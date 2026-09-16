@@ -57,24 +57,30 @@ def main() -> int:
             page.screenshot(path=str(OUT / name), full_page=False)
             print("wrote", name)
 
-        # Modal
-        page.evaluate("() => window.prksNavigate('#/folders')")
-        page.wait_for_timeout(400)
-        page.locator("#prks-ribbon-create").click()
-        page.wait_for_timeout(200)
-        # Open settings as a representative modal
+        # Modal — open Settings without leaving a create-file modal open.
         page.keyboard.press("Escape")
         page.wait_for_timeout(200)
-        page.locator("#sidebar button, #sidebar a").filter(has_text="").first  # no-op keep lint quiet
-        settings = page.locator('[data-lucide="settings"], #prks-open-settings, button[aria-label*="Settings"]')
-        if settings.count() == 0:
-            page.evaluate("() => { if (window.openModal) openModal('settings-modal'); }")
-        else:
-            settings.first.click()
-        page.wait_for_timeout(500)
+        page.evaluate(
+            """() => {
+                document.querySelectorAll('.modal').forEach((m) => {
+                    m.classList.remove('is-open', 'show');
+                    m.style.display = 'none';
+                });
+                if (typeof openModal === 'function') openModal('settings-modal');
+            }"""
+        )
+        page.wait_for_timeout(400)
         page.screenshot(path=str(OUT / "modal-settings.png"), full_page=False)
         print("wrote modal-settings.png")
         page.keyboard.press("Escape")
+        page.evaluate(
+            """() => {
+                document.querySelectorAll('.modal').forEach((m) => {
+                    m.classList.remove('is-open', 'show');
+                    m.style.display = 'none';
+                });
+            }"""
+        )
 
         # Narrow / mobile
         page.set_viewport_size(NARROW)
