@@ -4686,6 +4686,10 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
     def _cache_arguments(self, page, server):
         """Caches the complete index plus Argument A's detail."""
         _wait_sw_active(page)
+        # Leave first: after a domain fence the route may already be an
+        # Arguments page, and a same-hash navigate would not remount/republish.
+        page.evaluate("() => prksNavigate('#/folders')")
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
         _open_argument_index(page)
         _wait_list_cached(page, "arguments:index")
         _open_argument(page, server.ids["argument_a"])
