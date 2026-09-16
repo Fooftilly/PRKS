@@ -3525,6 +3525,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'saved-views': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Saved Views require a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Saved Views require a connection',
+                    };
+                    break;
+                }
                 const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
                 if (stale()) return;
                 if (typeof renderSavedViewsIndex === 'function') {
@@ -3536,6 +3547,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'saved-view-detail': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Saved View results require a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Saved View results require a connection',
+                    };
+                    break;
+                }
                 const viewId = route.params.viewId;
                 const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
                 if (stale()) return;
@@ -3608,6 +3630,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'search': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Search requires a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Search requires a connection',
+                    };
+                    break;
+                }
                 const query = route.params.q || '';
                 const tag = route.params.tag || '';
                 const author = route.params.author || '';

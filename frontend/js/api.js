@@ -977,7 +977,17 @@ async function fetchSavedView(id, options = {}) {
     }
 }
 
+function prksGuardSavedViewMutation(message) {
+    if (typeof prksOfflineGuardMutation !== 'function') return;
+    if (!prksOfflineGuardMutation(
+        message || 'Saved Views require a connection to PRKS.')) return;
+    const err = new Error('Requires a connection to PRKS.');
+    err.prksOfflineRefused = true;
+    throw err;
+}
+
 async function createSavedView(payload) {
+    prksGuardSavedViewMutation('Saving a view requires a connection to PRKS.');
     const res = await prksRequest('/api/saved-views', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -991,6 +1001,7 @@ async function createSavedView(payload) {
 }
 
 async function updateSavedView(id, payload) {
+    prksGuardSavedViewMutation('Editing a Saved View requires a connection to PRKS.');
     const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1004,6 +1015,7 @@ async function updateSavedView(id, payload) {
 }
 
 async function deleteSavedView(id) {
+    prksGuardSavedViewMutation('Deleting a Saved View requires a connection to PRKS.');
     const res = await prksRequest('/api/saved-views/' + encodeURIComponent(id), {
         method: 'DELETE',
     });

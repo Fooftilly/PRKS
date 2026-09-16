@@ -304,6 +304,11 @@
     }
 
     function openModalWith(options) {
+        if (typeof root.prksOfflineGuardMutation === 'function' &&
+            root.prksOfflineGuardMutation(
+                'Saved Views require a connection to PRKS.')) {
+            return;
+        }
         const opts = options || {};
         const els = modalEls();
         modalState.mode = opts.viewId ? 'edit' : 'create';

@@ -74,20 +74,17 @@ as it stands — not a claim that each is impossible.
   and lifetime, large-file behaviour, acknowledgement, cleanup after ACK or
   discard, and duplicate/retry semantics. Until that design exists, this is an
   intentional binary boundary rather than an oversight.
+* **PDF annotation edits.** Online flush pairs metadata replace with managed-PDF
+  byte overwrite. Metadata-only durable ops without a byte strategy would
+  desync canvas and sidebar. Escalation:
+  Project `internal/pdf-annotations-escalation.md`. Preview-from-cache remains.
+* **Saved Views and global Search.** Live execute is `/api/search` (FTS, tags,
+  PDF text index). Offline routes refuse explicitly; CRUD is guarded. Do not
+  approximate search over browse cards.
 
 ### Not yet durable, no known blocker
 
-Each of these is a normal family that has simply not been built yet. The shapes
-they should take, and what each must declare before implementation, are in
-*Adding a family: the four shapes and what each must declare* in
-`docs/local-first-sync.md`.
-
-* **PDF annotations** — only where the PDF is already cached. Annotation
-  identity must be audited first: if annotations receive server-generated ids
-  today, new ones need permanent distributed ids before offline creation is
-  possible.
-* **Saved Views**, and a clearly-labelled cached-data search mode. Global search
-  over uncached server records is not offered and should not be implied.
+_(none — remaining connection-required surfaces above are classified.)_
 
 ### Implemented, but with no control in the app
 
