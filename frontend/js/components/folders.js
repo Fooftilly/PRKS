@@ -916,24 +916,12 @@ async function prksCollectFolderLibraryGlanceExtras() {
                           'Recent'
                       )
                     : result && result.value;
+            /* Glance titles only — pending-open overlay stays in the Recent route. */
             if (Array.isArray(base)) {
-                const withMeta =
+                recentRows =
                     typeof prksEffectiveBrowseRows === 'function'
                         ? prksEffectiveBrowseRows(base, 'recent')
                         : base;
-                if (
-                    typeof prksEffectiveRecent === 'function' &&
-                    window.prksSync &&
-                    prksSync.store &&
-                    typeof prksSync.store.listOperations === 'function'
-                ) {
-                    recentRows = prksEffectiveRecent(
-                        withMeta,
-                        await prksSync.store.listOperations()
-                    );
-                } else {
-                    recentRows = withMeta;
-                }
             }
         }
     } catch (_e) {
@@ -1016,24 +1004,15 @@ async function prksCollectFolderLibraryGlanceExtras() {
         });
     }
 
-    let syncN = null;
+    /* Sync attention: read the already-painted nav cue — do not open the durable store. */
     try {
-        if (
-            window.prksSync &&
-            prksSync.store &&
-            typeof prksSync.store.listOperations === 'function'
-        ) {
-            const ops = await prksSync.store.listOperations();
-            syncN = (ops || []).filter(function (op) {
-                const stOp = op && op.status;
-                return stOp && stOp !== 'acknowledged' && stOp !== 'discarded';
-            }).length;
+        const cue = document.getElementById('prks-sync-queue-cue');
+        if (cue && !cue.hidden && !cue.classList.contains('hidden')) {
+            const label = String(cue.getAttribute('aria-label') || '').trim();
+            if (label) parts.push(label.replace(/\.$/, ''));
         }
     } catch (_e) {
-        syncN = null;
-    }
-    if (syncN != null && syncN > 0) {
-        parts.push(syncN + (syncN === 1 ? ' change queued' : ' changes queued'));
+        /* omit */
     }
 
     return parts;
