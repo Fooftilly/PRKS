@@ -755,6 +755,20 @@ function prksRerenderPeopleListOnly(root) {
         prksApplyPersonOfflineState(host);
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
     }
+    const roleFiltered = filterPersonsByAssignedRole(st.persons, st.roleFilter);
+    const filterQ = String(st.filterQuery || '').trim();
+    let shownCount = roleFiltered.length;
+    if (filterQ) {
+        shownCount = roleFiltered.filter((p) => prksPeopleListMatchesQuery(p, filterQ)).length;
+    }
+    if (typeof prksPaintScopeHost === 'function') {
+        prksPaintScopeHost(root, {
+            shown: shownCount,
+            total: roleFiltered.length,
+            filter: filterQ,
+            label: st.roleFilter ? String(st.roleFilter) : 'People',
+        });
+    }
 }
 
 function prksSyncPeopleLibrarySearchClear(input, clearBtn) {
@@ -818,6 +832,22 @@ function renderPeopleList(ctx, persons, container, options = {}) {
     const titleExtra = roleFilter ? ` — ${PEOPLE_LIST_ROLE_LABELS[roleFilter] || roleFilter}` : '';
     const roleFiltered = filterPersonsByAssignedRole(list, roleFilter);
     const hasPeople = roleFiltered.length > 0;
+    const filterQ = String(filterQuery || '').trim();
+    let shownCount = roleFiltered.length;
+    if (filterQ) {
+        shownCount = roleFiltered.filter((p) => prksPeopleListMatchesQuery(p, filterQ)).length;
+    }
+    const peopleScopeHtml =
+        typeof prksScopeLineHtml === 'function' && hasPeople
+            ? `<div data-prks-role="index-scope-host">${prksScopeLineHtml({
+                  shown: shownCount,
+                  total: roleFiltered.length,
+                  filter: filterQ,
+                  label: roleFilter ? String(roleFilter) : 'People',
+              })}</div>`
+            : hasPeople
+              ? '<div data-prks-role="index-scope-host"></div>'
+              : '';
     const searchToolbar = hasPeople
         ? `<div class="prks-people-library__toolbar">
             <div class="tag-add-shell tag-add-shell--flush prks-people-library__search">
@@ -838,6 +868,7 @@ function renderPeopleList(ctx, persons, container, options = {}) {
         <div class="prks-page-header page-header prks-people-library__header">
             <h2 class="prks-page-title">People${escapeHtmlPerson(titleExtra)}</h2>
             <button type="button" class="prks-btn prks-btn--primary" data-prks-role="${PERSON_CREATE_ROLE}" onclick="openModal('person-modal')">New Person</button>
+            ${peopleScopeHtml}
         </div>
         ${searchToolbar}
         ${listHost}

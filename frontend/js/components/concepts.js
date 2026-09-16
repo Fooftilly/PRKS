@@ -344,6 +344,14 @@
                           return conceptRowHtml(c, icon);
                       })
                       .join('');
+            if (typeof root.prksPaintScopeHost === 'function') {
+                root.prksPaintScopeHost(container, {
+                    shown: filtered.length,
+                    total: list.length,
+                    filter: query,
+                    label: 'Concepts',
+                });
+            }
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
             if (!filtered.length && !query) {
                 const emptyBtn = host.querySelector('#prks-concept-new-empty');
@@ -362,7 +370,8 @@
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-new" data-prks-role="' +
             CONCEPT_MUTATION_ROLE +
             '">New Concept</button>' +
-            '</div></div></div>' +
+            '</div></div>' +
+            '<div data-prks-role="index-scope-host"></div></div>' +
             (list.length ? researchIndexToolbarHtml('prks-concept-search', 'Search concepts…') : '') +
             '<div class="list-view prks-research-index" id="prks-concept-rows"></div>';
 
@@ -520,7 +529,24 @@
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Concept</p><h2 class="prks-page-title">' +
             esc(c.name || 'Concept') +
-            '</h2></div><div class="page-header__actions">' +
+            '</h2>' +
+            (typeof root.prksRelSummaryHtml === 'function'
+                ? root.prksRelSummaryHtml({
+                      parts: [
+                          parentList.length
+                              ? parentList.length +
+                                (parentList.length === 1 ? ' parent' : ' parents')
+                              : null,
+                          Number(c.mention_count) > 0
+                              ? String(Number(c.mention_count)) +
+                                (Number(c.mention_count) === 1
+                                    ? ' note mention'
+                                    : ' note mentions')
+                              : null,
+                      ],
+                  })
+                : '') +
+            '</div><div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-view-graph">View in graph</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-concept-rename" data-prks-role="' +
             CONCEPT_MUTATION_ROLE +

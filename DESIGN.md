@@ -465,7 +465,7 @@ Page
 ├── Page Header
 │   ├── optional Back/context path
 │   ├── Title
-│   ├── optional summary/count
+│   ├── optional summary/count (`.prks-page-summary` / `.prks-scope-line`)
 │   └── Actions
 ├── optional Toolbar / Filter area
 └── Content
@@ -477,6 +477,8 @@ Page
 .prks-page-header__context
 .prks-page-header__title-row
 .prks-page-title
+.prks-page-summary
+.prks-scope-line
 .prks-page-header__actions
 .prks-toolbar
 .prks-page-content
@@ -485,6 +487,26 @@ Page
 Do not reinvent `display:flex; justify-content:space-between; align-items:center; gap:12px` inside generated HTML.
 
 Consistency means shared visual grammar, not identical page structure. A tree remains a tree. A dense list remains a list.
+
+### Overview and context summaries
+
+Orientation belongs in the main column when it matters — not only in the right panel (which may be collapsed). Use one shared family from `frontend/js/overview-primitives.js`. Do not invent per-route summary markup.
+
+| Class / helper | Role |
+| --- | --- |
+| `.prks-page-summary` / `prksPageSummaryHtml` | Optional page-header summary under the title (library glance, entity counts). |
+| `.prks-scope-line` / `prksScopeLineHtml` | Collection filter/result scope (“12 of 48 matching”, “128 People”). |
+| `.prks-rel-summary` / `prksRelSummaryHtml` | Relationship strip near entity identity (folder · people · tags · parents). |
+| `.prks-state-summary` / `prksStateSummaryHtml` | Compact Details/state strip (status · type · N tags) before card stacks. |
+| `.prks-nav-attention` / `prksNavAttentionBadgeHtml` | Restrained nav attention count (Processing inbox, queued sync). Icon or label context + count; color alone is never enough. |
+
+Visual rules:
+
+- Dense, muted secondary text; middot separators (`.prks-summary-sep`); no KPI cards, gauges, or decorative charts.
+- Square and flat — same border/token language as the rest of the chrome.
+- Omit unknown parts. **Unknown is not zero.** Offline-unavailable catalogs must not render “0 folders” / “0 files”.
+- Prefer aggregates from catalogs already loaded (or one bounded list). No N+1 enrichment fetches for glance UI.
+- Do not add overview chrome inside tiled PDF Work tiles that reintroduces a duplicate title, Back row, or taller collapsed Notes (see Work/PDF density composition).
 
 ### Cards versus rows
 
@@ -754,8 +776,11 @@ Three different concepts. Do not use them interchangeably because everything is 
 | `.prks-tag` | Actual research/library tag. May have user/domain color via `--tag-accent`. |
 | `.prks-chip` | Compact interactive selection/removal item. |
 | `.prks-badge` | Non-interactive categorical/status metadata. |
+| `.prks-nav-attention` | Non-interactive nav attention count (inbox / sync queue). Not a tag or chip. |
 
 Document-type badges are domain badges (`--doc-type-color`), not generic accent chips.
+
+Nav attention badges stay restrained: show only when the count is a known positive finite number. Hide when unknown (do not show “0” as a stand-in for unread). Prefer Processing and durable-sync queue cues over decorative counters on every nav item.
 
 ### Status language
 

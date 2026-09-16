@@ -912,6 +912,40 @@ async function renderWorkDetails(ctx, work, requestCtx) {
     const workTitle = String((work && work.title) || '').trim();
     const headerTitle = workTitle ? prksEscapeHtmlLite(workTitle) : 'Document';
     const pdfViewerActive = inferredKind === 'pdf' && !!work.file_path;
+    const rolesForRel =
+        typeof prksEffectiveWorkDetailRoles === 'function'
+            ? prksEffectiveWorkDetailRoles(work)
+            : work;
+    const peopleN = Array.isArray(rolesForRel && rolesForRel.roles)
+        ? rolesForRel.roles.length
+        : Array.isArray(work.roles)
+          ? work.roles.length
+          : null;
+    const tagsN = Array.isArray(work.tags) ? work.tags.length : null;
+    const folderTitle = work.folder_title || (work.folder && work.folder.title) || '';
+    const folderId = work.folder_id || (work.folder && work.folder.id) || '';
+    const credit =
+        typeof prksWorkCardCreditLine === 'function' ? prksWorkCardCreditLine(work) : '';
+    const relSummaryHtml =
+        !pdfViewerActive && typeof prksRelSummaryHtml === 'function'
+            ? prksRelSummaryHtml({
+                  parts: [
+                      folderTitle
+                          ? folderId
+                              ? {
+                                    text: folderTitle,
+                                    href: '#/folders/' + encodeURIComponent(String(folderId)),
+                                }
+                              : folderTitle
+                          : null,
+                      credit || null,
+                      peopleN != null
+                          ? peopleN + (peopleN === 1 ? ' person' : ' people')
+                          : null,
+                      tagsN != null ? tagsN + (tagsN === 1 ? ' tag' : ' tags') : null,
+                  ],
+              })
+            : '';
     const workHeader = pdfViewerActive
         ? ''
         : `
@@ -920,6 +954,7 @@ async function renderWorkDetails(ctx, work, requestCtx) {
                     <h2 class="page-header--work-title">${headerTitle}</h2>
                     <span data-prks-role="work-header-doc-type-slot">${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}</span>
                 </div>
+                ${relSummaryHtml}
             </div>
         `;
 

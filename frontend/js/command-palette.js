@@ -44,6 +44,11 @@
                 root.prksOpenSavedViewModalForCurrentView();
             }
         },
+        'workspace-overview': function () {
+            if (typeof root.prksWorkspaceOverviewOpen === 'function') {
+                root.prksWorkspaceOverviewOpen();
+            }
+        },
     };
 
     const EMPTY_IDS = [
@@ -255,6 +260,15 @@
             keywords: ['inbox', 'import', 'drop'],
             icon: 'inbox',
             hash: '#/processing-files',
+            section: 'goto',
+        },
+        {
+            id: 'workspace-overview',
+            kind: 'context',
+            label: 'Workspace overview',
+            keywords: ['tabs', 'panes', 'split', 'open', 'overview'],
+            icon: 'layout-dashboard',
+            actionId: 'workspace-overview',
             section: 'goto',
         },
         {
@@ -1422,12 +1436,33 @@
         return 'Enter  Open   ' + mod + '+Enter  New tab   Alt+Enter  Split';
     }
 
+    function paletteOrientationText() {
+        try {
+            if (typeof root.prksWorkspaceSnapshot !== 'function') return '';
+            const snap = root.prksWorkspaceSnapshot();
+            if (!snap || !Array.isArray(snap.tabs)) return '';
+            const focused = snap.tabs.find(function (t) {
+                return t && String(t.id) === String(snap.focusedTabId);
+            });
+            const title = focused && (focused.title || focused.route);
+            if (!title) return '';
+            return 'Here · ' + String(title);
+        } catch (_e) {
+            return '';
+        }
+    }
+
     function syncPaletteHints() {
         const parts = paletteEls();
         if (!parts.hints) return;
         const hide = !state.open || state.scope === 'create';
         setHidden(parts.hints, hide);
-        if (!hide) parts.hints.textContent = paletteHintText();
+        if (!hide) {
+            const here = paletteOrientationText();
+            parts.hints.textContent = here
+                ? here + '   ·   ' + paletteHintText()
+                : paletteHintText();
+        }
     }
 
     function syncShortcutHint() {

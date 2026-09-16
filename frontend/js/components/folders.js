@@ -882,10 +882,31 @@ function renderDashboard(folders, container, options = {}) {
            </div>`
         : '';
     const foldersActive = activeTab !== 'recently-added';
+    let folderCount = list.length;
+    let workSum = 0;
+    let workSumKnown = true;
+    for (let i = 0; i < list.length; i += 1) {
+        const n = Number(list[i] && list[i].work_count);
+        if (!Number.isFinite(n)) {
+            workSumKnown = false;
+            break;
+        }
+        workSum += n;
+    }
+    const glanceHtml =
+        typeof prksPageSummaryHtml === 'function'
+            ? prksPageSummaryHtml({
+                  parts: [
+                      folderCount + (folderCount === 1 ? ' folder' : ' folders'),
+                      workSumKnown ? workSum + (workSum === 1 ? ' file' : ' files') : null,
+                  ],
+              })
+            : '';
     container.innerHTML = `
         <div class="prks-folder-library">
         <div class="prks-page-header page-header prks-folder-library__header">
             <h2 class="prks-page-title">Folder Library</h2>
+            ${glanceHtml}
         </div>
         <div class="tabs prks-folder-library__tabs" role="tablist" aria-label="Folder library views">
             <button type="button" class="tab-btn prks-tab prks-folder-library__tab-btn${foldersActive ? ' active is-active' : ''}" role="tab" data-tab="folders" aria-selected="${foldersActive ? 'true' : 'false'}">Folders</button>
@@ -1000,10 +1021,26 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         `
         : '';
 
+    const childN = Array.isArray(folder.children) ? folder.children.length : null;
+    const workN = Array.isArray(folder.works) ? folder.works.length : null;
+    const folderSummaryHtml =
+        typeof prksPageSummaryHtml === 'function'
+            ? prksPageSummaryHtml({
+                  parts: [
+                      childN != null
+                          ? childN + (childN === 1 ? ' subfolder' : ' subfolders')
+                          : null,
+                      workN != null ? workN + (workN === 1 ? ' file' : ' files') : null,
+                  ],
+              })
+            : '';
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split">
-            <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
-            ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+            <div class="page-header__title-row">
+                <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+                ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+            </div>
+            ${folderSummaryHtml}
         </div>
         <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
         ${subfoldersHtml}

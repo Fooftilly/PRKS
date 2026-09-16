@@ -193,7 +193,7 @@ function prksWorkCardHtml(w, options = {}) {
     const contextHtml = subtitle ? `<div class="work-card__context">${subtitle}</div>` : '';
 
     return `
-        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
+        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1" role="link" tabindex="0" aria-label="${title}">
             ${thumbHtml}
             <div class="work-card__body">
                 <div class="card-title" title="${title}">${title}</div>
@@ -209,6 +209,22 @@ function prksWorkCardHtml(w, options = {}) {
             </div>
         </div>
     `;
+}
+
+if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
+    window.__prksWorkCardKeyNavBound = true;
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const t = e.target;
+        if (!t || !t.closest) return;
+        if (t.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        const card = t.closest('.project-card--work-card[data-prks-route][role="link"]');
+        if (!card || t !== card) return;
+        const hash = card.getAttribute('data-prks-route');
+        if (!hash) return;
+        e.preventDefault();
+        if (typeof window.prksNavigate === 'function') window.prksNavigate(hash);
+    });
 }
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;

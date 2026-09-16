@@ -3612,6 +3612,43 @@ function renderWorkMetaTab(work, mode = 'view') {
         typeof prksProgressStatusIconHtml === 'function'
             ? prksProgressStatusIconHtml(statusText, { className: 'status-badge__icon', size: 'sm' })
             : '';
+    const rolesForCount =
+        typeof prksEffectiveWorkDetailRoles === 'function'
+            ? prksEffectiveWorkDetailRoles(work)
+            : work;
+    const peopleN = Array.isArray(rolesForCount && rolesForCount.roles)
+        ? rolesForCount.roles.length
+        : Array.isArray(work.roles)
+          ? work.roles.length
+          : null;
+    const tagsN = Array.isArray(work.tags) ? work.tags.length : null;
+    const folderTitle = work.folder_title || (work.folder && work.folder.title) || '';
+    const folderId = work.folder_id || (work.folder && work.folder.id) || '';
+    const docTypeLabel =
+        typeof prksDocTypeMeta === 'function'
+            ? prksDocTypeMeta(work.doc_type).label
+            : String(work.doc_type || '');
+    const stateSummaryHtml =
+        typeof prksStateSummaryHtml === 'function'
+            ? prksStateSummaryHtml({
+                  parts: [
+                      statusText,
+                      docTypeLabel || null,
+                      folderTitle
+                          ? folderId
+                              ? {
+                                    text: folderTitle,
+                                    href: '#/folders/' + encodeURIComponent(String(folderId)),
+                                }
+                              : folderTitle
+                          : null,
+                      peopleN != null
+                          ? peopleN + (peopleN === 1 ? ' person' : ' people')
+                          : null,
+                      tagsN != null ? tagsN + (tagsN === 1 ? ' tag' : ' tags') : null,
+                  ],
+              })
+            : '';
     const hasMetadata =
         work.year ||
         (showPublishedDate && work.published_date) ||
@@ -3628,6 +3665,7 @@ function renderWorkMetaTab(work, mode = 'view') {
         originalUrlPdf;
 
     return `
+        ${stateSummaryHtml}
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Title</h3>

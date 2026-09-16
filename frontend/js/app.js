@@ -130,6 +130,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof initModalCloseUi === 'function') initModalCloseUi();
     if (typeof initMobileShell === 'function') initMobileShell();
     if (typeof prksWorkspaceInit === 'function') prksWorkspaceInit();
+    if (typeof prksBindWorkspaceOverviewChrome === 'function') prksBindWorkspaceOverviewChrome();
+    initPrksNavAttentionBadges();
     initRouter();
     initTabs();
     initForms();
@@ -139,6 +141,130 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
     initUploadDragAndDrop();
 });
+
+/** Last known Processing inbox count. null = unknown (do not show “0”). */
+let __prksProcessingAttentionCount = null;
+
+function prksSetProcessingAttentionCount(count) {
+    if (count == null || !Number.isFinite(Number(count))) {
+        __prksProcessingAttentionCount = null;
+    } else {
+        __prksProcessingAttentionCount = Math.max(0, Number(count));
+    }
+    prksPaintProcessingNavBadge();
+}
+
+function prksPaintProcessingNavBadge() {
+    const host = document.querySelector('[data-prks-role="nav-processing-badge"]');
+    if (!host) return;
+    if (__prksProcessingAttentionCount == null) {
+        host.innerHTML = '';
+        return;
+    }
+    if (typeof prksNavAttentionBadgeHtml !== 'function') {
+        host.innerHTML = '';
+        return;
+    }
+    host.innerHTML = prksNavAttentionBadgeHtml({
+        count: __prksProcessingAttentionCount,
+        ariaLabel:
+            __prksProcessingAttentionCount +
+            (__prksProcessingAttentionCount === 1
+                ? ' file for processing'
+                : ' files for processing'),
+    });
+}
+
+async function prksRefreshProcessingNavBadge(options) {
+    const opts = options || {};
+    const online =
+        typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
+    if (!online) {
+        // Keep last known; never invent 0 while unreachable.
+        prksPaintProcessingNavBadge();
+        return;
+    }
+    if (typeof fetchProcessingFiles !== 'function') return;
+    try {
+        const rows = await fetchProcessingFiles({
+            rescan: !!opts.rescan,
+            signal: opts.signal,
+        });
+        if (Array.isArray(rows)) prksSetProcessingAttentionCount(rows.length);
+    } catch (_e) {
+        /* leave previous known count */
+        prksPaintProcessingNavBadge();
+    }
+}
+
+async function prksRefreshSyncQueueCue() {
+    const cue = document.getElementById('prks-sync-queue-cue');
+    const host = document.querySelector('[data-prks-role="sync-queue-badge"]');
+    if (!cue) return;
+    let n = null;
+    try {
+        if (
+            typeof prksSync !== 'undefined' &&
+            prksSync &&
+            prksSync.store &&
+            typeof prksSync.store.listOperations === 'function'
+        ) {
+            const ops = await prksSync.store.listOperations();
+            const active = (ops || []).filter(function (op) {
+                const st = op && op.status;
+                return st && st !== 'acknowledged' && st !== 'discarded';
+            });
+            n = active.length;
+        }
+    } catch (_e) {
+        n = null;
+    }
+    if (n == null || n <= 0) {
+        cue.hidden = true;
+        cue.classList.add('hidden');
+        if (host) host.innerHTML = '';
+        return;
+    }
+    cue.hidden = false;
+    cue.classList.remove('hidden');
+    cue.setAttribute(
+        'aria-label',
+        n + (n === 1 ? ' change queued' : ' changes queued')
+    );
+    cue.title = 'Open Settings → Diagnostics';
+    if (host && typeof prksNavAttentionBadgeHtml === 'function') {
+        host.innerHTML = prksNavAttentionBadgeHtml({
+            count: n,
+            ariaLabel: n + (n === 1 ? ' change queued' : ' changes queued'),
+        });
+    }
+}
+
+function initPrksNavAttentionBadges() {
+    prksPaintProcessingNavBadge();
+    void prksRefreshProcessingNavBadge({ rescan: false });
+    void prksRefreshSyncQueueCue();
+    const cue = document.getElementById('prks-sync-queue-cue');
+    if (cue && cue.dataset.bound !== '1') {
+        cue.dataset.bound = '1';
+        cue.addEventListener('click', function () {
+            if (typeof openModal === 'function') openModal('settings-modal');
+            const diagBtn = document.querySelector(
+                '[data-prks-settings-category="diagnostics"]'
+            );
+            if (diagBtn && typeof diagBtn.click === 'function') diagBtn.click();
+        });
+    }
+    // Bounded refresh — not per-nav-render.
+    window.setInterval(function () {
+        void prksRefreshProcessingNavBadge({ rescan: false });
+        void prksRefreshSyncQueueCue();
+    }, 60000);
+}
+
+window.prksSetProcessingAttentionCount = prksSetProcessingAttentionCount;
+window.prksRefreshProcessingNavBadge = prksRefreshProcessingNavBadge;
+window.prksRefreshSyncQueueCue = prksRefreshSyncQueueCue;
 
 function prksSyncSwitchUi(btn, on) {
     btn.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -3613,6 +3739,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     const rows = await fetchProcessingFiles({ rescan: true, signal: routeSignal });
                     if (stale()) return;
                     publishSidebar({ pendingCount: Array.isArray(rows) ? rows.length : 0 });
+                    if (Array.isArray(rows) && typeof prksSetProcessingAttentionCount === 'function') {
+                        prksSetProcessingAttentionCount(rows.length);
+                    }
                     if (typeof renderProcessingFilesPage === 'function') {
                         renderProcessingFilesPage(rows, contentDiv);
                     } else {
