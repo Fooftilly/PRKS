@@ -1307,26 +1307,29 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         """Pending DELETE_WORK keeps the disposable cache until ACK. The Work
         route must not race listOperations against an empty fallback and then
         treat a missing answer as "no pending delete" — that re-renders a
-        tombstoned Work from cache. Cached opens still must not await the
-        durable queue before paint (metadata hydration gates listOperations)."""
+        tombstoned Work from cache. Cached opens classify via the targeted
+        persisted lifecycle marker (not a full queue scan / listOperations)."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         lifecycle = _read(os.path.join(_FRONTEND, "js", "work-lifecycle-state.js"))
+        store = _read(os.path.join(_FRONTEND, "js", "local-store.js"))
         at = app.index("case 'work': {")
         nxt = app.find("case 'concepts':", at)
         body = app[at: nxt if nxt > at else at + 5500]
-        self.assertIn("prksIsLivePendingWorkDeletion", body)
+        self.assertIn("prksResolveWorkLifecycle", body)
         self.assertIn("prksApplyLiveWorkLifecycleFromOperations", body)
         # The empty-ops Promise.race fallback was the regression.
         self.assertNotIn("Promise.resolve({ ops: null })", body)
         self.assertNotIn("raced.ops || []", body)
-        # Cached + not live-deleted: paint via detail fetch; ops are background.
+        # Cached + not deleted: paint via detail fetch; ops are background.
         paint = body[body.index("} else {\n                        offlineWork = await prksOfflineDetailFetch"):
                      body.index("void workOpsPromise.then") + 80]
         self.assertIn("prksOfflineDetailFetch", paint)
         self.assertIn("void workOpsPromise.then", paint)
         self.assertNotIn("workOps = await workOpsPromise", paint)
-        self.assertIn("prksIsLivePendingWorkDeletion", lifecycle)
-        self.assertIn("noteLiveDelete", lifecycle)
+        self.assertIn("prksResolveWorkLifecycle", lifecycle)
+        self.assertIn("getWorkLifecycle", store)
+        self.assertIn("work-lifecycle:", store)
+        self.assertIn("putWorkLifecycleIn", store)
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into

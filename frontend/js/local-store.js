@@ -41,6 +41,13 @@
 
     const META_DEVICE_ID = 'device_id';
     const META_SEQUENCE = 'op_sequence';
+    /* Per-Work CREATE/DELETE tombstone. Keyed separately so a cached Work open
+     * can ask about ONE id without scanning the durable operations queue.
+     * Written in the same transaction as the CREATE_WORK / DELETE_WORK row. */
+    const META_WORK_LIFECYCLE_PREFIX = 'work-lifecycle:';
+    const WORK_LIFECYCLE_CREATE = 'create';
+    const WORK_LIFECYCLE_DELETE = 'delete';
+    const WORK_LIFECYCLE_KINDS = Object.freeze([WORK_LIFECYCLE_CREATE, WORK_LIFECYCLE_DELETE]);
 
     /** Operation lifecycle. Kept minimal: a retryable failure is `pending`
      *  plus `last_error`/`attempt_count`, not a separate persisted status. */
@@ -1141,6 +1148,44 @@
             return prepared;
         }
 
+        function workLifecycleKey(workId) {
+            return META_WORK_LIFECYCLE_PREFIX + String(workId);
+        }
+
+        async function putWorkLifecycleIn(request, workId, kind) {
+            if (!isNonBlankString(workId) || WORK_LIFECYCLE_KINDS.indexOf(kind) === -1) return;
+            await request(STORE_METADATA, s => s.put({
+                key: workLifecycleKey(workId),
+                value: kind,
+            }));
+        }
+
+        async function clearWorkLifecycleIn(request, workId) {
+            if (!isNonBlankString(workId)) return;
+            await request(STORE_METADATA, s => s.delete(workLifecycleKey(workId)));
+        }
+
+        /**
+         * Targeted CREATE/DELETE tombstone for one Work id.
+         *
+         * Returns `'create'`, `'delete'`, or `null`. A single metadata key
+         * read — never a scan of the durable operations queue — so a cached
+         * Work open can classify lifecycle without awaiting listOperations.
+         */
+        function getWorkLifecycle(workId) {
+            if (!isNonBlankString(workId)) {
+                return Promise.resolve(null);
+            }
+            return runTransaction(STORE_METADATA, 'readonly', function (request, setResult) {
+                return request(STORE_METADATA, function (store) {
+                    return store.get(workLifecycleKey(workId));
+                }).then(function (row) {
+                    const value = row ? row.value : null;
+                    setResult(WORK_LIFECYCLE_KINDS.indexOf(value) === -1 ? null : value);
+                });
+            });
+        }
+
         /* One desired state per relationship, checked and changed atomically.
          * Only NEVER SENT pending rows may be canceled. A pending retry may
          * already be ledgered by the server after a lost response; keep its id.
@@ -1757,6 +1802,7 @@
                         payload: payload, base_revision: null,
                         depends_on: deps,
                     }, null);
+                    await putWorkLifecycleIn(request, createOp.entity_id, WORK_LIFECYCLE_CREATE);
                     rows.push(createOp);
                     const tagOps = [];
                     for (let i = 0; i < normalizedTags.length; i += 1) {
@@ -1795,13 +1841,18 @@
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingWork(rows, workId);
                     const already = mine.find(r => r.operation === 'DELETE_WORK');
-                    if (already) { setResult(already); return; }
+                    if (already) {
+                        await putWorkLifecycleIn(request, workId, WORK_LIFECYCLE_DELETE);
+                        setResult(already);
+                        return;
+                    }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
                     const creation = mine.find(r => r.operation === 'CREATE_WORK');
                     if (creation && neverSent(creation) && mine.every(neverSent)) {
                         for (const row of mine) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
                         }
+                        await clearWorkLifecycleIn(request, workId);
                         setResult(null);
                         return;
                     }
@@ -1813,11 +1864,13 @@
                             waitFor.push(row.op_id);
                         }
                     }
-                    setResult(await insertEnvelopeIn(request, {
+                    const op = await insertEnvelopeIn(request, {
                         operation: 'DELETE_WORK', entity_type: 'work',
                         entity_id: workId, payload: {},
                         base_revision: null, depends_on: waitFor,
-                    }, null));
+                    }, null);
+                    await putWorkLifecycleIn(request, workId, WORK_LIFECYCLE_DELETE);
+                    setResult(op);
                 });
         }
 
@@ -3729,7 +3782,7 @@
                 STATUSES.indexOf(changes.status) === -1) {
                 return Promise.reject(localStoreError('invalid_status', 'Unknown operation status.'));
             }
-            return runTransaction(STORE_OPERATIONS, 'readwrite', function (request, setResult) {
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', function (request, setResult) {
                 return request(STORE_OPERATIONS, function (store) {
                     return store.get(String(opId));
                 }).then(function (row) {
@@ -3775,6 +3828,15 @@
                     return request(STORE_OPERATIONS, function (store) {
                         return store.put(next);
                     }).then(function () {
+                        /* Conflict means the tombstone no longer awaits the
+                         * server — clear the persisted lifecycle marker so a
+                         * retained cache may be opened again. */
+                        if (next.status === STATUS_CONFLICT &&
+                            (next.operation === 'CREATE_WORK' || next.operation === 'DELETE_WORK')) {
+                            return clearWorkLifecycleIn(request, next.entity_id).then(function () {
+                                setResult(next);
+                            });
+                        }
                         setResult(next);
                     });
                 });
@@ -3787,7 +3849,7 @@
          * discard the user's change.
          */
         function deleteAcknowledgedOperation(opId) {
-            return runTransaction(STORE_OPERATIONS, 'readwrite', function (request, setResult) {
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', function (request, setResult) {
                 return request(STORE_OPERATIONS, function (store) {
                     return store.get(String(opId));
                 }).then(function (row) {
@@ -3803,6 +3865,11 @@
                     return request(STORE_OPERATIONS, function (store) {
                         return store.delete(String(opId));
                     }).then(function () {
+                        if (row.operation === 'CREATE_WORK' || row.operation === 'DELETE_WORK') {
+                            return clearWorkLifecycleIn(request, row.entity_id).then(function () {
+                                setResult(true);
+                            });
+                        }
                         setResult(true);
                     });
                 });
@@ -3903,6 +3970,7 @@
             mergeTag: mergeTag,
             deleteWork: deleteWork,
             createWork: createWork,
+            getWorkLifecycle: getWorkLifecycle,
             coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,

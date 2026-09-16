@@ -867,6 +867,129 @@ class OfflineFoundationTests(unittest.TestCase):
         finally:
             page.unroute("**/api/sync/operations", reject_sync)
 
+    def test_pending_delete_work_survives_reload_without_painting_or_opening(self):
+        """DELETE_WORK in IndexedDB must classify after a real reload.
+
+        The live memory set starts empty; the Work route must read the
+        persisted per-Work lifecycle marker (not await full listOperations)
+        before publishing a retained cache or recording MARK_WORK_OPENED.
+        """
+        server, page, _context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_entity_cached(page, "work", work_a)
+
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
+
+        page.route("**/api/sync/operations", reject_sync)
+        try:
+            _open_details_drawer_if_tiled(page)
+            advanced = page.locator(".work-details-advanced")
+            if advanced.get_attribute("open") is None:
+                advanced.locator("summary").click()
+            page.locator(".delete-work-btn").click()
+            page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
+            page.locator("#prks-modal-confirm-ok").click()
+            page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+            wait_for_async(
+                page,
+                """id => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK' && r.entity_id === id))""",
+                arg=work_a,
+                timeout=15000,
+            )
+            wait_for_async(
+                page,
+                """id => prksSync.store.getWorkLifecycle(id).then(k => k === 'delete')""",
+                arg=work_a,
+                timeout=5000,
+            )
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+
+            open_count_before = wait_for_async(
+                page,
+                """id => prksSync.store.listOperations().then(rows =>
+                    rows.filter(r => r.operation === 'MARK_WORK_OPENED'
+                        && r.entity_id === id).length)""",
+                arg=work_a,
+                timeout=5000,
+            )
+
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_selector("#sidebar", timeout=15000)
+            _wait_sw_active(page)
+            wait_for_async(
+                page,
+                """id => prksSync.store.getWorkLifecycle(id).then(k => k === 'delete')""",
+                arg=work_a,
+                timeout=15000,
+            )
+            wait_for_async(
+                page,
+                """id => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK' && r.entity_id === id))""",
+                arg=work_a,
+                timeout=15000,
+            )
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+
+            page.evaluate("id => { void window.prksNavigate('#/works/' + id); }", work_a)
+            page.wait_for_function(
+                "id => location.hash.indexOf('#/works/' + id) === 0",
+                arg=work_a,
+                timeout=15000,
+            )
+            page.locator('[data-prks-role="offline-unavailable"]').wait_for(timeout=15000)
+            self.assertEqual(page.locator(".work-detail").count(), 0)
+            self.assertNotIn(
+                WORK_A_TITLE,
+                page.locator("#page-content").inner_text(),
+            )
+            self.assertFalse(
+                page.evaluate(
+                    """() => {
+                        const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                        const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+                        return !!(work && work.id);
+                    }"""
+                ),
+                "pending DELETE must never publish the Work as the live entity",
+            )
+            open_count_after = wait_for_async(
+                page,
+                """id => prksSync.store.listOperations().then(rows =>
+                    rows.filter(r => r.operation === 'MARK_WORK_OPENED'
+                        && r.entity_id === id).length)""",
+                arg=work_a,
+                timeout=5000,
+            )
+            self.assertEqual(
+                open_count_after,
+                open_count_before,
+                "reopening a tombstoned Work must not enqueue MARK_WORK_OPENED",
+            )
+            wait_for_async(
+                page,
+                """id => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK' && r.entity_id === id))""",
+                arg=work_a,
+                timeout=5000,
+            )
+            self.assertIsNotNone(_cached_entity(page, "work", work_a))
+            self.assertTrue(
+                wait_for_async(
+                    page,
+                    """id => prksSync.store.getWorkLifecycle(id).then(k => k === 'delete')""",
+                    arg=work_a,
+                    timeout=5000,
+                )
+            )
+        finally:
+            page.unroute("**/api/sync/operations", reject_sync)
+
     def test_offline_open_of_uncached_work_shows_unavailable(self):
         """Scenario 2: offline navigation to a Work never opened online -- a clean
         offline-unavailable state, never a false "not found"."""

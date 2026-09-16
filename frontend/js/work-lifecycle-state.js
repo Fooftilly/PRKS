@@ -5,11 +5,14 @@
  * Pending creations overlay Work detail; ACK fences the same coherence domains
  * the online create path published.
  *
- * Live CREATE/DELETE sets are updated at enqueue and refreshed from the durable
- * queue when it is readable. The Work route consults them synchronously so a
- * retained cache cannot reappear while DELETE_WORK is pending — without making
- * every cached open wait on listOperations (metadata hydration races gate that
- * read on purpose).
+ * CREATE/DELETE classification for the Work route uses:
+ *   1. an in-memory live set updated at enqueue (same-session, synchronous)
+ *   2. a persisted per-Work metadata marker written atomically with the
+ *      CREATE_WORK / DELETE_WORK row (survives reload; one-key read — never a
+ *      full listOperations scan on every cached open)
+ *
+ * Empty-ops Promise.race against the durable queue is forbidden: DELETE_WORK
+ * intentionally retains the disposable cache until ACK.
  */
 (function (root) {
     'use strict';
@@ -66,6 +69,29 @@
 
     function isLivePendingCreation(workId) {
         return !!workId && livePendingCreates.has(workId);
+    }
+
+    /**
+     * Resolve CREATE/DELETE for one Work without scanning the durable queue.
+     * Live memory first; otherwise the targeted metadata marker.
+     * Returns `'create'`, `'delete'`, or `null`.
+     */
+    async function resolveWorkLifecycle(workId) {
+        if (!workId) return null;
+        if (isLivePendingDeletion(workId)) return 'delete';
+        if (isLivePendingCreation(workId)) return 'create';
+        try {
+            if (root.prksSync && root.prksSync.store &&
+                typeof root.prksSync.store.getWorkLifecycle === 'function') {
+                const kind = await root.prksSync.store.getWorkLifecycle(workId);
+                if (kind === 'delete') noteLiveDelete(workId);
+                else if (kind === 'create') noteLiveCreate(workId);
+                return kind || null;
+            }
+        } catch (_e) {
+            /* Marker unreadable: fail open to prior ops-based paths. */
+        }
+        return null;
     }
 
     function armLiveHydration() {
@@ -216,6 +242,7 @@
         prksWorkDeleteSyncHandler: deleteHandler,
         prksIsLivePendingWorkDeletion: isLivePendingDeletion,
         prksIsLivePendingWorkCreation: isLivePendingCreation,
+        prksResolveWorkLifecycle: resolveWorkLifecycle,
         prksApplyLiveWorkLifecycleFromOperations: applyLiveFromOperations,
         prksArmLiveWorkLifecycleHydration: armLiveHydration,
     });

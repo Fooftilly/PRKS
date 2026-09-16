@@ -3899,13 +3899,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const workId = route.params.workId;
                 /* Durable-queue hydration must not block a cached Work from
                  * painting (metadata editor races gate listOperations on
-                 * purpose). Pending CREATE/DELETE classification is still
-                 * reliable: the live lifecycle registry is updated at enqueue
-                 * and refreshed whenever the queue is readable. Never race
-                 * listOperations against an empty fallback — that missed
-                 * DELETE_WORK while the disposable cache is intentionally
-                 * retained until ACK. Pending CREATE_WORK has no cache row —
-                 * only then await the queue before any network GET. */
+                 * purpose). CREATE/DELETE classification uses the live set
+                 * plus a targeted persisted lifecycle marker — never an
+                 * empty-ops Promise.race, and never a full listOperations
+                 * scan on every cached open. Pending CREATE_WORK has no
+                 * cache row — only then await the queue before any network
+                 * GET. */
                 const workOpsPromise = prksDurableOperationsOrNone().then(function (ops) {
                     if (typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
                         prksApplyLiveWorkLifecycleFromOperations(ops || []);
@@ -3923,11 +3922,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 let workOps = [];
                 let offlineWork = { value: null, source: 'unavailable', cachedAt: null };
-                const liveDeleted = typeof prksIsLivePendingWorkDeletion === 'function' &&
-                    prksIsLivePendingWorkDeletion(workId);
-                const liveUnsent = !liveDeleted &&
-                    typeof prksIsLivePendingWorkCreation === 'function' &&
-                    prksIsLivePendingWorkCreation(workId);
+                const lifecycle = typeof prksResolveWorkLifecycle === 'function'
+                    ? await prksResolveWorkLifecycle(workId)
+                    : null;
+                if (stale()) return;
+                const liveDeleted = lifecycle === 'delete';
+                const liveUnsent = lifecycle === 'create';
                 if (cachedWorkRow && cachedWorkRow.value) {
                     if (liveDeleted) {
                         offlineWork = { value: null, source: 'unavailable', cachedAt: null };
@@ -3941,10 +3941,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             routeSignal
                         );
                         if (stale()) return;
-                        /* Background: after a reload the live set may still be
-                         * empty until the queue is readable. If DELETE_WORK is
-                         * pending, replace the paint — never leave a tombstone
-                         * visible. */
+                        /* Background: keep live set coherent with the queue.
+                         * The persisted marker already classified delete
+                         * before paint, so this must not be the first time
+                         * a pending DELETE becomes visible. */
                         void workOpsPromise.then(function (ops) {
                             if (stale()) return;
                             workOps = ops;

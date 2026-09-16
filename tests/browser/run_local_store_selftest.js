@@ -846,6 +846,65 @@ async function run() {
         }
     }
 
+    /* ---- Work CREATE/DELETE lifecycle markers (targeted tombstone) ---- */
+    {
+        globalThis.prksIsValidYoutubeUrl = function (u) {
+            return typeof u === 'string' && u.indexOf('youtube.com/watch') !== -1;
+        };
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const fields = {
+            title: 'Lifecycle',
+            status: 'Not Started',
+            abstract: '',
+            author_text: '',
+            year: '',
+            published_date: '',
+            urldate: '',
+            private_notes: '',
+            thumb_url: '',
+            source: { kind: 'video', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+            folder_id: '',
+            playlist_id: '',
+            roles: [],
+        };
+        const batch = await store.createWork(fields);
+        const createdId = batch.create.entity_id;
+        assertEq('CREATE_WORK writes create lifecycle marker',
+            await store.getWorkLifecycle(createdId), 'create');
+
+        /* Never-sent CREATE folds away entirely — no DELETE_WORK row, marker cleared. */
+        const folded = await store.deleteWork(createdId);
+        assert('never-sent create folds away with no DELETE row', folded === null);
+        assertEq('fold-away clears lifecycle marker',
+            await store.getWorkLifecycle(createdId), null);
+
+        /* DELETE_WORK on a Work that already exists on the server (no local
+         * CREATE_WORK) writes the delete marker atomically with the op. */
+        const serverWorkId = 'W-SERVER-LIFECYCLE';
+        const del = await store.deleteWork(serverWorkId);
+        assert('DELETE_WORK enqueued for acknowledged Work',
+            !!(del && del.operation === 'DELETE_WORK' && del.entity_id === serverWorkId));
+        assertEq('DELETE_WORK writes delete lifecycle marker',
+            await store.getWorkLifecycle(serverWorkId), 'delete');
+        /* Marker survives a new store instance (page reload). */
+        const reopened = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        assertEq('delete marker survives store reopen',
+            await reopened.getWorkLifecycle(serverWorkId), 'delete');
+        await reopened.updateOperationSyncState(del.op_id, { status: 'acknowledged' });
+        await reopened.deleteAcknowledgedOperation(del.op_id);
+        assertEq('ACK retirement clears lifecycle marker',
+            await reopened.getWorkLifecycle(serverWorkId), null);
+
+        /* Conflict also clears the marker so a retained cache may reopen. */
+        const del2 = await store.deleteWork('W-CONFLICT-LIFECYCLE');
+        assertEq('second DELETE writes delete marker',
+            await store.getWorkLifecycle('W-CONFLICT-LIFECYCLE'), 'delete');
+        await store.updateOperationSyncState(del2.op_id, { status: 'conflict' });
+        assertEq('conflict clears lifecycle marker',
+            await store.getWorkLifecycle('W-CONFLICT-LIFECYCLE'), null);
+    }
+
     /* ---- module hygiene: persistence only ---- */
     {
         const src = fs.readFileSync(path.join(rootDir, 'frontend/js/local-store.js'), 'utf8');
