@@ -890,109 +890,68 @@ function prksPaintFolderLibraryGlance(host, parts) {
     });
 }
 
+async function prksPeekCachedBrowseList(listKey) {
+    /* Read-only peek: never start a network warm that would publish into an
+     * independent browse domain from Home glance. Missing cache ⇒ omit. */
+    try {
+        if (typeof createPrksOfflineStore !== 'function') return null;
+        const row = await createPrksOfflineStore().getList(listKey);
+        const value = row && row.value;
+        return Array.isArray(value) ? value : null;
+    } catch (_e) {
+        return null;
+    }
+}
+
 async function prksCollectFolderLibraryGlanceExtras() {
     const parts = [];
     const CONTINUE_CAP = 3;
-    const online =
-        typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
 
-    /* Offline: never start glance browse GETs — omit warm-only extras rather than
-     * probing the network. Catalog parts + in-memory cues still paint. */
-    if (online) {
-        let recentRows = null;
-        try {
-            if (typeof prksOfflineBrowseFetch === 'function') {
-                const result = await prksOfflineBrowseFetch(
-                    'recent:index',
-                    'recent',
-                    '/api/recent',
-                    typeof prksIsRecentIndexShape === 'function' ? prksIsRecentIndexShape : null
-                );
-                const base =
-                    typeof prksResolveOfflineBrowseList === 'function'
-                        ? prksResolveOfflineBrowseList(
-                              result,
-                              'recent:index',
-                              typeof prksIsRecentIndexShape === 'function'
-                                  ? prksIsRecentIndexShape
-                                  : function () {
-                                        return true;
-                                    },
-                              'Recent'
-                          )
-                        : result && result.value;
-                /* Glance titles only — pending-open overlay stays in the Recent route. */
-                if (Array.isArray(base)) {
-                    recentRows =
-                        typeof prksEffectiveBrowseRows === 'function'
-                            ? prksEffectiveBrowseRows(base, 'recent')
-                            : base;
-                }
-            }
-        } catch (_e) {
-            recentRows = null;
+    /* Continue / In Progress / Recently added reuse already-warmed snapshots or
+     * in-memory tab state only. Never call prksOfflineBrowseFetch /
+     * prksOfflineWorksBrowseFetch here — boot on #/folders must not populate
+     * works-browse:index or recent:index as a side effect of the glance band. */
+    let recentRows = await prksPeekCachedBrowseList('recent:index');
+    if (Array.isArray(recentRows) && recentRows.length) {
+        if (typeof prksEffectiveBrowseRows === 'function') {
+            recentRows = prksEffectiveBrowseRows(recentRows, 'recent');
         }
-        if (Array.isArray(recentRows) && recentRows.length) {
-            const slice = recentRows.slice(0, CONTINUE_CAP);
-            for (let i = 0; i < slice.length; i += 1) {
-                const w = slice[i];
-                if (!w || !w.id) continue;
-                const title = String(w.title || 'Untitled').trim() || 'Untitled';
-                parts.push({
-                    text: title,
-                    href: '#/works/' + encodeURIComponent(String(w.id)),
-                });
-            }
-            if (recentRows.length > CONTINUE_CAP) {
-                parts.push({ text: 'More recent', href: '#/recent' });
-            }
+        const slice = recentRows.slice(0, CONTINUE_CAP);
+        for (let i = 0; i < slice.length; i += 1) {
+            const w = slice[i];
+            if (!w || !w.id) continue;
+            const title = String(w.title || 'Untitled').trim() || 'Untitled';
+            parts.push({
+                text: title,
+                href: '#/works/' + encodeURIComponent(String(w.id)),
+            });
         }
+        if (recentRows.length > CONTINUE_CAP) {
+            parts.push({ text: 'More recent', href: '#/recent' });
+        }
+    }
 
-        let inProgressN = null;
-        try {
-            if (typeof prksOfflineWorksBrowseFetch === 'function') {
-                const browse = await prksOfflineWorksBrowseFetch();
-                const rows =
-                    typeof prksResolveOfflineWorksBrowse === 'function'
-                        ? prksResolveOfflineWorksBrowse(browse)
-                        : browse && browse.value;
-                if (Array.isArray(rows)) {
-                    const effective =
-                        typeof prksEffectiveBrowseRows === 'function'
-                            ? prksEffectiveBrowseRows(rows, 'works-browse')
-                            : rows;
-                    inProgressN = effective.filter(function (w) {
-                        return w && String(w.status || '') === 'In Progress';
-                    }).length;
-                }
-            }
-        } catch (_e) {
-            inProgressN = null;
+    let browseRows = await prksPeekCachedBrowseList('works-browse:index');
+    if (Array.isArray(browseRows)) {
+        if (typeof prksEffectiveBrowseRows === 'function') {
+            browseRows = prksEffectiveBrowseRows(browseRows, 'works-browse');
         }
-        if (inProgressN != null && inProgressN > 0) {
+        const inProgressN = browseRows.filter(function (w) {
+            return w && String(w.status || '') === 'In Progress';
+        }).length;
+        if (inProgressN > 0) {
             parts.push({
                 text: inProgressN + ' in progress',
                 href: '#/progress?status=' + encodeURIComponent('In Progress'),
             });
         }
+    }
 
-        let addedN = null;
-        const stMem = window.__prksFolderDashboardState;
-        /* Only reuse an already-loaded Recently-added RAM copy. Do not warm
-         * recently-added:index from Home glance — that domain is independent. */
-        if (stMem && Array.isArray(stMem.recentlyAddedWorks)) {
-            addedN = stMem.recentlyAddedWorks.length;
-        }
-        if (addedN != null && addedN > 0) {
-            parts.push(addedN + ' recently added');
-        }
-    } else {
-        const stMem = window.__prksFolderDashboardState;
-        if (stMem && Array.isArray(stMem.recentlyAddedWorks) && stMem.recentlyAddedWorks.length) {
-            parts.push(
-                stMem.recentlyAddedWorks.length + ' recently added'
-            );
-        }
+    const stMem = window.__prksFolderDashboardState;
+    /* Only reuse an already-loaded Recently-added RAM copy. Do not warm
+     * recently-added:index from Home glance — that domain is independent. */
+    if (stMem && Array.isArray(stMem.recentlyAddedWorks) && stMem.recentlyAddedWorks.length) {
+        parts.push(stMem.recentlyAddedWorks.length + ' recently added');
     }
 
     const procCount =

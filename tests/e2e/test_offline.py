@@ -624,6 +624,7 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
+        _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Manage tags").click()
         page.locator("#work-tag-search").fill(tag_name)
         page.locator("#work-tag-search-results .result-item--create", has_text=tag_name).click()

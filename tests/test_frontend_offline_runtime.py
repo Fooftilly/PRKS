@@ -1163,6 +1163,19 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         # The tab must no longer be disabled while offline.
         self.assertNotIn("Recently added requires a connection", folders)
 
+    def test_home_glance_never_warms_independent_browse_domains(self):
+        """Boot on #/folders must not populate works-browse:index or recent:index
+        as a side effect of At-a-glance — those missing snapshots are the
+        Progress/Types/Recent offline-unavailable signal."""
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        body = _fn_body(folders, "async function prksCollectFolderLibraryGlanceExtras(")
+        self.assertNotIn("prksOfflineBrowseFetch", body)
+        self.assertNotIn("prksOfflineWorksBrowseFetch", body)
+        self.assertNotIn("prksOfflineRecentlyAddedFetch", body)
+        self.assertIn("prksPeekCachedBrowseList", body)
+        self.assertIn("recent:index", body)
+        self.assertIn("works-browse:index", body)
+
     def test_work_folder_card_does_not_fetch_the_catalog_offline(self):
         folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
         body = _fn_body(folders, "async function mountFolderAttachControlsForWork(")
