@@ -6043,42 +6043,67 @@ class OfflinePeopleMutationTests(unittest.TestCase):
         finally:
             _safe_unroute(page, "**/api/**", block_api)
 
-    def test_profile_group_creation_is_blocked_after_disconnect(self):
-        server, page, _context, _collector = self._start()
+    def test_profile_group_creation_is_durable_after_disconnect(self):
+        """Typing a new Group name in the Person editor creates it offline.
+
+        Person Groups are durable: the id is minted on this device, so Add
+        group is real with or without a server. Membership remains a separate
+        Save decision (no ADD_PERSON_GROUP_MEMBER until then). The older
+        "blocked after disconnect" contract is obsolete.
+        """
+        server, page, context, _collector = self._start()
         person_a = server.ids["person_a"]
+        group_name = "Brand New Offline Group"
 
         _wait_sw_active(page)
         _open_person(page, person_a)
         _wait_content_contains(page, PERSON_DISPLAY)
+        _wait_entity_cached(page, "person", person_a)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Edit profile").click()
         page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_a).wait_for()
         page.wait_for_function(
             "() => typeof document.querySelector('#pd-group-add-btn')?.onclick === 'function'"
         )
-        page.locator("#pd-group-search").fill("Brand New Offline Group")
+        # Warm the catalogue while online so Add does not need a dead fetch.
+        page.evaluate(
+            """async () => {
+                if (typeof prksEnsureAllGroupsCache === 'function') {
+                    await prksEnsureAllGroupsCache();
+                }
+            }"""
+        )
 
-        mutations = []
+        context.set_offline(True)
+        page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
 
-        def block_api(route):
-            if route.request.method in ("POST", "PATCH", "PUT", "DELETE"):
-                mutations.append((route.request.method, urlparse(route.request.url).path))
-            route.abort("connectionrefused")
+        page.locator("#pd-group-search").fill(group_name)
+        page.locator("#pd-group-add-btn").click()
+        page.locator("#pd-group-chips", has_text=group_name).wait_for()
+        self.assertEqual(page.locator("#pd-group-search").input_value(), "")
 
-        page.route("**/api/**", block_api)
-        try:
-            page.evaluate("""async () => { try { await window.prksRequest('/api/settings'); } catch (_e) {} }""")
-            page.wait_for_function(
-                "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
-                timeout=20000,
-            )
-            page.locator("#pd-group-add-btn").click(force=True)
-            page.wait_for_timeout(400)
-            self.assertEqual(mutations, [], "no Group create may be attempted offline")
-            # The draft the user was building is untouched.
-            self.assertEqual(page.locator("#pd-group-search").input_value(), "Brand New Offline Group")
-        finally:
-            _safe_unroute(page, "**/api/**", block_api)
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows => rows.some(
+                o => o && o.operation === 'CREATE_PERSON_GROUP'
+                    && o.payload && o.payload.name === %r
+                    && o.status !== 'acknowledged'))"""
+            % group_name,
+            timeout=15000,
+            message="CREATE_PERSON_GROUP never landed in the durable queue",
+        )
+        self.assertEqual(
+            page.evaluate(
+                """() => prksSync.store.listOperations().then(rows => rows.filter(
+                    o => o && o.operation === 'ADD_PERSON_GROUP_MEMBER').length)"""
+            ),
+            0,
+            "joining is a separate decision, recorded only on Save",
+        )
 
 
 class OfflinePeopleCoherenceTests(unittest.TestCase):
