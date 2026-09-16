@@ -16,9 +16,12 @@ import pathlib
 import re
 import unittest
 
+from backend.db_migrations import LATEST_SCHEMA_VERSION
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "AGENTS.md"
 STATUS = ROOT / "docs" / "local-first-rollout-status.md"
+README = ROOT / "README.md"
 
 # Families that are durable today. Each entry is (operation, the domain word a
 # reader would search AGENTS.md for).
@@ -162,6 +165,25 @@ class AgentGuidanceTests(unittest.TestCase):
             with self.subTest(family=family):
                 self.assertIn(family, self.status,
                               "the rollout status is the score and must list it")
+
+    def test_readme_current_schema_matches_latest(self):
+        """User-facing README current-version line tracks LATEST_SCHEMA_VERSION.
+
+        Historical notes such as "Schema v13 removed…" are deliberately left
+        alone; only the explicit current-version statement is compared.
+        """
+        readme = README.read_text()
+        match = re.search(
+            r"(?m)^Current schema version:\s*\*\*(\d+)\*\*\.\s*$",
+            readme,
+        )
+        self.assertIsNotNone(
+            match,
+            "README must state `Current schema version: **N**.` exactly once")
+        self.assertEqual(
+            int(match.group(1)),
+            LATEST_SCHEMA_VERSION,
+            "README current schema drifted from backend.db_migrations.LATEST_SCHEMA_VERSION")
 
 
 if __name__ == "__main__":

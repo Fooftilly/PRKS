@@ -705,6 +705,147 @@ async function run() {
             okConflict.status, 'conflict');
     }
 
+    /* ---- CREATE_WORK + selected Tags: one local decision ---- */
+    {
+        globalThis.prksIsValidYoutubeUrl = function (u) {
+            return typeof u === 'string' && u.indexOf('youtube.com/watch') !== -1;
+        };
+
+        function videoFields() {
+            return {
+                title: 'Talk',
+                status: 'Not Started',
+                abstract: '',
+                author_text: '',
+                year: '',
+                published_date: '',
+                urldate: '',
+                private_notes: '',
+                thumb_url: '',
+                source: { kind: 'video', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+                folder_id: '',
+                playlist_id: '',
+                roles: [],
+            };
+        }
+
+        function depsReady(op, byId) {
+            const deps = Array.isArray(op.depends_on) ? op.depends_on : [];
+            for (let i = 0; i < deps.length; i += 1) {
+                const dep = byId.get(deps[i]);
+                if (!dep || dep.status !== 'acknowledged' || dep.server_result) return false;
+            }
+            return true;
+        }
+
+        {
+            const idb = createFakeIndexedDBFactory();
+            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const batch = await store.createWork(videoFields(), {
+                tags: [{ id: 'T-EXISTING', name: 'Existing' }],
+            });
+            assert('createWork returns create envelope',
+                batch && batch.create && batch.create.operation === 'CREATE_WORK');
+            assertEq('one ADD_WORK_TAG in the same batch', batch.tags.length, 1);
+            assertEq('ADD_WORK_TAG depends on CREATE_WORK',
+                batch.tags[0].depends_on, [batch.create.op_id]);
+            const listed = await store.listOperations();
+            assertEq('CREATE_WORK and ADD_WORK_TAG both durable after one commit',
+                listed.map((r) => r.operation), ['CREATE_WORK', 'ADD_WORK_TAG']);
+            assert('ADD_WORK_TAG row names the new Work',
+                listed[1].entity_id === batch.create.entity_id &&
+                listed[1].payload.tag_id === 'T-EXISTING');
+        }
+
+        {
+            const idb = createFakeIndexedDBFactory();
+            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const tagCreate = await store.createTag({ name: 'Pending' });
+            const batch = await store.createWork(videoFields(), {
+                tags: [{ id: tagCreate.entity_id, name: 'Pending' }],
+            });
+            assert('pending CREATE_TAG + CREATE_WORK both in depends_on',
+                batch.tags[0].depends_on.indexOf(batch.create.op_id) !== -1 &&
+                batch.tags[0].depends_on.indexOf(tagCreate.op_id) !== -1);
+            assertEq('depends_on length is exactly two', batch.tags[0].depends_on.length, 2);
+        }
+
+        {
+            const idb = createFakeIndexedDBFactory();
+            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const batch = await store.createWork(videoFields(), {
+                tags: [{ id: 'T-A', name: 'A' }, { id: 'T-B', name: 'B' }],
+            });
+            const all = await store.listOperations();
+            const byId = new Map(all.map((r) => [r.op_id, r]));
+            const pending = all.filter((r) => r.status === 'pending');
+            const first = pending.find((op) => depsReady(op, byId));
+            assertEq('CREATE_WORK is eligible before its tag dependents',
+                first && first.operation, 'CREATE_WORK');
+            assert('no ADD_WORK_TAG is eligible while CREATE_WORK is still pending',
+                !pending.some((op) => op.operation === 'ADD_WORK_TAG' && depsReady(op, byId)));
+
+            /* Simulate ACK of CREATE_WORK the way sync-runtime does (no
+             * server_result on success). Tag ops then become eligible. */
+            await store.updateOperationSyncState(batch.create.op_id, {
+                status: 'acknowledged', last_error: null, server_result: null,
+            });
+            const after = await store.listOperations();
+            const byId2 = new Map(after.map((r) => [r.op_id, r]));
+            const pending2 = after.filter((r) => r.status === 'pending');
+            assert('tag dependents become eligible only after CREATE_WORK ACK',
+                pending2.every((op) => op.operation === 'ADD_WORK_TAG' && depsReady(op, byId2)));
+        }
+
+        {
+            const idb = createFakeIndexedDBFactory();
+            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            await assertRejects(
+                'invalid selected Tag rolls back the whole create batch',
+                store.createWork(videoFields(), { tags: [{ id: '', name: 'Bad' }] }),
+                'invalid_envelope');
+            assertEq('failed tagged create left no durable CREATE_WORK',
+                (await store.listOperations()).length, 0);
+        }
+
+        {
+            /* createWorkDurably must not wake sync until the batch Promise
+             * resolves with CREATE_WORK + tags already listed. */
+            const idb = createFakeIndexedDBFactory();
+            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            let wakeCount = 0;
+            let wokeBeforeCommit = false;
+            let opsListedBeforeWake = null;
+            const originalCreate = store.createWork.bind(store);
+            store.createWork = async function (fields, options) {
+                const result = await originalCreate(fields, options);
+                opsListedBeforeWake = await store.listOperations();
+                return result;
+            };
+            globalThis.prksSync = {
+                store: store,
+                changed: function () {
+                    wakeCount += 1;
+                    if (!opsListedBeforeWake) wokeBeforeCommit = true;
+                },
+            };
+            delete require.cache[require.resolve(path.join(rootDir, 'frontend/js/work-lifecycle-state.js'))];
+            require(path.join(rootDir, 'frontend/js/work-lifecycle-state.js'));
+            const batch = await globalThis.prksCreateWorkDurably(videoFields(), {
+                tags: [{ id: 'T-WAKE', name: 'Wake' }],
+            });
+            assertEq('sync.changed wakes once after batch commit', wakeCount, 1);
+            assert('changed never fires before createWork resolves', !wokeBeforeCommit);
+            assert('wake follows a commit that already holds CREATE_WORK + ADD_WORK_TAG',
+                opsListedBeforeWake &&
+                opsListedBeforeWake.some((r) => r.op_id === batch.create.op_id) &&
+                opsListedBeforeWake.some((r) => r.operation === 'ADD_WORK_TAG' &&
+                    r.payload.tag_id === 'T-WAKE' &&
+                    r.depends_on.indexOf(batch.create.op_id) !== -1));
+            delete globalThis.prksSync;
+        }
+    }
+
     /* ---- module hygiene: persistence only ---- */
     {
         const src = fs.readFileSync(path.join(rootDir, 'frontend/js/local-store.js'), 'utf8');

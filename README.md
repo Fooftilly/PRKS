@@ -134,7 +134,7 @@ docker compose start prks
 
 PRKS automatically upgrades supported older databases at startup.
 
-Current schema version: **13**.
+Current schema version: **14**.
 
 Schema migrations are transactional and version-ordered. A database marked version N has passed every migration through N.
 

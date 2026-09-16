@@ -1338,56 +1338,6 @@
             });
         }
 
-        /**
-         * Attach Tags to a Work this device just created. Each row waits on the
-         * CREATE_WORK op and any pending CREATE_TAG for that Tag.
-         */
-        function attachWorkTagsAfterCreate(workId, createOpId, tagSpecs) {
-            if (!isNonBlankString(workId) || !isNonBlankString(createOpId) ||
-                !Array.isArray(tagSpecs) || !tagSpecs.length) {
-                return Promise.resolve([]);
-            }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
-                async (request, setResult) => {
-                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
-                    const createOp = rows.find(r => r && r.op_id === createOpId);
-                    if (!createOp || createOp.operation !== 'CREATE_WORK' ||
-                        createOp.entity_id !== workId) {
-                        throw localStoreError('invalid_envelope', 'Unknown file creation.');
-                    }
-                    const created = [];
-                    for (let i = 0; i < tagSpecs.length; i += 1) {
-                        const spec = tagSpecs[i];
-                        const tagId = spec && spec.id;
-                        if (!isNonBlankString(tagId)) continue;
-                        assertTagIsNotBeingDeleted(rows, tagId, 'attached');
-                        assertTagIsNotBeingMerged(rows, tagId, 'attached');
-                        const tagCreateOp = tagCreationDependency(rows, tagId,
-                            'it cannot be attached to a new file');
-                        const existing = rows.find(r => r.entity_type === 'work' &&
-                            r.entity_id === workId && r.payload && r.payload.tag_id === tagId &&
-                            r.status !== STATUS_ACKNOWLEDGED);
-                        if (existing) {
-                            created.push(existing);
-                            continue;
-                        }
-                        const depends = [createOpId];
-                        if (tagCreateOp) depends.push(tagCreateOp.op_id);
-                        const tagContext = spec.name
-                            ? { tag: { id: tagId, name: spec.name } }
-                            : null;
-                        const op = await insertEnvelopeIn(request, {
-                            operation: 'ADD_WORK_TAG', entity_type: 'work',
-                            entity_id: workId, payload: { tag_id: tagId },
-                            base_revision: 0, depends_on: depends,
-                        }, tagContext);
-                        created.push(op);
-                        rows.push(op);
-                    }
-                    setResult(created);
-                });
-        }
-
         function coalesceFolderTag(folderId, tagId, present, baseState, baseRevision, tag) {
             if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -1733,13 +1683,29 @@
             };
         }
 
-        function createWork(fields) {
+        /**
+         * Create a video Work under a client-minted `W-` id.
+         *
+         * Optional `options.tags` is an array of `{id, name?}` specs. Selected
+         * Tags become ordinary `ADD_WORK_TAG` ops in the SAME transaction as
+         * `CREATE_WORK`, each depending on the new create (and on any pending
+         * `CREATE_TAG` for that Tag). Sync must not wake until this Promise
+         * settles — otherwise create could retire before dependents exist.
+         *
+         * PDF / binary construction is refused here: that path stays on
+         * `POST /api/works` until durable Blob storage exists. Source identity
+         * uses the same intent form as `SET_WORK_SOURCE` (`{kind, url}`).
+         *
+         * Returns `{ create, tags }` after the whole batch commits.
+         */
+        function createWork(fields, options) {
             let payload;
             try {
                 payload = canonicalWorkCreatePayload(fields);
             } catch (e) {
                 return Promise.reject(e);
             }
+            const tagSpecs = options && Array.isArray(options.tags) ? options.tags : [];
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
@@ -1763,12 +1729,53 @@
                             'they cannot be credited on a new file');
                         if (personOp) deps.push(personOp.op_id);
                     }
-                    setResult(await insertEnvelopeIn(request, {
+                    /* Validate every selected Tag BEFORE inserting CREATE_WORK
+                     * so a doomed Tag cannot leave a half-committed Work. */
+                    const normalizedTags = [];
+                    const seenTag = Object.create(null);
+                    for (let i = 0; i < tagSpecs.length; i += 1) {
+                        const spec = tagSpecs[i];
+                        const tagId = spec && spec.id;
+                        if (!isNonBlankString(tagId)) {
+                            throw localStoreError('invalid_envelope', 'Invalid tag.');
+                        }
+                        if (seenTag[tagId]) continue;
+                        seenTag[tagId] = true;
+                        assertTagIsNotBeingDeleted(rows, tagId, 'attached');
+                        assertTagIsNotBeingMerged(rows, tagId, 'attached');
+                        const tagCreateOp = tagCreationDependency(rows, tagId,
+                            'it cannot be attached to a new file');
+                        normalizedTags.push({
+                            id: tagId,
+                            name: spec && typeof spec.name === 'string' ? spec.name : '',
+                            tagCreateOp: tagCreateOp,
+                        });
+                    }
+                    const createOp = await insertEnvelopeIn(request, {
                         operation: 'CREATE_WORK', entity_type: 'work',
                         entity_id: generateEntityId('W', uuid),
                         payload: payload, base_revision: null,
                         depends_on: deps,
-                    }, null));
+                    }, null);
+                    rows.push(createOp);
+                    const tagOps = [];
+                    for (let i = 0; i < normalizedTags.length; i += 1) {
+                        const entry = normalizedTags[i];
+                        const depends = [createOp.op_id];
+                        if (entry.tagCreateOp) depends.push(entry.tagCreateOp.op_id);
+                        const tagContext = entry.name
+                            ? { tag: { id: entry.id, name: entry.name } }
+                            : null;
+                        const tagOp = await insertEnvelopeIn(request, {
+                            operation: 'ADD_WORK_TAG', entity_type: 'work',
+                            entity_id: createOp.entity_id,
+                            payload: { tag_id: entry.id },
+                            base_revision: 0, depends_on: depends,
+                        }, tagContext);
+                        tagOps.push(tagOp);
+                        rows.push(tagOp);
+                    }
+                    setResult({ create: createOp, tags: tagOps });
                 });
         }
 
@@ -3896,7 +3903,7 @@
             mergeTag: mergeTag,
             deleteWork: deleteWork,
             createWork: createWork,
-            coalesceWorkTag, attachWorkTagsAfterCreate, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
+            coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,
             createPerson,

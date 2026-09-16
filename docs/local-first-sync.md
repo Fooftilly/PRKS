@@ -1728,6 +1728,12 @@ orders behind pending `CREATE_FOLDER` / `CREATE_PLAYLIST` / `CREATE_PERSON` via
 `depends_on`. A second envelope for an id that already exists acknowledges
 without overwriting.
 
+Selected Tags at create time are ordinary `ADD_WORK_TAG` operations written in
+the **same** local-store transaction as `CREATE_WORK`. Each tag row depends on
+the new create (and on any pending `CREATE_TAG`). Sync wakes only after that
+batch commits — never between create and tags. Tags are not stuffed into the
+`CREATE_WORK` payload.
+
 Acknowledgement fences folders, works-browse and recently-added always; playlists
 when construction carried a playlist; people and person-groups when it carried
 roles. Recent is deliberately untouched. Pending creates overlay Work detail

@@ -90,14 +90,17 @@
         };
     }
 
-    async function createWorkDurably(fields) {
+    async function createWorkDurably(fields, options) {
         const sync = root.prksSync;
         if (!sync || !sync.store || typeof sync.store.createWork !== 'function') {
             throw new Error('File creation is not available.');
         }
-        const op = await sync.store.createWork(fields);
+        /* One local transaction: CREATE_WORK plus any selected ADD_WORK_TAG
+         * rows. Wake sync only after that batch commits so create cannot retire
+         * before its tag dependents exist. */
+        const batch = await sync.store.createWork(fields, options);
         if (typeof sync.changed === 'function') sync.changed();
-        return op;
+        return batch;
     }
 
     async function deleteWorkDurably(workId) {

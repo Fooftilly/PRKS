@@ -4581,22 +4581,14 @@ function initForms() {
                         };
                     }).filter(function (r) { return r.person_id; }) : [],
                 };
-                const op = await prksCreateWorkDurably(createFields);
-                const newId = op && op.entity_id;
-                if (newId && typeof uploadTagsSelected !== 'undefined' && uploadTagsSelected.length &&
-                    typeof window.prksSync !== 'undefined' && window.prksSync.store &&
-                    typeof window.prksSync.store.attachWorkTagsAfterCreate === 'function') {
-                    try {
-                        await window.prksSync.store.attachWorkTagsAfterCreate(
-                            newId, op.op_id, uploadTagsSelected);
-                        if (typeof window.prksSync.changed === 'function') window.prksSync.changed();
-                    } catch (tagErr) {
-                        if (statusMsg) {
-                            statusMsg.textContent = 'File created, but one or more tags could not be attached.';
-                            statusMsg.classList.remove('hidden');
-                        }
-                    }
-                }
+                const selectedTags = (typeof uploadTagsSelected !== 'undefined' &&
+                    Array.isArray(uploadTagsSelected))
+                    ? uploadTagsSelected.map(function (t) {
+                        return { id: t.id, name: t.name || '' };
+                    }).filter(function (t) { return t.id; })
+                    : [];
+                const batch = await prksCreateWorkDurably(createFields, { tags: selectedTags });
+                const newId = batch && batch.create && batch.create.entity_id;
                 closeModals();
                 if (newId && typeof prksNavigate === 'function') {
                     prksNavigate('#/works/' + encodeURIComponent(newId));
