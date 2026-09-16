@@ -4,6 +4,12 @@
  * Construction is video / YouTube only. PDF binary stays on POST /api/works.
  * Pending creations overlay Work detail; ACK fences the same coherence domains
  * the online create path published.
+ *
+ * Live CREATE/DELETE sets are updated at enqueue and refreshed from the durable
+ * queue when it is readable. The Work route consults them synchronously so a
+ * retained cache cannot reappear while DELETE_WORK is pending — without making
+ * every cached open wait on listOperations (metadata hydration races gate that
+ * read on purpose).
  */
 (function (root) {
     'use strict';
@@ -12,6 +18,10 @@
         function (op) {
             return !!op && op.status !== 'acknowledged' && op.status !== 'conflict';
         };
+
+    let livePendingDeletes = new Set();
+    let livePendingCreates = new Set();
+    let liveHydrationArmed = false;
 
     function pendingDeletions(operations) {
         return new Set((operations || []).filter(function (op) {
@@ -23,6 +33,58 @@
         return (operations || []).filter(function (op) {
             return op && op.operation === 'CREATE_WORK' && deletionAwaitsServer(op);
         });
+    }
+
+    function applyLiveFromOperations(operations) {
+        livePendingDeletes = pendingDeletions(operations);
+        livePendingCreates = new Set(pendingCreates(operations).map(function (op) {
+            return op.entity_id;
+        }));
+    }
+
+    function noteLiveDelete(workId) {
+        if (!workId) return;
+        livePendingDeletes.add(workId);
+        livePendingCreates.delete(workId);
+    }
+
+    function noteLiveCreate(workId) {
+        if (!workId) return;
+        livePendingCreates.add(workId);
+        livePendingDeletes.delete(workId);
+    }
+
+    function clearLiveLifecycle(workId) {
+        if (!workId) return;
+        livePendingDeletes.delete(workId);
+        livePendingCreates.delete(workId);
+    }
+
+    function isLivePendingDeletion(workId) {
+        return !!workId && livePendingDeletes.has(workId);
+    }
+
+    function isLivePendingCreation(workId) {
+        return !!workId && livePendingCreates.has(workId);
+    }
+
+    function armLiveHydration() {
+        if (liveHydrationArmed) return true;
+        if (!root.prksSync || !root.prksSync.store ||
+            typeof root.prksSync.store.listOperations !== 'function') {
+            return false;
+        }
+        liveHydrationArmed = true;
+        const refresh = function () {
+            return root.prksSync.store.listOperations().then(function (ops) {
+                applyLiveFromOperations(ops);
+            }).catch(function () { /* live set stays last-known */ });
+        };
+        void refresh();
+        if (typeof root.prksSync.subscribe === 'function') {
+            root.prksSync.subscribe(function () { void refresh(); });
+        }
+        return true;
     }
 
     /** Drop Works this device is waiting to delete from a list of rows. */
@@ -99,6 +161,9 @@
          * rows. Wake sync only after that batch commits so create cannot retire
          * before its tag dependents exist. */
         const batch = await sync.store.createWork(fields, options);
+        if (batch && batch.create && batch.create.entity_id) {
+            noteLiveCreate(batch.create.entity_id);
+        }
         if (typeof sync.changed === 'function') sync.changed();
         return batch;
     }
@@ -109,6 +174,8 @@
             throw new Error('File deletion is not available.');
         }
         const op = await sync.store.deleteWork(workId);
+        if (op && op.entity_id) noteLiveDelete(op.entity_id);
+        else clearLiveLifecycle(workId);
         if (typeof sync.changed === 'function') sync.changed();
         return op;
     }
@@ -147,5 +214,16 @@
         prksDeleteWorkDurably: deleteWorkDurably,
         prksWorkCreateSyncHandler: createHandler,
         prksWorkDeleteSyncHandler: deleteHandler,
+        prksIsLivePendingWorkDeletion: isLivePendingDeletion,
+        prksIsLivePendingWorkCreation: isLivePendingCreation,
+        prksApplyLiveWorkLifecycleFromOperations: applyLiveFromOperations,
+        prksArmLiveWorkLifecycleHydration: armLiveHydration,
     });
+
+    /* sync-runtime.js loads after this module; arm once it publishes prksSync. */
+    if (!armLiveHydration() && root.document) {
+        root.document.addEventListener('DOMContentLoaded', function () {
+            armLiveHydration();
+        });
+    }
 })(typeof window === 'undefined' ? globalThis : window);

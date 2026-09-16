@@ -3897,13 +3897,21 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'work': {
                 const workId = route.params.workId;
-                /* Cached Work detail may start loading in parallel with the
-                 * durable queue, but CREATE_WORK / DELETE_WORK classification
-                 * must be reliable before this route decides the Work exists.
-                 * DELETE_WORK intentionally keeps the cache until ACK — racing
-                 * listOperations against an empty fallback can miss a pending
-                 * tombstone and re-render the deleted Work. */
-                const workOpsPromise = prksDurableOperationsOrNone();
+                /* Durable-queue hydration must not block a cached Work from
+                 * painting (metadata editor races gate listOperations on
+                 * purpose). Pending CREATE/DELETE classification is still
+                 * reliable: the live lifecycle registry is updated at enqueue
+                 * and refreshed whenever the queue is readable. Never race
+                 * listOperations against an empty fallback — that missed
+                 * DELETE_WORK while the disposable cache is intentionally
+                 * retained until ACK. Pending CREATE_WORK has no cache row —
+                 * only then await the queue before any network GET. */
+                const workOpsPromise = prksDurableOperationsOrNone().then(function (ops) {
+                    if (typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
+                        prksApplyLiveWorkLifecycleFromOperations(ops || []);
+                    }
+                    return ops || [];
+                });
                 let cachedWorkRow = null;
                 try {
                     if (typeof createPrksOfflineStore === 'function') {
@@ -3915,34 +3923,49 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 let workOps = [];
                 let offlineWork = { value: null, source: 'unavailable', cachedAt: null };
+                const liveDeleted = typeof prksIsLivePendingWorkDeletion === 'function' &&
+                    prksIsLivePendingWorkDeletion(workId);
+                const liveUnsent = !liveDeleted &&
+                    typeof prksIsLivePendingWorkCreation === 'function' &&
+                    prksIsLivePendingWorkCreation(workId);
                 if (cachedWorkRow && cachedWorkRow.value) {
-                    const fetchPromise = prksOfflineDetailFetch(
-                        'work',
-                        workId,
-                        '/api/works/' + encodeURIComponent(workId),
-                        routeSignal
-                    );
-                    workOps = await workOpsPromise;
-                    if (stale()) return;
-                    const workDeletedEarly = typeof prksPendingWorkDeletions === 'function' &&
-                        prksPendingWorkDeletions(workOps).has(workId);
-                    const workUnsentEarly = !workDeletedEarly &&
-                        typeof prksPendingWorkCreates === 'function' &&
-                        prksPendingWorkCreates(workOps).some(op => op.entity_id === workId);
-                    if (workDeletedEarly || workUnsentEarly) {
+                    if (liveDeleted) {
                         offlineWork = { value: null, source: 'unavailable', cachedAt: null };
-                    } else {
-                        offlineWork = await fetchPromise;
+                        workOps = await workOpsPromise;
                         if (stale()) return;
+                    } else {
+                        offlineWork = await prksOfflineDetailFetch(
+                            'work',
+                            workId,
+                            '/api/works/' + encodeURIComponent(workId),
+                            routeSignal
+                        );
+                        if (stale()) return;
+                        /* Background: after a reload the live set may still be
+                         * empty until the queue is readable. If DELETE_WORK is
+                         * pending, replace the paint — never leave a tombstone
+                         * visible. */
+                        void workOpsPromise.then(function (ops) {
+                            if (stale()) return;
+                            workOps = ops;
+                            if (typeof prksPendingWorkDeletions === 'function' &&
+                                prksPendingWorkDeletions(ops).has(workId)) {
+                                if (typeof prksOfflineRenderUnavailable === 'function') {
+                                    prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
+                                }
+                                if (ctx.setEntity) ctx.setEntity('work', null);
+                            }
+                        });
                     }
                 } else {
                     workOps = await workOpsPromise;
                     if (stale()) return;
-                    const workDeletedEarly = typeof prksPendingWorkDeletions === 'function' &&
-                        prksPendingWorkDeletions(workOps).has(workId);
-                    const workUnsentEarly = !workDeletedEarly &&
+                    const workDeletedEarly = liveDeleted ||
+                        (typeof prksPendingWorkDeletions === 'function' &&
+                            prksPendingWorkDeletions(workOps).has(workId));
+                    const workUnsentEarly = liveUnsent || (!workDeletedEarly &&
                         typeof prksPendingWorkCreates === 'function' &&
-                        prksPendingWorkCreates(workOps).some(op => op.entity_id === workId);
+                        prksPendingWorkCreates(workOps).some(op => op.entity_id === workId));
                     if (!workUnsentEarly && !workDeletedEarly) {
                         offlineWork = await prksOfflineDetailFetch(
                             'work',
@@ -3953,11 +3976,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         if (stale()) return;
                     }
                 }
-                const workDeleted = typeof prksPendingWorkDeletions === 'function' &&
-                    prksPendingWorkDeletions(workOps).has(workId);
-                const workUnsent = !workDeleted &&
+                const workDeleted = liveDeleted ||
+                    (typeof prksPendingWorkDeletions === 'function' &&
+                        prksPendingWorkDeletions(workOps).has(workId));
+                const workUnsent = liveUnsent || (!workDeleted &&
                     typeof prksPendingWorkCreates === 'function' &&
-                    prksPendingWorkCreates(workOps).some(op => op.entity_id === workId);
+                    prksPendingWorkCreates(workOps).some(op => op.entity_id === workId));
                 if (workUnsent) {
                     offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                 }

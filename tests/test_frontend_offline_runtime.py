@@ -1302,22 +1302,30 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("void prksRecordWorkOpened(", app[at: at + 4500])
         self.assertNotIn("await prksRecordWorkOpened(", app)
 
-    def test_work_route_awaits_durable_ops_before_create_delete_classification(self):
+    def test_work_route_classifies_pending_delete_without_empty_ops_race(self):
         """Pending DELETE_WORK keeps the disposable cache until ACK. The Work
         route must not race listOperations against an empty fallback and then
         treat a missing answer as "no pending delete" — that re-renders a
-        tombstoned Work from cache."""
+        tombstoned Work from cache. Cached opens still must not await the
+        durable queue before paint (metadata hydration gates listOperations)."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        lifecycle = _read(os.path.join(_FRONTEND, "js", "work-lifecycle-state.js"))
         at = app.index("case 'work': {")
         nxt = app.find("case 'concepts':", at)
         body = app[at: nxt if nxt > at else at + 5500]
-        self.assertIn("workOps = await workOpsPromise", body)
-        self.assertIn("prksPendingWorkDeletions(workOps)", body)
+        self.assertIn("prksIsLivePendingWorkDeletion", body)
+        self.assertIn("prksApplyLiveWorkLifecycleFromOperations", body)
         # The empty-ops Promise.race fallback was the regression.
         self.assertNotIn("Promise.resolve({ ops: null })", body)
         self.assertNotIn("raced.ops || []", body)
-        # Cached path may still start detail fetch in parallel with the queue.
-        self.assertIn("fetchPromise", body)
+        # Cached + not live-deleted: paint via detail fetch; ops are background.
+        paint = body[body.index("} else {\n                        offlineWork = await prksOfflineDetailFetch"):
+                     body.index("void workOpsPromise.then") + 80]
+        self.assertIn("prksOfflineDetailFetch", paint)
+        self.assertIn("void workOpsPromise.then", paint)
+        self.assertNotIn("workOps = await workOpsPromise", paint)
+        self.assertIn("prksIsLivePendingWorkDeletion", lifecycle)
+        self.assertIn("noteLiveDelete", lifecycle)
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into
