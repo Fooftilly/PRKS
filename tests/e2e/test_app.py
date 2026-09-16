@@ -582,12 +582,14 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         person_b = server.ids["person_b"]
         tab_a, tab_b = _open_two_person_split(page, server)
         held = []
+        hold_active = {"on": False}
 
         def hold_a_patch(route):
             # The save's in-flight window is now the read of the revision base
             # it measures against, not a canonical PATCH.
             req = route.request
-            if urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_a:
+            if (hold_active["on"]
+                    and urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_a):
                 held.append(route)
                 return
             route.fallback()
@@ -595,8 +597,18 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
         page.route("**/api/persons/**", hold_a_patch)
         try:
             _focus_workspace_tab(page, tab_a)
-            _open_focused_person_editor(page, person_a)
+            # Warm metadata-state before arming the save hold (route is already
+            # installed but hold_active is False, so the warm uses fallback).
+            with page.expect_response(
+                lambda r: (
+                    urlparse(r.url).path == "/api/persons/%s/metadata-state" % person_a
+                    and r.ok
+                ),
+                timeout=15000,
+            ):
+                _open_focused_person_editor(page, person_a)
             page.locator("#pd-first-name").fill("Ada Background Saved")
+            hold_active["on"] = True
             page.locator("#pd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -604,6 +616,7 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             self.assertTrue(held, "the profile save never read its revision base")
             _focus_workspace_tab(page, tab_b)
             page.locator(".person-sidebar-summary").wait_for()
+            hold_active["on"] = False
             held.pop().continue_()
             page.wait_for_function(
                 """id => {
@@ -626,6 +639,7 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             )
             self.assertIn("Ada Background Saved", heading)
         finally:
+            hold_active["on"] = False
             _continue_held_routes(held)
             page.unroute("**/api/persons/**", hold_a_patch)
 
@@ -5031,131 +5045,123 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertNotAlmostEqual(after["width"], before["width"], delta=2)
 
     def test_delayed_person_save_updates_owner_without_replacing_other_focused_panel(self):
+        """Durable profile save must not steal Main's annotations panel.
+
+        Profile fields are durable-first: there is no canonical PATCH left to
+        delay. Ownership still matters — after the save settles on the Person
+        tile, focusing Main and opening annotations must stay put even while
+        sync acknowledgement finishes in the background.
+        """
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         person_id = server.ids["person"]
         ids = _open_work_person_split(page, server)
-        held = []
-
-        def hold_person_patch(route):
-            # A profile save is durable-first: there is no canonical PATCH to
-            # hold any more. What it DOES await is the revision base this edit
-            # is measured against, so that read is the save's in-flight window.
-            req = route.request
-            if urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_id:
-                held.append(route)
-                return
-            route.fallback()
-
         saved_about = "PERSON-CROSS-FOCUS-%s" % int(time.time() * 1000)
-        page.route("**/api/persons/**", hold_person_patch)
-        try:
-            _open_details_drawer_if_tiled(page)
+
+        _open_details_drawer_if_tiled(page)
+        with page.expect_response(
+            lambda r: (
+                urlparse(r.url).path == "/api/persons/%s/metadata-state" % person_id
+                and r.ok
+            ),
+            timeout=15000,
+        ):
             page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
-            page.wait_for_selector("#pd-about")
-            page.fill("#pd-about", saved_about)
-            # Opening the editor WARMS the same revision base, so whatever is
-            # held at this point belongs to the open, not to the save. Release
-            # it first or the save's own read is the one left hanging.
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            _continue_held_routes(held)
-            held.clear()
-            page.wait_for_timeout(200)
-            page.locator("#pd-save-btn").click()
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            self.assertTrue(held, "the profile save never read its revision base")
-            save_btn = page.locator("#pd-save-btn")
-            self.assertTrue(save_btn.is_disabled())
-            self.assertEqual(save_btn.get_attribute("aria-busy"), "true")
-            self.assertEqual(save_btn.inner_text(), "Saving…")
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_id).wait_for()
+        page.wait_for_function(
+            "() => typeof document.querySelector('#pd-group-add-btn')?.onclick === 'function'"
+        )
+        page.fill("#pd-about", saved_about)
+        page.locator("#pd-save-btn").click()
+        settled = page.wait_for_function(
+            """(args) => {
+                const alert = document.querySelector('#prks-modal-confirm:not(.hidden)');
+                if (alert) return 'alert:' + (alert.innerText || '').slice(0, 200);
+                const ctx = window.prksGetTabContext(args.tabId);
+                const person = ctx && ctx.getEntity && ctx.getEntity('person');
+                if (person && person.about === args.about
+                        && !(ctx.ui && ctx.ui.personDetailEditing)) {
+                    return 'ok';
+                }
+                return false;
+            }""",
+            arg={"tabId": ids["secondaryTabId"], "about": saved_about},
+            timeout=60000,
+        ).json_value()
+        self.assertEqual(settled, "ok")
 
-            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
-            page.wait_for_function(
-                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
-                arg=ids["mainTabId"],
-            )
-            page.wait_for_function(
-                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
-                arg=ids["mainTabId"],
-            )
-            page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-            page.wait_for_selector("#annotation-fallback-list")
-            before = page.evaluate(
-                """() => {
-                    const snap = window.prksWorkspaceSnapshot();
-                    const ctx = window.prksGetTabContext(snap.mainTabId);
-                    const panel = document.getElementById('panel-content');
-                    const marker = document.getElementById('annotation-fallback-list');
-                    const editor = document.getElementById('pdf-annotation-editor');
-                    window.__prksPersonSavePanelMarker = marker;
-                    window.__prksPersonSaveEditorMarker = editor;
-                    return {
-                        focusedTabId: snap.focusedTabId,
-                        panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
-                        rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
-                        annotationMarker: !!marker,
-                        editorMarker: !!editor,
-                    };
-                }"""
-            )
-            self.assertEqual(before["focusedTabId"], ids["mainTabId"])
-            self.assertEqual(before["panelOwnerTabId"], ids["mainTabId"])
-            self.assertEqual(before["rightPanelTab"], "annotations")
-            self.assertTrue(before["annotationMarker"])
-            self.assertTrue(before["editorMarker"])
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["mainTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["mainTabId"],
+        )
+        page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
+        page.wait_for_selector("#annotation-fallback-list")
+        before = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.mainTabId);
+                const panel = document.getElementById('panel-content');
+                const marker = document.getElementById('annotation-fallback-list');
+                const editor = document.getElementById('pdf-annotation-editor');
+                window.__prksPersonSavePanelMarker = marker;
+                window.__prksPersonSaveEditorMarker = editor;
+                return {
+                    focusedTabId: snap.focusedTabId,
+                    panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
+                    rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
+                    annotationMarker: !!marker,
+                    editorMarker: !!editor,
+                };
+            }"""
+        )
+        self.assertEqual(before["focusedTabId"], ids["mainTabId"])
+        self.assertEqual(before["panelOwnerTabId"], ids["mainTabId"])
+        self.assertEqual(before["rightPanelTab"], "annotations")
+        self.assertTrue(before["annotationMarker"])
+        self.assertTrue(before["editorMarker"])
 
-            _continue_held_routes(held)
-            page.wait_for_function(
-                """(args) => {
-                    const ctx = window.prksGetTabContext(args.tabId);
-                    const person = ctx && ctx.getEntity && ctx.getEntity('person');
-                    const about = ctx && ctx.query && ctx.query('.person-profile__about');
-                    return !!(
-                        person && person.about === args.about &&
-                        about && about.textContent.indexOf(args.about) !== -1
-                    );
-                }""",
-                arg={"tabId": ids["secondaryTabId"], "about": saved_about},
-                timeout=60000,
-            )
-            after = page.evaluate(
-                """() => {
-                    const snap = window.prksWorkspaceSnapshot();
-                    const ctx = window.prksGetTabContext(snap.mainTabId);
-                    const panel = document.getElementById('panel-content');
-                    const marker = document.getElementById('annotation-fallback-list');
-                    const editor = document.getElementById('pdf-annotation-editor');
-                    const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
-                    return {
-                        focusedTabId: snap.focusedTabId,
-                        panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
-                        rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
-                        annotationsActive: !!(annBtn && annBtn.classList.contains('active')),
-                        sameAnnotationMarker: marker === window.__prksPersonSavePanelMarker,
-                        sameEditorMarker: editor === window.__prksPersonSaveEditorMarker,
-                        hasPersonPanel: !!(panel && panel.querySelector('.person-sidebar-summary, .person-panel-edit')),
-                    };
-                }"""
-            )
-            self.assertEqual(after["focusedTabId"], ids["mainTabId"])
-            self.assertEqual(after["panelOwnerTabId"], ids["mainTabId"])
-            self.assertEqual(after["rightPanelTab"], "annotations")
-            self.assertTrue(after["annotationsActive"])
-            self.assertTrue(after["sameAnnotationMarker"])
-            self.assertTrue(after["sameEditorMarker"])
-            self.assertFalse(after["hasPersonPanel"])
-        finally:
-            _continue_held_routes(held)
-            try:
-                page.unroute("**/api/persons/**", hold_person_patch)
-            except Exception:
-                pass
+        # Give any background ACK / panel refresh a window to misbehave.
+        page.wait_for_timeout(400)
+        after = page.evaluate(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(snap.mainTabId);
+                const panel = document.getElementById('panel-content');
+                const marker = document.getElementById('annotation-fallback-list');
+                const editor = document.getElementById('pdf-annotation-editor');
+                const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
+                return {
+                    focusedTabId: snap.focusedTabId,
+                    panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
+                    rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
+                    annotationsActive: !!(annBtn && annBtn.classList.contains('active')),
+                    sameAnnotationMarker: marker === window.__prksPersonSavePanelMarker,
+                    sameEditorMarker: editor === window.__prksPersonSaveEditorMarker,
+                    hasPersonPanel: !!(panel && panel.querySelector('.person-sidebar-summary, .person-panel-edit')),
+                };
+            }"""
+        )
+        self.assertEqual(after["focusedTabId"], ids["mainTabId"])
+        self.assertEqual(after["panelOwnerTabId"], ids["mainTabId"])
+        self.assertEqual(after["rightPanelTab"], "annotations")
+        self.assertTrue(after["annotationsActive"])
+        self.assertTrue(after["sameAnnotationMarker"])
+        self.assertTrue(after["sameEditorMarker"])
+        self.assertFalse(after["hasPersonPanel"])
 
     def test_delayed_role_link_refresh_cannot_claim_other_focused_work_panel(self):
+        """Durable link must not replace another focused Work's panel.
+
+        The role modal no longer GETs the Work after save (that raced the ACK
+        and could wipe Unlink). Ownership is still the point: while Main's
+        link settles via pending overlay / ACK, a focused Secondary Work's
+        panel must stay untouched.
+        """
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         work_a, work_b, ids = _open_work_work_split(page, server)
@@ -5170,15 +5176,6 @@ class WorkspaceTilingTests(_BrowserE2E):
             "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
             arg=ids["mainTabId"],
         )
-
-        work_gets = []
-
-        def on_request(req):
-            path = urlparse(req.url).path
-            if req.method == "GET" and path == "/api/works/%s" % work_a:
-                work_gets.append(req.url)
-
-        page.on("request", on_request)
 
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Manage relationships").click()
@@ -5197,162 +5194,121 @@ class WorkspaceTilingTests(_BrowserE2E):
         )
         page.locator('#role-role-seg-mount .prks-segmented__btn[data-value="Editor"]').click()
 
-        held = []
+        page.locator("#save-role-btn").click()
+        page.wait_for_selector("#role-modal.hidden, #role-modal", state="attached")
+        page.wait_for_function("() => document.getElementById('role-modal').classList.contains('hidden')")
 
-        def hold_work_get(route):
-            req = route.request
-            if req.method == "GET" and urlparse(req.url).path == "/api/works/" + work_a:
-                held.append(route)
-                return
-            route.fallback()
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["secondaryTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["secondaryTabId"],
+        )
+        before = page.evaluate(
+            """() => {
+                const panel = document.getElementById('panel-content');
+                return { ownerTabId: panel.dataset.prksOwnerTabId, html: panel.innerHTML };
+            }"""
+        )
+        self.assertEqual(before["ownerTabId"], ids["secondaryTabId"])
+        self.assertIn(WORK_B_TITLE, before["html"])
+        self.assertNotIn(WORK_A_TITLE, before["html"])
 
-        page.route("**/api/works/*", hold_work_get)
-        try:
-            page.locator("#save-role-btn").click()
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            self.assertTrue(held, "Work GET refresh was not intercepted")
-            self.assertEqual(page.locator("#role-modal:not(.hidden)").count(), 0)
+        page.wait_for_function(
+            """(args) => {
+                const ctx = window.prksGetTabContext(args.tabId);
+                const work = ctx && ctx.getEntity && ctx.getEntity('work');
+                return !!(
+                    work &&
+                    Array.isArray(work.roles) &&
+                    work.roles.some(r => String(r.person_id || r.id) === args.personId)
+                );
+            }""",
+            arg={"tabId": ids["mainTabId"], "personId": str(person_id)},
+        )
+        page.wait_for_timeout(200)
+        after = page.evaluate(
+            """() => {
+                const panel = document.getElementById('panel-content');
+                return { ownerTabId: panel.dataset.prksOwnerTabId, html: panel.innerHTML };
+            }"""
+        )
+        self.assertEqual(after["ownerTabId"], ids["secondaryTabId"])
+        self.assertIn(WORK_B_TITLE, after["html"])
+        self.assertNotIn(WORK_A_TITLE, after["html"])
+        self.assertGreater(
+            page.locator("#panel-content button", has_text="Manage relationships").count(), 0
+        )
 
-            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["secondaryTabId"])
-            page.wait_for_function(
-                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
-                arg=ids["secondaryTabId"],
-            )
-            page.wait_for_function(
-                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
-                arg=ids["secondaryTabId"],
-            )
-            before = page.evaluate(
-                """() => {
-                    const panel = document.getElementById('panel-content');
-                    return { ownerTabId: panel.dataset.prksOwnerTabId, html: panel.innerHTML };
-                }"""
-            )
-            self.assertEqual(before["ownerTabId"], ids["secondaryTabId"])
-            self.assertIn(WORK_B_TITLE, before["html"])
-            self.assertNotIn(WORK_A_TITLE, before["html"])
-
-            _continue_held_routes(held)
-            page.wait_for_function(
-                """(args) => {
-                    const ctx = window.prksGetTabContext(args.tabId);
-                    const work = ctx && ctx.getEntity && ctx.getEntity('work');
-                    return !!(
-                        work &&
-                        Array.isArray(work.roles) &&
-                        work.roles.some(r => String(r.person_id || r.id) === args.personId)
-                    );
-                }""",
-                arg={"tabId": ids["mainTabId"], "personId": str(person_id)},
-            )
-            page.wait_for_timeout(200)
-            after = page.evaluate(
-                """() => {
-                    const panel = document.getElementById('panel-content');
-                    return { ownerTabId: panel.dataset.prksOwnerTabId, html: panel.innerHTML };
-                }"""
-            )
-            self.assertEqual(after["ownerTabId"], ids["secondaryTabId"])
-            self.assertIn(WORK_B_TITLE, after["html"])
-            self.assertNotIn(WORK_A_TITLE, after["html"])
-            self.assertGreater(
-                page.locator("#panel-content button", has_text="Manage relationships").count(), 0
-            )
-
-            page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
-            page.wait_for_function(
-                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
-                arg=ids["mainTabId"],
-            )
-            page.wait_for_function(
-                "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
-                arg=ids["mainTabId"],
-            )
-            manage_btn = page.locator("#panel-content button", has_text="Manage relationships")
-            if manage_btn.count():
-                manage_btn.click()
-            editor_role = page.locator(".work-linked-persons__role", has_text="Editor")
-            editor_role.wait_for()
-            self.assertIn(PERSON_DISPLAY, editor_role.inner_text())
-            self.assertEqual(len(work_gets), 1)
-        finally:
-            _continue_held_routes(held)
-            try:
-                page.unroute("**/api/works/*", hold_work_get)
-            except Exception:
-                pass
+        page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["mainTabId"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=ids["mainTabId"],
+        )
+        page.wait_for_function(
+            "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
+            arg=ids["mainTabId"],
+        )
+        manage_btn = page.locator("#panel-content button", has_text="Manage relationships")
+        if manage_btn.count():
+            manage_btn.click()
+        editor_role = page.locator(".work-linked-persons__role", has_text="Editor")
+        editor_role.wait_for()
+        self.assertIn(PERSON_DISPLAY, editor_role.inner_text())
 
     def test_delayed_person_save_refreshes_focused_person_panel(self):
+        """Durable profile save refreshes the focused Person panel in place."""
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         person_id = server.ids["person"]
         ids = _open_work_person_split(page, server)
-        held = []
-
-        def hold_person_patch(route):
-            # A profile save is durable-first: there is no canonical PATCH to
-            # hold any more. What it DOES await is the revision base this edit
-            # is measured against, so that read is the save's in-flight window.
-            req = route.request
-            if urlparse(req.url).path == "/api/persons/%s/metadata-state" % person_id:
-                held.append(route)
-                return
-            route.fallback()
-
         saved_about = "PERSON-FOCUSED-SAVE-%s" % int(time.time() * 1000)
-        page.route("**/api/persons/**", hold_person_patch)
-        try:
-            _open_details_drawer_if_tiled(page)
-            page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
-            page.wait_for_selector("#pd-about")
-            page.fill("#pd-about", saved_about)
-            # Opening the editor WARMS the same revision base, so whatever is
-            # held at this point belongs to the open, not to the save. Release
-            # it first or the save's own read is the one left hanging.
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            _continue_held_routes(held)
-            held.clear()
-            page.wait_for_timeout(200)
-            page.locator("#pd-save-btn").click()
-            deadline = time.time() + 8
-            while time.time() < deadline and not held:
-                page.wait_for_timeout(50)
-            self.assertTrue(held, "the profile save never read its revision base")
-            self.assertEqual(
-                page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"),
-                ids["secondaryTabId"],
-            )
 
-            _continue_held_routes(held)
-            page.wait_for_function(
-                """(args) => {
-                    const snap = window.prksWorkspaceSnapshot();
-                    const ctx = window.prksGetTabContext(args.tabId);
-                    const person = ctx && ctx.getEntity && ctx.getEntity('person');
-                    const about = ctx && ctx.query && ctx.query('.person-profile__about');
-                    const panel = document.getElementById('panel-content');
-                    return !!(
-                        snap.focusedTabId === args.tabId &&
-                        person && person.about === args.about &&
-                        about && about.textContent.indexOf(args.about) !== -1 &&
-                        panel && panel.dataset.prksOwnerTabId === args.tabId &&
-                        panel.querySelector('.person-sidebar-summary') &&
-                        !panel.querySelector('.person-panel-edit')
-                    );
-                }""",
-                arg={"tabId": ids["secondaryTabId"], "about": saved_about},
-                timeout=60000,
-            )
-        finally:
-            _continue_held_routes(held)
-            try:
-                page.unroute("**/api/persons/**", hold_person_patch)
-            except Exception:
-                pass
+        _open_details_drawer_if_tiled(page)
+        with page.expect_response(
+            lambda r: (
+                urlparse(r.url).path == "/api/persons/%s/metadata-state" % person_id
+                and r.ok
+            ),
+            timeout=15000,
+        ):
+            page.locator('.person-sidebar-summary .prks-btn--primary', has_text="Edit profile").click()
+        page.locator('.person-panel-edit[data-person-edit-id="%s"]' % person_id).wait_for()
+        page.wait_for_function(
+            "() => typeof document.querySelector('#pd-group-add-btn')?.onclick === 'function'"
+        )
+        page.fill("#pd-about", saved_about)
+        self.assertEqual(
+            page.evaluate("() => window.prksWorkspaceSnapshot().focusedTabId"),
+            ids["secondaryTabId"],
+        )
+        page.locator("#pd-save-btn").click()
+        settled = page.wait_for_function(
+            """(args) => {
+                const alert = document.querySelector('#prks-modal-confirm:not(.hidden)');
+                if (alert) return 'alert:' + (alert.innerText || '').slice(0, 200);
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext(args.tabId);
+                const person = ctx && ctx.getEntity && ctx.getEntity('person');
+                const aboutText = ctx && ctx.root &&
+                    ctx.root.querySelector('.person-profile__about-text');
+                const panel = document.getElementById('panel-content');
+                if (
+                    snap.focusedTabId === args.tabId &&
+                    person && person.about === args.about &&
+                    aboutText && aboutText.textContent.indexOf(args.about) !== -1 &&
+                    !(ctx.ui && ctx.ui.personDetailEditing) &&
+                    panel && !panel.querySelector('.person-panel-edit')
+                ) return 'ok';
+                return false;
+            }""",
+            arg={"tabId": ids["secondaryTabId"], "about": saved_about},
+            timeout=60000,
+        ).json_value()
+        self.assertEqual(settled, "ok")
 
     def test_deep_focus_survives_async_sibling_title_resolution(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)

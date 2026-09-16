@@ -86,6 +86,35 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         self.assertNotIn('window.location.reload', body)
         self.assertNotIn('fetchPersonDetails(', body,
                          'a refetch as the completion condition would fail Save offline')
+        # After the durable write, ownership must use the live generation —
+        # a captured pre-await generation treats a same-Person remount as
+        # "left the route" and skips painting the just-saved values.
+        post = body[body.index('prksSavePersonGroupMemberships('):]
+        self.assertIn(
+            "prksTabContextOwnsEntityRoute(ctx, ctx.generation, 'person', personId, 'person')",
+            post,
+        )
+        self.assertNotIn(
+            "prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')",
+            post,
+        )
+
+    def test_person_record_for_peeks_cache_before_read_through(self):
+        """A post-save paint must not race the durable ACK on the wire.
+
+        readThrough always GETs when online. If that GET leaves before the
+        server write is visible and returns after the op has been reconciled
+        and retired, nothing remains to overlay and the pre-mutation body
+        paints. The disposable cache is what reconcile just patched.
+        """
+        app = (FRONTEND / 'app.js').read_text()
+        at = app.index('async function prksPersonRecordFor(')
+        body = app[at: app.index('\nasync function ', at + 1)]
+        self.assertIn("createPrksOfflineStore().getEntity('person'", body)
+        peek_at = body.index("createPrksOfflineStore().getEntity('person'")
+        fetch_at = body.index('prksOfflineReadEntity(')
+        self.assertLess(peek_at, fetch_at,
+                        'cache peek must precede the read-through fallback')
 
     def test_unknown_profile_state_is_not_treated_as_empty(self):
         """G5. Guessing revision 0 for a Person whose revisions this device has

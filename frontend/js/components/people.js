@@ -1469,9 +1469,15 @@ async function savePersonProfile(personId) {
                 (Array.isArray(draft.groups) ? draft.groups : []).map(g => g.id))) {
             return;
         }
+        /* Ownership after the awaits must use the LIVE generation. Capturing
+         * generation at click time would treat a same-Person beginRoute
+         * remount as "left the route" and skip setEntity/render — leaving the
+         * durable write invisible and, when the remount did not run, the
+         * editor stranded open. A real navigation away destroys the draft or
+         * the entity id, which the check below still catches. */
         if (
             typeof prksTabContextOwnsEntityRoute === 'function' &&
-            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+            !prksTabContextOwnsEntityRoute(ctx, ctx.generation, 'person', personId, 'person')
         ) return;
         /* The record the user now sees: what was cached, overlaid with the
          * intent just written. No refetch -- there is nothing to fetch, the

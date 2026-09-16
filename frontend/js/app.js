@@ -2261,12 +2261,26 @@ async function prksPendingCreatedPersonGroup(groupId) {
  */
 async function prksPersonRecordFor(personId) {
     let cached = null;
+    /* Prefer the disposable cache snapshot. A network read-through here can
+     * race a just-sent durable ACK: the GET may leave before the server write
+     * is visible, return the pre-mutation body, and — once the op has already
+     * been reconciled and retired — paint that stale body with nothing left
+     * to overlay. The cache is what reconcile just patched (or what the
+     * pending op still overlays). */
     try {
-        const result = await prksOfflineReadEntity('person', personId,
-            '/api/persons/' + encodeURIComponent(personId),
-            { validate: value => prksIsPersonShape(value, personId) });
-        cached = result && result.value;
+        if (typeof createPrksOfflineStore === 'function') {
+            const row = await createPrksOfflineStore().getEntity('person', personId);
+            cached = row && row.value;
+        }
     } catch (_e) { cached = null; }
+    if (!cached) {
+        try {
+            const result = await prksOfflineReadEntity('person', personId,
+                '/api/persons/' + encodeURIComponent(personId),
+                { validate: value => prksIsPersonShape(value, personId) });
+            cached = result && result.value;
+        } catch (_e) { cached = null; }
+    }
     if (!cached) return await prksPendingCreatedPerson(personId);
     return await prksEffectivePersonRecord(cached);
 }
@@ -2281,12 +2295,23 @@ async function prksPersonRecordFor(personId) {
  */
 async function prksPersonGroupRecordFor(groupId) {
     let cached = null;
+    /* Same cache-first rule as prksPersonRecordFor: a read-through GET can
+     * race a just-acknowledged durable write and return a pre-mutation body
+     * after the op has already retired. */
     try {
-        const result = await prksOfflineReadEntity('person-group', groupId,
-            '/api/person-groups/' + encodeURIComponent(groupId),
-            { validate: value => prksIsPersonGroupShape(value, groupId) });
-        cached = result && result.value;
+        if (typeof createPrksOfflineStore === 'function') {
+            const row = await createPrksOfflineStore().getEntity('person-group', groupId);
+            cached = row && row.value;
+        }
     } catch (_e) { cached = null; }
+    if (!cached) {
+        try {
+            const result = await prksOfflineReadEntity('person-group', groupId,
+                '/api/person-groups/' + encodeURIComponent(groupId),
+                { validate: value => prksIsPersonGroupShape(value, groupId) });
+            cached = result && result.value;
+        } catch (_e) { cached = null; }
+    }
     if (!cached) return await prksPendingCreatedPersonGroup(groupId);
     return await prksEffectivePersonGroupRecord(cached);
 }
