@@ -5590,6 +5590,17 @@ class WorkspaceTilingTests(_BrowserE2E):
                 "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
                 arg=ids["secondaryTabId"],
             )
+            # Work Details paints durable metadata status asynchronously
+            # ("All changes synced"). Snapshot only after that settles so a
+            # late paint is not mistaken for Main's deferred playlist mount
+            # mutating another tab's panel.
+            page.wait_for_function(
+                """() => {
+                    const t = document.getElementById('panel-content');
+                    return !!(t && t.innerText && t.innerText.indexOf('All changes synced') !== -1);
+                }""",
+                timeout=15000,
+            )
             before = page.evaluate(
                 """() => ({
                     owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
