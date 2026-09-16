@@ -1007,6 +1007,9 @@ body {
 }
 
 .prks-tile {
+    /* Contain Notes drawer / PDF overlays so their z-index cannot paint over
+     * sibling workspace splitters (nested Main/Secondary dividers). */
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -1045,8 +1048,8 @@ body {
 }
 
 .prks-splitter {
-    /* Above adjacent tile content (Notes sidecar/drawer, PDF viewport) so the
-     * extended ::after hit strip stays reachable; below chrome overlays/modals. */
+    /* Above adjacent tile layers (tiles use isolation:isolate) so the extended
+     * ::after hit strip stays reachable; below chrome overlays/modals. */
     position: relative;
     z-index: var(--z-panel);
     background: var(--border);
