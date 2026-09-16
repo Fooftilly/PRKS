@@ -939,10 +939,12 @@ async function renderWorkDetails(ctx, work, requestCtx) {
                               : folderTitle
                           : null,
                       credit || null,
-                      peopleN != null
+                      peopleN != null && peopleN > 0
                           ? peopleN + (peopleN === 1 ? ' person' : ' people')
                           : null,
-                      tagsN != null ? tagsN + (tagsN === 1 ? ' tag' : ' tags') : null,
+                      tagsN != null && tagsN > 0
+                          ? tagsN + (tagsN === 1 ? ' tag' : ' tags')
+                          : null,
                   ],
               })
             : '';
