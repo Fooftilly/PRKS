@@ -236,24 +236,26 @@ function prksProcessingAttachTagCombobox(card) {
                 ev.preventDefault();
                 void (async () => {
                     try {
-                        const res = await prksRequest('/api/tags', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: val, color: '#6d6cf7' }),
-                        });
-                        const data = await res.json();
-                        if (!res.ok || !data.id) throw new Error(data.error || 'no id');
-                        if (typeof prksOfflineMarkTagsChanged === 'function') prksOfflineMarkTagsChanged();
+                        if (typeof prksCreateTagDurably !== 'function') {
+                            throw new Error('Tag creation is not available.');
+                        }
+                        const created = await prksCreateTagDurably(
+                            { name: val, color: '#6d6cf7' });
+                        if (!created || !created.entity_id) throw new Error('no id');
                         card.__processingTags = Array.isArray(card.__processingTags) ? card.__processingTags : [];
-                        if (!attachedIds().has(String(data.id))) {
-                            card.__processingTags.push({ id: data.id, name: data.name || val });
+                        if (!attachedIds().has(String(created.entity_id))) {
+                            card.__processingTags.push({
+                                id: created.entity_id,
+                                name: val,
+                            });
                             prksProcessingRenderTagList(card);
                         }
                         input.value = '';
                         prksHideInlineComboboxResults(results);
                     } catch (e) {
                         console.error(e);
-                        await prksAlertMessage('Could not create tag.', 'Error');
+                        await prksAlertMessage(
+                            (e && e.message) || 'Could not create tag.', 'Error');
                     }
                 })();
             };

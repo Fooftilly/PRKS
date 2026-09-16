@@ -125,13 +125,15 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         self.assertNotIn("prksRequest(", body)
         self.assertNotIn("prksOfflineMarkEntityChanged", body)
 
-    def test_folder_private_notes_remain_the_documented_patch_exception(self):
+    def test_folder_private_notes_use_durable_set_folder_field(self):
         src = _read(_UI)
         start = src.index("function prksEnqueuePrivateNotesSave(")
         body = src[start : src.index("function prksFlushPendingPrivateNotes(", start)]
-        self.assertIn("`/api/folders/${editor.entityId}`", body)
-        self.assertIn("prksOfflineRuntimeState() !== 'online'", body)
-        self.assertNotIn("`/api/works/${editor.entityId}`", body)
+        self.assertIn("patchFolder(", body)
+        self.assertIn("private_notes", body)
+        self.assertNotIn("/api/folders/", body)
+        self.assertNotIn("prksRequest(", body)
+        self.assertNotIn("Offline — notes are read-only", body)
 
     def test_toolbar_class_list_still_names_mutating_actions(self):
         src = _read(_WORKS)

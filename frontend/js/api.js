@@ -911,6 +911,12 @@ async function removeTagFromFolder(folderId, tagId) {
 }
 
 async function bulkUpdateWorks(payload) {
+    if (typeof prksOfflineGuardMutation === 'function' &&
+        prksOfflineGuardMutation('Bulk organize requires a connection to PRKS.')) {
+        const err = new Error('Requires a connection to PRKS.');
+        err.prksOfflineRefused = true;
+        throw err;
+    }
     const res = await prksRequest('/api/works/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

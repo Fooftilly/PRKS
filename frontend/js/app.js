@@ -3671,6 +3671,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'publishers': {
+                if (typeof prksOfflineRuntimeState === 'function' &&
+                    prksOfflineRuntimeState() !== 'online') {
+                    prksOfflineRenderUnavailable(
+                        contentDiv,
+                        'Publishers require a connection');
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Publishers require a connection',
+                    };
+                    break;
+                }
                 if (typeof renderPublishersPage === 'function') {
                     await renderPublishersPage(contentDiv, generation, { signal: routeSignal, ctx: ctx });
                     if (stale()) return;
@@ -4589,6 +4600,11 @@ function initForms() {
                     if (typeof prksFocusWorkModalControl === 'function') prksFocusWorkModalControl(videoUrlEl);
                 }
             }
+            return;
+        }
+
+        if (typeof prksOfflineGuardMutation === 'function' &&
+            prksOfflineGuardMutation('Adding a PDF file requires a connection to PRKS.')) {
             return;
         }
 

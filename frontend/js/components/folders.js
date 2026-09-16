@@ -273,26 +273,22 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
  * routes bind through their own TabContext, while the Work-side Folder card
  * lives in the shared right panel and mirrors the Playlist card's subscription.
  * ------------------------------------------------------------------------ */
-const PRKS_FOLDER_MUTATION_SELECTOR = [
-    '#prks-folder-library-create-btn',
-    '[data-prks-create-folder-query]',
-    '[data-delete-folder-id]',
+/* Folder create / rename / delete / filing / tags are durable. No library
+ * control is frozen solely for want of a connection. The Work Folder card
+ * still refuses *starting* an edit session offline (catalogue search),
+ * matching the Playlist card: Clear / New stay live; Search / Set freeze. */
+const PRKS_WORK_FOLDER_MUTATION_SELECTOR = [
+    '#prks-work-folder-search',
+    '#prks-work-folder-set-btn',
 ].join(', ');
 
 function prksFolderRuntimeOnline() {
     return typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
 }
 
-/** Recently Added is server-backed in this milestone: it has no cache to fall
- *  back to, so it is disabled rather than allowed to issue a doomed request. */
+/** Library create/delete stay live (durable). Nothing to freeze on the route. */
 function prksApplyFolderOfflineState(container) {
-    if (!container || !container.querySelectorAll) return;
-    const online = prksFolderRuntimeOnline();
-    container.querySelectorAll(PRKS_FOLDER_MUTATION_SELECTOR).forEach(function (el) {
-        if ('disabled' in el) el.disabled = !online;
-        if (online) el.removeAttribute('aria-disabled');
-        else el.setAttribute('aria-disabled', 'true');
-    });
+    void container;
 }
 
 /** The Folder detail's tag editor and delete button live in the shared right
@@ -344,21 +340,25 @@ function prksApplyWorkFolderOfflineState(ctx) {
     if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx, panel)) return;
     const online = prksFolderRuntimeOnline();
     const editing = !!(ctx && ctx.ui && ctx.ui.workFolderEditing);
+    panel.querySelectorAll(PRKS_WORK_FOLDER_MUTATION_SELECTOR).forEach(function (el) {
+        el.disabled = !online;
+        if (online) el.removeAttribute('aria-disabled');
+        else el.setAttribute('aria-disabled', 'true');
+    });
     const editBtn = panel.querySelector('#prks-work-folder-edit-btn');
     if (editBtn) {
         // Closed card: Edit cannot start a new edit offline. Open card: the
-        // same button is "Done" and must keep working.
+        // same button is "Done" and must keep working. Clear / New stay live
+        // — neither needs the live catalogue.
         editBtn.disabled = !online && !editing;
         if (editBtn.disabled) editBtn.setAttribute('aria-disabled', 'true');
         else editBtn.removeAttribute('aria-disabled');
     }
-    ['#prks-work-folder-search', '#prks-work-folder-set-btn',
-     '#prks-work-folder-clear-btn', '#prks-work-folder-new-btn'].forEach(function (sel) {
+    ['#prks-work-folder-clear-btn', '#prks-work-folder-new-btn'].forEach(function (sel) {
         const el = panel.querySelector(sel);
         if (!el) return;
-        el.disabled = !online;
-        if (online) el.removeAttribute('aria-disabled');
-        else el.setAttribute('aria-disabled', 'true');
+        el.disabled = false;
+        el.removeAttribute('aria-disabled');
     });
     const results = panel.querySelector('#prks-work-folder-results');
     if (results) {
@@ -377,10 +377,8 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
 }
 
 function prksOpenFolderModalFromLibrarySearch(query) {
-    // Central guard for the creation modal; createFolder() guards again at the
-    // canonical boundary so a disconnect while the dialog is open still refuses.
-    if (typeof prksOfflineGuardMutation === 'function' &&
-        prksOfflineGuardMutation('Creating a folder requires a connection to PRKS.')) return;
+    // CREATE_FOLDER is durable: the folder is real the moment it is written.
+    // No connectivity guard — unknown-base refusals live inside createFolder.
     const pre = String(query || '').trim();
     const titleEl = document.getElementById('folder-title');
     const descEl = document.getElementById('folder-description');
@@ -1228,7 +1226,6 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
             c.onmousedown = (ev) => {
                 ev.preventDefault();
                 void (async () => {
-                    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
                     try {
                         if (typeof createFolder !== 'function') return;
                         const newId = await createFolder(rawQ, '');
@@ -1293,7 +1290,6 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     input.onblur = () => setTimeout(() => prksHideInlineComboboxResults(results), 200);
 
     setBtn.onclick = async () => {
-        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         const pid = String(hidden.value || '').trim();
         if (!pid) return;
         try {
@@ -1319,7 +1315,6 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     };
 
     clearBtn.onclick = async () => {
-        if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
         try {
             if (typeof patchWorkFolder !== 'function') return;
             const coherenceToken = await patchWorkFolder(wid, null);

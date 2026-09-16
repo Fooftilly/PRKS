@@ -1577,7 +1577,6 @@ async function initWorkMetaRoleLinker(workId) {
 }
 
 async function addRoleToWorkFromMetaEditor(workId) {
-    if (typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const personHidden = document.getElementById('meta-role-person-id');
     const personSearch = document.getElementById('meta-role-person-search');
@@ -2576,10 +2575,6 @@ function prksEnqueuePrivateNotesSave(editor) {
     if (editor.entityType === 'work') {
         return prksEnqueueWorkPrivateNoteSave(editor);
     }
-    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') {
-        prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
-        return null;
-    }
     const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
     const content = String(entry.draftText);
     editor.dirty = false;
@@ -2591,27 +2586,21 @@ function prksEnqueuePrivateNotesSave(editor) {
     entry.saveError = false;
     entry.updatedAt = Date.now();
     prksPrivateNotesSetStatus(editor, 'Saving…');
-    // Documented exception to the canonical-Folder-wrapper rule: this is a
-    // coalesced autosave with its own draft lifecycle, and it is already gated
-    // by the runtime check at the top of this function. Its success branch
-    // publishes the same Folder coherence a wrapper would.
-    const url = `/api/folders/${editor.entityId}`;
-    const promise = prksRequest(
-        url,
-        {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ private_notes: content }),
-        },
-        { coalesceKey: 'private-notes:' + editor.key }
-    );
+    // Folder private notes are SET_FOLDER_FIELD via the canonical patchFolder
+    // wrapper (durable). Coalesce lives in the local-store field saver.
+    const promise = (async function () {
+        if (typeof patchFolder !== 'function') return { ok: false };
+        try {
+            await patchFolder(editor.entityId, { private_notes: content });
+            return { ok: true };
+        } catch (_e) {
+            return { ok: false };
+        }
+    })();
     entry.promise = promise;
     void promise
-        .then(async function (res) {
-            const ok = !!(res && res.ok);
-            if (ok && typeof prksMarkFoldersDomainChanged === 'function') {
-                prksMarkFoldersDomainChanged();
-            }
+        .then(async function (result) {
+            const ok = !!(result && result.ok);
             if (token !== entry.latestSaveToken) return;
             const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
             entry.settledSaveToken = token;
@@ -2665,27 +2654,16 @@ function prksFlushPendingPrivateNotes(ctx) {
     prksEnqueuePrivateNotesSave(editor);
 }
 
-/** Folder private notes stay read-only while offline. Work reminders are durable. */
+/** Work and Folder private notes are durable SET_* paths. */
 if (typeof prksOfflineRuntimeSubscribe === 'function') {
     prksOfflineRuntimeSubscribe(function (state) {
         if (typeof prksForEachLiveTabContext !== 'function') return;
-        const offline = state !== 'online';
+        void state;
         prksForEachLiveTabContext(function (ctx) {
             const editor = ctx && ctx.getResource ? ctx.getResource('privateNotesEditor') : null;
             if (!editor || !editor.textarea) return;
-            if (editor.entityType === 'work') {
-                editor.textarea.readOnly = false;
-                if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
-                return;
-            }
-            editor.textarea.readOnly = offline;
-            if (offline) {
-                prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
-            } else if (editor.dirty) {
-                prksEnqueuePrivateNotesSave(editor);
-            } else {
-                prksPrivateNotesSetStatus(editor, '');
-            }
+            editor.textarea.readOnly = false;
+            if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
         });
     });
 }
@@ -2717,9 +2695,6 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
         dirty: !!(entry && entry.state === 'drafting'),
     };
     const schedule = function () {
-        if (editor.entityType !== 'work' &&
-            typeof prksOfflineRuntimeState === 'function' &&
-            prksOfflineRuntimeState() !== 'online') return;
         const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
         draft.draftText = ta.value;
         draft.editGeneration += 1;
@@ -2758,12 +2733,6 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
             if (ta.value === next) return;
             ta.value = next;
         });
-    }
-    if (editor.entityType !== 'work' &&
-        typeof prksOfflineRuntimeState === 'function' &&
-        prksOfflineRuntimeState() !== 'online') {
-        ta.readOnly = true;
-        prksPrivateNotesSetStatus(editor, 'Offline — notes are read-only');
     }
     if (editor.entityType === 'work' && typeof prksBindWorkNotesSync === 'function') {
         prksBindWorkNotesSync(ctx);

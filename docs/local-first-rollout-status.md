@@ -81,6 +81,13 @@ as it stands — not a claim that each is impossible.
 * **Saved Views and global Search.** Live execute is `/api/search` (FTS, tags,
   PDF text index). Offline routes refuse explicitly; CRUD is guarded. Do not
   approximate search over browse cards.
+* **Tag aliases.** Add/remove alternate Tag names stays server-backed; guarded
+  offline. Identity transform for names is `MERGE_TAG`.
+* **Publishers vocabulary.** `#/publishers` create/delete/aliases are
+  connection-required; the route refuses offline.
+* **Bulk Organize.** `POST /api/works/bulk` (status / folder / tags) stays
+  server-backed and guarded; per-Work durable paths cover the same decisions
+  one file at a time.
 
 ### Not yet durable, no known blocker
 

@@ -1046,13 +1046,12 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
     def test_no_production_surface_writes_folders_outside_the_wrappers(self):
         """A raw Folder write anywhere else silently reopens the guard gap.
 
-        api.js holds the canonical wrappers. ui.js keeps one documented
-        exception: the coalesced private-notes autosave, gated by the runtime
-        check at the top of its own function, which publishes Folder coherence
-        on success. Everywhere else must go through a wrapper.
+        api.js holds the canonical wrappers. Folder private-notes autosave
+        goes through patchFolder (SET_FOLDER_FIELD). Everywhere else must
+        also go through a wrapper — never a raw /api/folders mutation.
         """
         for name in ("app.js", "components/folders.js", "components/processing-files.js",
-                     "components/works.js"):
+                     "components/works.js", "ui.js"):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
                 # A write is a /api/folders URL paired with a mutating method.
@@ -1062,10 +1061,10 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
                         self.assertNotIn(method, window,
                                          "%s writes /api/folders directly" % name)
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))
-        # The one exception must still be the private-notes autosave, and must
-        # still publish Folder coherence.
-        self.assertIn("prksMarkFoldersDomainChanged", ui)
-        self.assertIn("Documented exception to the canonical-Folder-wrapper rule", ui)
+        folder_notes = _fn_body(ui, "function prksEnqueuePrivateNotesSave(")
+        self.assertIn("patchFolder(", folder_notes)
+        self.assertNotIn("prksRequest(", folder_notes)
+        self.assertNotIn("Documented exception to the canonical-Folder-wrapper rule", ui)
 
     def test_folder_title_rename_evicts_member_work_snapshots(self):
         """A cached Work detail embeds `folder_title`. The acknowledgement NAMES
@@ -1166,6 +1165,22 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         guard_at = body.index("if (!prksFolderRuntimeOnline())")
         fetch_at = body.index("await fetchFolders()")
         self.assertLess(guard_at, fetch_at)
+
+    def test_work_folder_offline_policy_matches_playlist_clear_new(self):
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        self.assertIn("PRKS_WORK_FOLDER_MUTATION_SELECTOR", folders)
+        start = folders.index("const PRKS_WORK_FOLDER_MUTATION_SELECTOR")
+        # Bound the declaration tightly — Clear/New appear later as live controls.
+        decl = folders[start : start + 180]
+        self.assertIn("prks-work-folder-search", decl)
+        self.assertIn("prks-work-folder-set-btn", decl)
+        self.assertNotIn("prks-work-folder-clear-btn", decl)
+        self.assertNotIn("prks-work-folder-new-btn", decl)
+        open_body = _fn_body(folders, "function prksOpenFolderModalFromLibrarySearch(")
+        self.assertNotIn("prksOfflineGuardMutation", open_body)
+        apply = _fn_body(folders, "function prksApplyWorkFolderOfflineState(")
+        self.assertIn("prks-work-folder-clear-btn", apply)
+        self.assertIn("el.disabled = false", apply)
 
 
 class FrontendBrowseProjectionTests(unittest.TestCase):
