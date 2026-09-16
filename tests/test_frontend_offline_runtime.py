@@ -1251,9 +1251,8 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         and it touches no other browse projection."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
-        # Pending CREATE_WORK / durable-queue race logic lengthened this case;
-        # keep enough body to reach the open-event call at the end of setup.
-        body = app[at: at + 4500]
+        nxt = app.find("case 'concepts':", at)
+        body = app[at: nxt if nxt > at else at + 8000]
         self.assertIn("prksRecordWorkOpened(offlineWork.value)", body)
         for forbidden in ("prksMarkWorksBrowseChanged", "prksMarkRecentlyAddedChanged",
                           "prksMarkWorkBrowseDisplayChanged"):
@@ -1298,9 +1297,11 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertNotIn("prksAlertMessage", body)
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
+        nxt = app.find("case 'concepts':", at)
+        work_case = app[at: nxt if nxt > at else at + 8000]
         # Fire-and-forget: never awaited on the render path.
-        self.assertIn("void prksRecordWorkOpened(", app[at: at + 4500])
-        self.assertNotIn("await prksRecordWorkOpened(", app)
+        self.assertIn("void prksRecordWorkOpened(", work_case)
+        self.assertNotIn("await prksRecordWorkOpened(", work_case)
 
     def test_work_route_classifies_pending_delete_without_empty_ops_race(self):
         """Pending DELETE_WORK keeps the disposable cache until ACK. The Work
