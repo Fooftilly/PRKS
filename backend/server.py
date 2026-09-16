@@ -2480,11 +2480,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         data.get("operation") == "DELETE_WORK"):
                     if result.get("changed"):
                         from backend.work_deletion import cleanup_after_work_delete
+                        # file_path is present only on the first ACK (ephemeral
+                        # apply return). Replay ledgers omit it. When supplied,
+                        # cleanup re-checks current Work references — never
+                        # trusts a deletion-time managed_pdf_still_referenced.
                         cleanup_after_work_delete(
                             db, text_index, data.get("entity_id"),
                             file_path=result.get("file_path") or "",
-                            managed_pdf_still_referenced=bool(
-                                result.get("managed_pdf_still_referenced")),
                             existed=True,
                         )
                     # Paths are not durable client state; strip before the wire.

@@ -167,7 +167,19 @@ def process_operation(db, data):
         if not dependencies_satisfied(conn, op):
             return 400, {"code": "UNSATISFIED_DEPENDENCY"}
         status, result = handler.apply(db, conn, op, received_at)
-        insert_result(conn, op, digest, status, result)
+        # DELETE_WORK may carry an ephemeral file_path for post-commit PDF
+        # cleanup on the first ACK. The immortal ledger must not retain
+        # filenames or paths (logging/privacy rules); replay returns only the
+        # wire ACK shape. PDF cleanup on replay either has no path (skip) or
+        # re-checks live Work references when a path is supplied.
+        to_store = result
+        if op["operation"] == "DELETE_WORK":
+            to_store = {
+                "code": result["code"],
+                "work_id": result["work_id"],
+                "changed": result["changed"],
+            }
+        insert_result(conn, op, digest, status, to_store)
         return status, result
 
 

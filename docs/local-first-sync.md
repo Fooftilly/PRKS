@@ -1741,7 +1741,22 @@ convergence (`ACKNOWLEDGED` with `changed: false`) — the ordinary
 playlist/annotations/argument_sources relationships only; Tags/Persons/Arguments
 themselves stay). Filesystem and derived-index cleanup remain post-commit
 best-effort via `work_deletion.cleanup_after_work_delete`, shared with the HTTP
-path. The client cancels never-sent ops that name the Work (including Argument
+path.
+
+Managed-PDF removal is **replay-safe**: cleanup always re-checks whether any
+*current* Work row still resolves to that managed filename. A deletion-time
+`managed_pdf_still_referenced` snapshot is never authoritative — an exact
+`op_id` replay can arrive after another Work has begun sharing the file.
+
+The immortal `sync_operations` ledger stores only the wire ACK shape
+(`code` / `work_id` / `changed`). The managed `file_path` may appear on the
+first in-memory apply return so post-commit cleanup can run once; it is
+redacted before ledger insert and stripped from the HTTP body. Filenames and
+paths must not live indefinitely in sync history (logging/privacy rules).
+Replay without a path skips PDF removal (index/thumbnail cleanup still runs);
+that prefers a possible orphan over deleting live shared bytes.
+
+The client cancels never-sent ops that name the Work (including Argument
 creates/source replacements that cite it) and waits for possibly-sent ones; a
 never-sent `CREATE_WORK` for the same id folds away entirely.
 Acknowledgement fences Concepts, Arguments, People, Person Groups, Folders,

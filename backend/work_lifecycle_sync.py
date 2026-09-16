@@ -326,9 +326,10 @@ def apply_delete(db, conn, op, received_at):
         "work_id": work_id,
         "changed": bool(record is not None and existed),
     }
-    if record is not None:
+    # file_path is ephemeral cleanup state for the first post-commit pass only.
+    # sync_protocol redacts it before ledger insert; never immortalised.
+    if record is not None and record.file_path:
         result["file_path"] = record.file_path
-        result["managed_pdf_still_referenced"] = record.managed_pdf_still_referenced
     return 200, result
 
 

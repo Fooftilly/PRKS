@@ -398,6 +398,10 @@ class TestCleanupPrivacy(unittest.TestCase):
                     managed_pdf_still_referenced=False,
                 )
 
+            def execute_query(self, sql, params=()):
+                # Live ref check must see no survivors so cleanup reaches os.remove.
+                return []
+
         class _Index:
             def remove_work(self, work_id):
                 return 0
