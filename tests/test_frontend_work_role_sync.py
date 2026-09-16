@@ -98,6 +98,19 @@ class WorkRoleSyncFrontendTests(unittest.TestCase):
         metadata_at = palette.index('prksEffectiveWorkSync(')
         self.assertLess(roles_at, metadata_at, 'the palette composes in the same order')
 
+    def test_the_role_modal_does_not_race_a_work_refetch_after_durable_save(self):
+        """A GET after durable link races the ACK and can replace the panel with
+        a pre-link Work, dropping Unlink until a later remount. The modal must
+        refresh from the owned entity / people mode instead."""
+        app = (FRONTEND / 'app.js').read_text()
+        start = app.index("const saveRoleBtn = document.getElementById('save-role-btn');")
+        end = app.index('\n    };\n}', start)
+        body = app[start:end]
+        self.assertIn('prksSaveWorkPersonRoleDurably', body)
+        self.assertIn("prksSetWorkDetailsMode('people')", body)
+        self.assertNotIn('fetchWorkDetails', body)
+        self.assertNotIn('location.reload', body)
+
     def test_the_overlay_never_decides_the_displayed_credit(self):
         """The precedence rule -- Authors, then author_text, then Editor --
         lives in the card helper. A second copy inside the overlay would drift,

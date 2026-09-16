@@ -127,8 +127,12 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         page.locator('#save-role-btn').click()
 
     def unlink(self, page, person_id, role='Author'):
-        page.locator('.work-linked-persons__unlink[data-person-id="%s"][data-role-type="%s"]'
-                     % (person_id, role)).click()
+        # After a durable link the panel may still be settling from people-mode
+        # refresh; wait for the control rather than racing the first paint.
+        sel = ('.work-linked-persons__unlink[data-person-id="%s"][data-role-type="%s"]'
+               % (person_id, role))
+        page.wait_for_selector(sel)
+        page.locator(sel).click()
         page.locator('#prks-modal-confirm-ok').click()
 
     def pending(self, page, count, pred=None):

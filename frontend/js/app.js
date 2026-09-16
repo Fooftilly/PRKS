@@ -5288,12 +5288,6 @@ function initForms() {
                 : typeof prksReadRoleCreditName === 'function'
                   ? prksReadRoleCreditName('role-link')
                   : '';
-        const payload = {
-            person_id,
-            work_id,
-            role_type,
-            credit_name,
-        };
         const _cwDupCheck = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
         if (
             typeof prksWorkHasRoleLink === 'function' &&
@@ -5307,7 +5301,6 @@ function initForms() {
             return;
         }
         if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, true, { busyLabel: 'Linking…' });
-        let coherenceToken = null;
         try {
             /* The SAME durable path the Work panel's Link button takes. This
              * modal can target a Work other than the one on screen, which is
@@ -5358,23 +5351,18 @@ function initForms() {
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, false);
         }
         closeModals();
+        /* Durable save already wrote the pending overlay (and ACK will patch
+         * the live Work entity). A GET here races that ACK: a pre-link body
+         * can replace the panel and drop the Unlink control until a later
+         * remount — the consecutive-edit flake. Refresh from the owned entity
+         * instead; never reload the whole app for a non-focused target. */
         const expectedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
-        const ownsWork =
-            expectedWork &&
-            String(expectedWork.id) === String(work_id) &&
-            typeof prksApplyOwnedWorkEntity === 'function';
-        if (ownsWork && typeof fetchWorkDetails === 'function') {
-            const _rw = await fetchWorkDetails(work_id);
-            if (_rw && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
-                void prksOfflineCacheEntityIfCurrent('work', work_id, _rw, coherenceToken);
+        if (expectedWork && String(expectedWork.id) === String(work_id)) {
+            if (typeof prksSetWorkDetailsMode === 'function') {
+                void prksSetWorkDetailsMode('people');
+            } else if (typeof updatePanelContent === 'function') {
+                updatePanelContent('details');
             }
-            if (prksApplyOwnedWorkEntity(ownerCtx, work_id, _rw)) {
-                if (typeof prksReplaceFocusedWorkDetailsPanel === 'function') {
-                    prksReplaceFocusedWorkDetailsPanel(ownerCtx, _rw);
-                }
-            }
-        } else {
-            window.location.reload();
         }
     };
 }
