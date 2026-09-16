@@ -241,6 +241,28 @@ outline-offset: 2px;
 
 All interactive primitives must expose equivalent keyboard focus. Do not implement focus solely as a subtle background change.
 
+### Selected / current state
+
+Selected and current-route states are **quiet**: obvious in dense chrome, never a loud full-purple outline, outer ring, or glow.
+
+Shared grammar (lists, trees, cards, nav, workspace tabs):
+
+| Cue | Role |
+| --- | --- |
+| `--surface-selected` fill | Primary selected surface |
+| `1px` `--border-strong` (cards/rows that already border) | Thin perimeter — not `--accent` as a full outline |
+| Optional inset accent edge (`box-shadow: inset 3px 0 0 var(--accent)` on rows/nav/tree; inset bottom edge on tab strip) | Restrained accent — not an outer ring |
+| Font weight / `aria-current` / labels | Non-color cue (a11y) |
+
+Do **not**:
+
+- Use `box-shadow: 0 0 0 Npx var(--accent)` (or double border + ring) as the selected look
+- Paint a full `border-color: var(--accent)` outline around large selected cards/rows as the primary signal
+- Rely on accent text color alone for current nav
+- Conflate keyboard `:focus-visible` (2px `--focus-ring` outline) with selected/current chrome
+
+Domain controls (doc-type menu left edge, tag accent) may keep a thin accent edge when it is already their grammar. Drag drop-target previews may use a temporary accent stroke; that is transient feedback, not persistent selected state.
+
 ### Square geometry
 
 ```css
@@ -516,7 +538,7 @@ Use a **card** (`.prks-card`) when the object is a discrete visual item, a thumb
 
 Use a **list row** (`.prks-list-row`) when comparison/scanning density matters, many objects are displayed, or hierarchy/tree behavior matters.
 
-Both share surface, border, selection, hover, focus, and metadata hierarchy. Work cards, person cards, and folder tree rows are domain layouts that use this grammar—they are not a license for per-feature decoration.
+Both share surface, border, selection, hover, focus, and metadata hierarchy. Work cards, person cards, and folder tree rows are domain layouts that use this grammar—they are not a license for per-feature decoration. Selected rows/cards use the quiet Selected / current state contract above (surface + thin strong border + optional inset accent edge), never a loud outer purple ring.
 
 ### Work-card metadata hierarchy
 
@@ -591,14 +613,14 @@ Tiled pane headers are intentionally restrained. Secondary: drag grip, route/ent
 
 | State | Visual |
 | --- | --- |
-| Main tab | Strongest selected indication (accent border/background) |
+| Main tab | Quiet selected grammar: `--surface-selected`, semibold title, restrained inset accent edge — not a full purple outline |
 | Tiled Main pane | Structural marker + accessible Main label; no accent edge |
 | Tiled secondary tab | Visible as a tile, not visually equal to main |
-| Focused secondary tile | Subtle header highlight; does not imply promotion to main |
+| Focused secondary tile | Subtle header `--surface-selected` highlight; does not imply promotion to main; no pane ring/glow |
 | Parked / open tab | Normal tab-strip state; tile-capable parked tabs show a quiet Split action |
 | Dirty / queued / syncing / error | Small semantic state marker (icon + not color alone) |
 
-Main is not the same state as focus. Main owns the browser route. Focus marks the tile that receives pointer/keyboard and the right panel. A focused Secondary keeps its split marker and must not reuse Main’s selected background/accent bar.
+Main is not the same state as focus. Main owns the browser route. Focus marks the tile that receives pointer/keyboard and the right panel. A focused Secondary keeps its split marker and must not reuse Main’s selected surface treatment as if it were the Main tab.
 
 ### Workspace interaction invariants
 
@@ -883,7 +905,7 @@ At narrow modal widths the vertical nav becomes a single-line horizontally scrol
 
 The shell is one visual system, not three.
 
-**Sidebar:** 250px desktop baseline, flat surface, 1px separator, compact navigation, Lucide icons. Selected, hover, disclosure, nested indentation, and section spacing are shared. Selected state uses `--surface-selected` and accent, not a unique sidebar palette. Uppercase section labels (`Library`, `Organize`) mark groups of independent links; a disclosure family (People, Research, Progress) does not get a redundant standalone heading on top of its own row — `nav-disclosure--section-break` gives it the same separator/spacing a heading would have.
+**Sidebar:** 250px desktop baseline, flat surface, 1px separator, compact navigation, Lucide icons. Selected, hover, disclosure, nested indentation, and section spacing are shared. Selected/current nav uses the quiet selected grammar (`--surface-selected`, semibold label, restrained inset accent edge) — not a unique sidebar palette and not accent-colored text alone. Uppercase section labels (`Library`, `Organize`) mark groups of independent links; a disclosure family (People, Research, Progress) does not get a redundant standalone heading on top of its own row — `nav-disclosure--section-break` gives it the same separator/spacing a heading would have.
 
 **Sidebar disclosure (People/Research/Progress):** tri-state per family — `unset` (no explicit choice), `expanded`, or `collapsed` — stored under `prks.nav.<family>Expanded` (`"1"`/`"0"`; missing key is `unset`). An explicit user choice always wins over the active route. Only while `unset` may entering a route inside that family (e.g. `#/people/role/Reviewer`) auto-expand it. Pressing the disclosure toggle always visibly flips the family — there is no "forced open" case that silently reopens it. A family whose active route it contains, but which is collapsed, still gets a restrained `nav-disclosure--contains-current` indicator (accent label/icon) distinct from the `.active`/`aria-current="page"` treatment reserved for the actual destination link. People keeps a real `#/people` link plus a separate small chevron toggle, since it has a real landing page; Research and Progress have no useful landing page, so their whole row is one native `<button>` (icon + label + chevron) — not a link, and not a `<span>` wearing a click handler.
 

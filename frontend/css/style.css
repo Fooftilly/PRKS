@@ -459,8 +459,9 @@ body {
 
 .prks-btn[aria-pressed="true"] {
     background: var(--surface-selected);
-    border-color: var(--accent);
+    border-color: var(--border-strong);
     color: var(--text-primary);
+    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .prks-entity-choice {
@@ -852,6 +853,7 @@ body {
     background: var(--surface-selected);
     color: var(--text-primary);
     font-weight: var(--weight-semibold);
+    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .prks-workspace-tab.is-parked {
@@ -869,10 +871,12 @@ body {
 
 .prks-workspace-tab.is-focused:not(.is-main) {
     color: var(--text-primary);
+    background: var(--surface-selected);
+    box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
 .prks-workspace-tab.is-tiled.is-focused {
-    background: var(--surface);
+    background: var(--surface-selected);
 }
 
 .prks-workspace-menu {
@@ -1482,9 +1486,13 @@ body.prks-workspace-dragging * {
     border-color: var(--border-strong);
 }
 
+/* Quiet selected / current grammar (DESIGN.md): surface + thin strong border +
+ * optional inset accent edge. Never an outer accent ring or full purple outline.
+ * Keyboard :focus-visible stays the separate 2px --focus-ring outline. */
 .prks-card.is-selected {
     background: var(--surface-selected);
-    border-color: var(--accent);
+    border-color: var(--border-strong);
+    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .prks-list-row {
@@ -1502,10 +1510,12 @@ body.prks-workspace-dragging * {
     background: var(--hover-overlay);
 }
 
-.prks-list-row.is-selected,
-.prks-list-row:focus-visible {
+.prks-list-row.is-selected {
     background: var(--surface-selected);
-    border-color: var(--accent);
+    border-color: var(--border-strong);
+    box-shadow: inset 3px 0 0 var(--accent);
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
 }
 
 .prks-list-row:focus-visible {
@@ -1821,8 +1831,15 @@ body.prks-workspace-dragging * {
 }
 
 .prks-workspace-overview__row.is-focused {
-    border-color: var(--accent);
-    background: var(--accent-soft);
+    background: var(--surface-selected);
+    border-color: var(--border-strong);
+    box-shadow: inset 3px 0 0 var(--accent);
+    font-weight: var(--weight-semibold);
+}
+
+.prks-workspace-overview__row:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
 }
 
 .prks-workspace-overview__role {
@@ -1932,8 +1949,11 @@ body.prks-workspace-dragging * {
 }
 
 .prks-filter-toggle:has(input:checked) {
-    border-color: var(--accent);
-    background: var(--accent-soft);
+    border-color: var(--border-strong);
+    background: var(--surface-selected);
+    box-shadow: inset 3px 0 0 var(--accent);
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
 }
 
 .prks-filter-toggle input {
@@ -2501,9 +2521,17 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
 .nav-link__label {
     min-width: 0;
 }
-.nav-link:hover, .nav-link.active {
+.nav-link:hover {
     background-color: var(--surface-muted);
-    color: var(--accent);
+    color: var(--text-primary);
+}
+
+.nav-link.active,
+.nav-link[aria-current="page"] {
+    background-color: var(--surface-selected);
+    color: var(--text-primary);
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .nav-link.nav-link--sub {
@@ -2927,9 +2955,11 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
 }
 
 .prks-role-credit-picker__alias-chip--active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
+    border-color: var(--border-strong);
+    background: var(--surface-selected);
     color: var(--text-primary);
+    box-shadow: inset 3px 0 0 var(--accent);
+    font-weight: 600;
 }
 
 .meta-row--compact {
@@ -3860,10 +3890,16 @@ a.tag {
     color: var(--text-primary);
 }
 
-.prks-command-palette__option.is-active,
 .prks-command-palette__option:hover {
     background: var(--surface-muted);
-    color: var(--accent);
+    color: var(--text-primary);
+}
+
+.prks-command-palette__option.is-active {
+    background: var(--surface-selected);
+    color: var(--text-primary);
+    box-shadow: inset 3px 0 0 var(--accent);
+    font-weight: var(--weight-semibold);
 }
 
 .prks-command-palette__option-icon {
@@ -3873,7 +3909,7 @@ a.tag {
 }
 
 .prks-command-palette__option.is-active .prks-command-palette__option-icon {
-    color: var(--accent);
+    color: var(--text-primary);
 }
 
 .prks-command-palette__option-text {
@@ -4006,11 +4042,11 @@ a.tag {
     border-color: var(--border);
 }
 .prks-kind-toggle__btn.is-active {
-    background: var(--surface);
+    background: var(--surface-selected);
     color: var(--text-primary);
-    border-color: var(--accent);
-    outline: 1px solid var(--accent);
-    outline-offset: -1px;
+    border-color: var(--border-strong);
+    box-shadow: inset 0 -2px 0 var(--accent);
+    font-weight: 600;
 }
 .prks-kind-toggle__icon {
     display: inline-flex;
@@ -5271,7 +5307,23 @@ a.tag {
 
 .prks-folder-tree__row--match,
 .prks-group-tree__row--match {
-    background: rgba(99, 102, 241, 0.08);
+    background: var(--surface-selected);
+}
+
+.prks-folder-tree__row.is-selected,
+.prks-group-tree__row.is-selected,
+.prks-folder-tree__row:has(.prks-folder-tree__link[aria-current="page"]),
+.prks-group-tree__row:has(.prks-group-tree__link[aria-current="page"]) {
+    background: var(--surface-selected);
+    box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.prks-folder-tree__row.is-selected .prks-folder-tree__link,
+.prks-group-tree__row.is-selected .prks-group-tree__link,
+.prks-folder-tree__link[aria-current="page"],
+.prks-group-tree__link[aria-current="page"] {
+    color: var(--text-primary);
+    font-weight: 700;
 }
 
 .prks-folder-tree__toggle,
@@ -5353,7 +5405,9 @@ a.tag {
 
 .prks-folder-tree__link:hover,
 .prks-group-tree__link:hover {
-    color: var(--accent);
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .prks-folder-tree__icon,
@@ -6166,10 +6220,11 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     background: var(--surface);
 }
 .prks-theme-option--active {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--surface);
-    box-shadow: 0 0 0 1px var(--accent);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+    background: var(--surface-selected);
+    box-shadow: inset 0 -2px 0 var(--accent);
+    font-weight: 600;
 }
 .prks-theme-option__icon {
     flex-shrink: 0;
@@ -6234,9 +6289,10 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     outline-offset: -2px;
 }
 .prks-settings-nav__item.is-active {
-    background: var(--surface-muted);
-    color: var(--accent);
+    background: var(--surface-selected);
+    color: var(--text-primary);
     font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--accent);
 }
 .prks-settings-content {
     flex: 1 1 auto;
@@ -6624,11 +6680,11 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     color: var(--text-primary);
 }
 .prks-segmented--roles .prks-segmented__btn--active {
-    border-color: var(--accent);
-    background: var(--surface);
+    border-color: var(--border-strong);
+    background: var(--surface-selected);
     color: var(--text-primary);
     font-weight: 600;
-    box-shadow: none;
+    box-shadow: inset 0 -2px 0 var(--accent);
 }
 .prks-segmented--roles .prks-segmented__btn:focus-visible {
     box-shadow: 0 0 0 2px var(--card-bg, var(--surface-muted)), 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -7474,9 +7530,9 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
 }
 
 .prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn--active {
-    border-color: var(--accent);
-    background: var(--surface);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    border-color: var(--border-strong);
+    background: var(--surface-selected);
+    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .prks-upload-person-stack__roles--tiles .prks-segmented__btn {
@@ -8014,7 +8070,8 @@ textarea[data-prks-autosize="1"] {
 
 .prks-doc-type-menu__option.is-selected {
     border-left-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    background: var(--surface-selected);
+    font-weight: var(--weight-semibold);
 }
 
 .prks-doc-type-menu__option:focus-visible {
@@ -9665,7 +9722,9 @@ button.prks-research-row {
 
 .research-graph__find-hit.is-active {
     background: var(--surface-selected);
-    border-color: var(--accent);
+    border-color: var(--border-strong);
+    box-shadow: inset 3px 0 0 var(--accent);
+    font-weight: var(--weight-semibold);
 }
 
 .research-graph__status {
@@ -10985,7 +11044,9 @@ html.prks-force-mobile [data-prks-role="work-header-doc-type-slot"] {
     display: none;
 }
 .work-upload-meta__summary:focus-visible {
-    box-shadow: 0 0 0 2px var(--accent);
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    box-shadow: none;
 }
 .work-upload-meta__summary-chevron {
     flex-shrink: 0;
@@ -11154,9 +11215,9 @@ body.prks-bulk-selection-active .project-card--work-card .work-card__select {
 }
 
 .project-card--work-card.is-selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
-    background: var(--accent-soft);
+    border-color: var(--border-strong);
+    box-shadow: inset 3px 0 0 var(--accent);
+    background: var(--surface-selected);
 }
 
 body.prks-bulk-selection-active #main-content {

@@ -308,6 +308,42 @@ class DesignSystemContractTests(unittest.TestCase):
         self.assertNotIn(".delete-work-btn", css)
         self.assertNotIn("#ef4444", css.split(".prks-btn--danger {", 1)[-1][:800])
 
+    def test_quiet_selected_state_contract(self):
+        """Selected chrome uses surface + inset edge — not outer purple rings."""
+        design = _read(_DESIGN)
+        css = _read(_CSS)
+        self.assertIn("### Selected / current state", design)
+        self.assertIn("never a loud full-purple outline, outer ring, or glow", design)
+        self.assertNotIn("Strongest selected indication (accent border/background)", design)
+
+        work_sel = css.split(".project-card--work-card.is-selected {", 1)
+        self.assertEqual(len(work_sel), 2)
+        work_body = work_sel[1].split("}", 1)[0]
+        self.assertIn("var(--surface-selected)", work_body)
+        self.assertIn("inset 3px 0 0 var(--accent)", work_body)
+        self.assertNotIn("0 0 0 1px var(--accent)", work_body)
+        self.assertNotIn("border-color: var(--accent)", work_body)
+
+        list_sel = css.split(".prks-list-row.is-selected {", 1)
+        self.assertEqual(len(list_sel), 2)
+        list_body = list_sel[1].split("}", 1)[0]
+        self.assertIn("var(--surface-selected)", list_body)
+        self.assertIn("inset 3px 0 0 var(--accent)", list_body)
+        self.assertNotIn("border-color: var(--accent)", list_body)
+
+        card_sel = css.split(".prks-card.is-selected {", 1)
+        self.assertEqual(len(card_sel), 2)
+        card_body = card_sel[1].split("}", 1)[0]
+        self.assertIn("var(--surface-selected)", card_body)
+        self.assertIn("inset 3px 0 0 var(--accent)", card_body)
+
+        nav_active = css.split(".nav-link.active,", 1)
+        self.assertEqual(len(nav_active), 2)
+        nav_body = nav_active[1].split("}", 1)[0]
+        self.assertIn("var(--surface-selected)", nav_body)
+        self.assertIn("inset 3px 0 0 var(--accent)", nav_body)
+        self.assertNotIn("color: var(--accent)", nav_body)
+
     def test_annotation_sync_dots_use_semantic_tokens(self):
         css = _read(_CSS)
         saved = css.split(".work-annotation-sync-status--saved::before {", 1)
