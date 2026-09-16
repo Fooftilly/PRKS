@@ -8312,11 +8312,41 @@ textarea[data-prks-autosize="1"] {
     color: var(--text-secondary);
 }
 
-.document-view--work .work-workspace--notes-collapsed .work-notes-editor-wrap,
-.document-view--work .work-workspace--notes-collapsed .work-editor-status,
-.document-view--work .work-workspace--notes-collapsed .work-annotation-sync-status,
-.document-view--work .work-workspace--notes-collapsed [data-prks-role="annotation-sync-status"] {
+.document-view--work .work-workspace--notes-collapsed .work-notes-editor-wrap {
     display: none !important;
+}
+
+/* Collapsed: keep a compact save/sync cue — short text / quiet sync dot, not a second title bar. */
+.document-view--work .work-workspace--notes-collapsed .work-notes-pane-header-actions {
+    gap: var(--space-xs);
+    min-width: 0;
+}
+
+.document-view--work .work-workspace--notes-collapsed .work-editor-status {
+    display: inline-block;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-2xs);
+    line-height: var(--line-compact);
+    color: var(--text-tertiary);
+}
+
+.document-view--work .work-workspace--notes-collapsed .work-editor-status:empty {
+    display: none;
+}
+
+.document-view--work .work-workspace--notes-collapsed .work-annotation-sync-status {
+    font-size: var(--text-2xs);
+    gap: 4px;
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.document-view--work .work-workspace--notes-collapsed .work-annotation-sync-status:not(.work-annotation-sync-status--hidden) {
+    display: inline-flex;
 }
 
 /* Narrow expanded Notes: drawer over the PDF (presentation only). */
@@ -8350,7 +8380,7 @@ textarea[data-prks-autosize="1"] {
     background: var(--surface);
 }
 
-/* Wide sidecar / mobile forced side: PDF left, research notes right. */
+/* Wide sidecar / narrow forced side: PDF left, research notes right. */
 .document-view--work:has(.work-workspace--side) .work-workspace {
     --work-notes-width: min(38%, 320px);
     flex-direction: row;
@@ -8480,11 +8510,15 @@ textarea[data-prks-autosize="1"] {
 .document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-notes-pane-header-actions {
     flex-direction: column;
     align-items: center;
-    gap: 0;
+    gap: 2px;
+    max-width: 100%;
 }
 
 .document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-editor-status {
-    display: none;
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    max-width: none;
+    max-height: 6rem;
 }
 
 .document-view--work:has(.work-workspace--side) .work-workspace--notes-collapsed .work-notes-title {

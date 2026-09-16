@@ -610,6 +610,8 @@ Work notes layout follows that Work’s tile/container width, not a global viewp
 
 ### Work / PDF composition (density)
 
+> **Scope note (PR #4):** This section documents the **Work/PDF workspace-density slice** that shipped first — tiled chrome, Research Notes disclosure/drawer/sidecar, and splitter hit targets. Broader app-wide density (People, Folders lists, Graph chrome, etc.) is follow-up, not claimed by that PR.
+
 Dense tiled reading is the primary stress case. Prefer **composition** over indiscriminate shrink: remove redundant identity and reclaim height for the PDF (or other useful research context), not blank margin.
 
 **Identity hierarchy (one owner):**
@@ -632,10 +634,10 @@ Research Notes remain TabContext-owned (drafts, sync, EasyMDE). Presentation onl
 
 | State | Presentation |
 | --- | --- |
-| Collapsed | Tiny disclosure: one compact row at `--control-height-sm` (28px). Label + expand control. Hide verbose sync/status text while collapsed. Discoverable, not a second title bar. |
+| Collapsed | Tiny disclosure: one compact row at `--control-height-sm` (28px). Label + expand control + compact save/sync cue (short status text and/or quiet sync dot). Truncate long copy; do not hide all note/save/sync feedback, and do not restore a verbose status row. Discoverable, not a second title bar. |
 | Expanded, wide container (≥ ~720px), **stacked** | Sidecar beside the PDF (side split + `.work-split-handle`). |
 | Expanded, **tiled** pane (any width) | Drawer overlay — never a side strip against the Main/Secondary separator (that stole divider pointer hits and stole PDF width). |
-| Expanded, narrow stacked container (&lt; ~720px) | Drawer overlay over the PDF. The Settings toggle “Research notes beside PDF on mobile” may still force a sidecar on narrow widths. |
+| Expanded, narrow stacked container (&lt; ~720px) | Drawer overlay over the PDF. The Settings toggle “Research notes beside PDF when narrow” may still force a sidecar on narrow widths (container-aware, not phone-only). |
 
 Collapsed disclosure must stay visible in every Work that has Notes. Reclaimed space goes to the PDF (or existing research context), never to empty decorative padding.
 
@@ -838,7 +840,7 @@ Settings is task-grouped, not one long scrolling page. `#settings-modal` shows a
 
 **General is the default and stays calm.** It only shows Appearance (theme), Annotation author, and Show help hints — no backup, maintenance, or diagnostics language anywhere in it. This is the everyday-preferences first impression the reorganization exists to protect.
 
-**Reading & layout** groups the three device-local layout toggles (Force mobile layout, Research notes beside PDF on mobile, Remember PDF page per file) with a panel-level "Stored on this device" note. The mobile-notes toggle explains its narrow-layout dependency without ever disabling the control itself.
+**Reading & layout** groups the three device-local layout toggles (Force mobile layout, Research notes beside PDF when narrow, Remember PDF page per file) with a panel-level "Stored on this device" note. The narrow-notes toggle explains its container-width dependency (narrow stacked panes / tiles, and Force mobile layout) without ever disabling the control itself.
 
 **Export** is the BibTeX/BibLaTeX field toggles plus Restore export defaults, given real width instead of a squeezed disclosure. A compact "N of M fields included" summary sits above the toggle grid and is derived from the existing toggle `aria-checked` state — it is not a second source of truth.
 

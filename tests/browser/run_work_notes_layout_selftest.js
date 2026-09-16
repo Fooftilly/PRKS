@@ -35,11 +35,14 @@ function assertEq(name, got, want) {
     record(name, ok, ok ? '' : 'got=' + JSON.stringify(got) + ' want=' + JSON.stringify(want));
 }
 
-function makeWorkspace(id) {
+function makeWorkspace(id, opts) {
+    opts = opts || {};
     const styleVars = {};
     const handleListeners = Object.create(null);
     const handleClasses = new Set();
+    const wsClasses = new Set(opts.classes || []);
     let captured = null;
+    let tiledAncestor = !!opts.inTiled;
     const handle = {
         offsetHeight: 11,
         offsetWidth: 16,
@@ -63,14 +66,19 @@ function makeWorkspace(id) {
     };
     const ws = {
         workId: id,
-        clientWidth: 800,
+        clientWidth: opts.clientWidth != null ? opts.clientWidth : 800,
         classList: {
-            contains: function () {
-                return false;
+            contains: function (c) {
+                return wsClasses.has(c);
             },
-            add: function () {},
-            remove: function () {},
-            toggle: function () {},
+            add: function (c) { wsClasses.add(c); },
+            remove: function (c) { wsClasses.delete(c); },
+            toggle: function (c, force) {
+                const on = force === undefined ? !wsClasses.has(c) : !!force;
+                if (on) wsClasses.add(c);
+                else wsClasses.delete(c);
+                return on;
+            },
         },
         getAttribute: function (k) {
             return k === 'data-work-id' ? id : null;
@@ -89,11 +97,17 @@ function makeWorkspace(id) {
             },
         },
         getBoundingClientRect: function () {
-            return { width: 800, height: 600, top: 0, bottom: 600 };
+            return { width: ws.clientWidth, height: 600, top: 0, bottom: 600 };
         },
-        closest: function () { return ws; },
+        closest: function (sel) {
+            if (sel === '.prks-workspace-canvas--tiled') return tiledAncestor ? { className: 'prks-workspace-canvas--tiled' } : null;
+            if (sel === '.work-workspace' || !sel) return ws;
+            return null;
+        },
         _vars: styleVars,
         _handle: handle,
+        _classes: wsClasses,
+        _setTiled: function (v) { tiledAncestor = !!v; },
     };
     return ws;
 }
@@ -198,15 +212,68 @@ vm.runInNewContext(
 );
 
 sandbox.prksReapplyWorkNotesSplitLayout(ctxA);
-assert('A workspace height set', !!wsA._vars['--work-notes-height']);
-assert('B workspace untouched', !wsB._vars['--work-notes-height']);
+assert('A workspace side width set', !!wsA._vars['--work-notes-width']);
+assert('B workspace untouched', !wsB._vars['--work-notes-width'] && !wsB._vars['--work-notes-height']);
 assertEq('A editor refreshed', refreshA >= 1, true);
 assertEq('B editor not refreshed', refreshB, 0);
 assertEq('no document.querySelector', bannedQuery, 0);
+assert('A uses stacked-wide side class', wsA._classes.has('work-workspace--side'));
 
 sandbox.prksReapplyWorkNotesSplitLayout(ctxB);
-assert('B workspace height set', !!wsB._vars['--work-notes-height']);
+assert('B workspace side width set', !!wsB._vars['--work-notes-width']);
 assertEq('still no document.querySelector', bannedQuery, 0);
+
+function runLayoutModeMatrix() {
+    const ctxL = prksEnsureTabContext('notes-layout');
+    ctxL.mounted = true;
+    const wsL = makeWorkspace('W-layout', { clientWidth: 800, inTiled: false });
+    ctxL.root = makeRoot(wsL);
+    ctxL.query = function (sel) {
+        return ctxL.root.querySelector(sel);
+    };
+    sandbox.prksGetMobileWorkNotesRightEnabled = function () {
+        return false;
+    };
+
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('stacked wide uses side sidecar', wsL._classes.has('work-workspace--side'));
+    assert('stacked wide does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
+
+    wsL._setTiled(true);
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('tiled expanded never uses side', !wsL._classes.has('work-workspace--side'));
+    assert('tiled expanded uses drawer', wsL._classes.has('work-workspace--notes-drawer'));
+
+    wsL._setTiled(false);
+    wsL.clientWidth = 400;
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('narrow stacked uses drawer', wsL._classes.has('work-workspace--notes-drawer'));
+    assert('narrow stacked without force is not side', !wsL._classes.has('work-workspace--side'));
+
+    sandbox.prksGetMobileWorkNotesRightEnabled = function () {
+        return true;
+    };
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('narrow + force uses side sidecar', wsL._classes.has('work-workspace--side'));
+    assert('narrow + force does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
+
+    wsL._classes.add('work-workspace--notes-collapsed');
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksGetMobileWorkNotesRightEnabled = function () {
+        return false;
+    };
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('collapsed never uses drawer', !wsL._classes.has('work-workspace--notes-drawer'));
+}
+
+runLayoutModeMatrix();
 
 function tick() {
     return new Promise(function (resolve) {

@@ -213,6 +213,20 @@ class DesignSystemContractTests(unittest.TestCase):
         self.assertIn("prks-workspace-tab", html)
         self.assertIn("prks-tile--main", html)
         self.assertIn("prks-splitter", html)
+        # Collapsed Research Notes specimen must use production class structure
+        # (not an inline-styled imitation of the disclosure chrome).
+        self.assertIn('class="work-workspace work-workspace--notes-collapsed"', html)
+        self.assertIn('class="work-notes-pane"', html)
+        self.assertIn('class="work-notes-pane-header"', html)
+        self.assertIn('class="work-notes-title"', html)
+        self.assertIn('data-prks-role="editor-status"', html)
+        self.assertIn('class="work-editor-status"', html)
+        self.assertNotIn(
+            'class="work-notes-pane work-workspace--notes-collapsed"',
+            html,
+            "notes-collapsed belongs on .work-workspace, matching production DOM",
+        )
+        self.assertNotIn('style="height:var(--control-height-sm)', html)
         self.assertNotIn("tailwind", html.lower())
 
     def test_inline_style_policy(self):

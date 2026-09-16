@@ -165,6 +165,52 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
             block = css.split(selector + " {", 1)[1].split("}", 1)[0]
             self.assertNotIn("box-shadow", block, selector)
 
+    def test_work_pdf_density_contract(self):
+        """Work/PDF density slice: tiled chrome suppression, compact collapsed Notes,
+        drawer vs sidecar composition, tiled PDF min-height."""
+        css = _read(_CSS)
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        design = _read(_DESIGN)
+        index = _read(_INDEX)
+
+        self.assertIn(
+            ".prks-workspace-canvas--tiled .prks-nav-back-row--work",
+            css,
+        )
+        back_block = css.split(".prks-workspace-canvas--tiled .prks-nav-back-row--work {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: none", back_block)
+
+        self.assertIn(".prks-workspace-canvas--tiled .prks-pdf-toolbar__title", css)
+        title_block = css.split(".prks-workspace-canvas--tiled .prks-pdf-toolbar__title {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: none", title_block)
+
+        self.assertIn(".prks-workspace-canvas--tiled .prks-pdf-viewer", css)
+        pdf_block = css.split(".prks-workspace-canvas--tiled .prks-pdf-viewer {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-height: 0", pdf_block)
+
+        # Collapsed Notes keep a compact save/sync cue — never hide all status.
+        collapsed = css[
+            css.find(".document-view--work .work-workspace--notes-collapsed .work-editor-status") :
+        ]
+        self.assertIn("text-overflow: ellipsis", collapsed)
+        self.assertNotIn(
+            ".document-view--work .work-workspace--notes-collapsed .work-editor-status {\n    display: none",
+            css,
+        )
+
+        self.assertIn("work-workspace--notes-drawer", works)
+        self.assertIn("work-workspace--side", works)
+        self.assertIn("prksGetMobileWorkNotesRightEnabled", works)
+        # Tiled expanded Notes must be drawer, never a side strip against the splitter.
+        self.assertIn("inTiled", works)
+        self.assertIn("wantDrawer", works)
+
+        self.assertIn("Research notes beside PDF when narrow", index)
+        self.assertNotIn("Research notes beside PDF on mobile", index)
+        self.assertIn("Research notes beside PDF when narrow", design)
+        self.assertIn("compact save/sync cue", design)
+        self.assertIn("Work / PDF composition (density)", design)
+
     def test_tiled_v1_state_contract(self):
         src = _read(_WS)
         tiling = _read(_TILING)
