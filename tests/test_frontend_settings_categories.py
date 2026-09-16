@@ -154,7 +154,8 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         reading = modal.split('id="prks-settings-panel-reading"', 1)[1].split(
             'id="prks-settings-panel-export"', 1
         )[0]
-        self.assertIn("Only affects narrow/mobile layout", reading)
+        self.assertIn("notes expand as a drawer by default", reading)
+        self.assertIn("side-by-side sidecar", reading)
 
     def test_modal_width_scoped_to_settings_only(self):
         css = _read(_CSS)
