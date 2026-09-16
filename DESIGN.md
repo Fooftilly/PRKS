@@ -633,8 +633,9 @@ Research Notes remain TabContext-owned (drafts, sync, EasyMDE). Presentation onl
 | State | Presentation |
 | --- | --- |
 | Collapsed | Tiny disclosure: one compact row at `--control-height-sm` (28px). Label + expand control. Hide verbose sync/status text while collapsed. Discoverable, not a second title bar. |
-| Expanded, wide container (≥ ~720px) | Sidecar beside the PDF (side split + `.work-split-handle`). |
-| Expanded, narrow container (&lt; ~720px) | Drawer overlay over the PDF (does not permanently steal half the PDF height as a stacked bottom panel). The Settings toggle “Research notes beside PDF on mobile” may still force a sidecar on narrow widths. |
+| Expanded, wide container (≥ ~720px), **stacked** | Sidecar beside the PDF (side split + `.work-split-handle`). |
+| Expanded, **tiled** pane (any width) | Drawer overlay — never a side strip against the Main/Secondary separator (that stole divider pointer hits and stole PDF width). |
+| Expanded, narrow stacked container (&lt; ~720px) | Drawer overlay over the PDF. The Settings toggle “Research notes beside PDF on mobile” may still force a sidecar on narrow widths. |
 
 Collapsed disclosure must stay visible in every Work that has Notes. Reclaimed space goes to the PDF (or existing research context), never to empty decorative padding.
 

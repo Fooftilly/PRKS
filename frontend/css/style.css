@@ -1045,7 +1045,10 @@ body {
 }
 
 .prks-splitter {
+    /* Above adjacent tile content (Notes sidecar/drawer, PDF viewport) so the
+     * extended ::after hit strip stays reachable; below chrome overlays/modals. */
     position: relative;
+    z-index: var(--z-panel);
     background: var(--border);
     outline: none;
     -webkit-user-select: none;

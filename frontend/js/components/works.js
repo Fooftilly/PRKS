@@ -1595,10 +1595,12 @@ function prksReapplyWorkNotesSplitLayout(ctx) {
     const width = ws.clientWidth || 0;
     const mobileForceSide =
         typeof prksGetMobileWorkNotesRightEnabled === 'function' && prksGetMobileWorkNotesRightEnabled();
-    /* Wide → sidecar. Narrow → drawer unless Settings forces notes beside PDF. */
-    const wantSide = (width >= 720) || (mobileForceSide && width > 0 && width < 720);
+    const inTiled = !!(ws.closest && ws.closest('.prks-workspace-canvas--tiled'));
+    /* Stacked wide → sidecar. Tiled expanded → drawer (never a side strip against the
+     * Main/Secondary separator). Narrow stacked → drawer unless Settings forces side. */
+    const wantSide = (!inTiled && width >= 720) || (mobileForceSide && width > 0 && width < 720);
     const collapsed = ws.classList.contains('work-workspace--notes-collapsed');
-    const wantDrawer = !wantSide && !collapsed && width > 0 && width < 720;
+    const wantDrawer = !wantSide && !collapsed && width > 0;
     ws.classList.toggle('work-workspace--side', wantSide);
     ws.classList.toggle('work-workspace--notes-drawer', wantDrawer);
 
