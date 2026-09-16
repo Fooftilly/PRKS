@@ -243,25 +243,25 @@ All interactive primitives must expose equivalent keyboard focus. Do not impleme
 
 ### Selected / current state
 
-Selected and current-route states are **quiet**: obvious in dense chrome, never a loud full-purple outline, outer ring, or glow.
+Selected and current-route states are **quiet**: obvious in dense chrome, never a loud full-purple outline, outer ring, glow, or persistent accent stripe/underline.
 
-Shared grammar (lists, trees, cards, nav, workspace tabs):
+Shared grammar (lists, trees, cards, nav, workspace tabs, palette, filters, Settings nav, segmented controls, Graph find results, Workspace Overview):
 
 | Cue | Role |
 | --- | --- |
 | `--surface-selected` fill | Primary selected surface |
-| `1px` `--border-strong` (cards/rows that already border) | Thin perimeter — not `--accent` as a full outline |
-| Optional inset accent edge (`box-shadow: inset 3px 0 0 var(--accent)` on rows/nav/tree; inset bottom edge on tab strip) | Restrained accent — not an outer ring |
-| Font weight / `aria-current` / labels | Non-color cue (a11y) |
+| Optional `1px` `--border-strong` (cards/rows that already border) | Neutral perimeter — not `--accent` |
+| Font weight / structural marker / `aria-current` / `aria-selected` | Non-color cue (a11y) |
 
 Do **not**:
 
 - Use `box-shadow: 0 0 0 Npx var(--accent)` (or double border + ring) as the selected look
 - Paint a full `border-color: var(--accent)` outline around large selected cards/rows as the primary signal
+- Use persistent purple inset edges (`inset 3px 0 0` / bottom accent underlines) for selected/current chrome
 - Rely on accent text color alone for current nav
 - Conflate keyboard `:focus-visible` (2px `--focus-ring` outline) with selected/current chrome
 
-Domain controls (doc-type menu left edge, tag accent) may keep a thin accent edge when it is already their grammar. Drag drop-target previews may use a temporary accent stroke; that is transient feedback, not persistent selected state.
+Purple `--accent` / `--focus-ring` is reserved for keyboard focus and for domain grammar that is not “selected object” chrome (doc-type menu left edge, tag accent chips). Drag drop-target previews may use a temporary accent stroke; that is transient feedback, not persistent selected state.
 
 ### Square geometry
 
@@ -538,7 +538,7 @@ Use a **card** (`.prks-card`) when the object is a discrete visual item, a thumb
 
 Use a **list row** (`.prks-list-row`) when comparison/scanning density matters, many objects are displayed, or hierarchy/tree behavior matters.
 
-Both share surface, border, selection, hover, focus, and metadata hierarchy. Work cards, person cards, and folder tree rows are domain layouts that use this grammar—they are not a license for per-feature decoration. Selected rows/cards use the quiet Selected / current state contract above (surface + thin strong border + optional inset accent edge), never a loud outer purple ring.
+Both share surface, border, selection, hover, focus, and metadata hierarchy. Work cards, person cards, and folder tree rows are domain layouts that use this grammar—they are not a license for per-feature decoration. Selected rows/cards use the quiet Selected / current state contract above (`--surface-selected` + optional `--border-strong` + weight/ARIA), never a loud outer purple ring or persistent accent stripe.
 
 ### Work-card metadata hierarchy
 
@@ -613,7 +613,7 @@ Tiled pane headers are intentionally restrained. Secondary: drag grip, route/ent
 
 | State | Visual |
 | --- | --- |
-| Main tab | Quiet selected grammar: `--surface-selected`, semibold title, restrained inset accent edge — not a full purple outline |
+| Main tab | Quiet selected grammar: `--surface-selected`, semibold title — not a purple outline or accent underline |
 | Tiled Main pane | Structural marker + accessible Main label; no accent edge |
 | Tiled secondary tab | Visible as a tile, not visually equal to main |
 | Focused secondary tile | Subtle header `--surface-selected` highlight; does not imply promotion to main; no pane ring/glow |
@@ -905,7 +905,7 @@ At narrow modal widths the vertical nav becomes a single-line horizontally scrol
 
 The shell is one visual system, not three.
 
-**Sidebar:** 250px desktop baseline, flat surface, 1px separator, compact navigation, Lucide icons. Selected, hover, disclosure, nested indentation, and section spacing are shared. Selected/current nav uses the quiet selected grammar (`--surface-selected`, semibold label, restrained inset accent edge) — not a unique sidebar palette and not accent-colored text alone. Uppercase section labels (`Library`, `Organize`) mark groups of independent links; a disclosure family (People, Research, Progress) does not get a redundant standalone heading on top of its own row — `nav-disclosure--section-break` gives it the same separator/spacing a heading would have.
+**Sidebar:** 250px desktop baseline, flat surface, 1px separator, compact navigation, Lucide icons. Selected, hover, disclosure, nested indentation, and section spacing are shared. Selected/current nav uses the quiet selected grammar (`--surface-selected`, semibold label) — not a unique sidebar palette, not accent-colored text alone, and not a persistent purple edge. Uppercase section labels (`Library`, `Organize`) mark groups of independent links; a disclosure family (People, Research, Progress) does not get a redundant standalone heading on top of its own row — `nav-disclosure--section-break` gives it the same separator/spacing a heading would have.
 
 **Sidebar disclosure (People/Research/Progress):** tri-state per family — `unset` (no explicit choice), `expanded`, or `collapsed` — stored under `prks.nav.<family>Expanded` (`"1"`/`"0"`; missing key is `unset`). An explicit user choice always wins over the active route. Only while `unset` may entering a route inside that family (e.g. `#/people/role/Reviewer`) auto-expand it. Pressing the disclosure toggle always visibly flips the family — there is no "forced open" case that silently reopens it. A family whose active route it contains, but which is collapsed, still gets a restrained `nav-disclosure--contains-current` indicator (accent label/icon) distinct from the `.active`/`aria-current="page"` treatment reserved for the actual destination link. People keeps a real `#/people` link plus a separate small chevron toggle, since it has a real landing page; Research and Progress have no useful landing page, so their whole row is one native `<button>` (icon + label + chevron) — not a link, and not a `<span>` wearing a click handler.
 

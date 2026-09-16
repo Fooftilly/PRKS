@@ -6012,6 +6012,89 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         self.assertIn("/people/", page.evaluate("() => location.hash"))
 
+    def test_workspace_overview_hide_split_and_dialog_a11y(self):
+        """Overview visible panes follow visual-tiled; dialog traps focus and restores opener."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.wait_for_function("() => window.prksTabContextDebugSnapshot().mountedCount === 2")
+
+        btn = page.locator("#prks-workspace-overview-btn")
+        btn.click()
+        page.wait_for_selector("#prks-workspace-overview:not([hidden])")
+        overview = page.locator("#prks-workspace-overview")
+        self.assertEqual(overview.get_attribute("role"), "dialog")
+        self.assertEqual(overview.get_attribute("aria-modal"), "true")
+        summary = overview.locator(".prks-page-summary").inner_text()
+        self.assertIn("2 visible panes", summary)
+        self.assertEqual(btn.get_attribute("aria-expanded"), "true")
+
+        # Focus stays inside the dialog on Tab wrap.
+        page.keyboard.press("Tab")
+        page.keyboard.press("Tab")
+        page.keyboard.press("Tab")
+        page.keyboard.press("Tab")
+        page.keyboard.press("Tab")
+        in_dialog = page.evaluate(
+            """() => {
+                const root = document.getElementById('prks-workspace-overview');
+                return !!(root && root.contains(document.activeElement));
+            }"""
+        )
+        self.assertTrue(in_dialog)
+
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "() => { const el = document.getElementById('prks-workspace-overview'); return !el || el.hidden; }"
+        )
+        self.assertEqual(btn.get_attribute("aria-expanded"), "false")
+        focused_id = page.evaluate("() => document.activeElement && document.activeElement.id")
+        self.assertEqual(focused_id, "prks-workspace-overview-btn")
+
+        # Hide split preserves secondaryTree but Overview must count Main only.
+        page.evaluate("() => window.prksWorkspaceSetMode('stacked')")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return snap.mode === 'stacked' && !!snap.secondaryTree;
+            }"""
+        )
+        btn.click()
+        page.wait_for_selector("#prks-workspace-overview:not([hidden])")
+        summary2 = overview.locator(".prks-page-summary").inner_text()
+        self.assertIn("1 visible pane", summary2)
+        self.assertIn("Stacked", summary2)
+        parked = overview.locator(".prks-workspace-overview__section-label", has_text="Parked")
+        self.assertTrue(parked.count() >= 1)
+        page.keyboard.press("Escape")
+
+    def test_workspace_overview_narrow_fallback_main_only(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        page.evaluate("() => window.prksWorkspaceSetNarrowFallback(true)")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        page.wait_for_function("() => window.prksWorkspaceIsNarrowFallback() === true")
+        page.locator("#prks-workspace-overview-btn").click()
+        page.wait_for_selector("#prks-workspace-overview:not([hidden])")
+        summary = page.locator("#prks-workspace-overview .prks-page-summary").inner_text()
+        self.assertIn("1 visible pane", summary)
+        self.assertNotIn("2 visible panes", summary)
+        page.keyboard.press("Escape")
+
     def test_stack_hide_split_leave_guard_blocks_and_confirms(self):
         # Global "Hide split" (stacked mode) unmounts every visible Secondary leaf, so it is
         # still leave-guarded. Generic split placement is not: it never evicts an existing

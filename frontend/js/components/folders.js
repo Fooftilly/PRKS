@@ -856,6 +856,209 @@ function prksSwitchFolderLibraryTab(tab) {
     }
 }
 
+function prksFolderLibraryCatalogGlanceParts(folders) {
+    const list = Array.isArray(folders) ? folders : [];
+    const folderCount = list.length;
+    let workSum = 0;
+    let workSumKnown = true;
+    for (let i = 0; i < list.length; i += 1) {
+        const n = Number(list[i] && list[i].work_count);
+        if (!Number.isFinite(n)) {
+            workSumKnown = false;
+            break;
+        }
+        workSum += n;
+    }
+    return [
+        folderCount + (folderCount === 1 ? ' folder' : ' folders'),
+        /* Σ folder work_count is filed membership only — not the whole library. */
+        workSumKnown
+            ? workSum + (workSum === 1 ? ' file in folders' : ' files in folders')
+            : null,
+    ];
+}
+
+function prksPaintFolderLibraryGlance(host, parts) {
+    if (!host) return;
+    if (typeof prksPageSummaryHtml !== 'function') {
+        host.innerHTML = '';
+        return;
+    }
+    host.innerHTML = prksPageSummaryHtml({
+        parts: parts,
+        ariaLabel: 'Library at a glance',
+    });
+}
+
+async function prksCollectFolderLibraryGlanceExtras() {
+    const parts = [];
+    const CONTINUE_CAP = 3;
+
+    let recentRows = null;
+    try {
+        if (typeof prksOfflineBrowseFetch === 'function') {
+            const result = await prksOfflineBrowseFetch(
+                'recent:index',
+                'recent',
+                '/api/recent',
+                typeof prksIsRecentIndexShape === 'function' ? prksIsRecentIndexShape : null
+            );
+            const base =
+                typeof prksResolveOfflineBrowseList === 'function'
+                    ? prksResolveOfflineBrowseList(
+                          result,
+                          'recent:index',
+                          typeof prksIsRecentIndexShape === 'function'
+                              ? prksIsRecentIndexShape
+                              : function () {
+                                    return true;
+                                },
+                          'Recent'
+                      )
+                    : result && result.value;
+            if (Array.isArray(base)) {
+                const withMeta =
+                    typeof prksEffectiveBrowseRows === 'function'
+                        ? prksEffectiveBrowseRows(base, 'recent')
+                        : base;
+                if (
+                    typeof prksEffectiveRecent === 'function' &&
+                    window.prksSync &&
+                    prksSync.store &&
+                    typeof prksSync.store.listOperations === 'function'
+                ) {
+                    recentRows = prksEffectiveRecent(
+                        withMeta,
+                        await prksSync.store.listOperations()
+                    );
+                } else {
+                    recentRows = withMeta;
+                }
+            }
+        }
+    } catch (_e) {
+        recentRows = null;
+    }
+    if (Array.isArray(recentRows) && recentRows.length) {
+        const slice = recentRows.slice(0, CONTINUE_CAP);
+        for (let i = 0; i < slice.length; i += 1) {
+            const w = slice[i];
+            if (!w || !w.id) continue;
+            const title = String(w.title || 'Untitled').trim() || 'Untitled';
+            parts.push({
+                text: title,
+                href: '#/works/' + encodeURIComponent(String(w.id)),
+            });
+        }
+        if (recentRows.length > CONTINUE_CAP) {
+            parts.push({ text: 'More recent', href: '#/recent' });
+        }
+    }
+
+    let inProgressN = null;
+    try {
+        if (typeof prksOfflineWorksBrowseFetch === 'function') {
+            const browse = await prksOfflineWorksBrowseFetch();
+            const rows =
+                typeof prksResolveOfflineWorksBrowse === 'function'
+                    ? prksResolveOfflineWorksBrowse(browse)
+                    : browse && browse.value;
+            if (Array.isArray(rows)) {
+                const effective =
+                    typeof prksEffectiveBrowseRows === 'function'
+                        ? prksEffectiveBrowseRows(rows, 'works-browse')
+                        : rows;
+                inProgressN = effective.filter(function (w) {
+                    return w && String(w.status || '') === 'In Progress';
+                }).length;
+            }
+        }
+    } catch (_e) {
+        inProgressN = null;
+    }
+    if (inProgressN != null && inProgressN > 0) {
+        parts.push({
+            text: inProgressN + ' in progress',
+            href: '#/progress?status=' + encodeURIComponent('In Progress'),
+        });
+    }
+
+    let addedN = null;
+    const stMem = window.__prksFolderDashboardState;
+    if (stMem && Array.isArray(stMem.recentlyAddedWorks)) {
+        addedN = stMem.recentlyAddedWorks.length;
+    } else {
+        try {
+            if (typeof prksOfflineRecentlyAddedFetch === 'function') {
+                const result = await prksOfflineRecentlyAddedFetch();
+                const rows =
+                    typeof prksResolveOfflineRecentlyAdded === 'function'
+                        ? prksResolveOfflineRecentlyAdded(result)
+                        : result && result.value;
+                if (Array.isArray(rows)) addedN = rows.length;
+            }
+        } catch (_e) {
+            addedN = null;
+        }
+    }
+    if (addedN != null && addedN > 0) {
+        parts.push(addedN + ' recently added');
+    }
+
+    const procCount =
+        typeof prksGetProcessingAttentionCount === 'function'
+            ? prksGetProcessingAttentionCount()
+            : null;
+    if (procCount != null && procCount > 0) {
+        parts.push({
+            text: procCount + ' for processing',
+            href: '#/processing-files',
+        });
+    }
+
+    let syncN = null;
+    try {
+        if (
+            window.prksSync &&
+            prksSync.store &&
+            typeof prksSync.store.listOperations === 'function'
+        ) {
+            const ops = await prksSync.store.listOperations();
+            syncN = (ops || []).filter(function (op) {
+                const stOp = op && op.status;
+                return stOp && stOp !== 'acknowledged' && stOp !== 'discarded';
+            }).length;
+        }
+    } catch (_e) {
+        syncN = null;
+    }
+    if (syncN != null && syncN > 0) {
+        parts.push(syncN + (syncN === 1 ? ' change queued' : ' changes queued'));
+    }
+
+    return parts;
+}
+
+async function prksScheduleFolderLibraryGlance(root) {
+    const host =
+        root && root.querySelector
+            ? root.querySelector('[data-prks-role="folder-library-glance-host"]')
+            : null;
+    if (!host) return;
+    const token = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
+    host.dataset.glanceToken = token;
+    const st = window.__prksFolderDashboardState;
+    const catalogParts = prksFolderLibraryCatalogGlanceParts((st && st.folders) || []);
+    let extras = [];
+    try {
+        extras = await prksCollectFolderLibraryGlanceExtras();
+    } catch (_e) {
+        extras = [];
+    }
+    if (!host.isConnected || host.dataset.glanceToken !== token) return;
+    prksPaintFolderLibraryGlance(host, catalogParts.concat(extras || []));
+}
+
 function renderDashboard(folders, container, options = {}) {
     const prev = window.__prksFolderDashboardState || {};
     const list = Array.isArray(folders) ? folders : [];
@@ -882,26 +1085,16 @@ function renderDashboard(folders, container, options = {}) {
            </div>`
         : '';
     const foldersActive = activeTab !== 'recently-added';
-    let folderCount = list.length;
-    let workSum = 0;
-    let workSumKnown = true;
-    for (let i = 0; i < list.length; i += 1) {
-        const n = Number(list[i] && list[i].work_count);
-        if (!Number.isFinite(n)) {
-            workSumKnown = false;
-            break;
-        }
-        workSum += n;
-    }
+    const catalogParts = prksFolderLibraryCatalogGlanceParts(list);
     const glanceHtml =
-        typeof prksPageSummaryHtml === 'function'
+        '<div data-prks-role="folder-library-glance-host">' +
+        (typeof prksPageSummaryHtml === 'function'
             ? prksPageSummaryHtml({
-                  parts: [
-                      folderCount + (folderCount === 1 ? ' folder' : ' folders'),
-                      workSumKnown ? workSum + (workSum === 1 ? ' file' : ' files') : null,
-                  ],
+                  parts: catalogParts,
+                  ariaLabel: 'Library at a glance',
               })
-            : '';
+            : '') +
+        '</div>';
     container.innerHTML = `
         <div class="prks-folder-library">
         <div class="prks-page-header page-header prks-folder-library__header">
@@ -974,6 +1167,7 @@ function renderDashboard(folders, container, options = {}) {
     if (activeTab === 'recently-added') {
         void prksLoadFolderLibraryRecentlyAdded(false);
     }
+    void prksScheduleFolderLibraryGlance(root);
     prksBindFolderOfflineState(options && options.ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }

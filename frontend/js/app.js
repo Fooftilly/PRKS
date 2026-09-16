@@ -154,6 +154,10 @@ function prksSetProcessingAttentionCount(count) {
     prksPaintProcessingNavBadge();
 }
 
+function prksGetProcessingAttentionCount() {
+    return __prksProcessingAttentionCount;
+}
+
 function prksPaintProcessingNavBadge() {
     const host = document.querySelector('[data-prks-role="nav-processing-badge"]');
     if (!host) return;
@@ -180,8 +184,8 @@ async function prksRefreshProcessingNavBadge(options) {
     const online =
         typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
     if (!online) {
-        // Keep last known; never invent 0 while unreachable.
-        prksPaintProcessingNavBadge();
+        // Offline / unreachable: never present a stale count as live.
+        prksSetProcessingAttentionCount(null);
         return;
     }
     if (typeof fetchProcessingFiles !== 'function') return;
@@ -191,9 +195,9 @@ async function prksRefreshProcessingNavBadge(options) {
             signal: opts.signal,
         });
         if (Array.isArray(rows)) prksSetProcessingAttentionCount(rows.length);
+        else prksSetProcessingAttentionCount(null);
     } catch (_e) {
-        /* leave previous known count */
-        prksPaintProcessingNavBadge();
+        prksSetProcessingAttentionCount(null);
     }
 }
 
@@ -255,14 +259,33 @@ function initPrksNavAttentionBadges() {
             if (diagBtn && typeof diagBtn.click === 'function') diagBtn.click();
         });
     }
-    // Bounded refresh — not per-nav-render.
-    window.setInterval(function () {
-        void prksRefreshProcessingNavBadge({ rescan: false });
-        void prksRefreshSyncQueueCue();
-    }, 60000);
+    if (!window.__prksNavAttentionSubscribed) {
+        window.__prksNavAttentionSubscribed = true;
+        if (typeof prksOfflineRuntimeSubscribe === 'function') {
+            prksOfflineRuntimeSubscribe(function (state) {
+                if (state === 'online') {
+                    void prksRefreshProcessingNavBadge({ rescan: false });
+                    void prksRefreshSyncQueueCue();
+                } else {
+                    prksSetProcessingAttentionCount(null);
+                    void prksRefreshSyncQueueCue();
+                }
+            });
+        }
+        if (
+            typeof prksSync !== 'undefined' &&
+            prksSync &&
+            typeof prksSync.subscribe === 'function'
+        ) {
+            prksSync.subscribe(function () {
+                void prksRefreshSyncQueueCue();
+            });
+        }
+    }
 }
 
 window.prksSetProcessingAttentionCount = prksSetProcessingAttentionCount;
+window.prksGetProcessingAttentionCount = prksGetProcessingAttentionCount;
 window.prksRefreshProcessingNavBadge = prksRefreshProcessingNavBadge;
 window.prksRefreshSyncQueueCue = prksRefreshSyncQueueCue;
 

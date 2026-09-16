@@ -309,39 +309,41 @@ class DesignSystemContractTests(unittest.TestCase):
         self.assertNotIn("#ef4444", css.split(".prks-btn--danger {", 1)[-1][:800])
 
     def test_quiet_selected_state_contract(self):
-        """Selected chrome uses surface + inset edge — not outer purple rings."""
+        """Selected chrome uses surface + weight — not persistent purple edges/rings."""
         design = _read(_DESIGN)
         css = _read(_CSS)
         self.assertIn("### Selected / current state", design)
-        self.assertIn("never a loud full-purple outline, outer ring, or glow", design)
+        self.assertIn("never a loud full-purple outline, outer ring, glow, or persistent accent stripe/underline", design)
         self.assertNotIn("Strongest selected indication (accent border/background)", design)
+        self.assertNotIn("Optional inset accent edge", design)
+        self.assertIn("persistent purple inset edges", design)
 
-        work_sel = css.split(".project-card--work-card.is-selected {", 1)
-        self.assertEqual(len(work_sel), 2)
-        work_body = work_sel[1].split("}", 1)[0]
-        self.assertIn("var(--surface-selected)", work_body)
-        self.assertIn("inset 3px 0 0 var(--accent)", work_body)
-        self.assertNotIn("0 0 0 1px var(--accent)", work_body)
-        self.assertNotIn("border-color: var(--accent)", work_body)
+        for selector in (
+            ".project-card--work-card.is-selected {",
+            ".prks-list-row.is-selected {",
+            ".prks-card.is-selected {",
+            ".nav-link.active,",
+            ".prks-settings-nav__item.is-active {",
+            ".prks-command-palette__option.is-active {",
+            ".prks-kind-toggle__btn.is-active {",
+            ".research-graph__find-hit.is-active {",
+            ".prks-workspace-overview__row.is-focused {",
+        ):
+            parts = css.split(selector, 1)
+            self.assertEqual(len(parts), 2, selector)
+            body = parts[1].split("}", 1)[0]
+            self.assertIn("var(--surface-selected)", body, selector)
+            self.assertNotIn("var(--accent)", body, selector)
+            self.assertNotIn("inset 3px 0 0", body, selector)
+            self.assertNotIn("inset 0 -2px 0 0", body, selector)
 
-        list_sel = css.split(".prks-list-row.is-selected {", 1)
-        self.assertEqual(len(list_sel), 2)
-        list_body = list_sel[1].split("}", 1)[0]
-        self.assertIn("var(--surface-selected)", list_body)
-        self.assertIn("inset 3px 0 0 var(--accent)", list_body)
-        self.assertNotIn("border-color: var(--accent)", list_body)
+        tab_active = css.split(".prks-tab.is-active,", 1)
+        self.assertEqual(len(tab_active), 2)
+        tab_body = tab_active[1].split("}", 1)[0]
+        self.assertIn("var(--border-strong)", tab_body)
+        self.assertNotIn("var(--accent)", tab_body)
 
-        card_sel = css.split(".prks-card.is-selected {", 1)
-        self.assertEqual(len(card_sel), 2)
-        card_body = card_sel[1].split("}", 1)[0]
-        self.assertIn("var(--surface-selected)", card_body)
-        self.assertIn("inset 3px 0 0 var(--accent)", card_body)
-
-        nav_active = css.split(".nav-link.active,", 1)
-        self.assertEqual(len(nav_active), 2)
-        nav_body = nav_active[1].split("}", 1)[0]
-        self.assertIn("var(--surface-selected)", nav_body)
-        self.assertIn("inset 3px 0 0 var(--accent)", nav_body)
+        nav_body = css.split(".nav-link.active,", 1)[1].split("}", 1)[0]
         self.assertNotIn("color: var(--accent)", nav_body)
 
     def test_annotation_sync_dots_use_semantic_tokens(self):

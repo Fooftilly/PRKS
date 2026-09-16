@@ -1,12 +1,20 @@
 /**
- * Workspace Overview popover — read-only view of prksWorkspaceSnapshot().
+ * Workspace Overview dialog — read-only view of prksWorkspaceSnapshot().
  * No persistence, no remount, no tree rewrite.
+ *
+ * Modal dialog: initial focus, Tab containment, Escape closes, restore opener.
+ * Visible panes follow prksWorkspaceVisualTiled() — not every secondaryTree leaf.
  */
 (function (root) {
     'use strict';
 
     const POPOVER_ID = 'prks-workspace-overview';
     const BTN_ID = 'prks-workspace-overview-btn';
+    const FOCUSABLE =
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    let openerEl = null;
+    let previouslyFocused = null;
 
     function esc(s) {
         if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
@@ -17,14 +25,31 @@
             .replace(/"/g, '&quot;');
     }
 
+    /**
+     * Visible pane tab IDs from canonical visual-tiled state.
+     * Hide-split and narrow fallback preserve secondaryTree but are not tiled.
+     */
     function collectVisibleTabIds(snap) {
         const ids = [];
-        if (!snap) return ids;
-        if (snap.mainTabId) ids.push(String(snap.mainTabId));
-        if (typeof root.collectLeafTabIds === 'function' && snap.secondaryTree) {
+        if (!snap || !snap.mainTabId) return ids;
+        ids.push(String(snap.mainTabId));
+
+        const visual =
+            typeof root.prksWorkspaceVisualTiled === 'function'
+                ? !!root.prksWorkspaceVisualTiled()
+                : snap.mode === 'tiled' &&
+                  !!snap.secondaryTree &&
+                  !(
+                      typeof root.prksWorkspaceIsNarrowFallback === 'function' &&
+                      root.prksWorkspaceIsNarrowFallback()
+                  );
+
+        if (!visual || !snap.secondaryTree) return ids;
+
+        if (typeof root.collectLeafTabIds === 'function') {
             const leaves = root.collectLeafTabIds(snap.secondaryTree) || [];
             for (let i = 0; i < leaves.length; i += 1) ids.push(String(leaves[i]));
-        } else if (snap.secondaryTree && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId) {
+        } else if (snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId) {
             ids.push(String(snap.secondaryTree.tabId));
         }
         return ids;
@@ -42,7 +67,11 @@
         if (!snap) {
             return '<p class="meta-row">Workspace not ready.</p>';
         }
-        const mode = snap.mode === 'tiled' ? 'Split view' : 'Stacked';
+        const visual =
+            typeof root.prksWorkspaceVisualTiled === 'function'
+                ? !!root.prksWorkspaceVisualTiled()
+                : snap.mode === 'tiled';
+        const mode = visual ? 'Split view' : 'Stacked';
         const visibleIds = collectVisibleTabIds(snap);
         const visibleSet = {};
         visibleIds.forEach(function (id) {
@@ -51,8 +80,7 @@
         const parked = (snap.tabs || []).filter(function (t) {
             return t && !visibleSet[String(t.id)];
         });
-        const maxVisible =
-            typeof root.PRKS_MAX_VISIBLE_TABS === 'number' ? root.PRKS_MAX_VISIBLE_TABS : 4;
+        const maxVisible = 4;
         const remaining = Math.max(0, maxVisible - visibleIds.length);
 
         let rows = '';
@@ -132,6 +160,13 @@
         );
     }
 
+    function focusableNodes(el) {
+        if (!el || !el.querySelectorAll) return [];
+        return Array.prototype.slice.call(el.querySelectorAll(FOCUSABLE)).filter(function (n) {
+            return !!(n.offsetWidth || n.offsetHeight || n.getClientRects().length);
+        });
+    }
+
     function ensurePopover() {
         const d = root.document;
         if (!d || !d.body) return null;
@@ -142,11 +177,12 @@
         el.className = 'prks-workspace-overview';
         el.hidden = true;
         el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
         el.setAttribute('aria-label', 'Workspace overview');
         el.innerHTML =
-            '<div class="prks-workspace-overview__panel">' +
+            '<div class="prks-workspace-overview__panel" data-prks-overview-panel tabindex="-1">' +
             '<div class="prks-workspace-overview__head">' +
-            '<h2 class="prks-workspace-overview__title-head">Workspace overview</h2>' +
+            '<h2 class="prks-workspace-overview__title-head" id="prks-workspace-overview-title">Workspace overview</h2>' +
             '<button type="button" class="prks-icon-btn prks-icon-btn--ghost" data-prks-overview-close aria-label="Close overview">' +
             (typeof root.prksIcon === 'function'
                 ? root.prksIcon('x', { size: 'sm' })
@@ -155,6 +191,7 @@
             '</div>' +
             '<div class="prks-workspace-overview__body" data-prks-overview-body></div>' +
             '</div>';
+        el.setAttribute('aria-labelledby', 'prks-workspace-overview-title');
         d.body.appendChild(el);
         el.addEventListener('click', function (e) {
             const t = e.target;
@@ -185,15 +222,57 @@
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(el);
     }
 
-    function openOverview() {
+    function trapKeydown(e) {
+        const el = root.document && root.document.getElementById(POPOVER_ID);
+        if (!el || el.hidden) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeOverview();
+            return;
+        }
+        if (e.key !== 'Tab') return;
+        const nodes = focusableNodes(el);
+        if (!nodes.length) {
+            e.preventDefault();
+            const panel = el.querySelector('[data-prks-overview-panel]');
+            if (panel) panel.focus();
+            return;
+        }
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        const active = root.document.activeElement;
+        if (e.shiftKey) {
+            if (active === first || !el.contains(active)) {
+                e.preventDefault();
+                last.focus();
+            }
+        } else if (active === last || !el.contains(active)) {
+            e.preventDefault();
+            first.focus();
+        }
+    }
+
+    function openOverview(fromEl) {
         const el = ensurePopover();
         const btn = root.document && root.document.getElementById(BTN_ID);
         if (!el) return;
+        previouslyFocused =
+            (fromEl && fromEl.focus ? fromEl : null) ||
+            (btn && btn.focus ? btn : null) ||
+            (root.document && root.document.activeElement) ||
+            null;
+        openerEl = btn || fromEl || null;
         refreshBody();
         el.hidden = false;
-        if (btn) {
-            btn.setAttribute('aria-expanded', 'true');
-        }
+        if (btn) btn.setAttribute('aria-expanded', 'true');
+        root.document.addEventListener('keydown', trapKeydown, true);
+        root.requestAnimationFrame(function () {
+            const closeBtn = el.querySelector('[data-prks-overview-close]');
+            const firstRow = el.querySelector('[data-prks-overview-tab]');
+            const target = closeBtn || firstRow || el.querySelector('[data-prks-overview-panel]');
+            if (target && target.focus) target.focus();
+        });
     }
 
     function closeOverview() {
@@ -201,12 +280,23 @@
         const btn = root.document && root.document.getElementById(BTN_ID);
         if (el) el.hidden = true;
         if (btn) btn.setAttribute('aria-expanded', 'false');
+        root.document.removeEventListener('keydown', trapKeydown, true);
+        const restore = previouslyFocused || openerEl || btn;
+        previouslyFocused = null;
+        openerEl = null;
+        if (restore && typeof restore.focus === 'function') {
+            try {
+                restore.focus();
+            } catch (_e) {
+                /* ignore */
+            }
+        }
     }
 
-    function toggleOverview() {
+    function toggleOverview(fromEl) {
         const el = root.document && root.document.getElementById(POPOVER_ID);
         if (el && !el.hidden) closeOverview();
-        else openOverview();
+        else openOverview(fromEl);
     }
 
     function bindChrome() {
@@ -215,15 +305,12 @@
         const btn = d.getElementById(BTN_ID);
         if (btn && btn.dataset.bound !== '1') {
             btn.dataset.bound = '1';
+            btn.setAttribute('aria-haspopup', 'dialog');
+            btn.setAttribute('aria-controls', POPOVER_ID);
+            if (!btn.hasAttribute('aria-expanded')) btn.setAttribute('aria-expanded', 'false');
             btn.addEventListener('click', function (e) {
                 e.preventDefault();
-                toggleOverview();
-            });
-        }
-        if (d.documentElement.dataset.prksOverviewEsc !== '1') {
-            d.documentElement.dataset.prksOverviewEsc = '1';
-            d.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape') closeOverview();
+                toggleOverview(btn);
             });
         }
     }

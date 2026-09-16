@@ -313,10 +313,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
                           'prksEffective', 'payload.field'):
             self.assertNotIn(forbidden, cards, forbidden)
         # And the precedence itself still lives there, in one place.
-        credit_fn = cards[cards.index('function prksWorkCardCreditLine('):]
+        credit_fn = cards[cards.index('function prksWorkCardCreditText('):]
         credit_fn = credit_fn[: credit_fn.index('\n}')]
         self.assertLess(credit_fn.index('linked_authors'), credit_fn.index('author_text'))
         self.assertLess(credit_fn.index('author_text'), credit_fn.index('primary_editor'))
+        self.assertIn('function prksWorkCardCreditLine(', cards)
+        self.assertIn('prksWorkCardCreditText(w)', cards)
 
     def test_the_thumbnail_url_always_states_its_page(self):
         """A URL with no page means "whatever the server currently stores",

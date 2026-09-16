@@ -106,6 +106,21 @@ class OverviewPrimitivesTests(unittest.TestCase):
             """
         )
 
+    def test_rejects_raw_html_hatch(self):
+        _run_js(
+            r"""
+            const sneaky = context.prksPageSummaryHtml({
+                parts: [{ html: '<img src=x onerror=alert(1)>' }, { text: 'ok' }],
+            });
+            if (sneaky.includes('<img')) throw new Error('html hatch must be rejected: ' + sneaky);
+            if (!sneaky.includes('ok')) throw new Error('plain text part must remain');
+            const join = context.prksJoinSummaryParts;
+            if (typeof join !== 'function') throw new Error('missing join');
+            const joined = join(['a', 'b'], '<script>evil</script>');
+            if (joined.includes('<script>')) throw new Error('sepHtml must not be accepted: ' + joined);
+            """
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

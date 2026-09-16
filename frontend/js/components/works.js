@@ -925,7 +925,9 @@ async function renderWorkDetails(ctx, work, requestCtx) {
     const folderTitle = work.folder_title || (work.folder && work.folder.title) || '';
     const folderId = work.folder_id || (work.folder && work.folder.id) || '';
     const credit =
-        typeof prksWorkCardCreditLine === 'function' ? prksWorkCardCreditLine(work) : '';
+        typeof prksWorkCardCreditText === 'function'
+            ? prksWorkCardCreditText(work)
+            : '';
     const relSummaryHtml =
         !pdfViewerActive && typeof prksRelSummaryHtml === 'function'
             ? prksRelSummaryHtml({

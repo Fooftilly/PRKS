@@ -4,6 +4,9 @@
  * Dense, flat, information-first strips for page headers, identity, Details,
  * collections, and nav attention. Never invent counts: omit unknown parts;
  * unknown is not zero.
+ *
+ * Parts are typed plain text (and narrowly validated internal links only).
+ * No raw HTML hatch — callers must not pass prebuilt markup.
  */
 (function (root) {
     'use strict';
@@ -17,9 +20,23 @@
             .replace(/"/g, '&quot;');
     }
 
+    /** Allow only same-app hash routes or root-relative paths. */
+    function isSafeInternalHref(href) {
+        if (typeof href !== 'string') return false;
+        const h = href.trim();
+        if (!h) return false;
+        if (h.charAt(0) === '#') {
+            return h.indexOf('javascript:') === -1 && h.indexOf('data:') === -1;
+        }
+        if (h.charAt(0) === '/' && h.charAt(1) !== '/') {
+            return h.indexOf('javascript:') === -1 && h.indexOf('data:') === -1;
+        }
+        return false;
+    }
+
     /**
      * Normalize one summary part.
-     * Accepts: string | number | { text, href?, html?, unknown? } | null/undefined/false.
+     * Accepts: string | number | { text, href?, unknown? } | null/undefined/false.
      * Returns escaped HTML fragment or '' (omit).
      * Numbers are only used when Number.isFinite — never coerce NaN/null to 0.
      */
@@ -35,26 +52,24 @@
         }
         if (typeof part !== 'object') return '';
         if (part.unknown === true) return '';
-        if (part.html != null && String(part.html).trim()) return String(part.html);
+        /* Reject legacy html / raw markup keys — plain text only. */
+        if (Object.prototype.hasOwnProperty.call(part, 'html')) return '';
         const text = part.text != null ? String(part.text).trim() : '';
         if (!text) return '';
         const escaped = escapeText(text);
-        if (part.href) {
-            const href = String(part.href);
-            if (href.charAt(0) === '#' || href.indexOf('/') === 0) {
-                return (
-                    '<a class="prks-summary-link" href="' +
-                    escapeText(href) +
-                    '">' +
-                    escaped +
-                    '</a>'
-                );
-            }
+        if (part.href != null && isSafeInternalHref(String(part.href))) {
+            return (
+                '<a class="prks-summary-link" href="' +
+                escapeText(String(part.href).trim()) +
+                '">' +
+                escaped +
+                '</a>'
+            );
         }
         return escaped;
     }
 
-    function joinSummaryParts(parts, sepHtml) {
+    function joinSummaryParts(parts) {
         const list = Array.isArray(parts) ? parts : [];
         const bits = [];
         for (let i = 0; i < list.length; i += 1) {
@@ -62,10 +77,7 @@
             if (bit) bits.push(bit);
         }
         if (!bits.length) return '';
-        const sep =
-            sepHtml != null
-                ? String(sepHtml)
-                : '<span class="prks-summary-sep" aria-hidden="true"> · </span>';
+        const sep = '<span class="prks-summary-sep" aria-hidden="true"> · </span>';
         return bits.join(sep);
     }
 
@@ -178,12 +190,12 @@
     }
 
     /** Paint a stable `[data-prks-role="index-scope-host"]` with a scope line. */
-    function prksPaintScopeHost(root, options) {
-        if (!root || !root.querySelector) return;
+    function prksPaintScopeHost(rootEl, options) {
+        if (!rootEl || !rootEl.querySelector) return;
         const host =
-            root.getAttribute && root.getAttribute('data-prks-role') === 'index-scope-host'
-                ? root
-                : root.querySelector('[data-prks-role="index-scope-host"]');
+            rootEl.getAttribute && rootEl.getAttribute('data-prks-role') === 'index-scope-host'
+                ? rootEl
+                : rootEl.querySelector('[data-prks-role="index-scope-host"]');
         if (!host) return;
         host.innerHTML = prksScopeLineHtml(options);
     }

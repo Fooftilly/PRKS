@@ -461,7 +461,7 @@ body {
     background: var(--surface-selected);
     border-color: var(--border-strong);
     color: var(--text-primary);
-    box-shadow: inset 3px 0 0 var(--accent);
+    font-weight: var(--weight-semibold);
 }
 
 .prks-entity-choice {
@@ -635,8 +635,9 @@ body {
 .prks-tab[aria-selected="true"],
 .tab-btn.active,
 .tab-link.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+    color: var(--text-primary);
+    border-bottom-color: var(--border-strong);
+    font-weight: var(--weight-semibold);
 }
 
 .prks-tab:hover,
@@ -853,7 +854,6 @@ body {
     background: var(--surface-selected);
     color: var(--text-primary);
     font-weight: var(--weight-semibold);
-    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .prks-workspace-tab.is-parked {
@@ -872,7 +872,7 @@ body {
 .prks-workspace-tab.is-focused:not(.is-main) {
     color: var(--text-primary);
     background: var(--surface-selected);
-    box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, var(--border));
+    font-weight: var(--weight-semibold);
 }
 
 .prks-workspace-tab.is-tiled.is-focused {
@@ -1486,13 +1486,12 @@ body.prks-workspace-dragging * {
     border-color: var(--border-strong);
 }
 
-/* Quiet selected / current grammar (DESIGN.md): surface + thin strong border +
- * optional inset accent edge. Never an outer accent ring or full purple outline.
+/* Quiet selected / current grammar (DESIGN.md): surface-selected + optional
+ * neutral border-strong + weight/ARIA. No persistent purple lines or edges.
  * Keyboard :focus-visible stays the separate 2px --focus-ring outline. */
 .prks-card.is-selected {
     background: var(--surface-selected);
     border-color: var(--border-strong);
-    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .prks-list-row {
@@ -1513,7 +1512,6 @@ body.prks-workspace-dragging * {
 .prks-list-row.is-selected {
     background: var(--surface-selected);
     border-color: var(--border-strong);
-    box-shadow: inset 3px 0 0 var(--accent);
     color: var(--text-primary);
     font-weight: var(--weight-semibold);
 }
@@ -1833,7 +1831,6 @@ body.prks-workspace-dragging * {
 .prks-workspace-overview__row.is-focused {
     background: var(--surface-selected);
     border-color: var(--border-strong);
-    box-shadow: inset 3px 0 0 var(--accent);
     font-weight: var(--weight-semibold);
 }
 
@@ -1951,7 +1948,6 @@ body.prks-workspace-dragging * {
 .prks-filter-toggle:has(input:checked) {
     border-color: var(--border-strong);
     background: var(--surface-selected);
-    box-shadow: inset 3px 0 0 var(--accent);
     color: var(--text-primary);
     font-weight: var(--weight-semibold);
 }
@@ -2531,7 +2527,6 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
     background-color: var(--surface-selected);
     color: var(--text-primary);
     font-weight: 600;
-    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .nav-link.nav-link--sub {
@@ -2651,8 +2646,9 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
    but collapsed — distinct from .active/aria-current on the real destination. */
 .nav-disclosure--contains-current > .nav-disclosure__row .nav-disclosure__link,
 .nav-disclosure--contains-current > .nav-disclosure__row .nav-disclosure__toggle--full {
-    color: var(--accent);
+    color: var(--text-primary);
     font-weight: 600;
+    background: var(--surface-selected);
 }
 
 /* Sidebar category separators — applied directly to the top-level disclosure
@@ -2958,7 +2954,6 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
     border-color: var(--border-strong);
     background: var(--surface-selected);
     color: var(--text-primary);
-    box-shadow: inset 3px 0 0 var(--accent);
     font-weight: 600;
 }
 
@@ -3898,7 +3893,6 @@ a.tag {
 .prks-command-palette__option.is-active {
     background: var(--surface-selected);
     color: var(--text-primary);
-    box-shadow: inset 3px 0 0 var(--accent);
     font-weight: var(--weight-semibold);
 }
 
@@ -4045,7 +4039,6 @@ a.tag {
     background: var(--surface-selected);
     color: var(--text-primary);
     border-color: var(--border-strong);
-    box-shadow: inset 0 -2px 0 var(--accent);
     font-weight: 600;
 }
 .prks-kind-toggle__icon {
@@ -5150,11 +5143,18 @@ a.tag {
 
 .prks-folder-library .page-header.prks-folder-library__header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    gap: var(--space-sm) var(--space-md);
     margin-bottom: 8px;
     padding-bottom: 6px;
     min-height: 38px;
     flex-shrink: 0;
+}
+
+.prks-folder-library .page-header.prks-folder-library__header .prks-page-summary {
+    flex: 1 1 12rem;
+    margin: 0;
 }
 
 .prks-folder-library .page-header h2,
@@ -5315,7 +5315,6 @@ a.tag {
 .prks-folder-tree__row:has(.prks-folder-tree__link[aria-current="page"]),
 .prks-group-tree__row:has(.prks-group-tree__link[aria-current="page"]) {
     background: var(--surface-selected);
-    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .prks-folder-tree__row.is-selected .prks-folder-tree__link,
@@ -6223,7 +6222,6 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     border-color: var(--border-strong);
     color: var(--text-primary);
     background: var(--surface-selected);
-    box-shadow: inset 0 -2px 0 var(--accent);
     font-weight: 600;
 }
 .prks-theme-option__icon {
@@ -6292,7 +6290,6 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     background: var(--surface-selected);
     color: var(--text-primary);
     font-weight: 600;
-    box-shadow: inset 3px 0 0 var(--accent);
 }
 .prks-settings-content {
     flex: 1 1 auto;
@@ -6684,7 +6681,6 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     background: var(--surface-selected);
     color: var(--text-primary);
     font-weight: 600;
-    box-shadow: inset 0 -2px 0 var(--accent);
 }
 .prks-segmented--roles .prks-segmented__btn:focus-visible {
     box-shadow: 0 0 0 2px var(--card-bg, var(--surface-muted)), 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -7532,7 +7528,6 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
 .prks-upload-person-stack__roles--tiles .prks-segmented--roles-icons .prks-segmented__btn--active {
     border-color: var(--border-strong);
     background: var(--surface-selected);
-    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .prks-upload-person-stack__roles--tiles .prks-segmented__btn {
@@ -8069,7 +8064,7 @@ textarea[data-prks-autosize="1"] {
 }
 
 .prks-doc-type-menu__option.is-selected {
-    border-left-color: var(--accent);
+    border-left-color: var(--border-strong);
     background: var(--surface-selected);
     font-weight: var(--weight-semibold);
 }
@@ -9723,7 +9718,6 @@ button.prks-research-row {
 .research-graph__find-hit.is-active {
     background: var(--surface-selected);
     border-color: var(--border-strong);
-    box-shadow: inset 3px 0 0 var(--accent);
     font-weight: var(--weight-semibold);
 }
 
@@ -10164,8 +10158,8 @@ button.prks-research-row {
 }
 
 :root[data-theme="dark"] li.CodeMirror-hint-active {
-    background: var(--accent);
-    color: #f8fafc;
+    background: var(--surface-selected);
+    color: var(--text-primary);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -10180,8 +10174,8 @@ button.prks-research-row {
     }
 
     :root:not([data-theme="light"]) li.CodeMirror-hint-active {
-        background: var(--accent);
-        color: #f8fafc;
+        background: var(--surface-selected);
+        color: var(--text-primary);
     }
 }
 
@@ -10265,8 +10259,9 @@ button.prks-research-row {
 }
 
 :root[data-theme="dark"] .document-view--work .work-notes-editor-wrap .editor-toolbar button.active {
-    border-color: var(--accent) !important;
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: var(--surface-selected) !important;
+    border-color: var(--border-strong) !important;
+    box-shadow: none;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -10277,8 +10272,9 @@ button.prks-research-row {
     }
 
     :root:not([data-theme="light"]) .document-view--work .work-notes-editor-wrap .editor-toolbar button.active {
-        border-color: var(--accent) !important;
-        box-shadow: inset 0 0 0 1px var(--accent);
+        background: var(--surface-selected) !important;
+        border-color: var(--border-strong) !important;
+        box-shadow: none;
     }
 }
 
@@ -11216,7 +11212,6 @@ body.prks-bulk-selection-active .project-card--work-card .work-card__select {
 
 .project-card--work-card.is-selected {
     border-color: var(--border-strong);
-    box-shadow: inset 3px 0 0 var(--accent);
     background: var(--surface-selected);
 }
 
