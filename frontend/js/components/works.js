@@ -1592,10 +1592,15 @@ function prksReapplyWorkNotesSplitLayout(ctx) {
     if (!workId) return;
     const handle = ws.querySelector('.work-split-handle');
     if (!handle) return;
-    const enabled =
+    const width = ws.clientWidth || 0;
+    const mobileForceSide =
         typeof prksGetMobileWorkNotesRightEnabled === 'function' && prksGetMobileWorkNotesRightEnabled();
-    const wantSide = !!(enabled && ws.clientWidth > 0 && ws.clientWidth < 720);
+    /* Wide → sidecar. Narrow → drawer unless Settings forces notes beside PDF. */
+    const wantSide = (width >= 720) || (mobileForceSide && width > 0 && width < 720);
+    const collapsed = ws.classList.contains('work-workspace--notes-collapsed');
+    const wantDrawer = !wantSide && !collapsed && width > 0 && width < 720;
     ws.classList.toggle('work-workspace--side', wantSide);
+    ws.classList.toggle('work-workspace--notes-drawer', wantDrawer);
 
     if (prksWorkNotesMobileSideActive(ctx)) {
         const storageKeyW = 'prks.workNotesSideWidth.' + workId;
@@ -1892,6 +1897,9 @@ function setupWorkNotesCollapseToggle(ctx, workId) {
     function setCollapsed(collapsed) {
         ws.classList.toggle('work-workspace--notes-collapsed', collapsed);
         localStorage.setItem(storageKey, collapsed ? '1' : '0');
+        if (typeof prksReapplyWorkNotesSplitLayout === 'function') {
+            prksReapplyWorkNotesSplitLayout(ctx);
+        }
         syncToggleUi();
         requestAnimationFrame(() => {
             const _mdeC = prksWorkNotesEditor(ctx);

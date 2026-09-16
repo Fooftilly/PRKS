@@ -606,7 +606,37 @@ Split control: **Split** (no leaf), **Show split** (tree exists but is parked/hi
 
 Tile chrome exists only in tiled mode. Headers keep a stable height. Loading and errors stay inside the route root; the tile shell/header is not torn down. The Work Notes divider (`.work-split-handle`) keeps its nested-content grip and sizing behavior; hover, drag, and keyboard-focus strength match the workspace splitter’s idle-thin / obvious-when-interacting language.
 
-Work notes side-by-side layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
+Work notes layout follows that Work’s tile/container width, not a global viewport class that would restyle the other tile.
+
+### Work / PDF composition (density)
+
+Dense tiled reading is the primary stress case. Prefer **composition** over indiscriminate shrink: remove redundant identity and reclaim height for the PDF (or other useful research context), not blank margin.
+
+**Identity hierarchy (one owner):**
+
+| Mode | Title authority | PDF toolbar identity |
+| --- | --- | --- |
+| Tiled | Tile header (and tab strip) | Do **not** repeat the Work title; doc-type badge may remain |
+| Stacked PDF (no `.page-header--work`) | PDF toolbar title (and tab strip) | Keep title + type |
+| Non-PDF Work | `.page-header--work` title | n/a |
+
+Do not add a third in-pane title row. Right-panel Details may still show the Title field for editing — that is metadata, not chrome duplication of the tile header.
+
+**Contextual Back:** The `.prks-nav-back-row--work` row is for stacked PDF-without-header navigation. In **tiled** mode, suppress it — workspace tabs and pane chrome already provide orientation. Do not remove Back from stacked PDF Works.
+
+**PDF viewer in tiles:** Inside a tiled Work pane, the viewer must honor the pane’s height (`min-height: 0` on `.prks-pdf-viewer`). A large vendor min-height must not force Secondary panes to clip or waste chrome.
+
+### Research Notes presentation
+
+Research Notes remain TabContext-owned (drafts, sync, EasyMDE). Presentation only:
+
+| State | Presentation |
+| --- | --- |
+| Collapsed | Tiny disclosure: one compact row at `--control-height-sm` (28px). Label + expand control. Hide verbose sync/status text while collapsed. Discoverable, not a second title bar. |
+| Expanded, wide container (≥ ~720px) | Sidecar beside the PDF (side split + `.work-split-handle`). |
+| Expanded, narrow container (&lt; ~720px) | Drawer overlay over the PDF (does not permanently steal half the PDF height as a stacked bottom panel). The Settings toggle “Research notes beside PDF on mobile” may still force a sidecar on narrow widths. |
+
+Collapsed disclosure must stay visible in every Work that has Notes. Reclaimed space goes to the PDF (or existing research context), never to empty decorative padding.
 
 In the dense tiled desktop shell (and on mobile), the right Details/Annotations panel is a dismissible, fixed-position overlay (`position: fixed`, slides via `transform`), not a layout participant — opening or closing it never changes pane widths, split ratios, or workspace canvas width. It closes via Escape, the Details ribbon toggle, or an explicit Close (`×`, labeled "Close details") in its own header, all routed through the one canonical `prksToggleRightPanelOverlay()` path. Closing the panel is purely a visibility change: it must not clear a Graph node/edge selection or any other owning route's state — reopening the panel restores whatever it was already showing.
 

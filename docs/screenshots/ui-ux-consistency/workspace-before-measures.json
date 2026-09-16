@@ -1,0 +1,174 @@
+{
+  "label": "before",
+  "captured_at": "2026-09-16T08:05:49Z",
+  "viewport": {
+    "width": 1024,
+    "height": 582
+  },
+  "fixture": {
+    "works": [
+      "E2E Research Work",
+      "E2E Related Work",
+      "E2E UX Tour PDF Work"
+    ],
+    "work_ids": {
+      "a": "W-2EABDB8A7BED4C53BF91DE88BC45BFD2",
+      "b": "W-F052D25641B3464EB4E4981F9A2DDAE2",
+      "c": "W-CE734596ECA5424295732D96CBD31AFF"
+    },
+    "titles_in_headers": [
+      "E2E Research Work",
+      "E2E Related Work",
+      "E2E UX Tour PDF Work"
+    ],
+    "notes": "collapsed",
+    "right_panel": "hidden",
+    "nav": "tiled collapsed rail",
+    "theme": "dark"
+  },
+  "measures": {
+    "viewport": {
+      "w": 1024,
+      "h": 582
+    },
+    "theme": "dark",
+    "bodyClasses": [],
+    "appClasses": [
+      "app-container--tiled"
+    ],
+    "sidebarW": 54,
+    "ribbonH": 45,
+    "tabStripH": 36,
+    "canvas": {
+      "w": 934,
+      "h": 479,
+      "y": 103
+    },
+    "rightPanelVisible": false,
+    "rightPanelW": 410,
+    "shellChromeH": 81,
+    "canvasH": 479,
+    "chromeCostPct": 17.7,
+    "tiles": [
+      {
+        "tabId": "tab-1",
+        "role": "main",
+        "focused": true,
+        "tile": {
+          "w": 541,
+          "h": 479,
+          "y": 103
+        },
+        "headerH": 32,
+        "backRowH": 20,
+        "pdfToolbarH": 35,
+        "pdfViewerH": 369,
+        "pdfPaneH": 371,
+        "notesPaneH": 52,
+        "notesHeaderH": 52,
+        "notesCollapsed": true,
+        "pdfTitle": "E2E Research Work",
+        "tileTitle": "E2E Research Work"
+      },
+      {
+        "tabId": "tab-2",
+        "role": "secondary",
+        "focused": false,
+        "tile": {
+          "w": 392,
+          "h": 240,
+          "y": 103
+        },
+        "headerH": 32,
+        "backRowH": 20,
+        "pdfToolbarH": 35,
+        "pdfViewerH": 240,
+        "pdfPaneH": 132,
+        "notesPaneH": 52,
+        "notesHeaderH": 52,
+        "notesCollapsed": true,
+        "pdfTitle": "E2E Related Work",
+        "tileTitle": "E2E Related Work"
+      },
+      {
+        "tabId": "tab-3",
+        "role": "secondary",
+        "focused": false,
+        "tile": {
+          "w": 392,
+          "h": 239,
+          "y": 344
+        },
+        "headerH": 32,
+        "backRowH": 20,
+        "pdfToolbarH": 35,
+        "pdfViewerH": 240,
+        "pdfPaneH": 131,
+        "notesPaneH": 52,
+        "notesHeaderH": 52,
+        "notesCollapsed": true,
+        "pdfTitle": "E2E UX Tour PDF Work",
+        "tileTitle": "E2E UX Tour PDF Work"
+      }
+    ],
+    "secondaryMinPdfH": 240,
+    "secondaryAvgPdfH": 240,
+    "snapshot": {
+      "version": 1,
+      "mode": "tiled",
+      "mainTabId": "tab-1",
+      "focusedTabId": "tab-1",
+      "secondaryTree": {
+        "type": "split",
+        "id": "split-1",
+        "axis": "top-bottom",
+        "ratio": 0.5,
+        "first": {
+          "type": "leaf",
+          "tabId": "tab-2"
+        },
+        "second": {
+          "type": "leaf",
+          "tabId": "tab-3"
+        }
+      },
+      "tabs": [
+        {
+          "id": "tab-1",
+          "route": "#/works/W-2EABDB8A7BED4C53BF91DE88BC45BFD2",
+          "title": "E2E Research Work",
+          "icon": "file-text",
+          "history": [
+            "#/works/W-2EABDB8A7BED4C53BF91DE88BC45BFD2"
+          ],
+          "historyIndex": 0,
+          "titleRouteGen": 2
+        },
+        {
+          "id": "tab-2",
+          "route": "#/works/W-F052D25641B3464EB4E4981F9A2DDAE2",
+          "title": "E2E Related Work",
+          "icon": "file-text",
+          "history": [
+            "#/works/W-F052D25641B3464EB4E4981F9A2DDAE2"
+          ],
+          "historyIndex": 0,
+          "titleRouteGen": 1
+        },
+        {
+          "id": "tab-3",
+          "route": "#/works/W-CE734596ECA5424295732D96CBD31AFF",
+          "title": "E2E UX Tour PDF Work",
+          "icon": "file-text",
+          "history": [
+            "#/works/W-CE734596ECA5424295732D96CBD31AFF"
+          ],
+          "historyIndex": 0,
+          "titleRouteGen": 1
+        }
+      ],
+      "mainSplitRatio": 0.58
+    }
+  },
+  "screenshot": "docs/screenshots/ui-ux-consistency/workspace-before.png"
+}
