@@ -105,9 +105,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("const CONCEPTS_LIST_KEY = 'concepts:index';", src)
         # Every canonical caller shares that one definition rather than
         # re-listing the domain's kinds/list keys at each call site.
+        # Work deletion fences Concepts from the DELETE_WORK reconciler, not
+        # from works.js (which only enqueues durable intent).
         for path in (
             os.path.join(_FRONTEND, "js", "api.js"),
-            os.path.join(_FRONTEND, "js", "components", "works.js"),
+            os.path.join(_FRONTEND, "js", "offline-runtime.js"),
         ):
             caller = _read(path)
             self.assertIn("prksOfflineMarkConceptsChanged", caller)
@@ -118,6 +120,9 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             os.path.join(_FRONTEND, "js", "components", "playlists.js"),
         ):
             self.assertNotIn("entityKinds:", _read(path))
+        works = _read(os.path.join(_FRONTEND, "js", "components", "works.js"))
+        self.assertIn("prksDeleteWorkDurably", works)
+        self.assertNotIn("prksOfflineMarkConceptsChanged", works)
 
     def test_every_work_title_surface_uses_the_shared_coherence_helper(self):
         """A cached Concept detail shows the titles of the Works that mention it,
