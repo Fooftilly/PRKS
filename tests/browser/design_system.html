@@ -409,8 +409,8 @@
         </section>
 
         <section class="prks-gallery__section" id="workspace" data-gallery-section="workspace">
-            <h2>Workspace tabs / future tiles / splitter</h2>
-            <p class="prks-field__help">Stacked tab-strip specimen. Tiling remains a static future contract.</p>
+            <h2>Workspace tabs / tiles / splitter</h2>
+            <p class="prks-field__help">Tab strip + tile headers. In tiled Work/PDF, the tile header owns identity; collapsed Research Notes is a 28px disclosure.</p>
             <div class="prks-workspace-tabs-shell">
                 <div class="prks-workspace-tabs" role="tablist" aria-label="Workspace tabs">
                     <div class="prks-workspace-tab is-main">
@@ -437,6 +437,12 @@
             <div class="prks-row" style="align-items:stretch;min-height:120px;margin-top:var(--space-md)">
                 <div class="prks-tile prks-tile--main prks-gallery__demo-tile" style="flex:1">
                     <div class="prks-tile-header">Main tile</div>
+                    <div class="work-notes-pane work-workspace--notes-collapsed" style="margin-top:auto;border-top:1px solid var(--border)">
+                        <div class="work-notes-pane-header" style="height:var(--control-height-sm);min-height:var(--control-height-sm);display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-sm)">
+                            <span class="work-notes-title" style="font-size:var(--text-xs);color:var(--text-secondary)">Research Notes</span>
+                            <button type="button" class="work-notes-toggle-btn" aria-expanded="false" aria-label="Expand research notes editor" title="Expand notes">▾</button>
+                        </div>
+                    </div>
                 </div>
                 <div class="prks-splitter prks-splitter--vertical" role="separator" aria-orientation="vertical" tabindex="0"></div>
                 <div class="prks-tile prks-tile--secondary prks-tile--focused prks-gallery__demo-tile" style="flex:0 0 40%">

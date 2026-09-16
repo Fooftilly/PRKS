@@ -1552,8 +1552,8 @@ body.prks-workspace-dragging * {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: var(--space-md);
-    margin-bottom: var(--space-md);
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
     padding-bottom: var(--space-sm);
     border-bottom: 1px solid var(--border);
 }
@@ -1620,7 +1620,7 @@ body.prks-workspace-dragging * {
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-sm);
-    margin-bottom: var(--space-md);
+    margin-bottom: var(--space-sm);
 }
 
 .prks-page-content {
