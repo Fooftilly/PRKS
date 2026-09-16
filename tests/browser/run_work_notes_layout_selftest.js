@@ -260,9 +260,27 @@ function runLayoutModeMatrix() {
     wsL._classes.delete('work-workspace--side');
     wsL._classes.delete('work-workspace--notes-drawer');
     sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
-    assert('narrow + force uses side sidecar', wsL._classes.has('work-workspace--side'));
-    assert('narrow + force does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
+    assert('narrow stacked + force uses side sidecar', wsL._classes.has('work-workspace--side'));
+    assert('narrow stacked + force does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
 
+    /* Preference must never turn tiled Notes into a side strip against the splitter. */
+    wsL._setTiled(true);
+    wsL.clientWidth = 400;
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('tiled + narrow + force still never uses side', !wsL._classes.has('work-workspace--side'));
+    assert('tiled + narrow + force still uses drawer', wsL._classes.has('work-workspace--notes-drawer'));
+
+    wsL.clientWidth = 800;
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('tiled + wide + force still never uses side', !wsL._classes.has('work-workspace--side'));
+    assert('tiled + wide + force still uses drawer', wsL._classes.has('work-workspace--notes-drawer'));
+
+    wsL._setTiled(false);
+    wsL.clientWidth = 400;
     wsL._classes.add('work-workspace--notes-collapsed');
     wsL._classes.delete('work-workspace--side');
     wsL._classes.delete('work-workspace--notes-drawer');

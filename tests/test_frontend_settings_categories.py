@@ -157,7 +157,10 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         self.assertIn("Research notes beside PDF when narrow", reading)
         self.assertIn("notes expand as a drawer by default", reading)
         self.assertIn("side-by-side sidecar", reading)
+        self.assertIn("narrow stacked", reading)
+        self.assertIn("Split-view tiles always use a drawer", reading)
         self.assertNotIn("Research notes beside PDF on mobile", reading)
+        self.assertNotIn("narrow stacked containers and tiles", reading)
 
     def test_modal_width_scoped_to_settings_only(self):
         css = _read(_CSS)

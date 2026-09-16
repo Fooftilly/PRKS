@@ -201,15 +201,26 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("work-workspace--notes-drawer", works)
         self.assertIn("work-workspace--side", works)
         self.assertIn("prksGetMobileWorkNotesRightEnabled", works)
-        # Tiled expanded Notes must be drawer, never a side strip against the splitter.
+        # Tiled expanded Notes must be drawer always — Settings preference is stacked-only.
         self.assertIn("inTiled", works)
         self.assertIn("wantDrawer", works)
+        layout = works[works.find("function prksReapplyWorkNotesSplitLayout") : works.find("window.prksReapplyWorkNotesSplitLayout")]
+        self.assertIn("!inTiled &&", layout)
+        self.assertIn("Settings cannot override", layout)
+        self.assertNotIn(
+            "(mobileForceSide && width > 0 && width < 720)",
+            layout.replace("!inTiled && (width >= 720 || (mobileForceSide && width > 0 && width < 720))", ""),
+            "force-side must not apply outside the !inTiled gate",
+        )
 
         self.assertIn("Research notes beside PDF when narrow", index)
         self.assertNotIn("Research notes beside PDF on mobile", index)
         self.assertIn("Research notes beside PDF when narrow", design)
         self.assertIn("compact save/sync cue", design)
         self.assertIn("Work / PDF composition (density)", design)
+        self.assertIn("does **not** apply in tiled mode", design)
+        self.assertNotIn("Scope note (PR #4)", design)
+        self.assertNotIn("shipped first", design)
 
     def test_tiled_v1_state_contract(self):
         src = _read(_WS)

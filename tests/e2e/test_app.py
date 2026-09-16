@@ -4981,6 +4981,38 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertFalse(tiled["side"])
         self.assertTrue(tiled["drawer"])
 
+        # Preference must not override tiled → drawer (narrow or wide tiles).
+        page.evaluate(
+            """(tabId) => {
+                localStorage.setItem('prks.ui.mobileWorkNotesRight', '1');
+                const ctx = window.prksGetTabContext(tabId);
+                const ws = ctx && ctx.root && ctx.root.querySelector('.work-workspace');
+                if (!ws) return;
+                ws.classList.remove('work-workspace--notes-collapsed');
+                if (typeof window.prksSyncWorkNotesMobileSideClass === 'function') {
+                    window.prksSyncWorkNotesMobileSideClass();
+                } else if (typeof window.prksReapplyWorkNotesSplitLayout === 'function') {
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                }
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        tiled_forced = page.evaluate(
+            """(tabId) => {
+                const tile = document.querySelector('.prks-tile[data-prks-tab-id=\"' + tabId + '\"]');
+                const ws = tile && tile.querySelector('.work-workspace');
+                return {
+                    side: !!(ws && ws.classList.contains('work-workspace--side')),
+                    drawer: !!(ws && ws.classList.contains('work-workspace--notes-drawer')),
+                    pref: localStorage.getItem('prks.ui.mobileWorkNotesRight'),
+                };
+            }""",
+            arg=ids["secondaryTabId"],
+        )
+        self.assertEqual(tiled_forced["pref"], "1")
+        self.assertFalse(tiled_forced["side"])
+        self.assertTrue(tiled_forced["drawer"])
+
         # Splitter remains interactive while the Secondary Notes drawer is open.
         before = _tile_box(page, ids["mainTabId"])
         splitter = page.locator(".prks-splitter").first
