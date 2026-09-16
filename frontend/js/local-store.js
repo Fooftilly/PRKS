@@ -69,6 +69,7 @@
         'CREATE_TAG',
         'DELETE_TAG',
         'MERGE_TAG',
+        'CREATE_WORK',
         'DELETE_WORK',
         'ADD_WORK_TAG',
         'REMOVE_WORK_TAG',
@@ -1612,12 +1613,121 @@
         }
 
         /**
+         * Create a video Work under a client-minted `W-` id.
+         *
+         * PDF / binary construction is refused here: that path stays on
+         * `POST /api/works` until durable Blob storage exists. Source identity
+         * uses the same intent form as `SET_WORK_SOURCE` (`{kind, url}`).
+         */
+        function canonicalWorkCreatePayload(input) {
+            const src = isPlainObject(input) ? input : {};
+            const sourceIn = isPlainObject(src.source) ? src.source : null;
+            if (!sourceIn || sourceIn.kind !== 'video' || typeof sourceIn.url !== 'string') {
+                throw localStoreError('invalid_envelope', 'A video file needs a YouTube URL.');
+            }
+            let canonicalSource = null;
+            if (typeof root.prksCanonicalWorkSource === 'function') {
+                const parsed = root.prksCanonicalWorkSource(sourceIn.url);
+                if (parsed && parsed.source_url) {
+                    canonicalSource = { kind: 'video', url: parsed.source_url };
+                }
+            } else if (typeof root.prksIsValidYoutubeUrl === 'function' &&
+                root.prksIsValidYoutubeUrl(sourceIn.url)) {
+                canonicalSource = { kind: 'video', url: String(sourceIn.url).trim() };
+            }
+            if (!canonicalSource) {
+                throw localStoreError('invalid_envelope', 'Enter a valid YouTube URL.');
+            }
+            const status = (src.status == null ? 'Not Started' : String(src.status)).trim() ||
+                'Not Started';
+            const statuses = root.PRKS_WORK_STATUSES ||
+                ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
+            if (statuses.indexOf(status) === -1) {
+                throw localStoreError('invalid_envelope', 'Invalid status.');
+            }
+            const rolesIn = Array.isArray(src.roles) ? src.roles : [];
+            const roles = [];
+            const seen = Object.create(null);
+            for (let i = 0; i < rolesIn.length; i += 1) {
+                const entry = rolesIn[i];
+                if (!isPlainObject(entry) || !isNonBlankString(entry.person_id) ||
+                    !isNonBlankString(entry.role_type)) {
+                    throw localStoreError('invalid_envelope', 'Invalid role.');
+                }
+                const credit = entry.credit_name == null ? '' : String(entry.credit_name);
+                const key = entry.person_id + '\0' + entry.role_type;
+                if (seen[key]) continue;
+                seen[key] = true;
+                roles.push({
+                    person_id: entry.person_id.trim(),
+                    role_type: entry.role_type,
+                    credit_name: credit,
+                });
+            }
+            const str = (name) => (src[name] == null ? '' : String(src[name]));
+            return {
+                title: str('title'),
+                status: status,
+                doc_type: 'online',
+                abstract: str('abstract'),
+                author_text: str('author_text'),
+                year: str('year'),
+                published_date: str('published_date'),
+                urldate: str('urldate'),
+                private_notes: str('private_notes'),
+                thumb_url: str('thumb_url'),
+                source: { kind: 'video', url: canonicalSource.url || String(sourceIn.url).trim() },
+                folder_id: str('folder_id').trim(),
+                playlist_id: str('playlist_id').trim(),
+                roles: roles,
+            };
+        }
+
+        function createWork(fields) {
+            let payload;
+            try {
+                payload = canonicalWorkCreatePayload(fields);
+            } catch (e) {
+                return Promise.reject(e);
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+                async (request, setResult) => {
+                    const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    const deps = [];
+                    if (payload.folder_id) {
+                        assertFolderIsNotBeingDeleted(rows, payload.folder_id, 'filed into');
+                        const folderOp = folderCreationDependency(rows, payload.folder_id,
+                            'a file cannot be created inside it');
+                        if (folderOp) deps.push(folderOp.op_id);
+                    }
+                    if (payload.playlist_id) {
+                        assertPlaylistIsNotBeingDeleted(rows, payload.playlist_id, 'added to');
+                        const playlistOp = playlistCreationDependency(rows, payload.playlist_id,
+                            'a file cannot be added to it');
+                        if (playlistOp) deps.push(playlistOp.op_id);
+                    }
+                    for (let i = 0; i < payload.roles.length; i += 1) {
+                        const personId = payload.roles[i].person_id;
+                        assertPersonIsNotBeingDeleted(rows, personId, 'credited on a file');
+                        const personOp = personCreationDependency(rows, personId,
+                            'they cannot be credited on a new file');
+                        if (personOp) deps.push(personOp.op_id);
+                    }
+                    setResult(await insertEnvelopeIn(request, {
+                        operation: 'CREATE_WORK', entity_type: 'work',
+                        entity_id: generateEntityId('W', uuid),
+                        payload: payload, base_revision: null,
+                        depends_on: deps,
+                    }, null));
+                });
+        }
+
+        /**
          * Delete a Work, cancelling the intents it makes pointless.
          *
          * Same rule every other destruction uses: never-sent ops naming this
-         * Work are cancelled; possibly-sent ones are waited for. Absence is
-         * the goal, so there is no CREATE_WORK fold yet — that arrives with
-         * offline construction.
+         * Work are cancelled; possibly-sent ones are waited for. A Work this
+         * device created and never sent folds away entirely.
          */
         function deleteWork(workId) {
             if (!isNonBlankString(workId)) {
@@ -1630,9 +1740,17 @@
                     const already = mine.find(r => r.operation === 'DELETE_WORK');
                     if (already) { setResult(already); return; }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    const creation = mine.find(r => r.operation === 'CREATE_WORK');
+                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        for (const row of mine) {
+                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                        }
+                        setResult(null);
+                        return;
+                    }
                     const waitFor = [];
                     for (const row of mine) {
-                        if (neverSent(row)) {
+                        if (neverSent(row) && row.operation !== 'CREATE_WORK') {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
                         } else {
                             waitFor.push(row.op_id);
@@ -3727,6 +3845,7 @@
             deleteTag: deleteTag,
             mergeTag: mergeTag,
             deleteWork: deleteWork,
+            createWork: createWork,
             coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,

@@ -1278,6 +1278,8 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
                     self.assertNotIn('deleteList("%s")' % key, src)
 
     def test_work_create_marks_catalog_and_recently_added_but_not_recent(self):
+        """PDF create still publishes at the call site; video CREATE_WORK ACKs
+        through reconcileCreatedWork with the same domains (never Recent)."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("if (res.ok && typeof prksMarkWorksBrowseChanged === 'function')")
         body = app[at: at + 600]
@@ -1285,6 +1287,15 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("prksMarkRecentlyAddedChanged();", body)
         # A new Work has last_opened_at NULL, so it cannot be in Recent.
         self.assertNotIn("prksMarkRecentChanged();", body)
+        self.assertIn("prksCreateWorkDurably", app)
+        runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
+        at = runtime.index("async function reconcileCreatedWork(")
+        end = runtime.index("\n        /**", at)
+        reconcile = runtime[at:end]
+        self.assertIn("prksMarkWorksBrowseChanged()", reconcile)
+        self.assertIn("prksMarkRecentlyAddedChanged()", reconcile)
+        self.assertIn("prksMarkFoldersDomainChanged()", reconcile)
+        self.assertNotIn("prksMarkRecentChanged()", reconcile)
 
     def test_folder_membership_marks_recently_added_only(self):
         """Filing a Work is durable now, so its coherence moved to the

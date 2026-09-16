@@ -2288,6 +2288,39 @@
             return true;
         }
 
+        /**
+         * A Work this device constructed that the server has accepted.
+         *
+         * Mirrors the online create coherence publish: folders always, browse
+         * + recently-added always, playlists when construction carried a
+         * playlist, people / person-groups when it carried roles. Recent is
+         * deliberately untouched (last_opened_at is still NULL).
+         */
+        async function reconcileCreatedWork(result) {
+            if (!result || !result.work_id) return false;
+            if (typeof prksMarkWorksBrowseChanged === 'function') {
+                prksMarkWorksBrowseChanged();
+            }
+            if (typeof prksMarkRecentlyAddedChanged === 'function') {
+                prksMarkRecentlyAddedChanged();
+            }
+            if (typeof prksMarkFoldersDomainChanged === 'function') {
+                prksMarkFoldersDomainChanged();
+            }
+            if (result.playlist_id && typeof prksOfflineMarkPlaylistsChanged === 'function') {
+                prksOfflineMarkPlaylistsChanged();
+            }
+            if (result.role_count > 0) {
+                if (typeof prksOfflineMarkPeopleChanged === 'function') {
+                    prksOfflineMarkPeopleChanged();
+                }
+                if (typeof prksOfflineMarkPersonGroupsChanged === 'function') {
+                    prksOfflineMarkPersonGroupsChanged();
+                }
+            }
+            return true;
+        }
+
         /* ---- Person Groups ---------------------------------------------- */
 
         /** The cached Group catalogue, or null when this device holds none. */
@@ -2869,6 +2902,7 @@
             reconcileCreatedTag,
             reconcileDeletedTag,
             reconcileMergedTag,
+            reconcileCreatedWork,
             reconcileDeletedWork,
             reconcileCreatedPerson,
             reconcilePersonField,
@@ -3141,6 +3175,7 @@
         prksOfflineReconcileCreatedTag: result => production.reconcileCreatedTag(result),
         prksOfflineReconcileDeletedTag: result => production.reconcileDeletedTag(result),
         prksOfflineReconcileMergedTag: result => production.reconcileMergedTag(result),
+        prksOfflineReconcileCreatedWork: result => production.reconcileCreatedWork(result),
         prksOfflineReconcileDeletedWork: result => production.reconcileDeletedWork(result),
         prksOfflineReconcileCreatedPerson: result => production.reconcileCreatedPerson(result),
         prksOfflineReconcilePersonField: (result, op) => production.reconcilePersonField(result, op),

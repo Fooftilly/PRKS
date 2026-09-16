@@ -14,6 +14,7 @@ projection, and is proven by focused E2E coverage.
 | --- | --- | --- |
 | Work tags | `ADD_WORK_TAG`, `REMOVE_WORK_TAG` | element conflict unit `(work, tag)` |
 | Tag vocabulary | `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG` | client-minted `T-` id; deletion is a tombstone; merge is an identity transform (null base; refuse while source is named in the queue) |
+| Work creation (video) | `CREATE_WORK` | client-minted `W-` id; YouTube-only; PDF binary stays online-only |
 | Work deletion | `DELETE_WORK` | destruction; cascade like the ordinary DELETE; absence is convergence |
 | Work opens | `MARK_WORK_OPENED` | coalesced per Work |
 | Work metadata | `SET_WORK_METADATA_FIELD` | per-field conflict unit |
@@ -81,8 +82,6 @@ they should take, and what each must declare before implementation, are in
 *Adding a family: the four shapes and what each must declare* in
 `docs/local-first-sync.md`.
 
-* **Offline Work creation** for types needing no binary ingestion (video /
-  YouTube URL Works).
 * **PDF annotations** — only where the PDF is already cached. Annotation
   identity must be audited first: if annotations receive server-generated ids
   today, new ones need permanent distributed ids before offline creation is

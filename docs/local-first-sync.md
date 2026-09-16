@@ -1709,6 +1709,29 @@ way delete does.
 
 Tag identity stays PERSISTENT. Nothing here garbage-collects an unused Tag.
 
+## Work creation (CREATE_WORK)
+
+Video / YouTube construction under a client-minted `W-` id. Empty
+`base_revision`. Payload carries title/status/doc_type/bibliographic scalars,
+source intent `{kind: "video", url}`, optional `folder_id` / `playlist_id`, and
+initial `roles[]`. Provider columns are derived inside the mutation boundary via
+the same `_canonical_new_source` / `canonical_source` path as ordinary
+`POST /api/works` and `SET_WORK_SOURCE`. PDF / binary construction is refused —
+that stays intentionally online-only until durable Blob storage exists.
+
+Filing into Uncategorized (when `folder_id` is blank) and attaching playlist /
+roles are construction, not mutation: no folder/playlist/role revisions advance.
+Missing folder / playlist / person targets are named refusals
+(`FOLDER_NOT_FOUND` / `PLAYLIST_NOT_FOUND` / `PERSON_NOT_FOUND`); the client
+orders behind pending `CREATE_FOLDER` / `CREATE_PLAYLIST` / `CREATE_PERSON` via
+`depends_on`. A second envelope for an id that already exists acknowledges
+without overwriting.
+
+Acknowledgement fences folders, works-browse and recently-added always; playlists
+when construction carried a playlist; people and person-groups when it carried
+roles. Recent is deliberately untouched. Pending creates overlay Work detail
+from the durable envelope; never written into `prks-offline-v1`.
+
 ## Work deletion (DELETE_WORK)
 
 Destruction of a Work identity. Empty payload, null base revision. Absence is
@@ -1719,7 +1742,8 @@ playlist/annotations/argument_sources relationships only; Tags/Persons/Arguments
 themselves stay). Filesystem and derived-index cleanup remain post-commit
 best-effort via `work_deletion.cleanup_after_work_delete`, shared with the HTTP
 path. The client cancels never-sent ops that name the Work (including Argument
-creates/source replacements that cite it) and waits for possibly-sent ones.
+creates/source replacements that cite it) and waits for possibly-sent ones; a
+never-sent `CREATE_WORK` for the same id folds away entirely.
 Acknowledgement fences Concepts, Arguments, People, Person Groups, Folders,
 Playlists, browse catalogs and Research Graph core the same way the previous
 online-only `deleteWork` published coherence.

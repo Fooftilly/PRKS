@@ -202,6 +202,9 @@
         if (op.operation === 'MERGE_TAG') {
             return 'Merge a tag into ' + bounded(op.payload.target_tag_id);
         }
+        if (op.operation === 'CREATE_WORK') {
+            return 'Create file "' + bounded(op.payload.title || 'Untitled') + '"';
+        }
         if (op.operation === 'DELETE_WORK') {
             return 'Delete a file';
         }
@@ -283,6 +286,7 @@
         CREATE_TAG: 'tags:index',
         DELETE_TAG: 'tags:index',
         MERGE_TAG: 'tags:index',
+        CREATE_WORK: 'work',
         DELETE_WORK: 'work',
         ADD_WORK_TAG: 'work-tag-options',
         REMOVE_WORK_TAG: 'work-tag-options',

@@ -284,6 +284,7 @@
             // Source identity is an AGGREGATE, not a field: one decision, one
             // revision, one conflict, four columns.
             SET_WORK_SOURCE: root.prksWorkSourceSyncHandler,
+            CREATE_WORK: root.prksWorkCreateSyncHandler,
             DELETE_WORK: root.prksWorkDeleteSyncHandler,
             SET_WORK_RESEARCH_NOTE: root.prksNoteSyncHandler,
             SET_WORK_PRIVATE_NOTE: root.prksNoteSyncHandler,
