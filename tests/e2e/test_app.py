@@ -1199,8 +1199,13 @@ class WorkDetailsPolishTests(_BrowserE2E):
 
             # The field the operation owns is not editable while it is in
             # flight: a second value typed over an unresolved one would be an
-            # edit against a base this session cannot state.
-            self.assertTrue(page.evaluate("() => document.getElementById('meta-title').disabled"))
+            # edit against a base this session cannot state. Paint is async
+            # after claim/abort, so wait for the editor to settle busy.
+            page.wait_for_function(
+                "() => { const el = document.getElementById('meta-title');"
+                "        return !!el && el.disabled; }",
+                timeout=10000,
+            )
             page.locator("#save-work-identity-btn").click()
             page.wait_for_timeout(200)
             self.assertEqual(

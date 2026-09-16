@@ -5066,6 +5066,12 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
         page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message="DELETE_WORK must acknowledge before arguments coherence",
+        )
         self._assert_arguments_invalidated(page, server, before)
 
     def test_author_role_changes_invalidate_arguments(self):
@@ -6506,6 +6512,12 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
         page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message="DELETE_WORK must acknowledge before people coherence",
+        )
         self._assert_people_invalidated(page, server, before)
         self._assert_person_groups_invalidated(page, server, before_groups)
 

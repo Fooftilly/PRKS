@@ -645,16 +645,24 @@ class FoldersOfflineTests(unittest.TestCase):
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
+
+        def rewarm_folders_index():
+            # After an invalidation the route may already be #/folders, so a
+            # second index() is a no-op that never refetches. Leave and return.
+            page.evaluate("() => prksNavigate('#/people')")
+            page.wait_for_function("() => location.hash === '#/people'", timeout=15000)
+            self.index(page)
+            o._wait_list_cached(page, 'folders:index')
+
         for role in ('Author', 'Editor'):
             with self.subTest(role=role):
-                self.index(page)
-                o._wait_list_cached(page, 'folders:index')
+                rewarm_folders_index()
                 before = o._domain_generation(page, 'folders')
                 page.evaluate("([id, r]) => prksMarkWorkRoleChanged(id, r)", [ids['work_a'], role])
                 self.assertGreater(o._domain_generation(page, 'folders'), before)
+                o._wait_list_uncached(page, 'folders:index')
         # A role the Work card never renders must leave Folders eligible.
-        self.index(page)
-        o._wait_list_cached(page, 'folders:index')
+        rewarm_folders_index()
         before = o._domain_generation(page, 'folders')
         page.evaluate("(id) => prksMarkWorkRoleChanged(id, 'Reviewer')", ids['work_a'])
         self.assertEqual(o._domain_generation(page, 'folders'), before)

@@ -1057,6 +1057,13 @@ class PlaylistsOfflineTests(unittest.TestCase):
         page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
         page.locator('#prks-modal-confirm-ok').click()
         page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        # Navigation follows local DELETE_WORK enqueue; domain fences publish on ACK.
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='DELETE_WORK must acknowledge before playlist coherence',
+        )
         self.changed(page, before,
                      {'concepts', 'arguments', 'people', 'person-groups', 'playlists'})
 
