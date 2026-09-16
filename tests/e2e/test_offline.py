@@ -416,6 +416,47 @@ def _pdf_mode(page):
     return page.evaluate("() => { const pdf = %s; return pdf ? pdf.mode : null; }" % _FOCUSED_PDF)
 
 
+def _pdf_open_markup_tool(page, label="Highlight"):
+    """Activate a markup tool, opening the responsive More menu when needed.
+
+    Below the PDF viewer's 640px container breakpoint, Highlight/Underline live
+    under More tools rather than in the primary toolbar strip.
+    """
+    toolbar = page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar')
+    primary = toolbar.locator(
+        '.prks-pdf-toolbar__group > button[aria-label="%s"]' % label
+    )
+    if primary.count() and primary.first.is_visible():
+        primary.first.click()
+        return primary.first
+    more = toolbar.locator('.prks-pdf-toolbar__more button[aria-label="More tools"]')
+    more.wait_for(state="visible", timeout=15000)
+    more.click()
+    menu_tool = page.locator(
+        '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar__menu button[aria-label="%s"]'
+        % label
+    )
+    menu_tool.wait_for(state="visible", timeout=15000)
+    menu_tool.click()
+    return menu_tool
+
+
+def _pdf_markup_tools_available(page):
+    """True when markup tools are reachable online (primary strip or More)."""
+    return page.evaluate(
+        """() => {
+            const root = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
+            if (!root) return false;
+            const primary = root.querySelector(
+                '.prks-pdf-toolbar__group > button[aria-label="Highlight"]');
+            if (primary && primary.offsetParent !== null) return true;
+            const more = root.querySelector(
+                '.prks-pdf-toolbar__more button[aria-label="More tools"]');
+            return !!(more && more.offsetParent !== null);
+        }"""
+    )
+
+
 def _pdf_has_pending_changes(page):
     return bool(
         page.evaluate(
@@ -611,6 +652,13 @@ class OfflineFoundationTests(unittest.TestCase):
         page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
         page.locator("#prks-modal-confirm-ok").click()
         page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        # Navigation follows local DELETE_WORK enqueue; eviction is on ACK.
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message="DELETE_WORK must acknowledge before cache eviction",
+        )
         self.assertIsNone(_cached_entity(page, "work", work_a))
 
         context.set_offline(True)
@@ -733,13 +781,10 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_entity_cached(page, "work", work_a)
 
-        def reject_delete(route):
-            if route.request.method == "DELETE" and urlparse(route.request.url).path == "/api/works/" + work_a:
-                route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
-                return
-            route.fallback()
+        def reject_sync(route):
+            route.fulfill(status=500, content_type="application/json", body='{"error":"test failure"}')
 
-        page.route("**/api/works/*", reject_delete)
+        page.route("**/api/sync/operations", reject_sync)
         try:
             _open_details_drawer_if_tiled(page)
             advanced = page.locator(".work-details-advanced")
@@ -748,10 +793,17 @@ class OfflineFoundationTests(unittest.TestCase):
             page.locator(".delete-work-btn").click()
             page.locator("#prks-modal-confirm:not(.hidden)", has_text="Delete file?").wait_for()
             page.locator("#prks-modal-confirm-ok").click()
-            page.locator("#prks-modal-confirm:not(.hidden)", has_text="Error deleting file!").wait_for()
+            # Durable delete enqueues locally and navigates; ACK never arrives.
+            page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK'))""",
+                timeout=15000,
+            )
             self.assertIsNotNone(_cached_entity(page, "work", work_a))
         finally:
-            page.unroute("**/api/works/*", reject_delete)
+            page.unroute("**/api/sync/operations", reject_sync)
 
     def test_offline_open_of_uncached_work_shows_unavailable(self):
         """Scenario 2: offline navigation to a Work never opened online -- a clean
@@ -806,7 +858,11 @@ class OfflineFoundationTests(unittest.TestCase):
 
     def test_offline_mutation_is_blocked_not_faked(self):
         """Scenario 4: an offline mutation attempt never reaches the network and is
-        never silently accepted -- the user sees an explicit requires-connection message."""
+        never silently accepted -- the user sees an explicit requires-connection message.
+
+        DELETE_WORK is durable; this pins a still connection-required surface:
+        bulk organize.
+        """
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
 
@@ -815,45 +871,46 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_entity_cached(page, "work", work_a)
 
         context.set_offline(True)
-        page.reload(wait_until="domcontentloaded")
-        page.wait_for_function("() => document.body.innerText.indexOf(%r) !== -1" % WORK_A_TITLE)
-        page.wait_for_function("() => !document.getElementById('prks-connectivity-indicator').hidden")
+        page.wait_for_function(
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
+            timeout=20000,
+        )
 
         mutation_requests = []
         page.on(
             "request",
             lambda req: mutation_requests.append(req.method)
-            if req.method in ("POST", "PUT", "PATCH", "DELETE") and "/api/works/" in req.url
+            if req.method in ("POST", "PUT", "PATCH", "DELETE") and "/api/works" in req.url
             else None,
         )
 
-        _open_details_drawer_if_tiled(page)
-        # The Delete File button lives inside the "More" advanced disclosure.
-        advanced = page.locator(".work-details-advanced")
-        if advanced.get_attribute("open") is None:
-            advanced.locator("summary").click()
-        delete_btn = page.locator(".delete-work-btn")
-        delete_btn.wait_for()
-        delete_btn.click()
+        page.evaluate(
+            """async (wid) => {
+                try {
+                    await bulkUpdateWorks({ action: 'set_status', work_ids: [wid], status: 'Completed' });
+                } catch (e) { /* offline guard throws */ }
+            }""",
+            work_a,
+        )
 
         page.locator("#prks-modal-confirm-title").wait_for()
         self.assertEqual(page.locator("#prks-modal-confirm-title").inner_text(), "Offline")
         self.assertIn(
-            "This change requires a connection to PRKS.",
+            "Bulk organize requires a connection to PRKS.",
             page.locator("#prks-modal-confirm-desc").inner_text(),
         )
-        # Single-button alert: no destructive "Delete file" confirm ever appeared.
         self.assertTrue(page.locator("#prks-modal-confirm-cancel.hidden").count() >= 1)
         page.locator("#prks-modal-confirm-ok").click()
         page.locator("#prks-modal-confirm:not(.hidden)").wait_for(state="detached", timeout=5000)
 
         self.assertEqual(mutation_requests, [])
-        # Work A must still exist server-side -- nothing was silently "succeeded" client-side.
         context.set_offline(False)
         import urllib.request
 
         with urllib.request.urlopen(server.origin + "/api/works/" + work_a) as res:
             self.assertEqual(res.status, 200)
+            body = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(body.get("status"), "In Progress")
 
     def test_reconnect_refreshes_focused_route_with_server_data(self):
         """Scenario 5: restoring connectivity naturally returns the focused, previously
@@ -1008,10 +1065,9 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_whole_file_cached(page, pdf_path)
-        # Sanity check: online, the markup toolbar is present.
-        page.locator(
-            '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-        ).wait_for()
+        # Sanity check: online, the markup toolbar is reachable (primary or More).
+        _pdf_open_markup_tool(page, "Highlight")
+        page.keyboard.press("Escape")
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
@@ -1613,13 +1669,20 @@ class OfflineFoundationTests(unittest.TestCase):
             else None,
         )
 
-        highlight_btn = page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]')
-        highlight_btn.wait_for()
-        highlight_btn.click()
+        _pdf_open_markup_tool(page, "Highlight")
         page.wait_for_function(
             """() => {
-                const b = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]');
-                return b && b.getAttribute('aria-pressed') === 'true';
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.mode === 'work' && pdf.viewer);
+            }"""
+        )
+        page.wait_for_function(
+            """() => {
+                const buttons = document.querySelectorAll(
+                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"],'
+                    + '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar__menu [aria-label="Highlight"]');
+                return [...buttons].some(b => b.getAttribute('aria-pressed') === 'true');
             }"""
         )
 
@@ -1660,9 +1723,16 @@ class OfflineFoundationTests(unittest.TestCase):
             timeout=20000,
         )
         page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
-        page.locator(
-            '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-        ).wait_for()
+        page.wait_for_function(
+            "() => {"
+            "  const root = document.querySelector('[data-prks-role=\"pdf-viewer\"] .prks-pdf-toolbar');"
+            "  if (!root) return false;"
+            "  const more = root.querySelector('.prks-pdf-toolbar__more button[aria-label=\"More tools\"]');"
+            "  const primary = root.querySelector('.prks-pdf-toolbar__group > button[aria-label=\"Highlight\"]');"
+            "  return !!(more && more.offsetParent !== null) || !!(primary && primary.offsetParent !== null);"
+            "}",
+            timeout=15000,
+        )
 
     def test_persistence_setup_abandons_on_disconnect_before_worker_install(self):
         """Scenario 17 (AGENTS.md "an async annotation-persistence setup...

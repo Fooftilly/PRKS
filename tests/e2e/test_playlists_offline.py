@@ -162,6 +162,13 @@ class PlaylistsOfflineTests(unittest.TestCase):
             )
         page.locator('#save-work-btn').click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
+        # Navigation follows local CREATE_WORK enqueue; coherence publishes on ACK.
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='CREATE_WORK must acknowledge',
+        )
 
     def open_details_panel(self, page):
         o._open_details_drawer_if_tiled(page)
@@ -1060,17 +1067,10 @@ class PlaylistsOfflineTests(unittest.TestCase):
         before = self.generations(page)
 
         def fail(route):
-            if route.request.method == 'DELETE':
-                route.fulfill(status=500, content_type='application/json', body='{}')
-            else:
-                route.fallback()
+            route.fulfill(status=500, content_type='application/json', body='{}')
 
-        pattern = '**/api/works/%s' % ids['playlist_video_one']
-        page.route(pattern, fail)
+        page.route('**/api/sync/operations**', fail)
         try:
-            # Driven through the real UI: deleteWork() awaits its own
-            # confirmation dialog, so calling it from evaluate() would simply
-            # block forever on a prompt nothing answers.
             o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
             self.open_details_panel(page)
             advanced = page.locator('.work-details-advanced')
@@ -1079,13 +1079,16 @@ class PlaylistsOfflineTests(unittest.TestCase):
             page.locator('.delete-work-btn').click()
             page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
             page.locator('#prks-modal-confirm-ok').click()
-            page.locator('#prks-modal-confirm:not(.hidden)', has_text='Error deleting file!').wait_for(
-                timeout=15000
+            page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'DELETE_WORK'))""",
+                timeout=15000,
             )
-            page.locator('#prks-modal-confirm-ok').click()
             self.changed(page, before, set())
         finally:
-            o._safe_unroute(page, pattern, fail)
+            o._safe_unroute(page, '**/api/sync/operations**', fail)
 
     def test_work_creation_invalidates_playlists_only_when_it_names_one(self):
         """Driven through the real New File modal: the create endpoint can
@@ -1095,11 +1098,10 @@ class PlaylistsOfflineTests(unittest.TestCase):
         server, page, context = self.start()
         ids = server.ids
 
-        # A video created with no Playlist selected changes nothing.
+        # A video created with no Playlist selected leaves playlists untouched.
         self.cache(page, ids)
         before = self.generations(page)
         self.create_video_work_through_the_modal(page, 'Playlistless Video Work')
-        page.wait_for_timeout(500)
         self.changed(page, before, set())
 
         # ... and one created straight into a Playlist stales the domain.

@@ -147,11 +147,22 @@
         return canonical;
     }
 
-    async function ensureBase(ctx, work) {
+    async function ensureBase(ctx, work, options) {
         if (!ctx || !work || typeof work.id !== 'string') return null;
         const canonical = rememberCanonical(ctx, work) || canonicalFrom(work);
-        const result = await readState(work.id);
-        const state = result && result.value;
+        /* A pending CREATE_WORK has no server row yet. Hitting notes-state
+         * would 404 and trip harness console gates; seed revision 0 locally. */
+        let state = null;
+        if (options && options.pendingCreate) {
+            state = {
+                work_id: work.id,
+                research_note_revision: 0,
+                private_note_revision: 0,
+            };
+        } else {
+            const result = await readState(work.id);
+            state = result && result.value;
+        }
         const base = acknowledgedNoteBase({
             id: work.id,
             text_content: canonical.text_content,
