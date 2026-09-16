@@ -908,9 +908,9 @@ async function prksCollectFolderLibraryGlanceExtras() {
     const CONTINUE_CAP = 3;
 
     /* Continue / In Progress / Recently added reuse already-warmed snapshots or
-     * in-memory tab state only. Never call prksOfflineBrowseFetch /
-     * prksOfflineWorksBrowseFetch here — boot on #/folders must not populate
-     * works-browse:index or recent:index as a side effect of the glance band. */
+     * in-memory tab state only. Never start browse/recently-added read-through
+     * fetches here — boot on #/folders must not populate works-browse:index or
+     * recent:index as a side effect of the glance band. */
     let recentRows = await prksPeekCachedBrowseList('recent:index');
     if (Array.isArray(recentRows) && recentRows.length) {
         if (typeof prksEffectiveBrowseRows === 'function') {

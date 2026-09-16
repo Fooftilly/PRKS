@@ -626,6 +626,10 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_entity_cached(page, "work", work_a)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Manage tags").click()
+        page.wait_for_function(
+            "() => { const i = document.getElementById('work-tag-search'); return i && !i.disabled; }",
+            timeout=15000,
+        )
         page.locator("#work-tag-search").fill(tag_name)
         page.locator("#work-tag-search-results .result-item--create", has_text=tag_name).click()
         page.locator("#work-tags-list .work-tag-chip", has_text=tag_name).wait_for(timeout=15000)
