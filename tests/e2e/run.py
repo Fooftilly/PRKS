@@ -92,36 +92,104 @@ E2E_MODULES = (
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
 WORKER_STOP_TIMEOUT_S = 20.0
+# Child of the full-gate deadline supervisor (Windows + POSIX).
+FULL_GATE_CHILD_ENV = "PRKS_E2E_FULL_GATE_CHILD"
 
 
-class FullGateTimeoutError(BaseException):
-    """Full E2E gate exceeded the hard wall-clock limit (not a test failure)."""
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Best-effort terminate a supervised child and its descendants."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=WORKER_STOP_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError, AttributeError):
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError, AttributeError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass
 
 
-def _arm_full_gate_watchdog(timeout_s: int):
-    """Install a process-wide ITIMER_REAL alarm for the full gate.
+def _run_with_deadline(cmd, timeout_s: int, *, env=None, cwd=None) -> int:
+    """Run cmd under a wall-clock deadline; return exit code or 124 on timeout.
 
-    Returns a cancel callback. timeout_s <= 0 leaves the process unarmed.
-    Uses SIGALRM so serial unittest runs and parallel worker polls both abort.
+    Cross-platform: uses subprocess wait(timeout=…) plus process-tree kill.
+    Covers any work the child performs (E2E shards, pointer capture, etc.).
     """
     if timeout_s <= 0:
-        return lambda: None
+        completed = subprocess.run(cmd, cwd=cwd, env=env)
+        return completed.returncode
 
-    previous = signal.getsignal(signal.SIGALRM)
+    popen_kwargs = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
 
-    def _on_alarm(_signum, _frame):
-        raise FullGateTimeoutError(
-            "full E2E gate exceeded %ds hard limit" % timeout_s
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, **popen_kwargs)
+    try:
+        return proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        print(
+            "full E2E gate exceeded %ds hard limit" % timeout_s,
+            file=sys.stderr,
         )
+        _terminate_process_tree(proc)
+        print("E2E FAIL (full) — hard timeout", file=sys.stderr)
+        return 124
 
-    signal.signal(signal.SIGALRM, _on_alarm)
-    signal.setitimer(signal.ITIMER_REAL, float(timeout_s))
 
-    def cancel():
-        signal.setitimer(signal.ITIMER_REAL, 0.0)
-        signal.signal(signal.SIGALRM, previous)
+def _supervise_full_gate(argv, timeout_s: int) -> int:
+    """Re-exec this runner as a child and enforce one wall-clock deadline.
 
-    return cancel
+    The child runs chromium install, serial/parallel E2E, last-failed merge,
+    and pointer_capture under the same PRKS_E2E_FULL_TIMEOUT budget. Works on
+    Windows and POSIX via subprocess deadline supervision.
+    """
+    env = os.environ.copy()
+    env[FULL_GATE_CHILD_ENV] = "1"
+    cmd = [
+        python_for_subprocess(),
+        str(REPO / "tests" / "e2e" / "run.py"),
+        *(argv if argv is not None else []),
+    ]
+    print(
+        "Full-gate hard limit: %ds (PRKS_E2E_FULL_TIMEOUT; 0 disables)"
+        % timeout_s
+    )
+    return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
 
 
 def _executed_ids_from_observation(observed, failed_ids) -> list:
@@ -760,6 +828,10 @@ def _resolve_selection(args, all_ids):
         note = "from %s (%d id(s))" % (LAST_FAILED_PATH, len(data["test_ids"]))
         if missing:
             note += "; dropped %d renamed/removed" % len(missing)
+        if not ids:
+            # Every persisted failure was renamed/removed — prune is a clean state,
+            # not a permanent zero-selection error (merge_last_failed never runs).
+            return "last-failed-stale", [], note
         return "last-failed", ids, note
 
     if args.affected:
@@ -835,7 +907,7 @@ def main(argv=None) -> int:
                 file=sys.stderr,
             )
             return 2
-        if tier != "affected-noop":
+        if tier not in ("affected-noop", "last-failed-stale"):
             args.fail_fast = True
             args.no_pointer_capture = True
             tier = "dev"
@@ -852,6 +924,18 @@ def main(argv=None) -> int:
         )
         return 0
 
+    if tier == "last-failed-stale":
+        last_failed_path = REPO / LAST_FAILED_PATH
+        if last_failed_path.is_file():
+            try:
+                last_failed_path.unlink()
+            except OSError:
+                pass
+        print(
+            "last-failed: no known unresolved failures remain — cleared stale state"
+        )
+        return 0
+
     if not test_ids:
         print("no E2E tests selected", file=sys.stderr)
         if tier == "affected":
@@ -861,6 +945,15 @@ def main(argv=None) -> int:
                 file=sys.stderr,
             )
         return 1
+
+    # Full gate: one wall-clock deadline covers chromium install, shards, and
+    # pointer_capture. Parent re-execs as a supervised child (Windows + POSIX).
+    if tier == "full":
+        timeout_s = full_gate_timeout_s()
+        if timeout_s > 0 and not os.environ.get(FULL_GATE_CHILD_ENV):
+            return _supervise_full_gate(
+                argv if argv is not None else sys.argv[1:], timeout_s
+            )
 
     try:
         ensure_chromium_installed()
@@ -887,34 +980,12 @@ def main(argv=None) -> int:
     jobs = min(jobs, len(test_ids))
 
     timings = load_timings(REPO / TIMINGS_PATH)
-    cancel_watchdog = lambda: None
-    if tier == "full":
-        timeout_s = full_gate_timeout_s()
-        if timeout_s > 0:
-            print(
-                "Full-gate hard limit: %ds (PRKS_E2E_FULL_TIMEOUT; 0 disables)"
-                % timeout_s
-            )
-            cancel_watchdog = _arm_full_gate_watchdog(timeout_s)
-
-    try:
-        try:
-            if jobs == 1:
-                ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
-            else:
-                ok, observed, failed_ids = run_parallel(
-                    test_ids, jobs, timings, args.fail_fast
-                )
-        except FullGateTimeoutError as exc:
-            print(str(exc), file=sys.stderr)
-            try:
-                stop_all_servers()
-            except Exception:
-                pass
-            print("E2E FAIL (full) — hard timeout", file=sys.stderr)
-            return 124
-    finally:
-        cancel_watchdog()
+    if jobs == 1:
+        ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
+    else:
+        ok, observed, failed_ids = run_parallel(
+            test_ids, jobs, timings, args.fail_fast
+        )
 
     targeted = tier != "full"
     _persist_timings(observed, test_ids if not targeted else None)
@@ -953,7 +1024,8 @@ def main(argv=None) -> int:
     pointer = None
     if ok and not args.no_pointer_capture:
         # Once per run, in the parent, after every shard has passed -- never
-        # once per worker.
+        # once per worker. Under the full-gate supervisor this still runs inside
+        # the same deadline-bounded child as the shards above.
         pointer = _run_pointer_capture()
         if pointer != 0:
             print("pointer_capture.py failed", file=sys.stderr)

@@ -508,20 +508,113 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             else:
                 os.environ["PRKS_E2E"] = previous_env
 
-    def test_full_gate_arms_watchdog(self):
-        previous = os.environ.get("PRKS_E2E")
+    def test_last_failed_stale_only_clears_and_succeeds(self):
+        """All persisted IDs renamed/removed → prune file, exit 0 (not error)."""
+        previous_env = os.environ.get("PRKS_E2E")
         os.environ["PRKS_E2E"] = "1"
         try:
             from tests.e2e import run as runner
+            import io
+            from contextlib import redirect_stdout
 
+            known = ["tests.e2e.live.T.test_ok"]
+            stale = [
+                "tests.e2e.gone.Old.test_a",
+                "tests.e2e.gone.Old.test_b",
+            ]
+            with tempfile.TemporaryDirectory() as raw:
+                last_path = Path(raw) / "e2e-last-failed.json"
+                policy.save_last_failed(last_path, stale, meta={"tier": "full"})
+                buf = io.StringIO()
+                with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
+                    with mock.patch.object(runner, "REPO", Path(raw)):
+                        with mock.patch.object(
+                            runner, "discover_test_ids", return_value=known
+                        ):
+                            with mock.patch.object(
+                                runner, "ensure_chromium_installed"
+                            ) as ensure:
+                                with redirect_stdout(buf):
+                                    code = runner.main(["--last-failed"])
+                self.assertEqual(code, 0)
+                ensure.assert_not_called()
+                self.assertFalse(last_path.is_file())
+                self.assertIn("no known unresolved failures remain", buf.getvalue())
+        finally:
+            if previous_env is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous_env
+
+    def test_full_gate_parent_supervises_child(self):
+        """Parent of a timed full gate re-execs under deadline supervision."""
+        from tests.e2e import run as runner
+
+        previous = os.environ.get("PRKS_E2E")
+        child_key = runner.FULL_GATE_CHILD_ENV
+        child_prev = os.environ.get(child_key)
+        os.environ["PRKS_E2E"] = "1"
+        os.environ.pop(child_key, None)
+        try:
             ids = ["tests.e2e.fake.T.test_x"]
-            cancel = mock.Mock()
+            with tempfile.TemporaryDirectory() as raw:
+                with mock.patch.object(runner, "REPO", Path(raw)):
+                    with mock.patch.object(
+                        runner, "discover_test_ids", return_value=ids
+                    ):
+                        with mock.patch.object(
+                            runner, "full_gate_timeout_s", return_value=1200
+                        ):
+                            with mock.patch.object(
+                                runner, "_supervise_full_gate", return_value=0
+                            ) as supervise:
+                                with mock.patch.object(
+                                    runner, "run_serial"
+                                ) as serial:
+                                    with mock.patch.object(
+                                        runner, "ensure_chromium_installed"
+                                    ) as ensure:
+                                        code = runner.main(
+                                            [
+                                                "--jobs",
+                                                "1",
+                                                "--no-pointer-capture",
+                                            ]
+                                        )
+            self.assertEqual(code, 0)
+            supervise.assert_called_once()
+            self.assertEqual(supervise.call_args[0][1], 1200)
+            serial.assert_not_called()
+            ensure.assert_not_called()
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+            if child_prev is None:
+                os.environ.pop(child_key, None)
+            else:
+                os.environ[child_key] = child_prev
+
+    def test_full_gate_child_runs_shards_and_pointer_under_same_process(self):
+        """Supervised child runs E2E + pointer_capture without re-supervising."""
+        from tests.e2e import run as runner
+
+        previous = os.environ.get("PRKS_E2E")
+        child_key = runner.FULL_GATE_CHILD_ENV
+        child_prev = os.environ.get(child_key)
+        os.environ["PRKS_E2E"] = "1"
+        os.environ[child_key] = "1"
+        try:
+            ids = ["tests.e2e.fake.T.test_x"]
             with tempfile.TemporaryDirectory() as raw:
                 with mock.patch.object(runner, "REPO", Path(raw)):
                     with mock.patch.object(
                         runner, "LAST_FAILED_PATH", Path(raw) / "last.json"
                     ):
-                        with mock.patch.object(runner, "ensure_chromium_installed"):
+                        with mock.patch.object(
+                            runner, "ensure_chromium_installed"
+                        ):
                             with mock.patch.object(
                                 runner, "discover_test_ids", return_value=ids
                             ):
@@ -531,8 +624,10 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                     return_value=(True, {ids[0]: 0.1}, []),
                                 ):
                                     with mock.patch.object(
-                                        runner, "_run_pointer_capture", return_value=0
-                                    ):
+                                        runner,
+                                        "_run_pointer_capture",
+                                        return_value=0,
+                                    ) as pointer:
                                         with mock.patch.object(
                                             runner, "load_timings", return_value={}
                                         ):
@@ -544,29 +639,70 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                                 ):
                                                     with mock.patch.object(
                                                         runner,
-                                                        "_arm_full_gate_watchdog",
-                                                        return_value=cancel,
-                                                    ) as arm:
+                                                        "_supervise_full_gate",
+                                                    ) as supervise:
                                                         with mock.patch.object(
                                                             runner,
                                                             "full_gate_timeout_s",
                                                             return_value=1200,
                                                         ):
                                                             code = runner.main(
-                                                                [
-                                                                    "--jobs",
-                                                                    "1",
-                                                                    "--no-pointer-capture",
-                                                                ]
+                                                                ["--jobs", "1"]
                                                             )
             self.assertEqual(code, 0)
-            arm.assert_called_once_with(1200)
-            cancel.assert_called_once()
+            supervise.assert_not_called()
+            pointer.assert_called_once()
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)
             else:
                 os.environ["PRKS_E2E"] = previous
+            if child_prev is None:
+                os.environ.pop(child_key, None)
+            else:
+                os.environ[child_key] = child_prev
+
+    def test_deadline_subprocess_kills_hung_child(self):
+        """Real hung subprocess is killed and yields 124 — not a mocked watchdog."""
+        import time
+
+        from tests.e2e import run as runner
+
+        py = sys.executable
+        started = time.perf_counter()
+        code = runner._run_with_deadline(
+            [py, "-c", "import time; time.sleep(60)"],
+            timeout_s=1,
+        )
+        elapsed = time.perf_counter() - started
+        self.assertEqual(code, 124)
+        self.assertLess(elapsed, 20.0)
+        # Successful short child still returns its own exit code.
+        code_ok = runner._run_with_deadline(
+            [py, "-c", "raise SystemExit(42)"],
+            timeout_s=10,
+        )
+        self.assertEqual(code_ok, 42)
+
+    def test_no_sigalrm_watchdog_in_runner(self):
+        """Full-gate deadline must not depend on POSIX-only alarm APIs."""
+        import ast
+        from tests.e2e import run as runner
+
+        path = Path(runner.__file__)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        names = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        }
+        self.assertNotIn("SIGALRM", names)
+        self.assertNotIn("setitimer", names)
+        self.assertNotIn("ITIMER_REAL", names)
+        self.assertTrue(hasattr(runner, "_run_with_deadline"))
+        self.assertTrue(hasattr(runner, "_supervise_full_gate"))
+        self.assertFalse(hasattr(runner, "_arm_full_gate_watchdog"))
+        self.assertFalse(hasattr(runner, "FullGateTimeoutError"))
 
 
 if __name__ == "__main__":

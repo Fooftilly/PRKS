@@ -881,7 +881,11 @@ def extract_failed_ids(result) -> list:
 
 
 def full_gate_timeout_s(environ=None) -> int:
-    """Seconds for the full-gate watchdog (0 disables)."""
+    """Seconds for the full-gate deadline supervisor (0 disables).
+
+    Enforced by re-execing the runner under a cross-platform subprocess
+    deadline (Windows + POSIX) that covers shards and pointer_capture.
+    """
     env = os.environ if environ is None else environ
     raw = env.get("PRKS_E2E_FULL_TIMEOUT")
     if raw is None or raw == "":
