@@ -147,6 +147,13 @@ def _run_with_deadline(cmd, timeout_s: int, *, env=None, cwd=None) -> int:
 
     Cross-platform: uses subprocess wait(timeout=…) plus process-tree kill.
     Covers any work the child performs (E2E shards, pointer capture, etc.).
+
+    The supervised child is started in its own process group/session so an
+    external `timeout(1)` / Ctrl+C targeting only this supervisor must not
+    orphan workers or Chromium. Any abnormal supervisor exit (deadline,
+    KeyboardInterrupt, SIGINT/SIGTERM) terminates the child tree before the
+    supervisor returns or dies. Normal completion still returns the child's
+    real exit code; deadline expiration remains 124.
     """
     if timeout_s <= 0:
         completed = subprocess.run(cmd, cwd=cwd, env=env)
@@ -159,16 +166,61 @@ def _run_with_deadline(cmd, timeout_s: int, *, env=None, cwd=None) -> int:
         popen_kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, **popen_kwargs)
-    try:
-        return proc.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        print(
-            "full E2E gate exceeded %ds hard limit" % timeout_s,
-            file=sys.stderr,
-        )
+    previous_handlers = {}
+
+    def _on_signal(signum, frame):
+        # Tear down the separate-session child before this process exits so an
+        # outer `timeout 1200` SIGTERM (or Ctrl+C) cannot leave it orphaned.
         _terminate_process_tree(proc)
-        print("E2E FAIL (full) — hard timeout", file=sys.stderr)
-        return 124
+        prior = previous_handlers.get(signum, signal.SIG_DFL)
+        try:
+            signal.signal(signum, prior)
+        except (OSError, ValueError, AttributeError):
+            pass
+        if signum == getattr(signal, "SIGINT", None):
+            raise KeyboardInterrupt
+        try:
+            signal.signal(signum, signal.SIG_DFL)
+        except (OSError, ValueError, AttributeError):
+            pass
+        try:
+            os.kill(os.getpid(), signum)
+        except OSError:
+            raise SystemExit(128 + int(signum))
+
+    for sig_name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            previous_handlers[sig] = signal.signal(sig, _on_signal)
+        except (OSError, ValueError, AttributeError):
+            # Unsupported on this platform/thread — finally still cleans up.
+            pass
+
+    try:
+        try:
+            return proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            print(
+                "full E2E gate exceeded %ds hard limit" % timeout_s,
+                file=sys.stderr,
+            )
+            _terminate_process_tree(proc)
+            print("E2E FAIL (full) — hard timeout", file=sys.stderr)
+            return 124
+        except KeyboardInterrupt:
+            _terminate_process_tree(proc)
+            raise
+    finally:
+        # Unconditional: leave no supervised orphan on any abnormal exit path.
+        if proc.poll() is None:
+            _terminate_process_tree(proc)
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except (OSError, ValueError, AttributeError):
+                pass
 
 
 def _supervise_full_gate(argv, timeout_s: int) -> int:
@@ -926,14 +978,16 @@ def main(argv=None) -> int:
 
     if tier == "last-failed-stale":
         last_failed_path = REPO / LAST_FAILED_PATH
+        cleared = True
         if last_failed_path.is_file():
             try:
                 last_failed_path.unlink()
             except OSError:
-                pass
-        print(
-            "last-failed: no known unresolved failures remain — cleared stale state"
-        )
+                cleared = False
+        if cleared:
+            print(
+                "last-failed: no known unresolved failures remain — cleared stale state"
+            )
         return 0
 
     if not test_ids:

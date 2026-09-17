@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -683,6 +685,183 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             timeout_s=10,
         )
         self.assertEqual(code_ok, 42)
+
+    def test_deadline_supervisor_cleans_child_on_abnormal_exit(self):
+        """Interrupting/terminating the supervisor must not orphan the child.
+
+        Platform-aware: always covers KeyboardInterrupt cleanup with a real
+        supervised subprocess. On POSIX, also SIGTERM the outer supervisor
+        process (the `timeout 1200` path) and assert the child is gone.
+        """
+        import time
+
+        from tests.e2e import run as runner
+
+        def pid_alive(pid: int) -> bool:
+            """True if pid is a live (non-zombie) process."""
+            if os.name == "nt":
+                completed = subprocess.run(
+                    ["tasklist", "/FI", "PID eq %d" % pid, "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                out = completed.stdout or ""
+                return str(pid) in out and "No tasks" not in out
+            status_path = Path("/proc") / str(pid) / "status"
+            try:
+                text = status_path.read_text(encoding="utf-8")
+            except OSError:
+                return False
+            for line in text.splitlines():
+                if line.startswith("State:"):
+                    # Zombies still occupy a pid; they are not running children.
+                    return not line.split(":", 1)[1].strip().startswith("Z")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True
+            return True
+
+        def wait_until(predicate, timeout_s=10.0, interval_s=0.05):
+            deadline = time.time() + timeout_s
+            while time.time() < deadline:
+                if predicate():
+                    return True
+                time.sleep(interval_s)
+            return False
+
+        with tempfile.TemporaryDirectory() as raw:
+            pid_path = Path(raw) / "supervised.pid"
+            child_code = (
+                "import os, pathlib, time\n"
+                "pathlib.Path(%r).write_text(str(os.getpid()), encoding='utf-8')\n"
+                "time.sleep(120)\n"
+            ) % str(pid_path)
+
+            # --- KeyboardInterrupt path (works on Windows + POSIX) ---
+            original_popen = subprocess.Popen
+
+            class InterruptAfterStart(original_popen):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self._raised_interrupt = False
+
+                def wait(self, timeout=None):
+                    # First wait() simulates Ctrl+C; later waits (tree cleanup)
+                    # must still reap so we do not leave a zombie looking "alive".
+                    if not self._raised_interrupt:
+                        ready = wait_until(pid_path.is_file, timeout_s=10.0)
+                        if not ready:
+                            raise AssertionError("supervised child never wrote pid")
+                        self._raised_interrupt = True
+                        raise KeyboardInterrupt
+                    return original_popen.wait(self, timeout=timeout)
+
+            with mock.patch.object(runner.subprocess, "Popen", InterruptAfterStart):
+                with self.assertRaises(KeyboardInterrupt):
+                    runner._run_with_deadline(
+                        [sys.executable, "-c", child_code],
+                        timeout_s=60,
+                    )
+
+            child_pid = int(pid_path.read_text(encoding="utf-8").strip())
+            self.assertTrue(
+                wait_until(lambda: not pid_alive(child_pid), timeout_s=15.0),
+                "KeyboardInterrupt left supervised child pid=%s alive" % child_pid,
+            )
+
+            # --- SIGTERM to outer supervisor (POSIX / external timeout) ---
+            if os.name == "nt" or not hasattr(signal, "SIGTERM"):
+                return
+
+            pid_path.unlink(missing_ok=True)
+            supervisor_code = (
+                "import sys\n"
+                "from tests.e2e.run import _run_with_deadline\n"
+                "raise SystemExit(_run_with_deadline("
+                "[sys.executable, '-c', sys.argv[1]], timeout_s=120))\n"
+            )
+            env = os.environ.copy()
+            # Ensure the repo root is importable for `tests.e2e.run`.
+            repo_root = str(Path(__file__).resolve().parents[1])
+            prev_pp = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                repo_root if not prev_pp else repo_root + os.pathsep + prev_pp
+            )
+            super_proc = subprocess.Popen(
+                [sys.executable, "-c", supervisor_code, child_code],
+                cwd=repo_root,
+                env=env,
+            )
+            try:
+                self.assertTrue(
+                    wait_until(pid_path.is_file, timeout_s=10.0),
+                    "SIGTERM-case supervised child never wrote pid",
+                )
+                child_pid = int(pid_path.read_text(encoding="utf-8").strip())
+                self.assertTrue(pid_alive(child_pid))
+                self.assertTrue(pid_alive(super_proc.pid))
+                os.kill(super_proc.pid, signal.SIGTERM)
+                try:
+                    super_proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    super_proc.kill()
+                    super_proc.wait(timeout=10)
+                    self.fail("supervisor did not exit after SIGTERM")
+                self.assertTrue(
+                    wait_until(lambda: not pid_alive(child_pid), timeout_s=15.0),
+                    "SIGTERM left supervised child pid=%s alive" % child_pid,
+                )
+            finally:
+                if super_proc.poll() is None:
+                    super_proc.kill()
+                    try:
+                        super_proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+
+    def test_last_failed_stale_unlink_failure_skips_cleared_message(self):
+        """Failed stale last-failed unlink must not claim the file was cleared."""
+        previous_env = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+            import io
+            from contextlib import redirect_stdout
+
+            known = ["tests.e2e.live.T.test_ok"]
+            stale = ["tests.e2e.gone.Old.test_a"]
+            with tempfile.TemporaryDirectory() as raw:
+                last_path = Path(raw) / "e2e-last-failed.json"
+                policy.save_last_failed(last_path, stale, meta={"tier": "full"})
+                buf = io.StringIO()
+                with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
+                    with mock.patch.object(runner, "REPO", Path(raw)):
+                        with mock.patch.object(
+                            runner, "discover_test_ids", return_value=known
+                        ):
+                            with mock.patch.object(
+                                runner, "ensure_chromium_installed"
+                            ):
+                                with mock.patch.object(
+                                    Path,
+                                    "unlink",
+                                    side_effect=OSError("simulated unlink failure"),
+                                ):
+                                    with redirect_stdout(buf):
+                                        code = runner.main(["--last-failed"])
+                self.assertEqual(code, 0)
+                self.assertNotIn("cleared stale state", buf.getvalue())
+                self.assertTrue(last_path.is_file())
+        finally:
+            if previous_env is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous_env
 
     def test_no_sigalrm_watchdog_in_runner(self):
         """Full-gate deadline must not depend on POSIX-only alarm APIs."""
