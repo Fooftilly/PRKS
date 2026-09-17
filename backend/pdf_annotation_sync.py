@@ -233,14 +233,41 @@ def advance_revision_if_changed_on_conn(
 
 def get_annotations_state_on_conn(conn, work_id: str) -> Optional[dict]:
     """Per-annotation revisions for one Work (hydration for durable clients)."""
+    snapshot = get_annotations_snapshot_on_conn(conn, work_id)
+    if snapshot is None:
+        return None
+    return {
+        "work_id": snapshot["work_id"],
+        "annotations": snapshot["annotations"],
+        "known_absent": snapshot["known_absent"],
+    }
+
+
+def get_annotations_snapshot_on_conn(conn, work_id: str) -> Optional[dict]:
+    """One coherent acknowledged annotation snapshot from one DB transaction.
+
+    Annotation values, per-annotation revisions, and materialization generation
+    counters must come from the same canonical moment — never from two
+    independent GETs that can race a concurrent mutation.
+    """
+    from backend import pdf_materialization
+
     if not _work_exists(conn, work_id):
         return None
+    mat = pdf_materialization.get_materialization_on_conn(conn, work_id) or {}
+    items = []
     present = []
     for row in conn.execute(
-        "SELECT id FROM annotations WHERE work_id = ? ORDER BY id ASC",
+        """
+        SELECT id, type, content, page_index, color, geometry_json, updated_at
+        FROM annotations
+        WHERE work_id = ?
+        ORDER BY page_index ASC, id ASC
+        """,
         (work_id,),
     ).fetchall():
         ann_id = row[0]
+        items.append(reconstruct_annotation(row))
         present.append(
             {
                 "annotation_id": ann_id,
@@ -271,8 +298,15 @@ def get_annotations_state_on_conn(conn, work_id: str) -> Optional[dict]:
         known_absent[ann_id] = int(row[1])
     return {
         "work_id": work_id,
+        "items": items,
         "annotations": present,
         "known_absent": known_absent,
+        "canonical_annotation_set_revision": int(
+            mat.get("canonical_annotation_set_revision") or 0
+        ),
+        "materialized_pdf_annotation_revision": int(
+            mat.get("materialized_pdf_annotation_revision") or 0
+        ),
     }
 
 

@@ -66,13 +66,33 @@
      * prksPdfPersistenceStillLive() itself, because an *already-installed*
      * worker must keep passing that check (and simply stay paused) while
      * offline -- only a not-yet-installed setup needs to abandon outright.
+     *
+     * Durable startup is special: hydrate + bridge install run while mode is
+     * still preview (`online_awaiting_base` / `*_awaiting_bridge`). Those
+     * reasons must remain eligible online (or offline_awaiting_bridge with a
+     * cached base) so setMutationEnabled(true) can happen only after the
+     * bridge is ready — never earlier.
      */
     function prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken) {
         if (!prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)) return false;
+        const reason = runtime && runtime.annotationMutationReason
+            ? String(runtime.annotationMutationReason)
+            : '';
+        const awaitingDurableStartup =
+            reason === 'online_awaiting_base' ||
+            reason === 'online_awaiting_bridge' ||
+            reason === 'offline_awaiting_bridge';
+        if (runtime.annotationMutationDurable === true || awaitingDurableStartup) {
+            if (reason === 'online_awaiting_base' || reason === 'online_awaiting_bridge') {
+                if (typeof root.prksOfflineRuntimeState === 'function' &&
+                    root.prksOfflineRuntimeState() !== 'online') {
+                    return false;
+                }
+            }
+            return true;
+        }
         if (runtime.mode !== 'work') return false;
-        // Slice E: durable offline annotation edits still need the hydrate +
-        // onAnnotationEvent bridge. Legacy full-list flush stays online-only.
-        if (runtime.annotationMutationDurable === true) return true;
+        // Legacy full-list flush stays online-only.
         if (typeof root.prksOfflineRuntimeState === 'function' && root.prksOfflineRuntimeState() !== 'online') {
             return false;
         }

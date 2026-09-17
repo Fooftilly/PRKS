@@ -128,8 +128,23 @@ async function coalesceSetCancelAndSentSuccessor() {
     assert.equal(sent.payload.annotation.contents, 'edit');
     assert.equal(dep.operation, 'SET_PDF_ANNOTATION');
     assert.equal(dep.payload.annotation.contents, 'again');
-    assert.equal(dep.base_revision, 3, 'successor measured after SENT advances');
+    assert.equal(dep.base_revision, 3, 'provisional successor base before ACK rebase');
     assert.deepEqual(dep.depends_on, [firstId]);
+
+    // Predecessor ACKs at a far-newer convergent revision (base 2 → server 5).
+    // Never-sent successor must be re-enveloped against the actual ACK revision.
+    await store.updateOperationSyncState(firstId, {
+        status: 'acknowledged', last_error: null, server_revision: 5,
+    });
+    const replaced = await store.rebasePdfAnnotationDependents(firstId, 5);
+    assert.equal(replaced.length, 1);
+    rows = await store.listOperations();
+    const afterRebase = rows.filter(r => r.status === 'pending');
+    assert.equal(afterRebase.length, 1);
+    assert.equal(afterRebase[0].base_revision, 5, 'successor wire base is ACK server_revision');
+    assert.equal(afterRebase[0].payload.annotation.contents, 'again');
+    assert.deepEqual(afterRebase[0].depends_on, [firstId]);
+    assert.notEqual(afterRebase[0].op_id, successor.op_id, 're-envelope mints a new op_id');
 
     // Overlay prefers the latest sequence (successor).
     globalThis.prksSetPendingPdfAnnotations(rows);

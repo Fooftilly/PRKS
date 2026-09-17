@@ -124,6 +124,7 @@ _NESTED_STATIC = {
             "thumbnail",
             "annotations",
             "annotations-state",
+            "annotations-snapshot",
             "pdf-materialization",
             "save-confirm",
             "related_folders",

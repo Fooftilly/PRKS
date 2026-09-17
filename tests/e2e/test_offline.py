@@ -1923,7 +1923,7 @@ class OfflineFoundationTests(unittest.TestCase):
         """Scenario 17 (AGENTS.md "an async annotation-persistence setup...
         must re-check current viewer identity, runtime.mode, and
         connectivity... after every await boundary"): holding the initial
-        `GET /api/works/<id>/annotations` past an offline transition must
+        `GET /api/works/<id>/annotations-snapshot` past an offline transition must
         make setup abandon rather than install an active worker, and must
         reset `_persistenceSetupStarted` so a later online reconcile can
         retry exactly once."""
@@ -1934,7 +1934,8 @@ class OfflineFoundationTests(unittest.TestCase):
 
         def hold_annotations_get(route):
             req = route.request
-            if req.method == "GET" and urlparse(req.url).path == "/api/works/%s/annotations" % work_a:
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/works/%s/annotations-snapshot" % work_a:
                 held.append(route)
                 return
             route.fallback()
@@ -1948,16 +1949,23 @@ class OfflineFoundationTests(unittest.TestCase):
             deadline = time.time() + 12
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "initial GET /annotations did not start")
+            self.assertTrue(held, "initial GET /annotations-snapshot did not start")
             self.assertEqual(len(held), 1)
-            self.assertEqual(_pdf_mode(page), "work")
+            # Awaiting coherent base must not leave a mutation-capable viewer.
+            self.assertEqual(_pdf_mode(page), "preview")
+            self.assertFalse(
+                page.evaluate(
+                    "() => { const pdf = %s; return !!(pdf && pdf.annotationMutationAllowed); }"
+                    % _FOCUSED_PDF
+                )
+            )
 
             context.set_offline(True)
             page.wait_for_function(
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
                 timeout=20000,
             )
-            # Annotation GET still held ⇒ no acknowledged base yet ⇒ preview.
+            # Annotation snapshot still held ⇒ no acknowledged base yet ⇒ preview.
             self.assertEqual(_pdf_mode(page), "preview")
 
             # Release the held GET only now, after PRKS has already
@@ -1998,6 +2006,87 @@ class OfflineFoundationTests(unittest.TestCase):
             _continue_held_routes(held)
             try:
                 page.unroute("**/api/works/**", hold_annotations_get)
+            except Exception:
+                pass
+
+    def test_held_annotations_snapshot_blocks_untracked_mutation(self):
+        """Held `/annotations-snapshot` must keep mutation disabled so the user
+        cannot create an untracked annotation during durable-bridge startup."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        held = []
+
+        def hold_snapshot(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/works/%s/annotations-snapshot" % work_a:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/works/**", hold_snapshot)
+        try:
+            _wait_sw_active(page)
+            _open_work_from_home(page, WORK_A_TITLE)
+            _wait_pdf_viewer(page)
+
+            deadline = time.time() + 12
+            while time.time() < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "initial GET /annotations-snapshot did not start")
+
+            page.wait_for_function(
+                """() => {
+                    const pdf = (window.prksGetFocusedTabContext &&
+                        window.prksGetFocusedTabContext().getResource('pdf'));
+                    return !!(pdf && pdf.mode === 'preview');
+                }""",
+                timeout=10000,
+            )
+            self.assertEqual(_pdf_mode(page), "preview")
+            self.assertFalse(_pdf_markup_tools_available(page))
+            self.assertFalse(
+                page.evaluate(
+                    """() => {
+                        const pdf = %s;
+                        return !!(pdf && pdf.annotationDurableBridgeReady);
+                    }""" % _FOCUSED_PDF
+                )
+            )
+            before_ops = page.evaluate(
+                "() => prksSync.store.listOperations().then(r => r.length)"
+            )
+            # Attempt a highlight while snapshot is held — must not create
+            # durable intent or leave an untracked viewer annotation accepted.
+            try:
+                _commit_pdf_highlight(page)
+            except Exception:
+                pass
+            page.wait_for_timeout(400)
+            after_ops = page.evaluate(
+                "() => prksSync.store.listOperations().then(r => r.length)"
+            )
+            self.assertEqual(before_ops, after_ops)
+            self.assertEqual(_pdf_mode(page), "preview")
+
+            _continue_held_routes(held)
+            held.clear()
+            page.unroute("**/api/works/**", hold_snapshot)
+            page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+            page.wait_for_function(
+                """() => {
+                    const pdf = %s;
+                    return !!(pdf && pdf.annotationDurableBridgeReady
+                        && pdf.annotationMutationDurable && pdf.mode === 'work');
+                }""" % _FOCUSED_PDF,
+                timeout=20000,
+            )
+            self.assertTrue(_pdf_markup_tools_available(page))
+        finally:
+            _continue_held_routes(held)
+            try:
+                page.unroute("**/api/works/**", hold_snapshot)
             except Exception:
                 pass
 

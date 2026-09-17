@@ -2067,6 +2067,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/annotations-snapshot') and len(path.split('/')) == 5:
+                # One DB transaction: items + revisions + materialization gens.
+                w_id = path.split('/')[3]
+                data = db.get_work_annotations_snapshot(w_id)
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-annotations-snapshot", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/works/') and path.endswith('/pdf-materialization') and len(path.split('/')) == 5:
                 w_id = path.split('/')[3]
                 data = db.get_work_pdf_materialization(w_id)

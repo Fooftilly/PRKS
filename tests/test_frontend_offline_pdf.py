@@ -43,19 +43,23 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_WORKS_PDF)
         init_start = src.index("export function initPdfViewerForWork")
         init_body = src[init_start : init_start + 3000]
-        self.assertIn("prksPdfDesiredMode(runtime)", init_body)
+        # Always start EmbedPDF in preview; capability + durable bridge enable
+        # mutations only after hydrate (never mutation-capable during startup).
         self.assertIn(
-            "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, prksPdfDesiredMode(runtime))",
+            "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, 'preview')",
             init_body,
         )
+        self.assertIn("annotationDurableBridgeReady = false", src)
 
     def test_annotation_persistence_only_installed_in_work_mode(self):
         src = _read(_WORKS_PDF)
         mount_start = src.index("async function prksMountPdfViewer")
         mount_end = src.index("export function initPdfViewerForWork")
         mount_body = src[mount_start:mount_end]
-        self.assertIn("if (desired === 'work' && !runtime.annotationMutationDurable)", mount_body)
-        self.assertIn("if (desired === 'work' && runtime.annotationMutationDurable)", mount_body)
+        # Durable startup may install hydrate/bridge while still preview
+        # (online_awaiting_base / *_awaiting_bridge); legacy stays work-only.
+        self.assertIn("needsPersistenceSetup", mount_body)
+        self.assertIn("online_awaiting_base", mount_body)
         self.assertIn(
             "prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)", mount_body
         )
@@ -110,10 +114,12 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_subscriber_reconciles_every_live_pdf_runtime(self):
         src = _read(_WORKS_PDF)
-        sub_start = src.index("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
-        sub_body = src[sub_start : sub_start + 500]
+        # Shell-level subscriber is the last prksOfflineRuntimeSubscribe block.
+        sub_start = src.rindex("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
+        sub_body = src[sub_start:]
         self.assertIn("prksForEachLiveTabContext(function (ctx) {", sub_body)
         self.assertIn("prksApplyPdfAnnotationCapability(ctx, runtime", sub_body)
+        self.assertIn("annotationDurableBridgeReady", sub_body)
 
     def test_ensure_annotation_persistence_installs_at_most_once(self):
         src = _read(_WORKS_PDF)
@@ -237,12 +243,14 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_PDF_RUNTIME)
         self.assertIn("function prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)", src)
         start = src.index("function prksPdfPersistenceSetupEligible")
-        end = src.index("\n    }\n", start)
+        end = src.index("function createPdfAnnotationPersistenceWorker", start)
         body = src[start:end]
         self.assertIn("prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)", body)
         self.assertIn("runtime.mode !== 'work'", body)
         self.assertIn("prksOfflineRuntimeState", body)
-        # Slice E: durable offline may install the hydrate/event bridge.
+        # Durable hydrate may run while mode is still preview.
+        self.assertIn("online_awaiting_base", body)
+        self.assertIn("online_awaiting_bridge", body)
         self.assertIn("annotationMutationDurable === true", body)
 
     def test_confirm_persisted_token_stops_when_worker_paused(self):

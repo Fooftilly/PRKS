@@ -302,9 +302,9 @@
         ADD_WORK_PERSON_ROLE: 'work-people-state',
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',
-        CREATE_PDF_ANNOTATION: 'work-annotations-state',
-        SET_PDF_ANNOTATION: 'work-annotations-state',
-        DELETE_PDF_ANNOTATION: 'work-annotations-state',
+        CREATE_PDF_ANNOTATION: 'work-annotations-snapshot',
+        SET_PDF_ANNOTATION: 'work-annotations-snapshot',
+        DELETE_PDF_ANNOTATION: 'work-annotations-snapshot',
         CREATE_PERSON: 'person',
         DELETE_PERSON: 'person',
         /* Reached only through the Work branch below, which a Person-scoped
@@ -431,7 +431,7 @@
         if (projection) root.prksOfflineMarkEntityChanged(projection, op.entity_id);
         if (root.PRKS_PDF_ANNOTATION_OPERATION_TYPES &&
             root.PRKS_PDF_ANNOTATION_OPERATION_TYPES.indexOf(op.operation) !== -1) {
-            root.prksOfflineMarkEntityChanged('work-annotations', op.entity_id);
+            root.prksOfflineMarkEntityChanged('work-annotations-snapshot', op.entity_id);
         }
     }
 

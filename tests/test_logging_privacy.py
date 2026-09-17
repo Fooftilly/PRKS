@@ -120,6 +120,10 @@ class TestSafeRoute(unittest.TestCase):
             "/api/works/:id/annotations/adopt",
         )
         self.assertEqual(
+            safe_route("/api/works/W-ABC/annotations-snapshot"),
+            "/api/works/:id/annotations-snapshot",
+        )
+        self.assertEqual(
             safe_route("/api/works/W-ABC/pdf-materialization"),
             "/api/works/:id/pdf-materialization",
         )

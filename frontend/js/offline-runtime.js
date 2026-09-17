@@ -805,55 +805,51 @@
             if (!id || !annotationId || !Number.isSafeInteger(result.server_revision)) {
                 return false;
             }
-            const kinds = ['work-annotations', 'work-annotations-state'];
-            const tokens = kinds.map(function (kind) {
-                const token = currentEntityGeneration(kind, id) + 1;
-                entityCoherence.set(entityKey(kind, id), token);
-                return token;
-            });
-            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
-            const listSnap = snapshots[0] && snapshots[0].value;
-            const stateSnap = snapshots[1] && snapshots[1].value;
-            const present = result.present !== false && !!result.annotation;
-
-            if (Array.isArray(listSnap)) {
-                let nextList = listSnap.filter(function (item) {
-                    if (!item || typeof item !== 'object') return true;
-                    const itemId = item.id || item.uuid || item.annotationId || item.annotation_id;
-                    return String(itemId) !== String(annotationId);
-                });
-                if (present) nextList = nextList.concat([result.annotation]);
-                if (!await cacheEntityIfCurrent('work-annotations', id, nextList, tokens[0])) {
-                    return false;
-                }
+            const kind = 'work-annotations-snapshot';
+            const token = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(entityKey(kind, id), token);
+            const envelope = await store.getEntity(kind, id);
+            const snap = envelope && envelope.value;
+            if (!snap || typeof snap !== 'object' || !Array.isArray(snap.items) ||
+                !Array.isArray(snap.annotations)) {
+                /* No coherent base cached — ACK still succeeds; next hydrate
+                 * repopulates. Do not invent a partial snapshot. */
+                return true;
             }
-
-            if (stateSnap && typeof stateSnap === 'object') {
-                const annotations = Array.isArray(stateSnap.annotations)
-                    ? stateSnap.annotations.filter(function (row) {
-                        return !(row && row.annotation_id === annotationId);
-                    })
-                    : [];
-                const knownAbsent = Object.assign({}, stateSnap.known_absent || {});
-                if (present) {
-                    annotations.push({
-                        annotation_id: annotationId,
-                        revision: result.server_revision,
-                    });
-                    delete knownAbsent[annotationId];
-                } else {
-                    knownAbsent[annotationId] = result.server_revision;
-                }
-                annotations.sort(function (a, b) {
-                    return String(a.annotation_id).localeCompare(String(b.annotation_id));
+            const present = result.present !== false && !!result.annotation;
+            let nextItems = snap.items.filter(function (item) {
+                if (!item || typeof item !== 'object') return true;
+                const itemId = item.id || item.uuid || item.annotationId || item.annotation_id;
+                return String(itemId) !== String(annotationId);
+            });
+            if (present) nextItems = nextItems.concat([result.annotation]);
+            const annotations = snap.annotations.filter(function (row) {
+                return !(row && row.annotation_id === annotationId);
+            });
+            const knownAbsent = Object.assign({}, snap.known_absent || {});
+            if (present) {
+                annotations.push({
+                    annotation_id: annotationId,
+                    revision: result.server_revision,
                 });
-                const nextState = Object.assign({}, stateSnap, {
-                    annotations: annotations,
-                    known_absent: knownAbsent,
-                });
-                if (!await cacheEntityIfCurrent('work-annotations-state', id, nextState, tokens[1])) {
-                    return false;
-                }
+                delete knownAbsent[annotationId];
+            } else {
+                knownAbsent[annotationId] = result.server_revision;
+            }
+            annotations.sort(function (a, b) {
+                return String(a.annotation_id).localeCompare(String(b.annotation_id));
+            });
+            const nextSnap = Object.assign({}, snap, {
+                items: nextItems,
+                annotations: annotations,
+                known_absent: knownAbsent,
+            });
+            if (Number.isSafeInteger(result.canonical_annotation_set_revision)) {
+                nextSnap.canonical_annotation_set_revision =
+                    result.canonical_annotation_set_revision;
+            }
+            if (!await cacheEntityIfCurrent(kind, id, nextSnap, token)) {
+                return false;
             }
             return true;
         }

@@ -275,8 +275,29 @@
     }
 
     /**
-     * Safe offline/online base requires BOTH the annotation snapshot and the
-     * revision snapshot. An annotations list alone must never imply revision 0.
+     * Coherent acknowledged snapshot: annotation values + revisions (+ optional
+     * materialization gens) from one canonical moment. Never treat a bare list
+     * as a safe base.
+     */
+    function isAnnotationsSnapshotShape(snap) {
+        return !!(snap && typeof snap === 'object' &&
+            Array.isArray(snap.items) &&
+            Array.isArray(snap.annotations) &&
+            snap.known_absent && typeof snap.known_absent === 'object');
+    }
+
+    function snapshotToState(snap) {
+        if (!isAnnotationsSnapshotShape(snap)) return null;
+        return {
+            work_id: snap.work_id,
+            annotations: snap.annotations,
+            known_absent: snap.known_absent || {},
+        };
+    }
+
+    /**
+     * Safe offline/online base requires the coherent snapshot (items +
+     * revisions together). A list alone must never imply revision 0.
      */
     async function hasAcknowledgedAnnotationBase(workId, runtime) {
         if (!workId) return false;
@@ -289,10 +310,8 @@
             return false;
         }
         try {
-            const listSnap = await root.prksOfflinePeekEntity('work-annotations', workId);
-            if (!Array.isArray(listSnap)) return false;
-            const stateSnap = await root.prksOfflinePeekEntity('work-annotations-state', workId);
-            return isAnnotationsStateShape(stateSnap);
+            const snap = await root.prksOfflinePeekEntity('work-annotations-snapshot', workId);
+            return isAnnotationsSnapshotShape(snap);
         } catch (_e) {
             return false;
         }
@@ -301,6 +320,8 @@
     /**
      * Offline annotation mutation capability (Slice E).
      * Connectivity alone must not decide; need PDF bytes + base + durable store.
+     * online_awaiting_base must NOT expose a mutation-capable viewer — hydrate
+     * first, install the durable bridge, then enable mutations.
      */
     async function resolvePdfAnnotationMutationCapability(work, runtime) {
         const workId = work && work.id ? String(work.id) : (runtime && runtime.workId) || '';
@@ -328,9 +349,12 @@
                 return { mode: 'work', durable: false, reason: 'online_legacy' };
             }
             if (!(await hasAcknowledgedAnnotationBase(workId, runtime))) {
-                // Durable store is up, but revision snapshot is missing — never
-                // invent base_revision 0 for existing annotations.
-                return { mode: 'work', durable: false, reason: 'online_awaiting_base' };
+                // Durable store is up, but coherent snapshot is missing — never
+                // invent base_revision 0, and never enable mutation yet.
+                return { mode: 'preview', durable: false, reason: 'online_awaiting_base' };
+            }
+            if (runtime && runtime.annotationDurableBridgeReady !== true) {
+                return { mode: 'preview', durable: true, reason: 'online_awaiting_bridge' };
             }
             return { mode: 'work', durable: true, reason: 'online_durable' };
         }
@@ -343,30 +367,72 @@
         if (!(await hasAcknowledgedAnnotationBase(workId, runtime))) {
             return { mode: 'preview', durable: false, reason: 'annotation_base_unavailable' };
         }
+        if (runtime && runtime.annotationDurableBridgeReady !== true) {
+            return { mode: 'preview', durable: true, reason: 'offline_awaiting_bridge' };
+        }
         return { mode: 'work', durable: true, reason: 'offline_durable' };
     }
 
-    async function publishAcknowledgedAnnotations(workId, list, state) {
+    async function publishAcknowledgedAnnotations(workId, snapshotOrList, maybeState) {
         if (!workId || typeof root.prksOfflineCacheEntity !== 'function') return;
         try {
-            if (Array.isArray(list)) {
-                await root.prksOfflineCacheEntity('work-annotations', workId, list);
+            let snap = null;
+            if (isAnnotationsSnapshotShape(snapshotOrList)) {
+                snap = snapshotOrList;
+            } else if (Array.isArray(snapshotOrList) && isAnnotationsStateShape(maybeState)) {
+                snap = {
+                    work_id: workId,
+                    items: snapshotOrList,
+                    annotations: maybeState.annotations,
+                    known_absent: maybeState.known_absent || {},
+                    canonical_annotation_set_revision:
+                        Number.isSafeInteger(maybeState.canonical_annotation_set_revision)
+                            ? maybeState.canonical_annotation_set_revision
+                            : undefined,
+                    materialized_pdf_annotation_revision:
+                        Number.isSafeInteger(maybeState.materialized_pdf_annotation_revision)
+                            ? maybeState.materialized_pdf_annotation_revision
+                            : undefined,
+                };
             }
-            if (state && typeof state === 'object') {
-                await root.prksOfflineCacheEntity('work-annotations-state', workId, state);
+            if (snap) {
+                await root.prksOfflineCacheEntity('work-annotations-snapshot', workId, snap);
             }
         } catch (_e) { /* disposable cache best-effort */ }
     }
 
-    async function loadAcknowledgedAnnotationState(workId) {
+    async function loadAcknowledgedAnnotationSnapshot(workId) {
         if (!workId) return null;
         if (typeof root.prksOfflinePeekEntity === 'function') {
             try {
-                const snap = await root.prksOfflinePeekEntity('work-annotations-state', workId);
-                if (isAnnotationsStateShape(snap)) return snap;
+                const snap = await root.prksOfflinePeekEntity('work-annotations-snapshot', workId);
+                if (isAnnotationsSnapshotShape(snap)) return snap;
             } catch (_e) { /* fall through */ }
         }
         return null;
+    }
+
+    async function loadAcknowledgedAnnotationState(workId) {
+        const snap = await loadAcknowledgedAnnotationSnapshot(workId);
+        return snapshotToState(snap);
+    }
+
+    async function workHasUnresolvedPdfAnnotationOps(workId) {
+        if (!workId || !root.prksSync || !root.prksSync.store ||
+            typeof root.prksSync.store.listOperations !== 'function') {
+            return false;
+        }
+        try {
+            const rows = await root.prksSync.store.listOperations();
+            return (rows || []).some(function (op) {
+                return op && OPERATIONS.indexOf(op.operation) !== -1 &&
+                    op.entity_type === 'work' &&
+                    String(op.entity_id) === String(workId) &&
+                    op.status !== 'acknowledged';
+            });
+        } catch (_e) {
+            return true;
+        }
     }
 
     async function savePdfAnnotationDurably(workId, desired, observed) {
@@ -519,15 +585,28 @@
     const handler = {
         isResult: isResult,
         terminal: terminal,
-        reconcile: function (data) {
+        reconcile: function (data, op) {
+            function afterAck() {
+                applyAckToLiveRuntimes(data);
+                // Re-envelope never-sent successors against the actual ACK
+                // server_revision before they can be claimed/SENT. Provisional
+                // base+1 is not safe for stale-identical convergent ACKs.
+                if (op && op.op_id && Number.isSafeInteger(data.server_revision) &&
+                    root.prksSync && root.prksSync.store &&
+                    typeof root.prksSync.store.rebasePdfAnnotationDependents === 'function') {
+                    return root.prksSync.store.rebasePdfAnnotationDependents(
+                        op.op_id, data.server_revision
+                    ).then(function () { return true; });
+                }
+                return Promise.resolve(true);
+            }
             if (typeof root.prksOfflineReconcilePdfAnnotation === 'function') {
                 return root.prksOfflineReconcilePdfAnnotation(data).then(function (ok) {
-                    if (ok) applyAckToLiveRuntimes(data);
-                    return ok;
+                    if (!ok) return false;
+                    return afterAck();
                 });
             }
-            applyAckToLiveRuntimes(data);
-            return Promise.resolve(true);
+            return afterAck();
         },
     };
 
@@ -552,8 +631,12 @@
         prksResolvePdfAnnotationMutationCapability: resolvePdfAnnotationMutationCapability,
         prksPublishAcknowledgedPdfAnnotations: publishAcknowledgedAnnotations,
         prksLoadAcknowledgedPdfAnnotationState: loadAcknowledgedAnnotationState,
+        prksLoadAcknowledgedPdfAnnotationSnapshot: loadAcknowledgedAnnotationSnapshot,
         prksApplyPdfAnnotationAckToLiveRuntimes: applyAckToLiveRuntimes,
         prksIsPdfAnnotationsStateShape: isAnnotationsStateShape,
+        prksIsPdfAnnotationsSnapshotShape: isAnnotationsSnapshotShape,
+        prksPdfAnnotationSnapshotToState: snapshotToState,
+        prksWorkHasUnresolvedPdfAnnotationOps: workHasUnresolvedPdfAnnotationOps,
         prksPdfAnnotationSyncHandler: handler,
     });
 }(typeof window !== 'undefined' ? window : global));

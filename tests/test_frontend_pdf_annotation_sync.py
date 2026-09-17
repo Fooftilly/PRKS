@@ -21,6 +21,17 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_capability_selftests(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_capability_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_the_family_is_registered_everywhere_it_must_be(self):
         families = (
             "CREATE_PDF_ANNOTATION",
@@ -43,33 +54,43 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
             self.assertNotIn(leaked, coordinator, leaked)
 
     def test_works_pdf_holds_review_invariants(self):
-        """Static contracts for the six review blockers."""
+        """Static contracts for local-first PDF annotation review blockers."""
         works_pdf = (FRONTEND / "components" / "works-pdf.js").read_text(encoding="utf-8")
         state = (FRONTEND / "pdf-annotation-state.js").read_text(encoding="utf-8")
         store = (FRONTEND / "local-store.js").read_text(encoding="utf-8")
+        runtime = (FRONTEND / "sync-runtime.js").read_text(encoding="utf-8")
         # 1. Pending hydrate before reconcile
         self.assertIn("prksRefreshPendingPdfAnnotations", works_pdf)
         # 2. Live ACK applies revision to runtimes
         self.assertIn("prksApplyPdfAnnotationAckToLiveRuntimes", state)
         self.assertIn("prksApplyPdfAnnotationAckToLiveRuntimes", works_pdf)
-        # 3. Safe base needs annotations-state shape
-        self.assertIn("work-annotations-state", state)
-        self.assertIn("prksIsPdfAnnotationsStateShape", works_pdf)
-        # 4. Materialize only after ACK (pendingMaterializationRevision)
+        # 3. Coherent snapshot (items + revisions together)
+        self.assertIn("work-annotations-snapshot", state)
+        self.assertIn("annotations-snapshot", works_pdf)
+        self.assertIn("prksIsPdfAnnotationsSnapshotShape", works_pdf)
+        # 4. Mutation gated until durable bridge ready
+        self.assertIn("annotationDurableBridgeReady", works_pdf)
+        self.assertIn("online_awaiting_base", state)
+        self.assertIn("online_awaiting_bridge", state)
+        self.assertIn("mode: 'preview', durable: false, reason: 'online_awaiting_base'", state)
+        # 5. Materialize only after ACK + clean queue (pendingMaterializationRevision)
         self.assertIn("pendingMaterializationRevision", works_pdf)
         self.assertIn("materialized_annotation_set_revision", works_pdf)
+        self.assertIn("prksWorkHasUnresolvedPdfAnnotationOps", works_pdf)
         self.assertIn("Do NOT materialize PDF bytes here", works_pdf)
+        self.assertIn("maybeCatchUpMaterialization", works_pdf)
         # Local durable save path must not immediately flush PDF bytes.
         save_idx = works_pdf.index("prksSavePdfAnnotationDurably")
         next_materialize = works_pdf.find("requestFlush('materialize')", save_idx)
         self.assertGreater(next_materialize, 0)
         self.assertIn("Do NOT materialize PDF bytes here", works_pdf[save_idx:next_materialize])
-        # ACK path is what queues materialization.
-        self.assertIn("pendingMaterializationRevision = setRev", works_pdf)
-        # 5. SENT successor (depends_on), not scope_busy dead end for attempted
-        self.assertIn("dependent successor", store)
-        self.assertIn("dependsOn = [existingAttempted.op_id]", store)
-        # 6. Terminal discard for gone Work / id reuse
+        # 6. SENT successor rebased against actual ACK server_revision
+        self.assertIn("rebasePdfAnnotationDependents", store)
+        self.assertIn("rebasePdfAnnotationDependents", state)
+        self.assertIn("provisionalRevisionAfterAttempted", store)
+        # Coordinator stays family-agnostic (no PDF op names in drain).
+        self.assertNotIn("CREATE_PDF_ANNOTATION", runtime.split("root.createPrksSyncRuntime")[0])
+        # 7. Terminal discard for gone Work / id reuse
         self.assertIn("discard: data.code", state)
         self.assertIn("ANNOTATION_ID_REUSED", state)
 

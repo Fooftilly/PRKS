@@ -2826,6 +2826,12 @@ class PRKSDatabase:
             conn.execute("BEGIN")
             return pdf_annotation_sync.get_annotations_state_on_conn(conn, work_id)
 
+    def get_work_annotations_snapshot(self, work_id: str):
+        """Coherent annotation items + revisions + materialization from one txn."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return pdf_annotation_sync.get_annotations_snapshot_on_conn(conn, work_id)
+
     def get_work_pdf_materialization(self, work_id: str):
         from backend import pdf_materialization
 

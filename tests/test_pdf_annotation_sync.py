@@ -174,6 +174,43 @@ class PdfAnnotationSyncTests(unittest.TestCase):
         self.assertFalse(result["changed"])
         self.assertEqual(result["server_revision"], 1)
 
+    def test_set_stale_identical_can_ack_far_above_base_plus_one(self):
+        """Convergent ACK returns the real server revision, not base+1."""
+        self.create(_ann())
+        body = _ann()
+        # Advance server revision without changing semantic body meaning for
+        # a later identical stale write: mutate then mutate back.
+        self.set_ann(
+            _ann({"contents": "Mid", "custom": {"prksComment": "Mid"}}), 0
+        )
+        self.set_ann(body, 1)
+        self.set_ann(
+            _ann({"contents": "Mid2", "custom": {"prksComment": "Mid2"}}), 2
+        )
+        self.set_ann(body, 3)
+        self.assertEqual(self.revision("ann-hi-1"), 4)
+        # Stale identical from base 2 → ACK at server_revision 4 (not 3).
+        status, result = self.set_ann(body, 2)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertFalse(result["changed"])
+        self.assertEqual(result["server_revision"], 4)
+
+    def test_coherent_snapshot_is_one_transaction(self):
+        self.create(_ann())
+        snap = self.db.get_work_annotations_snapshot(self.work_id)
+        self.assertIsNotNone(snap)
+        self.assertEqual(snap["work_id"], self.work_id)
+        self.assertEqual(len(snap["items"]), 1)
+        self.assertEqual(snap["items"][0]["id"], "ann-hi-1")
+        self.assertEqual(len(snap["annotations"]), 1)
+        self.assertEqual(snap["annotations"][0]["revision"], 0)
+        self.assertIn("canonical_annotation_set_revision", snap)
+        self.assertIn("materialized_pdf_annotation_revision", snap)
+        self.assertGreaterEqual(snap["canonical_annotation_set_revision"], 1)
+        state = self.db.get_work_annotations_state(self.work_id)
+        self.assertEqual(state["annotations"], snap["annotations"])
+        self.assertEqual(state["known_absent"], snap["known_absent"])
+
     def test_set_stale_different_conflicts(self):
         self.create(_ann())
         self.set_ann(

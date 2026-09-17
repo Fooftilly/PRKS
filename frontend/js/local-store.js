@@ -1569,7 +1569,11 @@
          * CREATE+DELETE cancels. SENT/attempted envelopes stay immutable; a new
          * desired state after an attempted sync becomes a dependent successor so
          * offline editing can continue (no same-annotation `scope_busy` dead end).
-         * Conflicted rows still require explicit resolution.
+         * A successor's provisional base_revision may predict base+1; before it
+         * can be SENT, `rebasePdfAnnotationDependents` re-envelopes it against
+         * the predecessor's actual ACK `server_revision` (stale-identical ACKs
+         * may land far above base+1). Conflicted rows still require explicit
+         * resolution.
          */
         function savePdfAnnotation(workId, desired, observed) {
             const deleting = desired === null;
@@ -1633,8 +1637,9 @@
                     row.status === STATUS_SYNCING ||
                     row.status === STATUS_FAILED;
             }
-            /** Revision the attempted op will leave after a successful ACK. */
-            function revisionAfterAttempted(row) {
+            /** Provisional successor base while a SENT predecessor is in flight.
+             * Never trust this for the wire: rebase against the ACK revision. */
+            function provisionalRevisionAfterAttempted(row) {
                 if (row.operation === 'CREATE_PDF_ANNOTATION') return 0;
                 if (row.operation === 'SET_PDF_ANNOTATION' ||
                     row.operation === 'DELETE_PDF_ANNOTATION') {
@@ -1696,10 +1701,10 @@
 
                 if (existingAttempted) {
                     /* SENT envelope stays immutable; enqueue a dependent
-                     * successor measured against the revision the attempted
-                     * op will establish on ACK. */
+                     * successor with a provisional base. Rebase against the
+                     * predecessor's actual ACK server_revision before SENT. */
                     dependsOn = [existingAttempted.op_id];
-                    const afterRev = revisionAfterAttempted(existingAttempted);
+                    const afterRev = provisionalRevisionAfterAttempted(existingAttempted);
                     if (!desiredPresent) {
                         operation = 'DELETE_PDF_ANNOTATION';
                         payload = { annotation_id: annotationId };
@@ -1748,6 +1753,86 @@
                     base_revision: baseRevision,
                     depends_on: dependsOn,
                 }, null));
+            });
+        }
+
+        /**
+         * After a PDF annotation predecessor ACKs, re-envelope every never-sent
+         * dependent whose base was only a provisional prediction.
+         *
+         * Stale-identical SET/DELETE may ACK at a `server_revision` far above
+         * `base+1`. The successor intent stays durable (same payload), but its
+         * wire base must become the predecessor's actual ACK revision before
+         * claim/SENT. Never rewrite a SENT/attempted envelope in place.
+         */
+        function rebasePdfAnnotationDependents(predecessorOpId, serverRevision) {
+            if (!isNonBlankString(predecessorOpId) ||
+                !Number.isSafeInteger(serverRevision) || serverRevision < 0) {
+                return Promise.reject(localStoreError(
+                    'invalid_envelope', 'Invalid PDF annotation rebase.'
+                ));
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const allRows = await request(STORE_OPERATIONS, s => s.getAll());
+                const waiting = (Array.isArray(allRows) ? allRows : []).filter(function (r) {
+                    return r && Array.isArray(r.depends_on) &&
+                        r.depends_on.indexOf(predecessorOpId) !== -1 &&
+                        PDF_ANNOTATION_OPERATIONS.indexOf(r.operation) !== -1 &&
+                        r.status === STATUS_PENDING &&
+                        !(r.attempt_count > 0);
+                });
+                const replaced = [];
+                for (let i = 0; i < waiting.length; i += 1) {
+                    const row = waiting[i];
+                    /* CREATE after DELETE keeps base_revision null. */
+                    if (row.base_revision === null || row.base_revision === undefined) {
+                        continue;
+                    }
+                    if (row.base_revision === serverRevision) {
+                        continue;
+                    }
+                    if (row.status === STATUS_SYNCING ||
+                        (Number.isInteger(row.attempt_count) && row.attempt_count > 0)) {
+                        throw localStoreError(
+                            'invalid_resolution',
+                            'A PDF annotation successor has already been sent.'
+                        );
+                    }
+                    const further = (Array.isArray(allRows) ? allRows : []).filter(function (r) {
+                        return r && r.op_id !== row.op_id &&
+                            Array.isArray(r.depends_on) &&
+                            r.depends_on.indexOf(row.op_id) !== -1;
+                    });
+                    if (further.some(function (r) {
+                        return r.status === STATUS_SYNCING ||
+                            (Number.isInteger(r.attempt_count) && r.attempt_count > 0);
+                    })) {
+                        throw localStoreError(
+                            'invalid_resolution',
+                            'An operation waiting on this successor has already been sent.'
+                        );
+                    }
+                    const replacement = await insertEnvelopeIn(request, {
+                        operation: row.operation,
+                        entity_type: row.entity_type,
+                        entity_id: row.entity_id,
+                        payload: row.payload,
+                        base_revision: serverRevision,
+                        depends_on: [predecessorOpId],
+                    }, row.local_context);
+                    for (let j = 0; j < further.length; j += 1) {
+                        const dependent = further[j];
+                        const next = Object.assign({}, dependent, {
+                            depends_on: dependent.depends_on.map(function (dep) {
+                                return dep === row.op_id ? replacement.op_id : dep;
+                            }),
+                        });
+                        await request(STORE_OPERATIONS, s => s.put(next));
+                    }
+                    await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+                    replaced.push(replacement);
+                }
+                setResult(replaced);
             });
         }
 
@@ -4252,6 +4337,7 @@
             saveWorkSource,
             saveWorkPersonRole,
             savePdfAnnotation,
+            rebasePdfAnnotationDependents,
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
             deletePerson: deletePerson,
