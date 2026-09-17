@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PRKS PDF annotation fidelity harness</title>
+    <style>
+        body { font-family: sans-serif; margin: 1rem; }
+        #host { width: 820px; height: 640px; border: 1px solid #cbd5e1; }
+        .pass { color: #047857; }
+        .fail { color: #b91c1c; }
+    </style>
+</head>
+<body>
+    <h1>PDF annotation fidelity harness</h1>
+    <p id="summary">Booting…</p>
+    <ol id="results"></ol>
+    <div id="host"></div>
+    <div hidden>
+        <span data-parity="annotation-fidelity-roundtrip"></span>
+        <span data-parity="annotation-fidelity-duplicate-id"></span>
+        <span data-parity="annotation-fidelity-link-preserve"></span>
+    </div>
+    <script type="module">
+const ASSET_BASE = '/frontend/vendor/prks-pdf-viewer/';
+const MINIMAL = '/tests/browser/assets/minimal.pdf';
+const WITH_LINK = '/tests/browser/assets/with_link.pdf';
+
+const resultsEl = document.getElementById('results');
+const summaryEl = document.getElementById('summary');
+const host = document.getElementById('host');
+
+function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+function waitFor(pred, timeoutMs, label) {
+    const t0 = Date.now();
+    return new Promise((resolve, reject) => {
+        const tick = () => {
+            let v;
+            try {
+                v = pred();
+            } catch (err) {
+                v = false;
+            }
+            if (v) {
+                resolve(v);
+                return;
+            }
+            if (Date.now() - t0 > timeoutMs) {
+                reject(new Error('timeout: ' + label));
+                return;
+            }
+            setTimeout(tick, 40);
+        };
+        tick();
+    });
+}
+
+function painted(root) {
+    return !!(root && root.querySelector('.prks-pdf-render-image'));
+}
+
+function jsonSafe(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+function rawAnnotations(viewer) {
+    return (viewer.getAnnotations() || []).map((a) => {
+        const raw = a && a.raw && typeof a.raw === 'object' ? a.raw : a;
+        return jsonSafe(raw);
+    });
+}
+
+function highlightSpec(id, comment) {
+    return {
+        id,
+        type: 9,
+        pageIndex: 0,
+        rect: { origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } },
+        segmentRects: [{ origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } }],
+        opacity: 1,
+        strokeColor: '#FFCD45',
+        color: '#FFCD45',
+        blendMode: 'Multiply',
+        contents: comment,
+        custom: { prksComment: comment },
+    };
+}
+
+function underlineSpec(id, comment) {
+    return {
+        id,
+        type: 10,
+        pageIndex: 0,
+        rect: { origin: { x: 80, y: 650 }, size: { width: 180, height: 12 } },
+        segmentRects: [{ origin: { x: 80, y: 650 }, size: { width: 180, height: 12 } }],
+        opacity: 1,
+        strokeColor: '#2563eb',
+        color: '#2563eb',
+        contents: comment,
+        custom: { prksComment: comment },
+    };
+}
+
+async function mount(src) {
+    const { createPrksPdfViewer } = await import('/frontend/js/pdf-viewer-runtime.js');
+    host.innerHTML = '';
+    const viewer = await createPrksPdfViewer({
+        target: host,
+        src,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+    });
+    await waitFor(() => viewer.getPageCount() >= 1, 20000, 'page count');
+    await waitFor(() => painted(host), 20000, 'paint');
+    await sleep(200);
+    return viewer;
+}
+
+window.__prksFidelityApi = {
+    MINIMAL,
+    WITH_LINK,
+    mount,
+    rawAnnotations,
+    highlightSpec,
+    underlineSpec,
+    jsonSafe,
+    sleep,
+    waitFor,
+    async destroy(viewer) {
+        if (viewer && typeof viewer.destroy === 'function') viewer.destroy();
+        host.innerHTML = '';
+        await sleep(50);
+    },
+};
+
+window.__prksFidelityReady = true;
+summaryEl.textContent = 'ready';
+summaryEl.className = 'pass';
+    </script>
+</body>
+</html>

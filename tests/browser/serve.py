@@ -49,6 +49,7 @@ def main() -> None:
     print(origin + "/tests/browser/markdown_security.html?dompurify=absent", flush=True)
     print(origin + "/tests/browser/markdown_security.html?dompurify=unsupported", flush=True)
     print(f"{origin}/tests/browser/pdf_viewer.html", flush=True)
+    print(f"{origin}/tests/browser/pdf_annotation_fidelity.html", flush=True)
     print(f"{origin}/tests/browser/navigation.html", flush=True)
     print(f"{origin}/tests/browser/design_system.html?theme=light", flush=True)
     print(f"{origin}/tests/browser/design_system.html?theme=dark", flush=True)
