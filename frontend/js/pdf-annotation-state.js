@@ -302,6 +302,7 @@
         prksRefreshPendingPdfAnnotations: refreshPending,
         prksPendingPdfAnnotationGeneration: function () { return pendingGeneration; },
         prksNormalizePdfAnnotation: normalizePdfAnnotation,
+        prksPdfAnnotationCanonicalId: canonicalId,
         prksPdfAnnotationSemanticView: semanticView,
         prksPdfAnnotationsSemanticallyEqual: annotationsSemanticallyEqual,
         prksRoundTripPdfAnnotation: roundTripAnnotation,

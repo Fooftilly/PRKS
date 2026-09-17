@@ -1075,6 +1075,31 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         docId: viewer.getDocumentId ? viewer.getDocumentId() : null,
         workId: String(workId),
     };
+
+    // Project acknowledged (+ later: pending durable) annotations into the
+    // viewer. PDF bytes may lag; the reconciler is the authority for
+    // PRKS-managed user markup and never touches Links / widgets.
+    if (typeof window.prksReconcileViewerAnnotations === 'function') {
+        const ackItems = Array.isArray(runtime.annotationCache.items)
+            ? runtime.annotationCache.items
+            : [];
+        const effective =
+            typeof window.prksEffectiveWorkAnnotations === 'function'
+                ? window.prksEffectiveWorkAnnotations(ackItems, String(workId))
+                : ackItems;
+        try {
+            await window.prksReconcileViewerAnnotations(viewer, effective, {
+                isManaged: prksIsUserMarkupAnnotation,
+            });
+        } catch (_e) {
+            // Projection failure must not block viewing; mutations stay on
+            // the existing persistence path until Slice E/F harden this.
+        }
+        if (!setupEligible()) {
+            abandonSetup();
+            return;
+        }
+    }
     renderSyncIndicator();
 
     async function exportAndPersistPdfCopy(saveToken) {
@@ -1249,6 +1274,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     function onAnnotationEvent(evt) {
         if (worker && worker.destroyed) return;
         if (!stillLive()) return;
+        // Reconcile create/update/delete must not look like user mutations.
+        if (typeof window.prksViewerIsReconcilingAnnotations === 'function' &&
+            window.prksViewerIsReconcilingAnnotations(viewer)) {
+            return;
+        }
         if (!evt || evt.committed !== true) return;
         if (evt.kind !== 'create' && evt.kind !== 'update' && evt.kind !== 'delete') return;
         syncState.localMutationSeen = true;
