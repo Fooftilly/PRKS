@@ -1379,6 +1379,22 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return;
     }
 
+    // Capability may have resolved as online_awaiting_base before the
+    // annotations-state hydrate finished. Re-resolve now that the base is known.
+    if (typeof window.prksApplyPdfAnnotationCapability === 'function' ||
+        typeof prksApplyPdfAnnotationCapability === 'function') {
+        try {
+            await prksApplyPdfAnnotationCapability(ctx, runtime, {
+                id: workId,
+                file_path: runtime.filePath,
+            });
+        } catch (_eCap) { /* best-effort */ }
+    }
+    if (!setupEligible()) {
+        abandonSetup();
+        return;
+    }
+
     runtime.annotationCache = runtime.annotationCache || {
         allItems: [],
         rawItems: [],
@@ -2091,8 +2107,8 @@ function prksDestroyWorkPdfViewer(ctx) {
  * resolves, stay conservative: online → work, offline → preview.
  *
  * A stale online_legacy capability must not keep work mode after disconnect.
- * online_durable with an acknowledged base may remain work while async
- * re-resolve confirms cached PDF bytes (offline durable path).
+ * online_durable / online_awaiting_base with an acknowledged base may remain
+ * work while async re-resolve confirms cached PDF bytes (offline durable path).
  */
 function prksPdfDesiredMode(runtime) {
     if (runtime && runtime.annotationMutationAllowed === false) return 'preview';
@@ -2102,7 +2118,8 @@ function prksPdfDesiredMode(runtime) {
             prksOfflineRuntimeState() !== 'online';
         if (offline && runtime.annotationMutationReason &&
             String(runtime.annotationMutationReason).indexOf('online_') === 0) {
-            if (runtime.annotationMutationReason === 'online_durable' &&
+            if ((runtime.annotationMutationReason === 'online_durable' ||
+                    runtime.annotationMutationReason === 'online_awaiting_base') &&
                 runtime.annotationBaseReady === true) {
                 return 'work';
             }
@@ -2345,14 +2362,15 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
         prksForEachLiveTabContext(function (ctx) {
             const runtime = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
             if (!runtime) return;
-            // Synchronously drop stale online_legacy (or online_durable without
-            // an acknowledged base) so mutation locks flip before async
-            // re-resolve. Keep work when online_durable + base are already
-            // known — offline durable editing must not blink into preview.
+            // Synchronously drop stale online_legacy (or online_* without an
+            // acknowledged base) so mutation locks flip before async
+            // re-resolve. Keep work when durable/awaiting-base + base are
+            // already known — offline durable editing must not blink into preview.
             if (!online && runtime.annotationMutationReason &&
                 String(runtime.annotationMutationReason).indexOf('online_') === 0) {
                 const keepDurableWork =
-                    runtime.annotationMutationReason === 'online_durable' &&
+                    (runtime.annotationMutationReason === 'online_durable' ||
+                        runtime.annotationMutationReason === 'online_awaiting_base') &&
                     runtime.annotationBaseReady === true;
                 if (!keepDurableWork) {
                     runtime.annotationMutationAllowed = false;

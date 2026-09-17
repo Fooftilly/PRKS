@@ -66,6 +66,12 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("Do NOT materialize PDF bytes here", works_pdf[save_idx:next_materialize])
         # ACK path is what queues materialization.
         self.assertIn("pendingMaterializationRevision = setRev", works_pdf)
+        # 5. SENT successor (depends_on), not scope_busy dead end for attempted
+        self.assertIn("dependent successor", store)
+        self.assertIn("dependsOn = [existingAttempted.op_id]", store)
+        # 6. Terminal discard for gone Work / id reuse
+        self.assertIn("discard: data.code", state)
+        self.assertIn("ANNOTATION_ID_REUSED", state)
 
 
 if __name__ == "__main__":
