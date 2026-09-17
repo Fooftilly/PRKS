@@ -419,11 +419,24 @@ class PageCollector:
         )
         if not self._pdf_posts:
             raise AssertionError("expected POST /api/works/{id}/pdf during PDF save handshake")
-        if not self._ann_posts:
+        # Durable path materializes PDF bytes only; legacy also POSTs full-list
+        # annotations. Accept either: PDF+annotations, or PDF with durable ops.
+        durable = page.evaluate(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                return !!(pdf && pdf.annotationMutationDurable);
+            }"""
+        )
+        if not durable and not self._ann_posts:
             raise AssertionError("expected POST /api/works/{id}/annotations during PDF save handshake")
-        if not self._save_confirms:
+        if not durable and not self._save_confirms:
             raise AssertionError("expected GET /api/works/{id}/save-confirm during PDF save handshake")
-        if any(s >= 400 for s in self._pdf_posts + self._ann_posts + self._save_confirms):
+        statuses = list(self._pdf_posts)
+        if not durable:
+            statuses.extend(self._ann_posts)
+            statuses.extend(self._save_confirms)
+        if any(s >= 400 for s in statuses):
             raise AssertionError("PDF save handshake had a failed response")
 
     def assert_clean(self) -> None:

@@ -1290,12 +1290,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
         if (!stillLive()) return;
+        // Slice F: PDF bytes are a materialized artifact. Always export them
+        // when this flush runs. Semantic metadata uses durable CREATE/SET/
+        // DELETE when available; the full-list annotations POST remains only
+        // for online-legacy (durable store unavailable).
         await exportAndPersistPdfCopy(saveToken);
         if (!stillLive()) return;
         const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+        renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
+        if (runtime.annotationMutationDurable) {
+            return;
+        }
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
         const serialized = JSON.stringify(userItems);
-        renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
         if (!stillLive()) return;
         const annRes = await prksRequest(`/api/works/${workId}/annotations`, {
             method: 'POST',
@@ -1378,9 +1385,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             try {
                 await runWorkAnnotationAndPdfPersistencePass(saveToken);
                 if (!stillLive()) break;
-                const confirmed = await confirmPersistedToken(saveToken);
-                if (!stillLive()) break;
-                if (!confirmed) throw new Error('Server confirmation timeout');
+                // Durable path: PDF POST alone materializes; metadata already
+                // lives in the sync family. save-confirm still requires both
+                // legacy tokens, so skip that dual handshake when durable.
+                if (!runtime.annotationMutationDurable) {
+                    const confirmed = await confirmPersistedToken(saveToken);
+                    if (!stillLive()) break;
+                    if (!confirmed) throw new Error('Server confirmation timeout');
+                }
                 syncState.lastConfirmedToken = saveToken;
                 syncState.lastSuccessAt = Date.now();
                 syncState.pendingChanges = queueRequested;
@@ -1479,6 +1491,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     syncState.localMutationSeen = true;
                     syncState.lastError = '';
                     renderSyncIndicator();
+                    // Best-effort PDF materialization when reachable. Semantic
+                    // ACK does not wait on this; offline leaves lag until resume.
+                    const online =
+                        typeof window.prksOfflineRuntimeState !== 'function' ||
+                        window.prksOfflineRuntimeState() === 'online';
+                    if (online) {
+                        void requestFlush('materialize');
+                    }
                 } catch (_err) {
                     if (!stillLive()) return;
                     syncState.lastError = 'local_save_failed';
@@ -1563,19 +1583,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             runtime.annotationPersistence = worker;
             runtime._flushAnnotationsImpl = async function () {
                 if (!stillLive() || (worker && worker.destroyed)) return;
-                // Durable path never uses the legacy full-list PDF+JSON flush.
-                if (runtime.annotationMutationDurable) return;
                 try {
                     syncState.localMutationSeen = true;
-                    await requestFlush('manual');
+                    // Durable: PDF-only materialization. Legacy: full handshake.
+                    await requestFlush(runtime.annotationMutationDurable ? 'materialize' : 'manual');
                 } catch (_e) {}
             };
             if (typeof viewer.onAnnotationEvent === 'function') {
                 viewer.onAnnotationEvent(onAnnotationEvent);
             }
-            if (runtime.annotationMutationDurable && typeof worker.pause === 'function') {
-                worker.pause();
-            }
+            // Do not permanently pause when durable — offline pause/resume still
+            // comes from connectivity. Durable flush is PDF materialization only.
         })
         : false;
     if (!installed) {
@@ -1909,13 +1927,19 @@ export function initPdfViewerForWork(ctx, work) {
 function prksReconcilePdfMutationMode(ctx, runtime) {
     if (!ctx || !runtime || runtime._destroyed || !runtime.viewer) return;
     const desired = prksPdfDesiredMode(runtime);
+    const online =
+        typeof window.prksOfflineRuntimeState !== 'function' ||
+        window.prksOfflineRuntimeState() === 'online';
     if (runtime.mode === desired) {
-        // Still refresh durable/legacy persistence posture when mode is stable
-        // but durable flag changed (online durable ↔ offline durable).
-        if (desired === 'work' && runtime.annotationMutationDurable) {
-            if (runtime.annotationPersistence && typeof runtime.annotationPersistence.pause === 'function') {
-                // Durable ops own annotation persistence; pause legacy full-list flush.
-                runtime.annotationPersistence.pause();
+        // Durable work mode: PDF-only materialization runs only while online.
+        // Offline keeps work-capable editing via durable ops but pauses upload.
+        if (desired === 'work' && runtime.annotationPersistence) {
+            if (runtime.annotationMutationDurable) {
+                if (online && typeof runtime.annotationPersistence.resume === 'function') {
+                    runtime.annotationPersistence.resume();
+                } else if (!online && typeof runtime.annotationPersistence.pause === 'function') {
+                    runtime.annotationPersistence.pause();
+                }
             }
         }
         return;
@@ -1926,10 +1950,13 @@ function prksReconcilePdfMutationMode(ctx, runtime) {
     runtime.mode = desired;
     if (desired === 'work') {
         if (runtime.annotationMutationDurable) {
-            // Durable path still needs annotation hydrate + onAnnotationEvent.
             prksEnsureAnnotationPersistence(ctx, runtime, runtime.workId, runtime.viewer, runtime.viewerSetupToken);
-            if (runtime.annotationPersistence && typeof runtime.annotationPersistence.pause === 'function') {
-                runtime.annotationPersistence.pause();
+            if (runtime.annotationPersistence) {
+                if (online && typeof runtime.annotationPersistence.resume === 'function') {
+                    runtime.annotationPersistence.resume();
+                } else if (!online && typeof runtime.annotationPersistence.pause === 'function') {
+                    runtime.annotationPersistence.pause();
+                }
             }
             return;
         }
