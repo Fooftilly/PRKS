@@ -1999,9 +1999,9 @@ function prksDestroyWorkPdfViewer(ctx) {
  * capability on the runtime (`annotationMutationAllowed`). Until that
  * resolves, stay conservative: online → work, offline → preview.
  *
- * An *online_* capability must not keep work mode after disconnect: offline
- * editing requires PDF bytes + acknowledged base + durable store, which the
- * async re-resolve will confirm. Until then, treat work as preview.
+ * A stale online_legacy capability must not keep work mode after disconnect.
+ * online_durable with an acknowledged base may remain work while async
+ * re-resolve confirms cached PDF bytes (offline durable path).
  */
 function prksPdfDesiredMode(runtime) {
     if (runtime && runtime.annotationMutationAllowed === false) return 'preview';
@@ -2011,6 +2011,10 @@ function prksPdfDesiredMode(runtime) {
             prksOfflineRuntimeState() !== 'online';
         if (offline && runtime.annotationMutationReason &&
             String(runtime.annotationMutationReason).indexOf('online_') === 0) {
+            if (runtime.annotationMutationReason === 'online_durable' &&
+                runtime.annotationBaseReady === true) {
+                return 'work';
+            }
             return 'preview';
         }
         return 'work';
@@ -2250,14 +2254,21 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
         prksForEachLiveTabContext(function (ctx) {
             const runtime = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
             if (!runtime) return;
-            // Synchronously drop stale online-only capability so mutation
-            // locks / mode flip before the async re-resolve finishes.
+            // Synchronously drop stale online_legacy (or online_durable without
+            // an acknowledged base) so mutation locks flip before async
+            // re-resolve. Keep work when online_durable + base are already
+            // known — offline durable editing must not blink into preview.
             if (!online && runtime.annotationMutationReason &&
                 String(runtime.annotationMutationReason).indexOf('online_') === 0) {
-                runtime.annotationMutationAllowed = false;
-                runtime.annotationMutationDurable = false;
-                runtime.annotationMutationReason = 'reresolving_offline';
-                prksReconcilePdfMutationMode(ctx, runtime);
+                const keepDurableWork =
+                    runtime.annotationMutationReason === 'online_durable' &&
+                    runtime.annotationBaseReady === true;
+                if (!keepDurableWork) {
+                    runtime.annotationMutationAllowed = false;
+                    runtime.annotationMutationDurable = false;
+                    runtime.annotationMutationReason = 'reresolving_offline';
+                    prksReconcilePdfMutationMode(ctx, runtime);
+                }
             }
             void prksApplyPdfAnnotationCapability(ctx, runtime, {
                 id: runtime.workId,
