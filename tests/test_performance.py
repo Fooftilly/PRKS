@@ -478,4 +478,4 @@ class TestPerformanceHTTP(unittest.TestCase):
     def test_schema_version_unchanged(self):
         from backend.db_manager import PRKS_SCHEMA_VERSION
 
-        self.assertEqual(PRKS_SCHEMA_VERSION, 14)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 15)
