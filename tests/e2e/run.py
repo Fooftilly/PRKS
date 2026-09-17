@@ -37,6 +37,19 @@ from tests.e2e.harness import (
     stop_all_servers,
 )
 from tests.e2e.install_browser import ensure_chromium_installed
+from tests.e2e.policy import (
+    LAST_FAILED_PATH,
+    format_feature_catalog,
+    full_gate_timeout_s,
+    list_changed_paths,
+    load_last_failed,
+    merge_last_failed,
+    report_banner,
+    save_last_failed,
+    select_affected,
+    select_features,
+    select_smoke,
+)
 from tests.e2e.sharding import (
     TIMINGS_PATH,
     aggregate_worker_results,
@@ -79,6 +92,167 @@ E2E_MODULES = (
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
 WORKER_STOP_TIMEOUT_S = 20.0
+# Child of the full-gate deadline supervisor (Windows + POSIX).
+FULL_GATE_CHILD_ENV = "PRKS_E2E_FULL_GATE_CHILD"
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Best-effort terminate a supervised child and its descendants."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=WORKER_STOP_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError, AttributeError):
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError, AttributeError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _run_with_deadline(cmd, timeout_s: int, *, env=None, cwd=None) -> int:
+    """Run cmd under a wall-clock deadline; return exit code or 124 on timeout.
+
+    Cross-platform: uses subprocess wait(timeout=…) plus process-tree kill.
+    Covers any work the child performs (E2E shards, pointer capture, etc.).
+
+    The supervised child is started in its own process group/session so an
+    external `timeout(1)` / Ctrl+C targeting only this supervisor must not
+    orphan workers or Chromium. Any abnormal supervisor exit (deadline,
+    KeyboardInterrupt, SIGINT/SIGTERM) terminates the child tree before the
+    supervisor returns or dies. Normal completion still returns the child's
+    real exit code; deadline expiration remains 124.
+    """
+    if timeout_s <= 0:
+        completed = subprocess.run(cmd, cwd=cwd, env=env)
+        return completed.returncode
+
+    popen_kwargs = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, **popen_kwargs)
+    previous_handlers = {}
+
+    def _on_signal(signum, frame):
+        # Tear down the separate-session child before this process exits so an
+        # outer `timeout 1200` SIGTERM (or Ctrl+C) cannot leave it orphaned.
+        _terminate_process_tree(proc)
+        prior = previous_handlers.get(signum, signal.SIG_DFL)
+        try:
+            signal.signal(signum, prior)
+        except (OSError, ValueError, AttributeError):
+            pass
+        if signum == getattr(signal, "SIGINT", None):
+            raise KeyboardInterrupt
+        try:
+            signal.signal(signum, signal.SIG_DFL)
+        except (OSError, ValueError, AttributeError):
+            pass
+        try:
+            os.kill(os.getpid(), signum)
+        except OSError:
+            raise SystemExit(128 + int(signum))
+
+    for sig_name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            previous_handlers[sig] = signal.signal(sig, _on_signal)
+        except (OSError, ValueError, AttributeError):
+            # Unsupported on this platform/thread — finally still cleans up.
+            pass
+
+    try:
+        try:
+            return proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            print(
+                "full E2E gate exceeded %ds hard limit" % timeout_s,
+                file=sys.stderr,
+            )
+            _terminate_process_tree(proc)
+            print("E2E FAIL (full) — hard timeout", file=sys.stderr)
+            return 124
+        except KeyboardInterrupt:
+            _terminate_process_tree(proc)
+            raise
+    finally:
+        # Unconditional: leave no supervised orphan on any abnormal exit path.
+        if proc.poll() is None:
+            _terminate_process_tree(proc)
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except (OSError, ValueError, AttributeError):
+                pass
+
+
+def _supervise_full_gate(argv, timeout_s: int) -> int:
+    """Re-exec this runner as a child and enforce one wall-clock deadline.
+
+    The child runs chromium install, serial/parallel E2E, last-failed merge,
+    and pointer_capture under the same PRKS_E2E_FULL_TIMEOUT budget. Works on
+    Windows and POSIX via subprocess deadline supervision.
+    """
+    env = os.environ.copy()
+    env[FULL_GATE_CHILD_ENV] = "1"
+    cmd = [
+        python_for_subprocess(),
+        str(REPO / "tests" / "e2e" / "run.py"),
+        *(argv if argv is not None else []),
+    ]
+    print(
+        "Full-gate hard limit: %ds (PRKS_E2E_FULL_TIMEOUT; 0 disables)"
+        % timeout_s
+    )
+    return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
+
+
+def _executed_ids_from_observation(observed, failed_ids) -> list:
+    """IDs that actually completed this run (timings + any reported failures)."""
+    executed = list(observed or ())
+    seen = set(executed)
+    for tid in failed_ids or ():
+        if tid not in seen:
+            executed.append(tid)
+            seen.add(tid)
+    return executed
 
 
 class _TimingResult(unittest.TextTestResult):
@@ -223,6 +397,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         "failures": 0,
         "errors": 0,
         "skipped": 0,
+        "failed_ids": [],
         "timings": {},
         "output": "",
         "detail": "",
@@ -240,6 +415,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         report["failures"] = len(result.failures)
         report["errors"] = len(result.errors)
         report["skipped"] = len(result.skipped)
+        report["failed_ids"] = _failed_ids_from_result(result)
         report["timings"] = {k: round(v, 3) for k, v in result.timings.items()}
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
@@ -263,6 +439,14 @@ def _failure_detail(result) -> str:
         for test, trace in group:
             chunks.append("%s: %s\n%s" % (label, test.id(), trace))
     return "\n".join(chunks)
+
+
+def _failed_ids_from_result(result) -> list:
+    ids = []
+    for group in (result.failures, result.errors):
+        for test, _trace in group:
+            ids.append(test.id())
+    return ids
 
 
 # --- parallel parent -----------------------------------------------------
@@ -343,12 +527,13 @@ def _tail(path, limit=4000):
         return ""
 
 
-def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict]:
+def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
     buckets = assign_shards(test_ids, jobs, timings)
     estimates = shard_estimates(buckets, timings)
     browsers_path = apply_e2e_playwright_env()
     observed = {}
     reports = []
+    failed_ids = []
     started = time.perf_counter()
 
     with tempfile.TemporaryDirectory(prefix="prks-e2e-jobs-") as raw:
@@ -404,6 +589,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict]:
                     reports.append(entry)
                     if report:
                         observed.update(report.get("timings") or {})
+                        for fid in report.get("failed_ids") or []:
+                            if fid not in failed_ids:
+                                failed_ids.append(fid)
                     ok = report is not None and rc == 0
                     print(
                         "[E2E %d/%d] %s — %.1fs (%d tests)"
@@ -468,7 +656,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict]:
     )
     for problem in problems:
         print("  %s" % problem, file=sys.stderr)
-    return ok, observed
+    return ok, observed, failed_ids
 
 
 def _print_worker_failure(worker, jobs, report):
@@ -497,7 +685,7 @@ def _print_worker_failure(worker, jobs, report):
 # --- serial parent -------------------------------------------------------
 
 
-def run_serial(test_ids, fail_fast) -> tuple[bool, dict]:
+def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list]:
     runner = unittest.TextTestRunner(
         verbosity=2, failfast=fail_fast, resultclass=_result_factory
     )
@@ -513,7 +701,11 @@ def run_serial(test_ids, fail_fast) -> tuple[bool, dict]:
         "E2E workers=1 tests=%d failures=%d errors=%d skipped=%d in %.1fs"
         % (result.testsRun, len(result.failures), len(result.errors), len(result.skipped), wall)
     )
-    return result.wasSuccessful(), {k: round(v, 3) for k, v in result.timings.items()}
+    return (
+        result.wasSuccessful(),
+        {k: round(v, 3) for k, v in result.timings.items()},
+        _failed_ids_from_result(result),
+    )
 
 
 # --- CLI -----------------------------------------------------------------
@@ -524,8 +716,23 @@ def build_parser():
         prog="tests/e2e/run.py",
         description=(
             "Real Chromium E2E against isolated temporary PRKS storage. "
-            "Default is one worker (deterministic, best for debugging); "
+            "Default is the full suite on one worker (deterministic). "
+            "Use --smoke / --feature / --affected / --last-failed / --dev "
+            "for the agent development feedback loop. "
             "--jobs N shards individual test IDs across N processes."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python tests/e2e/run.py --smoke --jobs 2\n"
+            "  python tests/e2e/run.py --feature graph --jobs 2 --no-pointer-capture\n"
+            "  python tests/e2e/run.py --dev --feature tabs\n"
+            "  python tests/e2e/run.py --affected\n"
+            "  python tests/e2e/run.py --affected --base origin/master\n"
+            "  python tests/e2e/run.py --last-failed\n"
+            "  python tests/e2e/run.py --jobs 4   # full regression gate "
+            "(runner hard-limits at 1200s)\n"
+            "  python tests/e2e/run.py --jobs 1 tests.e2e.test_app.AppShellAndNavigationTests\n"
         ),
     )
     parser.add_argument(
@@ -550,9 +757,57 @@ def build_parser():
         help="Skip the pointer-capture checks (they otherwise run once, after the workers).",
     )
     parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run the curated smoke suite (small essential shell + critical workflows).",
+    )
+    parser.add_argument(
+        "--feature",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "Run one feature/domain group (repeatable). "
+            "Use --list-features for the catalog. Alias: pass 'smoke' as a feature name."
+        ),
+    )
+    parser.add_argument(
+        "--affected",
+        action="store_true",
+        help=(
+            "Select feature groups from the git working-tree diff "
+            "(default vs HEAD; override with --base)."
+        ),
+    )
+    parser.add_argument(
+        "--base",
+        default=None,
+        metavar="REF",
+        help="Git ref for --affected comparison (default: HEAD). Example: origin/master",
+    )
+    parser.add_argument(
+        "--last-failed",
+        action="store_true",
+        help="Rerun only tests that failed in the previous E2E run (.tests/e2e-last-failed.json).",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help=(
+            "Agent/dev mode: --fail-fast + --no-pointer-capture. "
+            "Requires an explicit selection (--feature/--smoke/--affected/--last-failed "
+            "or positional tests)."
+        ),
+    )
+    parser.add_argument(
         "--list-tests",
         action="store_true",
-        help="Print the discovered test IDs and exit.",
+        help="Print the discovered/selected test IDs and exit.",
+    )
+    parser.add_argument(
+        "--list-features",
+        action="store_true",
+        help="Print the E2E feature-group catalog and exit.",
     )
     # Internal: how the parent invokes one shard.
     parser.add_argument("--worker-index", type=int, default=None, help=argparse.SUPPRESS)
@@ -560,6 +815,118 @@ def build_parser():
     parser.add_argument("--tests-file", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--report-file", default=None, help=argparse.SUPPRESS)
     return parser
+
+
+def _print_affected_plan(plan):
+    print("Affected E2E plan:")
+    print("  comparison: working tree (+ untracked production/E2E paths) vs base")
+    for decision in plan["decisions"]:
+        if decision["skip"]:
+            print(
+                "  skip  %-40s rule=%s%s"
+                % (
+                    decision["path"],
+                    decision["rule"],
+                    (" — " + decision["note"]) if decision["note"] else "",
+                )
+            )
+        else:
+            print(
+                "  take  %-40s rule=%s features=%s%s"
+                % (
+                    decision["path"],
+                    decision["rule"],
+                    ",".join(decision["features"]) or "-",
+                    (" — " + decision["note"]) if decision["note"] else "",
+                )
+            )
+    if plan["features"]:
+        print("  selected features: %s" % ", ".join(plan["features"]))
+        print("  selected tests: %d" % len(plan["test_ids"]))
+    else:
+        print("  selected features: (none)")
+        if plan.get("empty_reason"):
+            print("  reason: %s" % plan["empty_reason"])
+
+
+def _resolve_selection(args, all_ids):
+    """Return (tier, test_ids, selection_note)."""
+    selection_modes = sum(
+        1
+        for flag in (
+            bool(args.smoke),
+            bool(args.feature),
+            bool(args.affected),
+            bool(args.last_failed),
+            bool(args.tests),
+        )
+        if flag
+    )
+    if selection_modes > 1:
+        raise ValueError(
+            "use only one of: positional tests, --smoke, --feature, --affected, --last-failed"
+        )
+
+    if args.last_failed:
+        data = load_last_failed(REPO / LAST_FAILED_PATH)
+        if not data or not data.get("test_ids"):
+            raise ValueError(
+                "no last-failed state at %s — run E2E once and let it fail first"
+                % (REPO / LAST_FAILED_PATH)
+            )
+        known = set(all_ids)
+        ids = [tid for tid in data["test_ids"] if tid in known]
+        missing = [tid for tid in data["test_ids"] if tid not in known]
+        note = "from %s (%d id(s))" % (LAST_FAILED_PATH, len(data["test_ids"]))
+        if missing:
+            note += "; dropped %d renamed/removed" % len(missing)
+        if not ids:
+            # Every persisted failure was renamed/removed — prune is a clean state,
+            # not a permanent zero-selection error (merge_last_failed never runs).
+            return "last-failed-stale", [], note
+        return "last-failed", ids, note
+
+    if args.affected:
+        changed = list_changed_paths(REPO, base=args.base)
+        print(
+            "Changed paths vs %s (%d):"
+            % (args.base or "HEAD", len(changed))
+        )
+        if not changed:
+            print("  (none)")
+        else:
+            for path in changed:
+                print("  %s" % path)
+        plan = select_affected(all_ids, changed)
+        _print_affected_plan(plan)
+        note = "features=%s" % (",".join(plan["features"]) or "-")
+        if plan.get("noop_ok") and not plan["test_ids"]:
+            # Docs/unit/ignored-only (or empty) diffs are a successful no-op.
+            return "affected-noop", [], note
+        return "affected", plan["test_ids"], note
+
+    if args.smoke:
+        ids = select_smoke(all_ids)
+        return "smoke", ids, "%d curated smoke tests" % len(ids)
+
+    if args.feature:
+        names = []
+        for item in args.feature:
+            for part in item.split(","):
+                part = part.strip()
+                if part:
+                    names.append(part)
+        ids = select_features(all_ids, names)
+        return "feature", ids, "groups=%s" % ",".join(names)
+
+    if args.tests:
+        test_ids = []
+        loader = unittest.TestLoader()
+        for name in args.tests:
+            _flatten(loader.loadTestsFromName(name), test_ids)
+        return "targeted", test_ids, "explicit=%s" % " ".join(args.tests)
+
+    return "full", list(all_ids), "complete suite"
 
 
 def main(argv=None) -> int:
@@ -570,7 +937,82 @@ def main(argv=None) -> int:
             args.worker_index, args.worker_count or 1, args.tests_file, args.report_file
         )
 
+    if args.list_features:
+        print(format_feature_catalog())
+        return 0
+
+    # Resolve selection before Chromium install so docs/unit --affected and
+    # --list-tests are cheap no-ops (no browser download).
     apply_e2e_playwright_env()
+    all_ids = discover_test_ids()
+    try:
+        tier, test_ids, note = _resolve_selection(args, all_ids)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if args.dev:
+        if tier == "full":
+            print(
+                "--dev refuses the full suite; pass --smoke, --feature, --affected, "
+                "--last-failed, or positional tests",
+                file=sys.stderr,
+            )
+            return 2
+        if tier not in ("affected-noop", "last-failed-stale"):
+            args.fail_fast = True
+            args.no_pointer_capture = True
+            tier = "dev"
+            note = (note + "; fail-fast") if note else "fail-fast"
+
+    if args.list_tests:
+        for test_id in test_ids:
+            print(test_id)
+        return 0
+
+    if tier == "affected-noop":
+        print(
+            "affected: no E2E-relevant changes (docs/unit/ignored only) — success no-op"
+        )
+        return 0
+
+    if tier == "last-failed-stale":
+        last_failed_path = REPO / LAST_FAILED_PATH
+        cleared = True
+        if last_failed_path.is_file():
+            try:
+                last_failed_path.unlink()
+            except OSError:
+                cleared = False
+                print(
+                    "warning: could not unlink stale last-failed state",
+                    file=sys.stderr,
+                )
+        if cleared:
+            print(
+                "last-failed: no known unresolved failures remain — cleared stale state"
+            )
+        return 0
+
+    if not test_ids:
+        print("no E2E tests selected", file=sys.stderr)
+        if tier == "affected":
+            print(
+                "hint: mapped features selected zero tests, or the selection is broken. "
+                "Use --smoke or --feature explicitly if you still want a browser run.",
+                file=sys.stderr,
+            )
+        return 1
+
+    # Full gate: one wall-clock deadline covers chromium install, shards, and
+    # pointer_capture. Parent re-execs as a supervised child (Windows + POSIX).
+    if tier == "full":
+        timeout_s = full_gate_timeout_s()
+        if timeout_s > 0 and not os.environ.get(FULL_GATE_CHILD_ENV):
+            return _supervise_full_gate(
+                argv if argv is not None else sys.argv[1:], timeout_s
+            )
+
     try:
         ensure_chromium_installed()
     except RuntimeError as exc:
@@ -578,26 +1020,18 @@ def main(argv=None) -> int:
         return 1
     apply_e2e_playwright_env()
 
-    targeted = bool(args.tests)
-    if targeted:
-        test_ids = []
-        loader = unittest.TestLoader()
-        for name in args.tests:
-            _flatten(loader.loadTestsFromName(name), test_ids)
-    else:
-        test_ids = discover_test_ids()
-
-    if args.list_tests:
-        for test_id in test_ids:
-            print(test_id)
-        return 0
-
-    if not test_ids:
-        print("no E2E tests selected", file=sys.stderr)
-        return 1
+    print(report_banner(tier, len(test_ids), note))
+    if tier != "full":
+        print(
+            "NOTE: a PASS here is %s coverage — not equivalent to the full E2E gate."
+            % tier
+        )
 
     try:
-        jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=1)
+        # Serial-by-default so debugging stays deterministic; advertised full-gate
+        # entry points (run_tests.py --e2e, scripts/e2e full) pass --jobs 4.
+        default_jobs = 1
+        jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=default_jobs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -605,17 +1039,51 @@ def main(argv=None) -> int:
 
     timings = load_timings(REPO / TIMINGS_PATH)
     if jobs == 1:
-        ok, observed = run_serial(test_ids, args.fail_fast)
+        ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
     else:
-        ok, observed = run_parallel(test_ids, jobs, timings, args.fail_fast)
+        ok, observed, failed_ids = run_parallel(
+            test_ids, jobs, timings, args.fail_fast
+        )
 
+    targeted = tier != "full"
     _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
+
+    # Persist unresolved failures from actual completions only — never treat
+    # the pre-run selection as executed (fail-fast / cancelled / crashed).
+    executed_ids = _executed_ids_from_observation(observed, failed_ids)
+    previous = load_last_failed(REPO / LAST_FAILED_PATH)
+    previous_ids = (previous or {}).get("test_ids") or []
+    unresolved = merge_last_failed(
+        previous_ids, executed_ids, failed_ids, known_ids=all_ids
+    )
+    last_failed_path = REPO / LAST_FAILED_PATH
+    if unresolved:
+        save_last_failed(
+            last_failed_path,
+            unresolved,
+            meta={
+                "tier": tier,
+                "note": note,
+                "executed": len(executed_ids),
+                "selected": len(test_ids),
+                "failed_this_run": len(failed_ids),
+            },
+        )
+        print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
+    elif last_failed_path.is_file():
+        try:
+            last_failed_path.unlink()
+        except OSError:
+            pass
+        if previous_ids:
+            print("Cleared last-failed (all previously failed tests resolved)")
 
     pointer = None
     if ok and not args.no_pointer_capture:
         # Once per run, in the parent, after every shard has passed -- never
-        # once per worker.
+        # once per worker. Under the full-gate supervisor this still runs inside
+        # the same deadline-bounded child as the shards above.
         pointer = _run_pointer_capture()
         if pointer != 0:
             print("pointer_capture.py failed", file=sys.stderr)
@@ -623,7 +1091,10 @@ def main(argv=None) -> int:
         print("skipping pointer_capture.py because E2E tests failed", file=sys.stderr)
 
     code = run_exit_code(ok, pointer)
-    print("E2E PASS" if code == 0 else "E2E FAIL")
+    if code == 0:
+        print("E2E PASS (%s)%s" % (tier, "" if tier == "full" else " — not a full gate"))
+    else:
+        print("E2E FAIL (%s)" % tier)
     return code
 
 
