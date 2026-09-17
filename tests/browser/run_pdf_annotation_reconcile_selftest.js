@@ -99,7 +99,7 @@ async function updateAndManagedDelete() {
     viewer.createAnnotation(0, highlight('legacy', 'L', 600));
     stats = await globalThis.prksReconcileViewerAnnotations(viewer, [a2]);
     assert.equal(stats.deleted, 1);
-    const ids = viewer.getAnnotations().map((x) => x.raw.id).sort();
+    const ids = viewer.getAnnotations().map((x) => x.raw.id).sort((a, b) => a.localeCompare(b));
     assert.deepEqual(ids, ['a', 'legacy']);
 }
 
@@ -131,7 +131,7 @@ async function neverTouchLink() {
     await globalThis.prksReconcileViewerAnnotations(viewer, []);
     // 'a' was not previously managed on this viewer, so it stays (legacy).
     // Link always stays.
-    const ids = viewer.getAnnotations().map((x) => x.raw.id).sort();
+    const ids = viewer.getAnnotations().map((x) => x.raw.id).sort((a, b) => a.localeCompare(b));
     assert.deepEqual(ids, ['a', 'link-1']);
 
     // Seed managed then empty effective deletes 'a' only.

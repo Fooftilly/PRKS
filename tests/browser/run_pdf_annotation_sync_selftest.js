@@ -182,7 +182,7 @@ function applyAckUpdatesLiveRuntimeRevision() {
     const contexts = [{ getResource: () => runtime }];
     const prev = globalThis.prksForEachLiveTabContext;
     globalThis.prksForEachLiveTabContext = function (fn) {
-        contexts.forEach(fn);
+        contexts.forEach((ctx) => fn(ctx));
     };
     try {
         globalThis.prksApplyPdfAnnotationAckToLiveRuntimes({
