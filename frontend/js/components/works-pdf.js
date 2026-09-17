@@ -2436,7 +2436,20 @@ function prksReconcilePdfMutationMode(ctx, runtime) {
     const online =
         typeof window.prksOfflineRuntimeState !== 'function' ||
         window.prksOfflineRuntimeState() === 'online';
+    const needsPersistenceSetup =
+        desired === 'work' ||
+        runtime.annotationMutationReason === 'online_awaiting_base' ||
+        runtime.annotationMutationReason === 'online_awaiting_bridge' ||
+        runtime.annotationMutationReason === 'offline_awaiting_bridge';
     if (runtime.mode === desired) {
+        // Mode unchanged can still need a (re)start: e.g. abandon left both
+        // sides on preview with online_awaiting_base, then reconnect must
+        // call ensure again — never early-return past that path.
+        if (needsPersistenceSetup && !runtime.annotationPersistence) {
+            prksEnsureAnnotationPersistence(
+                ctx, runtime, runtime.workId, runtime.viewer, runtime.viewerSetupToken
+            );
+        }
         // Durable work mode: PDF-only materialization runs only while online.
         // Offline keeps work-capable editing via durable ops but pauses upload.
         if (desired === 'work' && runtime.annotationPersistence) {
@@ -2454,11 +2467,6 @@ function prksReconcilePdfMutationMode(ctx, runtime) {
         runtime.viewer.setMutationEnabled(desired === 'work');
     }
     runtime.mode = desired;
-    const needsPersistenceSetup =
-        desired === 'work' ||
-        runtime.annotationMutationReason === 'online_awaiting_base' ||
-        runtime.annotationMutationReason === 'online_awaiting_bridge' ||
-        runtime.annotationMutationReason === 'offline_awaiting_bridge';
     if (desired === 'work') {
         if (runtime.annotationMutationDurable) {
             prksEnsureAnnotationPersistence(ctx, runtime, runtime.workId, runtime.viewer, runtime.viewerSetupToken);
