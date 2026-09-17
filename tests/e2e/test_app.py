@@ -5456,6 +5456,13 @@ class WorkspaceTilingTests(_BrowserE2E):
                     pdf.viewer.saveCopy = async function () {
                         return new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]).buffer;
                     };
+                    // Durable path only POSTs PDF bytes when a claimed ACK
+                    // generation is queued (Slice F). Legacy flush ignores this.
+                    if (pdf.annotationMutationDurable) {
+                        const rev = pdf.acknowledgedAnnotationSetRevision;
+                        pdf.pendingMaterializationRevision =
+                            Number.isSafeInteger(rev) && rev >= 0 ? rev : 0;
+                    }
                     window.__prksSurvivingPdfPromise = pdf.flushAnnotations();
                 }""",
                 arg=tree["d_id"],
