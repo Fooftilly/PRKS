@@ -335,7 +335,7 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         # helper (used for both initial mount and offline/online mode
         # rebuilds), rather than being read inline at the createPrksPdfViewer
         # call site.
-        self.assertIn("lastPage.initialPage, prksPdfDesiredMode()", works)
+        self.assertIn("lastPage.initialPage, prksPdfDesiredMode(runtime)", works)
         self.assertIn("initialPage: initialPage,", works)
         self.assertIn("if (!alive) return", works)
         self.assertIn("document.visibilityState === 'hidden'", works)

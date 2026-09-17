@@ -233,6 +233,121 @@
         };
     }
 
+    function managedPdfPath(filePath) {
+        const raw = String(filePath || '').split('?')[0];
+        return raw.indexOf('/api/pdfs/') === 0 ? raw : '';
+    }
+
+    async function hasCachedManagedPdf(filePath) {
+        const path = managedPdfPath(filePath);
+        if (!path) return false;
+        const cacheName = root.PRKS_OFFLINE_PDF_CACHE_NAME || 'prks-pdf-v1';
+        if (typeof root.caches === 'undefined' || !root.caches || typeof root.caches.open !== 'function') {
+            return false;
+        }
+        try {
+            const cache = await root.caches.open(cacheName);
+            const match = await cache.match(path);
+            return !!match;
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    async function durableStoreWritable() {
+        if (!root.prksSync || !root.prksSync.store) return false;
+        if (typeof root.prksSync.store.isAvailable !== 'function') return false;
+        try {
+            return !!(await root.prksSync.store.isAvailable());
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    async function hasAcknowledgedAnnotationBase(workId, runtime) {
+        if (!workId) return false;
+        if (runtime && runtime.annotationBaseReady === true) return true;
+        if (runtime && runtime.annotationCache && Array.isArray(runtime.annotationCache.items)) {
+            return true;
+        }
+        if (!root.prksOfflinePeekEntity || typeof root.prksOfflinePeekEntity !== 'function') {
+            return false;
+        }
+        try {
+            const snap = await root.prksOfflinePeekEntity('work-annotations', workId);
+            return Array.isArray(snap);
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    /**
+     * Offline annotation mutation capability (Slice E).
+     * Connectivity alone must not decide; need PDF bytes + base + durable store.
+     */
+    async function resolvePdfAnnotationMutationCapability(work, runtime) {
+        const workId = work && work.id ? String(work.id) : (runtime && runtime.workId) || '';
+        const filePath = (work && work.file_path) || (runtime && runtime.filePath) || '';
+        const online = typeof root.prksOfflineRuntimeState === 'function'
+            ? root.prksOfflineRuntimeState() === 'online'
+            : true;
+
+        if (workId && typeof root.prksIsLivePendingWorkDeletion === 'function' &&
+            root.prksIsLivePendingWorkDeletion(workId)) {
+            return { mode: 'preview', durable: false, reason: 'work_pending_delete' };
+        }
+        if (workId && typeof root.prksResolveWorkLifecycle === 'function') {
+            try {
+                const life = await root.prksResolveWorkLifecycle(workId);
+                if (life === 'delete') {
+                    return { mode: 'preview', durable: false, reason: 'work_pending_delete' };
+                }
+            } catch (_e) { /* best-effort */ }
+        }
+
+        const durableOk = await durableStoreWritable();
+        if (online) {
+            return {
+                mode: 'work',
+                durable: durableOk,
+                reason: durableOk ? 'online_durable' : 'online_legacy',
+            };
+        }
+        if (!durableOk) {
+            return { mode: 'preview', durable: false, reason: 'durable_unavailable' };
+        }
+        if (!(await hasCachedManagedPdf(filePath))) {
+            return { mode: 'preview', durable: false, reason: 'pdf_bytes_unavailable' };
+        }
+        if (!(await hasAcknowledgedAnnotationBase(workId, runtime))) {
+            return { mode: 'preview', durable: false, reason: 'annotation_base_unavailable' };
+        }
+        return { mode: 'work', durable: true, reason: 'offline_durable' };
+    }
+
+    async function publishAcknowledgedAnnotations(workId, list, state) {
+        if (!workId || typeof root.prksOfflineCacheEntity !== 'function') return;
+        try {
+            if (Array.isArray(list)) {
+                await root.prksOfflineCacheEntity('work-annotations', workId, list);
+            }
+            if (state && typeof state === 'object') {
+                await root.prksOfflineCacheEntity('work-annotations-state', workId, state);
+            }
+        } catch (_e) { /* disposable cache best-effort */ }
+    }
+
+    async function loadAcknowledgedAnnotationState(workId) {
+        if (!workId) return null;
+        if (typeof root.prksOfflinePeekEntity === 'function') {
+            try {
+                const snap = await root.prksOfflinePeekEntity('work-annotations-state', workId);
+                if (snap && typeof snap === 'object') return snap;
+            } catch (_e) { /* fall through */ }
+        }
+        return null;
+    }
+
     async function savePdfAnnotationDurably(workId, desired, observed) {
         if (!root.prksSync || !root.prksSync.store ||
             typeof root.prksSync.store.savePdfAnnotation !== 'function') {
@@ -310,6 +425,10 @@
         prksAcknowledgedPdfAnnotationBase: acknowledgedBase,
         prksPdfAnnotationBaseUnavailable: pdfAnnotationBaseUnavailable,
         prksSavePdfAnnotationDurably: savePdfAnnotationDurably,
+        prksHasCachedManagedPdf: hasCachedManagedPdf,
+        prksResolvePdfAnnotationMutationCapability: resolvePdfAnnotationMutationCapability,
+        prksPublishAcknowledgedPdfAnnotations: publishAcknowledgedAnnotations,
+        prksLoadAcknowledgedPdfAnnotationState: loadAcknowledgedAnnotationState,
         prksPdfAnnotationSyncHandler: handler,
     });
 }(typeof window !== 'undefined' ? window : global));

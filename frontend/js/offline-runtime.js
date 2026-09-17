@@ -346,6 +346,18 @@
             return cacheEntityIfCurrent(kind, id, value, currentEntityGeneration(kind, id));
         }
 
+        /** Read a disposable cached entity value with no network. Null if missing. */
+        async function peekEntity(kind, id) {
+            if (!store || typeof store.getEntity !== 'function') return null;
+            try {
+                const snap = await store.getEntity(kind, id);
+                if (!snap) return null;
+                return snap.value;
+            } catch (_e) {
+                return null;
+            }
+        }
+
         /** Cache only if no later canonical change has superseded this value. */
         function cacheEntityIfCurrent(kind, id, value, coherenceToken) {
             if (value == null || !store || typeof store.putEntity !== 'function') return Promise.resolve(false);
@@ -2980,6 +2992,7 @@
             reconcileDeletedPersonGroup,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
+            peekEntity: peekEntity,
             invalidateEntity: invalidateEntity,
             invalidateList: invalidateList,
             markEntityChanged: markEntityChanged,
@@ -3033,6 +3046,9 @@
     }
     function prksOfflineCacheEntity(kind, id, value) {
         return production.cacheEntity(kind, id, value);
+    }
+    function prksOfflinePeekEntity(kind, id) {
+        return production.peekEntity(kind, id);
     }
     function prksOfflineCacheEntityIfCurrent(kind, id, value, coherenceToken) {
         return production.cacheEntityIfCurrent(kind, id, value, coherenceToken);
@@ -3188,6 +3204,7 @@
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflinePeekEntity: prksOfflinePeekEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
         prksOfflineReconcileFolderTag: result => production.reconcileFolderTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),

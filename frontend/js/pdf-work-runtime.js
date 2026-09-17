@@ -70,6 +70,9 @@
     function prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken) {
         if (!prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)) return false;
         if (runtime.mode !== 'work') return false;
+        // Slice E: durable offline annotation edits still need the hydrate +
+        // onAnnotationEvent bridge. Legacy full-list flush stays online-only.
+        if (runtime.annotationMutationDurable === true) return true;
         if (typeof root.prksOfflineRuntimeState === 'function' && root.prksOfflineRuntimeState() !== 'online') {
             return false;
         }

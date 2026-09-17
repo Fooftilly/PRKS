@@ -23,36 +23,42 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
     def test_file_exists(self):
         self.assertTrue(os.path.isfile(_WORKS_PDF))
 
-    def test_viewer_mode_is_never_hardcoded_to_work(self):
+    def test_viewer_mode_follows_capability_not_connectivity_alone(self):
         src = _read(_WORKS_PDF)
-        # The only two modes this integration ever passes to the vendor
-        # viewer are 'work' and 'preview', decided by prksPdfDesiredMode() --
-        # never a hardcoded mode: 'work' literal that would ignore current
-        # connectivity.
+        # Modes are still only 'work' / 'preview', but Slice E decides via
+        # resolved annotationMutationAllowed on the runtime — not solely
+        # prksOfflineRuntimeState().
         self.assertNotIn("mode: 'work',", src)
         self.assertNotIn('mode: "work",', src)
-        self.assertIn("function prksPdfDesiredMode()", src)
-        self.assertIn("prksOfflineRuntimeState() !== 'online' ? 'preview' : 'work'", src)
+        self.assertIn("function prksPdfDesiredMode(runtime)", src)
+        self.assertIn("annotationMutationAllowed === true", src)
+        self.assertIn("prksResolvePdfAnnotationMutationCapability", src)
+        self.assertIn("prksApplyPdfAnnotationCapability", src)
+        body = src.split("function prksPdfDesiredMode")[1].split("async function prksApplyPdfAnnotationCapability")[0]
+        allowed_at = body.index("annotationMutationAllowed === true")
+        fallback_at = body.index("prksOfflineRuntimeState()")
+        self.assertLess(allowed_at, fallback_at)
 
     def test_initial_mount_uses_desired_mode(self):
         src = _read(_WORKS_PDF)
         init_start = src.index("export function initPdfViewerForWork")
         init_body = src[init_start : init_start + 3000]
-        self.assertIn("prksPdfDesiredMode()", init_body)
-        self.assertIn("prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, prksPdfDesiredMode())", init_body)
+        self.assertIn("prksPdfDesiredMode(runtime)", init_body)
+        self.assertIn(
+            "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, prksPdfDesiredMode(runtime))",
+            init_body,
+        )
 
     def test_annotation_persistence_only_installed_in_work_mode(self):
         src = _read(_WORKS_PDF)
         mount_start = src.index("async function prksMountPdfViewer")
         mount_end = src.index("export function initPdfViewerForWork")
         mount_body = src[mount_start:mount_end]
-        self.assertIn("if (desired === 'work') {", mount_body)
+        self.assertIn("if (desired === 'work' && !runtime.annotationMutationDurable)", mount_body)
+        self.assertIn("if (desired === 'work' && runtime.annotationMutationDurable)", mount_body)
         self.assertIn(
             "prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)", mount_body
         )
-        idx = mount_body.index("prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)")
-        preceding = mount_body[:idx]
-        self.assertIn("if (desired === 'work') {", preceding[-120:])
 
     def test_mount_reconciles_stale_desired_mode_before_publishing(self):
         """A viewer that began mounting for a stale `mode` (connectivity
@@ -63,7 +69,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         mount_start = src.index("async function prksMountPdfViewer")
         mount_end = src.index("export function initPdfViewerForWork")
         mount_body = src[mount_start:mount_end]
-        self.assertIn("const desired = prksPdfDesiredMode();", mount_body)
+        self.assertIn("const desired = prksPdfDesiredMode(runtime);", mount_body)
         self.assertIn("if (desired !== mode", mount_body)
         self.assertIn("viewer.setMutationEnabled(desired === 'work');", mount_body)
         # The reconciliation happens before runtime.mode is set to the
@@ -74,7 +80,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         # Never destroy/recreate the just-created viewer merely because its
         # starting mode was stale.
         after_await = mount_body[mount_body.index("const viewer = await createPrksPdfViewer") :]
-        stale_reconcile_region = after_await[after_await.index("const desired = prksPdfDesiredMode();") :]
+        stale_reconcile_region = after_await[after_await.index("const desired = prksPdfDesiredMode(runtime);") :]
         self.assertNotIn("viewer.destroy()", stale_reconcile_region[:400])
 
     def test_connectivity_reconcile_never_destroys_the_viewer(self):
@@ -107,7 +113,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         sub_start = src.index("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
         sub_body = src[sub_start : sub_start + 500]
         self.assertIn("prksForEachLiveTabContext(function (ctx) {", sub_body)
-        self.assertIn("prksReconcilePdfMutationMode(ctx, runtime)", sub_body)
+        self.assertIn("prksApplyPdfAnnotationCapability(ctx, runtime", sub_body)
 
     def test_ensure_annotation_persistence_installs_at_most_once(self):
         src = _read(_WORKS_PDF)
@@ -165,13 +171,16 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_WORKS_PDF)
         for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
             at = src.index(fn_name)
-            snippet = src[at : at + 300]
-            self.assertIn("prksOfflineGuardMutation", snippet, "%s must guard before any mutation" % fn_name)
+            snippet = src[at : at + 550]
+            self.assertIn("annotationMutationAllowed", snippet, "%s must check capability" % fn_name)
+            self.assertIn("prksOfflineGuardMutation", snippet, "%s must retain legacy online guard" % fn_name)
 
     def test_sidebar_row_delete_is_guarded(self):
         src = _read(_WORKS_PDF)
         at = src.index(".annotation-row__delete")
-        snippet = src[at : at + 400]
+        handler_at = src.index("annotation-row__delete", at + 1)
+        snippet = src[handler_at : handler_at + 700]
+        self.assertIn("annotationMutationAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
     def test_vendor_handle_exposes_set_mutation_enabled(self):
