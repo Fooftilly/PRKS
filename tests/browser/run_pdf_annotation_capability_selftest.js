@@ -18,7 +18,7 @@ function installGlobals(opts) {
             isAvailable: async () => opts.durable !== false,
             savePdfAnnotation: async () => ({ op_id: 'x' }),
         },
-        kick() {},
+        changed() { opts.changedCalls = (opts.changedCalls || 0) + 1; },
     };
     globalThis.PRKS_OFFLINE_PDF_CACHE_NAME = 'prks-pdf-v1';
     globalThis.caches = {
@@ -111,11 +111,23 @@ async function pendingDeleteBlocks() {
     assert.equal(cap.reason, 'work_pending_delete');
 }
 
+async function saveWakesSyncViaChanged() {
+    const opts = { state: 'online', durable: true, changedCalls: 0 };
+    installGlobals(opts);
+    await globalThis.prksSavePdfAnnotationDurably(
+        'W1',
+        { annotation_id: 'a1', annotation: { id: 'a1', type: 9 } },
+        { annotation_id: 'a1', present: false, revision: 0, annotation: null }
+    );
+    assert.equal(opts.changedCalls, 1);
+}
+
 (async () => {
     await onlineDurable();
     await onlineLegacyWithoutDurable();
     await offlineNeedsPdfAndBase();
     await pendingDeleteBlocks();
+    await saveWakesSyncViaChanged();
     console.log(checks + ' checks passed');
 })().catch((err) => {
     console.error(err);
