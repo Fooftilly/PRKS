@@ -1234,12 +1234,11 @@ class OfflineFoundationTests(unittest.TestCase):
         page.wait_for_timeout(200)
         self.assertIn("OFFLINE-EDIT", page.locator(selector).input_value())
 
-    def test_cached_pdf_reopened_offline_has_no_annotation_tools(self):
-        """Scenario 9: a previously-cached PDF reopened offline mounts the vendor
-        viewer in its read-only 'preview' mode -- the markup toolbar
-        (Highlight/Underline/Undo/Redo) is entirely absent from the DOM and no
-        annotation-sync persistence worker is installed, never merely disabled
-        client-side tooling that could race a real mutation through."""
+    def test_cached_pdf_reopened_offline_keeps_annotation_tools(self):
+        """Scenario 9 (V2): a previously-cached PDF reopened offline stays in
+        'work' mode when PDF bytes, an acknowledged annotation base, and the
+        durable store are available — markup tools remain reachable and the
+        hydrate/event bridge installs (legacy full-list flush stays paused)."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
         pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
@@ -1248,7 +1247,15 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_whole_file_cached(page, pdf_path)
-        # Sanity check: online, the markup toolbar is reachable (primary or More).
+        # Warm acknowledged annotation base into disposable cache.
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady);
+            }""",
+            timeout=20000,
+        )
         _pdf_open_markup_tool(page, "Highlight")
         page.keyboard.press("Escape")
 
@@ -1256,37 +1263,25 @@ class OfflineFoundationTests(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         _wait_pdf_viewer(page)
-
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
+        )
+        self.assertEqual(_pdf_mode(page), "work")
+        self.assertTrue(_pdf_markup_tools_available(page))
         self.assertEqual(
             page.evaluate(
                 """() => {
-                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                    const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
-                    return pdf ? pdf.mode : null;
+                    const pdf = (window.prksGetFocusedTabContext &&
+                        window.prksGetFocusedTabContext().getResource('pdf'));
+                    return pdf ? (pdf.annotationMutationReason || '') : '';
                 }"""
             ),
-            "preview",
-        )
-        self.assertEqual(
-            page.locator(
-                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-            ).count(),
-            0,
-        )
-        self.assertEqual(
-            page.locator(
-                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Underline"]'
-            ).count(),
-            0,
-        )
-        self.assertIsNone(
-            page.evaluate(
-                """() => {
-                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
-                    const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
-                    return pdf ? (pdf.annotationPersistence || null) : null;
-                }"""
-            )
+            "offline_durable",
         )
 
     def test_offline_research_notes_toolbar_and_pickers_stay_live(self):
@@ -1410,38 +1405,54 @@ class OfflineFoundationTests(unittest.TestCase):
         self.assertNotEqual(page.evaluate("() => %s.value()" % _FOCUSED_WORK_NOTES), original_text)
 
     def test_pending_annotation_survives_disconnect_and_resumes_on_reconnect(self):
-        """Scenario 11: an annotation created while ONLINE must not be lost
-        because connectivity vanishes before persistence completes. The live
-        Work viewer/document stay mounted, mutation tools become unavailable,
-        no retry storm fires while offline, and reconnecting resumes exactly
-        one flush that saves the held annotation."""
+        """Scenario 11 (V2): an annotation created while ONLINE is durable in
+        local-store before sync ACK. Holding `/api/sync/operations` must not
+        lose the highlight; going offline keeps work-capable tools when PDF
+        bytes + base are present; reconnect drains the durable queue."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
+        )
 
         held = []
-        ann_post_count = [0]
+        sync_post_count = [0]
 
-        def hold_annotations_post(route):
+        def hold_sync_operations(route):
             req = route.request
-            if req.method == "POST" and urlparse(req.url).path == "/api/works/%s/annotations" % work_a:
-                ann_post_count[0] += 1
+            if req.method == "POST" and urlparse(req.url).path == "/api/sync/operations":
+                sync_post_count[0] += 1
                 held.append(route)
                 return
             route.fallback()
 
-        page.route("**/api/works/**", hold_annotations_post)
+        page.route("**/api/sync/operations", hold_sync_operations)
         try:
             _commit_pdf_highlight(page)
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows => rows.some(
+                    r => r && (r.operation === 'CREATE_PDF_ANNOTATION'
+                        || r.operation === 'SET_PDF_ANNOTATION')
+                    && r.entity_id === %s))"""
+                % json.dumps(work_a),
+                timeout=20000,
+            )
             deadline = time.time() + 12
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
-            self.assertTrue(held, "annotation persistence POST did not start")
-            self.assertEqual(len(held), 1)
-            self.assertTrue(_pdf_has_pending_changes(page))
+            self.assertTrue(held, "durable annotation sync POST did not start")
             annotation_count_before = _viewer_annotation_count(page)
             self.assertGreaterEqual(annotation_count_before, 1)
 
@@ -1451,71 +1462,55 @@ class OfflineFoundationTests(unittest.TestCase):
                 timeout=20000,
             )
 
-            # Same annotation remains visible; viewer/document not destroyed.
             self.assertEqual(_viewer_annotation_count(page), annotation_count_before)
             self.assertTrue(page.evaluate("() => !!%s" % _FOCUSED_VIEWER))
+            self.assertEqual(_pdf_mode(page), "work")
+            self.assertTrue(_pdf_markup_tools_available(page))
 
-            # Mutation tools become unavailable (preview-equivalent toolbar).
-            self.assertEqual(
-                page.locator(
-                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-                ).count(),
-                0,
+            page.wait_for_timeout(1500)
+            self.assertEqual(len(held), 1, "sync retried a request while offline")
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows => rows.some(
+                    r => r && (r.operation === 'CREATE_PDF_ANNOTATION'
+                        || r.operation === 'SET_PDF_ANNOTATION')
+                    && r.entity_id === %s))"""
+                % json.dumps(work_a),
+                timeout=5000,
             )
 
-            # Pending state remains represented, and no repeated persistence
-            # requests fire while offline (no retry storm).
-            page.wait_for_timeout(1500)
-            self.assertEqual(len(held), 1, "annotation persistence retried a request while offline")
-            self.assertTrue(_pdf_has_pending_changes(page))
-
-            # Reconnect: persistence resumes and the held annotation is saved.
-            # resume() itself queues another pass through the same drain loop
-            # if a mutation was requested while the original save was still
-            # in flight, so releasing the request(s) currently in `held` is
-            # not necessarily a one-shot affair -- keep draining whatever
-            # newly appears in `held` until the sync settles.
             context.set_offline(False)
             page.wait_for_function(
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'online'",
                 timeout=20000,
             )
             deadline = time.time() + 20
-            settled = False
-            while time.time() < deadline:
-                if held:
-                    _continue_held_routes(held)
-                    held.clear()
-                if page.evaluate(_PDF_SYNC_SETTLED_JS):
-                    settled = True
-                    break
+            while time.time() < deadline and held:
+                _continue_held_routes(held)
+                held.clear()
                 page.wait_for_timeout(100)
-            self.assertTrue(settled, "annotation persistence never settled after reconnect")
-            self.assertGreaterEqual(ann_post_count[0], 1)
-            self.assertEqual(
-                page.locator(
-                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-                ).count(),
-                1,
+                # New sync attempts may appear after resume.
+                page.wait_for_timeout(50)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+                timeout=30000,
             )
+            self.assertGreaterEqual(sync_post_count[0], 1)
+            self.assertEqual(_pdf_mode(page), "work")
+            self.assertTrue(_pdf_markup_tools_available(page))
         finally:
             _continue_held_routes(held)
             try:
-                page.unroute("**/api/works/**", hold_annotations_post)
+                page.unroute("**/api/sync/operations", hold_sync_operations)
             except Exception:
                 pass
 
     def test_reconnect_probe_race_settles_pdf_to_online_work_capable_state(self):
-        """Scenario 12 (browser-level approximation -- the exact millisecond
-        async-mount race is covered deterministically at the unit level by
-        tests/test_frontend_offline_pdf.py's
-        test_mount_reconciles_stale_desired_mode_before_publishing and
-        tests/browser/run_pdf_runtime_selftest.js): a PDF mounted offline in
-        'preview' mode, with the reachability probe held in flight while
-        network access is actually restored, must settle to a single
-        Work-capable online viewer once that probe resolves -- never a
-        leftover preview viewer, never a duplicate mount, exactly one
-        annotation persistence worker."""
+        """Scenario 12 (V2): a PDF mounted offline in durable 'work' mode, with
+        the reachability probe held while network access is restored, must
+        settle to a single online Work-capable viewer — never a duplicate
+        mount, never a leftover preview when prerequisites still hold."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
         pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
@@ -1524,25 +1519,33 @@ class OfflineFoundationTests(unittest.TestCase):
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
         _wait_pdf_whole_file_cached(page, pdf_path)
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady);
+            }""",
+            timeout=20000,
+        )
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_a, page.evaluate("() => location.hash"))
         _wait_pdf_viewer(page)
-        self.assertEqual(_pdf_mode(page), "preview")
-        self.assertEqual(
-            page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]').count(),
-            0,
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
         )
+        self.assertEqual(_pdf_mode(page), "work")
+        self.assertTrue(_pdf_markup_tools_available(page))
         page.wait_for_function(
             "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
             timeout=20000,
         )
-        # Startup probe retries (~250ms + 750ms) hold probeInFlight, which
-        # makes the browser 'online' handler a no-op. Let them exhaust while
-        # the context is still offline. Ordinary Work GETs now report
-        # reachability, so holding only /api/settings would let a Work GET
-        # sneak the runtime online before the held probe is observed.
         page.wait_for_timeout(1500)
 
         held_probe = []
@@ -1557,10 +1560,6 @@ class OfflineFoundationTests(unittest.TestCase):
 
         page.route("**/api/**", hold_reachability_gets)
         try:
-            # Network access is restored, but reachability confirmation
-            # (probe and ordinary JSON GETs) is held -- the runtime must stay
-            # non-online (and the viewer must stay in 'preview') until a held
-            # request is actually resolved.
             context.set_offline(False)
             deadline = time.time() + 12
             while time.time() < deadline and not held_probe:
@@ -1569,7 +1568,8 @@ class OfflineFoundationTests(unittest.TestCase):
 
             page.wait_for_timeout(200)
             self.assertNotEqual(_connectivity_state(page), "online")
-            self.assertEqual(_pdf_mode(page), "preview")
+            # Prerequisites still hold → stay work while probe is in flight.
+            self.assertEqual(_pdf_mode(page), "work")
 
             settings_held = [
                 route
@@ -1597,17 +1597,10 @@ class OfflineFoundationTests(unittest.TestCase):
             page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
             self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
             self.assertEqual(
-                page.locator(
-                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-                ).count(),
+                page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar').count(),
                 1,
             )
-            # prksEnsureAnnotationPersistence()'s setup is async (fire-and-forget
-            # from the reconciler) -- give it a moment past the mode flip to land.
-            page.wait_for_function(
-                "() => { const pdf = %s; return !!(pdf && pdf.annotationPersistence); }" % _FOCUSED_PDF,
-                timeout=20000,
-            )
+            self.assertTrue(_pdf_markup_tools_available(page))
         finally:
             _continue_held_routes(held_probe)
             try:
@@ -1618,14 +1611,24 @@ class OfflineFoundationTests(unittest.TestCase):
     def test_rapid_connectivity_transitions_settle_to_latest_state(self):
         """Scenario 13: online -> offline -> online (rapid) must end in an
         online, mutation-capable viewer; offline -> online -> offline (rapid)
-        must end read-only. No stale worker/viewer survives either
-        sequence (exactly one PDF viewer container remains mounted)."""
+        must end work-capable when PDF bytes + annotation base remain, else
+        preview. Exactly one PDF viewer container remains mounted."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady);
+            }""",
+            timeout=20000,
+        )
 
         # online -> offline -> online, rapid.
         context.set_offline(True)
@@ -1636,37 +1639,30 @@ class OfflineFoundationTests(unittest.TestCase):
             timeout=20000,
         )
         page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
-        self.assertEqual(
-            page.locator(
-                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-            ).count(),
-            1,
-        )
+        self.assertTrue(_pdf_markup_tools_available(page))
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
 
-        # offline -> online -> offline, rapid. A few hundred ms between each
-        # toggle (rather than zero) avoids a pure CDP-level race where a
-        # probe request dispatched in one transition races the *next*
-        # transition's own network-condition change rather than the app's
-        # own reconciliation logic; runProbe()'s in-flight guard plus the
-        # 'online'/'offline' event handlers are what is actually under test.
+        # offline -> online -> offline, rapid. With prerequisites, settle in
+        # durable work mode rather than preview.
         context.set_offline(True)
         page.wait_for_timeout(300)
         context.set_offline(False)
         page.wait_for_timeout(300)
         context.set_offline(True)
         page.wait_for_function(
-            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
+            "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) === 'offline'",
             timeout=20000,
         )
-        page.wait_for_function(_PDF_READ_ONLY_JS, timeout=20000)
-        self.assertEqual(
-            page.locator(
-                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-            ).count(),
-            0,
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
         )
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
+        self.assertTrue(_pdf_markup_tools_available(page))
         context.set_offline(False)
 
     def test_ctrl_b_shortcut_alters_notes_while_offline(self):
@@ -1829,19 +1825,27 @@ class OfflineFoundationTests(unittest.TestCase):
         # completion-pick attempts below may cause another.
         self.assertEqual(annotation_post_count[0], 0)
 
-    def test_active_markup_tool_cleared_on_disconnect(self):
-        """Scenario 16 (AGENTS.md "clear an already-active PDF markup tool
-        when mutations are disabled"): the Highlight *tool* (toolbar
-        activation, not a committed annotation) must be cleared the instant
-        connectivity drops -- never merely hidden a frame later -- and a
-        subsequent drag/select on the PDF must create nothing and issue no
-        mutation request."""
+    def test_active_markup_tool_stays_on_disconnect_when_durable(self):
+        """Scenario 16 (V2): when PDF bytes + annotation base + durable store
+        are available, disconnecting must NOT clear an active Highlight tool
+        or force preview — capability keeps work mode and a drag still
+        enqueues durable intent (no canonical HTTP while offline)."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
+        )
         annotation_count_before = _viewer_annotation_count(page)
 
         mutation_requests = []
@@ -1874,19 +1878,15 @@ class OfflineFoundationTests(unittest.TestCase):
             "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
             timeout=20000,
         )
-        self.assertEqual(_pdf_mode(page), "preview")
-        page.wait_for_function(
-            """() => !document.querySelector(
-                '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Highlight"]'
-            )"""
-        )
-        # Tool cleared -> Pointer (no active markup tool, no panning) shows pressed.
         page.wait_for_function(
             """() => {
-                const b = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar [aria-label="Pointer"]');
-                return b && b.getAttribute('aria-pressed') === 'true';
-            }"""
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
         )
+        self.assertEqual(_pdf_mode(page), "work")
 
         geo = _pdf_selection_geometry(page)
         page.mouse.move(geo["sx"], geo["sy"])
@@ -1895,9 +1895,16 @@ class OfflineFoundationTests(unittest.TestCase):
         page.mouse.up()
         page.wait_for_timeout(400)
 
-        self.assertEqual(page.locator(".prks-pdf-selection-popup").count(), 0)
-        self.assertEqual(_viewer_annotation_count(page), annotation_count_before)
-        self.assertFalse(_pdf_has_pending_changes(page))
+        self.assertGreaterEqual(_viewer_annotation_count(page), annotation_count_before + 1)
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows => rows.some(
+                r => r && (r.operation === 'CREATE_PDF_ANNOTATION'
+                    || r.operation === 'SET_PDF_ANNOTATION')
+                && r.entity_id === %s))"""
+            % json.dumps(work_a),
+            timeout=20000,
+        )
         self.assertEqual(mutation_requests, [])
 
         context.set_offline(False)
@@ -1906,15 +1913,10 @@ class OfflineFoundationTests(unittest.TestCase):
             timeout=20000,
         )
         page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
-        page.wait_for_function(
-            "() => {"
-            "  const root = document.querySelector('[data-prks-role=\"pdf-viewer\"] .prks-pdf-toolbar');"
-            "  if (!root) return false;"
-            "  const more = root.querySelector('.prks-pdf-toolbar__more button[aria-label=\"More tools\"]');"
-            "  const primary = root.querySelector('.prks-pdf-toolbar__group > button[aria-label=\"Highlight\"]');"
-            "  return !!(more && more.offsetParent !== null) || !!(primary && primary.offsetParent !== null);"
-            "}",
-            timeout=15000,
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=30000,
         )
 
     def test_persistence_setup_abandons_on_disconnect_before_worker_install(self):
@@ -1955,6 +1957,7 @@ class OfflineFoundationTests(unittest.TestCase):
                 "() => (typeof prksOfflineRuntimeState === 'function' ? prksOfflineRuntimeState() : null) !== 'online'",
                 timeout=20000,
             )
+            # Annotation GET still held ⇒ no acknowledged base yet ⇒ preview.
             self.assertEqual(_pdf_mode(page), "preview")
 
             # Release the held GET only now, after PRKS has already
@@ -2001,17 +2004,27 @@ class OfflineFoundationTests(unittest.TestCase):
 
     def test_transport_failure_while_browser_stays_online_goes_offline_and_recovers(self):
         """Server-unreachable while navigator.onLine remains true: an ordinary
-        prksRequest() transport failure must flip the runtime offline (notes
-        read-only, PDF preview) without context.set_offline, and a later real
-        HTTP response must restore online mutation capability."""
+        prksRequest() transport failure must flip the runtime offline without
+        context.set_offline. Notes stay editable (durable); PDF stays
+        work-capable when bytes + annotation base are already local."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
         _wait_entity_cached(page, "work", work_a)
         page.wait_for_selector(".CodeMirror")
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady);
+            }""",
+            timeout=20000,
+        )
         private_selector = "#prks-private-notes-work-" + work_a
         page.locator(private_selector).wait_for()
 
@@ -2063,8 +2076,15 @@ class OfflineFoundationTests(unittest.TestCase):
                 )
             )
             self.assertFalse(page.evaluate("(sel) => document.querySelector(sel).readOnly", private_selector))
-            page.wait_for_function(_PDF_READ_ONLY_JS, timeout=20000)
-            self.assertEqual(_pdf_mode(page), "preview")
+            page.wait_for_function(
+                """() => {
+                    const pdf = (window.prksGetFocusedTabContext &&
+                        window.prksGetFocusedTabContext().getResource('pdf'));
+                    return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable);
+                }""",
+                timeout=20000,
+            )
+            self.assertEqual(_pdf_mode(page), "work")
         finally:
             try:
                 page.unroute("**/api/**", abort_api)

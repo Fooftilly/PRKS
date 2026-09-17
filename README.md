@@ -142,11 +142,30 @@ Databases created by a newer PRKS version are refused rather than downgraded. Do
 
 ## PDF annotations
 
-PDF file bytes are the canonical rendered document, including markup the viewer writes into the file.
+PRKS stores annotation *meaning* as structured rows in the `annotations` table
+(id, type, content, page, color, geometry). That metadata is the canonical
+source for the sidebar, comments, sync, and offline durable ops
+(`CREATE_PDF_ANNOTATION` / `SET_PDF_ANNOTATION` / `DELETE_PDF_ANNOTATION`).
+Managed PDF bytes are a materialized rendering of a known annotation-set
+generation — never the sync protocol, and never placed inside a durable
+operation envelope.
 
-The `annotations` table is the sole PRKS annotation-metadata store, used by the sidebar, comments, and `GET /api/works/{id}/annotations`. Extra EmbedPDF fields that are not first-class columns are stored in `geometry_json` so the submitted object can be reconstructed.
+The `annotations` table is used by the sidebar, comments, and
+`GET /api/works/{id}/annotations`. Extra EmbedPDF fields that are not
+first-class columns are stored in `geometry_json` so the submitted object can
+be reconstructed.
 
-Schema v13 removed the former `work_annotations` JSON snapshot. PDF bytes remain the canonical rendered/embedded markup; `annotations` remains PRKS sidebar/comment metadata.
+Legacy byte-only user markup (highlights present in PDF bytes but missing from
+metadata) is adopted into `annotations` on mount via
+`POST /api/works/{id}/annotations/adopt`. Links and other non-user artifacts
+are left alone. The older full-list
+`POST /api/works/{id}/annotations` replace path remains only as online-legacy
+compat when the durable store is unavailable.
+
+Schema v13 removed the former `work_annotations` JSON snapshot. Schema v15
+tracks `canonical_annotation_set_revision` vs
+`materialized_pdf_annotation_revision` so PDF export can lag without data loss
+(`ANNOTATION_MATERIALIZATION_STALE`).
 
 ## PDF text search
 
@@ -273,7 +292,7 @@ What works offline:
 
 What stays connection-required or unavailable offline:
 
-- **New PDF files** (binary upload) and **PDF annotation create/edit/delete** still need PRKS. A previously cached PDF reopened offline mounts the viewer in read-only preview mode: you can render, scroll, zoom, and navigate pages, but the highlight/underline/annotation toolbar is not available. If connectivity drops while a PDF is already open, the same mounted viewer switches live into that read-only mode and annotation persistence is paused — the document is not torn down. Nothing is silently discarded or faked as saved.
+- **New PDF files** (binary upload) still need PRKS. **PDF annotation create/edit/delete** on a PDF that is already available on this device is local-first: edits are durable semantic operations (not whole PDF blobs in the sync queue). Offline annotation editing requires cached PDF bytes, an acknowledged annotation base on this device, and a working durable store; otherwise the viewer stays read-only preview. New PDF binary ingestion remains connection-required. If connectivity drops while a PDF is already open and those prerequisites hold, markup tools stay available and edits save locally; otherwise the same mounted viewer switches live into read-only preview without tearing down the document.
 - **Saved Views** and **global Search** refuse offline: both execute against `/api/search` (FTS and the PDF text index). Do not approximate them over browse cards.
 - **Tag aliases**, the **Publishers** vocabulary, **Bulk Organize**, **backup/restore**, **Processing Files**, host Settings, and PDF reindex/linearize stay server-bound.
 - Editing which files a person is linked to **from their profile page** still requires a connection; the same links are durable from the file's own People panel. Creating a person, editing a profile, changing their groups and deleting them do not — see below.

@@ -520,6 +520,8 @@ server, survive reload, and reconcile on acknowledgement):
 - Arguments / Stances: `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`,
   `SET_ARGUMENT_SOURCES`, `SET_ARGUMENT_TARGETS`, `DELETE_ARGUMENT`
 - Work notes: `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE`
+- PDF annotations (already-available PDFs): `CREATE_PDF_ANNOTATION`,
+  `SET_PDF_ANNOTATION`, `DELETE_PDF_ANNOTATION`
 
 `docs/local-first-rollout-status.md` is the running score and is authoritative
 when this file and it disagree. Anything not listed there still calls a
@@ -598,7 +600,9 @@ The durable families above have an outbox, conflict resolution and
 reconciliation; **this read cache must never grow one**. Durable user intent
 belongs in `local-store.js` and the sync coordinator. There is still no CRDT or
 character-level merging, no multi-user sync and no server push, and
-PDF annotations are not yet editable offline.
+PDF annotations on an already-available managed PDF are local-first
+(metadata durable ops; PDF bytes stay in Cache Storage `prks-pdf-v1`).
+New PDF binary ingestion remains connection-required.
 
 A family becomes durable only by being *implemented* as one — a semantic
 operation with validation, a revision or an explicit "no base revision" rule,
@@ -1901,12 +1905,12 @@ remain connection-required. The Work-Tag implementation contract is in
   Work projections invalidate, including absent tombstones on delete/merge.
 - The durable family list under "Offline / PWA" and
   `docs/local-first-rollout-status.md` are the running score. Still absent as
-  product: PDF annotations as a durable family, CRDTs, multi-user sync and
-  server push. `year` and
-  `published_date` (2G) are the high fan-out case: they reach all three browse
-  catalogs AND the Work summaries embedded in cached Folder, Person and
-  Playlist details, which are patched -- never invalidated -- under a
-  generation advanced before the read.
+  product: CRDTs, multi-user sync and server push. New PDF binary ingestion
+  stays connection-required; annotation metadata on already-cached PDFs is
+  durable. `year` and `published_date` (2G) are the high fan-out case: they
+  reach all three browse catalogs AND the Work summaries embedded in cached
+  Folder, Person and Playlist details, which are patched -- never
+  invalidated -- under a generation advanced before the read.
 
 **Tag identity is persistent.** Only `delete_tag()` and `merge_tags_into()`
 may destroy or transform a Tag. Removing a tag from a Work or Folder, deleting

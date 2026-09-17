@@ -2275,3 +2275,40 @@ cache. They are refused rather than invented.
 
 The registry is the authority on what synchronizes; this section is a note on
 what is deliberately not a field.
+
+## PDF annotations (V2 local-first boundary)
+
+PDF annotation *metadata* is a durable family on already-available managed
+PDFs. One annotation is one revisioned aggregate under scope
+`pdf-annotation / [work_id, annotation_id]`:
+
+| Operation | Role |
+| --- | --- |
+| `CREATE_PDF_ANNOTATION` | construction; initial revision 0 |
+| `SET_PDF_ANNOTATION` | mutate geometry/type/content/page/color |
+| `DELETE_PDF_ANNOTATION` | delete/tombstone; revision history retained |
+
+**Four ownership layers (do not collapse them):**
+
+1. Canonical metadata — `annotations` table (`pdf_annotations.py`)
+2. Durable unsynchronized intent — `prks-local-v1` semantic ops
+3. Disposable acknowledged snapshot — offline cache entity `work-annotations`
+4. PDF bytes — materialized artifact in Cache Storage `prks-pdf-v1` only
+
+Offline mutation requires all of: usable cached PDF bytes, an acknowledged
+annotation base on this device, and a writable durable store. Connectivity
+alone must not disable editing when those hold, and must not enable it when
+they do not. Pending `DELETE_WORK` refuses new annotation edits.
+
+PDF bytes are never placed in a durable operation. Semantic ACK must not wait
+on a multi-MB PDF upload. Per-Work
+`canonical_annotation_set_revision` vs `materialized_pdf_annotation_revision`
+tracks lag (`ANNOTATION_MATERIALIZATION_STALE`); rebuild the PDF, never raise a
+user-facing binary conflict.
+
+Legacy byte-only user markup is adopted into metadata
+(`POST /api/works/:id/annotations/adopt`) without deleting metadata-only rows
+and without adopting Links/widgets. Full-list
+`POST /api/works/:id/annotations` remains online-legacy compat only.
+
+New PDF binary ingestion / replacement stays connection-required.
