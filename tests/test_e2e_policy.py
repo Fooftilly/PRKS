@@ -698,7 +698,12 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         from tests.e2e import run as runner
 
         def pid_alive(pid: int) -> bool:
-            """True if pid is a live (non-zombie) process."""
+            """True if pid is a live (non-zombie) process.
+
+            Generic POSIX check is ``os.kill(pid, 0)``. When ``/proc`` exists
+            (Linux), also treat zombies as not alive so a reaped-but-unwaited
+            child cannot look like a running orphan.
+            """
             if os.name == "nt":
                 completed = subprocess.run(
                     ["tasklist", "/FI", "PID eq %d" % pid, "/NH"],
@@ -709,21 +714,23 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 )
                 out = completed.stdout or ""
                 return str(pid) in out and "No tasks" not in out
-            status_path = Path("/proc") / str(pid) / "status"
-            try:
-                text = status_path.read_text(encoding="utf-8")
-            except OSError:
-                return False
-            for line in text.splitlines():
-                if line.startswith("State:"):
-                    # Zombies still occupy a pid; they are not running children.
-                    return not line.split(":", 1)[1].strip().startswith("Z")
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 return False
             except PermissionError:
+                pass
+            status_path = Path("/proc") / str(pid) / "status"
+            if not status_path.is_file():
                 return True
+            try:
+                text = status_path.read_text(encoding="utf-8")
+            except OSError:
+                return True
+            for line in text.splitlines():
+                if line.startswith("State:"):
+                    # Zombies still occupy a pid; they are not running children.
+                    return not line.split(":", 1)[1].strip().startswith("Z")
             return True
 
         def wait_until(predicate, timeout_s=10.0, interval_s=0.05):
@@ -831,7 +838,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         try:
             from tests.e2e import run as runner
             import io
-            from contextlib import redirect_stdout
+            from contextlib import redirect_stderr, redirect_stdout
 
             known = ["tests.e2e.live.T.test_ok"]
             stale = ["tests.e2e.gone.Old.test_a"]
@@ -839,6 +846,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 last_path = Path(raw) / "e2e-last-failed.json"
                 policy.save_last_failed(last_path, stale, meta={"tier": "full"})
                 buf = io.StringIO()
+                err = io.StringIO()
                 with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
                     with mock.patch.object(runner, "REPO", Path(raw)):
                         with mock.patch.object(
@@ -853,9 +861,13 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                     side_effect=OSError("simulated unlink failure"),
                                 ):
                                     with redirect_stdout(buf):
-                                        code = runner.main(["--last-failed"])
+                                        with redirect_stderr(err):
+                                            code = runner.main(["--last-failed"])
                 self.assertEqual(code, 0)
                 self.assertNotIn("cleared stale state", buf.getvalue())
+                self.assertIn(
+                    "could not unlink stale last-failed state", err.getvalue()
+                )
                 self.assertTrue(last_path.is_file())
         finally:
             if previous_env is None:

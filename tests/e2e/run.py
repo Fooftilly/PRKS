@@ -984,6 +984,10 @@ def main(argv=None) -> int:
                 last_failed_path.unlink()
             except OSError:
                 cleared = False
+                print(
+                    "warning: could not unlink stale last-failed state",
+                    file=sys.stderr,
+                )
         if cleared:
             print(
                 "last-failed: no known unresolved failures remain — cleared stale state"
