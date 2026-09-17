@@ -42,6 +42,31 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         for leaked in families + ("annotation_id", "pdf-annotation"):
             self.assertNotIn(leaked, coordinator, leaked)
 
+    def test_works_pdf_holds_review_invariants(self):
+        """Static contracts for the six review blockers."""
+        works_pdf = (FRONTEND / "components" / "works-pdf.js").read_text(encoding="utf-8")
+        state = (FRONTEND / "pdf-annotation-state.js").read_text(encoding="utf-8")
+        store = (FRONTEND / "local-store.js").read_text(encoding="utf-8")
+        # 1. Pending hydrate before reconcile
+        self.assertIn("prksRefreshPendingPdfAnnotations", works_pdf)
+        # 2. Live ACK applies revision to runtimes
+        self.assertIn("prksApplyPdfAnnotationAckToLiveRuntimes", state)
+        self.assertIn("prksApplyPdfAnnotationAckToLiveRuntimes", works_pdf)
+        # 3. Safe base needs annotations-state shape
+        self.assertIn("work-annotations-state", state)
+        self.assertIn("prksIsPdfAnnotationsStateShape", works_pdf)
+        # 4. Materialize only after ACK (pendingMaterializationRevision)
+        self.assertIn("pendingMaterializationRevision", works_pdf)
+        self.assertIn("materialized_annotation_set_revision", works_pdf)
+        self.assertIn("Do NOT materialize PDF bytes here", works_pdf)
+        # Local durable save path must not immediately flush PDF bytes.
+        save_idx = works_pdf.index("prksSavePdfAnnotationDurably")
+        next_materialize = works_pdf.find("requestFlush('materialize')", save_idx)
+        self.assertGreater(next_materialize, 0)
+        self.assertIn("Do NOT materialize PDF bytes here", works_pdf[save_idx:next_materialize])
+        # ACK path is what queues materialization.
+        self.assertIn("pendingMaterializationRevision = setRev", works_pdf)
+
 
 if __name__ == "__main__":
     unittest.main()
