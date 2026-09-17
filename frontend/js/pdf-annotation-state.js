@@ -266,10 +266,10 @@
 
     async function hasAcknowledgedAnnotationBase(workId, runtime) {
         if (!workId) return false;
+        // Only a completed hydrate marks the in-memory cache as a real base.
+        // An empty pre-hydrate annotationCache must not count — that would let
+        // offline edits start before GET /annotations (or its cache peek) finished.
         if (runtime && runtime.annotationBaseReady === true) return true;
-        if (runtime && runtime.annotationCache && Array.isArray(runtime.annotationCache.items)) {
-            return true;
-        }
         if (!root.prksOfflinePeekEntity || typeof root.prksOfflinePeekEntity !== 'function') {
             return false;
         }

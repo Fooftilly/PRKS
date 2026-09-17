@@ -1102,7 +1102,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 }
             } catch (_e) {}
             if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                void window.prksPublishAcknowledgedPdfAnnotations(String(workId), saved, stateBody);
+                await window.prksPublishAcknowledgedPdfAnnotations(String(workId), saved, stateBody);
             }
         }
     } catch (_e) {
@@ -1198,7 +1198,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                 }
                             } catch (_eState) {}
                             if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                                void window.prksPublishAcknowledgedPdfAnnotations(
+                                await window.prksPublishAcknowledgedPdfAnnotations(
                                     String(workId),
                                     saved,
                                     stateBody
