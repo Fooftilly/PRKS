@@ -2527,6 +2527,29 @@ def _open_annotations_tab(page):
     page.wait_for_selector("#annotation-fallback-list")
 
 
+def _wait_annotation_list_rendered(page, expected_rows):
+    """Wait until the focused PDF context has painted the shared annotation list.
+
+    `#annotation-fallback-list` is part of the right panel's annotations-tab
+    markup, so waiting for the element only proves the tab is up -- the list
+    still holds whatever was painted into it last. Only
+    `renderAnnotationFallbackList` fills it, and that returns early unless the
+    owning context is the focused one (`prksIsFocusedPdfCtx`), so a mutation
+    made while another tab held focus is not reflected until a render runs for
+    the refocused tab. The status line is emitted on both the empty and the
+    populated path, which makes it the signal that a render actually ran rather
+    than that the markup merely exists.
+    """
+    page.wait_for_function(
+        """(expected) => {
+            const list = document.getElementById('annotation-fallback-list');
+            if (!list || !list.querySelector('.annotation-list-status')) return false;
+            return list.querySelectorAll('.annotation-row').length === expected;
+        }""",
+        arg=expected_rows,
+    )
+
+
 def _sync_success_at(page):
     return int(
         page.evaluate(
@@ -2721,7 +2744,10 @@ class PdfPersistenceTests(_BrowserE2E):
         self.assertIn(work_id, page.evaluate("() => location.hash"))
         _wait_pdf_viewer(page)
         _open_annotations_tab(page)
-        page.wait_for_selector("#annotation-fallback-list")
+        # A reload starts this list empty, so asserting zero before the render
+        # would also pass if the delete had NOT persisted and the row were
+        # still on its way back. Wait for the render that read persisted state.
+        _wait_annotation_list_rendered(page, 0)
         self.assertEqual(page.locator(".annotation-row").count(), 0)
 
     def test_annotation_delete_confirm_preserves_owner_across_focus_change(self):
@@ -2805,6 +2831,13 @@ class PdfPersistenceTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         _open_annotations_tab(page)
+        # The delete was confirmed while Work B held focus, so the shared list
+        # could not be repainted then; only this refocused render corrects it.
+        _wait_annotation_list_rendered(page, 0)
+        # Rows only ever render into that one shared list in the right panel --
+        # which sits in <aside id="right-panel">, outside <main> and so outside
+        # the warm-parking host -- so the page-wide count is the same claim, and
+        # it still fails if a row shows up anywhere at all.
         self.assertEqual(page.locator(".annotation-row").count(), 0)
 
     def test_annotation_delete_confirm_cancel_does_not_delete(self):
