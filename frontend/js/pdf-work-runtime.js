@@ -219,6 +219,12 @@
 
         runtime.hasPendingSync = function () {
             const st = runtime.syncState;
+            // Durable path: semantic intent already lives in prks-local-v1.
+            // Materialization lag is not unload-blocking data loss. Only a
+            // failed local durable write (provisional viewer state) blocks.
+            if (runtime.annotationMutationDurable === true) {
+                return !!(st && st.lastError === 'local_save_failed');
+            }
             return !!(st && (st.pendingChanges || st.inFlight));
         };
 

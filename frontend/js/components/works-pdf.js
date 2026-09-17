@@ -1030,35 +1030,244 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     runtime.syncState = syncState;
     prksEnsureAnnotationBeforeUnloadGuard();
 
+    let syncUiPaintVersion = 0;
+    let stopSyncSubscribe = null;
+    let stopOfflineSubscribe = null;
+
+    function annotationOpTypes() {
+        return Array.isArray(window.PRKS_PDF_ANNOTATION_OPERATION_TYPES)
+            ? window.PRKS_PDF_ANNOTATION_OPERATION_TYPES
+            : ['CREATE_PDF_ANNOTATION', 'SET_PDF_ANNOTATION', 'DELETE_PDF_ANNOTATION'];
+    }
+
+    function isOnlineRuntime() {
+        return typeof window.prksOfflineRuntimeState !== 'function' ||
+            window.prksOfflineRuntimeState() === 'online';
+    }
+
+    async function listWorkPdfAnnotationOps() {
+        if (!window.prksSync || !window.prksSync.store ||
+            typeof window.prksSync.store.listOperations !== 'function') {
+            return [];
+        }
+        const rows = await window.prksSync.store.listOperations();
+        const types = annotationOpTypes();
+        return (Array.isArray(rows) ? rows : []).filter(function (op) {
+            return op &&
+                op.entity_type === 'work' &&
+                String(op.entity_id) === String(workId) &&
+                types.indexOf(op.operation) !== -1 &&
+                op.status !== 'acknowledged';
+        });
+    }
+
     function renderSyncIndicator() {
+        void refreshAnnotationSyncUi();
+    }
+
+    async function refreshAnnotationSyncUi() {
+        const paintVersion = ++syncUiPaintVersion;
         try {
             if (!stillLive()) return;
             const el = ctx && ctx.query ? ctx.query('[data-prks-role="annotation-sync-status"]') : null;
             if (!el) return;
+            const ops = await listWorkPdfAnnotationOps();
+            if (paintVersion !== syncUiPaintVersion || !stillLive()) return;
+
+            const online = isOnlineRuntime();
+            const durable = !!runtime.annotationMutationDurable;
+            const conflicts = ops.filter(function (op) { return op.status === 'conflict'; });
+            const pendingOps = ops.filter(function (op) {
+                return op.status === 'pending' || op.status === 'syncing' || op.status === 'retrying';
+            });
+            const materializing = durable && !!(syncState.inFlight || syncState.pendingChanges);
+            const localSaveFailed = syncState.lastError === 'local_save_failed';
+            const materializeFailed = durable && !!syncState.lastError && !localSaveFailed;
+
             el.classList.remove(
                 'work-annotation-sync-status--hidden',
                 'work-annotation-sync-status--saving',
                 'work-annotation-sync-status--saved',
-                'work-annotation-sync-status--error'
+                'work-annotation-sync-status--error',
+                'work-annotation-sync-status--conflict',
+                'work-annotation-sync-status--local',
+                'work-annotation-sync-status--materializing',
+                'work-annotation-sync-status--offline'
             );
-            if (syncState.inFlight || syncState.pendingChanges) {
-                el.classList.add('work-annotation-sync-status--saving');
-                el.textContent = syncState.lastError ? 'Sync retry pending...' : 'PDF annotations syncing...';
-                return;
+            el.replaceChildren();
+
+            let tone = 'saved';
+            let label = 'Saved';
+            if (conflicts.length) {
+                tone = 'conflict';
+                label = 'Conflict';
+            } else if (localSaveFailed) {
+                tone = 'error';
+                label = 'Could not save locally';
+            } else if (materializeFailed) {
+                tone = 'error';
+                label = 'Materialization failed';
+            } else if (!durable && (syncState.inFlight || syncState.pendingChanges)) {
+                tone = 'saving';
+                label = syncState.lastError ? 'Sync retry pending…' : 'Syncing';
+            } else if (!durable && syncState.lastError) {
+                tone = 'error';
+                label = 'PDF annotations sync failed';
+            } else if (pendingOps.length && online) {
+                tone = 'saving';
+                label = 'Syncing';
+            } else if (pendingOps.length && !online) {
+                tone = 'local';
+                label = 'Saved locally';
+            } else if (materializing) {
+                tone = 'materializing';
+                label = 'Materialization pending';
+            } else if (!online) {
+                tone = 'offline';
+                label = runtime.annotationMutationAllowed === true
+                    ? 'Offline · editable'
+                    : 'Offline · read-only';
+            } else if (durable) {
+                tone = 'saved';
+                const t = prksFormatSyncClock(syncState.lastSuccessAt);
+                label = t ? ('Saved · PDF updated ' + t) : 'Saved';
+            } else {
+                tone = 'saved';
+                const t = prksFormatSyncClock(syncState.lastSuccessAt);
+                label = t ? ('PDF annotations saved at ' + t) : 'PDF annotations saved';
             }
-            if (syncState.lastError) {
-                el.classList.add('work-annotation-sync-status--error');
-                el.textContent = 'PDF annotations sync failed';
-                return;
+
+            if (tone === 'conflict') el.classList.add('work-annotation-sync-status--conflict');
+            else if (tone === 'error') el.classList.add('work-annotation-sync-status--error');
+            else if (tone === 'saving') el.classList.add('work-annotation-sync-status--saving');
+            else if (tone === 'local') el.classList.add('work-annotation-sync-status--local');
+            else if (tone === 'materializing') el.classList.add('work-annotation-sync-status--materializing');
+            else if (tone === 'offline') el.classList.add('work-annotation-sync-status--offline');
+            else el.classList.add('work-annotation-sync-status--saved');
+
+            const labelEl = document.createElement('span');
+            labelEl.className = 'work-annotation-sync-status__label';
+            labelEl.textContent = label;
+            el.appendChild(labelEl);
+
+            for (let i = 0; i < conflicts.length; i += 1) {
+                paintAnnotationConflictRow(el, conflicts[i]);
             }
-            el.classList.add('work-annotation-sync-status--saved');
-            const t = prksFormatSyncClock(syncState.lastSuccessAt);
-            el.textContent = t ? `PDF annotations saved at ${t}` : 'PDF annotations saved';
         } finally {
             if (ctx && ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
                 window.prksWorkspaceRefreshTabStatus(ctx.tabId);
             }
         }
+    }
+
+    function paintAnnotationConflictRow(host, op) {
+        const result = op.server_result || {};
+        const annId = op.payload && op.payload.annotation_id
+            ? String(op.payload.annotation_id)
+            : '';
+        const row = document.createElement('div');
+        row.className = 'work-annotation-sync-status__conflict';
+        row.setAttribute('data-prks-annotation-conflict', annId);
+        const msg = document.createElement('span');
+        msg.textContent = annId
+            ? ('Annotation ' + annId.slice(0, 8) + '… needs a decision. ')
+            : 'This annotation needs a decision. ';
+        row.appendChild(msg);
+
+        function action(label, apply) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'prks-btn prks-btn--secondary prks-btn--sm';
+            button.textContent = label;
+            button.onclick = async function () {
+                button.disabled = true;
+                try {
+                    if (!apply &&
+                        (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION')) {
+                        const ack = {
+                            work_id: String(workId),
+                            annotation_id: annId,
+                            present: !!result.current_annotation,
+                            annotation: result.current_annotation || null,
+                            server_revision: result.current_revision,
+                            code: 'ACKNOWLEDGED',
+                            changed: true,
+                        };
+                        if (typeof window.prksOfflineReconcilePdfAnnotation === 'function') {
+                            if (!await window.prksOfflineReconcilePdfAnnotation(ack)) {
+                                throw new Error('reconcile failed');
+                            }
+                        }
+                        const ackList =
+                            (runtime.annotationCache && runtime.annotationCache.items) || [];
+                        let nextList = ackList.filter(function (item) {
+                            if (!item || typeof item !== 'object') return true;
+                            const itemId = item.id || item.uuid || item.annotationId || item.annotation_id;
+                            return String(itemId) !== annId;
+                        });
+                        if (ack.present && ack.annotation) nextList = nextList.concat([ack.annotation]);
+                        runtime.annotationCache = {
+                            allItems: nextList,
+                            rawItems: nextList,
+                            items: nextList,
+                            docId: runtime.annotationCache && runtime.annotationCache.docId,
+                            workId: String(workId),
+                        };
+                        if (runtime.annotationState && typeof runtime.annotationState === 'object') {
+                            const annotations = Array.isArray(runtime.annotationState.annotations)
+                                ? runtime.annotationState.annotations.filter(function (r) {
+                                    return !(r && String(r.annotation_id) === annId);
+                                })
+                                : [];
+                            const knownAbsent = Object.assign(
+                                {},
+                                runtime.annotationState.known_absent || {}
+                            );
+                            if (ack.present) {
+                                annotations.push({
+                                    annotation_id: annId,
+                                    revision: ack.server_revision,
+                                });
+                                delete knownAbsent[annId];
+                            } else if (Number.isSafeInteger(ack.server_revision)) {
+                                knownAbsent[annId] = ack.server_revision;
+                            }
+                            runtime.annotationState = Object.assign({}, runtime.annotationState, {
+                                annotations: annotations,
+                                known_absent: knownAbsent,
+                            });
+                        }
+                        if (typeof window.prksReconcileViewerAnnotations === 'function' && viewer) {
+                            const effective =
+                                typeof window.prksEffectiveWorkAnnotations === 'function'
+                                    ? window.prksEffectiveWorkAnnotations(nextList, String(workId))
+                                    : nextList;
+                            await window.prksReconcileViewerAnnotations(viewer, effective, {
+                                isManaged: prksIsUserMarkupAnnotation,
+                            });
+                        }
+                    }
+                    await window.prksSync.store.resolveConflict(op.op_id, apply);
+                    if (window.prksSync && typeof window.prksSync.changed === 'function') {
+                        window.prksSync.changed();
+                    }
+                } catch (_err) {
+                    button.disabled = false;
+                    button.textContent = 'Retry';
+                    return;
+                }
+                await refreshAnnotationSyncUi();
+            };
+            row.appendChild(button);
+        }
+
+        if (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION') {
+            action('Keep server', false);
+            action('Apply mine', true);
+        } else {
+            action('Discard local change', false);
+        }
+        host.appendChild(row);
     }
 
     try {
@@ -1497,6 +1706,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         typeof window.prksOfflineRuntimeState !== 'function' ||
                         window.prksOfflineRuntimeState() === 'online';
                     if (online) {
+                        if (worker && worker.paused && typeof worker.resume === 'function') {
+                            worker.resume();
+                        }
                         void requestFlush('materialize');
                     }
                 } catch (_err) {
@@ -1555,6 +1767,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                               return !!(syncState && syncState.pendingChanges);
                           },
                           onDestroy: function () {
+                              if (typeof stopSyncSubscribe === 'function') {
+                                  try { stopSyncSubscribe(); } catch (_e) {}
+                                  stopSyncSubscribe = null;
+                              }
+                              if (typeof stopOfflineSubscribe === 'function') {
+                                  try { stopOfflineSubscribe(); } catch (_e) {}
+                                  stopOfflineSubscribe = null;
+                              }
                               if (viewer && typeof viewer.offAnnotationEvent === 'function') {
                                   try {
                                       viewer.offAnnotationEvent(onAnnotationEvent);
@@ -1578,6 +1798,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                           },
                           destroy: function () {
                               this.destroyed = true;
+                              if (typeof stopSyncSubscribe === 'function') {
+                                  try { stopSyncSubscribe(); } catch (_e) {}
+                                  stopSyncSubscribe = null;
+                              }
+                              if (typeof stopOfflineSubscribe === 'function') {
+                                  try { stopOfflineSubscribe(); } catch (_e) {}
+                                  stopOfflineSubscribe = null;
+                              }
                           },
                       };
             runtime.annotationPersistence = worker;
@@ -1592,11 +1820,30 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (typeof viewer.onAnnotationEvent === 'function') {
                 viewer.onAnnotationEvent(onAnnotationEvent);
             }
+            if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
+                stopSyncSubscribe = window.prksSync.subscribe(function () {
+                    if (stillLive()) renderSyncIndicator();
+                });
+            }
+            if (typeof window.prksOfflineRuntimeSubscribe === 'function') {
+                stopOfflineSubscribe = window.prksOfflineRuntimeSubscribe(function () {
+                    if (stillLive()) renderSyncIndicator();
+                });
+            }
+            renderSyncIndicator();
             // Do not permanently pause when durable — offline pause/resume still
             // comes from connectivity. Durable flush is PDF materialization only.
         })
         : false;
     if (!installed) {
+        if (typeof stopSyncSubscribe === 'function') {
+            try { stopSyncSubscribe(); } catch (_e) {}
+            stopSyncSubscribe = null;
+        }
+        if (typeof stopOfflineSubscribe === 'function') {
+            try { stopOfflineSubscribe(); } catch (_e) {}
+            stopOfflineSubscribe = null;
+        }
         abandonSetup();
         return;
     }
