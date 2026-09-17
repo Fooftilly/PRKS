@@ -786,6 +786,66 @@
             return true;
         }
 
+        async function reconcilePdfAnnotation(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            const annotationId = result.annotation_id;
+            if (!id || !annotationId || !Number.isSafeInteger(result.server_revision)) {
+                return false;
+            }
+            const kinds = ['work-annotations', 'work-annotations-state'];
+            const tokens = kinds.map(function (kind) {
+                const token = currentEntityGeneration(kind, id) + 1;
+                entityCoherence.set(entityKey(kind, id), token);
+                return token;
+            });
+            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
+            const listSnap = snapshots[0] && snapshots[0].value;
+            const stateSnap = snapshots[1] && snapshots[1].value;
+            const present = result.present !== false && !!result.annotation;
+
+            if (Array.isArray(listSnap)) {
+                let nextList = listSnap.filter(function (item) {
+                    if (!item || typeof item !== 'object') return true;
+                    const itemId = item.id || item.uuid || item.annotationId || item.annotation_id;
+                    return String(itemId) !== String(annotationId);
+                });
+                if (present) nextList = nextList.concat([result.annotation]);
+                if (!await cacheEntityIfCurrent('work-annotations', id, nextList, tokens[0])) {
+                    return false;
+                }
+            }
+
+            if (stateSnap && typeof stateSnap === 'object') {
+                const annotations = Array.isArray(stateSnap.annotations)
+                    ? stateSnap.annotations.filter(function (row) {
+                        return !(row && row.annotation_id === annotationId);
+                    })
+                    : [];
+                const knownAbsent = Object.assign({}, stateSnap.known_absent || {});
+                if (present) {
+                    annotations.push({
+                        annotation_id: annotationId,
+                        revision: result.server_revision,
+                    });
+                    delete knownAbsent[annotationId];
+                } else {
+                    knownAbsent[annotationId] = result.server_revision;
+                }
+                annotations.sort(function (a, b) {
+                    return String(a.annotation_id).localeCompare(String(b.annotation_id));
+                });
+                const nextState = Object.assign({}, stateSnap, {
+                    annotations: annotations,
+                    known_absent: knownAbsent,
+                });
+                if (!await cacheEntityIfCurrent('work-annotations-state', id, nextState, tokens[1])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         async function reconcileWorkSource(result) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
@@ -2882,6 +2942,7 @@
             reconcileWorkNote,
             reconcilePrivateNote,
             reconcileWorkRole,
+            reconcilePdfAnnotation,
             reconcileRecentOpen,
             reconcileCreatedFolder,
             reconcileFolderField,
@@ -3135,6 +3196,7 @@
         prksOfflineReconcilePrivateNote: (result, op) =>
             production.reconcilePrivateNote(result, op),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
+        prksOfflineReconcilePdfAnnotation: result => production.reconcilePdfAnnotation(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedFolder: result => production.reconcileCreatedFolder(result),
         prksOfflineReconcileFolderField: (result, op) =>

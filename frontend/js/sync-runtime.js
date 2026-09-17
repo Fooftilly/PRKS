@@ -294,6 +294,9 @@
             ADD_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
             REMOVE_WORK_PERSON_ROLE: root.prksWorkRoleSyncHandler,
             SET_WORK_PERSON_ROLE_CREDIT: root.prksWorkRoleSyncHandler,
+            CREATE_PDF_ANNOTATION: root.prksPdfAnnotationSyncHandler,
+            SET_PDF_ANNOTATION: root.prksPdfAnnotationSyncHandler,
+            DELETE_PDF_ANNOTATION: root.prksPdfAnnotationSyncHandler,
             CREATE_PERSON: root.prksPersonSyncHandler,
             DELETE_PERSON: root.prksPersonDeleteSyncHandler,
             // Editing a Person is FIELD-scoped, like Work metadata and for

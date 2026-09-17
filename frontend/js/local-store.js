@@ -117,6 +117,9 @@
         'DELETE_ARGUMENT',
         'SET_WORK_RESEARCH_NOTE',
         'SET_WORK_PRIVATE_NOTE',
+        'CREATE_PDF_ANNOTATION',
+        'SET_PDF_ANNOTATION',
+        'DELETE_PDF_ANNOTATION',
     ]);
 
     /* Bounds the ledger long before text/CRDT operations exist. A payload this
@@ -378,6 +381,14 @@
         'ADD_WORK_PERSON_ROLE', 'REMOVE_WORK_PERSON_ROLE', 'SET_WORK_PERSON_ROLE_CREDIT',
     ]);
 
+    /* One PRKS-managed PDF annotation = one revisioned aggregate under a Work. */
+    const PDF_ANNOTATION_OPERATIONS = Object.freeze([
+        'CREATE_PDF_ANNOTATION', 'SET_PDF_ANNOTATION', 'DELETE_PDF_ANNOTATION',
+    ]);
+    /* Geometry for highlight/underline is small; still bound the annotation
+     * object explicitly so a future kind cannot smuggle PDF bytes. */
+    const PDF_ANNOTATION_PAYLOAD_BYTES = 256 * 1024;
+
     /** The canonical state an enqueued role operation names. */
     function workPersonRoleState(row) {
         if (row.operation === 'REMOVE_WORK_PERSON_ROLE') return null;
@@ -581,6 +592,13 @@
                 return utf8ByteLength(payload.text) <= limit;
             }
         }
+        if (operation === 'CREATE_PDF_ANNOTATION' || operation === 'SET_PDF_ANNOTATION') {
+            if (Object.keys(payload).length === 2 &&
+                typeof payload.annotation_id === 'string' &&
+                isPlainObject(payload.annotation)) {
+                return utf8ByteLength(JSON.stringify(payload.annotation)) <= PDF_ANNOTATION_PAYLOAD_BYTES;
+            }
+        }
         return jsonByteLength(payload) <= MAX_PAYLOAD_BYTES;
     }
 
@@ -611,6 +629,9 @@
         SET_WORK_SOURCE: Object.freeze(['SOURCE_REVISION_CONFLICT']),
         SET_WORK_RESEARCH_NOTE: Object.freeze(['REVISION_CONFLICT']),
         SET_WORK_PRIVATE_NOTE: Object.freeze(['REVISION_CONFLICT']),
+        CREATE_PDF_ANNOTATION: Object.freeze(['REVISION_CONFLICT']),
+        SET_PDF_ANNOTATION: Object.freeze(['REVISION_CONFLICT']),
+        DELETE_PDF_ANNOTATION: Object.freeze(['REVISION_CONFLICT']),
     });
 
     /**
@@ -1535,6 +1556,118 @@
                     base_revision: observed.revision,
                     depends_on: createOp ? [createOp.op_id] : [],
                 }, localContext || null));
+            });
+        }
+
+        /**
+         * Save the intent for one PDF annotation aggregate under a Work.
+         *
+         * `desired` is null to delete, else `{annotation_id, annotation}` where
+         * `annotation` is the API-shaped object (id/type/contents/geometry…).
+         * `observed` is `{present, revision, annotation?}` from the acknowledged
+         * snapshot + annotations-state. Never-sent CREATE+SET folds into CREATE;
+         * CREATE+DELETE cancels; SENT rows refuse with `scope_busy`.
+         */
+        function savePdfAnnotation(workId, desired, observed) {
+            const deleting = desired === null;
+            const annotationId = deleting
+                ? (observed && observed.annotation_id)
+                : (desired && desired.annotation_id);
+            if (!isNonBlankString(workId) || !isNonBlankString(annotationId)) {
+                return Promise.reject(localStoreError('invalid_envelope', 'Invalid PDF annotation save.'));
+            }
+            if (!isPlainObject(observed) ||
+                typeof observed.present !== 'boolean' ||
+                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+                return Promise.reject(localStoreError('invalid_base', 'Invalid observed annotation state.'));
+            }
+            if (!deleting) {
+                if (!isPlainObject(desired) || !isPlainObject(desired.annotation) ||
+                    desired.annotation_id !== annotationId) {
+                    return Promise.reject(localStoreError('invalid_envelope', 'Invalid PDF annotation save.'));
+                }
+            }
+            const matches = row => row.entity_type === 'work' && row.entity_id === workId &&
+                PDF_ANNOTATION_OPERATIONS.indexOf(row.operation) !== -1 &&
+                row.payload && row.payload.annotation_id === annotationId &&
+                row.status !== STATUS_ACKNOWLEDGED;
+            const desiredPresent = !deleting;
+            function sameAsObserved() {
+                if (desiredPresent !== observed.present) return false;
+                if (!desiredPresent) return true;
+                const left = desired.annotation;
+                const right = observed.annotation;
+                if (!right || typeof right !== 'object') return false;
+                if (typeof root.prksPdfAnnotationsSemanticallyEqual === 'function') {
+                    return root.prksPdfAnnotationsSemanticallyEqual(left, right);
+                }
+                return JSON.stringify(left) === JSON.stringify(right);
+            }
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+                const allRows = await request(STORE_OPERATIONS, s => s.getAll());
+                assertWorkIsNotBeingDeleted(allRows, workId, 'annotated');
+                const rows = allRows.filter(matches)
+                    .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+                if (rows.length > 1) {
+                    throw localStoreError('scope_busy',
+                        'This annotation has ' + rows.length + ' unsynchronized changes; ' +
+                        'let them finish or resolve them before editing it again.');
+                }
+                const existing = rows[0];
+                if (existing) {
+                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                        throw localStoreError('scope_busy', 'This annotation is syncing or needs resolution.');
+                    }
+                    const existingPresent = existing.operation !== 'DELETE_PDF_ANNOTATION';
+                    const existingBody = existingPresent ? existing.payload.annotation : null;
+                    const sameIntent = existingPresent === desiredPresent && (
+                        !desiredPresent ||
+                        (typeof root.prksPdfAnnotationsSemanticallyEqual === 'function'
+                            ? root.prksPdfAnnotationsSemanticallyEqual(existingBody, desired.annotation)
+                            : JSON.stringify(existingBody) === JSON.stringify(desired.annotation))
+                    );
+                    if (sameIntent) { setResult(existing); return; }
+                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                    /* CREATE then DELETE with never-sent CREATE: cancel both. */
+                    if (existing.operation === 'CREATE_PDF_ANNOTATION' && !desiredPresent) {
+                        setResult(null);
+                        return;
+                    }
+                }
+                if (sameAsObserved()) { setResult(null); return; }
+                let operation;
+                let payload;
+                let baseRevision;
+                if (!desiredPresent) {
+                    operation = 'DELETE_PDF_ANNOTATION';
+                    payload = { annotation_id: annotationId };
+                    baseRevision = observed.revision;
+                } else if (!observed.present && (!existing || existing.operation === 'CREATE_PDF_ANNOTATION')) {
+                    /* Fresh create, or fold SET into never-sent CREATE. */
+                    operation = 'CREATE_PDF_ANNOTATION';
+                    payload = { annotation_id: annotationId, annotation: desired.annotation };
+                    baseRevision = null;
+                } else if (!observed.present && existing && existing.operation !== 'CREATE_PDF_ANNOTATION') {
+                    /* Should not happen for a coherent queue; treat as create. */
+                    operation = 'CREATE_PDF_ANNOTATION';
+                    payload = { annotation_id: annotationId, annotation: desired.annotation };
+                    baseRevision = null;
+                } else {
+                    operation = 'SET_PDF_ANNOTATION';
+                    payload = { annotation_id: annotationId, annotation: desired.annotation };
+                    baseRevision = observed.revision;
+                }
+                /* Fold: never-sent CREATE + SET → recreate CREATE with new body. */
+                if (existing && existing.operation === 'CREATE_PDF_ANNOTATION' && desiredPresent) {
+                    operation = 'CREATE_PDF_ANNOTATION';
+                    payload = { annotation_id: annotationId, annotation: desired.annotation };
+                    baseRevision = null;
+                }
+                setResult(await insertEnvelopeIn(request, {
+                    operation, entity_type: 'work', entity_id: workId, payload,
+                    base_revision: baseRevision,
+                    depends_on: [],
+                }, null));
             });
         }
 
@@ -4038,6 +4171,7 @@
             coalesceWorkTag, coalesceFolderTag, recordWorkOpened, saveWorkMetadataFields, saveWorkNote,
             saveWorkSource,
             saveWorkPersonRole,
+            savePdfAnnotation,
             createPerson,
             savePersonMetadataFields: savePersonMetadataFields,
             deletePerson: deletePerson,
@@ -4092,6 +4226,7 @@
         PRKS_LOCAL_WORK_RESEARCH_NOTE_BYTES: WORK_RESEARCH_NOTE_BYTES,
         PRKS_LOCAL_WORK_PRIVATE_NOTE_BYTES: WORK_PRIVATE_NOTE_BYTES,
         PRKS_LOCAL_WORK_ROLE_OPERATIONS: WORK_ROLE_OPERATIONS,
+        PRKS_LOCAL_PDF_ANNOTATION_OPERATIONS: PDF_ANNOTATION_OPERATIONS,
         PRKS_LOCAL_PERSON_FIELDS: PERSON_FIELDS,
         PRKS_LOCAL_FOLDER_FIELDS: FOLDER_FIELDS,
         prksDurableDeletionAwaitsServer: deletionAwaitsServer,
