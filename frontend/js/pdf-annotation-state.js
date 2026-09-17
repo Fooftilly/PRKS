@@ -355,8 +355,10 @@
         }
         const row = await root.prksSync.store.savePdfAnnotation(workId, desired, observed);
         await refreshPending();
-        if (root.prksSync && typeof root.prksSync.kick === 'function') {
-            try { root.prksSync.kick(); } catch (_e) { /* best-effort */ }
+        // Same wake path as every other durable family: changed() emits + wake().
+        // There is no prksSync.kick(); a no-op here strands the row until focus.
+        if (root.prksSync && typeof root.prksSync.changed === 'function') {
+            try { root.prksSync.changed(); } catch (_e) { /* best-effort */ }
         }
         return row;
     }
