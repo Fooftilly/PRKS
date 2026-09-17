@@ -903,6 +903,72 @@ async function run() {
         await store.updateOperationSyncState(del2.op_id, { status: 'conflict' });
         assertEq('conflict clears lifecycle marker',
             await store.getWorkLifecycle('W-CONFLICT-LIFECYCLE'), null);
+
+        /* Conflicted / terminal DELETE must not recreate a delete tombstone
+         * via the already-DELETE_WORK branch. */
+        const again = await store.deleteWork('W-CONFLICT-LIFECYCLE');
+        assert('already-DELETE returns the conflicted row',
+            !!(again && again.op_id === del2.op_id && again.status === 'conflict'));
+        assertEq('conflicted DELETE re-call does not recreate delete marker',
+            await store.getWorkLifecycle('W-CONFLICT-LIFECYCLE'), null);
+    }
+
+    /* ---- CREATE ACK must not clear a later DELETE lifecycle marker ---- */
+    {
+        globalThis.prksIsValidYoutubeUrl = function (u) {
+            return typeof u === 'string' && u.indexOf('youtube.com/watch') !== -1;
+        };
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const fields = {
+            title: 'CreateThenDelete',
+            status: 'Not Started',
+            abstract: '',
+            author_text: '',
+            year: '',
+            published_date: '',
+            urldate: '',
+            private_notes: '',
+            thumb_url: '',
+            source: { kind: 'video', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+            folder_id: '',
+            playlist_id: '',
+            roles: [],
+        };
+        const batch = await store.createWork(fields);
+        const workId = batch.create.entity_id;
+        const createOpId = batch.create.op_id;
+        assertEq('ownership case starts with create marker',
+            await store.getWorkLifecycle(workId), 'create');
+
+        /* Mark CREATE as already attempted/syncing so delete cannot fold it away. */
+        await store.updateOperationSyncState(createOpId, {
+            status: 'syncing',
+            bump_attempt: true,
+        });
+
+        const del = await store.deleteWork(workId);
+        assert('DELETE_WORK enqueued while CREATE still syncing',
+            !!(del && del.operation === 'DELETE_WORK' && del.entity_id === workId));
+        assertEq('DELETE overwrites lifecycle marker to delete',
+            await store.getWorkLifecycle(workId), 'delete');
+
+        /* CREATE ACK + retire must leave the DELETE-owned marker intact. */
+        await store.updateOperationSyncState(createOpId, { status: 'acknowledged' });
+        await store.deleteAcknowledgedOperation(createOpId);
+        assertEq('CREATE retirement leaves delete marker',
+            await store.getWorkLifecycle(workId), 'delete');
+
+        /* Simulate reload: a fresh store instance must still read delete. */
+        const afterReload = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        assertEq('delete marker survives reload after CREATE retirement',
+            await afterReload.getWorkLifecycle(workId), 'delete');
+
+        /* Only DELETE ACK + retire clears the marker. */
+        await afterReload.updateOperationSyncState(del.op_id, { status: 'acknowledged' });
+        await afterReload.deleteAcknowledgedOperation(del.op_id);
+        assertEq('DELETE retirement clears lifecycle marker',
+            await afterReload.getWorkLifecycle(workId), null);
     }
 
     /* ---- module hygiene: persistence only ---- */

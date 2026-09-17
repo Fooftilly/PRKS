@@ -1330,6 +1330,10 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("getWorkLifecycle", store)
         self.assertIn("work-lifecycle:", store)
         self.assertIn("putWorkLifecycleIn", store)
+        self.assertIn("clearWorkLifecycleIfOwnedIn", store)
+        # CREATE ACK must not clear a DELETE-owned marker.
+        self.assertIn("op_id", store[store.index("putWorkLifecycleIn"):
+                                     store.index("putWorkLifecycleIn") + 400])
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into

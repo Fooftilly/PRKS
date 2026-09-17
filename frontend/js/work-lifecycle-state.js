@@ -8,8 +8,9 @@
  * CREATE/DELETE classification for the Work route uses:
  *   1. an in-memory live set updated at enqueue (same-session, synchronous)
  *   2. a persisted per-Work metadata marker written atomically with the
- *      CREATE_WORK / DELETE_WORK row (survives reload; one-key read — never a
- *      full listOperations scan on every cached open)
+ *      CREATE_WORK / DELETE_WORK row as `{ kind, op_id }` (survives reload;
+ *      one-key read — never a full listOperations scan on every cached open;
+ *      retirement/conflict clears only when that op owns the current marker)
  *
  * Empty-ops Promise.race against the durable queue is forbidden: DELETE_WORK
  * intentionally retains the disposable cache until ACK.

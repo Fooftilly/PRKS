@@ -43,7 +43,9 @@
     const META_SEQUENCE = 'op_sequence';
     /* Per-Work CREATE/DELETE tombstone. Keyed separately so a cached Work open
      * can ask about ONE id without scanning the durable operations queue.
-     * Written in the same transaction as the CREATE_WORK / DELETE_WORK row. */
+     * Written in the same transaction as the CREATE_WORK / DELETE_WORK row.
+     * Value is `{ kind, op_id }` so retirement/conflict clears only the marker
+     * that operation owns — CREATE ACK must not erase a later DELETE tombstone. */
     const META_WORK_LIFECYCLE_PREFIX = 'work-lifecycle:';
     const WORK_LIFECYCLE_CREATE = 'create';
     const WORK_LIFECYCLE_DELETE = 'delete';
@@ -1152,17 +1154,52 @@
             return META_WORK_LIFECYCLE_PREFIX + String(workId);
         }
 
-        async function putWorkLifecycleIn(request, workId, kind) {
+        /** Extract `'create'`/`'delete'` from owned `{kind,op_id}` or legacy string. */
+        function workLifecycleKindFromValue(value) {
+            if (typeof value === 'string') {
+                return WORK_LIFECYCLE_KINDS.indexOf(value) === -1 ? null : value;
+            }
+            if (value && typeof value === 'object' && typeof value.kind === 'string') {
+                return WORK_LIFECYCLE_KINDS.indexOf(value.kind) === -1 ? null : value.kind;
+            }
+            return null;
+        }
+
+        async function putWorkLifecycleIn(request, workId, kind, opId) {
             if (!isNonBlankString(workId) || WORK_LIFECYCLE_KINDS.indexOf(kind) === -1) return;
+            if (!isNonBlankString(opId)) return;
             await request(STORE_METADATA, s => s.put({
                 key: workLifecycleKey(workId),
-                value: kind,
+                value: { kind: kind, op_id: String(opId) },
             }));
         }
 
         async function clearWorkLifecycleIn(request, workId) {
             if (!isNonBlankString(workId)) return;
             await request(STORE_METADATA, s => s.delete(workLifecycleKey(workId)));
+        }
+
+        /**
+         * Clear the lifecycle marker only when this operation owns it.
+         * CREATE retirement must not erase a DELETE tombstone written later;
+         * a conflicted DELETE must not erase a newer CREATE (or vice versa).
+         * Legacy string values clear on kind match only.
+         */
+        async function clearWorkLifecycleIfOwnedIn(request, workId, kind, opId) {
+            if (!isNonBlankString(workId) || WORK_LIFECYCLE_KINDS.indexOf(kind) === -1) return;
+            const key = workLifecycleKey(workId);
+            const row = await request(STORE_METADATA, s => s.get(key));
+            if (!row) return;
+            const value = row.value;
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+                if (value.kind === kind && String(value.op_id) === String(opId)) {
+                    await request(STORE_METADATA, s => s.delete(key));
+                }
+                return;
+            }
+            if (value === kind) {
+                await request(STORE_METADATA, s => s.delete(key));
+            }
         }
 
         /**
@@ -1180,8 +1217,7 @@
                 return request(STORE_METADATA, function (store) {
                     return store.get(workLifecycleKey(workId));
                 }).then(function (row) {
-                    const value = row ? row.value : null;
-                    setResult(WORK_LIFECYCLE_KINDS.indexOf(value) === -1 ? null : value);
+                    setResult(workLifecycleKindFromValue(row ? row.value : null));
                 });
             });
         }
@@ -1802,7 +1838,8 @@
                         payload: payload, base_revision: null,
                         depends_on: deps,
                     }, null);
-                    await putWorkLifecycleIn(request, createOp.entity_id, WORK_LIFECYCLE_CREATE);
+                    await putWorkLifecycleIn(request, createOp.entity_id, WORK_LIFECYCLE_CREATE,
+                        createOp.op_id);
                     rows.push(createOp);
                     const tagOps = [];
                     for (let i = 0; i < normalizedTags.length; i += 1) {
@@ -1842,7 +1879,13 @@
                     const mine = operationsNamingWork(rows, workId);
                     const already = mine.find(r => r.operation === 'DELETE_WORK');
                     if (already) {
-                        await putWorkLifecycleIn(request, workId, WORK_LIFECYCLE_DELETE);
+                        /* Only a delete that still awaits the server may own
+                         * the tombstone. A conflicted/terminal DELETE must not
+                         * recreate a marker that conflict clearing removed. */
+                        if (deletionAwaitsServer(already)) {
+                            await putWorkLifecycleIn(request, workId, WORK_LIFECYCLE_DELETE,
+                                already.op_id);
+                        }
                         setResult(already);
                         return;
                     }
@@ -1869,7 +1912,7 @@
                         entity_id: workId, payload: {},
                         base_revision: null, depends_on: waitFor,
                     }, null);
-                    await putWorkLifecycleIn(request, workId, WORK_LIFECYCLE_DELETE);
+                    await putWorkLifecycleIn(request, workId, WORK_LIFECYCLE_DELETE, op.op_id);
                     setResult(op);
                 });
         }
@@ -3828,12 +3871,22 @@
                     return request(STORE_OPERATIONS, function (store) {
                         return store.put(next);
                     }).then(function () {
-                        /* Conflict means the tombstone no longer awaits the
-                         * server — clear the persisted lifecycle marker so a
-                         * retained cache may be opened again. */
+                        /* Conflict means THIS op's tombstone no longer awaits
+                         * the server. Clear only when this op owns the marker
+                         * so a sibling CREATE/DELETE is left intact. */
                         if (next.status === STATUS_CONFLICT &&
-                            (next.operation === 'CREATE_WORK' || next.operation === 'DELETE_WORK')) {
-                            return clearWorkLifecycleIn(request, next.entity_id).then(function () {
+                            next.operation === 'CREATE_WORK') {
+                            return clearWorkLifecycleIfOwnedIn(
+                                request, next.entity_id, WORK_LIFECYCLE_CREATE, next.op_id
+                            ).then(function () {
+                                setResult(next);
+                            });
+                        }
+                        if (next.status === STATUS_CONFLICT &&
+                            next.operation === 'DELETE_WORK') {
+                            return clearWorkLifecycleIfOwnedIn(
+                                request, next.entity_id, WORK_LIFECYCLE_DELETE, next.op_id
+                            ).then(function () {
                                 setResult(next);
                             });
                         }
@@ -3865,8 +3918,19 @@
                     return request(STORE_OPERATIONS, function (store) {
                         return store.delete(String(opId));
                     }).then(function () {
-                        if (row.operation === 'CREATE_WORK' || row.operation === 'DELETE_WORK') {
-                            return clearWorkLifecycleIn(request, row.entity_id).then(function () {
+                        /* Ownership: CREATE retirement must not clear a DELETE
+                         * marker that a later DELETE_WORK still owns. */
+                        if (row.operation === 'CREATE_WORK') {
+                            return clearWorkLifecycleIfOwnedIn(
+                                request, row.entity_id, WORK_LIFECYCLE_CREATE, row.op_id
+                            ).then(function () {
+                                setResult(true);
+                            });
+                        }
+                        if (row.operation === 'DELETE_WORK') {
+                            return clearWorkLifecycleIfOwnedIn(
+                                request, row.entity_id, WORK_LIFECYCLE_DELETE, row.op_id
+                            ).then(function () {
                                 setResult(true);
                             });
                         }
