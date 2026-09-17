@@ -207,10 +207,11 @@ FEATURES = {
 }
 
 # ---------------------------------------------------------------------------
-# Affected-file mapping — first matching rule wins per path; union features
+# Affected-file mapping
 # ---------------------------------------------------------------------------
 # Patterns are matched with Path.match against repo-relative POSIX paths.
-# Order matters only for documentation; selection unions all matching rules.
+# First matching rule wins per path; features from all changed paths are
+# unioned into the final selection (not first-match across the whole diff).
 
 AFFECTED_RULES = (
     # E2E framework itself → smoke + runner unit coverage signal
@@ -240,6 +241,7 @@ AFFECTED_RULES = (
             "frontend/js/ui.js",
             "frontend/js/request-coordinator.js",
             "frontend/js/tab-context.js",
+            "frontend/js/command-palette.js",
             "frontend/index.html",
             "frontend/sw.js",
             "backend/server.py",
@@ -264,6 +266,8 @@ AFFECTED_RULES = (
         "name": "concepts",
         "paths": (
             "frontend/js/components/concepts.js",
+            "frontend/js/concept-state.js",
+            "backend/concept_sync.py",
             "backend/research_network.py",
             "backend/research_markup.py",
             "backend/research_index.py",
@@ -271,28 +275,46 @@ AFFECTED_RULES = (
         "features": ("concepts", "graph", "notes"),
     },
     {
-        "name": "positions-arguments",
+        "name": "positions",
         "paths": (
             "frontend/js/components/positions.js",
-            "frontend/js/components/arguments.js",
+            "frontend/js/position-state.js",
+            "backend/position_sync.py",
         ),
-        "features": ("positions", "arguments", "graph"),
+        "features": ("positions", "graph"),
+    },
+    {
+        "name": "arguments",
+        "paths": (
+            "frontend/js/components/arguments.js",
+            "frontend/js/argument-state.js",
+            "backend/argument_sync.py",
+        ),
+        "features": ("arguments", "graph"),
+    },
+    {
+        "name": "person-groups",
+        "paths": (
+            "frontend/js/components/person-groups.js",
+            "frontend/js/person-group-state.js",
+            "backend/person_group_sync.py",
+        ),
+        "features": ("person-groups", "people"),
     },
     {
         "name": "people",
         "paths": (
             "frontend/js/components/people.js",
             "frontend/js/work-role-editor.js",
+            "frontend/js/work-role-state.js",
+            "frontend/js/person-state.js",
+            "frontend/js/person-metadata-state.js",
             "frontend/js/person-*.js",
+            "backend/person_sync.py",
+            "backend/person_metadata_sync.py",
+            "backend/work_role_sync.py",
         ),
         "features": ("people", "person-groups"),
-    },
-    {
-        "name": "person-groups",
-        "paths": (
-            "frontend/js/components/person-groups.js",
-        ),
-        "features": ("person-groups", "people"),
     },
     {
         "name": "notes",
@@ -300,9 +322,10 @@ AFFECTED_RULES = (
             "frontend/js/work-notes-state.js",
             "frontend/js/components/works.js",
             "frontend/js/works-pdf.js",
+            "backend/work_note_sync.py",
             "backend/pdf_annotations.py",
         ),
-        "features": ("notes", "sync"),
+        "features": ("notes",),
     },
     {
         "name": "workspace-tabs",
@@ -323,6 +346,16 @@ AFFECTED_RULES = (
         "features": ("tiling", "tabs"),
     },
     {
+        "name": "workspace-overview",
+        "paths": (
+            "frontend/js/workspace-overview.js",
+            "frontend/js/overview-primitives.js",
+            "frontend/js/work-selection.js",
+        ),
+        "features": ("tiling", "tabs"),
+        "note": "Workspace overview / selection (PR #5) → tiling + tabs",
+    },
+    {
         "name": "workspace-drag",
         "paths": ("frontend/js/workspace-drag.js",),
         "features": ("workspace-drag", "tiling", "tabs"),
@@ -331,13 +364,21 @@ AFFECTED_RULES = (
         "name": "folders",
         "paths": (
             "frontend/js/components/folders.js",
+            "frontend/js/folder-state.js",
+            "frontend/js/folder-tag-state.js",
             "frontend/js/folder-*.js",
+            "backend/folder_sync.py",
+            "backend/folder_tag_sync.py",
         ),
         "features": ("folders", "browse"),
     },
     {
         "name": "playlists",
-        "paths": ("frontend/js/components/playlists.js",),
+        "paths": (
+            "frontend/js/components/playlists.js",
+            "frontend/js/playlist-state.js",
+            "backend/playlist_sync.py",
+        ),
         "features": ("playlists",),
     },
     {
@@ -368,6 +409,16 @@ AFFECTED_RULES = (
         "features": ("offline", "sync", "smoke"),
     },
     {
+        "name": "work-lifecycle",
+        "paths": (
+            "frontend/js/work-lifecycle-state.js",
+            "frontend/js/work-lifecycle-*.js",
+            "backend/work_lifecycle_sync.py",
+        ),
+        "features": ("offline", "folders", "sync"),
+        "note": "CREATE/DELETE_WORK lifecycle → offline + folders + sync",
+    },
+    {
         "name": "sync-families",
         "paths": (
             "frontend/js/sync-runtime.js",
@@ -375,13 +426,13 @@ AFFECTED_RULES = (
             "frontend/js/work-open-*.js",
             "frontend/js/work-metadata-*.js",
             "frontend/js/work-source-*.js",
-            "frontend/js/work-lifecycle-*.js",
+            "frontend/js/tag-vocabulary-state.js",
             "backend/sync_protocol.py",
             "backend/work_tag_sync.py",
             "backend/work_open_sync.py",
             "backend/work_metadata_sync.py",
             "backend/work_source_sync.py",
-            "backend/*_sync.py",
+            "backend/tag_sync.py",
         ),
         "features": ("sync", "offline"),
     },
@@ -468,9 +519,15 @@ def select_by_selectors(all_ids, selectors):
 
 
 def select_smoke(all_ids):
-    """Smoke suite: only IDs that still exist in the suite."""
+    """Smoke suite: curated IDs must all still exist (never silently shrink)."""
     known = set(all_ids)
-    return [tid for tid in SMOKE_TEST_IDS if tid in known]
+    missing = [tid for tid in SMOKE_TEST_IDS if tid not in known]
+    if missing:
+        raise ValueError(
+            "curated smoke suite references missing test id(s): %s"
+            % ", ".join(missing)
+        )
+    return list(SMOKE_TEST_IDS)
 
 
 def select_features(all_ids, names):
@@ -541,10 +598,16 @@ def features_for_e2e_module_path(rel: str):
     if not rel.startswith("tests/e2e/test_") or not rel.endswith(".py"):
         return []
     stem = Path(rel).stem  # test_app
-    # test_app.py mixes many domains; class-level diff mapping is out of scope.
-    # Prefer smoke + an explicit agent choice of --feature for the touched classes.
+    # test_app.py mixes many domains. A whole-file change must not silently
+    # collapse to smoke — union every feature group that owns a test_app class.
     if stem == "test_app":
-        return ["smoke"]
+        hits = []
+        for name, meta in FEATURES.items():
+            for selector in meta["selectors"]:
+                if selector.startswith("tests.e2e.test_app."):
+                    hits.append(name)
+                    break
+        return hits or ["smoke"]
     module = "tests.e2e.%s" % stem
     hits = []
     for name, meta in FEATURES.items():
@@ -592,7 +655,11 @@ def select_affected(all_ids, changed_paths):
     """Map changed paths → feature union + explanation records.
 
     Returns dict:
-      features, test_ids, decisions (per path), skipped, notes
+      features, test_ids, decisions (per path), empty_reason, noop_ok
+
+    `noop_ok` is True when the diff is only docs/unit/ignored paths (successful
+    no-op for --affected). It is False when features were selected but yielded
+    no tests, or when a production path mapped to an empty selection.
     """
     features = []
     seen_f = set()
@@ -616,33 +683,58 @@ def select_affected(all_ids, changed_paths):
                 seen_f.add(f)
                 features.append(f)
     if not features:
-        # No runnable selection from the diff — leave empty; caller decides.
+        # Docs/unit/ignored-only (or empty changed list) → successful no-op.
         return {
             "features": [],
             "test_ids": [],
             "decisions": decisions,
             "empty_reason": "no E2E-relevant changes mapped",
+            "noop_ok": True,
+        }
+    test_ids = select_features(all_ids, features)
+    if not test_ids:
+        return {
+            "features": features,
+            "test_ids": [],
+            "decisions": decisions,
+            "empty_reason": "mapped features selected zero tests",
+            "noop_ok": False,
         }
     return {
         "features": features,
-        "test_ids": select_features(all_ids, features),
+        "test_ids": test_ids,
         "decisions": decisions,
         "empty_reason": None,
+        "noop_ok": False,
     }
+
+
+# Untracked paths under these prefixes are included in --affected discovery.
+# scripts/ covers scripts/e2e; tests/e2e/ covers policy/runner additions.
+UNTRACKED_AFFECTED_PREFIXES = (
+    "frontend/",
+    "backend/",
+    "tests/e2e/",
+    "tools/",
+    "scripts/",
+    "prks_app.py",
+)
 
 
 def list_changed_paths(repo: Path, base: str | None = None, include_untracked=True):
     """Working-tree changes vs base (default: HEAD). Explicit --base overrides.
 
     Default comparison is the agent-normal case: dirty working tree + index
-    against HEAD (or against `base` when provided). Also includes untracked
-    files under frontend/, backend/, tests/e2e/, tools/ when include_untracked.
+    against HEAD (or against `base` when provided). Includes Added/Copied/
+    Modified/Renamed/Deleted (D). Also includes untracked files under
+    frontend/, backend/, tests/e2e/, tools/, scripts/ when include_untracked.
     """
     repo = Path(repo)
     ref = base or "HEAD"
     paths = []
-    # Staged + unstaged vs ref
-    cmd = ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=ACMR", ref]
+    # Staged + unstaged vs ref — include deletes so removed production/E2E
+    # files still drive feature selection.
+    cmd = ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=ACMRD", ref]
     try:
         out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -656,7 +748,15 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
     if base and base != "HEAD":
         try:
             local = subprocess.check_output(
-                ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=ACMR", "HEAD"],
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "diff",
+                    "--name-only",
+                    "--diff-filter=ACMRD",
+                    "HEAD",
+                ],
                 text=True,
                 stderr=subprocess.DEVNULL,
             )
@@ -681,11 +781,32 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
                 continue
             if any(
                 line.startswith(p) or line == p.rstrip("/")
-                for p in ("frontend/", "backend/", "tests/e2e/", "tools/", "prks_app.py")
+                for p in UNTRACKED_AFFECTED_PREFIXES
             ):
                 if line not in paths:
                     paths.append(line)
     return paths
+
+
+def merge_last_failed(previous_ids, executed_ids, current_failed_ids):
+    """Treat last-failed persistence as an unresolved-failure set.
+
+    - Retain prior failed tests that were not actually executed this run
+      (partial / unrelated selections must not erase them).
+    - Drop prior failures that were rerun and passed.
+    - Add current failures.
+    """
+    previous = list(previous_ids or ())
+    executed = set(executed_ids or ())
+    current_failed = list(current_failed_ids or ())
+    retained = [tid for tid in previous if tid not in executed]
+    merged = list(retained)
+    seen = set(retained)
+    for tid in current_failed:
+        if tid not in seen:
+            merged.append(tid)
+            seen.add(tid)
+    return merged
 
 
 def save_last_failed(path: Path, test_ids, meta=None):

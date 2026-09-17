@@ -42,6 +42,7 @@ from tests.e2e.policy import (
     format_feature_catalog,
     list_changed_paths,
     load_last_failed,
+    merge_last_failed,
     report_banner,
     save_last_failed,
     select_affected,
@@ -732,6 +733,9 @@ def _resolve_selection(args, all_ids):
         plan = select_affected(all_ids, changed)
         _print_affected_plan(plan)
         note = "features=%s" % (",".join(plan["features"]) or "-")
+        if plan.get("noop_ok") and not plan["test_ids"]:
+            # Docs/unit/ignored-only (or empty) diffs are a successful no-op.
+            return "affected-noop", [], note
         return "affected", plan["test_ids"], note
 
     if args.smoke:
@@ -796,21 +800,28 @@ def main(argv=None) -> int:
                 file=sys.stderr,
             )
             return 2
-        args.fail_fast = True
-        args.no_pointer_capture = True
-        tier = "dev"
-        note = (note + "; fail-fast") if note else "fail-fast"
+        if tier != "affected-noop":
+            args.fail_fast = True
+            args.no_pointer_capture = True
+            tier = "dev"
+            note = (note + "; fail-fast") if note else "fail-fast"
 
     if args.list_tests:
         for test_id in test_ids:
             print(test_id)
         return 0
 
+    if tier == "affected-noop":
+        print(
+            "affected: no E2E-relevant changes (docs/unit/ignored only) — success no-op"
+        )
+        return 0
+
     if not test_ids:
         print("no E2E tests selected", file=sys.stderr)
         if tier == "affected":
             print(
-                "hint: no mapped production/E2E changes, or only docs/unit-test paths. "
+                "hint: mapped features selected zero tests, or the selection is broken. "
                 "Use --smoke or --feature explicitly if you still want a browser run.",
                 file=sys.stderr,
             )
@@ -842,19 +853,31 @@ def main(argv=None) -> int:
     _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
 
-    if failed_ids:
+    # Persist unresolved failures: retain prior failures not executed this run,
+    # drop only those actually rerun and passed, add current failures.
+    previous = load_last_failed(REPO / LAST_FAILED_PATH)
+    previous_ids = (previous or {}).get("test_ids") or []
+    unresolved = merge_last_failed(previous_ids, test_ids, failed_ids)
+    last_failed_path = REPO / LAST_FAILED_PATH
+    if unresolved:
         save_last_failed(
-            REPO / LAST_FAILED_PATH,
-            failed_ids,
-            meta={"tier": tier, "note": note},
+            last_failed_path,
+            unresolved,
+            meta={
+                "tier": tier,
+                "note": note,
+                "executed": len(test_ids),
+                "failed_this_run": len(failed_ids),
+            },
         )
-        print("Wrote last-failed (%d) → %s" % (len(failed_ids), LAST_FAILED_PATH))
-    elif ok and (REPO / LAST_FAILED_PATH).is_file():
-        # Clear stale failures after a clean selected run that had none.
+        print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
+    elif last_failed_path.is_file():
         try:
-            (REPO / LAST_FAILED_PATH).unlink()
+            last_failed_path.unlink()
         except OSError:
             pass
+        if previous_ids:
+            print("Cleared last-failed (all previously failed tests resolved)")
 
     pointer = None
     if ok and not args.no_pointer_capture:

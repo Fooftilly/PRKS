@@ -22,12 +22,15 @@ FAKE_IDS = [
     "tests.e2e.test_app.WorkspaceTabsTests.test_close_selects_right_neighbor_then_home",
     "tests.e2e.test_app.WorkspaceTilingTests.test_split_right",
     "tests.e2e.test_app.ResearchGraphChromeTests.test_escape_closes_filters_and_returns_focus",
+    "tests.e2e.test_app.PersonProfileDraftOwnershipTests.test_draft",
+    "tests.e2e.test_app.WorkDetailsPolishTests.test_notes_polish",
     "tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_core_cache_and_local_interactions",
     "tests.e2e.test_concepts_durable.DurableConceptTests.test_create",
     "tests.e2e.test_offline.OfflineConceptTests.test_index",
     "tests.e2e.test_offline.OfflineFoundationTests.test_cached_work_renders_offline_after_reload",
     "tests.e2e.test_folders_offline.FoldersOfflineTests.test_default_offline_launch_lands_on_the_cached_hierarchy",
     "tests.e2e.test_work_tags_offline.OfflineWorkTagTests.test_add",
+    "tests.e2e.test_work_notes_offline.WorkNotesOfflineTests.test_research",
     "tests.e2e.test_local_store_durability.LocalStoreDurabilityTests.test_a_pending_operation_survives_a_page_reload",
     "tests.e2e.test_app.WorkCreateWorkflowTests.test_unified_create_control_and_menu",
     "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_categories_present_general_default_and_calm",
@@ -35,18 +38,19 @@ FAKE_IDS = [
 
 
 class SmokeSelectionTests(unittest.TestCase):
-    def test_smoke_returns_only_known_curated_ids_in_order(self):
-        selected = policy.select_smoke(FAKE_IDS)
-        self.assertTrue(selected)
-        self.assertEqual(selected, [tid for tid in policy.SMOKE_TEST_IDS if tid in FAKE_IDS])
-        self.assertIn(
-            "tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation",
-            selected,
-        )
+    def test_smoke_returns_curated_ids_when_all_present(self):
+        selected = policy.select_smoke(list(policy.SMOKE_TEST_IDS) + ["extra.unrelated"])
+        self.assertEqual(selected, list(policy.SMOKE_TEST_IDS))
 
-    def test_smoke_drops_missing_ids_without_failing(self):
-        selected = policy.select_smoke(["tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation"])
-        self.assertEqual(len(selected), 1)
+    def test_smoke_fails_when_curated_id_missing(self):
+        with self.assertRaises(ValueError) as ctx:
+            policy.select_smoke(
+                [
+                    "tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation",
+                ]
+            )
+        self.assertIn("missing test id", str(ctx.exception))
+        self.assertIn("WorkspaceTabsTests", str(ctx.exception))
 
 
 class FeatureSelectionTests(unittest.TestCase):
@@ -108,10 +112,52 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertFalse(skip)
         self.assertIn("sync", feats)
 
-    def test_test_app_module_maps_to_smoke_only(self):
+    def test_test_app_module_maps_to_all_owning_features_not_smoke_only(self):
         _rule, feats, skip, _note = policy.match_affected_path("tests/e2e/test_app.py")
         self.assertFalse(skip)
-        self.assertEqual(feats, ("smoke",))
+        self.assertIn("graph", feats)
+        self.assertIn("tabs", feats)
+        self.assertIn("people", feats)
+        self.assertIn("notes", feats)
+        self.assertIn("tiling", feats)
+        self.assertNotEqual(feats, ("smoke",))
+
+    def test_domain_sync_files_map_to_feature_groups(self):
+        cases = (
+            ("backend/concept_sync.py", "concepts", ("concepts", "graph", "notes")),
+            ("backend/folder_sync.py", "folders", ("folders", "browse")),
+            ("backend/person_sync.py", "people", ("people", "person-groups")),
+            ("backend/argument_sync.py", "arguments", ("arguments", "graph")),
+            ("backend/position_sync.py", "positions", ("positions", "graph")),
+            ("backend/playlist_sync.py", "playlists", ("playlists",)),
+            ("backend/work_note_sync.py", "notes", ("notes",)),
+            ("backend/work_lifecycle_sync.py", "work-lifecycle", ("offline", "folders", "sync")),
+            ("backend/work_tag_sync.py", "sync-families", ("sync", "offline")),
+        )
+        for path, rule_name, expected in cases:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, rule_name)
+                self.assertFalse(skip)
+                self.assertEqual(feats, expected)
+
+    def test_domain_state_files_map_to_feature_groups(self):
+        cases = (
+            ("frontend/js/concept-state.js", "concepts"),
+            ("frontend/js/folder-state.js", "folders"),
+            ("frontend/js/person-state.js", "people"),
+            ("frontend/js/argument-state.js", "arguments"),
+            ("frontend/js/work-notes-state.js", "notes"),
+            ("frontend/js/work-lifecycle-state.js", "work-lifecycle"),
+            ("frontend/js/workspace-overview.js", "workspace-overview"),
+            ("frontend/js/overview-primitives.js", "workspace-overview"),
+        )
+        for path, rule_name in cases:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, rule_name)
+                self.assertFalse(skip)
+                self.assertTrue(feats)
 
     def test_select_affected_unions_features_and_explains(self):
         plan = policy.select_affected(
@@ -125,14 +171,40 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertIn("graph", plan["features"])
         self.assertIn("tabs", plan["features"])
         self.assertTrue(plan["test_ids"])
+        self.assertFalse(plan["noop_ok"])
         skips = [d for d in plan["decisions"] if d["path"] == "README.md"]
         self.assertTrue(skips[0]["skip"])
 
-    def test_select_affected_empty_when_only_docs(self):
+    def test_select_affected_docs_only_is_successful_noop(self):
         plan = policy.select_affected(FAKE_IDS, ["docs/local-first-sync.md"])
         self.assertEqual(plan["features"], [])
         self.assertEqual(plan["test_ids"], [])
+        self.assertTrue(plan["noop_ok"])
         self.assertIsNotNone(plan["empty_reason"])
+
+    def test_select_affected_unit_only_is_successful_noop(self):
+        plan = policy.select_affected(FAKE_IDS, ["tests/test_e2e_policy.py"])
+        self.assertTrue(plan["noop_ok"])
+        self.assertEqual(plan["test_ids"], [])
+
+    def test_select_affected_broken_feature_selection_is_not_noop(self):
+        # Features mapped, but none of the known IDs match → fail, not noop.
+        plan = policy.select_affected(
+            ["tests.e2e.unrelated.SomeTests.test_x"],
+            ["frontend/js/components/research-graph.js"],
+        )
+        self.assertIn("graph", plan["features"])
+        self.assertEqual(plan["test_ids"], [])
+        self.assertFalse(plan["noop_ok"])
+        self.assertIn("zero tests", plan["empty_reason"])
+
+    def test_deleted_path_still_maps(self):
+        rule, feats, skip, _note = policy.match_affected_path(
+            "frontend/js/components/research-graph.js"
+        )
+        self.assertEqual(rule, "graph")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("graph",))
 
 
 class LastFailedPersistenceTests(unittest.TestCase):
@@ -151,28 +223,79 @@ class LastFailedPersistenceTests(unittest.TestCase):
             path.write_text("{not json", encoding="utf-8")
             self.assertIsNone(policy.load_last_failed(path))
 
+    def test_merge_retains_unexecuted_prior_failures(self):
+        previous = ["a.Fail.test_1", "a.Fail.test_2", "a.Fail.test_3"]
+        executed = ["a.Fail.test_1", "b.Other.test_ok"]
+        current_failed = ["b.Other.test_ok"]
+        merged = policy.merge_last_failed(previous, executed, current_failed)
+        self.assertEqual(
+            merged,
+            ["a.Fail.test_2", "a.Fail.test_3", "b.Other.test_ok"],
+        )
+
+    def test_merge_removes_rerun_passed_failures(self):
+        previous = ["a.Fail.test_1", "a.Fail.test_2"]
+        executed = ["a.Fail.test_1", "a.Fail.test_2"]
+        current_failed = []
+        merged = policy.merge_last_failed(previous, executed, current_failed)
+        self.assertEqual(merged, [])
+
+    def test_merge_multi_failure_partial_rerun(self):
+        # Three prior failures; only one rerun and it still fails; another new fails.
+        previous = ["t.A.test_1", "t.A.test_2", "t.A.test_3"]
+        executed = ["t.A.test_1", "t.B.test_new"]
+        current_failed = ["t.A.test_1", "t.B.test_new"]
+        merged = policy.merge_last_failed(previous, executed, current_failed)
+        self.assertEqual(merged, ["t.A.test_2", "t.A.test_3", "t.A.test_1", "t.B.test_new"])
+
+    def test_merge_fail_fast_keeps_unexecuted(self):
+        previous = ["t.A.test_1", "t.A.test_2", "t.A.test_3"]
+        # Fail-fast ran only the first and it failed again.
+        executed = ["t.A.test_1"]
+        current_failed = ["t.A.test_1"]
+        merged = policy.merge_last_failed(previous, executed, current_failed)
+        self.assertEqual(merged, ["t.A.test_2", "t.A.test_3", "t.A.test_1"])
+
 
 class PathMatchTests(unittest.TestCase):
     def test_glob_double_star(self):
         self.assertTrue(policy._path_matches("frontend/css/style.css", "frontend/css/**"))
-        self.assertTrue(policy._path_matches("backend/work_tag_sync.py", "backend/*_sync.py"))
-        self.assertFalse(policy._path_matches("backend/server.py", "backend/*_sync.py"))
+        self.assertTrue(policy._path_matches("backend/work_tag_sync.py", "backend/work_tag_sync.py"))
+        self.assertFalse(policy._path_matches("backend/server.py", "backend/work_tag_sync.py"))
 
 
 class ListChangedPathsTests(unittest.TestCase):
-    def test_invokes_git_diff_against_base(self):
+    def test_invokes_git_diff_against_base_including_deletes(self):
         with mock.patch("subprocess.check_output") as check:
             check.side_effect = [
-                "frontend/js/app.js\n",  # diff vs base
+                "frontend/js/app.js\nfrontend/js/gone.js\n",  # diff vs base (incl D)
                 "frontend/js/app.js\nbackend/x.py\n",  # local vs HEAD when base != HEAD
-                "frontend/js/new.js\n",  # untracked
+                "scripts/e2e\nfrontend/js/new.js\n",  # untracked
             ]
             paths = policy.list_changed_paths(
                 Path("/tmp/repo"), base="origin/master", include_untracked=True
             )
             self.assertIn("frontend/js/app.js", paths)
+            self.assertIn("frontend/js/gone.js", paths)
             self.assertIn("backend/x.py", paths)
             self.assertIn("frontend/js/new.js", paths)
+            self.assertIn("scripts/e2e", paths)
+            # Diff filter must include Deleted (D).
+            first_cmd = check.call_args_list[0][0][0]
+            self.assertIn("--diff-filter=ACMRD", first_cmd)
+
+    def test_untracked_scripts_and_e2e_policy_are_discoverable(self):
+        with mock.patch("subprocess.check_output") as check:
+            check.side_effect = [
+                "",  # diff vs HEAD
+                "scripts/e2e\ntests/e2e/policy.py\ntmp/scratch.txt\n",
+            ]
+            paths = policy.list_changed_paths(
+                Path("/tmp/repo"), base=None, include_untracked=True
+            )
+            self.assertIn("scripts/e2e", paths)
+            self.assertIn("tests/e2e/policy.py", paths)
+            self.assertNotIn("tmp/scratch.txt", paths)
 
 
 class ReportBannerTests(unittest.TestCase):
@@ -239,6 +362,29 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             with mock.patch.object(runner, "ensure_chromium_installed"):
                 code = runner.main(["--dev"])
             self.assertEqual(code, 2)
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_affected_docs_only_is_success_noop(self):
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+            import io
+            from contextlib import redirect_stdout
+
+            buf = io.StringIO()
+            with mock.patch.object(runner, "ensure_chromium_installed"):
+                with mock.patch.object(
+                    runner, "list_changed_paths", return_value=["README.md", "docs/x.md"]
+                ):
+                    with redirect_stdout(buf):
+                        code = runner.main(["--affected"])
+            self.assertEqual(code, 0)
+            self.assertIn("success no-op", buf.getvalue())
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)
