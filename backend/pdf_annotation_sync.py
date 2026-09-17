@@ -51,6 +51,15 @@ def _advance(conn, work_id: str, annotation_id: str) -> int:
     return get_revision(conn, work_id, annotation_id)
 
 
+def _bump_canonical_set_if_changed(conn, work_id: str, *, changed: bool) -> None:
+    """Annotation meaning changed ⇒ PDF materialization may lag (Slice F)."""
+    if not changed:
+        return
+    from backend import pdf_materialization
+
+    pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
+
+
 def _work_exists(conn, work_id: str) -> bool:
     return (
         conn.execute("SELECT 1 FROM works WHERE id = ?", (work_id,)).fetchone()
@@ -322,6 +331,7 @@ def apply_create(db, conn, op, received_at):
         return 409, result
 
     stored = insert_annotation_on_conn(conn, work_id, desired)
+    _bump_canonical_set_if_changed(conn, work_id, changed=True)
     result.update(
         code="ACKNOWLEDGED",
         changed=True,
@@ -391,6 +401,7 @@ def apply_set(db, conn, op, received_at):
         )
 
     changed, after, stored = update_annotation_on_conn(conn, work_id, desired)
+    _bump_canonical_set_if_changed(conn, work_id, changed=changed)
     result.update(
         code="ACKNOWLEDGED",
         changed=changed,
@@ -461,6 +472,7 @@ def apply_delete(db, conn, op, received_at):
         return 409, result
 
     changed, after = delete_annotation_on_conn(conn, work_id, annotation_id)
+    _bump_canonical_set_if_changed(conn, work_id, changed=changed)
     result.update(
         code="ACKNOWLEDGED",
         changed=changed,

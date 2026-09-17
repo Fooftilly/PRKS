@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS works (
     doc_type TEXT DEFAULT 'article', -- BibTeX @ entry type (article, book, misc, …)
     private_notes TEXT, -- User reminders (not indexed in FTS)
     hide_pdf_link_annotations INTEGER DEFAULT 0, -- 1 = hide PDF Link annotations in sidebar list only
+    canonical_annotation_set_revision INTEGER NOT NULL DEFAULT 0,
+    materialized_pdf_annotation_revision INTEGER NOT NULL DEFAULT 0,
     last_opened_at TIMESTAMP, -- For Recent page
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

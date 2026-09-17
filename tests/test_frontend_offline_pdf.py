@@ -242,6 +242,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)", body)
         self.assertIn("runtime.mode !== 'work'", body)
         self.assertIn("prksOfflineRuntimeState", body)
+        # Slice E: durable offline may install the hydrate/event bridge.
+        self.assertIn("annotationMutationDurable === true", body)
 
     def test_confirm_persisted_token_stops_when_worker_paused(self):
         src = _read(_WORKS_PDF)

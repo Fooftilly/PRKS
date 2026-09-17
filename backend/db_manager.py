@@ -2826,6 +2826,24 @@ class PRKSDatabase:
             conn.execute("BEGIN")
             return pdf_annotation_sync.get_annotations_state_on_conn(conn, work_id)
 
+    def get_work_pdf_materialization(self, work_id: str):
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return pdf_materialization.get_materialization_on_conn(conn, work_id)
+
+    def mark_work_pdf_materialized(self, work_id: str, *, at_revision=None):
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rev = pdf_materialization.mark_pdf_materialized_on_conn(
+                conn, work_id, at_revision=at_revision
+            )
+            conn.commit()
+            return rev
+
     def save_work_annotations(self, work_id: str, annotations_json: str):
         """Parse the submitted JSON list and replace canonical annotations only."""
         items = parse_annotations_json(annotations_json)
@@ -2884,6 +2902,7 @@ class PRKSDatabase:
         current_ids = set(current_rows)
         incoming_set = {row["id"] for row in normalized}
 
+        any_set_changed = False
         for row in normalized:
             geom = json.dumps(row["geometry"], allow_nan=False)
             params = (
@@ -2907,6 +2926,7 @@ class PRKSDatabase:
                 before = reconstruct_annotation(current_rows[row["id"]])
                 changed = not annotations_semantically_equal(before, desired)
                 if changed:
+                    any_set_changed = True
                     conn.execute(
                         """
                         UPDATE annotations SET
@@ -2920,6 +2940,7 @@ class PRKSDatabase:
                         conn, work_id, row["id"], changed=True
                     )
             else:
+                any_set_changed = True
                 # Construction: insert without advancing (revision stays 0).
                 conn.execute(
                     """
@@ -2932,6 +2953,7 @@ class PRKSDatabase:
 
         to_delete = current_ids - incoming_set
         for ann_id in sorted(to_delete):
+            any_set_changed = True
             conn.execute(
                 "DELETE FROM annotations WHERE work_id = ? AND id = ?",
                 (work_id, ann_id),
@@ -2939,6 +2961,10 @@ class PRKSDatabase:
             pdf_annotation_sync.advance_revision_if_changed_on_conn(
                 conn, work_id, ann_id, changed=True
             )
+        if any_set_changed:
+            from backend import pdf_materialization
+
+            pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
 
     def resolve_wiki_links(self, text: str) -> str:
         if not text: return ""

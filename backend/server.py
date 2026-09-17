@@ -2054,6 +2054,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/pdf-materialization') and len(path.split('/')) == 5:
+                w_id = path.split('/')[3]
+                data = db.get_work_pdf_materialization(w_id)
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    self.send_json(200, data)
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
                 w_id = path.split('/')[3]
                 data = {"work_id": w_id, "annotations_json": db.get_work_annotations(w_id)}
@@ -3163,7 +3170,32 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     if save_token:
                         with _SAVE_TOKEN_LOCK:
                             _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                    self.send_json(200, {'status': 'success'})
+                    # Slice F: managed PDF bytes now match the current canonical
+                    # annotation generation (or an explicit at_revision if sent).
+                    materialized_rev = None
+                    try:
+                        at_rev = data.get('materialized_annotation_set_revision', None)
+                        if at_rev is not None:
+                            at_rev = int(at_rev)
+                        materialized_rev = db.mark_work_pdf_materialized(
+                            w_id, at_revision=at_rev
+                        )
+                    except Exception as e:
+                        LOGGER.warning(
+                            "pdf_materialization_mark_failed work_id=%s error_type=%s",
+                            safe_log_id(w_id),
+                            safe_error_type(e),
+                        )
+                    body = {'status': 'success'}
+                    if materialized_rev is not None:
+                        body['materialized_pdf_annotation_revision'] = materialized_rev
+                        mat = db.get_work_pdf_materialization(w_id)
+                        if mat:
+                            body['canonical_annotation_set_revision'] = mat[
+                                'canonical_annotation_set_revision'
+                            ]
+                            body['stale'] = mat['stale']
+                    self.send_json(200, body)
                 else:
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
