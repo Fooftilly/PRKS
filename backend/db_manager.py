@@ -22,10 +22,13 @@ from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
     WorkAnnotationError,
+    annotations_semantically_equal,
     normalize_annotation_list,
     parse_annotations_json,
     reconstruct_annotation,
+    round_trip_annotation,
 )
+from backend import pdf_annotation_sync
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.performance import (
     classify_sql_write,
@@ -2817,6 +2820,12 @@ class PRKSDatabase:
         )
         return json.dumps([reconstruct_annotation(row) for row in res])
 
+    def get_work_annotations_state(self, work_id: str):
+        """Per-annotation sync revisions for one Work (durable-client hydration)."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return pdf_annotation_sync.get_annotations_state_on_conn(conn, work_id)
+
     def save_work_annotations(self, work_id: str, annotations_json: str):
         """Parse the submitted JSON list and replace canonical annotations only."""
         items = parse_annotations_json(annotations_json)
@@ -2862,13 +2871,17 @@ class PRKSDatabase:
                         409,
                     )
 
-        current_ids = {
-            row["id"]
+        current_rows = {
+            row["id"]: row
             for row in conn.execute(
-                "SELECT id FROM annotations WHERE work_id = ?",
+                """
+                SELECT id, type, content, page_index, color, geometry_json, updated_at
+                FROM annotations WHERE work_id = ?
+                """,
                 (work_id,),
             ).fetchall()
         }
+        current_ids = set(current_rows)
         incoming_set = {row["id"] for row in normalized}
 
         for row in normalized:
@@ -2880,17 +2893,34 @@ class PRKSDatabase:
                 row["color"],
                 geom,
             )
+            desired = round_trip_annotation(
+                {
+                    "id": row["id"],
+                    "type": row["type"],
+                    "contents": row["content"],
+                    "pageIndex": row["page_index"],
+                    "color": row["color"],
+                    **row["geometry"],
+                }
+            )
             if row["id"] in current_ids:
-                conn.execute(
-                    """
-                    UPDATE annotations SET
-                        type = ?, content = ?, page_index = ?, color = ?,
-                        geometry_json = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND work_id = ?
-                    """,
-                    params + (row["id"], work_id),
-                )
+                before = reconstruct_annotation(current_rows[row["id"]])
+                changed = not annotations_semantically_equal(before, desired)
+                if changed:
+                    conn.execute(
+                        """
+                        UPDATE annotations SET
+                            type = ?, content = ?, page_index = ?, color = ?,
+                            geometry_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND work_id = ?
+                        """,
+                        params + (row["id"], work_id),
+                    )
+                    pdf_annotation_sync.advance_revision_if_changed_on_conn(
+                        conn, work_id, row["id"], changed=True
+                    )
             else:
+                # Construction: insert without advancing (revision stays 0).
                 conn.execute(
                     """
                     INSERT INTO annotations
@@ -2901,11 +2931,13 @@ class PRKSDatabase:
                 )
 
         to_delete = current_ids - incoming_set
-        if to_delete:
-            placeholders = ",".join("?" * len(to_delete))
+        for ann_id in sorted(to_delete):
             conn.execute(
-                f"DELETE FROM annotations WHERE work_id = ? AND id IN ({placeholders})",
-                (work_id, *to_delete),
+                "DELETE FROM annotations WHERE work_id = ? AND id = ?",
+                (work_id, ann_id),
+            )
+            pdf_annotation_sync.advance_revision_if_changed_on_conn(
+                conn, work_id, ann_id, changed=True
             )
 
     def resolve_wiki_links(self, text: str) -> str:
