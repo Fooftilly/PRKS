@@ -3223,19 +3223,24 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                     safe_error_type(e),
                                 )
 
-                        # 2. Extract annotations
-                        byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)
-                        for b in byte_matches:
+                        # 2. Extract [[Name]] mentions from PDF bytes (linear scan;
+                        # never a backtracking regex over untrusted input).
+                        from backend.pdf_byte_mentions import iter_pdf_mentioned_labels
+
+                        for clean in iter_pdf_mentioned_labels(pdf_bytes):
                             try:
-                                decoded = b.decode('utf-8', errors='ignore').strip()
-                                clean = ''.join(c for c in decoded if c.isalnum() or c.isspace() or c in "-_")
-                                if clean:
-                                    db_res = db.execute_query("SELECT id FROM persons WHERE (first_name || ' ' || last_name) = ? OR last_name = ?", (clean, clean))
-                                    if db_res:
-                                        p_id = db_res[0]['id']
-                                        exist = db.execute_query("SELECT 1 FROM roles WHERE person_id=? AND work_id=? AND role_type='Mentioned'", (p_id, w_id))
-                                        if not exist:
-                                            db.add_role(p_id, w_id, 'Mentioned')
+                                db_res = db.execute_query(
+                                    "SELECT id FROM persons WHERE (first_name || ' ' || last_name) = ? OR last_name = ?",
+                                    (clean, clean),
+                                )
+                                if db_res:
+                                    p_id = db_res[0]['id']
+                                    exist = db.execute_query(
+                                        "SELECT 1 FROM roles WHERE person_id=? AND work_id=? AND role_type='Mentioned'",
+                                        (p_id, w_id),
+                                    )
+                                    if not exist:
+                                        db.add_role(p_id, w_id, 'Mentioned')
                             except Exception:
                                 continue
                         if save_token:
