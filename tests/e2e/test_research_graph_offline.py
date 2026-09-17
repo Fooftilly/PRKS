@@ -580,23 +580,24 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.locator('.work-details-advanced').wait_for()
         o._open_details_drawer_if_tiled(page)
         page.locator('.work-details-advanced summary').click()
+
         def fail(route):
-            if route.request.method == 'DELETE':
-                route.fulfill(status=400, content_type='application/json', body='{"error":"rejected"}')
-            else:
-                route.fallback()
-        page.route('**/api/works/**', fail)
-        page.locator('.delete-work-btn').click()
-        page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
-        page.locator('#prks-modal-confirm-ok').click()
-        page.locator('#prks-modal-confirm:not(.hidden)', has_text='Error deleting file!').wait_for()
-        self.changed(page, before, (False, False))
-        page.locator('#prks-modal-confirm-ok').click()
-        page.unroute('**/api/works/**', fail)
+            route.fulfill(status=500, content_type='application/json', body='{"error":"rejected"}')
+
+        page.route('**/api/sync/operations', fail)
         page.locator('.delete-work-btn').click()
         page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
         page.locator('#prks-modal-confirm-ok').click()
         page.wait_for_function('location.hash === "#/folders"')
+        wait_for_async(page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.some(r => r.operation === 'DELETE_WORK'))""")
+        # Unacknowledged destroy must not fence Graph snapshots.
+        self.changed(page, before, (False, False))
+        page.unroute('**/api/sync/operations', fail)
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000)
         self.changed(page, before)
 
     def test_work_creation_with_and_without_author_preserves_snapshots(self):

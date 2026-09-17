@@ -700,6 +700,9 @@ async function prksRenderProcessingFilesPageWithFetch(container, options = {}) {
         if (!ctx.routeSidebar || typeof ctx.routeSidebar !== 'object') ctx.routeSidebar = {};
         ctx.routeSidebar.pendingCount = Array.isArray(items) ? items.length : 0;
     }
+    if (Array.isArray(items) && typeof prksSetProcessingAttentionCount === 'function') {
+        prksSetProcessingAttentionCount(items.length);
+    }
     renderProcessingFilesPage(items, container, ctx);
 }
 

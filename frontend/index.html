@@ -141,7 +141,11 @@
                     </ul>
                 </li>
                 <li class="sidebar-nav-section-break">
-                    <a href="#/processing-files" class="nav-link"><span class="nav-link__icon"><i data-lucide="inbox" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Files for Processing</span></a>
+                    <a href="#/processing-files" class="nav-link" data-prks-role="nav-processing">
+                        <span class="nav-link__icon"><i data-lucide="inbox" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span>
+                        <span class="nav-link__label">Files for Processing</span>
+                        <span data-prks-role="nav-processing-badge"></span>
+                    </a>
                 </li>
             </ul>
         </nav>
@@ -189,6 +193,17 @@
                     </div>
                     <button
                         type="button"
+                        id="prks-sync-queue-cue"
+                        class="prks-sync-queue-cue hidden"
+                        hidden
+                        aria-label="Queued changes"
+                        title="Open Settings → Diagnostics"
+                    >
+                        <span class="prks-sync-queue-cue__icon" aria-hidden="true"><i data-lucide="cloud-upload" class="prks-icon prks-icon--sm"></i></span>
+                        <span data-prks-role="sync-queue-badge"></span>
+                    </button>
+                    <button
+                        type="button"
                         id="prks-mobile-details-btn"
                         class="prks-icon-btn prks-icon-btn--ghost"
                         aria-label="Open details panel"
@@ -205,6 +220,15 @@
                     role="tablist"
                     aria-label="Workspace tabs"
                 ></div>
+                    <button
+                    type="button"
+                    id="prks-workspace-overview-btn"
+                    class="prks-icon-btn prks-icon-btn--ghost"
+                    aria-label="Workspace overview"
+                    title="Workspace overview"
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                ><span class="ribbon-btn__icon"><i data-lucide="layout-dashboard" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
                 <button
                     type="button"
                     id="prks-workspace-tab-overflow"
@@ -1064,6 +1088,7 @@
     <script src="/js/workspace-split.js"></script>
     <script src="/js/workspace-tab-menu.js"></script>
     <script src="/js/workspace-drag.js"></script>
+    <script src="/js/workspace-overview.js"></script>
     <script src="/js/pdf-work-runtime.js"></script>
     <script src="/js/request-coordinator.js"></script>
     <script src="/js/offline-store.js"></script>
@@ -1095,6 +1120,7 @@
     <script src="/js/sync-diagnostics.js"></script>
     <script src="/js/api.js"></script>
     <script src="/js/doc-types.js"></script>
+    <script src="/js/overview-primitives.js"></script>
     <script src="/js/ui.js"></script>
     <script src="/js/ribbon-create.js"></script>
     <script src="/js/components/work-cards.js"></script>

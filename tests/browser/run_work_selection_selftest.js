@@ -141,6 +141,12 @@ function makeEl(tag) {
         if (Object.prototype.hasOwnProperty.call(el.attributes, k)) return el.attributes[k];
         return null;
     };
+    el.hasAttribute = function (k) {
+        if (k === 'class') return !!el.className;
+        if (k === 'id') return !!el.id;
+        if (k === 'hidden') return !!el.hidden;
+        return Object.prototype.hasOwnProperty.call(el.attributes, k);
+    };
     el.setAttribute = function (k, v) {
         const val = String(v);
         if (k === 'class') el.className = val;
@@ -356,6 +362,9 @@ function addCard(id, title, hidden) {
     const card = document.createElement('div');
     card.className = 'project-card project-card--work-card';
     card.setAttribute('data-work-id', id);
+    card.setAttribute('data-prks-route', '#/works/' + id);
+    card.setAttribute('role', 'link');
+    card.setAttribute('tabindex', '0');
     card.hidden = !!hidden;
     const t = document.createElement('div');
     t.className = 'card-title';
@@ -458,6 +467,35 @@ const hashBefore = location.hash;
 document._dispatch('click', clickEv);
 assert('click again deselects', root.prksWorkSelectionGetIds().indexOf('W-1') < 0);
 assertEq('hash unchanged', location.hash, hashBefore);
+
+/* Bulk selection: Enter/Space toggles; card is not a navigable link. */
+root.prksWorkSelectionEnter();
+assertEq('selection removes link role', c1.getAttribute('role'), null);
+assertEq('selection removes tab stop', c1.getAttribute('tabindex'), '-1');
+assert('selection has checkbox', !!c1.querySelector('.work-card__checkbox'));
+const keyNavCalls = { n: 0 };
+root.prksNavigate = function () { keyNavCalls.n += 1; };
+const keyEv = {
+    key: 'Enter',
+    target: c1,
+    preventDefault: function () { this.prevented = true; },
+    stopPropagation: function () { this.stopped = true; },
+};
+document._dispatch('keydown', keyEv);
+assert('enter toggles select', root.prksWorkSelectionGetIds().indexOf('W-1') >= 0);
+assert('enter prevented nav default', !!keyEv.prevented);
+assertEq('enter did not navigate', keyNavCalls.n, 0);
+const spaceEv = {
+    key: ' ',
+    target: c1,
+    preventDefault: function () { this.prevented = true; },
+    stopPropagation: function () { this.stopped = true; },
+};
+document._dispatch('keydown', spaceEv);
+assert('space deselects', root.prksWorkSelectionGetIds().indexOf('W-1') < 0);
+root.prksWorkSelectionExit();
+assertEq('exit restores link role', c1.getAttribute('role'), 'link');
+assertEq('exit restores tabindex', c1.getAttribute('tabindex'), '0');
 
 let navCalls = 0;
 let navReplace = false;

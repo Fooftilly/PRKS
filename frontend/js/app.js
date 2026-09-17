@@ -130,6 +130,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof initModalCloseUi === 'function') initModalCloseUi();
     if (typeof initMobileShell === 'function') initMobileShell();
     if (typeof prksWorkspaceInit === 'function') prksWorkspaceInit();
+    if (typeof prksBindWorkspaceOverviewChrome === 'function') prksBindWorkspaceOverviewChrome();
+    initPrksNavAttentionBadges();
     initRouter();
     initTabs();
     initForms();
@@ -139,6 +141,153 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
     initUploadDragAndDrop();
 });
+
+/** Last known Processing inbox count. null = unknown (do not show “0”). */
+let __prksProcessingAttentionCount = null;
+
+function prksSetProcessingAttentionCount(count) {
+    if (count == null || !Number.isFinite(Number(count))) {
+        __prksProcessingAttentionCount = null;
+    } else {
+        __prksProcessingAttentionCount = Math.max(0, Number(count));
+    }
+    prksPaintProcessingNavBadge();
+}
+
+function prksGetProcessingAttentionCount() {
+    return __prksProcessingAttentionCount;
+}
+
+function prksPaintProcessingNavBadge() {
+    const host = document.querySelector('[data-prks-role="nav-processing-badge"]');
+    if (!host) return;
+    if (__prksProcessingAttentionCount == null) {
+        host.innerHTML = '';
+        return;
+    }
+    if (typeof prksNavAttentionBadgeHtml !== 'function') {
+        host.innerHTML = '';
+        return;
+    }
+    host.innerHTML = prksNavAttentionBadgeHtml({
+        count: __prksProcessingAttentionCount,
+        ariaLabel:
+            __prksProcessingAttentionCount +
+            (__prksProcessingAttentionCount === 1
+                ? ' file for processing'
+                : ' files for processing'),
+    });
+}
+
+async function prksRefreshProcessingNavBadge(options) {
+    const opts = options || {};
+    const online =
+        typeof prksOfflineRuntimeState !== 'function' || prksOfflineRuntimeState() === 'online';
+    if (!online) {
+        // Offline / unreachable: never present a stale count as live.
+        prksSetProcessingAttentionCount(null);
+        return;
+    }
+    if (typeof fetchProcessingFiles !== 'function') return;
+    try {
+        const rows = await fetchProcessingFiles({
+            rescan: !!opts.rescan,
+            signal: opts.signal,
+        });
+        if (Array.isArray(rows)) prksSetProcessingAttentionCount(rows.length);
+        else prksSetProcessingAttentionCount(null);
+    } catch (_e) {
+        prksSetProcessingAttentionCount(null);
+    }
+}
+
+async function prksRefreshSyncQueueCue() {
+    const cue = document.getElementById('prks-sync-queue-cue');
+    const host = document.querySelector('[data-prks-role="sync-queue-badge"]');
+    if (!cue) return;
+    let n = null;
+    try {
+        if (
+            typeof prksSync !== 'undefined' &&
+            prksSync &&
+            prksSync.store &&
+            typeof prksSync.store.listOperations === 'function'
+        ) {
+            const ops = await prksSync.store.listOperations();
+            const active = (ops || []).filter(function (op) {
+                const st = op && op.status;
+                return st && st !== 'acknowledged' && st !== 'discarded';
+            });
+            n = active.length;
+        }
+    } catch (_e) {
+        n = null;
+    }
+    if (n == null || n <= 0) {
+        cue.hidden = true;
+        cue.classList.add('hidden');
+        if (host) host.innerHTML = '';
+        return;
+    }
+    cue.hidden = false;
+    cue.classList.remove('hidden');
+    cue.setAttribute(
+        'aria-label',
+        n + (n === 1 ? ' change queued' : ' changes queued')
+    );
+    cue.title = 'Open Settings → Diagnostics';
+    if (host && typeof prksNavAttentionBadgeHtml === 'function') {
+        host.innerHTML = prksNavAttentionBadgeHtml({
+            count: n,
+            ariaLabel: n + (n === 1 ? ' change queued' : ' changes queued'),
+        });
+    }
+}
+
+function initPrksNavAttentionBadges() {
+    prksPaintProcessingNavBadge();
+    void prksRefreshProcessingNavBadge({ rescan: false });
+    void prksRefreshSyncQueueCue();
+    const cue = document.getElementById('prks-sync-queue-cue');
+    if (cue && cue.dataset.bound !== '1') {
+        cue.dataset.bound = '1';
+        cue.addEventListener('click', function () {
+            if (typeof openModal === 'function') openModal('settings-modal');
+            const diagBtn = document.querySelector(
+                '[data-prks-settings-category="diagnostics"]'
+            );
+            if (diagBtn && typeof diagBtn.click === 'function') diagBtn.click();
+        });
+    }
+    if (!window.__prksNavAttentionSubscribed) {
+        window.__prksNavAttentionSubscribed = true;
+        if (typeof prksOfflineRuntimeSubscribe === 'function') {
+            prksOfflineRuntimeSubscribe(function (state) {
+                if (state === 'online') {
+                    void prksRefreshProcessingNavBadge({ rescan: false });
+                    void prksRefreshSyncQueueCue();
+                } else {
+                    prksSetProcessingAttentionCount(null);
+                    void prksRefreshSyncQueueCue();
+                }
+            });
+        }
+        if (
+            typeof prksSync !== 'undefined' &&
+            prksSync &&
+            typeof prksSync.subscribe === 'function'
+        ) {
+            prksSync.subscribe(function () {
+                void prksRefreshSyncQueueCue();
+            });
+        }
+    }
+}
+
+window.prksSetProcessingAttentionCount = prksSetProcessingAttentionCount;
+window.prksGetProcessingAttentionCount = prksGetProcessingAttentionCount;
+window.prksRefreshProcessingNavBadge = prksRefreshProcessingNavBadge;
+window.prksRefreshSyncQueueCue = prksRefreshSyncQueueCue;
 
 function prksSyncSwitchUi(btn, on) {
     btn.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -2112,12 +2261,26 @@ async function prksPendingCreatedPersonGroup(groupId) {
  */
 async function prksPersonRecordFor(personId) {
     let cached = null;
+    /* Prefer the disposable cache snapshot. A network read-through here can
+     * race a just-sent durable ACK: the GET may leave before the server write
+     * is visible, return the pre-mutation body, and — once the op has already
+     * been reconciled and retired — paint that stale body with nothing left
+     * to overlay. The cache is what reconcile just patched (or what the
+     * pending op still overlays). */
     try {
-        const result = await prksOfflineReadEntity('person', personId,
-            '/api/persons/' + encodeURIComponent(personId),
-            { validate: value => prksIsPersonShape(value, personId) });
-        cached = result && result.value;
+        if (typeof createPrksOfflineStore === 'function') {
+            const row = await createPrksOfflineStore().getEntity('person', personId);
+            cached = row && row.value;
+        }
     } catch (_e) { cached = null; }
+    if (!cached) {
+        try {
+            const result = await prksOfflineReadEntity('person', personId,
+                '/api/persons/' + encodeURIComponent(personId),
+                { validate: value => prksIsPersonShape(value, personId) });
+            cached = result && result.value;
+        } catch (_e) { cached = null; }
+    }
     if (!cached) return await prksPendingCreatedPerson(personId);
     return await prksEffectivePersonRecord(cached);
 }
@@ -2132,12 +2295,23 @@ async function prksPersonRecordFor(personId) {
  */
 async function prksPersonGroupRecordFor(groupId) {
     let cached = null;
+    /* Same cache-first rule as prksPersonRecordFor: a read-through GET can
+     * race a just-acknowledged durable write and return a pre-mutation body
+     * after the op has already retired. */
     try {
-        const result = await prksOfflineReadEntity('person-group', groupId,
-            '/api/person-groups/' + encodeURIComponent(groupId),
-            { validate: value => prksIsPersonGroupShape(value, groupId) });
-        cached = result && result.value;
+        if (typeof createPrksOfflineStore === 'function') {
+            const row = await createPrksOfflineStore().getEntity('person-group', groupId);
+            cached = row && row.value;
+        }
     } catch (_e) { cached = null; }
+    if (!cached) {
+        try {
+            const result = await prksOfflineReadEntity('person-group', groupId,
+                '/api/person-groups/' + encodeURIComponent(groupId),
+                { validate: value => prksIsPersonGroupShape(value, groupId) });
+            cached = result && result.value;
+        } catch (_e) { cached = null; }
+    }
     if (!cached) return await prksPendingCreatedPersonGroup(groupId);
     return await prksEffectivePersonGroupRecord(cached);
 }
@@ -3613,6 +3787,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     const rows = await fetchProcessingFiles({ rescan: true, signal: routeSignal });
                     if (stale()) return;
                     publishSidebar({ pendingCount: Array.isArray(rows) ? rows.length : 0 });
+                    if (Array.isArray(rows) && typeof prksSetProcessingAttentionCount === 'function') {
+                        prksSetProcessingAttentionCount(rows.length);
+                    }
                     if (typeof renderProcessingFilesPage === 'function') {
                         renderProcessingFilesPage(rows, contentDiv);
                     } else {
@@ -3720,21 +3897,94 @@ async function prksRenderTabRoute(ctx, hash, options) {
             }
             case 'work': {
                 const workId = route.params.workId;
-                const workOps = await prksDurableOperationsOrNone();
+                /* Durable-queue hydration must not block a cached Work from
+                 * painting (metadata editor races gate listOperations on
+                 * purpose). CREATE/DELETE classification uses the live set
+                 * plus a targeted persisted lifecycle marker — never an
+                 * empty-ops Promise.race, and never a full listOperations
+                 * scan on every cached open. Pending CREATE_WORK has no
+                 * cache row — only then await the queue before any network
+                 * GET. */
+                const workOpsPromise = prksDurableOperationsOrNone().then(function (ops) {
+                    if (typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
+                        prksApplyLiveWorkLifecycleFromOperations(ops || []);
+                    }
+                    return ops || [];
+                });
+                let cachedWorkRow = null;
+                try {
+                    if (typeof createPrksOfflineStore === 'function') {
+                        cachedWorkRow = await createPrksOfflineStore().getEntity('work', workId);
+                    }
+                } catch (_e) {
+                    cachedWorkRow = null;
+                }
                 if (stale()) return;
-                const workDeleted = typeof prksPendingWorkDeletions === 'function' &&
-                    prksPendingWorkDeletions(workOps).has(workId);
-                const workUnsent = !workDeleted &&
+                let workOps = [];
+                let offlineWork = { value: null, source: 'unavailable', cachedAt: null };
+                const lifecycle = typeof prksResolveWorkLifecycle === 'function'
+                    ? await prksResolveWorkLifecycle(workId)
+                    : null;
+                if (stale()) return;
+                const liveDeleted = lifecycle === 'delete';
+                const liveUnsent = lifecycle === 'create';
+                if (cachedWorkRow && cachedWorkRow.value) {
+                    if (liveDeleted) {
+                        offlineWork = { value: null, source: 'unavailable', cachedAt: null };
+                        workOps = await workOpsPromise;
+                        if (stale()) return;
+                    } else {
+                        offlineWork = await prksOfflineDetailFetch(
+                            'work',
+                            workId,
+                            '/api/works/' + encodeURIComponent(workId),
+                            routeSignal
+                        );
+                        if (stale()) return;
+                        /* Background: keep live set coherent with the queue.
+                         * The persisted marker already classified delete
+                         * before paint, so this must not be the first time
+                         * a pending DELETE becomes visible. */
+                        void workOpsPromise.then(function (ops) {
+                            if (stale()) return;
+                            workOps = ops;
+                            if (typeof prksPendingWorkDeletions === 'function' &&
+                                prksPendingWorkDeletions(ops).has(workId)) {
+                                if (typeof prksOfflineRenderUnavailable === 'function') {
+                                    prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
+                                }
+                                if (ctx.setEntity) ctx.setEntity('work', null);
+                            }
+                        });
+                    }
+                } else {
+                    workOps = await workOpsPromise;
+                    if (stale()) return;
+                    const workDeletedEarly = liveDeleted ||
+                        (typeof prksPendingWorkDeletions === 'function' &&
+                            prksPendingWorkDeletions(workOps).has(workId));
+                    const workUnsentEarly = liveUnsent || (!workDeletedEarly &&
+                        typeof prksPendingWorkCreates === 'function' &&
+                        prksPendingWorkCreates(workOps).some(op => op.entity_id === workId));
+                    if (!workUnsentEarly && !workDeletedEarly) {
+                        offlineWork = await prksOfflineDetailFetch(
+                            'work',
+                            workId,
+                            '/api/works/' + encodeURIComponent(workId),
+                            routeSignal
+                        );
+                        if (stale()) return;
+                    }
+                }
+                const workDeleted = liveDeleted ||
+                    (typeof prksPendingWorkDeletions === 'function' &&
+                        prksPendingWorkDeletions(workOps).has(workId));
+                const workUnsent = liveUnsent || (!workDeleted &&
                     typeof prksPendingWorkCreates === 'function' &&
-                    prksPendingWorkCreates(workOps).some(op => op.entity_id === workId);
-                const offlineWork = workUnsent
-                    ? { value: null, source: 'unavailable', cachedAt: null }
-                    : await prksOfflineDetailFetch(
-                        'work',
-                        workId,
-                        '/api/works/' + encodeURIComponent(workId),
-                        routeSignal
-                    );
+                    prksPendingWorkCreates(workOps).some(op => op.entity_id === workId));
+                if (workUnsent) {
+                    offlineWork = { value: null, source: 'unavailable', cachedAt: null };
+                }
                 if (stale()) return;
                 // This route IS the genuine foreground open, so it is the only
                 // place that records one. The read itself is pure; the explicit
@@ -3780,7 +4030,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     prksRememberWorkNotesCanonical(ctx, work);
                 }
                 if (work && typeof prksEnsureWorkNotesBase === 'function') {
-                    void prksEnsureWorkNotesBase(ctx, work);
+                    void prksEnsureWorkNotesBase(ctx, work, { pendingCreate: !!workUnsent });
                 }
                 if (typeof prksRefreshPendingWorkNotes === 'function') {
                     void prksRefreshPendingWorkNotes();
@@ -5096,12 +5346,6 @@ function initForms() {
                 : typeof prksReadRoleCreditName === 'function'
                   ? prksReadRoleCreditName('role-link')
                   : '';
-        const payload = {
-            person_id,
-            work_id,
-            role_type,
-            credit_name,
-        };
         const _cwDupCheck = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
         if (
             typeof prksWorkHasRoleLink === 'function' &&
@@ -5115,7 +5359,6 @@ function initForms() {
             return;
         }
         if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, true, { busyLabel: 'Linking…' });
-        let coherenceToken = null;
         try {
             /* The SAME durable path the Work panel's Link button takes. This
              * modal can target a Work other than the one on screen, which is
@@ -5166,23 +5409,18 @@ function initForms() {
             if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, false);
         }
         closeModals();
+        /* Durable save already wrote the pending overlay (and ACK will patch
+         * the live Work entity). A GET here races that ACK: a pre-link body
+         * can replace the panel and drop the Unlink control until a later
+         * remount — the consecutive-edit flake. Refresh from the owned entity
+         * instead; never reload the whole app for a non-focused target. */
         const expectedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
-        const ownsWork =
-            expectedWork &&
-            String(expectedWork.id) === String(work_id) &&
-            typeof prksApplyOwnedWorkEntity === 'function';
-        if (ownsWork && typeof fetchWorkDetails === 'function') {
-            const _rw = await fetchWorkDetails(work_id);
-            if (_rw && typeof prksOfflineCacheEntityIfCurrent === 'function' && coherenceToken != null) {
-                void prksOfflineCacheEntityIfCurrent('work', work_id, _rw, coherenceToken);
+        if (expectedWork && String(expectedWork.id) === String(work_id)) {
+            if (typeof prksSetWorkDetailsMode === 'function') {
+                void prksSetWorkDetailsMode('people');
+            } else if (typeof updatePanelContent === 'function') {
+                updatePanelContent('details');
             }
-            if (prksApplyOwnedWorkEntity(ownerCtx, work_id, _rw)) {
-                if (typeof prksReplaceFocusedWorkDetailsPanel === 'function') {
-                    prksReplaceFocusedWorkDetailsPanel(ownerCtx, _rw);
-                }
-            }
-        } else {
-            window.location.reload();
         }
     };
 }

@@ -2472,6 +2472,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         if current:
                             research_index.sync_work(
                                 data.get("entity_id"), current.get("text_content") or "", db)
+                            # Compact preview/link map for the live Work entity.
+                            # Body stays omitted; refs are derived and bounded.
+                            result["research_refs"] = research_index.work_research_refs(
+                                data.get("entity_id"), db)
                     except Exception as e:
                         LOGGER.warning(
                             "research_index_sync_failed work_id=%s error_type=%s",

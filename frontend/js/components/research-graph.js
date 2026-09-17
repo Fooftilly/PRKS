@@ -525,9 +525,9 @@
             {
                 selector: 'node:selected, node.graph-node--selected',
                 style: {
-                    'border-width': 3,
-                    'border-color': accent,
-                    'background-color': accentSoft,
+                    'border-width': 2,
+                    'border-color': token('--border-strong', '#9ca3af'),
+                    'background-color': token('--surface-selected', '#f3f4f6'),
                 },
             },
             {

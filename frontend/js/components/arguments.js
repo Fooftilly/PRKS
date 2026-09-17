@@ -222,6 +222,14 @@
                           return argumentRowHtml(a, iconArg);
                       })
                       .join('');
+            if (typeof root.prksPaintScopeHost === 'function') {
+                root.prksPaintScopeHost(container, {
+                    shown: filtered.length,
+                    total: list.length,
+                    filter: query,
+                    label: kindUi.plural,
+                });
+            }
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
             if (!filtered.length && !query) {
                 const na = host.querySelector('#prks-argument-new-empty');
@@ -245,7 +253,8 @@
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-stance-new" data-prks-role="' +
             ARGUMENT_MUTATION_ROLE +
             '">New Stance</button>' +
-            '</div></div></div>' +
+            '</div></div>' +
+            '<div data-prks-role="index-scope-host"></div></div>' +
             '<div class="prks-tabs" role="tablist" aria-label="Argument kind">' +
             btn('all', 'All') +
             btn('argument', 'Arguments') +

@@ -856,6 +856,149 @@ function prksSwitchFolderLibraryTab(tab) {
     }
 }
 
+function prksFolderLibraryCatalogGlanceParts(folders) {
+    const list = Array.isArray(folders) ? folders : [];
+    const folderCount = list.length;
+    let workSum = 0;
+    let workSumKnown = true;
+    for (let i = 0; i < list.length; i += 1) {
+        const n = Number(list[i] && list[i].work_count);
+        if (!Number.isFinite(n)) {
+            workSumKnown = false;
+            break;
+        }
+        workSum += n;
+    }
+    return [
+        folderCount + (folderCount === 1 ? ' folder' : ' folders'),
+        /* Σ folder work_count is filed membership only — not the whole library. */
+        workSumKnown
+            ? workSum + (workSum === 1 ? ' file in folders' : ' files in folders')
+            : null,
+    ];
+}
+
+function prksPaintFolderLibraryGlance(host, parts) {
+    if (!host) return;
+    if (typeof prksPageSummaryHtml !== 'function') {
+        host.innerHTML = '';
+        return;
+    }
+    host.innerHTML = prksPageSummaryHtml({
+        parts: parts,
+        ariaLabel: 'Library at a glance',
+    });
+}
+
+async function prksPeekCachedBrowseList(listKey) {
+    /* Read-only peek: never start a network warm that would publish into an
+     * independent browse domain from Home glance. Missing cache ⇒ omit. */
+    try {
+        if (typeof createPrksOfflineStore !== 'function') return null;
+        const row = await createPrksOfflineStore().getList(listKey);
+        const value = row && row.value;
+        return Array.isArray(value) ? value : null;
+    } catch (_e) {
+        return null;
+    }
+}
+
+async function prksCollectFolderLibraryGlanceExtras() {
+    const parts = [];
+    const CONTINUE_CAP = 3;
+
+    /* Continue / In Progress / Recently added reuse already-warmed snapshots or
+     * in-memory tab state only. Never start browse/recently-added read-through
+     * fetches here — boot on #/folders must not populate works-browse:index or
+     * recent:index as a side effect of the glance band. */
+    let recentRows = await prksPeekCachedBrowseList('recent:index');
+    if (Array.isArray(recentRows) && recentRows.length) {
+        if (typeof prksEffectiveBrowseRows === 'function') {
+            recentRows = prksEffectiveBrowseRows(recentRows, 'recent');
+        }
+        const slice = recentRows.slice(0, CONTINUE_CAP);
+        for (let i = 0; i < slice.length; i += 1) {
+            const w = slice[i];
+            if (!w || !w.id) continue;
+            const title = String(w.title || 'Untitled').trim() || 'Untitled';
+            parts.push({
+                text: title,
+                href: '#/works/' + encodeURIComponent(String(w.id)),
+            });
+        }
+        if (recentRows.length > CONTINUE_CAP) {
+            parts.push({ text: 'More recent', href: '#/recent' });
+        }
+    }
+
+    let browseRows = await prksPeekCachedBrowseList('works-browse:index');
+    if (Array.isArray(browseRows)) {
+        if (typeof prksEffectiveBrowseRows === 'function') {
+            browseRows = prksEffectiveBrowseRows(browseRows, 'works-browse');
+        }
+        const inProgressN = browseRows.filter(function (w) {
+            return w && String(w.status || '') === 'In Progress';
+        }).length;
+        if (inProgressN > 0) {
+            parts.push({
+                text: inProgressN + ' in progress',
+                href: '#/progress?status=' + encodeURIComponent('In Progress'),
+            });
+        }
+    }
+
+    const stMem = window.__prksFolderDashboardState;
+    /* Only reuse an already-loaded Recently-added RAM copy. Do not warm
+     * recently-added:index from Home glance — that domain is independent. */
+    if (stMem && Array.isArray(stMem.recentlyAddedWorks) && stMem.recentlyAddedWorks.length) {
+        parts.push(stMem.recentlyAddedWorks.length + ' recently added');
+    }
+
+    const procCount =
+        typeof prksGetProcessingAttentionCount === 'function'
+            ? prksGetProcessingAttentionCount()
+            : null;
+    if (procCount != null && procCount > 0) {
+        parts.push({
+            text: procCount + ' for processing',
+            href: '#/processing-files',
+        });
+    }
+
+    /* Sync attention: read the already-painted nav cue — do not open the durable store. */
+    try {
+        const cue = document.getElementById('prks-sync-queue-cue');
+        if (cue && !cue.hidden && !cue.classList.contains('hidden')) {
+            const label = String(cue.getAttribute('aria-label') || '').trim();
+            if (label) parts.push(label.replace(/\.$/, ''));
+        }
+    } catch (_e) {
+        /* omit */
+    }
+
+    return parts;
+}
+
+async function prksScheduleFolderLibraryGlance(root) {
+    const host =
+        root && root.querySelector
+            ? root.querySelector('[data-prks-role="folder-library-glance-host"]')
+            : null;
+    if (!host) return;
+    const token = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
+    host.dataset.glanceToken = token;
+    const st = window.__prksFolderDashboardState;
+    const catalogParts = prksFolderLibraryCatalogGlanceParts((st && st.folders) || []);
+    let extras = [];
+    try {
+        extras = await prksCollectFolderLibraryGlanceExtras();
+    } catch (_e) {
+        extras = [];
+    }
+    if (!host.isConnected || host.dataset.glanceToken !== token) return;
+    prksPaintFolderLibraryGlance(host, catalogParts.concat(extras || []));
+}
+
 function renderDashboard(folders, container, options = {}) {
     const prev = window.__prksFolderDashboardState || {};
     const list = Array.isArray(folders) ? folders : [];
@@ -882,10 +1025,21 @@ function renderDashboard(folders, container, options = {}) {
            </div>`
         : '';
     const foldersActive = activeTab !== 'recently-added';
+    const catalogParts = prksFolderLibraryCatalogGlanceParts(list);
+    const glanceHtml =
+        '<div data-prks-role="folder-library-glance-host">' +
+        (typeof prksPageSummaryHtml === 'function'
+            ? prksPageSummaryHtml({
+                  parts: catalogParts,
+                  ariaLabel: 'Library at a glance',
+              })
+            : '') +
+        '</div>';
     container.innerHTML = `
         <div class="prks-folder-library">
         <div class="prks-page-header page-header prks-folder-library__header">
             <h2 class="prks-page-title">Folder Library</h2>
+            ${glanceHtml}
         </div>
         <div class="tabs prks-folder-library__tabs" role="tablist" aria-label="Folder library views">
             <button type="button" class="tab-btn prks-tab prks-folder-library__tab-btn${foldersActive ? ' active is-active' : ''}" role="tab" data-tab="folders" aria-selected="${foldersActive ? 'true' : 'false'}">Folders</button>
@@ -953,6 +1107,7 @@ function renderDashboard(folders, container, options = {}) {
     if (activeTab === 'recently-added') {
         void prksLoadFolderLibraryRecentlyAdded(false);
     }
+    void prksScheduleFolderLibraryGlance(root);
     prksBindFolderOfflineState(options && options.ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
@@ -1000,10 +1155,26 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         `
         : '';
 
+    const childN = Array.isArray(folder.children) ? folder.children.length : null;
+    const workN = Array.isArray(folder.works) ? folder.works.length : null;
+    const folderSummaryHtml =
+        typeof prksPageSummaryHtml === 'function'
+            ? prksPageSummaryHtml({
+                  parts: [
+                      childN != null
+                          ? childN + (childN === 1 ? ' subfolder' : ' subfolders')
+                          : null,
+                      workN != null ? workN + (workN === 1 ? ' file' : ' files') : null,
+                  ],
+              })
+            : '';
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split">
-            <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
-            ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+            <div class="page-header__title-row">
+                <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+                ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+            </div>
+            ${folderSummaryHtml}
         </div>
         <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
         ${subfoldersHtml}

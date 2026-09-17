@@ -2476,6 +2476,56 @@ function prksPrivateNotesStatusForResult(code) {
     return 'Could not save';
 }
 
+/**
+ * A park/flush may still be syncing when the remounted Reminders field is
+ * edited again. `saveWorkNote` correctly refuses to coalesce a sent row
+ * (`scope_busy`). Keep the draft dirty and retry once that in-flight note
+ * settles — otherwise the later text is stranded in the draft map while the
+ * server keeps the earlier body.
+ */
+function prksSchedulePrivateNoteBusyRetry(editor, token) {
+    if (!editor || !editor.ctx) return;
+    const timerKey = 'privateNotesBusyRetry:' + editor.key;
+    editor.ctx.clearTimer(timerKey);
+    if (editor._prksBusyRetryStop) {
+        try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
+        editor._prksBusyRetryStop = null;
+    }
+    const tryAgain = function () {
+        if (token !== (prksPrivateNoteDrafts.get(editor.key) || {}).latestSaveToken) return;
+        const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
+        if (liveEditor !== editor) return;
+        if (!editor.dirty) return;
+        prksEnqueuePrivateNotesSave(editor);
+    };
+    if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.subscribe === 'function') {
+        const stop = prksSync.subscribe(function () {
+            if (token !== (prksPrivateNoteDrafts.get(editor.key) || {}).latestSaveToken) {
+                stop();
+                editor._prksBusyRetryStop = null;
+                return;
+            }
+            const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
+            if (liveEditor !== editor || !editor.dirty) {
+                stop();
+                editor._prksBusyRetryStop = null;
+                return;
+            }
+            stop();
+            editor._prksBusyRetryStop = null;
+            tryAgain();
+        });
+        editor._prksBusyRetryStop = stop;
+    }
+    const timer = window.setTimeout(function () {
+        if (editor.ctx.timers && editor.ctx.timers.get(timerKey) === timer) {
+            editor.ctx.clearTimer(timerKey);
+        }
+        tryAgain();
+    }, 400);
+    editor.ctx.setTimer(timerKey, timer);
+}
+
 function prksEnqueueWorkPrivateNoteSave(editor) {
     const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
     const content = String(entry.draftText);
@@ -2516,6 +2566,21 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
             entry.settledSaveToken = token;
             entry.promise = null;
+            if (code === 'scope_busy' && !hasNewerDraft) {
+                // Park-flush may still be in flight; keep this body and retry.
+                entry.saveError = false;
+                entry.state = 'drafting';
+                entry.updatedAt = Date.now();
+                editor.dirty = true;
+                if (prksPrivateNotesOwnerCurrent(editor)) {
+                    const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
+                    if (liveEditor === editor) {
+                        prksPrivateNotesSetStatus(editor, prksPrivateNotesStatusForResult(code));
+                    }
+                }
+                prksSchedulePrivateNoteBusyRetry(editor, token);
+                return;
+            }
             entry.saveError = !ok && !hasNewerDraft;
             entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             entry.updatedAt = Date.now();
@@ -2703,6 +2768,11 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
     ta.addEventListener('blur', blur);
     ctx.setResource('privateNotesEditor', editor, function () {
         ctx.clearTimer(editor.timerKey);
+        ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
+        if (editor._prksBusyRetryStop) {
+            try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
+            editor._prksBusyRetryStop = null;
+        }
         ta.removeEventListener('input', schedule);
         ta.removeEventListener('blur', blur);
     });
@@ -3612,6 +3682,43 @@ function renderWorkMetaTab(work, mode = 'view') {
         typeof prksProgressStatusIconHtml === 'function'
             ? prksProgressStatusIconHtml(statusText, { className: 'status-badge__icon', size: 'sm' })
             : '';
+    const rolesForCount =
+        typeof prksEffectiveWorkDetailRoles === 'function'
+            ? prksEffectiveWorkDetailRoles(work)
+            : work;
+    const peopleN = Array.isArray(rolesForCount && rolesForCount.roles)
+        ? rolesForCount.roles.length
+        : Array.isArray(work.roles)
+          ? work.roles.length
+          : null;
+    const tagsN = Array.isArray(work.tags) ? work.tags.length : null;
+    const folderTitle = work.folder_title || (work.folder && work.folder.title) || '';
+    const folderId = work.folder_id || (work.folder && work.folder.id) || '';
+    const docTypeLabel =
+        typeof prksDocTypeMeta === 'function'
+            ? prksDocTypeMeta(work.doc_type).label
+            : String(work.doc_type || '');
+    const stateSummaryHtml =
+        typeof prksStateSummaryHtml === 'function'
+            ? prksStateSummaryHtml({
+                  parts: [
+                      statusText,
+                      docTypeLabel || null,
+                      folderTitle
+                          ? folderId
+                              ? {
+                                    text: folderTitle,
+                                    href: '#/folders/' + encodeURIComponent(String(folderId)),
+                                }
+                              : folderTitle
+                          : null,
+                      peopleN != null
+                          ? peopleN + (peopleN === 1 ? ' person' : ' people')
+                          : null,
+                      tagsN != null ? tagsN + (tagsN === 1 ? ' tag' : ' tags') : null,
+                  ],
+              })
+            : '';
     const hasMetadata =
         work.year ||
         (showPublishedDate && work.published_date) ||
@@ -3628,6 +3735,7 @@ function renderWorkMetaTab(work, mode = 'view') {
         originalUrlPdf;
 
     return `
+        ${stateSummaryHtml}
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Title</h3>

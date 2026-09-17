@@ -233,6 +233,14 @@
                           return positionRowHtml(p, icon);
                       })
                       .join('');
+            if (typeof root.prksPaintScopeHost === 'function') {
+                root.prksPaintScopeHost(container, {
+                    shown: filtered.length,
+                    total: list.length,
+                    filter: query,
+                    label: 'Positions',
+                });
+            }
             if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(host);
             if (!filtered.length && !query) {
                 const emptyBtn = host.querySelector('#prks-position-new-empty');
@@ -255,7 +263,8 @@
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-new" data-prks-role="' +
             POSITION_MUTATION_ROLE +
             '">New Position</button>' +
-            '</div></div></div>' +
+            '</div></div>' +
+            '<div data-prks-role="index-scope-host"></div></div>' +
             (list.length && typeof root.prksResearchIndexToolbarHtml === 'function'
                 ? root.prksResearchIndexToolbarHtml('prks-position-search', 'Search positions…')
                 : '') +
@@ -319,7 +328,20 @@
             '<div class="prks-page-header page-header"><div class="page-header__title-row"><div>' +
             '<p class="saved-view-detail__kicker">Position</p><h2 class="prks-page-title">' +
             esc(p.name || 'Position') +
-            '</h2></div><div class="page-header__actions">' +
+            '</h2>' +
+            (typeof root.prksRelSummaryHtml === 'function'
+                ? root.prksRelSummaryHtml({
+                      parts: [
+                          argList.length
+                              ? argList.length +
+                                (argList.length === 1
+                                    ? ' targeting Argument/Stance'
+                                    : ' targeting Arguments/Stances')
+                              : null,
+                      ],
+                  })
+                : '') +
+            '</div><div class="page-header__actions">' +
             '<button type="button" class="prks-btn prks-btn--secondary" id="prks-position-view-graph">View in graph</button>' +
             '</div></div></div>' +
             '<div class="research-entity">' +

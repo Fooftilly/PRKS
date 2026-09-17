@@ -316,5 +316,8 @@
     root.addEventListener('focus', () => runtime.changed());
     // Durable rows, including conflicts, are discoverable after cache clearing.
     root.prksSyncDiagnostics = async () => Object.assign(await store.stats(), { discarded: runtime.discarded() });
+    if (typeof root.prksArmLiveWorkLifecycleHydration === 'function') {
+        root.prksArmLiveWorkLifecycleHydration();
+    }
     void runtime.wake();
 })(typeof window === 'undefined' ? globalThis : window);

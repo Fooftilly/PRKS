@@ -3578,6 +3578,34 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(result[0], 409)
         self.assertEqual(self._sv_json("POST", "/api/sync/operations", op), result)
 
+    def test_research_note_ack_includes_research_refs_not_body(self):
+        """Durable Research Note ACK keeps the body omitted but carries the
+        compact research_refs map so the live Work preview can resolve links
+        without a second Work GET."""
+        import uuid
+        db = server_module.db
+        work = db.add_work("Note ACK Refs")
+        concept = db.add_concept("ACK Ref Concept")
+        body = "See [[concept:ACK Ref Concept]]."
+        op = dict(
+            op_id=str(uuid.uuid4()), device_id=str(uuid.uuid4()),
+            operation="SET_WORK_RESEARCH_NOTE", entity_type="work", entity_id=work,
+            payload={"text": body}, base_revision=0,
+            occurred_at="2026-09-16T00:00:00Z", created_at="2026-09-16T00:00:00Z",
+            depends_on=[],
+        )
+        status, result = self._sv_json("POST", "/api/sync/operations", op)
+        self.assertEqual(status, 200)
+        self.assertEqual(result.get("code"), "ACKNOWLEDGED")
+        self.assertTrue(result.get("value_omitted"))
+        self.assertNotIn("text", result)
+        self.assertNotIn(body, json.dumps(result))
+        refs = result.get("research_refs") or {}
+        names = [c.get("name") for c in (refs.get("concepts") or [])]
+        self.assertIn("ACK Ref Concept", names)
+        self.assertEqual(concept, next(
+            c["id"] for c in refs["concepts"] if c.get("name") == "ACK Ref Concept"))
+
     def test_tags_etag_representation_contract(self):
         db = server_module.db
         tag = db.add_tag("ETag ABCD")["id"]

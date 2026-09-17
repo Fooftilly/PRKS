@@ -80,6 +80,7 @@
             <a href="#tags">Tags</a>
             <a href="#chips">Chips</a>
             <a href="#badges">Badges</a>
+            <a href="#summaries">Summaries</a>
             <a href="#status">Status</a>
             <a href="#nav">Navigation</a>
             <a href="#page-header">Page header</a>
@@ -228,6 +229,22 @@
             <div class="prks-cluster">
                 <span class="prks-badge prks-badge--neutral">neutral</span>
                 <span class="prks-badge" style="--doc-type-color:#a855f7">Book</span>
+                <span class="prks-nav-attention" aria-label="3 files for processing"><span class="prks-nav-attention__count">3</span></span>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="summaries" data-gallery-section="summaries">
+            <h2>Overview / context summaries</h2>
+            <div class="prks-stack">
+                <div class="prks-page-header">
+                    <div class="prks-page-header__title-row">
+                        <h3 class="prks-page-title">Folder Library</h3>
+                    </div>
+                    <p class="prks-page-summary">12 folders<span class="prks-summary-sep" aria-hidden="true"> · </span>148 files</p>
+                </div>
+                <p class="prks-scope-line" role="status">12 of 48 matching</p>
+                <p class="prks-rel-summary"><a class="prks-summary-link" href="#typography">Uncategorized</a><span class="prks-summary-sep" aria-hidden="true"> · </span>2 people<span class="prks-summary-sep" aria-hidden="true"> · </span>3 tags</p>
+                <p class="prks-state-summary">In Progress<span class="prks-summary-sep" aria-hidden="true"> · </span>Book<span class="prks-summary-sep" aria-hidden="true"> · </span>3 tags</p>
             </div>
         </section>
 
@@ -271,6 +288,7 @@
                 <li class="nav-section">Library</li>
                 <li><a href="#typography" class="nav-link active"><span class="nav-link__label">Folders</span></a></li>
                 <li><a href="#typography" class="nav-link"><span class="nav-link__label">Recent</span></a></li>
+                <li><a href="#typography" class="nav-link"><span class="nav-link__icon" aria-hidden="true"><i data-lucide="inbox" class="prks-icon prks-icon--nav"></i></span><span class="nav-link__label">Files for Processing</span><span class="prks-nav-attention" aria-label="3 files for processing"><span class="prks-nav-attention__count">3</span></span></a></li>
             </ul>
         </section>
 
@@ -280,7 +298,7 @@
                 <div class="prks-page-header__context"><a href="#typography" class="prks-nav-back">Back to Folders</a></div>
                 <div class="prks-page-header__title-row">
                     <h3 class="prks-page-title">People</h3>
-                    <span class="meta-row">128</span>
+                    <p class="prks-scope-line" role="status">128 People</p>
                 </div>
                 <div class="prks-page-header__actions">
                     <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm">Select</button>

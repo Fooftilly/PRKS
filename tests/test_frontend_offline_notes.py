@@ -124,6 +124,20 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         self.assertIn("prksSaveWorkNoteDurably", body)
         self.assertNotIn("prksRequest(", body)
         self.assertNotIn("prksOfflineMarkEntityChanged", body)
+        # Park-flush may still be syncing when a remounted draft is edited;
+        # scope_busy must keep the draft dirty and schedule a retry.
+        self.assertIn("scope_busy", body)
+        self.assertIn("prksSchedulePrivateNoteBusyRetry", body)
+        self.assertIn("editor.dirty = true", body)
+
+    def test_private_note_busy_retry_waits_for_sync(self):
+        src = _read(_UI)
+        self.assertIn("function prksSchedulePrivateNoteBusyRetry(editor, token)", src)
+        start = src.index("function prksSchedulePrivateNoteBusyRetry(editor, token)")
+        body = src[start : src.index("\nfunction prksEnqueueWorkPrivateNoteSave(", start)]
+        self.assertIn("prksSync.subscribe", body)
+        self.assertIn("prksEnqueuePrivateNotesSave(editor)", body)
+        self.assertIn("privateNotesBusyRetry:", body)
 
     def test_folder_private_notes_use_durable_set_folder_field(self):
         src = _read(_UI)

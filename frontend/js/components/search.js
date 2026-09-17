@@ -81,6 +81,13 @@ function renderSearch(results, query, container, options = {}) {
         html += `<div class="page-header__actions"><button type="button" class="prks-btn prks-btn--secondary" id="prks-save-view-btn">Save View</button></div>`;
     }
     html += `</div>`;
+    const resultN = Array.isArray(results) ? results.length : null;
+    if (resultN != null && typeof prksScopeLineHtml === 'function') {
+        html += prksScopeLineHtml({
+            total: resultN,
+            label: resultN === 1 ? 'result' : 'results',
+        });
+    }
     if (!tag) {
         const qEsc = searchEscapeHtml(query);
         const aEsc = searchEscapeHtml(author);

@@ -1163,6 +1163,21 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         # The tab must no longer be disabled while offline.
         self.assertNotIn("Recently added requires a connection", folders)
 
+    def test_home_glance_never_warms_independent_browse_domains(self):
+        """Boot on #/folders must not populate works-browse:index or recent:index
+        as a side effect of At-a-glance — those missing snapshots are the
+        Progress/Types/Recent offline-unavailable signal."""
+        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
+        body = _fn_body(folders, "async function prksCollectFolderLibraryGlanceExtras(")
+        self.assertNotIn("await prksOfflineBrowseFetch", body)
+        self.assertNotIn("await prksOfflineWorksBrowseFetch", body)
+        self.assertNotIn("await prksOfflineRecentlyAddedFetch", body)
+        self.assertNotIn("prksOfflineBrowseFetch(", body)
+        self.assertNotIn("prksOfflineWorksBrowseFetch(", body)
+        self.assertIn("prksPeekCachedBrowseList", body)
+        self.assertIn("recent:index", body)
+        self.assertIn("works-browse:index", body)
+
     def test_work_folder_card_does_not_fetch_the_catalog_offline(self):
         folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
         body = _fn_body(folders, "async function mountFolderAttachControlsForWork(")
@@ -1236,7 +1251,8 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         and it touches no other browse projection."""
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
-        body = app[at: at + 1800]
+        nxt = app.find("case 'concepts':", at)
+        body = app[at: nxt if nxt > at else at + 8000]
         self.assertIn("prksRecordWorkOpened(offlineWork.value)", body)
         for forbidden in ("prksMarkWorksBrowseChanged", "prksMarkRecentlyAddedChanged",
                           "prksMarkWorkBrowseDisplayChanged"):
@@ -1281,9 +1297,43 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertNotIn("prksAlertMessage", body)
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         at = app.index("case 'work': {")
+        nxt = app.find("case 'concepts':", at)
+        work_case = app[at: nxt if nxt > at else at + 8000]
         # Fire-and-forget: never awaited on the render path.
-        self.assertIn("void prksRecordWorkOpened(", app[at: at + 1800])
-        self.assertNotIn("await prksRecordWorkOpened(", app)
+        self.assertIn("void prksRecordWorkOpened(", work_case)
+        self.assertNotIn("await prksRecordWorkOpened(", work_case)
+
+    def test_work_route_classifies_pending_delete_without_empty_ops_race(self):
+        """Pending DELETE_WORK keeps the disposable cache until ACK. The Work
+        route must not race listOperations against an empty fallback and then
+        treat a missing answer as "no pending delete" — that re-renders a
+        tombstoned Work from cache. Cached opens classify via the targeted
+        persisted lifecycle marker (not a full queue scan / listOperations)."""
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        lifecycle = _read(os.path.join(_FRONTEND, "js", "work-lifecycle-state.js"))
+        store = _read(os.path.join(_FRONTEND, "js", "local-store.js"))
+        at = app.index("case 'work': {")
+        nxt = app.find("case 'concepts':", at)
+        body = app[at: nxt if nxt > at else at + 5500]
+        self.assertIn("prksResolveWorkLifecycle", body)
+        self.assertIn("prksApplyLiveWorkLifecycleFromOperations", body)
+        # The empty-ops Promise.race fallback was the regression.
+        self.assertNotIn("Promise.resolve({ ops: null })", body)
+        self.assertNotIn("raced.ops || []", body)
+        # Cached + not deleted: paint via detail fetch; ops are background.
+        paint = body[body.index("} else {\n                        offlineWork = await prksOfflineDetailFetch"):
+                     body.index("void workOpsPromise.then") + 80]
+        self.assertIn("prksOfflineDetailFetch", paint)
+        self.assertIn("void workOpsPromise.then", paint)
+        self.assertNotIn("workOps = await workOpsPromise", paint)
+        self.assertIn("prksResolveWorkLifecycle", lifecycle)
+        self.assertIn("getWorkLifecycle", store)
+        self.assertIn("work-lifecycle:", store)
+        self.assertIn("putWorkLifecycleIn", store)
+        self.assertIn("clearWorkLifecycleIfOwnedIn", store)
+        # CREATE ACK must not clear a DELETE-owned marker.
+        self.assertIn("op_id", store[store.index("putWorkLifecycleIn"):
+                                     store.index("putWorkLifecycleIn") + 400])
 
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into

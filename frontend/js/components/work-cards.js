@@ -104,21 +104,32 @@ function prksWorkCardYearPlain(w) {
 }
 
 /**
+ * Plain-text credit line for summaries that escape later.
+ * Linked Author(s), else `author_text`, else linked Editor.
+ * @returns {string} unescaped text e.g. `Author: …` or '', never HTML
+ */
+function prksWorkCardCreditText(w) {
+    if (!w) return '';
+    let name = w.linked_authors != null ? String(w.linked_authors).trim() : '';
+    if (!name && w.primary_author != null) name = String(w.primary_author).trim();
+    if (name) return 'Author: ' + name;
+    if (w.author_text != null) {
+        const at = String(w.author_text).trim();
+        if (at) return 'Author: ' + at;
+    }
+    name = w.primary_editor != null ? String(w.primary_editor).trim() : '';
+    if (name) return 'Editor: ' + name;
+    return '';
+}
+
+/**
  * Credit line: linked Author(s), else `author_text`, else linked Editor.
  * @returns {string} escaped HTML fragment e.g. `Author: …` or `Editor: …`, or ''
  */
 function prksWorkCardCreditLine(w) {
-    if (!w) return '';
-    let name = w.linked_authors != null ? String(w.linked_authors).trim() : '';
-    if (!name && w.primary_author != null) name = String(w.primary_author).trim();
-    if (name) return `Author: ${prksWorkCardsEscapeHtml(name)}`;
-    if (w.author_text != null) {
-        const at = String(w.author_text).trim();
-        if (at) return `Author: ${prksWorkCardsEscapeHtml(at)}`;
-    }
-    name = w.primary_editor != null ? String(w.primary_editor).trim() : '';
-    if (name) return `Editor: ${prksWorkCardsEscapeHtml(name)}`;
-    return '';
+    const plain = prksWorkCardCreditText(w);
+    if (!plain) return '';
+    return prksWorkCardsEscapeHtml(plain);
 }
 
 /**
@@ -193,7 +204,7 @@ function prksWorkCardHtml(w, options = {}) {
     const contextHtml = subtitle ? `<div class="work-card__context">${subtitle}</div>` : '';
 
     return `
-        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1">
+        <div class="project-card project-card--work-card" data-work-id="${wid}" data-prks-route="#/works/${wid}" data-prks-middleclick-nav="1" role="link" tabindex="0" aria-label="${title}">
             ${thumbHtml}
             <div class="work-card__body">
                 <div class="card-title" title="${title}">${title}</div>
@@ -211,4 +222,29 @@ function prksWorkCardHtml(w, options = {}) {
     `;
 }
 
+if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
+    window.__prksWorkCardKeyNavBound = true;
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const t = e.target;
+        if (!t || !t.closest) return;
+        if (t.closest('input, button, a, textarea, select, [contenteditable="true"]')) return;
+        /* Bulk selection owns Enter/Space on Work cards (toggle, not navigate). */
+        if (typeof window.prksWorkSelectionIsActive === 'function' && window.prksWorkSelectionIsActive()) {
+            return;
+        }
+        if (document.body && document.body.classList.contains('prks-bulk-selection-active')) {
+            return;
+        }
+        const card = t.closest('.project-card--work-card[data-prks-route][role="link"]');
+        if (!card || t !== card) return;
+        const hash = card.getAttribute('data-prks-route');
+        if (!hash) return;
+        e.preventDefault();
+        if (typeof window.prksNavigate === 'function') window.prksNavigate(hash);
+    });
+}
+
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
+window.prksWorkCardCreditText = prksWorkCardCreditText;
+window.prksWorkCardCreditLine = prksWorkCardCreditLine;

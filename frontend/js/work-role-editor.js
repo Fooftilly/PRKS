@@ -63,6 +63,23 @@
     async function readBase(ctx, state) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
+            /* Pending CREATE_WORK: no people-state row on the server yet.
+             * Seed an empty projection so the panel does not 404. */
+            let pendingCreate = false;
+            if (typeof root.prksPendingWorkCreates === 'function' &&
+                root.prksSync && root.prksSync.store &&
+                typeof root.prksSync.store.listOperations === 'function') {
+                try {
+                    const ops = await root.prksSync.store.listOperations();
+                    pendingCreate = root.prksPendingWorkCreates(ops).some(
+                        op => op && op.entity_id === state.workId);
+                } catch (_e) { pendingCreate = false; }
+            }
+            if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            if (pendingCreate) {
+                state.observed = { work_id: state.workId, scopes: [] };
+                return;
+            }
             const result = await root.prksOfflineReadEntity('work-people-state', state.workId,
                 '/api/works/' + encodeURIComponent(state.workId) + '/people-state',
                 { validate: shape(state.workId) });

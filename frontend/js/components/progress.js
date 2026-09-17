@@ -38,7 +38,14 @@ function renderProgressByStatus(works, status, container, options = {}) {
         .filter((w) => w && w.status === status)
         .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
 
-    let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2></div><div class="card-grid">`;
+    let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2>`;
+    if (typeof prksScopeLineHtml === 'function') {
+        html += prksScopeLineHtml({
+            total: list.length,
+            label: list.length === 1 ? 'file' : 'files',
+        });
+    }
+    html += `</div><div class="card-grid">`;
     if (list.length > 0) {
         list.forEach((w) => {
             /* `abstract_excerpt` arrives ALREADY bounded to 100 Unicode code
