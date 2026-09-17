@@ -555,9 +555,11 @@ scripts/e2e smoke --jobs 2
 python tests/e2e/run.py --last-failed
 python tests/e2e/run.py --dev --feature tabs
 
-# Full regression gate (final validation only)
-timeout 1200 python tests/e2e/run.py --jobs 4
-scripts/e2e full --jobs 4
+# Full regression gate (final validation only; runner hard-limits at 1200s)
+python run_tests.py --e2e
+scripts/e2e full
+python tests/e2e/run.py --jobs 4
+# optional: timeout 1200 python tests/e2e/run.py --jobs 4
 ```
 
 A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tier.

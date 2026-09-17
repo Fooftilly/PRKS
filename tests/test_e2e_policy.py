@@ -118,9 +118,34 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertIn("graph", feats)
         self.assertIn("tabs", feats)
         self.assertIn("people", feats)
-        self.assertIn("notes", feats)
+        self.assertIn("work-detail", feats)
         self.assertIn("tiling", feats)
         self.assertNotEqual(feats, ("smoke",))
+
+    def test_works_js_maps_to_work_detail_not_notes_only(self):
+        rule, feats, skip, _note = policy.match_affected_path(
+            "frontend/js/components/works.js"
+        )
+        self.assertEqual(rule, "work-detail")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("work-detail",))
+        selected = policy.select_features(FAKE_IDS, list(feats))
+        self.assertTrue(any("WorkDetailsPolishTests" in tid for tid in selected))
+        self.assertTrue(any("test_work_notes_offline" in tid for tid in selected))
+
+    def test_works_pdf_production_path_not_stale_alias(self):
+        rule, feats, skip, _note = policy.match_affected_path(
+            "frontend/js/components/works-pdf.js"
+        )
+        self.assertEqual(rule, "work-detail")
+        self.assertEqual(feats, ("work-detail",))
+        self.assertFalse(skip)
+        stale_rule, stale_feats, stale_skip, _ = policy.match_affected_path(
+            "frontend/js/works-pdf.js"
+        )
+        # Wrong path must not pretend to be the notes rule.
+        self.assertNotEqual(stale_rule, "notes")
+        self.assertNotEqual((stale_rule, stale_feats, stale_skip), (rule, feats, skip))
 
     def test_domain_sync_files_map_to_feature_groups(self):
         cases = (
@@ -131,6 +156,7 @@ class AffectedMappingTests(unittest.TestCase):
             ("backend/position_sync.py", "positions", ("positions", "graph")),
             ("backend/playlist_sync.py", "playlists", ("playlists",)),
             ("backend/work_note_sync.py", "notes", ("notes",)),
+            ("backend/pdf_annotations.py", "work-detail", ("work-detail",)),
             ("backend/work_lifecycle_sync.py", "work-lifecycle", ("offline", "folders", "sync")),
             ("backend/work_tag_sync.py", "sync-families", ("sync", "offline")),
         )
@@ -256,6 +282,24 @@ class LastFailedPersistenceTests(unittest.TestCase):
         merged = policy.merge_last_failed(previous, executed, current_failed)
         self.assertEqual(merged, ["t.A.test_2", "t.A.test_3", "t.A.test_1"])
 
+    def test_merge_prunes_renamed_removed_ids(self):
+        previous = ["gone.Old.test_x", "t.A.test_1", "t.A.test_2"]
+        known = ["t.A.test_1", "t.A.test_2", "t.A.test_3"]
+        merged = policy.merge_last_failed(
+            previous, executed_ids=["t.A.test_1"], current_failed_ids=[], known_ids=known
+        )
+        self.assertEqual(merged, ["t.A.test_2"])
+        self.assertNotIn("gone.Old.test_x", merged)
+
+    def test_full_gate_timeout_helper(self):
+        self.assertEqual(policy.full_gate_timeout_s({}), policy.FULL_GATE_TIMEOUT_S)
+        self.assertEqual(policy.full_gate_timeout_s({"PRKS_E2E_FULL_TIMEOUT": "90"}), 90)
+        self.assertEqual(policy.full_gate_timeout_s({"PRKS_E2E_FULL_TIMEOUT": "0"}), 0)
+        self.assertEqual(
+            policy.full_gate_timeout_s({"PRKS_E2E_FULL_TIMEOUT": "nope"}),
+            policy.FULL_GATE_TIMEOUT_S,
+        )
+
 
 class PathMatchTests(unittest.TestCase):
     def test_glob_double_star(self):
@@ -377,7 +421,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             from contextlib import redirect_stdout
 
             buf = io.StringIO()
-            with mock.patch.object(runner, "ensure_chromium_installed"):
+            with mock.patch.object(runner, "ensure_chromium_installed") as ensure:
                 with mock.patch.object(
                     runner, "list_changed_paths", return_value=["README.md", "docs/x.md"]
                 ):
@@ -385,6 +429,139 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         code = runner.main(["--affected"])
             self.assertEqual(code, 0)
             self.assertIn("success no-op", buf.getvalue())
+            ensure.assert_not_called()
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_fail_fast_last_failed_persists_unexecuted_priors(self):
+        """Runner must merge on observed completions, not the pre-run selection."""
+        previous_env = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+
+            selected = [
+                "tests.e2e.fake.FailTests.test_1",
+                "tests.e2e.fake.FailTests.test_2",
+                "tests.e2e.fake.FailTests.test_3",
+            ]
+            with tempfile.TemporaryDirectory() as raw:
+                last_path = Path(raw) / "e2e-last-failed.json"
+                policy.save_last_failed(last_path, selected, meta={"tier": "full"})
+                # Fail-fast: only test_1 completed (and failed); 2/3 never ran.
+                observed = {"tests.e2e.fake.FailTests.test_1": 0.4}
+                failed = ["tests.e2e.fake.FailTests.test_1"]
+
+                with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
+                    with mock.patch.object(runner, "REPO", Path(raw)):
+                        with mock.patch.object(
+                            runner, "ensure_chromium_installed"
+                        ):
+                            with mock.patch.object(
+                                runner, "discover_test_ids", return_value=selected
+                            ):
+                                with mock.patch.object(
+                                    runner,
+                                    "run_serial",
+                                    return_value=(False, observed, failed),
+                                ) as serial:
+                                    with mock.patch.object(
+                                        runner, "load_timings", return_value={}
+                                    ):
+                                        with mock.patch.object(
+                                            runner, "_persist_timings"
+                                        ):
+                                            with mock.patch.object(
+                                                runner, "_print_slowest"
+                                            ):
+                                                code = runner.main(
+                                                    [
+                                                        "--last-failed",
+                                                        "--fail-fast",
+                                                        "--no-pointer-capture",
+                                                        "--jobs",
+                                                        "1",
+                                                    ]
+                                                )
+                self.assertEqual(code, 1)
+                serial.assert_called_once()
+                # Selected set was [1,2,3]; if merge used selection, 2 and 3
+                # would be dropped as "passed". They must remain unresolved.
+                data = policy.load_last_failed(last_path)
+                self.assertIsNotNone(data)
+                self.assertEqual(
+                    data["test_ids"],
+                    [
+                        "tests.e2e.fake.FailTests.test_2",
+                        "tests.e2e.fake.FailTests.test_3",
+                        "tests.e2e.fake.FailTests.test_1",
+                    ],
+                )
+                self.assertEqual(data["meta"]["executed"], 1)
+                self.assertEqual(data["meta"]["selected"], 3)
+        finally:
+            if previous_env is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous_env
+
+    def test_full_gate_arms_watchdog(self):
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+
+            ids = ["tests.e2e.fake.T.test_x"]
+            cancel = mock.Mock()
+            with tempfile.TemporaryDirectory() as raw:
+                with mock.patch.object(runner, "REPO", Path(raw)):
+                    with mock.patch.object(
+                        runner, "LAST_FAILED_PATH", Path(raw) / "last.json"
+                    ):
+                        with mock.patch.object(runner, "ensure_chromium_installed"):
+                            with mock.patch.object(
+                                runner, "discover_test_ids", return_value=ids
+                            ):
+                                with mock.patch.object(
+                                    runner,
+                                    "run_serial",
+                                    return_value=(True, {ids[0]: 0.1}, []),
+                                ):
+                                    with mock.patch.object(
+                                        runner, "_run_pointer_capture", return_value=0
+                                    ):
+                                        with mock.patch.object(
+                                            runner, "load_timings", return_value={}
+                                        ):
+                                            with mock.patch.object(
+                                                runner, "_persist_timings"
+                                            ):
+                                                with mock.patch.object(
+                                                    runner, "_print_slowest"
+                                                ):
+                                                    with mock.patch.object(
+                                                        runner,
+                                                        "_arm_full_gate_watchdog",
+                                                        return_value=cancel,
+                                                    ) as arm:
+                                                        with mock.patch.object(
+                                                            runner,
+                                                            "full_gate_timeout_s",
+                                                            return_value=1200,
+                                                        ):
+                                                            code = runner.main(
+                                                                [
+                                                                    "--jobs",
+                                                                    "1",
+                                                                    "--no-pointer-capture",
+                                                                ]
+                                                            )
+            self.assertEqual(code, 0)
+            arm.assert_called_once_with(1200)
+            cancel.assert_called_once()
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)

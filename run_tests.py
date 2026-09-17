@@ -68,10 +68,18 @@ def run_unit_tests(project_dir: str) -> int:
 
 
 def run_e2e_tests(project_dir: str) -> int:
+    """Run the bounded parallel full E2E gate (same contract as scripts/e2e full).
+
+    Uses --jobs 4 unless PRKS_E2E_JOBS is already set (run.py honors the env).
+    The runner itself enforces PRKS_E2E_FULL_TIMEOUT (default 1200s).
+    """
     from tests.e2e.harness import python_for_subprocess
 
     script = os.path.join(project_dir, "tests", "e2e", "run.py")
-    return subprocess.call([python_for_subprocess(), script], cwd=project_dir)
+    cmd = [python_for_subprocess(), script]
+    if not os.environ.get("PRKS_E2E_JOBS"):
+        cmd.extend(["--jobs", "4"])
+    return subprocess.call(cmd, cwd=project_dir)
 
 
 def run_ux_tour(project_dir: str) -> int:

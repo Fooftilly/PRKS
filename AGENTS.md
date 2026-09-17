@@ -5,7 +5,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
-- Full E2E gate: `timeout 1200 python tests/e2e/run.py --jobs 4` (expected ~7-10 min; over ~15 min is a hang to investigate, not a slow run). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow" / "E2E TESTING POLICY".
+- Full E2E gate: `python tests/e2e/run.py --jobs 4` (or `python run_tests.py --e2e` / `scripts/e2e full`). Runner enforces a 1200s hard limit (`PRKS_E2E_FULL_TIMEOUT`; expected ~7-10 min; over ~15 min is a hang to investigate). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow" / "E2E TESTING POLICY".
 - Agent/dev E2E loop (preferred): `python tests/e2e/run.py --smoke`, `--feature <group>`, `--affected`, `--last-failed`, or `--dev --feature <group>` — never iterate on the full suite. Convenience: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
 - **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E feature/module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture --feature <group>` or a module path; never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>` or `--last-failed`, never by rerunning the suite. See "E2E TESTING POLICY".
 - App, default for agents: `python prks_app.py --testing`
@@ -1963,9 +1963,9 @@ PRKS E2E is Python unittest + Playwright Chromium via `tests/e2e/run.py`
 | Feature | `python tests/e2e/run.py --feature graph` | One domain group |
 | Smoke | `python tests/e2e/run.py --smoke` | Curated essential suite (~9 tests) |
 | Affected | `python tests/e2e/run.py --affected` | Git diff → feature groups |
-| Last-failed | `python tests/e2e/run.py --last-failed` | Prior run's failures only |
+| Last-failed | `python tests/e2e/run.py --last-failed` | unresolved failures from prior runs |
 | Dev | `python tests/e2e/run.py --dev --feature tabs` | Fail-fast + no pointer-capture |
-| Full | `timeout 1200 python tests/e2e/run.py --jobs 4` | Complete regression gate |
+| Full | `python tests/e2e/run.py --jobs 4` | Complete regression gate (runner hard-limits at 1200s; `timeout 1200 …` still fine) |
 
 Convenience wrapper: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
 Catalog: `python tests/e2e/run.py --list-features`. Mapping lives in
@@ -2074,7 +2074,9 @@ parallel E2E suite once:**
 
 ```
 python run_tests.py
-timeout 1200 python tests/e2e/run.py --jobs 4
+python run_tests.py --e2e
+# equivalent: scripts/e2e full   or   python tests/e2e/run.py --jobs 4
+# optional shell wrapper still fine: timeout 1200 python tests/e2e/run.py --jobs 4
 ```
 
 The full run already contains every module, so do not run a module separately
@@ -2086,7 +2088,7 @@ immediately before it.
 | --- | --- |
 | Expected `--jobs 4` runtime | ~7-10 min |
 | Investigate | > 15 min |
-| Hard outer timeout | ~20 min (`timeout 1200`) |
+| Hard outer timeout | ~20 min (runner `PRKS_E2E_FULL_TIMEOUT` default 1200; `timeout 1200` optional) |
 
 A generous outer timeout does not make a run succeed; it hides a hang. If the
 suite overruns, do NOT wait it out and do NOT restart it: read the log, see

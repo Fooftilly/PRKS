@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -110,6 +111,28 @@ class TestRunTests(unittest.TestCase):
         self.assertIn("e2e", src)
         self.assertIn("run.py", src)
 
+    def test_run_e2e_tests_invokes_parallel_full_gate(self):
+        from run_tests import run_e2e_tests
+
+        old_jobs = os.environ.pop("PRKS_E2E_JOBS", None)
+        try:
+            with mock.patch("subprocess.call", return_value=0) as call:
+                with mock.patch(
+                    "tests.e2e.harness.python_for_subprocess", return_value="python3"
+                ):
+                    code = run_e2e_tests(_PROJECT_DIR)
+            self.assertEqual(code, 0)
+            cmd = call.call_args[0][0]
+            self.assertEqual(cmd[0], "python3")
+            self.assertTrue(cmd[1].endswith(os.path.join("tests", "e2e", "run.py")))
+            self.assertIn("--jobs", cmd)
+            self.assertEqual(cmd[cmd.index("--jobs") + 1], "4")
+        finally:
+            if old_jobs is None:
+                os.environ.pop("PRKS_E2E_JOBS", None)
+            else:
+                os.environ["PRKS_E2E_JOBS"] = old_jobs
+
     def test_agents_documents_the_e2e_cadence_rule(self):
         """The rule that keeps the inner loop cheap must stay written down.
 
@@ -124,12 +147,13 @@ class TestRunTests(unittest.TestCase):
             "do not run browser E2E tests at all",
             "neither the full suite nor an entire module",
             "Never run browser E2E tests while iterating",
-            "run the relevant targeted E2E module once",
+            "run the relevant targeted E2E feature/module once",
             "If an E2E test fails, stop running the full suite",
             "--jobs 4 --no-pointer-capture",
             "runs SERIALLY",
             "Hard outer timeout",
-            "timeout 1200 python tests/e2e/run.py --jobs 4",
+            "timeout 1200",
+            "python tests/e2e/run.py --jobs 4",
         ):
             self.assertIn(phrase, text, phrase)
         # Stated where an agent starts reading, not only 1500 lines in.

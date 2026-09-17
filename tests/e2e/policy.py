@@ -7,6 +7,7 @@ entry point that applies these selections to a real Chromium run.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,12 @@ LAST_FAILED_PATH = Path(".tests") / "e2e-last-failed.json"
 # ---------------------------------------------------------------------------
 
 TIERS = ("targeted", "feature", "smoke", "full", "dev", "last-failed", "affected")
+
+# Full regression gate hard limit (seconds). Enforced inside tests/e2e/run.py so
+# advertised entry points cannot hang unboundedly even without a shell `timeout`.
+# Override with PRKS_E2E_FULL_TIMEOUT; set 0 to disable.
+FULL_GATE_TIMEOUT_S = 1200
+FULL_GATE_DEFAULT_JOBS = 4
 
 TIER_LABELS = {
     "targeted": "targeted E2E (explicit test/module selection)",
@@ -154,12 +161,22 @@ FEATURES = {
         ),
     },
     "notes": {
-        "description": "Research Notes / Reminders offline + related Work detail polish",
+        "description": "Research Notes / Reminders offline (Work note aggregates)",
+        "selectors": ("tests.e2e.test_work_notes_offline",),
+    },
+    "work-detail": {
+        "description": (
+            "Work detail UI: metadata, PDF/video viewer, people panel, notes chrome"
+        ),
         "selectors": (
-            "tests.e2e.test_work_notes_offline",
             "tests.e2e.test_app.WorkDetailsPolishTests",
             "tests.e2e.test_app.RightPanelNavigationOwnershipTests",
             "tests.e2e.test_app.PdfPersistenceTests",
+            "tests.e2e.test_work_metadata_offline",
+            "tests.e2e.test_work_people_offline",
+            "tests.e2e.test_work_notes_offline",
+            "tests.e2e.test_work_tags_offline",
+            "tests.e2e.test_work_source_offline",
         ),
     },
     "work-create": {
@@ -320,12 +337,20 @@ AFFECTED_RULES = (
         "name": "notes",
         "paths": (
             "frontend/js/work-notes-state.js",
-            "frontend/js/components/works.js",
-            "frontend/js/works-pdf.js",
             "backend/work_note_sync.py",
-            "backend/pdf_annotations.py",
         ),
         "features": ("notes",),
+    },
+    {
+        "name": "work-detail",
+        "paths": (
+            "frontend/js/components/works.js",
+            "frontend/js/components/works-pdf.js",
+            "frontend/js/components/works-video.js",
+            "backend/pdf_annotations.py",
+        ),
+        "features": ("work-detail",),
+        "note": "Core Work-detail UI → metadata/people/notes/PDF/sync coverage",
     },
     {
         "name": "workspace-tabs",
@@ -788,17 +813,28 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
     return paths
 
 
-def merge_last_failed(previous_ids, executed_ids, current_failed_ids):
+def merge_last_failed(previous_ids, executed_ids, current_failed_ids, known_ids=None):
     """Treat last-failed persistence as an unresolved-failure set.
 
     - Retain prior failed tests that were not actually executed this run
-      (partial / unrelated selections must not erase them).
+      (partial / fail-fast / crashed selections must not erase them).
     - Drop prior failures that were rerun and passed.
     - Add current failures.
+    - When known_ids is provided, drop renamed/removed IDs that no longer
+      exist in the suite (selection already skipped them; persistence must too).
+
+    executed_ids must be tests that actually completed (timing observation or
+    an explicit executed set) — never the full pre-run selection.
     """
     previous = list(previous_ids or ())
+    if known_ids is not None:
+        known = set(known_ids)
+        previous = [tid for tid in previous if tid in known]
     executed = set(executed_ids or ())
     current_failed = list(current_failed_ids or ())
+    if known_ids is not None:
+        known = set(known_ids)
+        current_failed = [tid for tid in current_failed if tid in known]
     retained = [tid for tid in previous if tid not in executed]
     merged = list(retained)
     seen = set(retained)
@@ -842,6 +878,18 @@ def extract_failed_ids(result) -> list:
         for test, _trace in group:
             failed.append(test.id())
     return failed
+
+
+def full_gate_timeout_s(environ=None) -> int:
+    """Seconds for the full-gate watchdog (0 disables)."""
+    env = os.environ if environ is None else environ
+    raw = env.get("PRKS_E2E_FULL_TIMEOUT")
+    if raw is None or raw == "":
+        return FULL_GATE_TIMEOUT_S
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return FULL_GATE_TIMEOUT_S
 
 
 def is_full_gate(tier: str, targeted: bool) -> bool:

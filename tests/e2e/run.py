@@ -40,6 +40,7 @@ from tests.e2e.install_browser import ensure_chromium_installed
 from tests.e2e.policy import (
     LAST_FAILED_PATH,
     format_feature_catalog,
+    full_gate_timeout_s,
     list_changed_paths,
     load_last_failed,
     merge_last_failed,
@@ -91,6 +92,47 @@ E2E_MODULES = (
 SLOWEST_LIMIT = 25
 WORKER_POLL_S = 0.25
 WORKER_STOP_TIMEOUT_S = 20.0
+
+
+class FullGateTimeoutError(BaseException):
+    """Full E2E gate exceeded the hard wall-clock limit (not a test failure)."""
+
+
+def _arm_full_gate_watchdog(timeout_s: int):
+    """Install a process-wide ITIMER_REAL alarm for the full gate.
+
+    Returns a cancel callback. timeout_s <= 0 leaves the process unarmed.
+    Uses SIGALRM so serial unittest runs and parallel worker polls both abort.
+    """
+    if timeout_s <= 0:
+        return lambda: None
+
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def _on_alarm(_signum, _frame):
+        raise FullGateTimeoutError(
+            "full E2E gate exceeded %ds hard limit" % timeout_s
+        )
+
+    signal.signal(signal.SIGALRM, _on_alarm)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_s))
+
+    def cancel():
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous)
+
+    return cancel
+
+
+def _executed_ids_from_observation(observed, failed_ids) -> list:
+    """IDs that actually completed this run (timings + any reported failures)."""
+    executed = list(observed or ())
+    seen = set(executed)
+    for tid in failed_ids or ():
+        if tid not in seen:
+            executed.append(tid)
+            seen.add(tid)
+    return executed
 
 
 class _TimingResult(unittest.TextTestResult):
@@ -568,7 +610,8 @@ def build_parser():
             "  python tests/e2e/run.py --affected\n"
             "  python tests/e2e/run.py --affected --base origin/master\n"
             "  python tests/e2e/run.py --last-failed\n"
-            "  python tests/e2e/run.py --jobs 4   # full regression gate\n"
+            "  python tests/e2e/run.py --jobs 4   # full regression gate "
+            "(runner hard-limits at 1200s)\n"
             "  python tests/e2e/run.py --jobs 1 tests.e2e.test_app.AppShellAndNavigationTests\n"
         ),
     )
@@ -774,17 +817,9 @@ def main(argv=None) -> int:
         print(format_feature_catalog())
         return 0
 
-    # Selection resolution can run before Chromium install for --list-tests.
+    # Resolve selection before Chromium install so docs/unit --affected and
+    # --list-tests are cheap no-ops (no browser download).
     apply_e2e_playwright_env()
-    needs_browser = not args.list_tests
-    if needs_browser:
-        try:
-            ensure_chromium_installed()
-        except RuntimeError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        apply_e2e_playwright_env()
-
     all_ids = discover_test_ids()
     try:
         tier, test_ids, note = _resolve_selection(args, all_ids)
@@ -827,6 +862,13 @@ def main(argv=None) -> int:
             )
         return 1
 
+    try:
+        ensure_chromium_installed()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    apply_e2e_playwright_env()
+
     print(report_banner(tier, len(test_ids), note))
     if tier != "full":
         print(
@@ -835,7 +877,8 @@ def main(argv=None) -> int:
         )
 
     try:
-        # Dev defaults to 1 worker unless the caller set jobs/env explicitly.
+        # Serial-by-default so debugging stays deterministic; advertised full-gate
+        # entry points (run_tests.py --e2e, scripts/e2e full) pass --jobs 4.
         default_jobs = 1
         jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=default_jobs)
     except ValueError as exc:
@@ -844,20 +887,47 @@ def main(argv=None) -> int:
     jobs = min(jobs, len(test_ids))
 
     timings = load_timings(REPO / TIMINGS_PATH)
-    if jobs == 1:
-        ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
-    else:
-        ok, observed, failed_ids = run_parallel(test_ids, jobs, timings, args.fail_fast)
+    cancel_watchdog = lambda: None
+    if tier == "full":
+        timeout_s = full_gate_timeout_s()
+        if timeout_s > 0:
+            print(
+                "Full-gate hard limit: %ds (PRKS_E2E_FULL_TIMEOUT; 0 disables)"
+                % timeout_s
+            )
+            cancel_watchdog = _arm_full_gate_watchdog(timeout_s)
+
+    try:
+        try:
+            if jobs == 1:
+                ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
+            else:
+                ok, observed, failed_ids = run_parallel(
+                    test_ids, jobs, timings, args.fail_fast
+                )
+        except FullGateTimeoutError as exc:
+            print(str(exc), file=sys.stderr)
+            try:
+                stop_all_servers()
+            except Exception:
+                pass
+            print("E2E FAIL (full) — hard timeout", file=sys.stderr)
+            return 124
+    finally:
+        cancel_watchdog()
 
     targeted = tier != "full"
     _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
 
-    # Persist unresolved failures: retain prior failures not executed this run,
-    # drop only those actually rerun and passed, add current failures.
+    # Persist unresolved failures from actual completions only — never treat
+    # the pre-run selection as executed (fail-fast / cancelled / crashed).
+    executed_ids = _executed_ids_from_observation(observed, failed_ids)
     previous = load_last_failed(REPO / LAST_FAILED_PATH)
     previous_ids = (previous or {}).get("test_ids") or []
-    unresolved = merge_last_failed(previous_ids, test_ids, failed_ids)
+    unresolved = merge_last_failed(
+        previous_ids, executed_ids, failed_ids, known_ids=all_ids
+    )
     last_failed_path = REPO / LAST_FAILED_PATH
     if unresolved:
         save_last_failed(
@@ -866,7 +936,8 @@ def main(argv=None) -> int:
             meta={
                 "tier": tier,
                 "note": note,
-                "executed": len(test_ids),
+                "executed": len(executed_ids),
+                "selected": len(test_ids),
                 "failed_this_run": len(failed_ids),
             },
         )

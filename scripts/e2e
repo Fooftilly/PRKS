@@ -6,7 +6,7 @@
 #   scripts/e2e affected [--base origin/master]
 #   scripts/e2e last-failed
 #   scripts/e2e dev --feature tabs
-#   scripts/e2e full --jobs 4
+#   scripts/e2e full [--jobs 4]
 #   scripts/e2e list-features
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,6 +20,16 @@ usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|li
 EOF
   exit 2
 fi
+
+_has_jobs_flag() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --jobs|-j|--jobs=*|-j=*) return 0 ;;
+    esac
+  done
+  return 1
+}
 
 cmd="$1"
 shift
@@ -46,7 +56,13 @@ case "$cmd" in
     exec "${RUN[@]}" --dev "$@"
     ;;
   full)
-    exec "${RUN[@]}" "$@"
+    # Bounded parallel full gate. Runner also enforces PRKS_E2E_FULL_TIMEOUT
+    # (default 1200s). Caller may still pass --jobs / -j to override width.
+    if _has_jobs_flag "$@"; then
+      exec "${RUN[@]}" "$@"
+    else
+      exec "${RUN[@]}" --jobs 4 "$@"
+    fi
     ;;
   list-features|list_features)
     exec "${RUN[@]}" --list-features "$@"
