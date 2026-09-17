@@ -3115,6 +3115,31 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, {'status': 'success'})
+            elif path.startswith('/api/works/') and path.endswith('/annotations/adopt'):
+                parts = path.split('/')
+                if len(parts) != 6 or parts[4] != 'annotations' or parts[5] != 'adopt':
+                    self.send_error(404, "API endpoint not found")
+                    return
+                w_id = parts[3]
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                viewer_annotations = data.get('viewer_annotations')
+                if not isinstance(viewer_annotations, list):
+                    self.send_json(
+                        400,
+                        {
+                            'error': 'viewer_annotations must be a JSON list',
+                            'code': 'malformed_annotation_payload',
+                        },
+                    )
+                    return
+                try:
+                    result = db.adopt_byte_only_user_markup(w_id, viewer_annotations)
+                except WorkAnnotationError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, result)
             elif path.startswith('/api/works/') and path.endswith('/pdf'):
                 w_id = path.split('/')[3]
                 file_b64 = data.get('file_b64', '')
@@ -3199,6 +3224,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
+                # Compat full-list replace. Product writes use durable
+                # CREATE/SET/DELETE_PDF_ANNOTATION; this remains for online-legacy
+                # when the durable store is unavailable (Slice G retirement).
                 w_id = path.split('/')[3]
                 if not isinstance(data, dict) or 'annotations_json' not in data:
                     self.send_json(
@@ -3219,7 +3247,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if save_token:
                     with _SAVE_TOKEN_LOCK:
                         _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                self.send_json(200, {'status': 'saved'})
+                self.send_json(200, {'status': 'saved', 'path': 'legacy-full-list'})
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:

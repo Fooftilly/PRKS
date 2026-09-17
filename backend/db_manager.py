@@ -2844,8 +2844,35 @@ class PRKSDatabase:
             conn.commit()
             return rev
 
+    def adopt_byte_only_user_markup(self, work_id: str, viewer_items):
+        """Insert canonical rows for viewer user markup missing from metadata.
+
+        Does not delete metadata-only rows and never adopts Links/widgets.
+        """
+        from backend import pdf_annotation_adopt
+
+        with self.connection() as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                result = pdf_annotation_adopt.adopt_byte_only_user_markup_on_conn(
+                    conn, work_id, viewer_items
+                )
+                conn.commit()
+                return result
+            except sqlite3.IntegrityError as exc:
+                raise WorkAnnotationError(
+                    "annotation_id_conflict",
+                    "Annotation ID belongs to another Work.",
+                    409,
+                ) from exc
+
     def save_work_annotations(self, work_id: str, annotations_json: str):
-        """Parse the submitted JSON list and replace canonical annotations only."""
+        """Compat full-list replace (legacy online path only).
+
+        Durable clients use CREATE/SET/DELETE_PDF_ANNOTATION. This replace path
+        remains for temporary online-legacy support when the durable store is
+        unavailable; it must not become a second product write path.
+        """
         items = parse_annotations_json(annotations_json)
         self.sync_work_annotations(work_id, items)
 
@@ -2853,6 +2880,8 @@ class PRKSDatabase:
         """Replace one Work's canonical annotations in a single transaction.
 
         Validates the complete incoming list before any delete/update/insert.
+        Prefer per-annotation sync ops for product writes; full-list replace is
+        compat/legacy only.
         """
         with self.connection() as conn:
             try:

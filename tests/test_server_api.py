@@ -1494,6 +1494,44 @@ class TestServerAPI(unittest.TestCase):
         err404 = json.loads(cm404.exception.read().decode())
         self.assertEqual(err404.get("code"), "work_not_found")
 
+    def test_22c2_annotation_adopt_byte_only(self):
+        w_id = self._create_work_api("Ann Adopt")
+        meta = [{"id": "meta-only", "type": 9, "contents": "m", "pageIndex": 0,
+                 "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}],
+                 "custom": {"prksComment": "m"}}]
+        with self._post_work_annotations(w_id, {"annotations_json": json.dumps(meta)}) as res:
+            self.assertEqual(res.status, 200)
+        viewer = [
+            {
+                "id": "byte-only",
+                "type": 9,
+                "contents": "b",
+                "pageIndex": 0,
+                "segmentRects": [{"origin": {"x": 3, "y": 3}, "size": {"width": 2, "height": 2}}],
+                "custom": {"prksComment": "b"},
+            },
+            {
+                "id": "link-skip",
+                "type": 2,
+                "uri": "https://example.test/x",
+                "pageIndex": 0,
+            },
+            meta[0],
+        ]
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}/annotations/adopt",
+            data=json.dumps({"viewer_annotations": viewer}).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+            body = json.loads(res.read().decode())
+        self.assertEqual(body.get("adopted"), ["byte-only"])
+        ids = {row["id"] for row in self._get_work_annotations(w_id)}
+        self.assertEqual(ids, {"meta-only", "byte-only"})
+        self.assertNotIn("link-skip", ids)
+
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")
         good = [{"id": "tok", "contents": "ok", "pageIndex": 0}]

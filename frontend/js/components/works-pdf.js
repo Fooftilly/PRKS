@@ -1143,7 +1143,82 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         workId: String(workId),
     };
 
-    // Project acknowledged (+ later: pending durable) annotations into the
+    // Slice G: adopt byte-only user markup from PDF bytes into canonical
+    // metadata before projecting. Never deletes metadata-only rows; Links /
+    // widgets stay out of the annotations table. Offline skips (server needed).
+    const onlineForAdopt =
+        typeof window.prksOfflineRuntimeState !== 'function' ||
+        window.prksOfflineRuntimeState() === 'online';
+    if (onlineForAdopt && typeof viewer.getAnnotations === 'function') {
+        try {
+            const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+            const adoptRes = await prksRequest(
+                `/api/works/${workId}/annotations/adopt`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ viewer_annotations: viewerItems }),
+                },
+                { dedupe: false, retry: false, freshForMs: 0 }
+            );
+            if (setupEligible() && adoptRes && adoptRes.ok) {
+                const adoptBody = await adoptRes.json().catch(function () { return null; });
+                if (
+                    adoptBody &&
+                    Number(adoptBody.adopted_count) > 0 &&
+                    setupEligible()
+                ) {
+                    const refreshed = await prksRequest(
+                        `/api/works/${workId}/annotations`,
+                        { cache: 'no-store' },
+                        { dedupe: false, retry: false, freshForMs: 0 }
+                    );
+                    if (setupEligible() && refreshed && refreshed.ok) {
+                        const refreshedData = await refreshed.json();
+                        const saved = JSON.parse(refreshedData.annotations_json || '[]');
+                        if (Array.isArray(saved)) {
+                            runtime.annotationCache = {
+                                allItems: saved,
+                                rawItems: saved,
+                                items: saved,
+                                docId: 'DB',
+                                workId: String(workId),
+                            };
+                            runtime.annotationBaseReady = true;
+                            let stateBody = runtime.annotationState || null;
+                            try {
+                                const stateRes = await prksRequest(
+                                    `/api/works/${workId}/annotations-state`,
+                                    { cache: 'no-store' },
+                                    { dedupe: false, retry: false, freshForMs: 0 }
+                                );
+                                if (setupEligible() && stateRes.ok) {
+                                    stateBody = await stateRes.json();
+                                    runtime.annotationState = stateBody;
+                                }
+                            } catch (_eState) {}
+                            if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
+                                void window.prksPublishAcknowledgedPdfAnnotations(
+                                    String(workId),
+                                    saved,
+                                    stateBody
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_eAdopt) {
+            // Adoption failure must not block viewing; byte-only markup remains
+            // in the viewer and reconciler preserves unknown legacy IDs.
+        }
+        if (!setupEligible()) {
+            abandonSetup();
+            return;
+        }
+    }
+
+    // Project acknowledged (+ pending durable) annotations into the
     // viewer. PDF bytes may lag; the reconciler is the authority for
     // PRKS-managed user markup and never touches Links / widgets.
     if (typeof window.prksReconcileViewerAnnotations === 'function') {

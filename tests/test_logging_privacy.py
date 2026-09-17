@@ -115,6 +115,14 @@ class TestSafeRoute(unittest.TestCase):
         self.assertEqual(route, "/api/works/:id/annotations")
         self.assertNotIn("W-ABC", route)
         self.assertNotIn(SECRET_QUERY, route)
+        self.assertEqual(
+            safe_route("/api/works/W-ABC/annotations/adopt"),
+            "/api/works/:id/annotations/adopt",
+        )
+        self.assertEqual(
+            safe_route("/api/works/W-ABC/pdf-materialization"),
+            "/api/works/:id/pdf-materialization",
+        )
 
     def test_known_nested_families(self):
         self.assertEqual(
