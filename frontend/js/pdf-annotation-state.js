@@ -137,13 +137,17 @@
     let pendingGeneration = 0;
 
     function setPending(rows) {
-        const next = new Map();
-        (rows || []).filter(function (op) {
+        const ranked = (rows || []).filter(function (op) {
             return op && OPERATIONS.indexOf(op.operation) !== -1 &&
                 op.entity_type === 'work' && op.status !== 'acknowledged';
-        }).forEach(function (op) {
+        }).slice().sort(function (a, b) {
+            return (a.sequence || 0) - (b.sequence || 0);
+        });
+        const next = new Map();
+        ranked.forEach(function (op) {
             const annotationId = op.payload && op.payload.annotation_id;
             if (!annotationId) return;
+            /* Highest sequence wins when SENT + successor share a scope. */
             next.set(scopeKey(op.entity_id, annotationId), {
                 work_id: op.entity_id,
                 annotation_id: annotationId,
@@ -152,6 +156,8 @@
                 annotation: op.operation === 'DELETE_PDF_ANNOTATION'
                     ? null
                     : (op.payload && op.payload.annotation) || null,
+                sequence: op.sequence || 0,
+                status: op.status,
             });
         });
         pendingByScope = next;
@@ -264,18 +270,29 @@
         }
     }
 
+    function isAnnotationsStateShape(state) {
+        return !!(state && typeof state === 'object' && Array.isArray(state.annotations));
+    }
+
+    /**
+     * Safe offline/online base requires BOTH the annotation snapshot and the
+     * revision snapshot. An annotations list alone must never imply revision 0.
+     */
     async function hasAcknowledgedAnnotationBase(workId, runtime) {
         if (!workId) return false;
-        // Only a completed hydrate marks the in-memory cache as a real base.
-        // An empty pre-hydrate annotationCache must not count — that would let
-        // offline edits start before GET /annotations (or its cache peek) finished.
-        if (runtime && runtime.annotationBaseReady === true) return true;
+        if (runtime && runtime.annotationBaseReady === true &&
+            runtime.annotationState && isAnnotationsStateShape(runtime.annotationState) &&
+            runtime.annotationCache && Array.isArray(runtime.annotationCache.items)) {
+            return true;
+        }
         if (!root.prksOfflinePeekEntity || typeof root.prksOfflinePeekEntity !== 'function') {
             return false;
         }
         try {
-            const snap = await root.prksOfflinePeekEntity('work-annotations', workId);
-            return Array.isArray(snap);
+            const listSnap = await root.prksOfflinePeekEntity('work-annotations', workId);
+            if (!Array.isArray(listSnap)) return false;
+            const stateSnap = await root.prksOfflinePeekEntity('work-annotations-state', workId);
+            return isAnnotationsStateShape(stateSnap);
         } catch (_e) {
             return false;
         }
@@ -307,11 +324,15 @@
 
         const durableOk = await durableStoreWritable();
         if (online) {
-            return {
-                mode: 'work',
-                durable: durableOk,
-                reason: durableOk ? 'online_durable' : 'online_legacy',
-            };
+            if (!durableOk) {
+                return { mode: 'work', durable: false, reason: 'online_legacy' };
+            }
+            if (!(await hasAcknowledgedAnnotationBase(workId, runtime))) {
+                // Durable store is up, but revision snapshot is missing — never
+                // invent base_revision 0 for existing annotations.
+                return { mode: 'work', durable: false, reason: 'online_awaiting_base' };
+            }
+            return { mode: 'work', durable: true, reason: 'online_durable' };
         }
         if (!durableOk) {
             return { mode: 'preview', durable: false, reason: 'durable_unavailable' };
@@ -342,7 +363,7 @@
         if (typeof root.prksOfflinePeekEntity === 'function') {
             try {
                 const snap = await root.prksOfflinePeekEntity('work-annotations-state', workId);
-                if (snap && typeof snap === 'object') return snap;
+                if (isAnnotationsStateShape(snap)) return snap;
             } catch (_e) { /* fall through */ }
         }
         return null;
@@ -361,6 +382,90 @@
             try { root.prksSync.changed(); } catch (_e) { /* best-effort */ }
         }
         return row;
+    }
+
+    function patchRuntimeAcknowledged(runtime, data) {
+        if (!runtime || !data || !data.annotation_id) return false;
+        const annotationId = String(data.annotation_id);
+        const present = data.present !== false && !!data.annotation;
+        const ackList =
+            (runtime.annotationCache && Array.isArray(runtime.annotationCache.items))
+                ? runtime.annotationCache.items
+                : [];
+        let nextList = ackList.filter(function (item) {
+            if (!item || typeof item !== 'object') return true;
+            return canonicalId(item) !== annotationId;
+        });
+        if (present) nextList = nextList.concat([data.annotation]);
+        runtime.annotationCache = {
+            allItems: nextList,
+            rawItems: nextList,
+            items: nextList,
+            docId: runtime.annotationCache && runtime.annotationCache.docId,
+            workId: String(runtime.workId || data.work_id || ''),
+        };
+
+        const prevState = runtime.annotationState && typeof runtime.annotationState === 'object'
+            ? runtime.annotationState
+            : { work_id: data.work_id, annotations: [], known_absent: {} };
+        const annotations = Array.isArray(prevState.annotations)
+            ? prevState.annotations.filter(function (row) {
+                return !(row && String(row.annotation_id) === annotationId);
+            })
+            : [];
+        const knownAbsent = Object.assign({}, prevState.known_absent || {});
+        if (present) {
+            annotations.push({
+                annotation_id: annotationId,
+                revision: data.server_revision,
+            });
+            delete knownAbsent[annotationId];
+        } else if (Number.isSafeInteger(data.server_revision)) {
+            knownAbsent[annotationId] = data.server_revision;
+        }
+        runtime.annotationState = Object.assign({}, prevState, {
+            annotations: annotations,
+            known_absent: knownAbsent,
+        });
+        if (Number.isSafeInteger(data.canonical_annotation_set_revision)) {
+            runtime.acknowledgedAnnotationSetRevision = data.canonical_annotation_set_revision;
+        }
+        return true;
+    }
+
+    /**
+     * After ACK: update every mounted Work PDF runtime for this Work so the
+     * next mutation uses the new base_revision without reopening the PDF.
+     */
+    function applyAckToLiveRuntimes(data) {
+        if (!data || !data.work_id || !Number.isSafeInteger(data.server_revision)) {
+            return [];
+        }
+        const touched = [];
+        function visit(ctx) {
+            const runtime = ctx && typeof ctx.getResource === 'function'
+                ? ctx.getResource('pdf')
+                : null;
+            if (!runtime || runtime._destroyed) return;
+            if (String(runtime.workId) !== String(data.work_id)) return;
+            if (!patchRuntimeAcknowledged(runtime, data)) return;
+            touched.push(runtime);
+            if (typeof root.prksReconcileViewerAnnotations === 'function' && runtime.viewer) {
+                const effective = effectiveWorkAnnotations(
+                    (runtime.annotationCache && runtime.annotationCache.items) || [],
+                    String(data.work_id)
+                );
+                void root.prksReconcileViewerAnnotations(runtime.viewer, effective, {
+                    isManaged: typeof root.prksIsUserMarkupAnnotation === 'function'
+                        ? root.prksIsUserMarkupAnnotation
+                        : undefined,
+                });
+            }
+        }
+        if (typeof root.prksForEachLiveTabContext === 'function') {
+            root.prksForEachLiveTabContext(visit);
+        }
+        return touched;
     }
 
     function isResult(data, op) {
@@ -390,7 +495,18 @@
         }
     }
 
+    /**
+     * While stabilizing: Work gone / id reuse are consumed like Work-deletion
+     * outcomes — discard, do not open a user-resolvable annotation conflict.
+     * True revision conflicts remain user-resolvable.
+     */
     function terminal(data) {
+        if (!data || !data.code) return { discard: 'UNKNOWN' };
+        if (data.code === 'ENTITY_NOT_FOUND' ||
+            data.code === 'ANNOTATION_ID_REUSED' ||
+            data.code === 'ANNOTATION_ID_CONFLICT') {
+            return { discard: data.code };
+        }
         const out = { code: data.code };
         if (Number.isSafeInteger(data.current_revision)) {
             out.current_revision = data.current_revision;
@@ -405,8 +521,12 @@
         terminal: terminal,
         reconcile: function (data) {
             if (typeof root.prksOfflineReconcilePdfAnnotation === 'function') {
-                return root.prksOfflineReconcilePdfAnnotation(data);
+                return root.prksOfflineReconcilePdfAnnotation(data).then(function (ok) {
+                    if (ok) applyAckToLiveRuntimes(data);
+                    return ok;
+                });
             }
+            applyAckToLiveRuntimes(data);
             return Promise.resolve(true);
         },
     };
@@ -428,9 +548,12 @@
         prksPdfAnnotationBaseUnavailable: pdfAnnotationBaseUnavailable,
         prksSavePdfAnnotationDurably: savePdfAnnotationDurably,
         prksHasCachedManagedPdf: hasCachedManagedPdf,
+        prksHasAcknowledgedAnnotationBase: hasAcknowledgedAnnotationBase,
         prksResolvePdfAnnotationMutationCapability: resolvePdfAnnotationMutationCapability,
         prksPublishAcknowledgedPdfAnnotations: publishAcknowledgedAnnotations,
         prksLoadAcknowledgedPdfAnnotationState: loadAcknowledgedAnnotationState,
+        prksApplyPdfAnnotationAckToLiveRuntimes: applyAckToLiveRuntimes,
+        prksIsPdfAnnotationsStateShape: isAnnotationsStateShape,
         prksPdfAnnotationSyncHandler: handler,
     });
 }(typeof window !== 'undefined' ? window : global));

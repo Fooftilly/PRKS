@@ -2844,6 +2844,45 @@ class PRKSDatabase:
             conn.commit()
             return rev
 
+    def accept_work_pdf_materialization_claim(self, work_id: str, claimed_revision):
+        """Validate a durable materialization claim under BEGIN IMMEDIATE.
+
+        Raises LookupError / ValueError(ANNOTATION_MATERIALIZATION_STALE).
+        Returns the accepted canonical generation.
+        """
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                accepted = pdf_materialization.accept_materialization_revision_on_conn(
+                    conn, work_id, claimed_revision
+                )
+                conn.commit()
+                return accepted
+            except Exception:
+                conn.rollback()
+                raise
+
+    def mark_work_pdf_materialized_if_claim_current(self, work_id: str, claimed_revision):
+        """Re-validate claim then mark materialized in one IMMEDIATE transaction."""
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                accepted = pdf_materialization.accept_materialization_revision_on_conn(
+                    conn, work_id, claimed_revision
+                )
+                rev = pdf_materialization.mark_pdf_materialized_on_conn(
+                    conn, work_id, at_revision=accepted
+                )
+                conn.commit()
+                return rev
+            except Exception:
+                conn.rollback()
+                raise
+
     def adopt_byte_only_user_markup(self, work_id: str, viewer_items):
         """Insert canonical rows for viewer user markup missing from metadata.
 

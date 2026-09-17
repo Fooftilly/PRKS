@@ -84,6 +84,36 @@ class PdfMaterializationTests(unittest.TestCase):
         self.assertFalse(mat2["stale"])
         self.assertIsNone(mat2["code"])
 
+    def test_claimed_future_revision_rejected(self) -> None:
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        mat = self.db.get_work_pdf_materialization(self.work_id)
+        future = mat["canonical_annotation_set_revision"] + 5
+        with self.assertRaises(ValueError) as ctx:
+            self.db.mark_work_pdf_materialized(self.work_id, at_revision=future)
+        self.assertEqual(str(ctx.exception), pdf_materialization.STALE_CODE)
+        mat2 = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertEqual(mat2["materialized_pdf_annotation_revision"], 0)
+        self.assertTrue(mat2["stale"])
+
+    def test_claimed_stale_revision_rejected(self) -> None:
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        # Advance canonical again so claim of 1 is behind.
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A2")])
+        mat = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertGreaterEqual(mat["canonical_annotation_set_revision"], 2)
+        with self.assertRaises(ValueError) as ctx:
+            self.db.accept_work_pdf_materialization_claim(self.work_id, 1)
+        self.assertEqual(str(ctx.exception), pdf_materialization.STALE_CODE)
+
+    def test_exact_claim_marks_materialized(self) -> None:
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        mat = self.db.get_work_pdf_materialization(self.work_id)
+        claim = mat["canonical_annotation_set_revision"]
+        rev = self.db.mark_work_pdf_materialized_if_claim_current(self.work_id, claim)
+        self.assertEqual(rev, claim)
+        mat2 = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertFalse(mat2["stale"])
+
     def test_identical_set_does_not_bump_canonical(self) -> None:
         items = [_highlight("a", "A")]
         self.db.sync_work_annotations(self.work_id, items)

@@ -1566,7 +1566,10 @@
          * `annotation` is the API-shaped object (id/type/contents/geometry…).
          * `observed` is `{present, revision, annotation?}` from the acknowledged
          * snapshot + annotations-state. Never-sent CREATE+SET folds into CREATE;
-         * CREATE+DELETE cancels; SENT rows refuse with `scope_busy`.
+         * CREATE+DELETE cancels. SENT/attempted envelopes stay immutable; a new
+         * desired state after an attempted sync becomes a dependent successor so
+         * offline editing can continue (no same-annotation `scope_busy` dead end).
+         * Conflicted rows still require explicit resolution.
          */
         function savePdfAnnotation(workId, desired, observed) {
             const deleting = desired === null;
@@ -1592,63 +1595,135 @@
                 row.payload && row.payload.annotation_id === annotationId &&
                 row.status !== STATUS_ACKNOWLEDGED;
             const desiredPresent = !deleting;
-            function sameAsObserved() {
-                if (desiredPresent !== observed.present) return false;
-                if (!desiredPresent) return true;
-                const left = desired.annotation;
-                const right = observed.annotation;
-                if (!right || typeof right !== 'object') return false;
+            function annotationsEqual(left, right) {
+                if (!left && !right) return true;
+                if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
+                    return false;
+                }
                 if (typeof root.prksPdfAnnotationsSemanticallyEqual === 'function') {
                     return root.prksPdfAnnotationsSemanticallyEqual(left, right);
                 }
                 return JSON.stringify(left) === JSON.stringify(right);
+            }
+            function sameAsObserved() {
+                if (desiredPresent !== observed.present) return false;
+                if (!desiredPresent) return true;
+                return annotationsEqual(desired.annotation, observed.annotation);
+            }
+            function rowPresent(row) {
+                return row.operation !== 'DELETE_PDF_ANNOTATION';
+            }
+            function rowBody(row) {
+                return rowPresent(row) ? (row.payload && row.payload.annotation) || null : null;
+            }
+            function sameIntentAsRow(row) {
+                return rowPresent(row) === desiredPresent && (
+                    !desiredPresent || annotationsEqual(rowBody(row), desired.annotation)
+                );
+            }
+            function isNeverSent(row) {
+                return row.status === STATUS_PENDING && !(row.attempt_count > 0);
+            }
+            function isConflicted(row) {
+                return row.status === STATUS_CONFLICT;
+            }
+            function isAttemptedOpen(row) {
+                if (isConflicted(row) || isNeverSent(row)) return false;
+                return row.status === STATUS_PENDING ||
+                    row.status === STATUS_SYNCING ||
+                    row.status === STATUS_FAILED;
+            }
+            /** Revision the attempted op will leave after a successful ACK. */
+            function revisionAfterAttempted(row) {
+                if (row.operation === 'CREATE_PDF_ANNOTATION') return 0;
+                if (row.operation === 'SET_PDF_ANNOTATION' ||
+                    row.operation === 'DELETE_PDF_ANNOTATION') {
+                    const base = Number.isSafeInteger(row.base_revision) ? row.base_revision : 0;
+                    return base + 1;
+                }
+                return 0;
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(allRows, workId, 'annotated');
                 const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
-                if (rows.length > 1) {
+                const neverSentRows = rows.filter(isNeverSent);
+                const attemptedRows = rows.filter(isAttemptedOpen);
+                const conflictRows = rows.filter(isConflicted);
+                if (conflictRows.length) {
+                    throw localStoreError('scope_busy',
+                        'This annotation needs resolution before it can be edited again.');
+                }
+                if (neverSentRows.length > 1 || attemptedRows.length > 1) {
                     throw localStoreError('scope_busy',
                         'This annotation has ' + rows.length + ' unsynchronized changes; ' +
                         'let them finish or resolve them before editing it again.');
                 }
-                const existing = rows[0];
-                if (existing) {
-                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                        throw localStoreError('scope_busy', 'This annotation is syncing or needs resolution.');
+                const existingNeverSent = neverSentRows[0] || null;
+                const existingAttempted = attemptedRows[0] || null;
+
+                if (existingNeverSent) {
+                    if (sameIntentAsRow(existingNeverSent)) {
+                        setResult(existingNeverSent);
+                        return;
                     }
-                    const existingPresent = existing.operation !== 'DELETE_PDF_ANNOTATION';
-                    const existingBody = existingPresent ? existing.payload.annotation : null;
-                    const sameIntent = existingPresent === desiredPresent && (
-                        !desiredPresent ||
-                        (typeof root.prksPdfAnnotationsSemanticallyEqual === 'function'
-                            ? root.prksPdfAnnotationsSemanticallyEqual(existingBody, desired.annotation)
-                            : JSON.stringify(existingBody) === JSON.stringify(desired.annotation))
-                    );
-                    if (sameIntent) { setResult(existing); return; }
-                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
-                    /* CREATE then DELETE with never-sent CREATE: cancel both. */
-                    if (existing.operation === 'CREATE_PDF_ANNOTATION' && !desiredPresent) {
+                    await request(STORE_OPERATIONS, s => s.delete(existingNeverSent.op_id));
+                    /* CREATE then DELETE with never-sent CREATE: cancel both.
+                     * When a SENT predecessor remains, a DELETE successor is
+                     * still required so the in-flight create does not stick. */
+                    if (existingNeverSent.operation === 'CREATE_PDF_ANNOTATION' &&
+                        !desiredPresent && !existingAttempted) {
                         setResult(null);
                         return;
                     }
                 }
-                if (sameAsObserved()) { setResult(null); return; }
+
+                if (existingAttempted && sameIntentAsRow(existingAttempted) && !existingNeverSent) {
+                    setResult(existingAttempted);
+                    return;
+                }
+
+                if (sameAsObserved() && !existingAttempted) {
+                    setResult(null);
+                    return;
+                }
+
                 let operation;
                 let payload;
                 let baseRevision;
-                if (!desiredPresent) {
+                let dependsOn = [];
+
+                if (existingAttempted) {
+                    /* SENT envelope stays immutable; enqueue a dependent
+                     * successor measured against the revision the attempted
+                     * op will establish on ACK. */
+                    dependsOn = [existingAttempted.op_id];
+                    const afterRev = revisionAfterAttempted(existingAttempted);
+                    if (!desiredPresent) {
+                        operation = 'DELETE_PDF_ANNOTATION';
+                        payload = { annotation_id: annotationId };
+                        baseRevision = afterRev;
+                    } else if (existingAttempted.operation === 'DELETE_PDF_ANNOTATION') {
+                        /* Re-create after an in-flight delete. May terminal as
+                         * ANNOTATION_ID_REUSED; that is discarded, not conflict. */
+                        operation = 'CREATE_PDF_ANNOTATION';
+                        payload = { annotation_id: annotationId, annotation: desired.annotation };
+                        baseRevision = null;
+                    } else if (existingAttempted.operation === 'CREATE_PDF_ANNOTATION') {
+                        operation = 'SET_PDF_ANNOTATION';
+                        payload = { annotation_id: annotationId, annotation: desired.annotation };
+                        baseRevision = afterRev;
+                    } else {
+                        operation = 'SET_PDF_ANNOTATION';
+                        payload = { annotation_id: annotationId, annotation: desired.annotation };
+                        baseRevision = afterRev;
+                    }
+                } else if (!desiredPresent) {
                     operation = 'DELETE_PDF_ANNOTATION';
                     payload = { annotation_id: annotationId };
                     baseRevision = observed.revision;
-                } else if (!observed.present && (!existing || existing.operation === 'CREATE_PDF_ANNOTATION')) {
-                    /* Fresh create, or fold SET into never-sent CREATE. */
-                    operation = 'CREATE_PDF_ANNOTATION';
-                    payload = { annotation_id: annotationId, annotation: desired.annotation };
-                    baseRevision = null;
-                } else if (!observed.present && existing && existing.operation !== 'CREATE_PDF_ANNOTATION') {
-                    /* Should not happen for a coherent queue; treat as create. */
+                } else if (!observed.present) {
                     operation = 'CREATE_PDF_ANNOTATION';
                     payload = { annotation_id: annotationId, annotation: desired.annotation };
                     baseRevision = null;
@@ -1657,16 +1732,21 @@
                     payload = { annotation_id: annotationId, annotation: desired.annotation };
                     baseRevision = observed.revision;
                 }
-                /* Fold: never-sent CREATE + SET → recreate CREATE with new body. */
-                if (existing && existing.operation === 'CREATE_PDF_ANNOTATION' && desiredPresent) {
+
+                /* Fold: never-sent CREATE + SET → recreate CREATE with new body.
+                 * Only when there is no SENT predecessor (handled above). */
+                if (!existingAttempted && existingNeverSent &&
+                    existingNeverSent.operation === 'CREATE_PDF_ANNOTATION' && desiredPresent) {
                     operation = 'CREATE_PDF_ANNOTATION';
                     payload = { annotation_id: annotationId, annotation: desired.annotation };
                     baseRevision = null;
+                    dependsOn = [];
                 }
+
                 setResult(await insertEnvelopeIn(request, {
                     operation, entity_type: 'work', entity_id: workId, payload,
                     base_revision: baseRevision,
-                    depends_on: [],
+                    depends_on: dependsOn,
                 }, null));
             });
         }

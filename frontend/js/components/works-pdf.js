@@ -1305,7 +1305,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 docId: 'DB',
                 workId: String(workId),
             };
-            runtime.annotationBaseReady = true;
             if (saved.length > 0) {
                 renderAnnotationFallbackList(saved, 'DB', workId, ctx);
             }
@@ -1318,11 +1317,21 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 );
                 if (setupEligible() && stateRes.ok) {
                     stateBody = await stateRes.json();
-                    runtime.annotationState = stateBody;
+                    if (typeof window.prksIsPdfAnnotationsStateShape === 'function'
+                        ? window.prksIsPdfAnnotationsStateShape(stateBody)
+                        : (stateBody && Array.isArray(stateBody.annotations))) {
+                        runtime.annotationState = stateBody;
+                        // Both snapshots required — never treat list-only as safe.
+                        runtime.annotationBaseReady = true;
+                    }
                 }
             } catch (_e) {}
             if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                await window.prksPublishAcknowledgedPdfAnnotations(String(workId), saved, stateBody);
+                await window.prksPublishAcknowledgedPdfAnnotations(
+                    String(workId),
+                    saved,
+                    runtime.annotationBaseReady ? stateBody : null
+                );
             }
         }
     } catch (_e) {
@@ -1330,7 +1339,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (typeof window.prksOfflinePeekEntity === 'function') {
             try {
                 const cached = await window.prksOfflinePeekEntity('work-annotations', String(workId));
-                if (Array.isArray(cached)) {
+                let stateBody = null;
+                if (typeof window.prksLoadAcknowledgedPdfAnnotationState === 'function') {
+                    stateBody = await window.prksLoadAcknowledgedPdfAnnotationState(String(workId));
+                }
+                const stateOk = typeof window.prksIsPdfAnnotationsStateShape === 'function'
+                    ? window.prksIsPdfAnnotationsStateShape(stateBody)
+                    : !!(stateBody && Array.isArray(stateBody.annotations));
+                if (Array.isArray(cached) && stateOk) {
                     runtime.annotationCache = {
                         allItems: cached,
                         rawItems: cached,
@@ -1338,17 +1354,25 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         docId: 'CACHE',
                         workId: String(workId),
                     };
+                    runtime.annotationState = stateBody;
                     runtime.annotationBaseReady = true;
-                    if (typeof window.prksLoadAcknowledgedPdfAnnotationState === 'function') {
-                        runtime.annotationState =
-                            await window.prksLoadAcknowledgedPdfAnnotationState(String(workId));
-                    }
                     if (cached.length > 0) {
                         renderAnnotationFallbackList(cached, 'CACHE', workId, ctx);
                     }
                 }
             } catch (_e2) {}
         }
+    }
+    if (!setupEligible()) {
+        abandonSetup();
+        return;
+    }
+
+    // Hydrate pending durable ops before first effective-state / viewer reconcile.
+    if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
+        try {
+            await window.prksRefreshPendingPdfAnnotations();
+        } catch (_ePend) { /* best-effort */ }
     }
     if (!setupEligible()) {
         abandonSetup();
@@ -1404,7 +1428,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                 docId: 'DB',
                                 workId: String(workId),
                             };
-                            runtime.annotationBaseReady = true;
                             let stateBody = runtime.annotationState || null;
                             try {
                                 const stateRes = await prksRequest(
@@ -1414,14 +1437,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                 );
                                 if (setupEligible() && stateRes.ok) {
                                     stateBody = await stateRes.json();
-                                    runtime.annotationState = stateBody;
+                                    if (typeof window.prksIsPdfAnnotationsStateShape === 'function'
+                                        ? window.prksIsPdfAnnotationsStateShape(stateBody)
+                                        : (stateBody && Array.isArray(stateBody.annotations))) {
+                                        runtime.annotationState = stateBody;
+                                        runtime.annotationBaseReady = true;
+                                    }
                                 }
                             } catch (_eState) {}
                             if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
                                 await window.prksPublishAcknowledgedPdfAnnotations(
                                     String(workId),
                                     saved,
-                                    stateBody
+                                    runtime.annotationBaseReady ? stateBody : null
                                 );
                             }
                         }
@@ -1464,23 +1492,35 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     }
     renderSyncIndicator();
 
-    async function exportAndPersistPdfCopy(saveToken) {
+    async function exportAndPersistPdfCopy(saveToken, materializeRevision) {
         if (!stillLive()) return;
         const buffer = await viewer.saveCopy();
         if (!stillLive()) return;
         if (!buffer || !buffer.byteLength) return;
         const b64 = arrayBufferToBase64(buffer);
         if (!stillLive()) return;
+        const body = { file_b64: b64, save_token: saveToken };
+        if (Number.isSafeInteger(materializeRevision) && materializeRevision >= 0) {
+            body.materialized_annotation_set_revision = materializeRevision;
+        }
         const pdfRes = await prksRequest(`/api/works/${workId}/pdf`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ file_b64: b64, save_token: saveToken }),
+            body: JSON.stringify(body),
         }, {
             dedupe: false,
             retry: false,
             freshForMs: 0,
         });
         if (!pdfRes.ok) {
+            let code = '';
+            try {
+                const errBody = await pdfRes.json();
+                code = errBody && errBody.code ? String(errBody.code) : '';
+            } catch (_e) {}
+            if (code === 'ANNOTATION_MATERIALIZATION_STALE') {
+                throw new Error('ANNOTATION_MATERIALIZATION_STALE');
+            }
             throw new Error(`PDF save failed (${pdfRes.status})`);
         }
         if (typeof prksOfflineMarkEntityChanged === 'function') {
@@ -1510,17 +1550,27 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
         if (!stillLive()) return;
-        // Slice F: PDF bytes are a materialized artifact. Always export them
-        // when this flush runs. Semantic metadata uses durable CREATE/SET/
-        // DELETE when available; the full-list annotations POST remains only
-        // for online-legacy (durable store unavailable).
+        // Slice F: PDF bytes are a materialized artifact of an *acknowledged*
+        // annotation-set generation. Durable path only exports when a claimed
+        // generation is queued on the runtime after semantic ACK.
+        if (runtime.annotationMutationDurable) {
+            const claimed = runtime.pendingMaterializationRevision;
+            if (!Number.isSafeInteger(claimed) || claimed < 0) {
+                return;
+            }
+            await exportAndPersistPdfCopy(saveToken, claimed);
+            if (!stillLive()) return;
+            if (runtime.pendingMaterializationRevision === claimed) {
+                runtime.pendingMaterializationRevision = null;
+            }
+            const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+            renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
+            return;
+        }
         await exportAndPersistPdfCopy(saveToken);
         if (!stillLive()) return;
         const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
         renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
-        if (runtime.annotationMutationDurable) {
-            return;
-        }
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
         const serialized = JSON.stringify(userItems);
         if (!stillLive()) return;
@@ -1691,17 +1741,20 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     await window.prksSavePdfAnnotationDurably(String(workId), desired, observed);
                     if (!stillLive()) return;
                     // Refresh local sidebar projection from effective overlay.
-                    const effective =
-                        typeof window.prksEffectiveWorkAnnotations === 'function'
-                            ? window.prksEffectiveWorkAnnotations(ackList, String(workId))
-                            : ackList;
+                    // Keep acknowledged items in annotationCache; effective is
+                    // derived at render/reconcile time from pending overlay.
+                    const ackOnly = Array.isArray(ackList) ? ackList : [];
                     runtime.annotationCache = {
-                        allItems: effective,
-                        rawItems: effective,
-                        items: effective,
+                        allItems: ackOnly,
+                        rawItems: ackOnly,
+                        items: ackOnly,
                         docId: viewer.getDocumentId ? viewer.getDocumentId() : null,
                         workId: String(workId),
                     };
+                    const effective =
+                        typeof window.prksEffectiveWorkAnnotations === 'function'
+                            ? window.prksEffectiveWorkAnnotations(ackOnly, String(workId))
+                            : ackOnly;
                     renderAnnotationFallbackList(
                         effective,
                         runtime.annotationCache.docId,
@@ -1711,17 +1764,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     syncState.localMutationSeen = true;
                     syncState.lastError = '';
                     renderSyncIndicator();
-                    // Best-effort PDF materialization when reachable. Semantic
-                    // ACK does not wait on this; offline leaves lag until resume.
-                    const online =
-                        typeof window.prksOfflineRuntimeState !== 'function' ||
-                        window.prksOfflineRuntimeState() === 'online';
-                    if (online) {
-                        if (worker && worker.paused && typeof worker.resume === 'function') {
-                            worker.resume();
-                        }
-                        void requestFlush('materialize');
-                    }
+                    // Do NOT materialize PDF bytes here. Materialization runs
+                    // only after semantic ACK of an acknowledged generation.
                 } catch (_err) {
                     if (!stillLive()) return;
                     syncState.lastError = 'local_save_failed';
@@ -1832,8 +1876,55 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 viewer.onAnnotationEvent(onAnnotationEvent);
             }
             if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
-                stopSyncSubscribe = window.prksSync.subscribe(function () {
-                    if (stillLive()) renderSyncIndicator();
+                stopSyncSubscribe = window.prksSync.subscribe(function (event) {
+                    if (!stillLive()) return;
+                    void (async function () {
+                        if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
+                            try {
+                                await window.prksRefreshPendingPdfAnnotations();
+                            } catch (_e) { /* best-effort */ }
+                        }
+                        if (!stillLive()) return;
+                        const ack = event && event.acknowledged;
+                        const op = event && event.op;
+                        const isPdfAck = ack && op && (
+                            op.operation === 'CREATE_PDF_ANNOTATION' ||
+                            op.operation === 'SET_PDF_ANNOTATION' ||
+                            op.operation === 'DELETE_PDF_ANNOTATION'
+                        ) && String(op.entity_id) === String(workId);
+                        if (isPdfAck) {
+                            if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes === 'function') {
+                                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
+                            }
+                            const setRev = ack.canonical_annotation_set_revision;
+                            if (ack.changed === true && Number.isSafeInteger(setRev) && setRev >= 0) {
+                                runtime.acknowledgedAnnotationSetRevision = setRev;
+                                runtime.pendingMaterializationRevision = setRev;
+                                const online =
+                                    typeof window.prksOfflineRuntimeState !== 'function' ||
+                                    window.prksOfflineRuntimeState() === 'online';
+                                if (online) {
+                                    if (worker && worker.paused && typeof worker.resume === 'function') {
+                                        worker.resume();
+                                    }
+                                    void requestFlush('materialize');
+                                }
+                            }
+                            const ackItems =
+                                (runtime.annotationCache && runtime.annotationCache.items) || [];
+                            const effective =
+                                typeof window.prksEffectiveWorkAnnotations === 'function'
+                                    ? window.prksEffectiveWorkAnnotations(ackItems, String(workId))
+                                    : ackItems;
+                            renderAnnotationFallbackList(
+                                effective,
+                                runtime.annotationCache && runtime.annotationCache.docId,
+                                workId,
+                                ctx
+                            );
+                        }
+                        renderSyncIndicator();
+                    })();
                 });
             }
             if (typeof window.prksOfflineRuntimeSubscribe === 'function') {

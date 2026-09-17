@@ -51,13 +51,25 @@ def _advance(conn, work_id: str, annotation_id: str) -> int:
     return get_revision(conn, work_id, annotation_id)
 
 
-def _bump_canonical_set_if_changed(conn, work_id: str, *, changed: bool) -> None:
-    """Annotation meaning changed ⇒ PDF materialization may lag (Slice F)."""
-    if not changed:
-        return
+def _canonical_set_revision(conn, work_id: str) -> int:
     from backend import pdf_materialization
 
-    pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
+    status = pdf_materialization.get_materialization_on_conn(conn, work_id)
+    if status is None:
+        return 0
+    return int(status["canonical_annotation_set_revision"] or 0)
+
+
+def _bump_canonical_set_if_changed(conn, work_id: str, *, changed: bool) -> int:
+    """Annotation meaning changed ⇒ PDF materialization may lag (Slice F).
+
+    Returns the current canonical annotation-set generation after any bump.
+    """
+    from backend import pdf_materialization
+
+    if changed:
+        return pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
+    return _canonical_set_revision(conn, work_id)
 
 
 def _work_exists(conn, work_id: str) -> bool:
@@ -313,6 +325,7 @@ def apply_create(db, conn, op, received_at):
                 changed=False,
                 server_revision=revision,
                 annotation=current,
+                canonical_annotation_set_revision=_canonical_set_revision(conn, work_id),
             )
             return 200, result
         result.update(
@@ -331,12 +344,13 @@ def apply_create(db, conn, op, received_at):
         return 409, result
 
     stored = insert_annotation_on_conn(conn, work_id, desired)
-    _bump_canonical_set_if_changed(conn, work_id, changed=True)
+    set_rev = _bump_canonical_set_if_changed(conn, work_id, changed=True)
     result.update(
         code="ACKNOWLEDGED",
         changed=True,
         server_revision=0,
         annotation=stored,
+        canonical_annotation_set_revision=set_rev,
     )
     return 200, result
 
@@ -401,12 +415,13 @@ def apply_set(db, conn, op, received_at):
         )
 
     changed, after, stored = update_annotation_on_conn(conn, work_id, desired)
-    _bump_canonical_set_if_changed(conn, work_id, changed=changed)
+    set_rev = _bump_canonical_set_if_changed(conn, work_id, changed=changed)
     result.update(
         code="ACKNOWLEDGED",
         changed=changed,
         server_revision=after,
         annotation=stored,
+        canonical_annotation_set_revision=set_rev,
     )
     return 200, result
 
@@ -457,6 +472,7 @@ def apply_delete(db, conn, op, received_at):
             changed=False,
             server_revision=revision,
             present=False,
+            canonical_annotation_set_revision=_canonical_set_revision(conn, work_id),
         )
         return 200, result
 
@@ -472,12 +488,13 @@ def apply_delete(db, conn, op, received_at):
         return 409, result
 
     changed, after = delete_annotation_on_conn(conn, work_id, annotation_id)
-    _bump_canonical_set_if_changed(conn, work_id, changed=changed)
+    set_rev = _bump_canonical_set_if_changed(conn, work_id, changed=changed)
     result.update(
         code="ACKNOWLEDGED",
         changed=changed,
         server_revision=after,
         present=False,
+        canonical_annotation_set_revision=set_rev,
     )
     return 200, result
 

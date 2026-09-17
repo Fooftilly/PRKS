@@ -604,6 +604,19 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
 _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _SAVE_TOKEN_LOCK = threading.Lock()
+_PDF_MATERIALIZATION_LOCKS_GUARD = threading.Lock()
+_PDF_MATERIALIZATION_LOCKS = {}
+
+
+def _pdf_materialization_lock_for(work_id: str) -> threading.Lock:
+    """Per-Work lock so validate → replace → mark cannot race another ACK."""
+    with _PDF_MATERIALIZATION_LOCKS_GUARD:
+        lock = _PDF_MATERIALIZATION_LOCKS.get(work_id)
+        if lock is None:
+            lock = threading.Lock()
+            _PDF_MATERIALIZATION_LOCKS[work_id] = lock
+        return lock
+
 
 # Work creation and source synchronization share ONE parser, in the source
 # domain module. A second one here would eventually disagree with it, and the
@@ -3144,83 +3157,144 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 w_id = path.split('/')[3]
                 file_b64 = data.get('file_b64', '')
                 save_token = str(data.get('save_token', '') or '').strip()
+                claimed_set_rev = data.get('materialized_annotation_set_revision', None)
+                durable_materialize = claimed_set_rev is not None
                 if file_b64:
                     try:
                         pdf_bytes = base64.b64decode(file_b64, validate=True)
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    
-                    # 1. Overwrite file
-                    res_path = db.execute_query("SELECT file_path FROM works WHERE id=?", (w_id,))
-                    if res_path and res_path[0]['file_path']:
-                        filename = res_path[0]['file_path'].split('/')[-1]
-                        pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
-                        if not pdf_path:
-                            self.send_json(400, {'error': 'Invalid or unsafe PDF storage path'})
-                            return
-                        with open(pdf_path, 'wb') as f:
-                            f.write(pdf_bytes)
-                        changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
-                        LOGGER.info(
-                            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
-                            "true" if changed else "false",
-                            safe_log_label(reason),
-                        )
+
+                    mat_lock = _pdf_materialization_lock_for(w_id)
+                    with mat_lock:
+                        if durable_materialize:
+                            try:
+                                db.accept_work_pdf_materialization_claim(
+                                    w_id, claimed_set_rev
+                                )
+                            except LookupError:
+                                self.send_json(404, {'error': 'Work not found'})
+                                return
+                            except ValueError as e:
+                                from backend.pdf_materialization import STALE_CODE
+                                if str(e) == STALE_CODE:
+                                    mat = db.get_work_pdf_materialization(w_id) or {}
+                                    self.send_json(
+                                        409,
+                                        {
+                                            'error': 'PDF materialization is stale',
+                                            'code': STALE_CODE,
+                                            'canonical_annotation_set_revision': mat.get(
+                                                'canonical_annotation_set_revision'
+                                            ),
+                                            'materialized_pdf_annotation_revision': mat.get(
+                                                'materialized_pdf_annotation_revision'
+                                            ),
+                                        },
+                                    )
+                                    return
+                                self.send_json(400, {'error': 'Invalid materialization revision'})
+                                return
+
+                        # 1. Overwrite file
+                        res_path = db.execute_query("SELECT file_path FROM works WHERE id=?", (w_id,))
+                        if res_path and res_path[0]['file_path']:
+                            filename = res_path[0]['file_path'].split('/')[-1]
+                            pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
+                            if not pdf_path:
+                                self.send_json(400, {'error': 'Invalid or unsafe PDF storage path'})
+                                return
+                            with open(pdf_path, 'wb') as f:
+                                f.write(pdf_bytes)
+                            changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
+                            LOGGER.info(
+                                "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
+                                "true" if changed else "false",
+                                safe_log_label(reason),
+                            )
+                            try:
+                                stored_fp = res_path[0]["file_path"]
+                                text_index.sync_work(w_id, stored_fp)
+                            except Exception as e:
+                                LOGGER.warning(
+                                    "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
+                                    safe_log_id(w_id),
+                                    safe_error_type(e),
+                                )
+
+                        # 2. Extract annotations
+                        byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)
+                        for b in byte_matches:
+                            try:
+                                decoded = b.decode('utf-8', errors='ignore').strip()
+                                clean = ''.join(c for c in decoded if c.isalnum() or c.isspace() or c in "-_")
+                                if clean:
+                                    db_res = db.execute_query("SELECT id FROM persons WHERE (first_name || ' ' || last_name) = ? OR last_name = ?", (clean, clean))
+                                    if db_res:
+                                        p_id = db_res[0]['id']
+                                        exist = db.execute_query("SELECT 1 FROM roles WHERE person_id=? AND work_id=? AND role_type='Mentioned'", (p_id, w_id))
+                                        if not exist:
+                                            db.add_role(p_id, w_id, 'Mentioned')
+                            except Exception:
+                                continue
+                        if save_token:
+                            with _SAVE_TOKEN_LOCK:
+                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
+                        # Slice F: durable path re-validates the claimed generation
+                        # after the byte replace so another ACK cannot clear stale
+                        # with a future/arbitrary revision. Legacy omits the claim
+                        # and marks at the current tip.
+                        materialized_rev = None
                         try:
-                            stored_fp = res_path[0]["file_path"]
-                            text_index.sync_work(w_id, stored_fp)
-                        except Exception as e:
+                            if durable_materialize:
+                                materialized_rev = db.mark_work_pdf_materialized_if_claim_current(
+                                    w_id, claimed_set_rev
+                                )
+                            else:
+                                materialized_rev = db.mark_work_pdf_materialized(w_id)
+                        except LookupError:
+                            self.send_json(404, {'error': 'Work not found'})
+                            return
+                        except ValueError as e:
+                            from backend.pdf_materialization import STALE_CODE
+                            if str(e) == STALE_CODE:
+                                mat = db.get_work_pdf_materialization(w_id) or {}
+                                self.send_json(
+                                    409,
+                                    {
+                                        'error': 'PDF materialization is stale',
+                                        'code': STALE_CODE,
+                                        'canonical_annotation_set_revision': mat.get(
+                                            'canonical_annotation_set_revision'
+                                        ),
+                                        'materialized_pdf_annotation_revision': mat.get(
+                                            'materialized_pdf_annotation_revision'
+                                        ),
+                                    },
+                                )
+                                return
                             LOGGER.warning(
-                                "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
+                                "pdf_materialization_mark_failed work_id=%s error_type=%s",
                                 safe_log_id(w_id),
                                 safe_error_type(e),
                             )
-                            
-                    # 2. Extract annotations
-                    byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)
-                    for b in byte_matches:
-                        try:
-                            decoded = b.decode('utf-8', errors='ignore').strip()
-                            clean = ''.join(c for c in decoded if c.isalnum() or c.isspace() or c in "-_")
-                            if clean:
-                                db_res = db.execute_query("SELECT id FROM persons WHERE (first_name || ' ' || last_name) = ? OR last_name = ?", (clean, clean))
-                                if db_res:
-                                    p_id = db_res[0]['id']
-                                    exist = db.execute_query("SELECT 1 FROM roles WHERE person_id=? AND work_id=? AND role_type='Mentioned'", (p_id, w_id))
-                                    if not exist:
-                                        db.add_role(p_id, w_id, 'Mentioned')
-                        except Exception:
-                            continue
-                    if save_token:
-                        with _SAVE_TOKEN_LOCK:
-                            _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                    # Slice F: managed PDF bytes now match the current canonical
-                    # annotation generation (or an explicit at_revision if sent).
-                    materialized_rev = None
-                    try:
-                        at_rev = data.get('materialized_annotation_set_revision', None)
-                        if at_rev is not None:
-                            at_rev = int(at_rev)
-                        materialized_rev = db.mark_work_pdf_materialized(
-                            w_id, at_revision=at_rev
-                        )
-                    except Exception as e:
-                        LOGGER.warning(
-                            "pdf_materialization_mark_failed work_id=%s error_type=%s",
-                            safe_log_id(w_id),
-                            safe_error_type(e),
-                        )
-                    body = {'status': 'success'}
-                    if materialized_rev is not None:
-                        body['materialized_pdf_annotation_revision'] = materialized_rev
-                        mat = db.get_work_pdf_materialization(w_id)
-                        if mat:
-                            body['canonical_annotation_set_revision'] = mat[
-                                'canonical_annotation_set_revision'
-                            ]
-                            body['stale'] = mat['stale']
-                    self.send_json(200, body)
+                        except Exception as e:
+                            LOGGER.warning(
+                                "pdf_materialization_mark_failed work_id=%s error_type=%s",
+                                safe_log_id(w_id),
+                                safe_error_type(e),
+                            )
+                        body = {'status': 'success'}
+                        if materialized_rev is not None:
+                            body['materialized_pdf_annotation_revision'] = materialized_rev
+                            mat = db.get_work_pdf_materialization(w_id)
+                            if mat:
+                                body['canonical_annotation_set_revision'] = mat[
+                                    'canonical_annotation_set_revision'
+                                ]
+                                body['stale'] = mat['stale']
+                        self.send_json(200, body)
                 else:
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
