@@ -441,20 +441,33 @@ def _pdf_open_markup_tool(page, label="Highlight"):
     return menu_tool
 
 
+_PDF_MARKUP_TOOLS_AVAILABLE_JS = """() => {
+    const pdf = (window.prksGetFocusedTabContext &&
+        window.prksGetFocusedTabContext().getResource('pdf'));
+    // Coherent catch-up / materialization holds a gate and flips
+    // setMutationEnabled(false) — mode may still be 'work' while tools are
+    // hidden. Settlement requires the gate released AND tools reachable.
+    if (pdf && pdf._annotationMaterializing) return false;
+    const root = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
+    if (!root) return false;
+    const primary = root.querySelector(
+        '.prks-pdf-toolbar__group > button[aria-label="Highlight"]');
+    if (primary && primary.offsetParent !== null) return true;
+    const more = root.querySelector(
+        '.prks-pdf-toolbar__more button[aria-label="More tools"]');
+    return !!(more && more.offsetParent !== null);
+}"""
+
+
 def _pdf_markup_tools_available(page):
-    """True when markup tools are reachable online (primary strip or More)."""
-    return page.evaluate(
-        """() => {
-            const root = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
-            if (!root) return false;
-            const primary = root.querySelector(
-                '.prks-pdf-toolbar__group > button[aria-label="Highlight"]');
-            if (primary && primary.offsetParent !== null) return true;
-            const more = root.querySelector(
-                '.prks-pdf-toolbar__more button[aria-label="More tools"]');
-            return !!(more && more.offsetParent !== null);
-        }"""
-    )
+    """True when markup tools are reachable (primary strip or More) and the
+    materialization/catch-up gate is not holding user input locked."""
+    return bool(page.evaluate(_PDF_MARKUP_TOOLS_AVAILABLE_JS))
+
+
+def _wait_pdf_markup_tools_settled(page, timeout=20000):
+    """Wait until catch-up/materialization unlocks and markup tools show."""
+    page.wait_for_function(_PDF_MARKUP_TOOLS_AVAILABLE_JS, timeout=timeout)
 
 
 def _pdf_has_pending_changes(page):
@@ -1643,23 +1656,7 @@ class OfflineFoundationTests(unittest.TestCase):
         # tools) while projecting /annotations-snapshot into the live viewer.
         # Settlement means the gate is released AND tools are reachable again —
         # mode===work alone is not enough (viewer may still be input-locked).
-        page.wait_for_function(
-            """() => {
-                const pdf = (window.prksGetFocusedTabContext &&
-                    window.prksGetFocusedTabContext().getResource('pdf'));
-                if (!pdf || pdf._annotationMaterializing) return false;
-                const root = document.querySelector(
-                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
-                if (!root) return false;
-                const primary = root.querySelector(
-                    '.prks-pdf-toolbar__group > button[aria-label="Highlight"]');
-                if (primary && primary.offsetParent !== null) return true;
-                const more = root.querySelector(
-                    '.prks-pdf-toolbar__more button[aria-label="More tools"]');
-                return !!(more && more.offsetParent !== null);
-            }""",
-            timeout=20000,
-        )
+        _wait_pdf_markup_tools_settled(page)
         self.assertTrue(_pdf_markup_tools_available(page))
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
 
@@ -1684,6 +1681,7 @@ class OfflineFoundationTests(unittest.TestCase):
             timeout=20000,
         )
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
+        _wait_pdf_markup_tools_settled(page)
         self.assertTrue(_pdf_markup_tools_available(page))
         context.set_offline(False)
 
@@ -2104,6 +2102,7 @@ class OfflineFoundationTests(unittest.TestCase):
                 }""" % _FOCUSED_PDF,
                 timeout=20000,
             )
+            _wait_pdf_markup_tools_settled(page)
             self.assertTrue(_pdf_markup_tools_available(page))
         finally:
             _continue_held_routes(held)
@@ -2164,6 +2163,7 @@ class OfflineFoundationTests(unittest.TestCase):
                 timeout=30000,
             )
             self.assertGreaterEqual(snapshot_hits["n"], 3)
+            _wait_pdf_markup_tools_settled(page, timeout=30000)
             self.assertTrue(_pdf_markup_tools_available(page))
         finally:
             try:
