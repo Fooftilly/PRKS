@@ -236,7 +236,9 @@ function ApiBinder({
                     annotation?.selectAnnotation(pi, annotationId);
                 },
                 updateAnnotation: (annotationId, patch) => {
-                    if (mode !== 'work') return;
+                    if (mode !== 'work' && !controller.allowsProgrammaticAnnotationMutation()) {
+                        return;
+                    }
                     const got = annotation?.getAnnotationById(annotationId);
                     const obj = got?.object;
                     const pi = obj?.pageIndex;
@@ -244,11 +246,15 @@ function ApiBinder({
                     annotation?.updateAnnotation(pi, annotationId, patch as never);
                 },
                 createAnnotation: (pageIndex, annotationObj) => {
-                    if (mode !== 'work') return;
+                    if (mode !== 'work' && !controller.allowsProgrammaticAnnotationMutation()) {
+                        return;
+                    }
                     annotation?.createAnnotation(pageIndex, annotationObj as never);
                 },
                 deleteAnnotation: async (annotationId) => {
-                    if (mode !== 'work') return;
+                    if (mode !== 'work' && !controller.allowsProgrammaticAnnotationMutation()) {
+                        return;
+                    }
                     const got = annotation?.getAnnotationById(annotationId);
                     const obj = got?.object;
                     const pi = obj?.pageIndex;

@@ -79,29 +79,37 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksWorkHasUnresolvedPdfAnnotationOps", works_pdf)
         self.assertIn("Do NOT materialize PDF bytes here", works_pdf)
         self.assertIn("maybeCatchUpMaterialization", works_pdf)
-        # Catch-up always refreshes live /pdf-materialization (never trusts cached gens alone).
+        # Catch-up always fetches/applies coherent /annotations-snapshot
+        # (bodies + gens together; never gens-only /pdf-materialization).
         catch_up_at = works_pdf.index("async function maybeCatchUpMaterialization")
         catch_up_end = works_pdf.index("function onAnnotationEvent", catch_up_at)
         catch_up_body = works_pdf[catch_up_at:catch_up_end]
-        self.assertIn("/pdf-materialization", catch_up_body)
-        # Must fetch unconditionally — not only when local gens are missing.
-        self.assertNotIn(
-            "if (!Number.isSafeInteger(canonical) || !Number.isSafeInteger(materialized)) {\n"
-            "            try {\n"
-            "                const matRes = await prksRequest(",
-            catch_up_body,
-        )
+        self.assertIn("/annotations-snapshot", catch_up_body)
+        self.assertIn("applyAnnotationSnapshotToRuntime", catch_up_body)
+        self.assertNotIn("/pdf-materialization", catch_up_body)
         self.assertLess(
-            catch_up_body.index("/pdf-materialization"),
+            catch_up_body.index("/annotations-snapshot"),
             catch_up_body.index("if (canonical <= materialized)"),
         )
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
-        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 3500]
+        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 5500]
         self.assertIn("_annotationMaterializing = true", mat_pass)
         self.assertIn("_annotationDurableWriteChain", mat_pass)
+        self.assertIn("setMutationEnabled(false)", mat_pass)
+        self.assertIn("restoreEffectiveViewerAnnotations", mat_pass)
         self.assertIn("await window.prksReconcileViewerAnnotations(viewer, ackOnly", mat_pass)
         self.assertNotIn("catch (_eRec)", mat_pass)
+        # Real write-chain serializer: enqueue write fn, do not start early.
+        self.assertIn("function enqueueDurableAnnotationWrite", works_pdf)
+        self.assertIn("enqueueDurableAnnotationWrite(async function", works_pdf)
+        # STALE recovery: clear obsolete claim, coherent catch-up, no identical retry.
+        self.assertIn("ANNOTATION_MATERIALIZATION_STALE", works_pdf)
+        stale_at = works_pdf.index("msg === 'ANNOTATION_MATERIALIZATION_STALE'")
+        stale_handler = works_pdf[stale_at:stale_at + 700]
+        self.assertIn("pendingMaterializationRevision = null", stale_handler)
+        self.assertIn("maybeCatchUpMaterialization", stale_handler)
+        self.assertNotIn("scheduleRetry", stale_handler)
         # Snapshot hydration retries after transient non-OK.
         self.assertIn("scheduleAnnotationBaseHydrationRetry", works_pdf)
         self.assertIn("_annotationBaseHydrationNeedsRetry", works_pdf)

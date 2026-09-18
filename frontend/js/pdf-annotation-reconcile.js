@@ -151,6 +151,9 @@
         const nextManaged = new Set(previously);
 
         beginViewerAnnotationReconcile(viewer);
+        if (typeof viewer.beginProgrammaticAnnotationMutation === 'function') {
+            viewer.beginProgrammaticAnnotationMutation();
+        }
         try {
             const current = viewerRawObjects(viewer);
             const currentById = new Map();
@@ -212,6 +215,9 @@
 
             viewer[MANAGED_IDS] = nextManaged;
         } finally {
+            if (typeof viewer.endProgrammaticAnnotationMutation === 'function') {
+                viewer.endProgrammaticAnnotationMutation();
+            }
             endViewerAnnotationReconcile(viewer);
         }
         return stats;

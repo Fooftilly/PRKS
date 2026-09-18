@@ -39,12 +39,26 @@ export class ViewerController {
     private destroyed = false;
     private failed = false;
     private destroyImpl: () => void = () => {};
+    /** Nestable depth: create/update/delete may run while mode is preview. */
+    private programmaticMutationDepth = 0;
 
     constructor() {
         this.ready = new Promise((resolve, reject) => {
             this.resolveReady = resolve;
             this.rejectReady = reject;
         });
+    }
+
+    beginProgrammaticAnnotationMutation() {
+        this.programmaticMutationDepth += 1;
+    }
+
+    endProgrammaticAnnotationMutation() {
+        this.programmaticMutationDepth = Math.max(0, this.programmaticMutationDepth - 1);
+    }
+
+    allowsProgrammaticAnnotationMutation() {
+        return this.programmaticMutationDepth > 0;
     }
 
     attach(api: ReadyApi, destroyImpl: () => void) {
@@ -80,6 +94,12 @@ export class ViewerController {
             // Overwritten in createPrksPdfViewer() with the real live-mode
             // toggle -- this placeholder only satisfies the handle shape.
             setMutationEnabled: () => {},
+            beginProgrammaticAnnotationMutation: () => {
+                this.beginProgrammaticAnnotationMutation();
+            },
+            endProgrammaticAnnotationMutation: () => {
+                this.endProgrammaticAnnotationMutation();
+            },
             zoomIn: () => need().zoomIn(),
             zoomOut: () => need().zoomOut(),
             fitWidth: () => need().fitWidth(),

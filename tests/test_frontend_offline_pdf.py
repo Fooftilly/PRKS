@@ -194,6 +194,19 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(types_path)
         self.assertIn("setMutationEnabled(enabled: boolean): void;", src)
 
+    def test_vendor_handle_exposes_programmatic_annotation_mutation(self):
+        """User-input lock must not block reconcile create/update/delete."""
+        types_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "types.ts")
+        src = _read(types_path)
+        self.assertIn("beginProgrammaticAnnotationMutation(): void;", src)
+        self.assertIn("endProgrammaticAnnotationMutation(): void;", src)
+        viewer_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "viewer.tsx")
+        viewer = _read(viewer_path)
+        self.assertIn("allowsProgrammaticAnnotationMutation()", viewer)
+        reconcile = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "pdf-annotation-reconcile.js"))
+        self.assertIn("beginProgrammaticAnnotationMutation", reconcile)
+        self.assertIn("endProgrammaticAnnotationMutation", reconcile)
+
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation
         plugin to a non-mutating pointer state (clearActiveTool()) before the
