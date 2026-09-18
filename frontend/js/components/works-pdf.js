@@ -653,12 +653,17 @@ async function prksWaitOutAnnotationMaterialization(pdf) {
         if (Date.now() >= deadline) return;
         const gate = pdf._annotationMaterializationGate;
         const slice = Math.min(25, Math.max(0, deadline - Date.now()));
-        await Promise.race([
-            (gate && typeof gate.then === 'function')
-                ? Promise.resolve(gate).then(function () {}, function () {})
-                : Promise.resolve(),
-            new Promise(function (resolve) { setTimeout(resolve, slice); }),
-        ]);
+        const timeout = new Promise(function (resolve) { setTimeout(resolve, slice); });
+        // Handoff can be true with no gate between catch-up end and materialization
+        // acquire — never race Promise.resolve() (microtask spin / timer starvation).
+        if (gate && typeof gate.then === 'function') {
+            await Promise.race([
+                Promise.resolve(gate).then(function () {}, function () {}),
+                timeout,
+            ]);
+        } else {
+            await timeout;
+        }
     }
 }
 

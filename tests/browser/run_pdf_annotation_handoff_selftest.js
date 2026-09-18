@@ -102,12 +102,16 @@ async function waitOutMaterialization(pdf, { deadlineMs = 30000 } = {}) {
         if (Date.now() >= deadline) return;
         const gate = pdf._annotationMaterializationGate;
         const slice = Math.min(25, Math.max(0, deadline - Date.now()));
-        await Promise.race([
-            (gate && typeof gate.then === 'function')
-                ? Promise.resolve(gate).then(() => {}, () => {})
-                : Promise.resolve(),
-            new Promise((resolve) => setTimeout(resolve, slice)),
-        ]);
+        const timeout = new Promise((resolve) => setTimeout(resolve, slice));
+        // Handoff can be true with no gate — never race Promise.resolve() (spin).
+        if (gate && typeof gate.then === 'function') {
+            await Promise.race([
+                Promise.resolve(gate).then(() => {}, () => {}),
+                timeout,
+            ]);
+        } else {
+            await timeout;
+        }
     }
 }
 
@@ -278,6 +282,27 @@ async function materializationFinallyUnlock(runtime, viewer, { resolveCapability
     await waitOutMaterialization(paused);
     assert.ok(Date.now() - tPause < 500, 'pause must not wait on unresolved gate');
     assert.equal(pausedGateSettled, false);
+
+    // Handoff with no gate: short timer must clear handoff promptly (no microtask spin).
+    const handoffGap = {
+        _destroyed: false,
+        _annotationMaterializing: false,
+        _annotationMaterializationHandoff: true,
+        _annotationMaterializationGate: null,
+        annotationPersistence: { paused: false, destroyed: false },
+    };
+    setTimeout(() => {
+        handoffGap._annotationMaterializationHandoff = false;
+    }, 40);
+    const tHandoff = Date.now();
+    await waitOutMaterialization(handoffGap);
+    const handoffElapsed = Date.now() - tHandoff;
+    assert.ok(
+        handoffElapsed < 500,
+        `handoff gap wait must return promptly, got ${handoffElapsed}ms`,
+    );
+    assert.equal(handoffGap._annotationMaterializationHandoff, false);
+    assert.equal(handoffGap._annotationMaterializationGate, null);
 
     console.log(checks + ' checks passed');
 })().catch((err) => {

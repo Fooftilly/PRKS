@@ -189,6 +189,11 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("persistence.destroyed", wait_fn)
         self.assertIn("persistence.paused", wait_fn)
         self.assertIn("30000", wait_fn)
+        # No-gate handoff must await the timeout slice — not race an empty resolve.
+        self.assertIn("await timeout", wait_fn)
+        self.assertIn("else {\n            await timeout;\n        }", wait_fn)
+        self.assertNotIn("? Promise.resolve(gate)", wait_fn)
+        self.assertNotIn(": Promise.resolve()", wait_fn)
         # Client fidelity keys must include ink geometry (backend parity).
         self.assertIn("'inkList'", state_js)
         self.assertIn("'vertices'", state_js)
