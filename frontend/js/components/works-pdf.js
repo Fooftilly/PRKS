@@ -807,6 +807,27 @@ window.jumpToPdfAnnotation = async (id, pageIndex, _annItem, ctx) => {
     }
 };
 
+function prksAnnotationListItemId(item) {
+    if (!item || typeof item !== 'object') return '';
+    const id = item.id || item.uuid || item.annotationId || item._id;
+    return id != null && String(id) !== '' ? String(id) : '';
+}
+
+function prksAnnotationListSignature(list) {
+    const rows = Array.isArray(list) ? list : [];
+    return rows
+        .map(function (item) {
+            const id = prksAnnotationListItemId(item);
+            const comment =
+                item && item.custom && typeof item.custom === 'object' && typeof item.custom.prksComment === 'string'
+                    ? item.custom.prksComment.trim()
+                    : '';
+            const page = item.pageIndex ?? item.page ?? item.pageNumber ?? item.page_index;
+            return id + '\t' + String(page) + '\t' + comment;
+        })
+        .join('\n');
+}
+
 function renderAnnotationFallbackList(items, docId = null, workId = null, ctx) {
     const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);
@@ -823,6 +844,9 @@ function renderAnnotationFallbackList(items, docId = null, workId = null, ctx) {
                 : null;
     const sorted = sortAnnotationsByPage(Array.isArray(items) ? items : []);
     const list = sorted.filter(prksIsUserMarkupAnnotation);
+    const prevCache = pdf && pdf.annotationCache;
+    const nextSig = prksAnnotationListSignature(list);
+    const prevSig = prevCache ? prksAnnotationListSignature(prevCache.items) : null;
     const cache = {
         allItems: sorted,
         rawItems: sorted,
@@ -834,6 +858,19 @@ function renderAnnotationFallbackList(items, docId = null, workId = null, ctx) {
     if (!prksIsFocusedPdfCtx(owner)) return;
     const target = document.getElementById('annotation-fallback-list');
     if (!target) return;
+
+    // Materialization / reconcile may re-project the same ack+pending set.
+    // Replacing innerHTML would detach the confirm-dialog opener (Delete) and
+    // steal focus even when the visible rows did not change.
+    if (prevSig !== null && prevSig === nextSig && target.querySelector('.annotation-row, .annotations-tab__empty')) {
+        const status = target.querySelector('.annotation-list-status');
+        if (status) {
+            const now = new Date().toLocaleTimeString();
+            const info = cache.docId ? `ID: ${String(cache.docId).substring(0, 8)}...` : 'No ID';
+            status.textContent = `Last sync: ${now} (${list.length} found, ${info})`;
+        }
+        return;
+    }
 
     const now = new Date().toLocaleTimeString();
     const count = list.length;
@@ -1680,6 +1717,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             });
         }
         if (!stillLive()) return;
+        // Avoid wiping the annotation sidebar while a confirm dialog holds an
+        // opener reference into a Delete button (cancel must restore focus).
+        const confirmOpen = document.getElementById('prks-modal-confirm');
+        if (confirmOpen && !confirmOpen.classList.contains('hidden')) {
+            if (runtime.annotationCache) {
+                runtime.annotationCache.items = Array.isArray(effective) ? effective : [];
+                runtime.annotationCache.allItems = runtime.annotationCache.items;
+                runtime.annotationCache.rawItems = runtime.annotationCache.items;
+            }
+            return;
+        }
         renderAnnotationFallbackList(
             effective,
             viewer.getDocumentId ? viewer.getDocumentId() : (
@@ -1765,8 +1813,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     runtime.pendingMaterializationRevision = null;
                 }
                 runtime.materializedPdfAnnotationRevision = claimed;
-                const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
-                renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
+                // Do not paint ACK-only items into the sidebar here — finally
+                // restores effective ack+pending (and skips identical DOM).
                 return;
             } finally {
                 runtime._annotationMaterializing = false;
