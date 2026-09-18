@@ -1982,8 +1982,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 prksEndAnnotationMaterializationGate(runtime);
             }
         }
-        await exportAndPersistPdfCopy(saveToken);
-        if (!stillLive()) return;
+        // Legacy (online_legacy): annotations metadata first, then PDF bytes
+        // claiming that exact replace generation. If PDF fails, canonical >
+        // materialized is correct. Never PDF-first with a reusable save_token
+        // as proof of which metadata the bytes embed.
         const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
         renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
@@ -2001,9 +2003,23 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!annRes.ok) {
             throw new Error(`Annotation save failed (${annRes.status})`);
         }
+        let replaceGen = null;
+        try {
+            const annBody = await annRes.json();
+            if (annBody && Number.isSafeInteger(annBody.canonical_annotation_set_revision)) {
+                replaceGen = annBody.canonical_annotation_set_revision;
+            }
+        } catch (_eAnnBody) {
+            replaceGen = null;
+        }
+        if (!Number.isSafeInteger(replaceGen) || replaceGen < 0) {
+            throw new Error('Annotation save missing generation');
+        }
         if (typeof prksOfflineMarkEntityChanged === 'function') {
             prksOfflineMarkEntityChanged('work', workId);
         }
+        if (!stillLive()) return;
+        await exportAndPersistPdfCopy(saveToken, replaceGen);
     }
 
     // PRKS may go offline mid-confirmation-loop (the persistence worker

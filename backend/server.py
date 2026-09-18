@@ -3258,13 +3258,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         if save_token:
                             with _SAVE_TOKEN_LOCK:
                                 _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                        # Slice F: durable path re-validates the claimed generation
-                        # after the byte replace so another ACK cannot clear stale
-                        # with a future/arbitrary revision. Legacy (online_legacy)
-                        # omits the claim and MUST NOT mark here: the handshake
-                        # POSTs /pdf then /annotations, and annotations bump the
-                        # canonical tip — marking the pre-replace tip would leave
-                        # canonical > materialized. Mark after metadata replace.
+                        # Slice F: durable + legacy both mark only via an exact
+                        # claimed generation under this Work's materialization
+                        # lock. Legacy (online_legacy) POSTs /annotations first
+                        # (returns that replace generation), then /pdf with
+                        # materialized_annotation_set_revision equal to it.
+                        # Omitting the claim MUST NOT mark: annotations already
+                        # advanced the tip, and a PDF-only overwrite must leave
+                        # canonical > materialized until a valid claim lands.
                         materialized_rev = None
                         try:
                             if durable_materialize:
@@ -3331,40 +3332,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 annotations_json = data.get('annotations_json')
                 save_token = str(data.get('save_token', '') or '').strip()
-                # Legacy handshake only: mark materialization when this request's
-                # save_token matches a preceding POST /pdf for the same Work.
-                # Never mark on annotations-only POST — that would claim arbitrary
-                # PDF bytes embed the new tip. Mark the exact generation this
-                # replacement produced (same IMMEDIATE txn), not a later tip.
-                with _SAVE_TOKEN_LOCK:
-                    pdf_token_matches = bool(save_token) and (
-                        _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == save_token
-                    )
-                body = {'status': 'saved', 'path': 'legacy-full-list'}
-                materialized_rev = None
+                # Legacy handshake is annotations-first: this endpoint only
+                # replaces metadata and returns the exact replace generation.
+                # Never mark PDF materialization here — save_token is solely
+                # for save-confirm bookkeeping, not proof of bytes. Marking
+                # belongs to POST /pdf with materialized_annotation_set_revision
+                # (same claim path as durable), under the PDF materialization lock.
                 try:
-                    if pdf_token_matches:
-                        _replace_gen, materialized_rev = (
-                            db.save_work_annotations_and_mark_materialized(
-                                w_id, annotations_json
-                            )
-                        )
-                    else:
-                        db.save_work_annotations(w_id, annotations_json)
+                    replace_gen = db.save_work_annotations(w_id, annotations_json)
                 except WorkAnnotationError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
                 if save_token:
                     with _SAVE_TOKEN_LOCK:
                         _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                if materialized_rev is not None:
-                    body['materialized_pdf_annotation_revision'] = materialized_rev
-                    mat = db.get_work_pdf_materialization(w_id)
-                    if mat:
-                        body['canonical_annotation_set_revision'] = mat[
-                            'canonical_annotation_set_revision'
-                        ]
-                        body['stale'] = mat['stale']
+                body = {
+                    'status': 'saved',
+                    'path': 'legacy-full-list',
+                    'canonical_annotation_set_revision': replace_gen,
+                }
                 self.send_json(200, body)
             else:
                 self.send_error(404, "API endpoint not found")

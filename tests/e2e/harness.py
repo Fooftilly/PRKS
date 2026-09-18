@@ -419,8 +419,9 @@ class PageCollector:
         )
         if not self._pdf_posts:
             raise AssertionError("expected POST /api/works/{id}/pdf during PDF save handshake")
-        # Durable path materializes PDF bytes only; legacy also POSTs full-list
-        # annotations. Accept either: PDF+annotations, or PDF with durable ops.
+        # Durable path materializes PDF bytes only; legacy POSTs full-list
+        # annotations first, then PDF with a claimed generation. Accept either:
+        # PDF+annotations, or PDF with durable ops.
         durable = page.evaluate(
             """() => {
                 const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();

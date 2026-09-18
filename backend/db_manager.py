@@ -2944,40 +2944,6 @@ class PRKSDatabase:
                     409,
                 ) from exc
 
-    def save_work_annotations_and_mark_materialized(
-        self, work_id: str, annotations_json: str
-    ) -> tuple:
-        """Legacy handshake: replace metadata then mark that exact generation.
-
-        Runs under BEGIN IMMEDIATE so another mutation cannot advance the
-        canonical tip between replace and mark. Marks ``at_revision`` equal to
-        the generation this replacement produced — never "whatever tip is
-        current later". Callers must only invoke this when a matching PDF
-        ``save_token`` proved the preceding ``POST /pdf`` for this handshake.
-        """
-        from backend import pdf_materialization
-
-        items = parse_annotations_json(annotations_json)
-        with self.connection() as conn:
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                replace_gen = self._sync_work_annotations_on_conn(conn, work_id, items)
-                marked = pdf_materialization.mark_pdf_materialized_on_conn(
-                    conn, work_id, at_revision=replace_gen
-                )
-                conn.commit()
-                return replace_gen, marked
-            except sqlite3.IntegrityError as exc:
-                conn.rollback()
-                raise WorkAnnotationError(
-                    "annotation_id_conflict",
-                    "Annotation ID belongs to another Work.",
-                    409,
-                ) from exc
-            except Exception:
-                conn.rollback()
-                raise
-
     def _sync_work_annotations_on_conn(self, conn, work_id: str, items: List[dict]) -> int:
         exists = conn.execute(
             "SELECT id FROM works WHERE id = ?",

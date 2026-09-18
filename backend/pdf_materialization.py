@@ -13,6 +13,9 @@ Equal ⇒ PDF bytes match metadata. Canonical ahead ⇒
 Materialization may only claim an *acknowledged* generation: the client must
 send `materialized_annotation_set_revision` equal to the current canonical
 generation. A future or arbitrary generation must never clear stale.
+
+Legacy online path: POST /annotations first (returns the replace generation),
+then POST /pdf with that generation as the claim — same validation as durable.
 """
 
 from __future__ import annotations

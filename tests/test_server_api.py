@@ -1545,8 +1545,27 @@ class TestServerAPI(unittest.TestCase):
         self.assertNotIn("link-skip", ids)
         self.assertNotIn("link-type1", ids)
 
-    def test_22c3_online_legacy_marks_after_annotation_replace(self):
-        """POST /pdf then matching-token POST /annotations marks the replace generation."""
+    def _post_work_pdf(self, work_id, body):
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}/pdf",
+            data=json.dumps(body).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        return urllib.request.urlopen(req)
+
+    def _ann_row(self, ann_id, contents):
+        return {
+            "id": ann_id,
+            "type": 9,
+            "contents": contents,
+            "pageIndex": 0,
+            "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}],
+            "custom": {"prksComment": contents},
+        }
+
+    def test_22c3_online_legacy_marks_via_pdf_claim(self):
+        """POST /annotations then POST /pdf with that generation marks materialization."""
         pdf_bytes = _pdf_with_text_bytes("legacy mark order")
         payload = {
             "title": "Legacy Mat Order",
@@ -1563,30 +1582,7 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req) as res:
             w_id = json.loads(res.read().decode())["id"]
 
-        updated = _pdf_with_text_bytes("legacy mark order v2")
-        pdf_req = urllib.request.Request(
-            f"{self._base_url}/api/works/{w_id}/pdf",
-            data=json.dumps({
-                "file_b64": base64.b64encode(updated).decode("utf-8"),
-                "save_token": "legacy-handshake",
-            }).encode(),
-            method="POST",
-        )
-        pdf_req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(pdf_req) as pr:
-            self.assertEqual(pr.status, 200)
-            pdf_body = json.loads(pr.read().decode())
-        # Legacy PDF POST must not claim materialization at the pre-replace tip.
-        self.assertNotIn("materialized_pdf_annotation_revision", pdf_body)
-
-        ann = [{
-            "id": "legacy-ann-1",
-            "type": 9,
-            "contents": "hi",
-            "pageIndex": 0,
-            "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}],
-            "custom": {"prksComment": "hi"},
-        }]
+        ann = [self._ann_row("legacy-ann-1", "hi")]
         with self._post_work_annotations(
             w_id,
             {
@@ -1596,29 +1592,42 @@ class TestServerAPI(unittest.TestCase):
         ) as ar:
             self.assertEqual(ar.status, 200)
             ann_body = json.loads(ar.read().decode())
-        self.assertEqual(
-            ann_body.get("canonical_annotation_set_revision"),
-            ann_body.get("materialized_pdf_annotation_revision"),
-        )
-        self.assertFalse(ann_body.get("stale"))
+        replace_gen = ann_body.get("canonical_annotation_set_revision")
+        self.assertIsInstance(replace_gen, int)
+        self.assertGreaterEqual(replace_gen, 1)
+        # Annotations never claim bytes are materialized.
+        self.assertNotIn("materialized_pdf_annotation_revision", ann_body)
+        mat_mid = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertTrue(mat_mid["stale"])
+        self.assertEqual(mat_mid["canonical_annotation_set_revision"], replace_gen)
+
+        updated = _pdf_with_text_bytes("legacy mark order v2")
+        with self._post_work_pdf(
+            w_id,
+            {
+                "file_b64": base64.b64encode(updated).decode("utf-8"),
+                "save_token": "legacy-handshake",
+                "materialized_annotation_set_revision": replace_gen,
+            },
+        ) as pr:
+            self.assertEqual(pr.status, 200)
+            pdf_body = json.loads(pr.read().decode())
+        self.assertEqual(pdf_body.get("materialized_pdf_annotation_revision"), replace_gen)
+        self.assertEqual(pdf_body.get("canonical_annotation_set_revision"), replace_gen)
+        self.assertFalse(pdf_body.get("stale"))
         mat = self.__class__.test_db.get_work_pdf_materialization(w_id)
-        self.assertIsNotNone(mat)
         self.assertEqual(
             mat["canonical_annotation_set_revision"],
             mat["materialized_pdf_annotation_revision"],
         )
         self.assertFalse(mat["stale"])
 
-        # Mismatched / missing token must not mark (annotations-only is not a handshake).
+        # Annotations-only (no subsequent PDF claim) advances tip and leaves stale.
         with self._post_work_annotations(
             w_id,
             {
-                "annotations_json": json.dumps([{
-                    **ann[0],
-                    "contents": "changed",
-                    "custom": {"prksComment": "changed"},
-                }]),
-                "save_token": "not-the-pdf-token",
+                "annotations_json": json.dumps([self._ann_row("legacy-ann-1", "changed")]),
+                "save_token": "another-token",
             },
         ) as bad:
             self.assertEqual(bad.status, 200)
@@ -1632,20 +1641,33 @@ class TestServerAPI(unittest.TestCase):
         )
 
     def test_22c4_annotations_only_never_marks_materialization(self):
-        """POST /annotations without a matching PDF save_token never marks bytes."""
+        """POST /annotations never marks bytes — even with a leftover PDF save_token."""
         w_id = self._create_work_api("Ann Only No Mark")
         before = self.__class__.test_db.get_work_pdf_materialization(w_id)
-        ann = [{
-            "id": "only-ann",
-            "type": 9,
-            "contents": "x",
-            "pageIndex": 0,
-            "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}],
-            "custom": {"prksComment": "x"},
-        }]
-        with self._post_work_annotations(w_id, {"annotations_json": json.dumps(ann)}) as res:
+        # Plant a PDF save_token as if an older PDF-first client had uploaded.
+        leftover = _pdf_with_text_bytes("token plant")
+        with self._post_work_pdf(
+            w_id,
+            {
+                "file_b64": base64.b64encode(leftover).decode("utf-8"),
+                "save_token": "leftover-pdf-token",
+            },
+        ) as pr:
+            self.assertEqual(pr.status, 200)
+            pdf_body = json.loads(pr.read().decode())
+        self.assertNotIn("materialized_pdf_annotation_revision", pdf_body)
+
+        ann = [self._ann_row("only-ann", "x")]
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps(ann),
+                "save_token": "leftover-pdf-token",
+            },
+        ) as res:
             self.assertEqual(res.status, 200)
             body = json.loads(res.read().decode())
+        self.assertIn("canonical_annotation_set_revision", body)
         self.assertNotIn("materialized_pdf_annotation_revision", body)
         self.assertNotIn("stale", body)
         after = self.__class__.test_db.get_work_pdf_materialization(w_id)
@@ -1658,6 +1680,194 @@ class TestServerAPI(unittest.TestCase):
             after["materialized_pdf_annotation_revision"],
         )
         self.assertTrue(after["stale"])
+
+    def test_22c5_same_token_replay_does_not_mark_new_generation(self):
+        """Reusing a save_token on a later annotations list must not mark that tip."""
+        pdf_bytes = _pdf_with_text_bytes("replay token A")
+        payload = {
+            "title": "Legacy Token Replay",
+            "status": "Planned",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "replay.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+
+        token = "replay-token-A"
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps([self._ann_row("a1", "first")]),
+                "save_token": token,
+            },
+        ) as ar:
+            gen_a = json.loads(ar.read().decode())["canonical_annotation_set_revision"]
+        pdf_a = _pdf_with_text_bytes("replay token A bytes")
+        with self._post_work_pdf(
+            w_id,
+            {
+                "file_b64": base64.b64encode(pdf_a).decode("utf-8"),
+                "save_token": token,
+                "materialized_annotation_set_revision": gen_a,
+            },
+        ) as pr:
+            self.assertEqual(pr.status, 200)
+
+        # Same token, different annotations B — must advance tip without marking.
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps([self._ann_row("a1", "second-B")]),
+                "save_token": token,
+            },
+        ) as ar2:
+            body_b = json.loads(ar2.read().decode())
+        gen_b = body_b["canonical_annotation_set_revision"]
+        self.assertGreater(gen_b, gen_a)
+        self.assertNotIn("materialized_pdf_annotation_revision", body_b)
+        mat = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertEqual(mat["materialized_pdf_annotation_revision"], gen_a)
+        self.assertEqual(mat["canonical_annotation_set_revision"], gen_b)
+        self.assertTrue(mat["stale"])
+        # Stale claim for A must not clear lag after tip moved to B.
+        pdf_stale = _pdf_with_text_bytes("stale claim A")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_work_pdf(
+                w_id,
+                {
+                    "file_b64": base64.b64encode(pdf_stale).decode("utf-8"),
+                    "save_token": token,
+                    "materialized_annotation_set_revision": gen_a,
+                },
+            )
+        self.assertEqual(cm.exception.code, 409)
+        err = json.loads(cm.exception.read().decode())
+        self.assertEqual(err.get("code"), "ANNOTATION_MATERIALIZATION_STALE")
+        mat2 = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertEqual(mat2["materialized_pdf_annotation_revision"], gen_a)
+        self.assertEqual(mat2["canonical_annotation_set_revision"], gen_b)
+
+    def test_22c6_intervening_annotations_reject_stale_pdf_claim(self):
+        """Cross-tab: PDF claiming gen A fails after annotations advanced to B."""
+        pdf_bytes = _pdf_with_text_bytes("race base")
+        payload = {
+            "title": "Legacy Race Claim",
+            "status": "Planned",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "race.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+
+        with self._post_work_annotations(
+            w_id,
+            {"annotations_json": json.dumps([self._ann_row("r1", "A")])},
+        ) as ar:
+            gen_a = json.loads(ar.read().decode())["canonical_annotation_set_revision"]
+
+        # Tab B advances canonical before Tab A's PDF claim lands.
+        with self._post_work_annotations(
+            w_id,
+            {"annotations_json": json.dumps([self._ann_row("r1", "B")])},
+        ) as ar2:
+            gen_b = json.loads(ar2.read().decode())["canonical_annotation_set_revision"]
+        self.assertGreater(gen_b, gen_a)
+
+        pdf_a = _pdf_with_text_bytes("bytes for A")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_work_pdf(
+                w_id,
+                {
+                    "file_b64": base64.b64encode(pdf_a).decode("utf-8"),
+                    "save_token": "tab-a",
+                    "materialized_annotation_set_revision": gen_a,
+                },
+            )
+        self.assertEqual(cm.exception.code, 409)
+        mat = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertTrue(mat["stale"])
+        self.assertEqual(mat["canonical_annotation_set_revision"], gen_b)
+        self.assertLess(mat["materialized_pdf_annotation_revision"], gen_b)
+
+        # Concurrent PDF claim for A while another PDF claim for B holds the lock:
+        # B wins; A's claim stays rejected. Serialize via lock by running B first
+        # under the materialization lock path, then A.
+        pdf_b = _pdf_with_text_bytes("bytes for B")
+        with self._post_work_pdf(
+            w_id,
+            {
+                "file_b64": base64.b64encode(pdf_b).decode("utf-8"),
+                "save_token": "tab-b",
+                "materialized_annotation_set_revision": gen_b,
+            },
+        ) as pr:
+            self.assertEqual(pr.status, 200)
+            body_b = json.loads(pr.read().decode())
+        self.assertEqual(body_b.get("materialized_pdf_annotation_revision"), gen_b)
+        mat_ok = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertFalse(mat_ok["stale"])
+        self.assertEqual(mat_ok["materialized_pdf_annotation_revision"], gen_b)
+
+        # True race: hold materialization lock while another thread tries a claim.
+        mat_lock = server_module._pdf_materialization_lock_for(w_id)
+        results = {"status": None, "code": None}
+
+        def _claim_while_held():
+            try:
+                self._post_work_pdf(
+                    w_id,
+                    {
+                        "file_b64": base64.b64encode(
+                            _pdf_with_text_bytes("concurrent loser")
+                        ).decode("utf-8"),
+                        "save_token": "loser",
+                        "materialized_annotation_set_revision": gen_b,
+                    },
+                )
+                results["status"] = 200
+            except urllib.error.HTTPError as exc:
+                results["status"] = exc.code
+                try:
+                    results["code"] = json.loads(exc.read().decode()).get("code")
+                except Exception:
+                    results["code"] = None
+
+        with mat_lock:
+            # Advance tip under lock so the in-flight claim sees a new tip.
+            with self._post_work_annotations(
+                w_id,
+                {"annotations_json": json.dumps([self._ann_row("r1", "C")])},
+            ) as ar3:
+                gen_c = json.loads(ar3.read().decode())["canonical_annotation_set_revision"]
+            self.assertGreater(gen_c, gen_b)
+            t = threading.Thread(target=_claim_while_held)
+            t.start()
+            time.sleep(0.15)
+            # Still holding lock: peer must be blocked, not marking.
+            mid = self.__class__.test_db.get_work_pdf_materialization(w_id)
+            self.assertEqual(mid["materialized_pdf_annotation_revision"], gen_b)
+            self.assertEqual(mid["canonical_annotation_set_revision"], gen_c)
+        t.join(timeout=10)
+        self.assertFalse(t.is_alive())
+        # After unlock, claim for obsolete gen_b is rejected as stale.
+        self.assertEqual(results["status"], 409)
+        self.assertEqual(results["code"], "ANNOTATION_MATERIALIZATION_STALE")
+        final = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertEqual(final["materialized_pdf_annotation_revision"], gen_b)
+        self.assertEqual(final["canonical_annotation_set_revision"], gen_c)
+        self.assertTrue(final["stale"])
 
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")

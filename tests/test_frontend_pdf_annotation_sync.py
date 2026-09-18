@@ -193,6 +193,12 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("restoreEffectiveViewerAnnotations", mat_pass)
         self.assertIn("await window.prksReconcileViewerAnnotations(viewer, ackOnly", mat_pass)
         self.assertNotIn("catch (_eRec)", mat_pass)
+        # Legacy path: annotations first, then PDF with claimed replace generation.
+        legacy_ann = mat_pass.index("`/api/works/${workId}/annotations`")
+        legacy_claim = mat_pass.index("await exportAndPersistPdfCopy(saveToken, replaceGen)")
+        self.assertLess(legacy_ann, legacy_claim)
+        self.assertIn("Annotation save missing generation", mat_pass)
+        self.assertIn("canonical_annotation_set_revision", mat_pass[legacy_ann:legacy_claim + 80])
         # Materialization finally: clear handoff + enable + end gate synchronously
         # (no await after enabling controller mutation before gate ends).
         self.assertIn("prksClearMaterializationHandoff(runtime)", mat_pass)

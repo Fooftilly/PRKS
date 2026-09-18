@@ -396,7 +396,9 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("prksOfflineMarkPeopleChanged()", pdf[pdf_at : pdf_at + 1800])
         # ... but the separate annotations JSON save does not.
         ann_at = pdf.index("async function runWorkAnnotationAndPdfPersistencePass(")
-        ann_body = pdf[ann_at : ann_at + 2000]
+        ann_end = pdf.index("\n    // PRKS may go offline mid-confirmation-loop", ann_at)
+        ann_body = pdf[ann_at:ann_end]
+        self.assertIn("/annotations", ann_body)
         self.assertNotIn("prksOfflineMarkPeopleChanged", ann_body.split("/annotations")[1])
         # Work creation can create role links in the same canonical request.
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
@@ -434,7 +436,8 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # ... and only after the canonical response was acknowledged.
         self.assertLess(pdf_body.index("if (!pdfRes.ok)"), pdf_body.index("PersonGroups"))
         ann_at = pdf.index("async function runWorkAnnotationAndPdfPersistencePass(")
-        ann_body = pdf[ann_at : ann_at + 2000]
+        ann_end = pdf.index("\n    // PRKS may go offline mid-confirmation-loop", ann_at)
+        ann_body = pdf[ann_at:ann_end]
         self.assertNotIn("PersonGroups", ann_body.split("/annotations")[1])
         # Work creation can link roles without ever calling POST /api/roles.
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
