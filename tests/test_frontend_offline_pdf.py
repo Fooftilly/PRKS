@@ -295,7 +295,14 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)", body)
         self.assertIn("function abandonSetup()", body)
         self.assertIn("runtime._persistenceSetupStarted = false;", body)
-        self.assertNotIn(".destroy()", body)
+        # Abandon must reset the started flag without destroying the viewer.
+        # COW remount helpers nested later in this setup may call .destroy()
+        # intentionally; that is not an abandon/eligibility path.
+        abandon_at = body.index("function abandonSetup()")
+        abandon_end = body.index("\n    function ", abandon_at + 1)
+        abandon_body = body[abandon_at:abandon_end]
+        self.assertIn("runtime._persistenceSetupStarted = false;", abandon_body)
+        self.assertNotIn(".destroy()", abandon_body)
         # Gate immediately before the actual install call.
         install_idx = body.index("prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, viewer, setupToken")
         preceding = body[:install_idx]

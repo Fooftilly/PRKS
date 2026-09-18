@@ -248,17 +248,20 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         end_gate_at = mat_pass.rindex("prksEndAnnotationMaterializationGate")
         restore_at = mat_pass.index("restoreEffectiveViewerAnnotations")
         clear_handoff_at = mat_pass.index("prksClearMaterializationHandoff(runtime)")
-        unlock_at = mat_pass.index("unlockViewer.setMutationEnabled(unlockToWork)")
+        # Path-bound unlock: work mode alone is not enough — viewer must be on
+        # the exclusive managed path (shared-URL survivors stay locked).
+        unlock_at = mat_pass.index("unlockViewer.setMutationEnabled(allowUnlock)")
         self.assertLess(restore_at, end_gate_at)
         self.assertLess(clear_handoff_at, unlock_at)
         self.assertLess(unlock_at, end_gate_at)
         self.assertGreater(end_gate_at, mat_pass.index("finally {"))
         mat_finally = mat_pass[mat_pass.rindex("} finally {") : end_gate_at + 80]
         # No await between enabling user mutation and ending the gate.
-        enable_at = mat_finally.index("unlockViewer.setMutationEnabled(unlockToWork)")
+        enable_at = mat_finally.index("unlockViewer.setMutationEnabled(allowUnlock)")
         gate_end_at = mat_finally.index("prksEndAnnotationMaterializationGate")
         between = mat_finally[enable_at:gate_end_at]
         self.assertNotIn("await ", between)
+        self.assertIn("allowUnlock = !!(unlockToWork && viewerBoundExclusive)", mat_finally)
         # Capability helper respects catch-up projection + handoff blocks.
         self.assertIn("catch_up_projection_pending", works_pdf)
         self.assertIn("materialization_handoff", works_pdf)

@@ -1106,9 +1106,13 @@ class TestServerAPI(unittest.TestCase):
         post_pdf.add_header("Content-Type", "application/json")
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(post_pdf)
-        self.assertEqual(cm.exception.code, 400)
+        # `/api/pdfs/..` is rejected by managed_pdf_filename (not a managed
+        # basename), so replace reports no managed PDF rather than reaching
+        # the safe_pdf_path 400 path.
+        self.assertEqual(cm.exception.code, 404)
         err = json.loads(cm.exception.read().decode())
         self.assertIn("error", err)
+        self.assertIn("managed PDF", err["error"])
 
     def test_18_delete_work_with_dotdot_file_path_does_not_crash(self):
         req_w = urllib.request.Request(
@@ -1366,13 +1370,10 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(rr.status, 200)
 
         ann = [{"id": "a1", "type": "note", "contents": "hello", "pageIndex": 0, "color": "#fff"}]
-        req_ann = urllib.request.Request(
-            f"{self._base_url}/api/works/{w_id}/annotations",
-            data=json.dumps({"annotations_json": json.dumps(ann)}).encode(),
-            method="POST",
-        )
-        req_ann.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req_ann) as ra:
+        # Legacy annotations-first handshake requires the acknowledged tip.
+        with self._post_work_annotations(
+            w_id, {"annotations_json": json.dumps(ann)}
+        ) as ra:
             self.assertEqual(ra.status, 200)
 
         req_ann_get = urllib.request.Request(f"{self._base_url}/api/works/{w_id}/annotations")
