@@ -2911,21 +2911,41 @@ class PRKSDatabase:
                     409,
                 ) from exc
 
-    def save_work_annotations(self, work_id: str, annotations_json: str):
+    def save_work_annotations(
+        self,
+        work_id: str,
+        annotations_json: str,
+        *,
+        base_set_revision: Any = None,
+    ):
         """Compat full-list replace (legacy online path only).
 
         Durable clients use CREATE/SET/DELETE_PDF_ANNOTATION. This replace path
         remains for temporary online-legacy support when the durable store is
         unavailable; it must not become a second product write path.
 
+        ``base_set_revision`` is the viewer's acknowledged canonical annotation
+        set revision. When provided, a mismatch with the current tip refuses the
+        replace (``ANNOTATION_SET_STALE``) before any update/delete. Omit only
+        for internal callers that already serialized against the tip; the HTTP
+        adapter always passes the client value.
+
         Returns the canonical annotation-set revision after the replace (the
         generation this replacement produced, or the unchanged tip when the
         list was identical).
         """
         items = parse_annotations_json(annotations_json)
-        return self.sync_work_annotations(work_id, items)
+        return self.sync_work_annotations(
+            work_id, items, base_set_revision=base_set_revision
+        )
 
-    def sync_work_annotations(self, work_id: str, items: List[dict]) -> int:
+    def sync_work_annotations(
+        self,
+        work_id: str,
+        items: List[dict],
+        *,
+        base_set_revision: Any = None,
+    ) -> int:
         """Replace one Work's canonical annotations in a single transaction.
 
         Validates the complete incoming list before any delete/update/insert.
@@ -2936,7 +2956,9 @@ class PRKSDatabase:
         """
         with self.connection() as conn:
             try:
-                return self._sync_work_annotations_on_conn(conn, work_id, items)
+                return self._sync_work_annotations_on_conn(
+                    conn, work_id, items, base_set_revision=base_set_revision
+                )
             except sqlite3.IntegrityError as exc:
                 raise WorkAnnotationError(
                     "annotation_id_conflict",
@@ -2944,13 +2966,42 @@ class PRKSDatabase:
                     409,
                 ) from exc
 
-    def _sync_work_annotations_on_conn(self, conn, work_id: str, items: List[dict]) -> int:
+    def _sync_work_annotations_on_conn(
+        self,
+        conn,
+        work_id: str,
+        items: List[dict],
+        *,
+        base_set_revision: Any = None,
+    ) -> int:
         exists = conn.execute(
             "SELECT id FROM works WHERE id = ?",
             (work_id,),
         ).fetchone()
         if not exists:
             raise WorkAnnotationError("work_not_found", "Work not found.", 404)
+
+        from backend import pdf_materialization
+
+        mat = pdf_materialization.get_materialization_on_conn(conn, work_id)
+        current_set_rev = (
+            int(mat["canonical_annotation_set_revision"]) if mat else 0
+        )
+        if base_set_revision is not None:
+            try:
+                base = int(base_set_revision)
+            except (TypeError, ValueError) as exc:
+                raise WorkAnnotationError(
+                    "malformed_annotation_payload",
+                    "canonical_annotation_set_revision must be an integer.",
+                    400,
+                ) from exc
+            if base != current_set_rev:
+                raise WorkAnnotationError(
+                    "ANNOTATION_SET_STALE",
+                    "Annotation set revision is stale.",
+                    409,
+                )
 
         normalized = normalize_annotation_list(items)
         incoming_ids = [row["id"] for row in normalized]
@@ -3054,15 +3105,10 @@ class PRKSDatabase:
                 conn, work_id, ann_id, changed=True
             )
         if any_set_changed:
-            from backend import pdf_materialization
-
             return pdf_materialization.bump_canonical_annotation_set_on_conn(
                 conn, work_id
             )
-        from backend import pdf_materialization
-
-        mat = pdf_materialization.get_materialization_on_conn(conn, work_id)
-        return int(mat["canonical_annotation_set_revision"]) if mat else 0
+        return current_set_rev
 
     def resolve_wiki_links(self, text: str) -> str:
         if not text: return ""

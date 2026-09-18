@@ -353,6 +353,53 @@ class PdfAnnotationSyncTests(unittest.TestCase):
         self.assertIsNone(self.stored("ann-hi-1"))
         self.assertEqual(self.revision("ann-hi-1"), 1)
 
+    def test_full_list_replace_rejects_stale_base_set_revision(self):
+        """Stale viewer tip cannot overwrite A or delete B via full-list replace."""
+        from backend.pdf_annotations import WorkAnnotationError
+
+        tip0 = self.db.save_work_annotations(
+            self.work_id, json.dumps([_ann({"id": "ann-a", "contents": "A"})])
+        )
+        tip1 = self.db.save_work_annotations(
+            self.work_id,
+            json.dumps(
+                [
+                    _ann({"id": "ann-a", "contents": "A2", "custom": {"prksComment": "A2"}}),
+                    _ann({"id": "ann-b", "contents": "B", "custom": {"prksComment": "B"}}),
+                ]
+            ),
+            base_set_revision=tip0,
+        )
+        self.assertGreater(tip1, tip0)
+        with self.assertRaises(WorkAnnotationError) as ctx:
+            self.db.save_work_annotations(
+                self.work_id,
+                json.dumps([_ann({"id": "ann-a", "contents": "stale"})]),
+                base_set_revision=tip0,
+            )
+        self.assertEqual(ctx.exception.code, "ANNOTATION_SET_STALE")
+        rows = {
+            r["id"]: r["content"]
+            for r in self.db.execute_query(
+                "SELECT id, content FROM annotations WHERE work_id = ?",
+                (self.work_id,),
+            )
+        }
+        self.assertEqual(rows.get("ann-a"), "A2")
+        self.assertEqual(rows.get("ann-b"), "B")
+        # Current tip still accepts a repeated identical save.
+        tip_again = self.db.save_work_annotations(
+            self.work_id,
+            json.dumps(
+                [
+                    _ann({"id": "ann-a", "contents": "A2", "custom": {"prksComment": "A2"}}),
+                    _ann({"id": "ann-b", "contents": "B", "custom": {"prksComment": "B"}}),
+                ]
+            ),
+            base_set_revision=tip1,
+        )
+        self.assertEqual(tip_again, tip1)
+
     def test_set_ink_list_change_is_detected_and_persisted(self):
         ink = _ann(
             {

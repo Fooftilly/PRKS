@@ -3229,8 +3229,24 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # for save-confirm bookkeeping, not proof of bytes. Marking
                 # belongs to POST /pdf with materialized_annotation_set_revision
                 # (same claim path as durable), under the PDF materialization lock.
+                # Client must send its acknowledged tip so a stale viewer cannot
+                # overwrite newer annotations or delete siblings omitted locally.
+                if 'canonical_annotation_set_revision' not in data:
+                    self.send_json(
+                        400,
+                        {
+                            'error': 'canonical_annotation_set_revision is required',
+                            'code': 'malformed_annotation_payload',
+                        },
+                    )
+                    return
+                base_set_rev = data.get('canonical_annotation_set_revision')
                 try:
-                    replace_gen = db.save_work_annotations(w_id, annotations_json)
+                    replace_gen = db.save_work_annotations(
+                        w_id,
+                        annotations_json,
+                        base_set_revision=base_set_rev,
+                    )
                 except WorkAnnotationError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return

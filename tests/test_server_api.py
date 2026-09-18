@@ -1408,9 +1408,18 @@ class TestServerAPI(unittest.TestCase):
             return json.loads(res.read().decode())["id"]
 
     def _post_work_annotations(self, work_id, body):
+        payload = dict(body)
+        if (
+            "annotations_json" in payload
+            and "canonical_annotation_set_revision" not in payload
+        ):
+            mat = self.__class__.test_db.get_work_pdf_materialization(work_id) or {}
+            payload["canonical_annotation_set_revision"] = int(
+                mat.get("canonical_annotation_set_revision") or 0
+            )
         req = urllib.request.Request(
             f"{self._base_url}/api/works/{work_id}/annotations",
-            data=json.dumps(body).encode(),
+            data=json.dumps(payload).encode(),
             method="POST",
         )
         req.add_header("Content-Type", "application/json")
@@ -2039,6 +2048,166 @@ class TestServerAPI(unittest.TestCase):
             self.assertTrue(all(os.path.dirname(p) == tmp for p in seen))
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), b"%PDF-1.4 c")
+
+    def test_22c11_shared_managed_pdf_cow_keeps_sibling_materialization_honest(self):
+        """Two Works on one path: both materialize → exclusive files; not both non-stale on one blob."""
+        from backend.db_manager import managed_pdf_filename
+        import uuid as _uuid
+
+        suffix = _uuid.uuid4().hex[:10]
+        shared_name = f"shared-cow-{suffix}.pdf"
+        seed = _pdf_with_text_bytes("shared seed bytes")
+        shared_abs = os.path.join(server_module.pdfs_dir, shared_name)
+        with open(shared_abs, "wb") as f:
+            f.write(seed)
+        a_id = self.__class__.test_db.add_work(
+            title="CowShareA", file_path=f"/api/pdfs/{shared_name}"
+        )
+        b_id = self.__class__.test_db.add_work(
+            title="CowShareB", file_path=f"/api/pdfs/{shared_name}"
+        )
+        ann_a = f"cow-a-{suffix}"
+        ann_b = f"cow-b-{suffix}"
+
+        with self._post_work_annotations(
+            a_id, {"annotations_json": json.dumps([self._ann_row(ann_a, "A")])}
+        ) as ar:
+            gen_a = json.loads(ar.read().decode())["canonical_annotation_set_revision"]
+        pdf_a = _pdf_with_text_bytes("materialized-A-only")
+        with self._post_work_pdf(
+            a_id,
+            {
+                "file_b64": base64.b64encode(pdf_a).decode("utf-8"),
+                "materialized_annotation_set_revision": gen_a,
+            },
+        ) as pr:
+            self.assertEqual(pr.status, 200)
+            body_a = json.loads(pr.read().decode())
+        self.assertIn("file_path", body_a)
+        self.assertNotEqual(body_a["file_path"], f"/api/pdfs/{shared_name}")
+
+        with self._post_work_annotations(
+            b_id, {"annotations_json": json.dumps([self._ann_row(ann_b, "B")])}
+        ) as br:
+            gen_b = json.loads(br.read().decode())["canonical_annotation_set_revision"]
+        pdf_b = _pdf_with_text_bytes("materialized-B-only")
+        with self._post_work_pdf(
+            b_id,
+            {
+                "file_b64": base64.b64encode(pdf_b).decode("utf-8"),
+                "materialized_annotation_set_revision": gen_b,
+            },
+        ) as pr:
+            self.assertEqual(pr.status, 200)
+            body_b = json.loads(pr.read().decode())
+
+        mat_a = self.__class__.test_db.get_work_pdf_materialization(a_id)
+        mat_b = self.__class__.test_db.get_work_pdf_materialization(b_id)
+        self.assertFalse(mat_a["stale"])
+        self.assertFalse(mat_b["stale"])
+        row_a = self.__class__.test_db.execute_query(
+            "SELECT file_path FROM works WHERE id=?", (a_id,)
+        )[0]
+        row_b = self.__class__.test_db.execute_query(
+            "SELECT file_path FROM works WHERE id=?", (b_id,)
+        )[0]
+        self.assertNotEqual(row_a["file_path"], row_b["file_path"])
+        name_a = managed_pdf_filename(row_a["file_path"])
+        name_b = managed_pdf_filename(row_b["file_path"])
+        self.assertIsNotNone(name_a)
+        self.assertIsNotNone(name_b)
+        path_a = os.path.join(server_module.pdfs_dir, name_a)
+        path_b = os.path.join(server_module.pdfs_dir, name_b)
+        with open(path_a, "rb") as f:
+            bytes_a = f.read()
+        with open(path_b, "rb") as f:
+            bytes_b = f.read()
+        self.assertNotEqual(bytes_a, bytes_b)
+        # Extracted page text must match each Work's materialization payload.
+        import fitz
+
+        def _page_text(pdf_bytes: bytes) -> str:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            try:
+                return doc[0].get_text() or ""
+            finally:
+                doc.close()
+
+        self.assertIn("materialized-A-only", _page_text(bytes_a))
+        self.assertIn("materialized-B-only", _page_text(bytes_b))
+        # Impossible for both to be non-stale while sharing one file with only B's bytes.
+        self.assertNotEqual(path_a, path_b)
+
+    def test_22c12_legacy_annotations_reject_stale_set_revision(self):
+        """Stale full-list replace cannot overwrite newer annotations or delete B."""
+        import uuid as _uuid
+
+        suffix = _uuid.uuid4().hex[:10]
+        ann_a = f"stale-a-{suffix}"
+        ann_b = f"stale-b-{suffix}"
+        w_id = self._create_work_api("Ann Stale Set")
+        with self._post_work_annotations(
+            w_id, {"annotations_json": json.dumps([self._ann_row(ann_a, "first")])}
+        ) as res:
+            tip = json.loads(res.read().decode())["canonical_annotation_set_revision"]
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps(
+                    [
+                        self._ann_row(ann_a, "second"),
+                        self._ann_row(ann_b, "new-B"),
+                    ]
+                )
+            },
+        ) as res2:
+            tip2 = json.loads(res2.read().decode())["canonical_annotation_set_revision"]
+        self.assertGreater(tip2, tip)
+
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_work_annotations(
+                w_id,
+                {
+                    "annotations_json": json.dumps([self._ann_row(ann_a, "stale-A")]),
+                    "canonical_annotation_set_revision": tip,
+                },
+            )
+        self.assertEqual(cm.exception.code, 409)
+        err = json.loads(cm.exception.read().decode())
+        self.assertEqual(err.get("code"), "ANNOTATION_SET_STALE")
+        ids = {row["id"]: row["contents"] for row in self._get_work_annotations(w_id)}
+        self.assertEqual(ids.get(ann_a), "second")
+        self.assertEqual(ids.get(ann_b), "new-B")
+
+        # Repeated save against the current tip still succeeds (identical or edit).
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps(
+                    [
+                        self._ann_row(ann_a, "second"),
+                        self._ann_row(ann_b, "new-B"),
+                    ]
+                ),
+                "canonical_annotation_set_revision": tip2,
+            },
+        ) as ok:
+            self.assertEqual(ok.status, 200)
+            body = json.loads(ok.read().decode())
+        self.assertEqual(body["canonical_annotation_set_revision"], tip2)
+
+        # Missing base is refused on the wire.
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}/annotations",
+            data=json.dumps(
+                {"annotations_json": json.dumps([self._ann_row(ann_a, "x")])}
+            ).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm_miss:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm_miss.exception.code, 400)
 
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")

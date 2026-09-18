@@ -2027,16 +2027,31 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const userItems = sortAnnotationsByPage(itemsFound.filter(prksIsUserMarkupAnnotation));
         const serialized = JSON.stringify(userItems);
         if (!stillLive()) return;
+        const baseSetRev = Number.isSafeInteger(runtime.acknowledgedAnnotationSetRevision)
+            ? runtime.acknowledgedAnnotationSetRevision
+            : 0;
         const annRes = await prksRequest(`/api/works/${workId}/annotations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ annotations_json: serialized, save_token: saveToken }),
+            body: JSON.stringify({
+                annotations_json: serialized,
+                save_token: saveToken,
+                canonical_annotation_set_revision: baseSetRev,
+            }),
         }, {
             dedupe: false,
             retry: false,
             freshForMs: 0,
         });
         if (!annRes.ok) {
+            let staleCode = '';
+            try {
+                const errBody = await annRes.json();
+                staleCode = (errBody && errBody.code) || '';
+            } catch (_eErr) { /* ignore */ }
+            if (staleCode === 'ANNOTATION_SET_STALE') {
+                throw new Error('ANNOTATION_SET_STALE');
+            }
             throw new Error(`Annotation save failed (${annRes.status})`);
         }
         let replaceGen = null;
@@ -2051,6 +2066,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!Number.isSafeInteger(replaceGen) || replaceGen < 0) {
             throw new Error('Annotation save missing generation');
         }
+        runtime.acknowledgedAnnotationSetRevision = replaceGen;
         if (typeof prksOfflineMarkEntityChanged === 'function') {
             prksOfflineMarkEntityChanged('work', workId);
         }

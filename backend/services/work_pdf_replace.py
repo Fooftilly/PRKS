@@ -3,6 +3,10 @@
 Coordinates filesystem write, linearization, text-index sync, Mentioned-role
 extraction, and materialization claim/mark. HTTP adapters parse the request and
 map the returned status/body; they do not own this workflow.
+
+Shared ``/api/pdfs/<file>`` references are copy-on-write: before overwriting
+bytes that another Work still points at, this Work is retargeted to an exclusive
+managed filename so siblings keep their prior bytes and materialization marks.
 """
 
 from __future__ import annotations
@@ -11,9 +15,16 @@ import logging
 import os
 import tempfile
 import threading
+import time
+import uuid
 from typing import Any, Optional
 
-from backend.db_manager import managed_pdf_filename, safe_pdf_path_under_dir
+from backend.db_manager import (
+    managed_pdf_filename,
+    prks_thumb_cache_safe_wid,
+    referenced_managed_pdf_filename,
+    safe_pdf_path_under_dir,
+)
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.pdf_materialization import STALE_CODE
@@ -67,6 +78,14 @@ def atomic_replace_file_bytes(path: str, body: bytes) -> None:
             fp.write(body)
             fp.flush()
             os.fsync(fp.fileno())
+    except Exception:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    try:
         os.replace(tmp, path)
         fsync_parent_dir(path)
     except Exception:
@@ -111,6 +130,40 @@ def _sync_mentioned_roles(db, work_id: str, pdf_bytes: bytes) -> None:
             continue
 
 
+def other_works_share_managed_filename(
+    db, filename: str, *, exclude_work_id: str
+) -> bool:
+    """True when another Work's ``file_path`` resolves to the same managed basename."""
+    name = str(filename or "")
+    if not name:
+        return False
+    try:
+        rows = db.execute_query(
+            "SELECT id, file_path FROM works WHERE file_path IS NOT NULL"
+        )
+    except Exception:
+        # Fail closed: treat as shared so we COW rather than overwrite unknowns.
+        return True
+    for row in rows or ():
+        wid = row["id"] if isinstance(row, dict) else row[0]
+        if str(wid) == str(exclude_work_id):
+            continue
+        fp = row["file_path"] if isinstance(row, dict) else row[1]
+        if referenced_managed_pdf_filename(fp) == name:
+            return True
+    return False
+
+
+def allocate_exclusive_managed_filename(work_id: str, shared_filename: str) -> str:
+    """Mint a Work-specific managed PDF basename under ``pdfs/``."""
+    base = os.path.basename(str(shared_filename or "")) or "work.pdf"
+    safe_base = "".join(c for c in base if c.isalnum() or c in ".-_") or "work.pdf"
+    if not safe_base.lower().endswith(".pdf"):
+        safe_base = f"{safe_base}.pdf"
+    safe_wid = prks_thumb_cache_safe_wid(work_id)
+    return f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_{safe_base}"
+
+
 def replace_managed_work_pdf(
     db,
     *,
@@ -124,6 +177,10 @@ def replace_managed_work_pdf(
 
     Caller must already hold the per-Work materialization lock and have verified
     the Work exists. ``claimed_set_rev is not None`` enables durable claim+mark.
+
+    When another Work still references the same managed basename, bytes are
+    written to a new exclusive file and this Work's ``file_path`` is retargeted
+    (copy-on-write) so sibling materialization marks stay honest.
 
     Returns ``{status, body, wrote_pdf}`` for the HTTP adapter.
     """
@@ -152,87 +209,154 @@ def replace_managed_work_pdf(
         }
 
     with pdf_path_lock_for(pdf_path):
-        if durable:
+        # Re-read under the shared-path lock: a concurrent COW may have moved us.
+        res_path = db.execute_query(
+            "SELECT file_path FROM works WHERE id=?", (work_id,)
+        )
+        if not res_path:
+            return {
+                "status": 404,
+                "body": {"error": "Work not found"},
+                "wrote_pdf": False,
+            }
+        stored_fp = (res_path[0].get("file_path") or "").strip()
+        filename = managed_pdf_filename(stored_fp)
+        if not filename:
+            return {
+                "status": 404,
+                "body": {"error": "Work has no managed PDF"},
+                "wrote_pdf": False,
+            }
+        pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
+        if not pdf_path:
+            return {
+                "status": 400,
+                "body": {"error": "Invalid or unsafe PDF storage path"},
+                "wrote_pdf": False,
+            }
+
+        target_path = pdf_path
+        target_fp = stored_fp
+        cow_retarget = False
+        exclusive_lock = None
+
+        if other_works_share_managed_filename(
+            db, filename, exclude_work_id=work_id
+        ):
+            exclusive_name = allocate_exclusive_managed_filename(work_id, filename)
+            exclusive_path = safe_pdf_path_under_dir(pdfs_dir, exclusive_name)
+            if not exclusive_path:
+                return {
+                    "status": 400,
+                    "body": {"error": "Invalid or unsafe PDF storage path"},
+                    "wrote_pdf": False,
+                }
+            exclusive_lock = pdf_path_lock_for(exclusive_path)
+            exclusive_lock.acquire()
+            target_path = exclusive_path
+            target_fp = f"/api/pdfs/{exclusive_name}"
+            cow_retarget = True
+
+        try:
+            if durable:
+                try:
+                    db.accept_work_pdf_materialization_claim(work_id, claimed_set_rev)
+                except LookupError:
+                    return {
+                        "status": 404,
+                        "body": {"error": "Work not found"},
+                        "wrote_pdf": False,
+                    }
+                except ValueError as e:
+                    if str(e) == STALE_CODE:
+                        return {
+                            "status": 409,
+                            "body": _stale_body(db, work_id),
+                            "wrote_pdf": False,
+                        }
+                    return {
+                        "status": 400,
+                        "body": {"error": "Invalid materialization revision"},
+                        "wrote_pdf": False,
+                    }
+
+            atomic_replace_file_bytes(target_path, pdf_bytes)
+            if cow_retarget:
+                db.execute_query(
+                    """
+                    UPDATE works
+                    SET file_path = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (target_fp, work_id),
+                )
+                LOGGER.info(
+                    "pdf_cow_retarget work_id=%s",
+                    safe_log_id(work_id),
+                )
+            changed, reason = maybe_linearize_pdf_in_place(
+                target_path, context="work-pdf-overwrite"
+            )
+            fsync_parent_dir(target_path)
+            LOGGER.info(
+                "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
+                "true" if changed else "false",
+                safe_log_label(reason),
+            )
             try:
-                db.accept_work_pdf_materialization_claim(work_id, claimed_set_rev)
+                text_index.sync_work(work_id, target_fp)
+            except Exception as e:
+                LOGGER.warning(
+                    "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
+                    safe_log_id(work_id),
+                    safe_error_type(e),
+                )
+
+            _sync_mentioned_roles(db, work_id, pdf_bytes)
+
+            materialized_rev: Optional[int] = None
+            try:
+                if durable:
+                    materialized_rev = db.mark_work_pdf_materialized_if_claim_current(
+                        work_id, claimed_set_rev
+                    )
             except LookupError:
                 return {
                     "status": 404,
                     "body": {"error": "Work not found"},
-                    "wrote_pdf": False,
+                    "wrote_pdf": True,
                 }
             except ValueError as e:
                 if str(e) == STALE_CODE:
                     return {
                         "status": 409,
                         "body": _stale_body(db, work_id),
-                        "wrote_pdf": False,
+                        "wrote_pdf": True,
                     }
-                return {
-                    "status": 400,
-                    "body": {"error": "Invalid materialization revision"},
-                    "wrote_pdf": False,
-                }
-
-        atomic_replace_file_bytes(pdf_path, pdf_bytes)
-        changed, reason = maybe_linearize_pdf_in_place(
-            pdf_path, context="work-pdf-overwrite"
-        )
-        fsync_parent_dir(pdf_path)
-        LOGGER.info(
-            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
-            "true" if changed else "false",
-            safe_log_label(reason),
-        )
-        try:
-            text_index.sync_work(work_id, stored_fp)
-        except Exception as e:
-            LOGGER.warning(
-                "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
-                safe_log_id(work_id),
-                safe_error_type(e),
-            )
-
-        _sync_mentioned_roles(db, work_id, pdf_bytes)
-
-        materialized_rev: Optional[int] = None
-        try:
-            if durable:
-                materialized_rev = db.mark_work_pdf_materialized_if_claim_current(
-                    work_id, claimed_set_rev
+                LOGGER.warning(
+                    "pdf_materialization_mark_failed work_id=%s error_type=%s",
+                    safe_log_id(work_id),
+                    safe_error_type(e),
                 )
-        except LookupError:
-            return {
-                "status": 404,
-                "body": {"error": "Work not found"},
-                "wrote_pdf": True,
-            }
-        except ValueError as e:
-            if str(e) == STALE_CODE:
-                return {
-                    "status": 409,
-                    "body": _stale_body(db, work_id),
-                    "wrote_pdf": True,
-                }
-            LOGGER.warning(
-                "pdf_materialization_mark_failed work_id=%s error_type=%s",
-                safe_log_id(work_id),
-                safe_error_type(e),
-            )
-        except Exception as e:
-            LOGGER.warning(
-                "pdf_materialization_mark_failed work_id=%s error_type=%s",
-                safe_log_id(work_id),
-                safe_error_type(e),
-            )
+            except Exception as e:
+                LOGGER.warning(
+                    "pdf_materialization_mark_failed work_id=%s error_type=%s",
+                    safe_log_id(work_id),
+                    safe_error_type(e),
+                )
 
-        body: dict[str, Any] = {"status": "success"}
-        if materialized_rev is not None:
-            body["materialized_pdf_annotation_revision"] = materialized_rev
-            mat = db.get_work_pdf_materialization(work_id)
-            if mat:
-                body["canonical_annotation_set_revision"] = mat[
-                    "canonical_annotation_set_revision"
-                ]
-                body["stale"] = mat["stale"]
-        return {"status": 200, "body": body, "wrote_pdf": True}
+            body: dict[str, Any] = {"status": "success"}
+            if cow_retarget:
+                body["file_path"] = target_fp
+            if materialized_rev is not None:
+                body["materialized_pdf_annotation_revision"] = materialized_rev
+                mat = db.get_work_pdf_materialization(work_id)
+                if mat:
+                    body["canonical_annotation_set_revision"] = mat[
+                        "canonical_annotation_set_revision"
+                    ]
+                    body["stale"] = mat["stale"]
+            return {"status": 200, "body": body, "wrote_pdf": True}
+        finally:
+            if exclusive_lock is not None:
+                exclusive_lock.release()

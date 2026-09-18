@@ -222,6 +222,13 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertLess(legacy_ann, legacy_claim)
         self.assertIn("Annotation save missing generation", mat_pass)
         self.assertIn("canonical_annotation_set_revision", mat_pass[legacy_ann:legacy_claim + 80])
+        # Stale full-list guard: send acknowledged tip; refuse ANNOTATION_SET_STALE.
+        self.assertIn("acknowledgedAnnotationSetRevision", mat_pass)
+        self.assertIn("ANNOTATION_SET_STALE", mat_pass)
+        self.assertIn(
+            "canonical_annotation_set_revision: baseSetRev",
+            mat_pass,
+        )
         # Materialization finally: clear handoff + enable + end gate synchronously
         # (no await after enabling controller mutation before gate ends).
         self.assertIn("prksClearMaterializationHandoff(runtime)", mat_pass)
