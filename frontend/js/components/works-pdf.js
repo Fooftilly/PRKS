@@ -1654,10 +1654,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 return;
             }
             // Fail-closed + serialized with annotation mutation: drain in-flight
-            // durable writes first, then mutation-lock, recheck queue, ACK-only
-            // reconcile (must succeed), recheck clean, then saveCopy/upload.
-            // Lock AFTER draining so deferred annotation-event writes that wait
-            // on `_annotationMaterializing` cannot deadlock with this await.
+            // durable writes first, then raise the per-runtime materialization
+            // gate, recheck queue, ACK-only reconcile (must succeed), recheck
+            // clean, then saveCopy/upload. Gate AFTER draining so deferred
+            // annotation-event writes that wait on `_annotationMaterializing`
+            // cannot deadlock with this await. Do not call setMutationEnabled(false)
+            // here — that blocks viewer.deleteAnnotation and races sidebar delete
+            // with ACK-only reconcile; the write-chain gate is the mutation lock.
             if (runtime._annotationDurableWriteChain) {
                 try {
                     await runtime._annotationDurableWriteChain;
@@ -1665,9 +1668,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             if (!stillLive()) return;
             runtime._annotationMaterializing = true;
-            if (viewer && typeof viewer.setMutationEnabled === 'function') {
-                try { viewer.setMutationEnabled(false); } catch (_eLock) { /* best-effort */ }
-            }
             try {
                 if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
                     try {
@@ -1713,26 +1713,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 return;
             } finally {
                 runtime._annotationMaterializing = false;
-                if (stillLive()) {
-                    if (typeof prksApplyPdfAnnotationCapability === 'function') {
-                        try {
-                            await prksApplyPdfAnnotationCapability(ctx, runtime, {
-                                id: workId,
-                                file_path: runtime.filePath,
-                            });
-                        } catch (_eCap) {
-                            if (viewer && typeof viewer.setMutationEnabled === 'function') {
-                                try {
-                                    viewer.setMutationEnabled(prksPdfDesiredMode(runtime) === 'work');
-                                } catch (_eUnlock) { /* best-effort */ }
-                            }
-                        }
-                    } else if (viewer && typeof viewer.setMutationEnabled === 'function') {
-                        try {
-                            viewer.setMutationEnabled(prksPdfDesiredMode(runtime) === 'work');
-                        } catch (_eUnlock2) { /* best-effort */ }
-                    }
-                }
             }
         }
         await exportAndPersistPdfCopy(saveToken);
