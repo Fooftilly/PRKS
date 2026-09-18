@@ -91,49 +91,53 @@ def atomic_replace_managed_pdf_bytes(
 ) -> str:
     """Write ``body`` to managed ``filename`` under ``pdfs_dir`` without truncating first.
 
-    Destination comes from ``safe_pdf_path_under_dir``, then an inline
-    ``realpath`` + ``startswith`` check (the CodeQL ``py/path-injection``
-    documented barrier) immediately before ``os.replace``. Temps live under
-    ``realpath(pdfs_dir)`` and every unlink is likewise guarded inline —
-    never via ``dirname`` of a DB-derived path.
+    Runtime containment uses ``safe_pdf_path_under_dir``. The destination local
+    passed to ``os.replace`` is then rebuilt with the CodeQL-documented
+    ``normpath(join(base, basename))`` + ``startswith(base)`` pattern so the
+    sink does not carry a helper return CodeQL still treats as tainted. Temps
+    live under ``realpath(pdfs_dir)`` only.
     Returns the absolute managed path written.
     """
-    path = safe_pdf_path_under_dir(pdfs_dir, filename)
-    if not path:
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
         raise ValueError("Invalid or unsafe PDF storage path")
-    base = os.path.realpath(pdfs_dir)
-    # Inline CodeQL path-injection barrier on the destination local.
-    if path != base and not path.startswith(base + os.sep):
+    base_path = os.path.realpath(pdfs_dir)
+    # CodeQL py/path-injection documented sanitizer (query help user_picture3):
+    # build with join+normpath, then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if not fullpath.startswith(base_path):
         raise ValueError("Invalid or unsafe PDF storage path")
-    fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=base)
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
+        raise ValueError("Invalid or unsafe PDF storage path")
+
+    fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=base_path)
     try:
         with os.fdopen(fd, "wb") as fp:
             fp.write(body)
             fp.flush()
             os.fsync(fp.fileno())
     except Exception:
-        if tmp.startswith(base + os.sep):
+        if tmp.startswith(base_path + os.sep):
             try:
                 os.remove(tmp)
             except OSError:
                 pass
         raise
     try:
-        # Re-assert barriers immediately before the replace sink.
-        if path != base and not path.startswith(base + os.sep):
+        if not tmp.startswith(base_path):
             raise ValueError("Invalid or unsafe PDF storage path")
-        if not tmp.startswith(base + os.sep):
+        if not fullpath.startswith(base_path):
             raise ValueError("Invalid or unsafe PDF storage path")
-        os.replace(tmp, path)
+        os.replace(tmp, fullpath)
         fsync_managed_pdf_parent(pdfs_dir, filename)
     except Exception:
-        if tmp.startswith(base + os.sep):
+        if tmp.startswith(base_path + os.sep):
             try:
                 os.remove(tmp)
             except OSError:
                 pass
         raise
-    return path
+    return fullpath
 
 
 def _stale_body(db, work_id: str) -> dict[str, Any]:
