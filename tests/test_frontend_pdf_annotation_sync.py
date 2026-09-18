@@ -99,7 +99,8 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
             catch_up_body.index("if (canonical <= materialized)"),
         )
         self.assertIn("prksRefreshPendingPdfAnnotations", catch_up_body)
-        self.assertIn("handoffToMaterialize", catch_up_body)
+        self.assertIn("prksBeginAnnotationMaterializationGate", catch_up_body)
+        self.assertIn("prksEndAnnotationMaterializationGate", catch_up_body)
         # ACK-drained path must also use coherent catch-up — never assign
         # pendingMaterializationRevision from an incremental ACK alone.
         ack_sub_at = works_pdf.index("const isPdfAck = ack && op && (")
