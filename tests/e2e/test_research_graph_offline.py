@@ -353,6 +353,9 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 self.cache(page, ids)
                 before = self.generations(page)
                 page.evaluate(operation, ids)
+                # Enqueue fences Graph immediately; ACK fences again. Drain so
+                # the second sweep cannot race the next cache() republish.
+                self.drained(page)
                 self.changed(page, before, expected)
 
     def test_a_position_rename_patches_the_graph_node_it_already_has(self):
