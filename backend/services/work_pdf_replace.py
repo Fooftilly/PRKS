@@ -39,11 +39,15 @@ _PDF_PATH_LOCKS: dict[str, threading.Lock] = {}
 
 
 def managed_pdf_path_lock(pdfs_dir: str, filename: str) -> Optional[threading.Lock]:
-    """Lock for a managed PDF basename under ``pdfs_dir``, or None if unsafe."""
+    """Lock for a managed PDF basename under ``pdfs_dir``, or None if unsafe.
+
+    Keyed by the ``safe_pdf_path_under_dir`` return value directly (no re-join of
+    a DB/user basename onto the root).
+    """
     path = safe_pdf_path_under_dir(pdfs_dir, filename)
     if not path:
         return None
-    key = os.path.normpath(path)
+    key = path
     with _PDF_PATH_LOCKS_GUARD:
         lock = _PDF_PATH_LOCKS.get(key)
         if lock is None:
@@ -53,13 +57,17 @@ def managed_pdf_path_lock(pdfs_dir: str, filename: str) -> Optional[threading.Lo
 
 
 def fsync_managed_pdf_parent(pdfs_dir: str, filename: str) -> None:
-    """Best-effort directory fsync after rename (POSIX/Linux only)."""
-    path = safe_pdf_path_under_dir(pdfs_dir, filename)
-    if not path:
+    """Best-effort directory fsync after rename (POSIX/Linux only).
+
+    Confirms ``filename`` is a managed path under ``pdfs_dir``, then fsyncs the
+    trusted storage root (``realpath(pdfs_dir)``) — never ``dirname`` of a
+    DB-derived path.
+    """
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
         return
     if os.name != "posix":
         return
-    parent = os.path.dirname(path) or "."
+    parent = os.path.realpath(pdfs_dir)
     flags = getattr(os, "O_RDONLY", None)
     if flags is None:
         return
@@ -83,35 +91,47 @@ def atomic_replace_managed_pdf_bytes(
 ) -> str:
     """Write ``body`` to managed ``filename`` under ``pdfs_dir`` without truncating first.
 
-    Resolves the destination through ``safe_pdf_path_under_dir`` before any
-    filesystem operation. Returns the absolute managed path written.
+    Destination comes from ``safe_pdf_path_under_dir``, then an inline
+    ``realpath`` + ``startswith`` check (the CodeQL ``py/path-injection``
+    documented barrier) immediately before ``os.replace``. Temps live under
+    ``realpath(pdfs_dir)`` and every unlink is likewise guarded inline —
+    never via ``dirname`` of a DB-derived path.
+    Returns the absolute managed path written.
     """
     path = safe_pdf_path_under_dir(pdfs_dir, filename)
     if not path:
         raise ValueError("Invalid or unsafe PDF storage path")
-    parent = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=parent)
+    base = os.path.realpath(pdfs_dir)
+    # Inline CodeQL path-injection barrier on the destination local.
+    if path != base and not path.startswith(base + os.sep):
+        raise ValueError("Invalid or unsafe PDF storage path")
+    fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=base)
     try:
         with os.fdopen(fd, "wb") as fp:
             fp.write(body)
             fp.flush()
             os.fsync(fp.fileno())
     except Exception:
-        try:
-            if os.path.isfile(tmp):
+        if tmp.startswith(base + os.sep):
+            try:
                 os.remove(tmp)
-        except OSError:
-            pass
+            except OSError:
+                pass
         raise
     try:
+        # Re-assert barriers immediately before the replace sink.
+        if path != base and not path.startswith(base + os.sep):
+            raise ValueError("Invalid or unsafe PDF storage path")
+        if not tmp.startswith(base + os.sep):
+            raise ValueError("Invalid or unsafe PDF storage path")
         os.replace(tmp, path)
         fsync_managed_pdf_parent(pdfs_dir, filename)
     except Exception:
-        try:
-            if os.path.isfile(tmp):
+        if tmp.startswith(base + os.sep):
+            try:
                 os.remove(tmp)
-        except OSError:
-            pass
+            except OSError:
+                pass
         raise
     return path
 
