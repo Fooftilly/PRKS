@@ -1931,7 +1931,8 @@ class TestServerAPI(unittest.TestCase):
             live = os.path.join(tmp, "doc.pdf")
             with open(live, "wb") as f:
                 f.write(b"%PDF-1.4 live-original")
-            before = open(live, "rb").read()
+            with open(live, "rb") as f:
+                before = f.read()
 
             def boom_open(path, mode="r", *args, **kwargs):
                 if path.endswith(".prks-tmp") and "w" in mode:
@@ -1941,7 +1942,12 @@ class TestServerAPI(unittest.TestCase):
             with patch("builtins.open", boom_open):
                 with self.assertRaises(OSError):
                     server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 new")
-            self.assertEqual(open(live, "rb").read(), before)
+            with open(live, "rb") as f:
+                self.assertEqual(f.read(), before)
+            self.assertFalse(os.path.exists(live + ".prks-tmp"))
+            server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 replaced")
+            with open(live, "rb") as f:
+                self.assertEqual(f.read(), b"%PDF-1.4 replaced")
             self.assertFalse(os.path.exists(live + ".prks-tmp"))
 
     def test_22d_annotation_save_token_only_after_success(self):
