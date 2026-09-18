@@ -2513,6 +2513,39 @@ def _wait_pdf_viewer(page):
     )
 
 
+def _wait_pdf_annotation_gates_idle(page, timeout=20000):
+    """Wait until no mounted PDF holds the catch-up/materialization gate.
+
+    Coherent catch-up may still be projecting after Make Main / mount; its
+    `/annotations-snapshot` GETs must not be attributed to a later close.
+    """
+    page.wait_for_function(
+        """() => {
+            const snap = window.prksTabContextDebugSnapshot && window.prksTabContextDebugSnapshot();
+            const rows = (snap && snap.contexts) || [];
+            for (const row of rows) {
+                if (!row || !row.mounted) continue;
+                const ctx = window.prksGetTabContext && window.prksGetTabContext(row.tabId);
+                const pdf = ctx && ctx.getResource && ctx.getResource('pdf');
+                if (pdf && pdf._annotationMaterializing) return false;
+            }
+            return true;
+        }""",
+        timeout=timeout,
+    )
+
+
+def _url_is_entity_detail_get(url, entity_path):
+    """True when url is the entity detail GET, not a sub-resource.
+
+    `/api/works/:id/annotations-snapshot` (and metadata-state, opened, …)
+    must not count as remounting the Work leaf.
+    """
+    path = urlparse(url).path.rstrip("/")
+    want = entity_path.rstrip("/")
+    return path == want
+
+
 def _open_details_drawer_if_tiled(page):
     tiled = page.evaluate("() => !!document.querySelector('.app-container--tiled')")
     open_ = page.evaluate("() => document.body.classList.contains('prks-right-panel-open')")
@@ -5456,6 +5489,13 @@ class WorkspaceTilingTests(_BrowserE2E):
                     pdf.viewer.saveCopy = async function () {
                         return new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]).buffer;
                     };
+                    // Durable path only POSTs PDF bytes when a claimed ACK
+                    // generation is queued (Slice F). Legacy flush ignores this.
+                    if (pdf.annotationMutationDurable) {
+                        const rev = pdf.acknowledgedAnnotationSetRevision;
+                        pdf.pendingMaterializationRevision =
+                            Number.isSafeInteger(rev) && rev >= 0 ? rev : 0;
+                    }
                     window.__prksSurvivingPdfPromise = pdf.flushAnnotations();
                 }""",
                 arg=tree["d_id"],
@@ -7241,6 +7281,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg={"b": tree["b_id"], "c": tree["c_id"], "d": tree["d_id"]},
         )
 
+        _wait_pdf_annotation_gates_idle(page)
         seen_gets = []
         page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
 
@@ -7296,7 +7337,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             "/api/works/" + server.ids["work_b"],
         ):
             self.assertFalse(
-                any(path in u for u in seen_gets),
+                any(_url_is_entity_detail_get(u, path) for u in seen_gets),
                 "surviving unrelated Secondary leaf reloaded during Main close: " + path,
             )
 
@@ -7364,6 +7405,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg={"b": b_id, "a": a_id},
         )
 
+        _wait_pdf_annotation_gates_idle(page)
         seen_gets = []
         page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
 
@@ -7392,7 +7434,7 @@ class WorkspaceTilingTests(_BrowserE2E):
 
         for path in ("/api/persons/" + person_id, "/api/works/" + work_a):
             self.assertFalse(
-                any(path in u for u in seen_gets),
+                any(_url_is_entity_detail_get(u, path) for u in seen_gets),
                 "unrelated surviving Secondary leaf reloaded during batch close: " + path,
             )
 

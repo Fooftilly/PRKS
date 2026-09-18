@@ -122,6 +122,8 @@
     '/js/person-group-state.js',
         '/js/work-metadata-editor.js',
     '/js/work-source-editor.js',
+        '/js/pdf-annotation-state.js',
+        '/js/pdf-annotation-reconcile.js',
         '/js/sync-diagnostics.js',
         '/js/sync-runtime.js',
         '/js/work-tag-editor.js',

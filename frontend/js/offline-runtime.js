@@ -346,6 +346,18 @@
             return cacheEntityIfCurrent(kind, id, value, currentEntityGeneration(kind, id));
         }
 
+        /** Read a disposable cached entity value with no network. Null if missing. */
+        async function peekEntity(kind, id) {
+            if (!store || typeof store.getEntity !== 'function') return null;
+            try {
+                const snap = await store.getEntity(kind, id);
+                if (!snap) return null;
+                return snap.value;
+            } catch (_e) {
+                return null;
+            }
+        }
+
         /** Cache only if no later canonical change has superseded this value. */
         function cacheEntityIfCurrent(kind, id, value, coherenceToken) {
             if (value == null || !store || typeof store.putEntity !== 'function') return Promise.resolve(false);
@@ -782,6 +794,74 @@
                 root.prksMarkWorkRoleDependenciesChanged(result.role_type);
             } else {
                 markDomainChanged(DOMAIN_PEOPLE);
+            }
+            return true;
+        }
+
+        async function reconcilePdfAnnotation(result) {
+            if (!store || !await store.isAvailable()) return false;
+            const id = result.work_id;
+            const annotationId = result.annotation_id;
+            if (!id || !annotationId || !Number.isSafeInteger(result.server_revision)) {
+                return false;
+            }
+            const kind = 'work-annotations-snapshot';
+            const token = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(entityKey(kind, id), token);
+            const envelope = await store.getEntity(kind, id);
+            const snap = envelope && envelope.value;
+            if (!snap || typeof snap !== 'object' || !Array.isArray(snap.items) ||
+                !Array.isArray(snap.annotations)) {
+                /* No coherent base cached — ACK still succeeds; next hydrate
+                 * repopulates. Do not invent a partial snapshot. */
+                return true;
+            }
+            const present = result.present !== false && !!result.annotation;
+            let nextItems = snap.items.filter(function (item) {
+                if (!item || typeof item !== 'object') return true;
+                const itemId = item.id || item.uuid || item.annotationId || item.annotation_id;
+                return String(itemId) !== String(annotationId);
+            });
+            if (present) nextItems = nextItems.concat([result.annotation]);
+            const annotations = snap.annotations.filter(function (row) {
+                return !(row && row.annotation_id === annotationId);
+            });
+            const knownAbsent = Object.assign({}, snap.known_absent || {});
+            if (present) {
+                annotations.push({
+                    annotation_id: annotationId,
+                    revision: result.server_revision,
+                });
+                delete knownAbsent[annotationId];
+            } else {
+                knownAbsent[annotationId] = result.server_revision;
+            }
+            annotations.sort(function (a, b) {
+                return String(a.annotation_id).localeCompare(String(b.annotation_id));
+            });
+            const nextSnap = Object.assign({}, snap, {
+                items: nextItems,
+                annotations: annotations,
+                known_absent: knownAbsent,
+            });
+            // Patch the ACKed annotation body, but do not relabel the cached
+            // object as a newer coherent snapshot unless generation continuity
+            // proves no unseen set changes (cached gen + 1 === ACK gen) and the
+            // ACK changed something (changed:false cannot own a gen increment).
+            if (Number.isSafeInteger(result.canonical_annotation_set_revision)) {
+                const nextGen = result.canonical_annotation_set_revision;
+                const prevGen = Number.isSafeInteger(snap.canonical_annotation_set_revision)
+                    ? snap.canonical_annotation_set_revision
+                    : null;
+                if (prevGen === null || nextGen === prevGen) {
+                    nextSnap.canonical_annotation_set_revision = nextGen;
+                } else if (result.changed === true && nextGen === prevGen + 1) {
+                    nextSnap.canonical_annotation_set_revision = nextGen;
+                }
+                // else: keep snap.canonical_annotation_set_revision unchanged
+            }
+            if (!await cacheEntityIfCurrent(kind, id, nextSnap, token)) {
+                return false;
             }
             return true;
         }
@@ -2882,6 +2962,7 @@
             reconcileWorkNote,
             reconcilePrivateNote,
             reconcileWorkRole,
+            reconcilePdfAnnotation,
             reconcileRecentOpen,
             reconcileCreatedFolder,
             reconcileFolderField,
@@ -2919,6 +3000,7 @@
             reconcileDeletedPersonGroup,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
+            peekEntity: peekEntity,
             invalidateEntity: invalidateEntity,
             invalidateList: invalidateList,
             markEntityChanged: markEntityChanged,
@@ -2972,6 +3054,9 @@
     }
     function prksOfflineCacheEntity(kind, id, value) {
         return production.cacheEntity(kind, id, value);
+    }
+    function prksOfflinePeekEntity(kind, id) {
+        return production.peekEntity(kind, id);
     }
     function prksOfflineCacheEntityIfCurrent(kind, id, value, coherenceToken) {
         return production.cacheEntityIfCurrent(kind, id, value, coherenceToken);
@@ -3127,6 +3212,7 @@
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflinePeekEntity: prksOfflinePeekEntity,
         prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
         prksOfflineReconcileFolderTag: result => production.reconcileFolderTag(result),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
@@ -3135,6 +3221,7 @@
         prksOfflineReconcilePrivateNote: (result, op) =>
             production.reconcilePrivateNote(result, op),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
+        prksOfflineReconcilePdfAnnotation: result => production.reconcilePdfAnnotation(result),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedFolder: result => production.reconcileCreatedFolder(result),
         prksOfflineReconcileFolderField: (result, op) =>

@@ -278,7 +278,7 @@ class MigrationTestCase(unittest.TestCase):
 
 class TestRegistry(unittest.TestCase):
     def test_production_registry_is_contiguous(self):
-        self.assertEqual(LATEST_SCHEMA_VERSION, 14)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 15)
         self.assertEqual(PRKS_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
         self.assertEqual(LEGACY_BASELINE_VERSION, 9)
         validate_migration_registry()
@@ -868,7 +868,7 @@ class TestVersionRefusal(MigrationTestCase):
         conn = _raw(db.db_path)
         conn.execute("CREATE TABLE canary_keep (id INTEGER)")
         conn.execute("INSERT INTO canary_keep (id) VALUES (1)")
-        conn.execute("UPDATE schema_version SET version = 15")
+        conn.execute("UPDATE schema_version SET version = 16")
         conn.commit()
         conn.close()
         with self.assertRaises(MigrationError) as ctx:
@@ -879,7 +879,7 @@ class TestVersionRefusal(MigrationTestCase):
         try:
             self.assertEqual(
                 check.execute("SELECT version FROM schema_version").fetchone()[0],
-                15,
+                16,
             )
             self.assertEqual(check.execute("SELECT id FROM canary_keep").fetchone()[0], 1)
         finally:

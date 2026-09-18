@@ -27,6 +27,7 @@ from backend.db_manager import (
     BulkWorkError,
     effective_source_kind,
     SavedViewError,
+    managed_pdf_filename,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -35,6 +36,7 @@ from backend.db_manager import (
     prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
+from backend.services import work_pdf_replace
 from backend.text_index import (
     PRKSTextIndex,
     get_text_index,
@@ -604,6 +606,19 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
 _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _SAVE_TOKEN_LOCK = threading.Lock()
+_PDF_MATERIALIZATION_LOCKS_GUARD = threading.Lock()
+_PDF_MATERIALIZATION_LOCKS = {}
+
+
+def _pdf_materialization_lock_for(work_id: str) -> threading.Lock:
+    """Per-Work lock so validate → replace → mark cannot race another ACK."""
+    with _PDF_MATERIALIZATION_LOCKS_GUARD:
+        lock = _PDF_MATERIALIZATION_LOCKS.get(work_id)
+        if lock is None:
+            lock = threading.Lock()
+            _PDF_MATERIALIZATION_LOCKS[work_id] = lock
+        return lock
+
 
 # Work creation and source synchronization share ONE parser, in the source
 # domain module. A second one here would eventually disagree with it, and the
@@ -2043,6 +2058,36 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data)
                 else:
                     self.send_error(404, "Work not found")
+            elif path.startswith('/api/works/') and path.endswith('/annotations-state') and len(path.split('/')) == 5:
+                w_id = path.split('/')[3]
+                data = db.get_work_annotations_state(w_id)
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-annotations-state", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/annotations-snapshot') and len(path.split('/')) == 5:
+                # One DB transaction: items + revisions + materialization gens.
+                w_id = path.split('/')[3]
+                data = db.get_work_annotations_snapshot(w_id)
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    etag = db.etag_for_representation("work-annotations-snapshot", data)
+                    if self._prks_if_none_match(etag):
+                        self._send_json_not_modified(etag)
+                        return
+                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif path.startswith('/api/works/') and path.endswith('/pdf-materialization') and len(path.split('/')) == 5:
+                w_id = path.split('/')[3]
+                data = db.get_work_pdf_materialization(w_id)
+                if data is None:
+                    self.send_json(404, {"error": "Work not found"})
+                else:
+                    self.send_json(200, data)
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
                 w_id = path.split('/')[3]
                 data = {"work_id": w_id, "annotations_json": db.get_work_annotations(w_id)}
@@ -3097,65 +3142,75 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, {'status': 'success'})
+            elif path.startswith('/api/works/') and path.endswith('/annotations/adopt'):
+                parts = path.split('/')
+                if len(parts) != 6 or parts[4] != 'annotations' or parts[5] != 'adopt':
+                    self.send_error(404, "API endpoint not found")
+                    return
+                w_id = parts[3]
+                if not isinstance(data, dict):
+                    self.send_json(400, {'error': 'JSON object body required'})
+                    return
+                viewer_annotations = data.get('viewer_annotations')
+                if not isinstance(viewer_annotations, list):
+                    self.send_json(
+                        400,
+                        {
+                            'error': 'viewer_annotations must be a JSON list',
+                            'code': 'malformed_annotation_payload',
+                        },
+                    )
+                    return
+                try:
+                    result = db.adopt_byte_only_user_markup(w_id, viewer_annotations)
+                except WorkAnnotationError as e:
+                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    return
+                self.send_json(200, result)
             elif path.startswith('/api/works/') and path.endswith('/pdf'):
                 w_id = path.split('/')[3]
                 file_b64 = data.get('file_b64', '')
                 save_token = str(data.get('save_token', '') or '').strip()
+                claimed_set_rev = data.get('materialized_annotation_set_revision', None)
                 if file_b64:
                     try:
                         pdf_bytes = base64.b64decode(file_b64, validate=True)
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    
-                    # 1. Overwrite file
-                    res_path = db.execute_query("SELECT file_path FROM works WHERE id=?", (w_id,))
-                    if res_path and res_path[0]['file_path']:
-                        filename = res_path[0]['file_path'].split('/')[-1]
-                        pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
-                        if not pdf_path:
-                            self.send_json(400, {'error': 'Invalid or unsafe PDF storage path'})
-                            return
-                        with open(pdf_path, 'wb') as f:
-                            f.write(pdf_bytes)
-                        changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
-                        LOGGER.info(
-                            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
-                            "true" if changed else "false",
-                            safe_log_label(reason),
+
+                    # Existence before lock: unknown IDs must not grow
+                    # _PDF_MATERIALIZATION_LOCKS. Re-check under the Work lock
+                    # inside replace_managed_work_pdf for deletion races.
+                    pre = db.execute_query(
+                        "SELECT 1 AS ok FROM works WHERE id=?", (w_id,)
+                    )
+                    if not pre:
+                        self.send_json(404, {'error': 'Work not found'})
+                        return
+
+                    mat_lock = _pdf_materialization_lock_for(w_id)
+                    with mat_lock:
+                        outcome = work_pdf_replace.replace_managed_work_pdf(
+                            db,
+                            work_id=w_id,
+                            pdf_bytes=pdf_bytes,
+                            pdfs_dir=pdfs_dir,
+                            text_index=text_index,
+                            claimed_set_rev=claimed_set_rev,
                         )
-                        try:
-                            stored_fp = res_path[0]["file_path"]
-                            text_index.sync_work(w_id, stored_fp)
-                        except Exception as e:
-                            LOGGER.warning(
-                                "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
-                                safe_log_id(w_id),
-                                safe_error_type(e),
-                            )
-                            
-                    # 2. Extract annotations
-                    byte_matches = re.findall(rb'\[\[(.*?)\]\]', pdf_bytes)
-                    for b in byte_matches:
-                        try:
-                            decoded = b.decode('utf-8', errors='ignore').strip()
-                            clean = ''.join(c for c in decoded if c.isalnum() or c.isspace() or c in "-_")
-                            if clean:
-                                db_res = db.execute_query("SELECT id FROM persons WHERE (first_name || ' ' || last_name) = ? OR last_name = ?", (clean, clean))
-                                if db_res:
-                                    p_id = db_res[0]['id']
-                                    exist = db.execute_query("SELECT 1 FROM roles WHERE person_id=? AND work_id=? AND role_type='Mentioned'", (p_id, w_id))
-                                    if not exist:
-                                        db.add_role(p_id, w_id, 'Mentioned')
-                        except Exception:
-                            continue
-                    if save_token:
-                        with _SAVE_TOKEN_LOCK:
-                            _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                    self.send_json(200, {'status': 'success'})
+                        # save_token is HTTP bookkeeping only — record after a
+                        # successful byte write, never for empty/failed replaces.
+                        if outcome.get('wrote_pdf') and save_token:
+                            with _SAVE_TOKEN_LOCK:
+                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
+                        self.send_json(outcome['status'], outcome['body'])
                 else:
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
+                # Compat full-list replace. Product writes use durable
+                # CREATE/SET/DELETE_PDF_ANNOTATION; this remains for online-legacy
+                # when the durable store is unavailable (Slice G retirement).
                 w_id = path.split('/')[3]
                 if not isinstance(data, dict) or 'annotations_json' not in data:
                     self.send_json(
@@ -3168,15 +3223,42 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 annotations_json = data.get('annotations_json')
                 save_token = str(data.get('save_token', '') or '').strip()
+                # Legacy handshake is annotations-first: this endpoint only
+                # replaces metadata and returns the exact replace generation.
+                # Never mark PDF materialization here — save_token is solely
+                # for save-confirm bookkeeping, not proof of bytes. Marking
+                # belongs to POST /pdf with materialized_annotation_set_revision
+                # (same claim path as durable), under the PDF materialization lock.
+                # Client must send its acknowledged tip so a stale viewer cannot
+                # overwrite newer annotations or delete siblings omitted locally.
+                if 'canonical_annotation_set_revision' not in data:
+                    self.send_json(
+                        400,
+                        {
+                            'error': 'canonical_annotation_set_revision is required',
+                            'code': 'malformed_annotation_payload',
+                        },
+                    )
+                    return
+                base_set_rev = data.get('canonical_annotation_set_revision')
                 try:
-                    db.save_work_annotations(w_id, annotations_json)
+                    replace_gen = db.save_work_annotations(
+                        w_id,
+                        annotations_json,
+                        base_set_revision=base_set_rev,
+                    )
                 except WorkAnnotationError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
                 if save_token:
                     with _SAVE_TOKEN_LOCK:
                         _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                self.send_json(200, {'status': 'saved'})
+                body = {
+                    'status': 'saved',
+                    'path': 'legacy-full-list',
+                    'canonical_annotation_set_revision': replace_gen,
+                }
+                self.send_json(200, body)
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:

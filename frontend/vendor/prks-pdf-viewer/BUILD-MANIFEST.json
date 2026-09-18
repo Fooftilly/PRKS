@@ -16,11 +16,11 @@
     "node_modules/react/jsx-runtime.js"
   ],
   "outputSha256": {
-    "js": "474e6a50b3af0aa2eda8e313d3198c2d29312749a37b47d54705db295f3b4987",
+    "js": "15c6914aaba70daf69981652a11b17f2c9cf61dabebf3d774963e8fd11fb9ec5",
     "css": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae",
     "wasm": "c0af5a6aca30d7e54a149c3a68e317116ca906d6edc28fd3318b12c7d9478ac8"
   },
-  "builtAt": "2026-09-08T15:49:58.450Z",
+  "builtAt": "2026-09-18T09:24:52.045Z",
   "embedpdfPatches": [
     {
       "package": "@embedpdf/plugin-pan",

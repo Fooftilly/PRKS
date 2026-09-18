@@ -164,6 +164,16 @@ FEATURES = {
         "description": "Research Notes / Reminders offline (Work note aggregates)",
         "selectors": ("tests.e2e.test_work_notes_offline",),
     },
+    "pdf-annotations": {
+        "description": (
+            "PDF annotation local-first: durable ops, materialization, "
+            "offline capability, persistence handshake"
+        ),
+        "selectors": (
+            "tests.e2e.test_app.PdfPersistenceTests",
+            "tests.e2e.test_offline.OfflineFoundationTests",
+        ),
+    },
     "work-detail": {
         "description": (
             "Work detail UI: metadata, PDF/video viewer, people panel, notes chrome"
@@ -342,12 +352,26 @@ AFFECTED_RULES = (
         "features": ("notes",),
     },
     {
+        "name": "pdf-annotations",
+        "paths": (
+            "frontend/js/components/works-pdf.js",
+            "frontend/js/pdf-annotation-state.js",
+            "frontend/js/pdf-annotation-reconcile.js",
+            "frontend/js/pdf-work-runtime.js",
+            "backend/pdf_annotations.py",
+            "backend/pdf_annotation_sync.py",
+            "backend/pdf_materialization.py",
+            "backend/pdf_annotation_adopt.py",
+            "backend/services/work_pdf_replace.py",
+        ),
+        "features": ("pdf-annotations",),
+        "note": "PDF annotation durable family + materialization + viewer bridge",
+    },
+    {
         "name": "work-detail",
         "paths": (
             "frontend/js/components/works.js",
-            "frontend/js/components/works-pdf.js",
             "frontend/js/components/works-video.js",
-            "backend/pdf_annotations.py",
         ),
         "features": ("work-detail",),
         "note": "Core Work-detail UI → metadata/people/notes/PDF/sync coverage",

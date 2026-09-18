@@ -78,6 +78,13 @@
             }
             return 'Link ' + who + ' as ' + role;
         }
+        if (root.PRKS_PDF_ANNOTATION_OPERATION_TYPES &&
+            root.PRKS_PDF_ANNOTATION_OPERATION_TYPES.indexOf(op.operation) !== -1) {
+            const annId = op.payload.annotation_id || '?';
+            if (op.operation === 'DELETE_PDF_ANNOTATION') return 'Delete PDF annotation ' + annId;
+            if (op.operation === 'CREATE_PDF_ANNOTATION') return 'Create PDF annotation ' + annId;
+            return 'Edit PDF annotation ' + annId;
+        }
         if (op.operation === 'SET_PERSON_METADATA_FIELD') {
             const labels = root.PRKS_PERSON_FIELD_LABELS || {};
             const field = op.payload.field;
@@ -295,6 +302,9 @@
         ADD_WORK_PERSON_ROLE: 'work-people-state',
         REMOVE_WORK_PERSON_ROLE: 'work-people-state',
         SET_WORK_PERSON_ROLE_CREDIT: 'work-people-state',
+        CREATE_PDF_ANNOTATION: 'work-annotations-snapshot',
+        SET_PDF_ANNOTATION: 'work-annotations-snapshot',
+        DELETE_PDF_ANNOTATION: 'work-annotations-snapshot',
         CREATE_PERSON: 'person',
         DELETE_PERSON: 'person',
         /* Reached only through the Work branch below, which a Person-scoped
@@ -419,6 +429,10 @@
         root.prksOfflineMarkEntityChanged('work', op.entity_id);
         const projection = DISCARD_INVALIDATES[op.operation];
         if (projection) root.prksOfflineMarkEntityChanged(projection, op.entity_id);
+        if (root.PRKS_PDF_ANNOTATION_OPERATION_TYPES &&
+            root.PRKS_PDF_ANNOTATION_OPERATION_TYPES.indexOf(op.operation) !== -1) {
+            root.prksOfflineMarkEntityChanged('work-annotations-snapshot', op.entity_id);
+        }
     }
 
     /* Terminal refusals a durable result can carry, in the user's words. The

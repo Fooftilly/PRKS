@@ -130,7 +130,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertNotIn("acc[role].push(w)", read_branch)
         self.assertIn("prks-people-list__lifespan", people)
         self.assertNotIn("/api/persons/", people.split("function buildPersonListRowHtml", 1)[1].split("window.buildPersonListRowHtml", 1)[0])
-        self.assertIn("LATEST_SCHEMA_VERSION = 14", _read(_SCHEMA))
+        self.assertIn("LATEST_SCHEMA_VERSION = 15", _read(_SCHEMA))
 
     def test_docs(self):
         readme = _read(_README)

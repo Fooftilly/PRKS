@@ -8517,15 +8517,23 @@ textarea[data-prks-autosize="1"] {
 
 .document-view--work .work-annotation-sync-status {
     display: inline-flex;
-    align-items: center;
-    gap: var(--space-sm);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-xs);
     font-size: var(--text-2xs);
     line-height: var(--line-compact);
     color: var(--text-secondary);
+    max-width: min(22rem, 48vw);
+}
+
+.document-view--work .work-annotation-sync-status__label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
     white-space: nowrap;
 }
 
-.document-view--work .work-annotation-sync-status::before {
+.document-view--work .work-annotation-sync-status__label::before {
     content: '';
     width: 7px;
     height: 7px;
@@ -8538,18 +8546,43 @@ textarea[data-prks-autosize="1"] {
     display: none;
 }
 
-.document-view--work .work-annotation-sync-status--saving::before {
+.document-view--work .work-annotation-sync-status--saving .work-annotation-sync-status__label::before {
     background: var(--accent);
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
     animation: prks-ann-sync-pulse 1.2s ease-in-out infinite;
 }
 
-.document-view--work .work-annotation-sync-status--saved::before {
+.document-view--work .work-annotation-sync-status--saved .work-annotation-sync-status__label::before {
     background: var(--success);
 }
 
-.document-view--work .work-annotation-sync-status--error::before {
+.document-view--work .work-annotation-sync-status--error .work-annotation-sync-status__label::before {
     background: var(--danger);
+}
+
+.document-view--work .work-annotation-sync-status--conflict .work-annotation-sync-status__label::before {
+    background: var(--warning, #c47b1a);
+}
+
+.document-view--work .work-annotation-sync-status--local .work-annotation-sync-status__label::before,
+.document-view--work .work-annotation-sync-status--materializing .work-annotation-sync-status__label::before {
+    background: var(--accent);
+}
+
+.document-view--work .work-annotation-sync-status--offline .work-annotation-sync-status__label::before {
+    background: var(--text-tertiary);
+}
+
+.document-view--work .work-annotation-sync-status__conflict {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs);
+    white-space: normal;
+}
+
+.document-view--work .work-annotation-sync-status__conflict .prks-btn {
+    font-size: var(--text-2xs);
 }
 
 @keyframes prks-ann-sync-pulse {

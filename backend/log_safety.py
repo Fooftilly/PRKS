@@ -123,10 +123,21 @@ _NESTED_STATIC = {
             "roles",
             "thumbnail",
             "annotations",
+            "annotations-state",
+            "annotations-snapshot",
+            "pdf-materialization",
             "save-confirm",
             "related_folders",
             "pdf",
             "tags",
+            "opened",
+            "metadata-state",
+            "source-state",
+            "notes-state",
+            "people-state",
+            "tag-options",
+            "folder-state",
+            "playlist-state",
         }
     ),
     "playlists": frozenset({"items", "reorder"}),
@@ -144,6 +155,11 @@ _NESTED_ID_AFTER = {
     ("works", "tags"): ":id",
     ("playlists", "items"): ":id",
     ("folders", "tags"): ":id",
+}
+
+# Static action after a nested collection, e.g. /api/works/:id/annotations/adopt
+_NESTED_STATIC_TAIL = {
+    ("works", "annotations"): frozenset({"adopt"}),
 }
 
 _FIRST_PARTY_EXACT = frozenset(
@@ -365,6 +381,10 @@ def safe_route(path: str) -> str:
     nested_slot = _NESTED_ID_AFTER.get((family, rest[0]))
     if nested_slot is not None and len(rest) == 2:
         out.append(nested_slot)
+        return "/".join(out)
+    nested_tail = _NESTED_STATIC_TAIL.get((family, rest[0]))
+    if nested_tail is not None and len(rest) == 2 and rest[1] in nested_tail:
+        out.append(rest[1])
         return "/".join(out)
     return "/api/:unknown"
 

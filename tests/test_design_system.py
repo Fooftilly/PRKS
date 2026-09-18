@@ -348,18 +348,39 @@ class DesignSystemContractTests(unittest.TestCase):
 
     def test_annotation_sync_dots_use_semantic_tokens(self):
         css = _read(_CSS)
-        saved = css.split(".work-annotation-sync-status--saved::before {", 1)
+        saved = css.split(
+            ".work-annotation-sync-status--saved .work-annotation-sync-status__label::before {",
+            1,
+        )
         self.assertEqual(len(saved), 2)
         saved_body = saved[1].split("}", 1)[0]
         self.assertIn("var(--success)", saved_body)
         self.assertNotIn("#16a34a", saved_body)
-        err = css.split(".work-annotation-sync-status--error::before {", 1)
+        err = css.split(
+            ".work-annotation-sync-status--error .work-annotation-sync-status__label::before {",
+            1,
+        )
         self.assertEqual(len(err), 2)
         err_body = err[1].split("}", 1)[0]
         self.assertIn("var(--danger)", err_body)
         self.assertNotIn("#dc2626", err_body)
-        saving = css.split(".work-annotation-sync-status--saving::before {", 1)[1].split("}", 1)[0]
+        saving = css.split(
+            ".work-annotation-sync-status--saving .work-annotation-sync-status__label::before {",
+            1,
+        )[1].split("}", 1)[0]
         self.assertIn("var(--accent)", saving)
+        conflict = css.split(
+            ".work-annotation-sync-status--conflict .work-annotation-sync-status__label::before {",
+            1,
+        )
+        self.assertEqual(len(conflict), 2)
+        self.assertIn("var(--warning", conflict[1].split("}", 1)[0])
+        self.assertIn("Keep server", _read(os.path.join(_FRONTEND_JS, "components", "works-pdf.js")))
+        self.assertIn("Apply mine", _read(os.path.join(_FRONTEND_JS, "components", "works-pdf.js")))
+        self.assertIn("Saved locally", _read(os.path.join(_FRONTEND_JS, "components", "works-pdf.js")))
+        self.assertIn("Materialization pending", _read(os.path.join(_FRONTEND_JS, "components", "works-pdf.js")))
+        self.assertIn("Offline · editable", _read(os.path.join(_FRONTEND_JS, "components", "works-pdf.js")))
+        self.assertIn("Offline · read-only", _read(os.path.join(_FRONTEND_JS, "components", "works-pdf.js")))
 
     def test_easymde_toolbar_icons_use_lucide_not_font_awesome(self):
         works = _read(os.path.join(_FRONTEND_JS, "components", "works.js"))

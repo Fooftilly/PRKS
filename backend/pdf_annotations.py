@@ -122,6 +122,67 @@ def reconstruct_annotation(row: Any) -> dict:
     return item
 
 
+def round_trip_annotation(item: dict) -> dict:
+    """Normalize then reconstruct as if the annotation were stored and loaded.
+
+    Used by fidelity proofs: viewer → this → fresh viewer createAnnotation.
+    Drops row bookkeeping (`updated_at`) so the result is create-ready.
+    """
+    normalized = normalize_annotation(item)
+    reconstructed = reconstruct_annotation(
+        {
+            "id": normalized["id"],
+            "type": normalized["type"],
+            "content": normalized["content"],
+            "page_index": normalized["page_index"],
+            "color": normalized["color"],
+            "geometry_json": json.dumps(normalized["geometry"], allow_nan=False),
+            "updated_at": None,
+        }
+    )
+    reconstructed.pop("updated_at", None)
+    return reconstructed
+
+
+# Geometry keys that must survive recreate for PRKS-managed markup fidelity.
+_FIDELITY_GEOMETRY_KEYS = (
+    "rect",
+    "segmentRects",
+    "strokeColor",
+    "opacity",
+    "blendMode",
+    "custom",
+    "inkList",
+    "vertices",
+)
+
+
+def semantic_annotation_view(item: dict) -> dict:
+    """Stable, comparable view of one annotation for fidelity equality.
+
+    Compares canonical identity + PRKS-relevant geometry. Ignores viewer-only
+    bookkeeping (created timestamps, authors, engine-private keys).
+    """
+    normalized = normalize_annotation(item)
+    geom = normalized["geometry"]
+    view: dict[str, Any] = {
+        "id": normalized["id"],
+        "type": normalized["type"],
+        "content": normalized["content"],
+        "page_index": normalized["page_index"],
+        "color": normalized["color"],
+    }
+    for key in _FIDELITY_GEOMETRY_KEYS:
+        if key in geom:
+            view[key] = geom[key]
+    return view
+
+
+def annotations_semantically_equal(left: dict, right: dict) -> bool:
+    """True when two annotations match for PRKS-managed recreate fidelity."""
+    return semantic_annotation_view(left) == semantic_annotation_view(right)
+
+
 def _load_geometry(raw: Any) -> dict:
     if not raw:
         return {}

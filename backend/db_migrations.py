@@ -24,7 +24,7 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 14
+LATEST_SCHEMA_VERSION = 15
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
@@ -149,6 +149,8 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
         "last_opened_at",
         "created_at",
         "updated_at",
+        "canonical_annotation_set_revision",
+        "materialized_pdf_annotation_revision",
     ),
     "persons": (
         "id",
@@ -2031,6 +2033,20 @@ def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO sync_tag_lifecycle (tag_id, state) SELECT id, 'active' FROM tags")
 
 
+def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
+    """Annotation set vs materialized PDF generation tracking (Slice F)."""
+    if not column_exists(conn, "works", "canonical_annotation_set_revision"):
+        conn.execute(
+            "ALTER TABLE works ADD COLUMN canonical_annotation_set_revision "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+    if not column_exists(conn, "works", "materialized_pdf_annotation_revision"):
+        conn.execute(
+            "ALTER TABLE works ADD COLUMN materialized_pdf_annotation_revision "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 MIGRATIONS: Tuple[Migration, ...] = (
     Migration(
         target_version=10,
@@ -2053,6 +2069,11 @@ MIGRATIONS: Tuple[Migration, ...] = (
         apply=migrate_v12_to_v13,
     ),
     Migration(target_version=14, name="work_tag_sync", apply=migrate_v13_to_v14),
+    Migration(
+        target_version=15,
+        name="pdf_annotation_materialization",
+        apply=migrate_v14_to_v15,
+    ),
 )
 
 validate_migration_registry()

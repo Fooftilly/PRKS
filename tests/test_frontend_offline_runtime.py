@@ -393,10 +393,14 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Managed PDF save changes file_size_bytes and can add Mentioned roles.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
-        self.assertIn("prksOfflineMarkPeopleChanged()", pdf[pdf_at : pdf_at + 1800])
+        pdf_end = pdf.index("\n    async function restoreEffectiveViewerAnnotations(", pdf_at)
+        pdf_export = pdf[pdf_at:pdf_end]
+        self.assertIn("prksOfflineMarkPeopleChanged()", pdf_export)
         # ... but the separate annotations JSON save does not.
         ann_at = pdf.index("async function runWorkAnnotationAndPdfPersistencePass(")
-        ann_body = pdf[ann_at : ann_at + 2000]
+        ann_end = pdf.index("\n    // PRKS may go offline mid-confirmation-loop", ann_at)
+        ann_body = pdf[ann_at:ann_end]
+        self.assertIn("/annotations", ann_body)
         self.assertNotIn("prksOfflineMarkPeopleChanged", ann_body.split("/annotations")[1])
         # Work creation can create role links in the same canonical request.
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
@@ -429,12 +433,14 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # The managed PDF save owns it; the separate annotations JSON save does not.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         pdf_at = pdf.index("async function exportAndPersistPdfCopy(")
-        pdf_body = pdf[pdf_at : pdf_at + 1800]
+        pdf_end = pdf.index("\n    async function restoreEffectiveViewerAnnotations(", pdf_at)
+        pdf_body = pdf[pdf_at:pdf_end]
         self.assertIn("prksOfflineMarkPersonGroupsChanged()", pdf_body)
         # ... and only after the canonical response was acknowledged.
         self.assertLess(pdf_body.index("if (!pdfRes.ok)"), pdf_body.index("PersonGroups"))
         ann_at = pdf.index("async function runWorkAnnotationAndPdfPersistencePass(")
-        ann_body = pdf[ann_at : ann_at + 2000]
+        ann_end = pdf.index("\n    // PRKS may go offline mid-confirmation-loop", ann_at)
+        ann_body = pdf[ann_at:ann_end]
         self.assertNotIn("PersonGroups", ann_body.split("/annotations")[1])
         # Work creation can link roles without ever calling POST /api/roles.
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))

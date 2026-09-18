@@ -330,13 +330,13 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         works = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         self.assertIn("onAnnotationCommentRequest", works)
         self.assertNotIn("onAnnotationSelect:", works)
-        # initialPage now flows from lastPage.initialPage through the shared
-        # prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, mode)
-        # helper (used for both initial mount and offline/online mode
-        # rebuilds), rather than being read inline at the createPrksPdfViewer
-        # call site.
-        self.assertIn("lastPage.initialPage, prksPdfDesiredMode()", works)
+        # initialPage flows from lastPage.initialPage through the shared
+        # prksMountPdfViewer helper. Initial Work mount starts in 'preview';
+        # live capability then reconciles via prksPdfDesiredMode / setMutationEnabled
+        # (see test_mount_reconciles_stale_desired_mode_before_publishing).
+        self.assertIn("lastPage.initialPage, 'preview'", works)
         self.assertIn("initialPage: initialPage,", works)
+        self.assertIn("prksPdfDesiredMode(runtime)", works)
         self.assertIn("if (!alive) return", works)
         self.assertIn("document.visibilityState === 'hidden'", works)
         self.assertIn("onLayoutReady", _read(_VIEWER_SRC))

@@ -139,8 +139,8 @@ class AffectedMappingTests(unittest.TestCase):
         rule, feats, skip, _note = policy.match_affected_path(
             "frontend/js/components/works-pdf.js"
         )
-        self.assertEqual(rule, "work-detail")
-        self.assertEqual(feats, ("work-detail",))
+        self.assertEqual(rule, "pdf-annotations")
+        self.assertEqual(feats, ("pdf-annotations",))
         self.assertFalse(skip)
         stale_rule, stale_feats, stale_skip, _ = policy.match_affected_path(
             "frontend/js/works-pdf.js"
@@ -158,7 +158,8 @@ class AffectedMappingTests(unittest.TestCase):
             ("backend/position_sync.py", "positions", ("positions", "graph")),
             ("backend/playlist_sync.py", "playlists", ("playlists",)),
             ("backend/work_note_sync.py", "notes", ("notes",)),
-            ("backend/pdf_annotations.py", "work-detail", ("work-detail",)),
+            ("backend/pdf_annotations.py", "pdf-annotations", ("pdf-annotations",)),
+            ("backend/pdf_annotation_sync.py", "pdf-annotations", ("pdf-annotations",)),
             ("backend/work_lifecycle_sync.py", "work-lifecycle", ("offline", "folders", "sync")),
             ("backend/work_tag_sync.py", "sync-families", ("sync", "offline")),
         )
@@ -176,6 +177,7 @@ class AffectedMappingTests(unittest.TestCase):
             ("frontend/js/person-state.js", "people"),
             ("frontend/js/argument-state.js", "arguments"),
             ("frontend/js/work-notes-state.js", "notes"),
+            ("frontend/js/pdf-annotation-state.js", "pdf-annotations"),
             ("frontend/js/work-lifecycle-state.js", "work-lifecycle"),
             ("frontend/js/workspace-overview.js", "workspace-overview"),
             ("frontend/js/overview-primitives.js", "workspace-overview"),

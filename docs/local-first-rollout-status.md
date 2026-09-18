@@ -30,6 +30,7 @@ projection, and is proven by focused E2E coverage.
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
 | Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; detail page offers Delete playlist |
 | Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph when the body changed or the revision advanced past the observed base; Private ACK does not |
+| PDF annotations | `CREATE_PDF_ANNOTATION`, `SET_PDF_ANNOTATION`, `DELETE_PDF_ANNOTATION` | per-annotation aggregate on already-available PDFs; PDF bytes never in the durable queue; offline edits require cached `prks-pdf-v1` bytes + acknowledged annotation base + durable store; materialization may lag (`ANNOTATION_MATERIALIZATION_STALE`) |
 
 ## What one overnight pass added
 
@@ -73,11 +74,9 @@ the server — not a claim that the rest of PRKS is read-only offline.
   from the disposable cache, quota failure, browser-restart recovery, ownership
   and lifetime, large-file behaviour, acknowledgement, cleanup after ACK or
   discard, and duplicate/retry semantics. Until that design exists, this is an
-  intentional binary boundary rather than an oversight.
-* **PDF annotation edits.** Online flush pairs metadata replace with managed-PDF
-  byte overwrite. Metadata-only durable ops without a byte strategy would
-  desync canvas and sidebar. Escalation:
-  Project `internal/pdf-annotations-escalation.md`. Preview-from-cache remains.
+  intentional binary boundary rather than an oversight. Annotation *metadata*
+  on a PDF that is already on this device is durable (see table above); only
+  bringing a new PDF binary into the library stays connection-required.
 * **Saved Views and global Search.** Live execute is `/api/search` (FTS, tags,
   PDF text index). Offline routes refuse explicitly; CRUD is guarded. Do not
   approximate search over browse cards.

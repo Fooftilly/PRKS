@@ -23,36 +23,46 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
     def test_file_exists(self):
         self.assertTrue(os.path.isfile(_WORKS_PDF))
 
-    def test_viewer_mode_is_never_hardcoded_to_work(self):
+    def test_viewer_mode_follows_capability_not_connectivity_alone(self):
         src = _read(_WORKS_PDF)
-        # The only two modes this integration ever passes to the vendor
-        # viewer are 'work' and 'preview', decided by prksPdfDesiredMode() --
-        # never a hardcoded mode: 'work' literal that would ignore current
-        # connectivity.
+        # Modes are still only 'work' / 'preview', but Slice E decides via
+        # resolved annotationMutationAllowed on the runtime — not solely
+        # prksOfflineRuntimeState().
         self.assertNotIn("mode: 'work',", src)
         self.assertNotIn('mode: "work",', src)
-        self.assertIn("function prksPdfDesiredMode()", src)
-        self.assertIn("prksOfflineRuntimeState() !== 'online' ? 'preview' : 'work'", src)
+        self.assertIn("function prksPdfDesiredMode(runtime)", src)
+        self.assertIn("annotationMutationAllowed === true", src)
+        self.assertIn("prksResolvePdfAnnotationMutationCapability", src)
+        self.assertIn("prksApplyPdfAnnotationCapability", src)
+        body = src.split("function prksPdfDesiredMode")[1].split("async function prksApplyPdfAnnotationCapability")[0]
+        allowed_at = body.index("annotationMutationAllowed === true")
+        fallback_at = body.index("prksOfflineRuntimeState()")
+        self.assertLess(allowed_at, fallback_at)
 
     def test_initial_mount_uses_desired_mode(self):
         src = _read(_WORKS_PDF)
         init_start = src.index("export function initPdfViewerForWork")
         init_body = src[init_start : init_start + 3000]
-        self.assertIn("prksPdfDesiredMode()", init_body)
-        self.assertIn("prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, prksPdfDesiredMode())", init_body)
+        # Always start EmbedPDF in preview; capability + durable bridge enable
+        # mutations only after hydrate (never mutation-capable during startup).
+        self.assertIn(
+            "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, 'preview')",
+            init_body,
+        )
+        self.assertIn("annotationDurableBridgeReady = false", src)
 
     def test_annotation_persistence_only_installed_in_work_mode(self):
         src = _read(_WORKS_PDF)
         mount_start = src.index("async function prksMountPdfViewer")
         mount_end = src.index("export function initPdfViewerForWork")
         mount_body = src[mount_start:mount_end]
-        self.assertIn("if (desired === 'work') {", mount_body)
+        # Durable startup may install hydrate/bridge while still preview
+        # (online_awaiting_base / *_awaiting_bridge); legacy stays work-only.
+        self.assertIn("needsPersistenceSetup", mount_body)
+        self.assertIn("online_awaiting_base", mount_body)
         self.assertIn(
             "prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)", mount_body
         )
-        idx = mount_body.index("prksEnsureAnnotationPersistence(ctx, runtime, work.id, viewer, setupToken)")
-        preceding = mount_body[:idx]
-        self.assertIn("if (desired === 'work') {", preceding[-120:])
 
     def test_mount_reconciles_stale_desired_mode_before_publishing(self):
         """A viewer that began mounting for a stale `mode` (connectivity
@@ -63,7 +73,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         mount_start = src.index("async function prksMountPdfViewer")
         mount_end = src.index("export function initPdfViewerForWork")
         mount_body = src[mount_start:mount_end]
-        self.assertIn("const desired = prksPdfDesiredMode();", mount_body)
+        self.assertIn("const desired = prksPdfDesiredMode(runtime);", mount_body)
         self.assertIn("if (desired !== mode", mount_body)
         self.assertIn("viewer.setMutationEnabled(desired === 'work');", mount_body)
         # The reconciliation happens before runtime.mode is set to the
@@ -74,7 +84,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         # Never destroy/recreate the just-created viewer merely because its
         # starting mode was stale.
         after_await = mount_body[mount_body.index("const viewer = await createPrksPdfViewer") :]
-        stale_reconcile_region = after_await[after_await.index("const desired = prksPdfDesiredMode();") :]
+        stale_reconcile_region = after_await[after_await.index("const desired = prksPdfDesiredMode(runtime);") :]
         self.assertNotIn("viewer.destroy()", stale_reconcile_region[:400])
 
     def test_connectivity_reconcile_never_destroys_the_viewer(self):
@@ -104,10 +114,12 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_subscriber_reconciles_every_live_pdf_runtime(self):
         src = _read(_WORKS_PDF)
-        sub_start = src.index("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
-        sub_body = src[sub_start : sub_start + 500]
+        # Shell-level subscriber is the last prksOfflineRuntimeSubscribe block.
+        sub_start = src.rindex("if (typeof prksOfflineRuntimeSubscribe === 'function') {")
+        sub_body = src[sub_start:]
         self.assertIn("prksForEachLiveTabContext(function (ctx) {", sub_body)
-        self.assertIn("prksReconcilePdfMutationMode(ctx, runtime)", sub_body)
+        self.assertIn("prksApplyPdfAnnotationCapability(ctx, runtime", sub_body)
+        self.assertIn("annotationDurableBridgeReady", sub_body)
 
     def test_ensure_annotation_persistence_installs_at_most_once(self):
         src = _read(_WORKS_PDF)
@@ -163,21 +175,92 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)
+        self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)
+        self.assertIn("annotationMutationAllowed === false", src)
         for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
             at = src.index(fn_name)
-            snippet = src[at : at + 300]
-            self.assertIn("prksOfflineGuardMutation", snippet, "%s must guard before any mutation" % fn_name)
+            snippet = src[at : at + 2500]
+            self.assertIn(
+                "prksPdfUserMutationStillAllowed",
+                snippet,
+                "%s must check capability" % fn_name,
+            )
+            self.assertIn("prksOfflineGuardMutation", snippet, "%s must retain legacy online guard" % fn_name)
 
     def test_sidebar_row_delete_is_guarded(self):
         src = _read(_WORKS_PDF)
         at = src.index(".annotation-row__delete")
-        snippet = src[at : at + 400]
+        handler_at = src.index("annotation-row__delete", at + 1)
+        snippet = src[handler_at : handler_at + 2500]
+        self.assertIn("prksPdfUserMutationStillAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
     def test_vendor_handle_exposes_set_mutation_enabled(self):
         types_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "types.ts")
         src = _read(types_path)
         self.assertIn("setMutationEnabled(enabled: boolean): void;", src)
+
+    def test_vendor_handle_exposes_programmatic_annotation_mutation(self):
+        """User-input lock must not block reconcile create/update/delete."""
+        types_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "types.ts")
+        src = _read(types_path)
+        self.assertIn("beginProgrammaticAnnotationMutation(): void;", src)
+        self.assertIn("endProgrammaticAnnotationMutation(): void;", src)
+        viewer_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "viewer.tsx")
+        viewer = _read(viewer_path)
+        self.assertIn("allowsAnnotationMutation()", viewer)
+        self.assertIn("controller.setUserMutationEnabled(enabled)", viewer)
+        # Markup tools are user-only — programmatic depth must not authorize them.
+        act_at = viewer.index("activateMarkupTool: (tool) => {")
+        act_body = viewer[act_at:act_at + 280]
+        self.assertIn("allowsUserAnnotationMutation()", act_body)
+        self.assertNotIn("allowsAnnotationMutation()", act_body)
+        controller = _read(os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "controller.ts"))
+        self.assertIn("setUserMutationEnabled", controller)
+        self.assertIn("allowsAnnotationMutation()", controller)
+        # Synchronous gate: setUserMutationEnabled before React mode flip.
+        start = viewer.index("handle.setMutationEnabled = (enabled: boolean) => {")
+        end = viewer.index("\n    };", start)
+        body = viewer[start:end]
+        self.assertLess(
+            body.index("controller.setUserMutationEnabled(enabled)"),
+            body.index("currentMode = nextMode;"),
+        )
+        reconcile = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "pdf-annotation-reconcile.js"))
+        self.assertIn("beginProgrammaticAnnotationMutation", reconcile)
+        self.assertIn("endProgrammaticAnnotationMutation", reconcile)
+
+    def test_sidebar_delete_waits_out_materialization_not_programmatic(self):
+        """User Delete/comment confirm first; wait+capability before the mutation."""
+        works = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "works-pdf.js"))
+        self.assertIn("prksWaitOutAnnotationMaterialization", works)
+        self.assertIn("prksPdfUserMutationStillAllowed", works)
+        self.assertIn("_annotationMaterializationHandoff", works)
+        del_at = works.index("window.deletePdfAnnotationFromEditor")
+        del_body = works[del_at:del_at + 2200]
+        # Confirm opens before waiting out materialization so Cancel is not
+        # stranded behind a long critical section; wait then capability before
+        # the viewer delete.
+        confirm_at = del_body.index("prksConfirmDeletePdfAnnotation")
+        wait_at = del_body.index("await prksWaitOutAnnotationMaterialization")
+        check_at = del_body.index("prksPdfUserMutationStillAllowed", wait_at)
+        self.assertLess(confirm_at, wait_at)
+        self.assertLess(wait_at, check_at)
+        self.assertNotIn("prksViewerProgrammaticDelete", del_body)
+        save_at = works.index("window.savePdfAnnotationComment")
+        save_body = works[save_at:save_at + 2200]
+        save_wait = save_body.index("await prksWaitOutAnnotationMaterialization")
+        save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
+        self.assertLess(save_wait, save_check)
+        self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
+        # Sidebar row Delete: confirm first, then wait before capability refuse.
+        row_at = works.index(".annotation-row__delete")
+        row_body = works[row_at:row_at + 2400]
+        row_confirm = row_body.index("prksConfirmDeletePdfAnnotation")
+        row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
+        row_check = row_body.index("prksPdfUserMutationStillAllowed", row_wait)
+        self.assertLess(row_confirm, row_wait)
+        self.assertLess(row_wait, row_check)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation
@@ -200,8 +283,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(viewer_path)
         for fn in ("undo: () => {", "redo: () => {"):
             at = src.index(fn)
-            snippet = src[at : at + 150]
-            self.assertIn("if (mode !== 'work') return;", snippet)
+            snippet = src[at : at + 180]
+            self.assertIn("allowsUserAnnotationMutation()", snippet)
 
     def test_setup_annotation_persistence_has_setup_time_eligibility_gate(self):
         """AGENTS.md 'persistence setup cannot install an active worker after
@@ -218,7 +301,14 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)", body)
         self.assertIn("function abandonSetup()", body)
         self.assertIn("runtime._persistenceSetupStarted = false;", body)
-        self.assertNotIn(".destroy()", body)
+        # Abandon must reset the started flag without destroying the viewer.
+        # COW remount helpers nested later in this setup may call .destroy()
+        # intentionally; that is not an abandon/eligibility path.
+        abandon_at = body.index("function abandonSetup()")
+        abandon_end = body.index("\n    function ", abandon_at + 1)
+        abandon_body = body[abandon_at:abandon_end]
+        self.assertIn("runtime._persistenceSetupStarted = false;", abandon_body)
+        self.assertNotIn(".destroy()", abandon_body)
         # Gate immediately before the actual install call.
         install_idx = body.index("prksInstallPdfAnnotationPersistenceIfCurrent(ctx, generation, runtime, viewer, setupToken")
         preceding = body[:install_idx]
@@ -228,11 +318,15 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_PDF_RUNTIME)
         self.assertIn("function prksPdfPersistenceSetupEligible(ctx, generation, runtime, viewer, setupToken)", src)
         start = src.index("function prksPdfPersistenceSetupEligible")
-        end = src.index("\n    }\n", start)
+        end = src.index("function createPdfAnnotationPersistenceWorker", start)
         body = src[start:end]
         self.assertIn("prksPdfPersistenceStillLive(ctx, generation, runtime, viewer, setupToken)", body)
         self.assertIn("runtime.mode !== 'work'", body)
         self.assertIn("prksOfflineRuntimeState", body)
+        # Durable hydrate may run while mode is still preview.
+        self.assertIn("online_awaiting_base", body)
+        self.assertIn("online_awaiting_bridge", body)
+        self.assertIn("annotationMutationDurable === true", body)
 
     def test_confirm_persisted_token_stops_when_worker_paused(self):
         src = _read(_WORKS_PDF)

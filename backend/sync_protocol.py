@@ -187,9 +187,10 @@ def process_operation(db, data):
 # is readable in one place. Handler modules import nothing from this one.
 from backend import (  # noqa: E402
     argument_sync, concept_sync, folder_sync, folder_tag_sync, person_group_sync,
-    person_metadata_sync, person_sync, playlist_sync, position_sync, tag_sync,
-    work_lifecycle_sync, work_metadata_sync, work_note_sync, work_open_sync,
-    work_role_sync, work_source_sync, work_tag_sync,
+    person_metadata_sync, person_sync, pdf_annotation_sync, playlist_sync,
+    position_sync, tag_sync, work_lifecycle_sync, work_metadata_sync,
+    work_note_sync, work_open_sync, work_role_sync, work_source_sync,
+    work_tag_sync,
 )
 
 # The Tag VOCABULARY, as opposed to the Work-Tag relationship below. Two
@@ -290,3 +291,8 @@ register("DELETE_ARGUMENT", argument_sync.DELETE_HANDLER, entity_type="argument"
 # Private Notes never do.
 register("SET_WORK_RESEARCH_NOTE", work_note_sync.HANDLER)
 register("SET_WORK_PRIVATE_NOTE", work_note_sync.HANDLER)
+# PDF annotations: one revisioned aggregate per annotation under a Work.
+# PDF bytes are never in these operations — see pdf_annotation_sync.
+register("CREATE_PDF_ANNOTATION", pdf_annotation_sync.CREATE_HANDLER)
+register("SET_PDF_ANNOTATION", pdf_annotation_sync.SET_HANDLER)
+register("DELETE_PDF_ANNOTATION", pdf_annotation_sync.DELETE_HANDLER)

@@ -167,6 +167,19 @@ function prksHideModalConfirm() {
     prksModalConfirmOpener = null;
     if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
         opener.focus();
+    } else if (
+        opener &&
+        opener.classList &&
+        opener.classList.contains('annotation-row__delete')
+    ) {
+        // Sidebar may have been repainted (e.g. materialization restore) while
+        // the dialog was open — focus an equivalent Delete control if present.
+        const replacement = document.querySelector(
+            '#annotation-fallback-list .annotation-row__delete'
+        );
+        if (replacement && typeof replacement.focus === 'function') {
+            replacement.focus();
+        }
     }
 }
 

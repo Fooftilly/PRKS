@@ -22,10 +22,13 @@ from backend.entity_ids import generate as generate_entity_id, is_distributed
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.pdf_annotations import (
     WorkAnnotationError,
+    annotations_semantically_equal,
     normalize_annotation_list,
     parse_annotations_json,
     reconstruct_annotation,
+    round_trip_annotation,
 )
+from backend import pdf_annotation_sync
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.performance import (
     classify_sql_write,
@@ -2817,19 +2820,90 @@ class PRKSDatabase:
         )
         return json.dumps([reconstruct_annotation(row) for row in res])
 
-    def save_work_annotations(self, work_id: str, annotations_json: str):
-        """Parse the submitted JSON list and replace canonical annotations only."""
-        items = parse_annotations_json(annotations_json)
-        self.sync_work_annotations(work_id, items)
+    def get_work_annotations_state(self, work_id: str):
+        """Per-annotation sync revisions for one Work (durable-client hydration)."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return pdf_annotation_sync.get_annotations_state_on_conn(conn, work_id)
 
-    def sync_work_annotations(self, work_id: str, items: List[dict]):
-        """Replace one Work's canonical annotations in a single transaction.
+    def get_work_annotations_snapshot(self, work_id: str):
+        """Coherent annotation items + revisions + materialization from one txn."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return pdf_annotation_sync.get_annotations_snapshot_on_conn(conn, work_id)
 
-        Validates the complete incoming list before any delete/update/insert.
+    def get_work_pdf_materialization(self, work_id: str):
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            return pdf_materialization.get_materialization_on_conn(conn, work_id)
+
+    def mark_work_pdf_materialized(self, work_id: str, *, at_revision=None):
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rev = pdf_materialization.mark_pdf_materialized_on_conn(
+                conn, work_id, at_revision=at_revision
+            )
+            conn.commit()
+            return rev
+
+    def accept_work_pdf_materialization_claim(self, work_id: str, claimed_revision):
+        """Validate a durable materialization claim under BEGIN IMMEDIATE.
+
+        Raises LookupError / ValueError(ANNOTATION_MATERIALIZATION_STALE).
+        Returns the accepted canonical generation.
         """
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                accepted = pdf_materialization.accept_materialization_revision_on_conn(
+                    conn, work_id, claimed_revision
+                )
+                conn.commit()
+                return accepted
+            except Exception:
+                conn.rollback()
+                raise
+
+    def mark_work_pdf_materialized_if_claim_current(self, work_id: str, claimed_revision):
+        """Re-validate claim then mark materialized in one IMMEDIATE transaction."""
+        from backend import pdf_materialization
+
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                accepted = pdf_materialization.accept_materialization_revision_on_conn(
+                    conn, work_id, claimed_revision
+                )
+                rev = pdf_materialization.mark_pdf_materialized_on_conn(
+                    conn, work_id, at_revision=accepted
+                )
+                conn.commit()
+                return rev
+            except Exception:
+                conn.rollback()
+                raise
+
+    def adopt_byte_only_user_markup(self, work_id: str, viewer_items):
+        """Insert canonical rows for viewer user markup missing from metadata.
+
+        Does not delete metadata-only rows and never adopts Links/widgets.
+        """
+        from backend import pdf_annotation_adopt
+
         with self.connection() as conn:
             try:
-                self._sync_work_annotations_on_conn(conn, work_id, items)
+                conn.execute("BEGIN IMMEDIATE")
+                result = pdf_annotation_adopt.adopt_byte_only_user_markup_on_conn(
+                    conn, work_id, viewer_items
+                )
+                conn.commit()
+                return result
             except sqlite3.IntegrityError as exc:
                 raise WorkAnnotationError(
                     "annotation_id_conflict",
@@ -2837,13 +2911,97 @@ class PRKSDatabase:
                     409,
                 ) from exc
 
-    def _sync_work_annotations_on_conn(self, conn, work_id: str, items: List[dict]) -> None:
+    def save_work_annotations(
+        self,
+        work_id: str,
+        annotations_json: str,
+        *,
+        base_set_revision: Any = None,
+    ):
+        """Compat full-list replace (legacy online path only).
+
+        Durable clients use CREATE/SET/DELETE_PDF_ANNOTATION. This replace path
+        remains for temporary online-legacy support when the durable store is
+        unavailable; it must not become a second product write path.
+
+        ``base_set_revision`` is the viewer's acknowledged canonical annotation
+        set revision. When provided, a mismatch with the current tip refuses the
+        replace (``ANNOTATION_SET_STALE``) before any update/delete. Omit only
+        for internal callers that already serialized against the tip; the HTTP
+        adapter always passes the client value.
+
+        Returns the canonical annotation-set revision after the replace (the
+        generation this replacement produced, or the unchanged tip when the
+        list was identical).
+        """
+        items = parse_annotations_json(annotations_json)
+        return self.sync_work_annotations(
+            work_id, items, base_set_revision=base_set_revision
+        )
+
+    def sync_work_annotations(
+        self,
+        work_id: str,
+        items: List[dict],
+        *,
+        base_set_revision: Any = None,
+    ) -> int:
+        """Replace one Work's canonical annotations in a single transaction.
+
+        Validates the complete incoming list before any delete/update/insert.
+        Prefer per-annotation sync ops for product writes; full-list replace is
+        compat/legacy only.
+
+        Returns the canonical annotation-set revision after the replace.
+        """
+        with self.connection() as conn:
+            try:
+                return self._sync_work_annotations_on_conn(
+                    conn, work_id, items, base_set_revision=base_set_revision
+                )
+            except sqlite3.IntegrityError as exc:
+                raise WorkAnnotationError(
+                    "annotation_id_conflict",
+                    "Annotation ID belongs to another Work.",
+                    409,
+                ) from exc
+
+    def _sync_work_annotations_on_conn(
+        self,
+        conn,
+        work_id: str,
+        items: List[dict],
+        *,
+        base_set_revision: Any = None,
+    ) -> int:
         exists = conn.execute(
             "SELECT id FROM works WHERE id = ?",
             (work_id,),
         ).fetchone()
         if not exists:
             raise WorkAnnotationError("work_not_found", "Work not found.", 404)
+
+        from backend import pdf_materialization
+
+        mat = pdf_materialization.get_materialization_on_conn(conn, work_id)
+        current_set_rev = (
+            int(mat["canonical_annotation_set_revision"]) if mat else 0
+        )
+        if base_set_revision is not None:
+            try:
+                base = int(base_set_revision)
+            except (TypeError, ValueError) as exc:
+                raise WorkAnnotationError(
+                    "malformed_annotation_payload",
+                    "canonical_annotation_set_revision must be an integer.",
+                    400,
+                ) from exc
+            if base != current_set_rev:
+                raise WorkAnnotationError(
+                    "ANNOTATION_SET_STALE",
+                    "Annotation set revision is stale.",
+                    409,
+                )
 
         normalized = normalize_annotation_list(items)
         incoming_ids = [row["id"] for row in normalized]
@@ -2862,15 +3020,20 @@ class PRKSDatabase:
                         409,
                     )
 
-        current_ids = {
-            row["id"]
+        current_rows = {
+            row["id"]: row
             for row in conn.execute(
-                "SELECT id FROM annotations WHERE work_id = ?",
+                """
+                SELECT id, type, content, page_index, color, geometry_json, updated_at
+                FROM annotations WHERE work_id = ?
+                """,
                 (work_id,),
             ).fetchall()
         }
+        current_ids = set(current_rows)
         incoming_set = {row["id"] for row in normalized}
 
+        any_set_changed = False
         for row in normalized:
             geom = json.dumps(row["geometry"], allow_nan=False)
             params = (
@@ -2880,17 +3043,48 @@ class PRKSDatabase:
                 row["color"],
                 geom,
             )
+            desired = round_trip_annotation(
+                {
+                    "id": row["id"],
+                    "type": row["type"],
+                    "contents": row["content"],
+                    "pageIndex": row["page_index"],
+                    "color": row["color"],
+                    **row["geometry"],
+                }
+            )
             if row["id"] in current_ids:
-                conn.execute(
-                    """
-                    UPDATE annotations SET
-                        type = ?, content = ?, page_index = ?, color = ?,
-                        geometry_json = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND work_id = ?
-                    """,
-                    params + (row["id"], work_id),
-                )
+                before = reconstruct_annotation(current_rows[row["id"]])
+                changed = not annotations_semantically_equal(before, desired)
+                if changed:
+                    any_set_changed = True
+                    conn.execute(
+                        """
+                        UPDATE annotations SET
+                            type = ?, content = ?, page_index = ?, color = ?,
+                            geometry_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND work_id = ?
+                        """,
+                        params + (row["id"], work_id),
+                    )
+                    pdf_annotation_sync.advance_revision_if_changed_on_conn(
+                        conn, work_id, row["id"], changed=True
+                    )
             else:
+                # Mirror CREATE_PDF_ANNOTATION: a prior durable DELETE (or any
+                # mutation) leaves revision > 0 — never reinsert that id via
+                # full-list replace.
+                prior_rev = pdf_annotation_sync.get_revision(
+                    conn, work_id, row["id"]
+                )
+                if prior_rev > 0:
+                    raise WorkAnnotationError(
+                        "ANNOTATION_ID_REUSED",
+                        "Annotation ID was previously used and cannot be reinserted.",
+                        409,
+                    )
+                any_set_changed = True
+                # Construction: insert without advancing (revision stays 0).
                 conn.execute(
                     """
                     INSERT INTO annotations
@@ -2901,12 +3095,20 @@ class PRKSDatabase:
                 )
 
         to_delete = current_ids - incoming_set
-        if to_delete:
-            placeholders = ",".join("?" * len(to_delete))
+        for ann_id in sorted(to_delete):
+            any_set_changed = True
             conn.execute(
-                f"DELETE FROM annotations WHERE work_id = ? AND id IN ({placeholders})",
-                (work_id, *to_delete),
+                "DELETE FROM annotations WHERE work_id = ? AND id = ?",
+                (work_id, ann_id),
             )
+            pdf_annotation_sync.advance_revision_if_changed_on_conn(
+                conn, work_id, ann_id, changed=True
+            )
+        if any_set_changed:
+            return pdf_materialization.bump_canonical_annotation_set_on_conn(
+                conn, work_id
+            )
+        return current_set_rev
 
     def resolve_wiki_links(self, text: str) -> str:
         if not text: return ""
