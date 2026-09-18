@@ -32,6 +32,17 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_materialization_handoff_selftests(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_handoff_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_the_family_is_registered_everywhere_it_must_be(self):
         families = (
             "CREATE_PDF_ANNOTATION",
@@ -114,9 +125,9 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("scheduleCatchUpProjectionRetry", catch_up_body)
         self.assertIn("prksBeginAnnotationMaterializationGate", catch_up_body)
         self.assertIn("prksEndAnnotationMaterializationGate", catch_up_body)
-        # Catch-up finally ends its own gate; unlock only when projectionReady.
-        # requestFlush('materialize') must run AFTER the catch-up gate is released
-        # (independent materialization gate — no overlap).
+        # Catch-up finally ends its own gate. When shouldMaterialize, it must
+        # begin a handoff block and MUST NOT re-enable user mutation / await
+        # capability before releasing the gate (no unlocked interval).
         finally_at = catch_up_body.rindex("} finally {")
         finally_end = catch_up_body.index(
             "// Independent materialization gate", finally_at
@@ -125,7 +136,18 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksEndAnnotationMaterializationGate(runtime)", catch_up_finally)
         self.assertIn("projectionReady", catch_up_finally)
         self.assertIn("scheduleCatchUpProjectionRetry", catch_up_finally)
+        self.assertIn("prksBeginMaterializationHandoff(runtime)", catch_up_finally)
+        self.assertIn("shouldMaterialize", catch_up_finally)
         self.assertNotIn("void requestFlush('materialize')", catch_up_finally)
+        handoff_branch = catch_up_finally[
+            catch_up_finally.index("if (shouldMaterialize && stillLive())") : catch_up_finally.index(
+                "} else if (projectionReady"
+            )
+        ]
+        self.assertIn("prksBeginMaterializationHandoff", handoff_branch)
+        self.assertIn("setMutationEnabled(false)", handoff_branch)
+        self.assertNotIn("setMutationEnabled(runtime.mode === 'work')", handoff_branch)
+        self.assertNotIn("prksApplyPdfAnnotationCapability", handoff_branch)
         try_end = catch_up_body.index("} catch (_eCatchUp)")
         try_body = catch_up_body[:try_end]
         self.assertNotIn("void requestFlush('materialize')", try_body)
@@ -164,24 +186,38 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksPdfUserMutationStillAllowed", del_body[wait_at:])
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
-        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 7500]
-        self.assertIn("if (!prksBeginAnnotationMaterializationGate(runtime)) return;", mat_pass)
+        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 9000]
+        self.assertIn("if (!prksBeginAnnotationMaterializationGate(runtime))", mat_pass)
         self.assertIn("_annotationDurableWriteChain", mat_pass)
         self.assertIn("setMutationEnabled(false)", mat_pass)
         self.assertIn("restoreEffectiveViewerAnnotations", mat_pass)
         self.assertIn("await window.prksReconcileViewerAnnotations(viewer, ackOnly", mat_pass)
         self.assertNotIn("catch (_eRec)", mat_pass)
-        # Gate released only after restore + unlock (not before).
+        # Materialization finally: clear handoff + enable + end gate synchronously
+        # (no await after enabling controller mutation before gate ends).
+        self.assertIn("prksClearMaterializationHandoff(runtime)", mat_pass)
         self.assertIn("prksEndAnnotationMaterializationGate", mat_pass)
         end_gate_at = mat_pass.rindex("prksEndAnnotationMaterializationGate")
         restore_at = mat_pass.index("restoreEffectiveViewerAnnotations")
-        unlock_at = mat_pass.index("viewer.setMutationEnabled(runtime.mode === 'work')")
+        clear_handoff_at = mat_pass.index("prksClearMaterializationHandoff(runtime)")
+        unlock_at = mat_pass.index("viewer.setMutationEnabled(unlockToWork)")
         self.assertLess(restore_at, end_gate_at)
+        self.assertLess(clear_handoff_at, unlock_at)
         self.assertLess(unlock_at, end_gate_at)
         self.assertGreater(end_gate_at, mat_pass.index("finally {"))
-        # Capability helper respects catch-up projection block.
+        mat_finally = mat_pass[mat_pass.rindex("} finally {") : end_gate_at + 80]
+        # No await between enabling user mutation and ending the gate.
+        enable_at = mat_finally.index("viewer.setMutationEnabled(unlockToWork)")
+        gate_end_at = mat_finally.index("prksEndAnnotationMaterializationGate")
+        between = mat_finally[enable_at:gate_end_at]
+        self.assertNotIn("await ", between)
+        # Capability helper respects catch-up projection + handoff blocks.
         self.assertIn("catch_up_projection_pending", works_pdf)
+        self.assertIn("materialization_handoff", works_pdf)
         self.assertIn("_annotationCatchUpBlocksMutation", works_pdf)
+        self.assertIn("_annotationMaterializationHandoff", works_pdf)
+        self.assertIn("prksBeginMaterializationHandoff", works_pdf)
+        self.assertIn("prksClearMaterializationHandoff", works_pdf)
         # Real write-chain serializer: enqueue write fn, do not start early.
         self.assertIn("function enqueueDurableAnnotationWrite", works_pdf)
         self.assertIn("enqueueDurableAnnotationWrite(async function", works_pdf)
@@ -207,9 +243,11 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("Do NOT materialize PDF bytes here", save_tail)
         self.assertNotIn("requestFlush('materialize')", save_tail)
         self.assertNotIn("pendingMaterializationRevision =", save_tail)
-        # Materialization flush lives only inside coherent catch-up, after gate release.
+        # Materialization flush from catch-up after gate release (plus optional
+        # handoff-retry flush if gate acquire fails — same string).
         only_flush = works_pdf.count("void requestFlush('materialize')")
-        self.assertEqual(only_flush, 1)
+        self.assertGreaterEqual(only_flush, 1)
+        self.assertLessEqual(only_flush, 2)
         self.assertIn("void requestFlush('materialize');", catch_up_body)
         # 6. SENT successor rebased against actual ACK server_revision
         self.assertIn("rebasePdfAnnotationDependents", store)

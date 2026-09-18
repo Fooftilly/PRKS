@@ -235,23 +235,26 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         works = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "works-pdf.js"))
         self.assertIn("prksWaitOutAnnotationMaterialization", works)
         self.assertIn("prksPdfUserMutationStillAllowed", works)
+        self.assertIn("_annotationMaterializationHandoff", works)
         del_at = works.index("window.deletePdfAnnotationFromEditor")
-        del_body = works[del_at:del_at + 1800]
-        self.assertIn("prksWaitOutAnnotationMaterialization", del_body)
+        del_body = works[del_at:del_at + 2200]
+        # Wait before refuse — do not treat an in-flight gate as offline/base error.
+        first_wait = del_body.index("await prksWaitOutAnnotationMaterialization")
+        first_check = del_body.index("prksPdfUserMutationStillAllowed", first_wait)
+        self.assertLess(first_wait, first_check)
         self.assertNotIn("prksViewerProgrammaticDelete", del_body)
-        wait_at = del_body.index("await prksWaitOutAnnotationMaterialization")
-        self.assertIn("prksPdfUserMutationStillAllowed", del_body[wait_at:])
         save_at = works.index("window.savePdfAnnotationComment")
-        save_body = works[save_at:save_at + 2000]
-        self.assertIn("prksWaitOutAnnotationMaterialization", save_body)
-        self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
+        save_body = works[save_at:save_at + 2200]
         save_wait = save_body.index("await prksWaitOutAnnotationMaterialization")
-        self.assertIn("prksPdfUserMutationStillAllowed", save_body[save_wait:])
-        # Sidebar row Delete also re-checks after the gate.
+        save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
+        self.assertLess(save_wait, save_check)
+        self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
+        # Sidebar row Delete also waits before capability refuse.
         row_at = works.index(".annotation-row__delete")
-        row_body = works[row_at:row_at + 2200]
+        row_body = works[row_at:row_at + 2400]
         row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
-        self.assertIn("prksPdfUserMutationStillAllowed", row_body[row_wait:])
+        row_check = row_body.index("prksPdfUserMutationStillAllowed", row_wait)
+        self.assertLess(row_wait, row_check)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation

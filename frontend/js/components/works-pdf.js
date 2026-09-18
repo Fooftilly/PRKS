@@ -610,11 +610,25 @@ function prksEndAnnotationMaterializationGate(runtime) {
     }
 }
 
+function prksBeginMaterializationHandoff(runtime) {
+    if (!runtime) return;
+    // Blocks user mutation across catch-up gate release → materialization
+    // gate acquire. Cleared only in materialization's final sync cleanup.
+    runtime._annotationMaterializationHandoff = true;
+    runtime.annotationMutationAllowed = false;
+}
+
+function prksClearMaterializationHandoff(runtime) {
+    if (!runtime) return;
+    runtime._annotationMaterializationHandoff = false;
+}
+
 /**
  * User-originated sidebar/editor mutations must not use the programmatic
  * escape hatch (that is reconcile-only). Await the materialization gate
- * Promise when present; fall back to a short poll only if the flag is stuck
- * without a gate.
+ * Promise when present; also wait out a catch-up→materialize handoff block
+ * (gate may be briefly null while mutation must stay disabled). Fall back to
+ * a short poll if the flag is stuck without a gate.
  */
 async function prksWaitOutAnnotationMaterialization(pdf) {
     if (!pdf) return;
@@ -624,7 +638,7 @@ async function prksWaitOutAnnotationMaterialization(pdf) {
             await gate;
         } catch (_e) { /* settle anyway */ }
     }
-    while (pdf._annotationMaterializing) {
+    while (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff) {
         await new Promise(function (resolve) { setTimeout(resolve, 25); });
     }
 }
@@ -633,6 +647,7 @@ function prksPdfUserMutationStillAllowed(pdf) {
     if (!pdf) return false;
     if (pdf.annotationMutationAllowed === false) return false;
     if (pdf._annotationCatchUpBlocksMutation) return false;
+    if (pdf._annotationMaterializationHandoff) return false;
     if (pdf._annotationMaterializing) return false;
     return true;
 }
@@ -648,6 +663,11 @@ function prksRefusePdfUserMutation(pdf) {
 window.deletePdfAnnotationFromEditor = async function () {
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
+    if (!pdf) return;
+    // Wait out materialization/handoff first — do not refuse with a base/offline
+    // error while a transient critical section is still running.
+    await prksWaitOutAnnotationMaterialization(pdf);
+    if (owner && owner.destroyed) return;
     if (!prksPdfUserMutationStillAllowed(pdf)) {
         prksRefusePdfUserMutation(pdf);
         return;
@@ -691,6 +711,9 @@ window.deletePdfAnnotationFromEditor = async function () {
 window.savePdfAnnotationComment = async function () {
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
+    if (!pdf) return;
+    await prksWaitOutAnnotationMaterialization(pdf);
+    if (owner && owner.destroyed) return;
     if (!prksPdfUserMutationStillAllowed(pdf)) {
         prksRefusePdfUserMutation(pdf);
         return;
@@ -974,6 +997,10 @@ ${commentHtml}
             return;
         }
         if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {
+            // Wait out materialization/handoff before capability refuse (avoid
+            // a false offline/base error while a critical section is active).
+            await prksWaitOutAnnotationMaterialization(pdf);
+            if (owner && owner.destroyed) return;
             if (!prksPdfUserMutationStillAllowed(pdf)) {
                 prksRefusePdfUserMutation(pdf);
                 return;
@@ -1832,13 +1859,24 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             // Release only at the very end of finally — after effective restore
             // AND input unlock — so prksWaitOutAnnotationMaterialization does
             // not release sidebar Delete/comment early.
-            if (!prksBeginAnnotationMaterializationGate(runtime)) return;
+            if (!prksBeginAnnotationMaterializationGate(runtime)) {
+                // Handoff from catch-up may still be blocking; retry flush so
+                // we do not strand mutation disabled forever.
+                if (runtime._annotationMaterializationHandoff) {
+                    setTimeout(function () {
+                        if (stillLive()) void requestFlush('materialize');
+                    }, 40);
+                }
+                return;
+            }
             let userInputLocked = false;
             try {
                 if (typeof viewer.setMutationEnabled === 'function') {
                     viewer.setMutationEnabled(false);
                     userInputLocked = true;
                 }
+                // Materialization owns the user lock (including any catch-up
+                // handoff) through ACK-only reconcile + saveCopy.
                 if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
                     try {
                         await window.prksRefreshPendingPdfAnnotations();
@@ -1887,22 +1925,36 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 try {
                     await restoreEffectiveViewerAnnotations({ paintList: false });
                 } catch (_eRestore) { /* best-effort */ }
-                if (userInputLocked && stillLive() && typeof viewer.setMutationEnabled === 'function') {
-                    // setMutationEnabled(false) only flipped the viewer handle;
-                    // runtime.mode stayed 'work', so prksReconcilePdfMutationMode
-                    // would early-return without unlocking. Restore the handle to
-                    // match runtime.mode first, then re-run capability.
-                    viewer.setMutationEnabled(runtime.mode === 'work');
-                    if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                // Resolve desired capability while the controller stays locked
+                // (handoff + materializing). Never await after enabling user
+                // mutation before the gate ends.
+                let unlockToWork = false;
+                if (userInputLocked && stillLive()) {
+                    if (typeof window.prksResolvePdfAnnotationMutationCapability === 'function') {
                         try {
-                            await prksApplyPdfAnnotationCapability(ctx, runtime, {
-                                id: workId,
-                                file_path: runtime.filePath,
-                            });
-                        } catch (_eCap) { /* unlock above already applied */ }
+                            const cap = await window.prksResolvePdfAnnotationMutationCapability(
+                                { id: workId, file_path: runtime.filePath },
+                                runtime
+                            );
+                            unlockToWork = !!(cap && cap.mode === 'work');
+                            runtime.annotationMutationDurable = !!(cap && cap.durable);
+                            runtime.annotationMutationReason = (cap && cap.reason) || '';
+                        } catch (_eCap) {
+                            unlockToWork = runtime.mode === 'work';
+                        }
+                    } else {
+                        unlockToWork = runtime.mode === 'work';
+                    }
+                    if (typeof viewer.setMutationEnabled === 'function') {
+                        viewer.setMutationEnabled(false);
                     }
                 }
-                // Release gate last: waiters must see restored viewer + unlocked input.
+                // Synchronous critical-section exit: clear handoff, enable, end gate.
+                prksClearMaterializationHandoff(runtime);
+                if (userInputLocked && stillLive() && typeof viewer.setMutationEnabled === 'function') {
+                    runtime.annotationMutationAllowed = unlockToWork;
+                    viewer.setMutationEnabled(unlockToWork);
+                }
                 prksEndAnnotationMaterializationGate(runtime);
             }
         }
@@ -2063,10 +2115,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
      *
      * Gate ownership: catch-up holds `_annotationMaterializationGate` only for
      * snapshot+projection. It never hands that gate into async materialization.
-     * When a PDF export is needed it sets `shouldMaterialize`, releases the
-     * catch-up gate (and restores capability when projection succeeded), then
-     * starts `requestFlush('materialize')` so materialization acquires its own
-     * independent gate.
+     * When a PDF export is needed it sets `shouldMaterialize`, keeps a handoff
+     * user-mutation block (does **not** re-enable editing), releases the
+     * catch-up gate, then starts `requestFlush('materialize')` so materialization
+     * acquires its own independent gate and owns the user lock through
+     * saveCopy + final capability restore.
      */
     async function maybeCatchUpMaterialization() {
         if (!stillLive() || !runtime.annotationMutationDurable) return;
@@ -2148,7 +2201,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 runtime._annotationCatchUpBlocksMutation = true;
             }
         } finally {
-            if (projectionReady && userInputLocked && stillLive() &&
+            if (shouldMaterialize && stillLive()) {
+                // Materialization required: do NOT re-enable user mutation here.
+                // Retain a handoff block across catch-up gate release until the
+                // materialization pass acquires its own gate and finishes.
+                prksBeginMaterializationHandoff(runtime);
+                if (typeof viewer.setMutationEnabled === 'function') {
+                    viewer.setMutationEnabled(false);
+                }
+            } else if (projectionReady && userInputLocked && stillLive() &&
                 typeof viewer.setMutationEnabled === 'function') {
                 viewer.setMutationEnabled(runtime.mode === 'work');
                 if (typeof prksApplyPdfAnnotationCapability === 'function') {
@@ -2183,6 +2244,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             prksEndAnnotationMaterializationGate(runtime);
         }
         // Independent materialization gate: only after catch-up gate is gone.
+        // Handoff block (if shouldMaterialize) keeps mutation disabled until
+        // materialization's final sync cleanup.
         if (shouldMaterialize && stillLive()) {
             void requestFlush('materialize');
         }
@@ -2691,9 +2754,13 @@ async function prksApplyPdfAnnotationCapability(ctx, runtime, work) {
     runtime.filePath = runtime.filePath || (target && target.file_path) || '';
     // Coherent catch-up accepted a fresh snapshot but has not yet projected
     // effective ack+pending into the viewer — stay read-only until it does.
-    if (runtime._annotationCatchUpBlocksMutation) {
+    // Also block during catch-up→materialization handoff (mutation must stay
+    // off across the independent gate transition).
+    if (runtime._annotationCatchUpBlocksMutation || runtime._annotationMaterializationHandoff) {
         runtime.annotationMutationAllowed = false;
-        runtime.annotationMutationReason = 'catch_up_projection_pending';
+        runtime.annotationMutationReason = runtime._annotationMaterializationHandoff
+            ? 'materialization_handoff'
+            : 'catch_up_projection_pending';
         if (runtime.viewer && typeof runtime.viewer.setMutationEnabled === 'function') {
             runtime.viewer.setMutationEnabled(false);
         } else if (runtime.viewer) {
@@ -2702,7 +2769,7 @@ async function prksApplyPdfAnnotationCapability(ctx, runtime, work) {
         return {
             mode: 'preview',
             durable: !!cap.durable,
-            reason: 'catch_up_projection_pending',
+            reason: runtime.annotationMutationReason,
         };
     }
     if (runtime.viewer) {
