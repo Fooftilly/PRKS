@@ -177,6 +177,16 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksBeginAnnotationMaterializationGate", works_pdf)
         self.assertIn("prksEndAnnotationMaterializationGate", works_pdf)
         self.assertIn("_annotationMaterializationGate", works_pdf)
+        wait_fn_at = works_pdf.index("async function prksWaitOutAnnotationMaterialization")
+        wait_fn_end = works_pdf.index("\nfunction prksPdfUserMutationStillAllowed", wait_fn_at)
+        wait_fn = works_pdf[wait_fn_at:wait_fn_end]
+        self.assertIn("pdf._destroyed", wait_fn)
+        self.assertIn("persistence.destroyed", wait_fn)
+        self.assertIn("persistence.paused", wait_fn)
+        self.assertIn("30000", wait_fn)
+        # Client fidelity keys must include ink geometry (backend parity).
+        self.assertIn("'inkList'", state_js)
+        self.assertIn("'vertices'", state_js)
         self.assertIn("User path: plain delete after materialization lock", works_pdf)
         self.assertIn("prksPdfUserMutationStillAllowed", works_pdf)
         # Capability re-check after gate wait (Delete/comment) — no false UI settle.

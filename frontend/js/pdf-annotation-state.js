@@ -16,7 +16,10 @@
     const CONTENT_KEYS = ['contents', 'content', 'comment', 'text', 'body'];
     const PAGE_KEYS = ['pageIndex', 'page', 'pageNumber', 'page_index'];
     const STRIP = new Set(ID_KEYS.concat(TYPE_KEYS, CONTENT_KEYS, PAGE_KEYS, ['color', 'work_id']));
-    const FIDELITY_KEYS = ['rect', 'segmentRects', 'strokeColor', 'opacity', 'blendMode', 'custom'];
+    const FIDELITY_KEYS = [
+        'rect', 'segmentRects', 'inkList', 'vertices',
+        'strokeColor', 'opacity', 'blendMode', 'custom',
+    ];
 
     function firstText(item, keys) {
         for (let i = 0; i < keys.length; i++) {

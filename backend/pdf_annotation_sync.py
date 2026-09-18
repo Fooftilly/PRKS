@@ -275,14 +275,23 @@ def get_annotations_snapshot_on_conn(conn, work_id: str) -> Optional[dict]:
             }
         )
     # Known-absent scopes with revision > 0 (durable deletes / prior mutations).
+    # scope_id is JSON [work_id, annotation_id]; PK-range on the work prefix
+    # avoids a full-table scan + LIKE.
     known_absent = {}
     present_ids = {row["annotation_id"] for row in present}
+    work_prefix = (
+        json.dumps([work_id], ensure_ascii=True, separators=(",", ":"))[:-1] + ","
+    )
+    work_prefix_end = work_prefix + "\uffff"
     for row in conn.execute(
         """
         SELECT scope_id, revision FROM sync_entity_revisions
-        WHERE scope_type = ? AND revision > 0
+        WHERE scope_type = ?
+          AND scope_id >= ?
+          AND scope_id < ?
+          AND revision > 0
         """,
-        (SCOPE_TYPE,),
+        (SCOPE_TYPE, work_prefix, work_prefix_end),
     ).fetchall():
         try:
             parts = json.loads(row[0])

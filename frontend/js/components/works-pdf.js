@@ -638,7 +638,14 @@ async function prksWaitOutAnnotationMaterialization(pdf) {
             await gate;
         } catch (_e) { /* settle anyway */ }
     }
+    // Destroy, persistence teardown, or a stuck gate must not hang callers
+    // forever — they re-check prksPdfUserMutationStillAllowed afterward.
+    const deadline = Date.now() + 30000;
     while (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff) {
+        if (pdf._destroyed) return;
+        const persistence = pdf.annotationPersistence;
+        if (persistence && (persistence.destroyed || persistence.paused)) return;
+        if (Date.now() >= deadline) return;
         await new Promise(function (resolve) { setTimeout(resolve, 25); });
     }
 }

@@ -1869,6 +1869,44 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(final["canonical_annotation_set_revision"], gen_c)
         self.assertTrue(final["stale"])
 
+    def test_22c7_pdf_post_no_managed_pdf_404_before_mark(self):
+        """Blank/invalid file_path must 404 before save_token or materialization mark."""
+        w_id = self._create_work_api("No Managed PDF")
+        row = self.__class__.test_db.execute_query(
+            "SELECT file_path FROM works WHERE id=?", (w_id,)
+        )
+        self.assertTrue(row)
+        self.assertFalse((row[0].get("file_path") or "").strip())
+
+        before = self.__class__.test_db.get_work_pdf_materialization(w_id) or {
+            "canonical_annotation_set_revision": 0,
+            "materialized_pdf_annotation_revision": 0,
+        }
+        pdf_bytes = _pdf_with_text_bytes("orphan bytes")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_work_pdf(
+                w_id,
+                {
+                    "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+                    "save_token": "no-pdf-token",
+                    "materialized_annotation_set_revision": max(
+                        1, int(before.get("canonical_annotation_set_revision") or 0)
+                    ),
+                },
+            )
+        self.assertEqual(cm.exception.code, 404)
+        confirm = self._save_confirm(w_id, "no-pdf-token")
+        self.assertFalse(confirm.get("pdf_saved"))
+        after = self.__class__.test_db.get_work_pdf_materialization(w_id) or {}
+        self.assertEqual(
+            after.get("materialized_pdf_annotation_revision"),
+            before.get("materialized_pdf_annotation_revision"),
+        )
+        self.assertEqual(
+            after.get("canonical_annotation_set_revision"),
+            before.get("canonical_annotation_set_revision"),
+        )
+
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")
         good = [{"id": "tok", "contents": "ok", "pageIndex": 0}]

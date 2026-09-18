@@ -93,8 +93,19 @@ def _start_server() -> tuple[subprocess.Popen, str]:
             origin = line.strip().rsplit("/tests/", 1)[0]
             break
     if not origin:
-        err = proc.stderr.read() if proc.stderr else ""
+        # Kill first: stderr is a pipe and read() blocks until the child closes
+        # it (EOF). A live serve.py never does that on its own.
         proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+        err = ""
+        if proc.stderr:
+            try:
+                err = proc.stderr.read() or ""
+            except Exception:
+                err = ""
         raise RuntimeError(f"could not parse serve.py URL\n{err}")
     _wait_http(origin + "/tests/browser/pdf_annotation_fidelity.html")
     return proc, origin

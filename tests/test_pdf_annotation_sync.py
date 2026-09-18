@@ -44,7 +44,10 @@ class PdfAnnotationSyncTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="prks-pdf-ann-sync-")
         self.addCleanup(self.tmp.cleanup)
-        self.db = PRKSDatabase(storage=StorageConfig.for_testing(self.tmp.name))
+        self.db = PRKSDatabase(
+            storage=StorageConfig.for_testing(self.tmp.name),
+            schema_path=str(ROOT / "backend" / "db_schema.sql"),
+        )
         self.device = str(uuid.uuid4())
         self.work_id = self.db.add_work(title="Annotated")
 

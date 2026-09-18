@@ -27,6 +27,7 @@ from backend.db_manager import (
     BulkWorkError,
     effective_source_kind,
     SavedViewError,
+    managed_pdf_filename,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -3180,6 +3181,24 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
                     mat_lock = _pdf_materialization_lock_for(w_id)
                     with mat_lock:
+                        res_path = db.execute_query(
+                            "SELECT file_path FROM works WHERE id=?", (w_id,)
+                        )
+                        if not res_path:
+                            self.send_json(404, {'error': 'Work not found'})
+                            return
+                        stored_fp = (res_path[0].get('file_path') or '').strip()
+                        filename = managed_pdf_filename(stored_fp)
+                        if not filename:
+                            # No managed PDF on disk to overwrite — never mark
+                            # materialization or record a save_token for empty writes.
+                            self.send_json(404, {'error': 'Work has no managed PDF'})
+                            return
+                        pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
+                        if not pdf_path:
+                            self.send_json(400, {'error': 'Invalid or unsafe PDF storage path'})
+                            return
+
                         if durable_materialize:
                             try:
                                 db.accept_work_pdf_materialization_claim(
@@ -3209,31 +3228,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 self.send_json(400, {'error': 'Invalid materialization revision'})
                                 return
 
-                        # 1. Overwrite file
-                        res_path = db.execute_query("SELECT file_path FROM works WHERE id=?", (w_id,))
-                        if res_path and res_path[0]['file_path']:
-                            filename = res_path[0]['file_path'].split('/')[-1]
-                            pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
-                            if not pdf_path:
-                                self.send_json(400, {'error': 'Invalid or unsafe PDF storage path'})
-                                return
-                            with open(pdf_path, 'wb') as f:
-                                f.write(pdf_bytes)
-                            changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
-                            LOGGER.info(
-                                "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
-                                "true" if changed else "false",
-                                safe_log_label(reason),
+                        # 1. Overwrite managed PDF bytes (path resolved above).
+                        with open(pdf_path, 'wb') as f:
+                            f.write(pdf_bytes)
+                        changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
+                        LOGGER.info(
+                            "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
+                            "true" if changed else "false",
+                            safe_log_label(reason),
+                        )
+                        try:
+                            text_index.sync_work(w_id, stored_fp)
+                        except Exception as e:
+                            LOGGER.warning(
+                                "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
+                                safe_log_id(w_id),
+                                safe_error_type(e),
                             )
-                            try:
-                                stored_fp = res_path[0]["file_path"]
-                                text_index.sync_work(w_id, stored_fp)
-                            except Exception as e:
-                                LOGGER.warning(
-                                    "work_pdf_replace_text_index_failed work_id=%s error_type=%s",
-                                    safe_log_id(w_id),
-                                    safe_error_type(e),
-                                )
 
                         # 2. Extract [[Name]] mentions from PDF bytes (linear scan;
                         # never a backtracking regex over untrusted input).
