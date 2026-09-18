@@ -3331,30 +3331,32 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 annotations_json = data.get('annotations_json')
                 save_token = str(data.get('save_token', '') or '').strip()
+                # Legacy handshake only: mark materialization when this request's
+                # save_token matches a preceding POST /pdf for the same Work.
+                # Never mark on annotations-only POST — that would claim arbitrary
+                # PDF bytes embed the new tip. Mark the exact generation this
+                # replacement produced (same IMMEDIATE txn), not a later tip.
+                with _SAVE_TOKEN_LOCK:
+                    pdf_token_matches = bool(save_token) and (
+                        _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == save_token
+                    )
+                body = {'status': 'saved', 'path': 'legacy-full-list'}
+                materialized_rev = None
                 try:
-                    db.save_work_annotations(w_id, annotations_json)
+                    if pdf_token_matches:
+                        _replace_gen, materialized_rev = (
+                            db.save_work_annotations_and_mark_materialized(
+                                w_id, annotations_json
+                            )
+                        )
+                    else:
+                        db.save_work_annotations(w_id, annotations_json)
                 except WorkAnnotationError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
                 if save_token:
                     with _SAVE_TOKEN_LOCK:
                         _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                # online_legacy: PDF POST deferred materialization; mark against
-                # the generation produced by this metadata replacement so the
-                # uploaded bytes are not falsely left stale.
-                body = {'status': 'saved', 'path': 'legacy-full-list'}
-                try:
-                    materialized_rev = db.mark_work_pdf_materialized(w_id)
-                except LookupError:
-                    self.send_json(404, {'error': 'Work not found'})
-                    return
-                except Exception as e:
-                    LOGGER.warning(
-                        "pdf_materialization_mark_failed work_id=%s error_type=%s",
-                        safe_log_id(w_id),
-                        safe_error_type(e),
-                    )
-                    materialized_rev = None
                 if materialized_rev is not None:
                     body['materialized_pdf_annotation_revision'] = materialized_rev
                     mat = db.get_work_pdf_materialization(w_id)

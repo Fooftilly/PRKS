@@ -2917,20 +2917,26 @@ class PRKSDatabase:
         Durable clients use CREATE/SET/DELETE_PDF_ANNOTATION. This replace path
         remains for temporary online-legacy support when the durable store is
         unavailable; it must not become a second product write path.
+
+        Returns the canonical annotation-set revision after the replace (the
+        generation this replacement produced, or the unchanged tip when the
+        list was identical).
         """
         items = parse_annotations_json(annotations_json)
-        self.sync_work_annotations(work_id, items)
+        return self.sync_work_annotations(work_id, items)
 
-    def sync_work_annotations(self, work_id: str, items: List[dict]):
+    def sync_work_annotations(self, work_id: str, items: List[dict]) -> int:
         """Replace one Work's canonical annotations in a single transaction.
 
         Validates the complete incoming list before any delete/update/insert.
         Prefer per-annotation sync ops for product writes; full-list replace is
         compat/legacy only.
+
+        Returns the canonical annotation-set revision after the replace.
         """
         with self.connection() as conn:
             try:
-                self._sync_work_annotations_on_conn(conn, work_id, items)
+                return self._sync_work_annotations_on_conn(conn, work_id, items)
             except sqlite3.IntegrityError as exc:
                 raise WorkAnnotationError(
                     "annotation_id_conflict",
@@ -2938,7 +2944,41 @@ class PRKSDatabase:
                     409,
                 ) from exc
 
-    def _sync_work_annotations_on_conn(self, conn, work_id: str, items: List[dict]) -> None:
+    def save_work_annotations_and_mark_materialized(
+        self, work_id: str, annotations_json: str
+    ) -> tuple:
+        """Legacy handshake: replace metadata then mark that exact generation.
+
+        Runs under BEGIN IMMEDIATE so another mutation cannot advance the
+        canonical tip between replace and mark. Marks ``at_revision`` equal to
+        the generation this replacement produced — never "whatever tip is
+        current later". Callers must only invoke this when a matching PDF
+        ``save_token`` proved the preceding ``POST /pdf`` for this handshake.
+        """
+        from backend import pdf_materialization
+
+        items = parse_annotations_json(annotations_json)
+        with self.connection() as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                replace_gen = self._sync_work_annotations_on_conn(conn, work_id, items)
+                marked = pdf_materialization.mark_pdf_materialized_on_conn(
+                    conn, work_id, at_revision=replace_gen
+                )
+                conn.commit()
+                return replace_gen, marked
+            except sqlite3.IntegrityError as exc:
+                conn.rollback()
+                raise WorkAnnotationError(
+                    "annotation_id_conflict",
+                    "Annotation ID belongs to another Work.",
+                    409,
+                ) from exc
+            except Exception:
+                conn.rollback()
+                raise
+
+    def _sync_work_annotations_on_conn(self, conn, work_id: str, items: List[dict]) -> int:
         exists = conn.execute(
             "SELECT id FROM works WHERE id = ?",
             (work_id,),
@@ -3038,7 +3078,13 @@ class PRKSDatabase:
         if any_set_changed:
             from backend import pdf_materialization
 
-            pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
+            return pdf_materialization.bump_canonical_annotation_set_on_conn(
+                conn, work_id
+            )
+        from backend import pdf_materialization
+
+        mat = pdf_materialization.get_materialization_on_conn(conn, work_id)
+        return int(mat["canonical_annotation_set_revision"]) if mat else 0
 
     def resolve_wiki_links(self, text: str) -> str:
         if not text: return ""

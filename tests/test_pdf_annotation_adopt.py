@@ -199,6 +199,73 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
             pdf_annotation_adopt.default_is_user_markup(_highlight("H1", "x"))
         )
 
+    def test_classifier_rejects_type1_and_flattened_links(self) -> None:
+        """Browser prksIsPdfLinkAnnotation treats type 1 and flattened type 2 as links."""
+        type1_no_uri = {
+            "id": "link-type1",
+            "type": 1,
+            "pageIndex": 0,
+            "rect": {"origin": {"x": 10, "y": 10}, "size": {"width": 40, "height": 12}},
+        }
+        type1_string = {
+            "id": "link-type1-str",
+            "type": "1",
+            "pageIndex": 0,
+            "segmentRects": [
+                {"origin": {"x": 10, "y": 10}, "size": {"width": 40, "height": 12}}
+            ],
+            "rect": {"origin": {"x": 10, "y": 10}, "size": {"width": 40, "height": 12}},
+        }
+        type2_flat_no_uri = {
+            "id": "link-type2-flat",
+            "type": 2,
+            "pageIndex": 0,
+            "rect": {"origin": {"x": 20, "y": 20}, "size": {"width": 30, "height": 10}},
+        }
+        label_link = {
+            "id": "link-label",
+            "type": 9,
+            "pageIndex": 0,
+            "contents": "Link",
+            "segmentRects": [
+                {"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}
+            ],
+            "rect": {"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}},
+        }
+        dest_link = {
+            "id": "link-dest",
+            "type": 5,
+            "pageIndex": 0,
+            "dest": [0, {"name": "XYZ"}, 0, 0, 0],
+            "rect": {"origin": {"x": 5, "y": 5}, "size": {"width": 10, "height": 10}},
+        }
+        for item in (
+            type1_no_uri,
+            type1_string,
+            type2_flat_no_uri,
+            label_link,
+            dest_link,
+            _link("L-uri"),
+        ):
+            with self.subTest(ann_id=item["id"]):
+                self.assertTrue(
+                    pdf_annotation_adopt.is_pdf_link_annotation(item),
+                    msg="expected link for %s" % item["id"],
+                )
+                self.assertFalse(
+                    pdf_annotation_adopt.default_is_user_markup(item),
+                    msg="must not adopt link %s" % item["id"],
+                )
+
+        self.db.mark_work_pdf_materialized(self.work_id)
+        result = self.db.adopt_byte_only_user_markup(
+            self.work_id,
+            [type1_no_uri, type1_string, type2_flat_no_uri, label_link, dest_link],
+        )
+        self.assertEqual(result["adopted"], [])
+        self.assertEqual(result["skipped_non_user"], 5)
+        self.assertEqual(self._ids(), set())
+
     def test_classifier_adopts_managed_user_types(self) -> None:
         """Server classifier must match browser-managed user markup types."""
         cases = [

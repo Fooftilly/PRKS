@@ -8,8 +8,9 @@ touch Links/widgets/non-user artifacts.
 ``default_is_user_markup`` mirrors the browser
 ``prksIsUserMarkupAnnotation`` classifier so every managed user type the
 viewer would persist (ink, free text, stamps, shapes, strikeout/squiggly,
-types 1 and 3–15, comments, segmentRects/inkList) can enter canonical
-metadata on adoption.
+types 3–15, comments, segmentRects/inkList) can enter canonical metadata on
+adoption. Link exclusion mirrors ``prksIsPdfLinkAnnotation`` (including
+legacy numeric type ``1`` and flattened type ``2`` without URI).
 """
 
 from __future__ import annotations
@@ -22,10 +23,12 @@ from backend.pdf_annotations import (
     normalize_annotation,
 )
 
-# pdf.js AnnotationType numbers — Link (2) handled separately.
-_USER_TYPE_NUMS = frozenset({1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+# pdf.js / EmbedPDF user markup numbers. Type 1 is NEVER user markup here —
+# browser ``prksIsPdfLinkAnnotation`` treats rawType 1 as a link before any
+# user-type allowlist. Type 2 is link unless EmbedPDF text-markup heuristics.
+_USER_TYPE_NUMS = frozenset({3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
 _DENY_TYPE_NUMS = frozenset(
-    {2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
+    {1, 2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
 )
 _ALLOW_TOKENS = frozenset(
     {
@@ -225,25 +228,82 @@ def _embed_type2_is_user_text_markup(item: dict) -> bool:
     return False
 
 
+def _uri_like(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    return bool(re.match(r"^https?:\/\/", text, re.I) or "://" in text)
+
+
+def is_pdf_link_annotation(item: dict) -> bool:
+    """Mirror browser ``prksIsPdfLinkAnnotation`` — exclude before user-type rules."""
+    if not isinstance(item, dict):
+        return False
+    raw_type = item.get(
+        "type",
+        item.get("annotationType", item.get("subtype", item.get("Subtype"))),
+    )
+    # Legacy engine: numeric 1 is a link. String "1" after JSON round-trip too.
+    if raw_type == 1 or raw_type == "1":
+        return True
+    typ_blob = _type_blob(item)
+    if "link" in typ_blob:
+        return True
+    sub = str(item.get("subtype") or item.get("Subtype") or "").lower()
+    if "link" in sub:
+        return True
+    # Viewer often sets subject/title/contents to the literal "Link".
+    label_fields = [
+        item.get("contents"),
+        item.get("content"),
+        item.get("comment"),
+        item.get("text"),
+        item.get("subject"),
+        item.get("title"),
+        item.get("body"),
+    ]
+    label_joined = " ".join(str(v) for v in label_fields if v).strip().lower()
+    if label_joined == "link":
+        return True
+    if (
+        _uri_like(item.get("uri"))
+        or _uri_like(item.get("url"))
+        or _uri_like(item.get("URL"))
+    ):
+        return True
+    action = item.get("action")
+    if isinstance(action, dict):
+        at = str(action.get("type") or action.get("S") or action.get("s") or "").lower()
+        if any(x in at for x in ("uri", "goto", "gotor", "launch", "named")):
+            return True
+        dest = action.get("uri") or action.get("URL") or action.get("url")
+        if _uri_like(dest):
+            return True
+    if item.get("dest") is not None or item.get("destination") is not None:
+        return True
+    # pdf.js Link = 2; flattened clones may omit URI — link unless text markup.
+    if raw_type == 2 or raw_type == "2":
+        return not _embed_type2_is_user_text_markup(item)
+    return False
+
+
 def default_is_non_user(item: dict) -> bool:
     if not isinstance(item, dict):
         return True
-    n = _primary_type_number(item)
-    if n == 2 and (
-        item.get("uri")
-        or item.get("url")
-        or item.get("action")
-        or item.get("A")
-        or item.get("dest")
-    ):
+    if is_pdf_link_annotation(item):
         return True
     blob = _type_blob(item)
-    return any(tok in blob for tok in ("link", "uri", "goto", "widget", "watermark"))
+    return any(tok in blob for tok in ("widget", "watermark"))
 
 
 def default_is_user_markup(item: dict) -> bool:
     """Shared equivalent of browser ``prksIsUserMarkupAnnotation``."""
     if not isinstance(item, dict) or not _annotation_id(item):
+        return False
+    # Browser returns early for links before any user-type allowlist.
+    if is_pdf_link_annotation(item):
         return False
     if default_is_non_user(item):
         return False

@@ -1502,8 +1502,11 @@ class TestServerAPI(unittest.TestCase):
         with self._post_work_annotations(w_id, {"annotations_json": json.dumps(meta)}) as res:
             self.assertEqual(res.status, 200)
             body = json.loads(res.read().decode())
-        # Legacy annotations POST marks materialization after replace.
-        self.assertFalse(body.get("stale", True))
+        # Annotations-only POST must NOT claim PDF bytes are materialized.
+        self.assertNotIn("materialized_pdf_annotation_revision", body)
+        self.assertNotIn("stale", body)
+        # Adoption requires current materialization; mark explicitly (no PDF handshake).
+        self.__class__.test_db.mark_work_pdf_materialized(w_id)
         viewer = [
             {
                 "id": "byte-only",
@@ -1518,6 +1521,12 @@ class TestServerAPI(unittest.TestCase):
                 "type": 2,
                 "uri": "https://example.test/x",
                 "pageIndex": 0,
+            },
+            {
+                "id": "link-type1",
+                "type": 1,
+                "pageIndex": 0,
+                "rect": {"origin": {"x": 8, "y": 8}, "size": {"width": 20, "height": 8}},
             },
             meta[0],
         ]
@@ -1534,9 +1543,10 @@ class TestServerAPI(unittest.TestCase):
         ids = {row["id"] for row in self._get_work_annotations(w_id)}
         self.assertEqual(ids, {"meta-only", "byte-only"})
         self.assertNotIn("link-skip", ids)
+        self.assertNotIn("link-type1", ids)
 
     def test_22c3_online_legacy_marks_after_annotation_replace(self):
-        """POST /pdf (legacy) then POST /annotations must not leave false staleness."""
+        """POST /pdf then matching-token POST /annotations marks the replace generation."""
         pdf_bytes = _pdf_with_text_bytes("legacy mark order")
         payload = {
             "title": "Legacy Mat Order",
@@ -1598,6 +1608,56 @@ class TestServerAPI(unittest.TestCase):
             mat["materialized_pdf_annotation_revision"],
         )
         self.assertFalse(mat["stale"])
+
+        # Mismatched / missing token must not mark (annotations-only is not a handshake).
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps([{
+                    **ann[0],
+                    "contents": "changed",
+                    "custom": {"prksComment": "changed"},
+                }]),
+                "save_token": "not-the-pdf-token",
+            },
+        ) as bad:
+            self.assertEqual(bad.status, 200)
+            bad_body = json.loads(bad.read().decode())
+        self.assertNotIn("materialized_pdf_annotation_revision", bad_body)
+        mat_after = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertTrue(mat_after["stale"])
+        self.assertGreater(
+            mat_after["canonical_annotation_set_revision"],
+            mat_after["materialized_pdf_annotation_revision"],
+        )
+
+    def test_22c4_annotations_only_never_marks_materialization(self):
+        """POST /annotations without a matching PDF save_token never marks bytes."""
+        w_id = self._create_work_api("Ann Only No Mark")
+        before = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        ann = [{
+            "id": "only-ann",
+            "type": 9,
+            "contents": "x",
+            "pageIndex": 0,
+            "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}],
+            "custom": {"prksComment": "x"},
+        }]
+        with self._post_work_annotations(w_id, {"annotations_json": json.dumps(ann)}) as res:
+            self.assertEqual(res.status, 200)
+            body = json.loads(res.read().decode())
+        self.assertNotIn("materialized_pdf_annotation_revision", body)
+        self.assertNotIn("stale", body)
+        after = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertEqual(
+            after["materialized_pdf_annotation_revision"],
+            before["materialized_pdf_annotation_revision"],
+        )
+        self.assertGreater(
+            after["canonical_annotation_set_revision"],
+            after["materialized_pdf_annotation_revision"],
+        )
+        self.assertTrue(after["stale"])
 
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")
