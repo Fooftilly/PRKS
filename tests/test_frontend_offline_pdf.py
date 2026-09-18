@@ -204,6 +204,11 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         viewer = _read(viewer_path)
         self.assertIn("allowsAnnotationMutation()", viewer)
         self.assertIn("controller.setUserMutationEnabled(enabled)", viewer)
+        # Markup tools are user-only — programmatic depth must not authorize them.
+        act_at = viewer.index("activateMarkupTool: (tool) => {")
+        act_body = viewer[act_at:act_at + 280]
+        self.assertIn("allowsUserAnnotationMutation()", act_body)
+        self.assertNotIn("allowsAnnotationMutation()", act_body)
         controller = _read(os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "controller.ts"))
         self.assertIn("setUserMutationEnabled", controller)
         self.assertIn("allowsAnnotationMutation()", controller)

@@ -82,7 +82,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         # Catch-up always fetches/applies coherent /annotations-snapshot
         # (bodies + gens together; never gens-only /pdf-materialization).
         catch_up_at = works_pdf.index("async function maybeCatchUpMaterialization")
-        catch_up_end = works_pdf.index("function onAnnotationEvent", catch_up_at)
+        catch_up_end = works_pdf.index("function enqueueDurableAnnotationWrite", catch_up_at)
         catch_up_body = works_pdf[catch_up_at:catch_up_end]
         self.assertIn("/annotations-snapshot", catch_up_body)
         self.assertIn("applyAnnotationSnapshotToRuntime", catch_up_body)
@@ -91,6 +91,15 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
             catch_up_body.index("/annotations-snapshot"),
             catch_up_body.index("if (canonical <= materialized)"),
         )
+        # Fresh snapshot must project into live viewer+sidebar before unlock /
+        # materialize decision — even when canonical <= materialized.
+        self.assertIn("restoreEffectiveViewerAnnotations({ paintList: true })", catch_up_body)
+        self.assertLess(
+            catch_up_body.index("restoreEffectiveViewerAnnotations({ paintList: true })"),
+            catch_up_body.index("if (canonical <= materialized)"),
+        )
+        self.assertIn("prksRefreshPendingPdfAnnotations", catch_up_body)
+        self.assertIn("handoffToMaterialize", catch_up_body)
         # ACK-drained path must also use coherent catch-up — never assign
         # pendingMaterializationRevision from an incremental ACK alone.
         ack_sub_at = works_pdf.index("const isPdfAck = ack && op && (")
@@ -98,25 +107,36 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("maybeCatchUpMaterialization", ack_sub)
         self.assertNotIn("pendingMaterializationRevision = setRev", ack_sub)
         self.assertNotIn("requestFlush('materialize')", ack_sub)
-        # Incremental ACK must not relabel snapshot gen without continuity.
+        # Incremental ACK must not relabel snapshot gen without continuity + changed.
         offline = (ROOT / "frontend" / "js" / "offline-runtime.js").read_text(encoding="utf-8")
         rec_at = offline.index("async function reconcilePdfAnnotation")
         rec_body = offline[rec_at:rec_at + 3500]
-        self.assertIn("nextGen === prevGen + 1", rec_body)
+        self.assertIn("result.changed === true && nextGen === prevGen + 1", rec_body)
         state_js = (ROOT / "frontend" / "js" / "pdf-annotation-state.js").read_text(encoding="utf-8")
-        self.assertIn("nextGen === prevGen + 1", state_js)
+        self.assertIn("data.changed === true && nextGen === prevGen + 1", state_js)
         # User sidebar/editor waits out materialization; programmatic = reconcile only.
         self.assertIn("prksWaitOutAnnotationMaterialization", works_pdf)
+        self.assertIn("prksBeginAnnotationMaterializationGate", works_pdf)
+        self.assertIn("prksEndAnnotationMaterializationGate", works_pdf)
+        self.assertIn("_annotationMaterializationGate", works_pdf)
         self.assertIn("User path: plain delete after materialization lock", works_pdf)
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
-        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 5500]
-        self.assertIn("_annotationMaterializing = true", mat_pass)
+        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 7500]
+        self.assertIn("prksBeginAnnotationMaterializationGate(runtime)", mat_pass)
         self.assertIn("_annotationDurableWriteChain", mat_pass)
         self.assertIn("setMutationEnabled(false)", mat_pass)
         self.assertIn("restoreEffectiveViewerAnnotations", mat_pass)
         self.assertIn("await window.prksReconcileViewerAnnotations(viewer, ackOnly", mat_pass)
         self.assertNotIn("catch (_eRec)", mat_pass)
+        # Gate released only after restore + unlock (not before).
+        self.assertIn("prksEndAnnotationMaterializationGate", mat_pass)
+        end_gate_at = mat_pass.rindex("prksEndAnnotationMaterializationGate")
+        restore_at = mat_pass.index("restoreEffectiveViewerAnnotations")
+        unlock_at = mat_pass.index("viewer.setMutationEnabled(runtime.mode === 'work')")
+        self.assertLess(restore_at, end_gate_at)
+        self.assertLess(unlock_at, end_gate_at)
+        self.assertGreater(end_gate_at, mat_pass.index("finally {"))
         # Real write-chain serializer: enqueue write fn, do not start early.
         self.assertIn("function enqueueDurableAnnotationWrite", works_pdf)
         self.assertIn("enqueueDurableAnnotationWrite(async function", works_pdf)

@@ -199,7 +199,9 @@ function ApiBinder({
                     }
                 },
                 activateMarkupTool: (tool) => {
-                    if (!controller.allowsAnnotationMutation()) return;
+                    // User tool activation only — programmatic depth must never
+                    // authorize markup tools (reconcile uses create/update/delete).
+                    if (!controller.allowsUserAnnotationMutation()) return;
                     pan?.disablePan();
                     annotation?.setActiveTool(tool);
                 },

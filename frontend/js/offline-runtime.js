@@ -846,13 +846,16 @@
             });
             // Patch the ACKed annotation body, but do not relabel the cached
             // object as a newer coherent snapshot unless generation continuity
-            // proves no unseen set changes (cached gen + 1 === ACK gen).
+            // proves no unseen set changes (cached gen + 1 === ACK gen) and the
+            // ACK changed something (changed:false cannot own a gen increment).
             if (Number.isSafeInteger(result.canonical_annotation_set_revision)) {
                 const nextGen = result.canonical_annotation_set_revision;
                 const prevGen = Number.isSafeInteger(snap.canonical_annotation_set_revision)
                     ? snap.canonical_annotation_set_revision
                     : null;
-                if (prevGen === null || nextGen === prevGen || nextGen === prevGen + 1) {
+                if (prevGen === null || nextGen === prevGen) {
+                    nextSnap.canonical_annotation_set_revision = nextGen;
+                } else if (result.changed === true && nextGen === prevGen + 1) {
                     nextSnap.canonical_annotation_set_revision = nextGen;
                 }
                 // else: keep snap.canonical_annotation_set_revision unchanged
