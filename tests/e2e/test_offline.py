@@ -1613,6 +1613,7 @@ class OfflineFoundationTests(unittest.TestCase):
                 page.locator('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar').count(),
                 1,
             )
+            _wait_pdf_markup_tools_settled(page)
             self.assertTrue(_pdf_markup_tools_available(page))
         finally:
             _continue_held_routes(held_probe)
