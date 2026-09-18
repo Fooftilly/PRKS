@@ -179,7 +179,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("annotationMutationAllowed === false", src)
         for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
             at = src.index(fn_name)
-            snippet = src[at : at + 900]
+            snippet = src[at : at + 2500]
             self.assertIn(
                 "prksPdfUserMutationStillAllowed",
                 snippet,
@@ -191,7 +191,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_WORKS_PDF)
         at = src.index(".annotation-row__delete")
         handler_at = src.index("annotation-row__delete", at + 1)
-        snippet = src[handler_at : handler_at + 900]
+        snippet = src[handler_at : handler_at + 2500]
         self.assertIn("prksPdfUserMutationStillAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
@@ -231,17 +231,21 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("endProgrammaticAnnotationMutation", reconcile)
 
     def test_sidebar_delete_waits_out_materialization_not_programmatic(self):
-        """User Delete/comment must wait for materialization; programmatic is reconcile-only."""
+        """User Delete/comment confirm first; wait+capability before the mutation."""
         works = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "works-pdf.js"))
         self.assertIn("prksWaitOutAnnotationMaterialization", works)
         self.assertIn("prksPdfUserMutationStillAllowed", works)
         self.assertIn("_annotationMaterializationHandoff", works)
         del_at = works.index("window.deletePdfAnnotationFromEditor")
         del_body = works[del_at:del_at + 2200]
-        # Wait before refuse — do not treat an in-flight gate as offline/base error.
-        first_wait = del_body.index("await prksWaitOutAnnotationMaterialization")
-        first_check = del_body.index("prksPdfUserMutationStillAllowed", first_wait)
-        self.assertLess(first_wait, first_check)
+        # Confirm opens before waiting out materialization so Cancel is not
+        # stranded behind a long critical section; wait then capability before
+        # the viewer delete.
+        confirm_at = del_body.index("prksConfirmDeletePdfAnnotation")
+        wait_at = del_body.index("await prksWaitOutAnnotationMaterialization")
+        check_at = del_body.index("prksPdfUserMutationStillAllowed", wait_at)
+        self.assertLess(confirm_at, wait_at)
+        self.assertLess(wait_at, check_at)
         self.assertNotIn("prksViewerProgrammaticDelete", del_body)
         save_at = works.index("window.savePdfAnnotationComment")
         save_body = works[save_at:save_at + 2200]
@@ -249,11 +253,13 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
         self.assertLess(save_wait, save_check)
         self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
-        # Sidebar row Delete also waits before capability refuse.
+        # Sidebar row Delete: confirm first, then wait before capability refuse.
         row_at = works.index(".annotation-row__delete")
         row_body = works[row_at:row_at + 2400]
+        row_confirm = row_body.index("prksConfirmDeletePdfAnnotation")
         row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
         row_check = row_body.index("prksPdfUserMutationStillAllowed", row_wait)
+        self.assertLess(row_confirm, row_wait)
         self.assertLess(row_wait, row_check)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):

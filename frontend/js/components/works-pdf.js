@@ -714,21 +714,11 @@ window.deletePdfAnnotationFromEditor = async function () {
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
     if (!pdf) return;
-    // Wait out materialization/handoff first — do not refuse with a base/offline
-    // error while a transient critical section is still running.
-    await prksWaitOutAnnotationMaterialization(pdf);
-    if (owner && owner.destroyed) return;
-    if (!prksPdfUserMutationStillAllowed(pdf)) {
-        prksRefusePdfUserMutation(pdf);
-        return;
-    }
-    if (pdf.annotationMutationDurable !== true &&
-        typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
-        return;
-    }
     const st = pdf && pdf.annotationEditorState;
     if (!st || !st.annId) return;
     const annId = st.annId;
+    // Confirm first — do not hold the dialog behind materialization/handoff.
+    // Capability is re-checked after the gate before the viewer mutation.
     const confirmed =
         typeof prksConfirmDeletePdfAnnotation === 'function'
             ? await prksConfirmDeletePdfAnnotation()
@@ -1047,20 +1037,13 @@ ${commentHtml}
             return;
         }
         if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {
-            // Wait out materialization/handoff before capability refuse (avoid
-            // a false offline/base error while a critical section is active).
-            await prksWaitOutAnnotationMaterialization(pdf);
-            if (owner && owner.destroyed) return;
-            if (!prksPdfUserMutationStillAllowed(pdf)) {
-                prksRefusePdfUserMutation(pdf);
-                return;
-            }
-            if (pdf.annotationMutationDurable !== true &&
-                typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             const cache = pdf && pdf.annotationCache;
             const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
             const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
             if (!annId) return;
+            // Confirm immediately. Waiting out materialization before the dialog
+            // delayed Cancel/OK for the whole critical section and stranded the
+            // opener under load (sidebar may also repaint while waiting).
             const confirmed =
                 typeof prksConfirmDeletePdfAnnotation === 'function'
                     ? await prksConfirmDeletePdfAnnotation()
