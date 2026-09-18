@@ -1390,5 +1390,76 @@ class TestConstraintAndDrift(MigrationTestCase):
         self.assertNotIn("_migrate_works_fts_author_text", source)
 
 
+class TestPdfMaterializationMigration(MigrationTestCase):
+    def _downgrade_to_v14_without_roles_unique(self, *, keep_work_title="Keep V14"):
+        db = self._open()
+        work_id = db.add_work(title=keep_work_title)
+        person_id = db.add_person("Ada", "Lovelace")
+        db.add_role(person_id, work_id, "Author")
+        conn = _raw(self.storage.db_path)
+        conn.execute("DROP INDEX IF EXISTS idx_roles_person_work_role_unique")
+        # Materialization columns may already exist on a fresh latest DB; the
+        # v15 migration is idempotent for those ALTERs.
+        conn.execute("UPDATE schema_version SET version = 14")
+        conn.commit()
+        conn.close()
+        return work_id, person_id
+
+    def test_v14_missing_roles_unique_index_is_created(self):
+        work_id, person_id = self._downgrade_to_v14_without_roles_unique()
+        probe = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(probe), 14)
+            self.assertFalse(index_exists(probe, "idx_roles_person_work_role_unique"))
+        finally:
+            probe.close()
+        db = self._open()
+        self.assertEqual(_version(db.db_path), LATEST_SCHEMA_VERSION)
+        self.assertEqual(db.get_work(work_id)["title"], "Keep V14")
+        self.assertEqual(db.get_work_roles(work_id)[0]["id"], person_id)
+        conn = db.get_connection()
+        try:
+            self.assertTrue(index_exists(conn, "idx_roles_person_work_role_unique"))
+            self.assertTrue(column_exists(conn, "works", "canonical_annotation_set_revision"))
+            self.assertTrue(
+                column_exists(conn, "works", "materialized_pdf_annotation_revision")
+            )
+        finally:
+            conn.close()
+
+    def test_v14_duplicate_roles_block_unique_index(self):
+        work_id, person_id = self._downgrade_to_v14_without_roles_unique(
+            keep_work_title="Dup Roles"
+        )
+        conn = _raw(self.storage.db_path)
+        conn.execute(
+            """
+            INSERT INTO roles (person_id, work_id, role_type, order_index)
+            VALUES (?, ?, 'Author', 1)
+            """,
+            (person_id, work_id),
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "legacy_constraint_conflict")
+        self.assertEqual(
+            ctx.exception.details.get("constraint"),
+            "roles_person_work_role_unique",
+        )
+        check = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(check), 14)
+            self.assertFalse(index_exists(check, "idx_roles_person_work_role_unique"))
+            count = check.execute(
+                "SELECT COUNT(*) FROM roles WHERE person_id = ? AND work_id = ?",
+                (person_id, work_id),
+            ).fetchone()[0]
+            self.assertEqual(count, 2)
+        finally:
+            check.close()
+
+
 if __name__ == "__main__":
     unittest.main()
