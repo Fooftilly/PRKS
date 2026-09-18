@@ -1950,13 +1950,39 @@ class TestServerAPI(unittest.TestCase):
 
             real_fdopen = os.fdopen
 
+            class _BoomWriteProxy:
+                """fdopen stand-in: write raises OSError; close on context exit.
+
+                Cannot assign to BufferedWriter.write on some Python builds
+                (read-only); wrap instead so the failure path is actually hit.
+                """
+
+                def __init__(self, wrapped):
+                    self._wrapped = wrapped
+
+                def write(self, _data):
+                    raise OSError("simulated write failure")
+
+                def flush(self):
+                    return self._wrapped.flush()
+
+                def fileno(self):
+                    return self._wrapped.fileno()
+
+                def close(self):
+                    return self._wrapped.close()
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    self._wrapped.close()
+                    return False
+
             def boom_fdopen(fd, mode="r", *args, **kwargs):
                 fp = real_fdopen(fd, mode, *args, **kwargs)
                 if "w" in mode:
-                    def _boom(_data):
-                        raise OSError("simulated write failure")
-
-                    fp.write = _boom  # type: ignore[method-assign]
+                    return _BoomWriteProxy(fp)
                 return fp
 
             with patch.object(work_pdf_replace.os, "fdopen", boom_fdopen):
