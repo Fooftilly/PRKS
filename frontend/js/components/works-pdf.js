@@ -4,6 +4,24 @@
 
 import { createPrksPdfViewer } from '/js/pdf-viewer-runtime.js';
 
+function prksManagedPdfApiPath(filePath) {
+    const raw = String(filePath || '').split('?')[0].trim();
+    return raw.indexOf('/api/pdfs/') === 0 ? raw : '';
+}
+
+/**
+ * True when the mounted viewer is bound to the given managed PDF path.
+ * Distinct from "a viewer exists" — after a failed COW remount the old
+ * shared-URL viewer is intentionally kept while runtime.filePath already
+ * points at the exclusive path.
+ */
+function prksViewerBoundToManagedPath(runtime, path) {
+    if (!runtime || !runtime.viewer) return false;
+    const want = prksManagedPdfApiPath(path);
+    const bound = prksManagedPdfApiPath(runtime.viewerFilePath);
+    return !!(want && bound && want === bound);
+}
+
 function prksResolvePdfCtx(element) {
     if (typeof prksOwnerTabContext === 'function' && element) {
         const fromEl = prksOwnerTabContext(element);
@@ -1795,8 +1813,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     }
 
     function managedPdfApiPath(filePath) {
-        const raw = String(filePath || '').split('?')[0].trim();
-        return raw.indexOf('/api/pdfs/') === 0 ? raw : '';
+        return prksManagedPdfApiPath(filePath);
+    }
+
+    function viewerBoundToManagedPath(path) {
+        return prksViewerBoundToManagedPath(runtime, path);
     }
 
     async function cacheManagedPdfBytes(filePath, buffer) {
@@ -1835,12 +1856,36 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 oldViewer.destroy();
             }
         } catch (_eDestroy) { /* best-effort */ }
-        if (runtime && runtime.viewer === oldViewer) runtime.viewer = null;
+        if (runtime && runtime.viewer === oldViewer) {
+            runtime.viewer = null;
+            runtime.viewerFilePath = '';
+        }
         if (viewer === oldViewer) viewer = null;
+    }
+
+    function lockViewerPendingCowRemount(path) {
+        const pending = managedPdfApiPath(path);
+        if (runtime && pending) {
+            runtime._cowRemountPendingPath = pending;
+        }
+        const live = liveAnnotationViewer();
+        if (live && typeof live.setMutationEnabled === 'function') {
+            try { live.setMutationEnabled(false); } catch (_eLock) { /* best-effort */ }
+        }
+        if (runtime) {
+            runtime.annotationMutationAllowed = false;
+            if (!runtime.annotationMutationReason ||
+                String(runtime.annotationMutationReason).indexOf('cow_') !== 0) {
+                runtime.annotationMutationReason = 'cow_remount_pending';
+            }
+        }
     }
 
     function scheduleCowViewerRemount(path) {
         if (!runtime || runtime._destroyed) return;
+        const want = managedPdfApiPath(path);
+        if (!want) return;
+        lockViewerPendingCowRemount(want);
         if (runtime._cowRemountRetryScheduled) return;
         runtime._cowRemountRetryScheduled = true;
         const attempt = Number(runtime._cowRemountRetryAttempt) || 0;
@@ -1853,17 +1898,34 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         setTimeout(function () {
             runtime._cowRemountRetryScheduled = false;
             if (!runtime || runtime._destroyed) return;
-            if (liveAnnotationViewer()) return;
+            // Do NOT bail merely because a viewer exists — staging-first failure
+            // keeps the old shared-URL viewer. Retry until the live viewer is
+            // bound to the exclusive path.
+            if (viewerBoundToManagedPath(want)) {
+                runtime._cowRemountRetryAttempt = 0;
+                runtime._cowRemountPendingPath = '';
+                return;
+            }
             void (async function () {
-                const ok = await remountPdfViewerAfterCowRetarget(path);
+                const ok = await remountPdfViewerAfterCowRetarget(want);
                 if (ok) {
                     runtime._cowRemountRetryAttempt = 0;
+                    runtime._cowRemountPendingPath = '';
                     try {
                         await restoreEffectiveViewerAnnotations({ paintList: true });
                     } catch (_eRestore) { /* best-effort */ }
+                    if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                        try {
+                            await prksApplyPdfAnnotationCapability(ctx, runtime, {
+                                id: workId,
+                                file_path: runtime.filePath,
+                            });
+                        } catch (_eCap) { /* best-effort */ }
+                    }
                     return;
                 }
-                scheduleCowViewerRemount(path);
+                lockViewerPendingCowRemount(want);
+                scheduleCowViewerRemount(want);
             })();
         }, delay);
     }
@@ -1905,6 +1967,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
         if (!targetNode || !targetNode.parentNode) {
             keepOldViewerMutationDisabled();
+            lockViewerPendingCowRemount(newPath);
             return false;
         }
 
@@ -1948,6 +2011,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!newViewer) {
             try { staging.remove(); } catch (_eSt2) {}
             keepOldViewerMutationDisabled();
+            lockViewerPendingCowRemount(newPath);
             return false;
         }
 
@@ -1965,13 +2029,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 try { newViewer.destroy(); } catch (_eDestroyNew) {}
             }
             keepOldViewerMutationDisabled();
+            lockViewerPendingCowRemount(newPath);
             return false;
         }
 
         // Rebind closed-over viewer + runtime.viewer; leave viewerSetupToken
         // unchanged so stillLive() / the installed persistence worker stay valid.
+        // viewerFilePath marks this viewer as bound to the exclusive path —
+        // distinct from "a viewer exists" (old shared viewer may still be live
+        // until this point).
         viewer = newViewer;
         runtime.viewer = newViewer;
+        runtime.viewerFilePath = managedPdfApiPath(newPath) || String(newPath || '').split('?')[0];
+        runtime._cowRemountPendingPath = '';
         if (typeof newViewer.setMutationEnabled === 'function') {
             if (keepLocked) {
                 newViewer.setMutationEnabled(false);
@@ -1991,9 +2061,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!path) return false;
         const prev = managedPdfApiPath(runtime && runtime.filePath);
         if (path === prev) {
-            // Path already applied (e.g. error-path then success-path); still
-            // require a live viewer on the exclusive source.
-            if (liveAnnotationViewer()) return false;
+            // Path already applied (e.g. error-path then success-path). Bail
+            // only when the live viewer is already bound to that exclusive
+            // path — a surviving shared-URL viewer must still remount.
+            if (viewerBoundToManagedPath(path)) return false;
         } else {
             runtime.filePath = path;
             if (runtime.work && typeof runtime.work === 'object') {
@@ -2009,6 +2080,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             throw new Error('PDF_COW_REMOUNT_FAILED');
         }
         runtime._cowRemountRetryAttempt = 0;
+        runtime._cowRemountPendingPath = '';
         return true;
     }
 
@@ -2273,12 +2345,20 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     }
                 }
                 // Synchronous critical-section exit: clear handoff, enable, end gate.
+                // Never unlock a viewer that is still bound to the pre-COW shared
+                // path while runtime.filePath already points at the exclusive file.
                 prksClearMaterializationHandoff(runtime);
                 const unlockViewer = liveAnnotationViewer();
+                const viewerBoundExclusive = viewerBoundToManagedPath(runtime.filePath);
                 if (userInputLocked && stillLive() && unlockViewer &&
                     typeof unlockViewer.setMutationEnabled === 'function') {
-                    runtime.annotationMutationAllowed = unlockToWork;
-                    unlockViewer.setMutationEnabled(unlockToWork);
+                    const allowUnlock = !!(unlockToWork && viewerBoundExclusive);
+                    runtime.annotationMutationAllowed = allowUnlock;
+                    unlockViewer.setMutationEnabled(allowUnlock);
+                    if (!viewerBoundExclusive && managedPdfApiPath(runtime.filePath)) {
+                        lockViewerPendingCowRemount(runtime.filePath);
+                        scheduleCowViewerRemount(runtime.filePath);
+                    }
                 }
                 prksEndAnnotationMaterializationGate(runtime);
             }
@@ -2576,16 +2656,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 }
             } else if (projectionReady && userInputLocked && stillLive()) {
                 const catchUpViewer = liveAnnotationViewer();
+                const catchUpBound = viewerBoundToManagedPath(runtime.filePath);
                 if (catchUpViewer && typeof catchUpViewer.setMutationEnabled === 'function') {
-                    catchUpViewer.setMutationEnabled(runtime.mode === 'work');
+                    catchUpViewer.setMutationEnabled(catchUpBound && runtime.mode === 'work');
                 }
-                if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                if (catchUpBound && typeof prksApplyPdfAnnotationCapability === 'function') {
                     try {
                         await prksApplyPdfAnnotationCapability(ctx, runtime, {
                             id: workId,
                             file_path: runtime.filePath,
                         });
                     } catch (_eCap) { /* unlock above already applied */ }
+                } else if (!catchUpBound && managedPdfApiPath(runtime.filePath)) {
+                    lockViewerPendingCowRemount(runtime.filePath);
                 }
             } else if (acceptedSnapshot && !projectionReady && userInputLocked && stillLive()) {
                 // Remain preview/read-only until a later catch-up projects successfully.
@@ -2599,16 +2682,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             } else if (userInputLocked && stillLive()) {
                 // Snapshot never accepted (fetch/apply failed): restore capability.
                 const restoreViewer = liveAnnotationViewer();
+                const restoreBound = viewerBoundToManagedPath(runtime.filePath);
                 if (restoreViewer && typeof restoreViewer.setMutationEnabled === 'function') {
-                    restoreViewer.setMutationEnabled(runtime.mode === 'work');
+                    restoreViewer.setMutationEnabled(restoreBound && runtime.mode === 'work');
                 }
-                if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                if (restoreBound && typeof prksApplyPdfAnnotationCapability === 'function') {
                     try {
                         await prksApplyPdfAnnotationCapability(ctx, runtime, {
                             id: workId,
                             file_path: runtime.filePath,
                         });
                     } catch (_eCap) { /* unlock above already applied */ }
+                } else if (!restoreBound && managedPdfApiPath(runtime.filePath)) {
+                    lockViewerPendingCowRemount(runtime.filePath);
                 }
             }
             // Always end the catch-up gate here — never hand it to materialization.
@@ -3150,6 +3236,22 @@ async function prksApplyPdfAnnotationCapability(ctx, runtime, work) {
             reason: runtime.annotationMutationReason,
         };
     }
+    // After shared-PDF COW, runtime.filePath may already be exclusive while the
+    // live viewer is still the old shared-URL instance. Never enable mutation
+    // on that survivor — wait until remount binds viewerFilePath to filePath.
+    const exclusivePath = prksManagedPdfApiPath(runtime.filePath);
+    if (exclusivePath && runtime.viewer && !prksViewerBoundToManagedPath(runtime, exclusivePath)) {
+        runtime.annotationMutationAllowed = false;
+        runtime.annotationMutationReason = 'cow_remount_pending';
+        if (typeof runtime.viewer.setMutationEnabled === 'function') {
+            runtime.viewer.setMutationEnabled(false);
+        }
+        return {
+            mode: 'preview',
+            durable: !!cap.durable,
+            reason: 'cow_remount_pending',
+        };
+    }
     if (runtime.viewer) {
         prksReconcilePdfMutationMode(ctx, runtime);
     }
@@ -3218,9 +3320,11 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
     }
     if (runtime.lastPage && typeof runtime.lastPage.setViewer === 'function') runtime.lastPage.setViewer(viewer);
     runtime.viewer = viewer;
+    runtime.viewerFilePath = prksManagedPdfApiPath(work.file_path) || String(work.file_path || '').split('?')[0];
     runtime.viewerSetupToken = (runtime.viewerSetupToken || 0) + 1;
     const setupToken = runtime.viewerSetupToken;
     runtime.filePath = work.file_path || runtime.filePath || '';
+    runtime._cowRemountPendingPath = '';
     // Resolve capability (async) then reconcile mutation lock in place — never
     // destroy/recreate the viewer because connectivity or cache readiness changed.
     // Durable bridge starts not-ready so setMutationEnabled stays false until
@@ -3307,6 +3411,16 @@ export function initPdfViewerForWork(ctx, work) {
  */
 function prksReconcilePdfMutationMode(ctx, runtime) {
     if (!ctx || !runtime || runtime._destroyed || !runtime.viewer) return;
+    const exclusivePath = prksManagedPdfApiPath(runtime.filePath);
+    if (exclusivePath && !prksViewerBoundToManagedPath(runtime, exclusivePath)) {
+        // Shared-URL viewer surviving a failed COW remount — keep locked.
+        runtime.annotationMutationAllowed = false;
+        runtime.annotationMutationReason = 'cow_remount_pending';
+        if (typeof runtime.viewer.setMutationEnabled === 'function') {
+            runtime.viewer.setMutationEnabled(false);
+        }
+        return;
+    }
     const desired = prksPdfDesiredMode(runtime);
     const online =
         typeof window.prksOfflineRuntimeState !== 'function' ||

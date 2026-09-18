@@ -343,6 +343,19 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         apply_fn = cow_region[apply_at:]
         self.assertIn("PDF_COW_REMOUNT_FAILED", apply_fn)
         self.assertIn("scheduleCowViewerRemount", apply_fn)
+        # Remount retry must key off path binding, not mere viewer presence —
+        # a surviving shared-URL viewer must not block recovery.
+        schedule_at = cow_region.index("function scheduleCowViewerRemount")
+        schedule_fn = cow_region[schedule_at:remount_at]
+        self.assertIn("viewerBoundToManagedPath", schedule_fn)
+        self.assertNotIn("if (liveAnnotationViewer()) return;", schedule_fn)
+        self.assertIn("lockViewerPendingCowRemount", schedule_fn)
+        self.assertIn("runtime.viewerFilePath", remount)
+        self.assertIn("viewerBoundToManagedPath(path)", apply_fn)
+        self.assertNotIn(
+            "if (liveAnnotationViewer()) return false;",
+            apply_fn.split("const remounted")[0],
+        )
         # P1 failure path: apply file_path from non-OK bodies before throw.
         export_fn = works_pdf[export_at:export_end]
         err_path = export_fn.index("if (!pdfRes.ok)")
@@ -353,7 +366,8 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
             err_block.index("applyCowPdfRetarget(errRetarget, buffer)"),
             err_block.index("if (code === 'ANNOTATION_MATERIALIZATION_STALE')"),
         )
-        # Capability re-resolve after materialization must see the exclusive path.
+        # Capability re-resolve after materialization must see the exclusive path
+        # and must not unlock a shared-URL viewer still pending remount.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
         mat_pass = works_pdf[
             mat_pass_at : works_pdf.index(
@@ -362,7 +376,23 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         ]
         self.assertIn("file_path: runtime.filePath", mat_pass)
         self.assertIn("liveAnnotationViewer", mat_pass)
-        self.assertIn("unlockViewer.setMutationEnabled(unlockToWork)", mat_pass)
+        self.assertIn("viewerBoundExclusive", mat_pass)
+        self.assertIn("allowUnlock = !!(unlockToWork && viewerBoundExclusive)", mat_pass)
+        self.assertIn("unlockViewer.setMutationEnabled(allowUnlock)", mat_pass)
+        # Module-level capability must refuse mutation until viewerFilePath matches.
+        cap_at = works_pdf.index("async function prksApplyPdfAnnotationCapability")
+        cap_fn = works_pdf[cap_at : works_pdf.index("\nfunction prksCurrentPdfPageNumber", cap_at)]
+        self.assertIn("prksViewerBoundToManagedPath", cap_fn)
+        self.assertIn("cow_remount_pending", cap_fn)
+        reconcile_at = works_pdf.index("function prksReconcilePdfMutationMode")
+        reconcile_fn = works_pdf[
+            reconcile_at : works_pdf.index("\nif (typeof prksOfflineRuntimeSubscribe", reconcile_at)
+        ]
+        self.assertIn("prksViewerBoundToManagedPath", reconcile_fn)
+        self.assertIn("cow_remount_pending", reconcile_fn)
+        mount_at = works_pdf.index("async function prksMountPdfViewer")
+        mount_fn = works_pdf[mount_at : works_pdf.index("\nexport function initPdfViewerForWork", mount_at)]
+        self.assertIn("runtime.viewerFilePath", mount_fn)
 
 
 if __name__ == "__main__":
