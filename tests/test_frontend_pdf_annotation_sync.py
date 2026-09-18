@@ -79,6 +79,38 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksWorkHasUnresolvedPdfAnnotationOps", works_pdf)
         self.assertIn("Do NOT materialize PDF bytes here", works_pdf)
         self.assertIn("maybeCatchUpMaterialization", works_pdf)
+        # Catch-up always refreshes live /pdf-materialization (never trusts cached gens alone).
+        catch_up_at = works_pdf.index("async function maybeCatchUpMaterialization")
+        catch_up_end = works_pdf.index("function onAnnotationEvent", catch_up_at)
+        catch_up_body = works_pdf[catch_up_at:catch_up_end]
+        self.assertIn("/pdf-materialization", catch_up_body)
+        # Must fetch unconditionally — not only when local gens are missing.
+        self.assertNotIn(
+            "if (!Number.isSafeInteger(canonical) || !Number.isSafeInteger(materialized)) {\n"
+            "            try {\n"
+            "                const matRes = await prksRequest(",
+            catch_up_body,
+        )
+        self.assertLess(
+            catch_up_body.index("/pdf-materialization"),
+            catch_up_body.index("if (canonical <= materialized)"),
+        )
+        # Materialization fail-closed: ACK-only reconcile must not be swallowed.
+        mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
+        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 3500]
+        self.assertIn("_annotationMaterializing = true", mat_pass)
+        self.assertIn("_annotationDurableWriteChain", mat_pass)
+        self.assertIn("await window.prksReconcileViewerAnnotations(viewer, ackOnly", mat_pass)
+        self.assertNotIn("catch (_eRec)", mat_pass)
+        # Snapshot hydration retries after transient non-OK.
+        self.assertIn("scheduleAnnotationBaseHydrationRetry", works_pdf)
+        self.assertIn("_annotationBaseHydrationNeedsRetry", works_pdf)
+        self.assertIn("hydrateAnnotationBaseFromServer", works_pdf)
+        # Adoption skips known-stale bytes / unresolved ops.
+        self.assertIn("adoptBlocked", works_pdf)
+        adopt_py = (ROOT / "backend" / "pdf_annotation_adopt.py").read_text(encoding="utf-8")
+        self.assertIn("known-stale PDF bytes", adopt_py)
+        self.assertIn("STALE_CODE", adopt_py)
         # Local durable save path must not immediately flush PDF bytes.
         save_idx = works_pdf.index("prksSavePdfAnnotationDurably")
         next_materialize = works_pdf.find("requestFlush('materialize')", save_idx)

@@ -2090,6 +2090,64 @@ class OfflineFoundationTests(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_failed_then_successful_annotations_snapshot_becomes_editable(self):
+        """Transient non-OK `/annotations-snapshot` must retry hydration and
+        become work-capable without reopening the Work."""
+        server, page, context, _collector = self._start()
+        work_a = server.ids["work_a"]
+
+        snapshot_hits = {"n": 0}
+
+        def fail_then_ok_snapshot(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/works/%s/annotations-snapshot" % work_a:
+                snapshot_hits["n"] += 1
+                if snapshot_hits["n"] <= 2:
+                    route.fulfill(
+                        status=503,
+                        content_type="application/json",
+                        body='{"error":"temporary"}',
+                    )
+                    return
+            route.fallback()
+
+        page.route("**/api/works/**", fail_then_ok_snapshot)
+        try:
+            _wait_sw_active(page)
+            _open_work_from_home(page, WORK_A_TITLE)
+            _wait_pdf_viewer(page)
+
+            page.wait_for_function(
+                """() => {
+                    const pdf = %s;
+                    return !!(pdf && pdf.mode === 'preview'
+                        && (pdf.annotationMutationReason === 'online_awaiting_base'
+                            || pdf._annotationBaseHydrationNeedsRetry));
+                }""" % _FOCUSED_PDF,
+                timeout=15000,
+            )
+            self.assertEqual(_pdf_mode(page), "preview")
+            self.assertFalse(_pdf_markup_tools_available(page))
+
+            page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=30000)
+            page.wait_for_function(
+                """() => {
+                    const pdf = %s;
+                    return !!(pdf && pdf.annotationBaseReady
+                        && pdf.annotationDurableBridgeReady
+                        && pdf.annotationMutationDurable
+                        && pdf.mode === 'work');
+                }""" % _FOCUSED_PDF,
+                timeout=30000,
+            )
+            self.assertGreaterEqual(snapshot_hits["n"], 3)
+            self.assertTrue(_pdf_markup_tools_available(page))
+        finally:
+            try:
+                page.unroute("**/api/works/**", fail_then_ok_snapshot)
+            except Exception:
+                pass
 
     def test_transport_failure_while_browser_stays_online_goes_offline_and_recovers(self):
         """Server-unreachable while navigator.onLine remains true: an ordinary

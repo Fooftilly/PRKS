@@ -14,8 +14,9 @@ import pathlib
 import tempfile
 import unittest
 
-from backend import pdf_annotation_adopt
+from backend import pdf_annotation_adopt, pdf_materialization
 from backend.db_manager import PRKSDatabase
+from backend.pdf_annotations import WorkAnnotationError
 from backend.storage.config import StorageConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -71,6 +72,8 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
 
         # Case 1 seed: metadata-only + already-synced "both".
         self.db.sync_work_annotations(self.work_id, [meta_only, both])
+        # Adoption requires current materialization (canonical == materialized).
+        self.db.mark_work_pdf_materialized(self.work_id)
         before_ids = self._ids()
         self.assertEqual(before_ids, {"ann-meta", "ann-both"})
 
@@ -103,26 +106,55 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
         self.assertGreaterEqual(result["skipped_non_user"], 1)
         self.assertEqual(after_ids, {"ann-meta", "ann-both", "ann-byte"})
 
-    def test_adopt_preserves_materialization_lag(self) -> None:
+    def test_adopt_refuses_when_materialization_stale(self) -> None:
+        """Stale materialization must NOT adopt missing byte markup."""
         self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
         mat = self.db.get_work_pdf_materialization(self.work_id)
         self.assertTrue(mat["stale"])
-        lag = (
-            mat["canonical_annotation_set_revision"]
-            - mat["materialized_pdf_annotation_revision"]
-        )
-        self.assertEqual(lag, 1)
 
-        self.db.adopt_byte_only_user_markup(
-            self.work_id, [_highlight("byte", "Byte")]
-        )
+        with self.assertRaises(WorkAnnotationError) as ctx:
+            self.db.adopt_byte_only_user_markup(
+                self.work_id, [_highlight("byte", "Byte")]
+            )
+        self.assertEqual(ctx.exception.code, pdf_materialization.STALE_CODE)
+        self.assertNotIn("byte", self._ids())
         mat2 = self.db.get_work_pdf_materialization(self.work_id)
-        lag2 = (
-            mat2["canonical_annotation_set_revision"]
-            - mat2["materialized_pdf_annotation_revision"]
+        self.assertEqual(
+            mat2["canonical_annotation_set_revision"],
+            mat["canonical_annotation_set_revision"],
         )
-        self.assertEqual(lag2, lag)
+        self.assertEqual(
+            mat2["materialized_pdf_annotation_revision"],
+            mat["materialized_pdf_annotation_revision"],
+        )
+
+    def test_adopt_does_not_recreate_deleted_annotation_from_stale_bytes(self) -> None:
+        """A canonical+materialized → delete ACK → stale bytes still contain A →
+        reopen must not adopt A back into metadata."""
+        self.db.sync_work_annotations(self.work_id, [_highlight("ann-a", "A")])
+        self.db.mark_work_pdf_materialized(self.work_id)
+        mat = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertFalse(mat["stale"])
+
+        with self.db.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM annotations WHERE id = ? AND work_id = ?",
+                ("ann-a", self.work_id),
+            )
+            pdf_materialization.bump_canonical_annotation_set_on_conn(conn, self.work_id)
+            conn.commit()
+
+        mat2 = self.db.get_work_pdf_materialization(self.work_id)
         self.assertTrue(mat2["stale"])
+        self.assertNotIn("ann-a", self._ids())
+
+        with self.assertRaises(WorkAnnotationError) as ctx:
+            self.db.adopt_byte_only_user_markup(
+                self.work_id, [_highlight("ann-a", "A")]
+            )
+        self.assertEqual(ctx.exception.code, pdf_materialization.STALE_CODE)
+        self.assertNotIn("ann-a", self._ids())
 
     def test_adopt_when_current_does_not_invent_staleness(self) -> None:
         self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
@@ -140,8 +172,9 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
             mat2["materialized_pdf_annotation_revision"],
         )
 
-    def test_noop_when_viewer_empty(self) -> None:
+    def test_noop_when_viewer_empty_and_current(self) -> None:
         self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        self.db.mark_work_pdf_materialized(self.work_id)
         before = self.db.get_work_pdf_materialization(self.work_id)
         result = self.db.adopt_byte_only_user_markup(self.work_id, [])
         self.assertEqual(result["adopted_count"], 0)
@@ -150,6 +183,12 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
             before["canonical_annotation_set_revision"],
             after["canonical_annotation_set_revision"],
         )
+
+    def test_empty_viewer_still_refused_when_stale(self) -> None:
+        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+        with self.assertRaises(WorkAnnotationError) as ctx:
+            self.db.adopt_byte_only_user_markup(self.work_id, [])
+        self.assertEqual(ctx.exception.code, pdf_materialization.STALE_CODE)
 
     def test_classifier_rejects_links(self) -> None:
         self.assertTrue(pdf_annotation_adopt.default_is_non_user(_link("L1")))
@@ -161,6 +200,7 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
         )
 
     def test_http_adopt_endpoint(self) -> None:
+        # Fresh Work: both revisions at 0 (current). Adoption is allowed.
         result = self.db.adopt_byte_only_user_markup(
             self.work_id,
             [_highlight("from-http", "Via API"), _link("skip-me")],

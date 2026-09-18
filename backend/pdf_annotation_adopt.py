@@ -82,12 +82,28 @@ def adopt_byte_only_user_markup_on_conn(
 
     Does not delete any annotation. Non-user artifacts are ignored.
     Returns ``{adopted: [...ids], skipped_existing: n, skipped_non_user: n}``.
+
+    Known-stale PDF bytes are never authority: when
+    ``canonical_annotation_set_revision > materialized_pdf_annotation_revision``,
+    adoption is refused (do not resurrect deleted markup still embedded in an
+    older PDF). Adoption is only for legacy/current when the two revisions
+    match.
     """
+    from backend import pdf_materialization
+
     is_user = is_user_markup or default_is_user_markup
     is_link = is_non_user or default_is_non_user
-    exists = conn.execute("SELECT 1 FROM works WHERE id = ?", (work_id,)).fetchone()
-    if not exists:
+    mat = pdf_materialization.get_materialization_on_conn(conn, work_id)
+    if mat is None:
         raise WorkAnnotationError("work_not_found", "Work not found.", 404)
+    if int(mat["canonical_annotation_set_revision"]) > int(
+        mat["materialized_pdf_annotation_revision"]
+    ):
+        raise WorkAnnotationError(
+            pdf_materialization.STALE_CODE,
+            "Cannot adopt annotations from known-stale PDF bytes.",
+            409,
+        )
 
     present = {
         row[0]
@@ -148,11 +164,9 @@ def adopt_byte_only_user_markup_on_conn(
         present.add(normalized["id"])
 
     if adopted:
-        from backend import pdf_materialization
-
-        # Bytes already contain the adopted annotations. Bump the canonical set
-        # revision for inventory coherence, but preserve any prior materialization
-        # lag (do not invent staleness; do not clear real lag).
+        # Bytes already contain the adopted annotations and materialization is
+        # current (gated above). Bump both revisions together so adoption does
+        # not invent staleness.
         before = pdf_materialization.get_materialization_on_conn(conn, work_id)
         pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
         if before is not None:

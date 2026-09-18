@@ -1501,6 +1501,8 @@ class TestServerAPI(unittest.TestCase):
                  "custom": {"prksComment": "m"}}]
         with self._post_work_annotations(w_id, {"annotations_json": json.dumps(meta)}) as res:
             self.assertEqual(res.status, 200)
+        # Adoption requires current materialization; annotation save leaves lag.
+        self.__class__.test_db.mark_work_pdf_materialized(w_id)
         viewer = [
             {
                 "id": "byte-only",

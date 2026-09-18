@@ -1262,6 +1262,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     if (window.prksSync && typeof window.prksSync.changed === 'function') {
                         window.prksSync.changed();
                     }
+                    // Keep-server / discard may leave server materialization lagging
+                    // the live canonical set — refresh gens from the server, never
+                    // trust cached runtime integers alone.
+                    void maybeCatchUpMaterialization();
                 } catch (_err) {
                     button.disabled = false;
                     button.textContent = 'Retry';
@@ -1302,36 +1306,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
             : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
         if (snapOk) {
-            const saved = snapBody.items;
-            runtime.annotationCache = {
-                allItems: saved,
-                rawItems: saved,
-                items: saved,
-                docId: 'DB',
-                workId: String(workId),
-            };
-            runtime.annotationState = typeof window.prksPdfAnnotationSnapshotToState === 'function'
-                ? window.prksPdfAnnotationSnapshotToState(snapBody)
-                : {
-                    work_id: snapBody.work_id,
-                    annotations: snapBody.annotations,
-                    known_absent: snapBody.known_absent || {},
-                };
-            runtime.annotationBaseReady = true;
-            if (Number.isSafeInteger(snapBody.canonical_annotation_set_revision)) {
-                runtime.acknowledgedAnnotationSetRevision =
-                    snapBody.canonical_annotation_set_revision;
-            }
-            if (Number.isSafeInteger(snapBody.materialized_pdf_annotation_revision)) {
-                runtime.materializedPdfAnnotationRevision =
-                    snapBody.materialized_pdf_annotation_revision;
-            }
-            if (saved.length > 0) {
-                renderAnnotationFallbackList(saved, 'DB', workId, ctx);
-            }
+            applyAnnotationSnapshotToRuntime(snapBody, 'DB');
             if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
                 await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
             }
+        } else if (snapRes && !snapRes.ok) {
+            // Transient non-OK must not strand online_awaiting_base forever.
+            runtime._annotationBaseHydrationNeedsRetry = true;
         }
     } catch (_e) {
         // Offline reopen: try disposable coherent snapshot as acknowledged base.
@@ -1342,40 +1323,143 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
                     : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
                 if (snapOk) {
-                    const cached = snapBody.items;
-                    runtime.annotationCache = {
-                        allItems: cached,
-                        rawItems: cached,
-                        items: cached,
-                        docId: 'CACHE',
-                        workId: String(workId),
-                    };
-                    runtime.annotationState = typeof window.prksPdfAnnotationSnapshotToState === 'function'
-                        ? window.prksPdfAnnotationSnapshotToState(snapBody)
-                        : {
-                            work_id: snapBody.work_id,
-                            annotations: snapBody.annotations,
-                            known_absent: snapBody.known_absent || {},
-                        };
-                    runtime.annotationBaseReady = true;
-                    if (Number.isSafeInteger(snapBody.canonical_annotation_set_revision)) {
-                        runtime.acknowledgedAnnotationSetRevision =
-                            snapBody.canonical_annotation_set_revision;
-                    }
-                    if (Number.isSafeInteger(snapBody.materialized_pdf_annotation_revision)) {
-                        runtime.materializedPdfAnnotationRevision =
-                            snapBody.materialized_pdf_annotation_revision;
-                    }
-                    if (cached.length > 0) {
-                        renderAnnotationFallbackList(cached, 'CACHE', workId, ctx);
-                    }
+                    applyAnnotationSnapshotToRuntime(snapBody, 'CACHE');
                 }
             } catch (_e2) {}
+        }
+        if (!runtime.annotationBaseReady) {
+            runtime._annotationBaseHydrationNeedsRetry = true;
         }
     }
     if (!setupEligible()) {
         abandonSetup();
         return;
+    }
+
+    function applyAnnotationSnapshotToRuntime(snapBody, docId) {
+        if (!snapBody) return false;
+        const snapOk = typeof window.prksIsPdfAnnotationsSnapshotShape === 'function'
+            ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
+            : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
+        if (!snapOk) return false;
+        const saved = snapBody.items;
+        runtime.annotationCache = {
+            allItems: saved,
+            rawItems: saved,
+            items: saved,
+            docId: docId || 'DB',
+            workId: String(workId),
+        };
+        runtime.annotationState = typeof window.prksPdfAnnotationSnapshotToState === 'function'
+            ? window.prksPdfAnnotationSnapshotToState(snapBody)
+            : {
+                work_id: snapBody.work_id,
+                annotations: snapBody.annotations,
+                known_absent: snapBody.known_absent || {},
+            };
+        runtime.annotationBaseReady = true;
+        runtime._annotationBaseHydrationNeedsRetry = false;
+        if (Number.isSafeInteger(snapBody.canonical_annotation_set_revision)) {
+            runtime.acknowledgedAnnotationSetRevision =
+                snapBody.canonical_annotation_set_revision;
+        }
+        if (Number.isSafeInteger(snapBody.materialized_pdf_annotation_revision)) {
+            runtime.materializedPdfAnnotationRevision =
+                snapBody.materialized_pdf_annotation_revision;
+        }
+        if (saved.length > 0) {
+            renderAnnotationFallbackList(saved, docId || 'DB', workId, ctx);
+        }
+        return true;
+    }
+
+    async function hydrateAnnotationBaseFromServer() {
+        if (!stillLive() || !isOnlineRuntime()) return false;
+        if (runtime.annotationBaseReady) return true;
+        try {
+            const snapRes = await prksRequest(
+                `/api/works/${workId}/annotations-snapshot`,
+                { cache: 'no-store' },
+                { dedupe: false, retry: false, freshForMs: 0 }
+            );
+            if (!stillLive()) return false;
+            if (!snapRes || !snapRes.ok) return false;
+            const snapBody = await snapRes.json();
+            if (!stillLive()) return false;
+            if (!applyAnnotationSnapshotToRuntime(snapBody, 'DB')) return false;
+            if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
+                await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+            }
+            return true;
+        } catch (_eHydrate) {
+            return false;
+        }
+    }
+
+    /**
+     * Transient 500/503 (or aborted) snapshot must not leave permanent
+     * online_awaiting_base with an installed bridge that never restarts.
+     * Retry until coherent base lands, then re-resolve capability in place.
+     */
+    function scheduleAnnotationBaseHydrationRetry() {
+        if (runtime._annotationBaseHydrationRetryScheduled) return;
+        if (runtime.annotationBaseReady) return;
+        if (!runtime._annotationBaseHydrationNeedsRetry) return;
+        runtime._annotationBaseHydrationRetryScheduled = true;
+        void (async function retryHydrationLoop() {
+            let delay = 350;
+            try {
+                for (let attempt = 0; attempt < 16; attempt++) {
+                    if (!stillLive()) return;
+                    if (runtime.annotationBaseReady) return;
+                    if (!isOnlineRuntime()) {
+                        // Reconnect path calls ensure / offline subscribe catch-up.
+                        runtime._annotationBaseHydrationNeedsRetry = true;
+                        return;
+                    }
+                    await new Promise(function (resolve) { setTimeout(resolve, delay); });
+                    if (!stillLive()) return;
+                    const ok = await hydrateAnnotationBaseFromServer();
+                    if (!stillLive()) return;
+                    if (ok) {
+                        if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
+                            try {
+                                await window.prksRefreshPendingPdfAnnotations();
+                            } catch (_ePend) { /* best-effort */ }
+                        }
+                        if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                            await prksApplyPdfAnnotationCapability(ctx, runtime, {
+                                id: workId,
+                                file_path: runtime.filePath,
+                            });
+                        }
+                        void maybeCatchUpMaterialization();
+                        return;
+                    }
+                    delay = Math.min(Math.floor(delay * 1.55), 4000);
+                }
+            } finally {
+                runtime._annotationBaseHydrationRetryScheduled = false;
+                // If still missing a base while the viewer lives online, allow
+                // another ensure/retry cycle rather than permanent stranding.
+                if (stillLive() && !runtime.annotationBaseReady && isOnlineRuntime()) {
+                    runtime._annotationBaseHydrationNeedsRetry = true;
+                    // Soft-reset so reconnect/reconcile can call ensure again if
+                    // the worker never installed; if it did, re-arm this loop.
+                    if (!runtime.annotationPersistence) {
+                        abandonSetup();
+                    } else {
+                        scheduleAnnotationBaseHydrationRetry();
+                    }
+                }
+            }
+        })();
+    }
+
+    // If first snapshot failed while online, keep retrying without reopening Work.
+    if (!runtime.annotationBaseReady && isOnlineRuntime() &&
+        runtime._annotationBaseHydrationNeedsRetry) {
+        scheduleAnnotationBaseHydrationRetry();
     }
 
     // Hydrate pending durable ops before first effective-state / viewer reconcile.
@@ -1402,69 +1486,64 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // Slice G: adopt byte-only user markup from PDF bytes into canonical
     // metadata before projecting. Never deletes metadata-only rows; Links /
     // widgets stay out of the annotations table. Offline skips (server needed).
+    // Never adopt from known-stale PDF bytes, and never while unresolved PDF
+    // annotation ops exist (pending local intent is not adoption authority).
     const onlineForAdopt =
         typeof window.prksOfflineRuntimeState !== 'function' ||
         window.prksOfflineRuntimeState() === 'online';
     if (onlineForAdopt && typeof viewer.getAnnotations === 'function') {
         try {
-            const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
-            const adoptRes = await prksRequest(
-                `/api/works/${workId}/annotations/adopt`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ viewer_annotations: viewerItems }),
-                },
-                { dedupe: false, retry: false, freshForMs: 0 }
-            );
-            if (setupEligible() && adoptRes && adoptRes.ok) {
-                const adoptBody = await adoptRes.json().catch(function () { return null; });
-                if (
-                    adoptBody &&
-                    Number(adoptBody.adopted_count) > 0 &&
-                    setupEligible()
-                ) {
-                    const refreshed = await prksRequest(
-                        `/api/works/${workId}/annotations-snapshot`,
-                        { cache: 'no-store' },
-                        { dedupe: false, retry: false, freshForMs: 0 }
+            let adoptBlocked = false;
+            const canon = runtime.acknowledgedAnnotationSetRevision;
+            const matRev = runtime.materializedPdfAnnotationRevision;
+            if (Number.isSafeInteger(canon) && Number.isSafeInteger(matRev) && canon > matRev) {
+                adoptBlocked = true;
+            }
+            if (!adoptBlocked &&
+                typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
+                try {
+                    adoptBlocked = await window.prksWorkHasUnresolvedPdfAnnotationOps(
+                        String(workId)
                     );
-                    if (setupEligible() && refreshed && refreshed.ok) {
-                        const snapBody = await refreshed.json();
-                        const snapOk = typeof window.prksIsPdfAnnotationsSnapshotShape === 'function'
-                            ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
-                            : !!(snapBody && Array.isArray(snapBody.items) &&
-                                Array.isArray(snapBody.annotations));
-                        if (snapOk) {
-                            const saved = snapBody.items;
-                            runtime.annotationCache = {
-                                allItems: saved,
-                                rawItems: saved,
-                                items: saved,
-                                docId: 'DB',
-                                workId: String(workId),
-                            };
-                            runtime.annotationState =
-                                typeof window.prksPdfAnnotationSnapshotToState === 'function'
-                                    ? window.prksPdfAnnotationSnapshotToState(snapBody)
-                                    : {
-                                        work_id: snapBody.work_id,
-                                        annotations: snapBody.annotations,
-                                        known_absent: snapBody.known_absent || {},
-                                    };
-                            runtime.annotationBaseReady = true;
-                            if (Number.isSafeInteger(snapBody.canonical_annotation_set_revision)) {
-                                runtime.acknowledgedAnnotationSetRevision =
-                                    snapBody.canonical_annotation_set_revision;
-                            }
-                            if (Number.isSafeInteger(snapBody.materialized_pdf_annotation_revision)) {
-                                runtime.materializedPdfAnnotationRevision =
-                                    snapBody.materialized_pdf_annotation_revision;
-                            }
-                            if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                                await window.prksPublishAcknowledgedPdfAnnotations(
-                                    String(workId), snapBody
-                                );
+                } catch (_eDirtyAdopt) {
+                    adoptBlocked = true;
+                }
+            }
+            if (!setupEligible()) {
+                abandonSetup();
+                return;
+            }
+            if (!adoptBlocked) {
+                const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+                const adoptRes = await prksRequest(
+                    `/api/works/${workId}/annotations/adopt`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ viewer_annotations: viewerItems }),
+                    },
+                    { dedupe: false, retry: false, freshForMs: 0 }
+                );
+                if (setupEligible() && adoptRes && adoptRes.ok) {
+                    const adoptBody = await adoptRes.json().catch(function () { return null; });
+                    if (
+                        adoptBody &&
+                        Number(adoptBody.adopted_count) > 0 &&
+                        setupEligible()
+                    ) {
+                        const refreshed = await prksRequest(
+                            `/api/works/${workId}/annotations-snapshot`,
+                            { cache: 'no-store' },
+                            { dedupe: false, retry: false, freshForMs: 0 }
+                        );
+                        if (setupEligible() && refreshed && refreshed.ok) {
+                            const snapBody = await refreshed.json();
+                            if (applyAnnotationSnapshotToRuntime(snapBody, 'DB')) {
+                                if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
+                                    await window.prksPublishAcknowledgedPdfAnnotations(
+                                        String(workId), snapBody
+                                    );
+                                }
                             }
                         }
                     }
@@ -1574,35 +1653,85 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (!Number.isSafeInteger(claimed) || claimed < 0) {
                 return;
             }
-            if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
-                const dirty = await window.prksWorkHasUnresolvedPdfAnnotationOps(String(workId));
-                if (!stillLive()) return;
-                if (dirty) {
-                    // Keep the claim; a later ACK / startup catch-up retries.
-                    return;
-                }
+            // Fail-closed + serialized with annotation mutation: mutation-lock,
+            // await in-flight durable writes, recheck queue, ACK-only reconcile
+            // (must succeed), recheck clean, then saveCopy/upload.
+            runtime._annotationMaterializing = true;
+            if (viewer && typeof viewer.setMutationEnabled === 'function') {
+                try { viewer.setMutationEnabled(false); } catch (_eLock) { /* best-effort */ }
             }
-            // Project ACKNOWLEDGED-only state into the viewer before export.
-            const ackOnly = Array.isArray(runtime.annotationCache && runtime.annotationCache.items)
-                ? runtime.annotationCache.items
-                : [];
-            if (typeof window.prksReconcileViewerAnnotations === 'function') {
-                try {
+            try {
+                if (runtime._annotationDurableWriteChain) {
+                    try {
+                        await runtime._annotationDurableWriteChain;
+                    } catch (_eWrite) { /* prior write failure already handled */ }
+                }
+                if (!stillLive()) return;
+                if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
+                    try {
+                        await window.prksRefreshPendingPdfAnnotations();
+                    } catch (_ePend) { /* best-effort refresh */ }
+                }
+                if (!stillLive()) return;
+                if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
+                    const dirty = await window.prksWorkHasUnresolvedPdfAnnotationOps(String(workId));
+                    if (!stillLive()) return;
+                    if (dirty) {
+                        // Keep the claim; a later ACK / startup catch-up retries.
+                        return;
+                    }
+                }
+                // Project ACKNOWLEDGED-only state — require success (fail closed).
+                const ackOnly = Array.isArray(runtime.annotationCache && runtime.annotationCache.items)
+                    ? runtime.annotationCache.items
+                    : [];
+                if (typeof window.prksReconcileViewerAnnotations === 'function') {
                     await window.prksReconcileViewerAnnotations(viewer, ackOnly, {
                         isManaged: prksIsUserMarkupAnnotation,
                     });
-                } catch (_eRec) { /* best-effort; upload still fenced by claim */ }
+                }
+                if (!stillLive()) return;
+                if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
+                    const dirtyAfter = await window.prksWorkHasUnresolvedPdfAnnotationOps(
+                        String(workId)
+                    );
+                    if (!stillLive()) return;
+                    if (dirtyAfter) {
+                        return;
+                    }
+                }
+                await exportAndPersistPdfCopy(saveToken, claimed);
+                if (!stillLive()) return;
+                if (runtime.pendingMaterializationRevision === claimed) {
+                    runtime.pendingMaterializationRevision = null;
+                }
+                runtime.materializedPdfAnnotationRevision = claimed;
+                const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+                renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
+                return;
+            } finally {
+                runtime._annotationMaterializing = false;
+                if (stillLive()) {
+                    if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                        try {
+                            await prksApplyPdfAnnotationCapability(ctx, runtime, {
+                                id: workId,
+                                file_path: runtime.filePath,
+                            });
+                        } catch (_eCap) {
+                            if (viewer && typeof viewer.setMutationEnabled === 'function') {
+                                try {
+                                    viewer.setMutationEnabled(prksPdfDesiredMode(runtime) === 'work');
+                                } catch (_eUnlock) { /* best-effort */ }
+                            }
+                        }
+                    } else if (viewer && typeof viewer.setMutationEnabled === 'function') {
+                        try {
+                            viewer.setMutationEnabled(prksPdfDesiredMode(runtime) === 'work');
+                        } catch (_eUnlock2) { /* best-effort */ }
+                    }
+                }
             }
-            if (!stillLive()) return;
-            await exportAndPersistPdfCopy(saveToken, claimed);
-            if (!stillLive()) return;
-            if (runtime.pendingMaterializationRevision === claimed) {
-                runtime.pendingMaterializationRevision = null;
-            }
-            runtime.materializedPdfAnnotationRevision = claimed;
-            const itemsFound = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
-            renderAnnotationFallbackList(itemsFound, viewer.getDocumentId ? viewer.getDocumentId() : null, workId, ctx);
-            return;
         }
         await exportAndPersistPdfCopy(saveToken);
         if (!stillLive()) return;
@@ -1738,6 +1867,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
      * queue for this Work is clean, queue an ACK-only PDF export. Does not
      * rely solely on an in-memory pendingMaterializationRevision from a live
      * ACK subscriber.
+     *
+     * Always refreshes `/pdf-materialization` — cached runtime gens (e.g. 4/4)
+     * can be stale vs the live server (5/4) after reconnect or Keep-server.
      */
     async function maybeCatchUpMaterialization() {
         if (!stillLive() || !runtime.annotationMutationDurable) return;
@@ -1745,30 +1877,28 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             typeof window.prksOfflineRuntimeState !== 'function' ||
             window.prksOfflineRuntimeState() === 'online';
         if (!online) return;
-        let canonical = runtime.acknowledgedAnnotationSetRevision;
-        let materialized = runtime.materializedPdfAnnotationRevision;
-        if (!Number.isSafeInteger(canonical) || !Number.isSafeInteger(materialized)) {
-            try {
-                const matRes = await prksRequest(
-                    `/api/works/${workId}/pdf-materialization`,
-                    { cache: 'no-store' },
-                    { dedupe: false, retry: false, freshForMs: 0 }
-                );
-                if (!stillLive()) return;
-                if (matRes && matRes.ok) {
-                    const mat = await matRes.json();
-                    if (Number.isSafeInteger(mat.canonical_annotation_set_revision)) {
-                        canonical = mat.canonical_annotation_set_revision;
-                        runtime.acknowledgedAnnotationSetRevision = canonical;
-                    }
-                    if (Number.isSafeInteger(mat.materialized_pdf_annotation_revision)) {
-                        materialized = mat.materialized_pdf_annotation_revision;
-                        runtime.materializedPdfAnnotationRevision = materialized;
-                    }
+        let canonical = null;
+        let materialized = null;
+        try {
+            const matRes = await prksRequest(
+                `/api/works/${workId}/pdf-materialization`,
+                { cache: 'no-store' },
+                { dedupe: false, retry: false, freshForMs: 0 }
+            );
+            if (!stillLive()) return;
+            if (matRes && matRes.ok) {
+                const mat = await matRes.json();
+                if (Number.isSafeInteger(mat.canonical_annotation_set_revision)) {
+                    canonical = mat.canonical_annotation_set_revision;
+                    runtime.acknowledgedAnnotationSetRevision = canonical;
                 }
-            } catch (_eMat) {
-                return;
+                if (Number.isSafeInteger(mat.materialized_pdf_annotation_revision)) {
+                    materialized = mat.materialized_pdf_annotation_revision;
+                    runtime.materializedPdfAnnotationRevision = materialized;
+                }
             }
+        } catch (_eMat) {
+            return;
         }
         if (!Number.isSafeInteger(canonical) || !Number.isSafeInteger(materialized)) return;
         if (canonical <= materialized) return;
@@ -1790,6 +1920,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     function onAnnotationEvent(evt) {
         if (worker && worker.destroyed) return;
         if (!stillLive()) return;
+        // Materialization holds a temporary mutation lock; ignore events that
+        // race the ACK-only export window.
+        if (runtime._annotationMaterializing) return;
         // Reconcile create/update/delete must not look like user mutations.
         if (typeof window.prksViewerIsReconcilingAnnotations === 'function' &&
             window.prksViewerIsReconcilingAnnotations(viewer)) {
@@ -1803,8 +1936,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         // the projection back to effective acknowledged+pending state.
         if (runtime.annotationMutationDurable &&
             typeof window.prksSavePdfAnnotationDurably === 'function') {
-            void (async function () {
+            const writeTask = (async function () {
                 if (!stillLive()) return;
+                if (runtime._annotationMaterializing) return;
                 const annId = evt.annotationId || (evt.annotation && (
                     evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
                 ));
@@ -1875,6 +2009,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     }
                 }
             })();
+            // Serialize durable annotation-event writes with materialization.
+            const prior = runtime._annotationDurableWriteChain || Promise.resolve();
+            runtime._annotationDurableWriteChain = prior.then(
+                function () { return writeTask; },
+                function () { return writeTask; }
+            );
+            void writeTask;
             return;
         }
 
@@ -2059,8 +2200,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 stopOfflineSubscribe = window.prksOfflineRuntimeSubscribe(function () {
                     if (!stillLive()) return;
                     renderSyncIndicator();
+                    if (!runtime.annotationBaseReady && isOnlineRuntime()) {
+                        runtime._annotationBaseHydrationNeedsRetry = true;
+                        scheduleAnnotationBaseHydrationRetry();
+                    }
                     // Reconnect catch-up: stale PDF materialization must not
-                    // depend solely on a live ACK that already fired.
+                    // depend solely on a live ACK that already fired. Always
+                    // re-inspect live server gens (see maybeCatchUpMaterialization).
                     void maybeCatchUpMaterialization();
                 });
             }
