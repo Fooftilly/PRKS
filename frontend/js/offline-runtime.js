@@ -844,9 +844,18 @@
                 annotations: annotations,
                 known_absent: knownAbsent,
             });
+            // Patch the ACKed annotation body, but do not relabel the cached
+            // object as a newer coherent snapshot unless generation continuity
+            // proves no unseen set changes (cached gen + 1 === ACK gen).
             if (Number.isSafeInteger(result.canonical_annotation_set_revision)) {
-                nextSnap.canonical_annotation_set_revision =
-                    result.canonical_annotation_set_revision;
+                const nextGen = result.canonical_annotation_set_revision;
+                const prevGen = Number.isSafeInteger(snap.canonical_annotation_set_revision)
+                    ? snap.canonical_annotation_set_revision
+                    : null;
+                if (prevGen === null || nextGen === prevGen || nextGen === prevGen + 1) {
+                    nextSnap.canonical_annotation_set_revision = nextGen;
+                }
+                // else: keep snap.canonical_annotation_set_revision unchanged
             }
             if (!await cacheEntityIfCurrent(kind, id, nextSnap, token)) {
                 return false;

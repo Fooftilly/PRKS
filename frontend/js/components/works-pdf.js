@@ -581,6 +581,15 @@ function prksViewerProgrammaticUpdate(viewer, annId, patch) {
     }
 }
 
+/** User-originated sidebar/editor mutations must not use the programmatic
+ * escape hatch (that is reconcile-only). Wait out materialization lock. */
+async function prksWaitOutAnnotationMaterialization(pdf) {
+    if (!pdf) return;
+    while (pdf._annotationMaterializing) {
+        await new Promise(function (resolve) { setTimeout(resolve, 25); });
+    }
+}
+
 window.deletePdfAnnotationFromEditor = async function () {
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
@@ -604,9 +613,12 @@ window.deletePdfAnnotationFromEditor = async function () {
     if (!confirmed) return;
     if (owner && owner.destroyed) return;
     try {
+        await prksWaitOutAnnotationMaterialization(pdf);
+        if (owner && owner.destroyed) return;
         const viewer = prksPdfViewer(owner);
         if (!viewer || typeof viewer.deleteAnnotation !== 'function') return;
-        await prksViewerProgrammaticDelete(viewer, annId);
+        // User path: plain delete after lock releases — never beginProgrammatic.
+        await viewer.deleteAnnotation(annId);
         if (typeof window.closePdfAnnotationEditor === 'function') {
             window.closePdfAnnotationEditor(owner);
         }
@@ -632,6 +644,8 @@ window.savePdfAnnotationComment = async function () {
     if (!st || !txt) return;
     const val = (txt.value || '').trim();
     try {
+        await prksWaitOutAnnotationMaterialization(pdf);
+        if (owner && owner.destroyed) return;
         const viewer = prksPdfViewer(owner);
         if (!viewer || typeof viewer.updateAnnotation !== 'function') return;
         const liveAnn = prksFindViewerAnnotation(viewer, st.annId);
@@ -661,7 +675,8 @@ window.savePdfAnnotationComment = async function () {
             custom: Object.assign({}, baseCustom, { prksComment: val }),
             contents: val,
         };
-        prksViewerProgrammaticUpdate(viewer, st.annId, patch);
+        // User path: plain update after lock — never beginProgrammatic.
+        viewer.updateAnnotation(st.annId, patch);
         prksPatchAnnotationListCacheAfterCommentSave(owner, st.annId, val);
         if (typeof window.applyCachedAnnotationListToPanel === 'function') {
             window.applyCachedAnnotationListToPanel(owner);
@@ -906,10 +921,13 @@ ${commentHtml}
                     : window.confirm('Delete this annotation from the PDF?');
             if (!confirmed) return;
             if (owner && owner.destroyed) return;
+            await prksWaitOutAnnotationMaterialization(pdf);
+            if (owner && owner.destroyed) return;
             const viewer = prksPdfViewer(owner);
             if (viewer && typeof viewer.deleteAnnotation === 'function') {
                 try {
-                    await prksViewerProgrammaticDelete(viewer, annId);
+                    // User path: plain delete after materialization lock.
+                    await viewer.deleteAnnotation(String(annId));
                     if (typeof window.closePdfAnnotationEditor === 'function') {
                         const st = pdf && pdf.annotationEditorState;
                         if (st && String(st.annId) === String(annId)) {
@@ -2216,11 +2234,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             op.operation === 'SET_PDF_ANNOTATION' ||
                             op.operation === 'DELETE_PDF_ANNOTATION'
                         ) && String(op.entity_id) === String(workId);
-                        if (isPdfAck) {
+                            if (isPdfAck) {
                             if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes === 'function') {
                                 window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
                             }
-                            const setRev = ack.canonical_annotation_set_revision;
                             let dirty = false;
                             if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
                                 try {
@@ -2232,25 +2249,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                 }
                             }
                             if (!stillLive()) return;
-                            if (ack.changed === true && Number.isSafeInteger(setRev) && setRev >= 0) {
-                                runtime.acknowledgedAnnotationSetRevision = setRev;
-                                // Never materialize while other annotation intent
-                                // for this Work is still unresolved — saveCopy
-                                // would bake pending B into generation A.
-                                if (!dirty) {
-                                    runtime.pendingMaterializationRevision = setRev;
-                                    const online =
-                                        typeof window.prksOfflineRuntimeState !== 'function' ||
-                                        window.prksOfflineRuntimeState() === 'online';
-                                    if (online) {
-                                        if (worker && worker.paused && typeof worker.resume === 'function') {
-                                            worker.resume();
-                                        }
-                                        void requestFlush('materialize');
-                                    }
-                                }
-                            } else if (!dirty) {
-                                // Unchanged ACK while queue drained — catch up.
+                            // Every materialization — including the normal
+                            // ACK-drained path — goes through a fresh coherent
+                            // /annotations-snapshot. Never claim
+                            // pendingMaterializationRevision from an
+                            // incremental ACK alone (cache may only have
+                            // patched one annotation while the set gen jumped).
+                            if (!dirty) {
                                 void maybeCatchUpMaterialization();
                             }
                             const ackItems =

@@ -199,17 +199,17 @@ function ApiBinder({
                     }
                 },
                 activateMarkupTool: (tool) => {
-                    if (mode !== 'work') return;
+                    if (!controller.allowsAnnotationMutation()) return;
                     pan?.disablePan();
                     annotation?.setActiveTool(tool);
                 },
                 clearActiveTool: () => annotation?.setActiveTool(null),
                 undo: () => {
-                    if (mode !== 'work') return;
+                    if (!controller.allowsUserAnnotationMutation()) return;
                     historyCap?.forDocument(activeDocumentId)?.undo();
                 },
                 redo: () => {
-                    if (mode !== 'work') return;
+                    if (!controller.allowsUserAnnotationMutation()) return;
                     historyCap?.forDocument(activeDocumentId)?.redo();
                 },
                 getAnnotations: () => {
@@ -236,7 +236,8 @@ function ApiBinder({
                     annotation?.selectAnnotation(pi, annotationId);
                 },
                 updateAnnotation: (annotationId, patch) => {
-                    if (mode !== 'work' && !controller.allowsProgrammaticAnnotationMutation()) {
+                    // Synchronous controller gate — do not rely only on React mode.
+                    if (!controller.allowsAnnotationMutation()) {
                         return;
                     }
                     const got = annotation?.getAnnotationById(annotationId);
@@ -246,13 +247,13 @@ function ApiBinder({
                     annotation?.updateAnnotation(pi, annotationId, patch as never);
                 },
                 createAnnotation: (pageIndex, annotationObj) => {
-                    if (mode !== 'work' && !controller.allowsProgrammaticAnnotationMutation()) {
+                    if (!controller.allowsAnnotationMutation()) {
                         return;
                     }
                     annotation?.createAnnotation(pageIndex, annotationObj as never);
                 },
                 deleteAnnotation: async (annotationId) => {
-                    if (mode !== 'work' && !controller.allowsProgrammaticAnnotationMutation()) {
+                    if (!controller.allowsAnnotationMutation()) {
                         return;
                     }
                     const got = annotation?.getAnnotationById(annotationId);
@@ -447,6 +448,7 @@ export async function createPrksPdfViewer(
     // engine/document, so toggling it is safe to do at any time without
     // losing in-memory (including unsaved) annotation state.
     let currentMode: 'work' | 'preview' = options.mode || 'work';
+    controller.setUserMutationEnabled(currentMode === 'work');
     const renderTree = () => {
         root.render(
             <ViewerTree
@@ -460,6 +462,9 @@ export async function createPrksPdfViewer(
     renderTree();
     const handle = controller.asHandle();
     handle.setMutationEnabled = (enabled: boolean) => {
+        // Synchronous controller gate first — ApiBinder create/update/delete
+        // consult this immediately; do not wait for React mode rerender.
+        controller.setUserMutationEnabled(enabled);
         const nextMode = enabled ? 'work' : 'preview';
         if (nextMode === currentMode) return;
         if (!enabled) {

@@ -91,6 +91,23 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
             catch_up_body.index("/annotations-snapshot"),
             catch_up_body.index("if (canonical <= materialized)"),
         )
+        # ACK-drained path must also use coherent catch-up — never assign
+        # pendingMaterializationRevision from an incremental ACK alone.
+        ack_sub_at = works_pdf.index("const isPdfAck = ack && op && (")
+        ack_sub = works_pdf[ack_sub_at:ack_sub_at + 2200]
+        self.assertIn("maybeCatchUpMaterialization", ack_sub)
+        self.assertNotIn("pendingMaterializationRevision = setRev", ack_sub)
+        self.assertNotIn("requestFlush('materialize')", ack_sub)
+        # Incremental ACK must not relabel snapshot gen without continuity.
+        offline = (ROOT / "frontend" / "js" / "offline-runtime.js").read_text(encoding="utf-8")
+        rec_at = offline.index("async function reconcilePdfAnnotation")
+        rec_body = offline[rec_at:rec_at + 3500]
+        self.assertIn("nextGen === prevGen + 1", rec_body)
+        state_js = (ROOT / "frontend" / "js" / "pdf-annotation-state.js").read_text(encoding="utf-8")
+        self.assertIn("nextGen === prevGen + 1", state_js)
+        # User sidebar/editor waits out materialization; programmatic = reconcile only.
+        self.assertIn("prksWaitOutAnnotationMaterialization", works_pdf)
+        self.assertIn("User path: plain delete after materialization lock", works_pdf)
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
         mat_pass = works_pdf[mat_pass_at:mat_pass_at + 5500]
@@ -120,10 +137,15 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("known-stale PDF bytes", adopt_py)
         self.assertIn("STALE_CODE", adopt_py)
         # Local durable save path must not immediately flush PDF bytes.
-        save_idx = works_pdf.index("prksSavePdfAnnotationDurably")
-        next_materialize = works_pdf.find("requestFlush('materialize')", save_idx)
-        self.assertGreater(next_materialize, 0)
-        self.assertIn("Do NOT materialize PDF bytes here", works_pdf[save_idx:next_materialize])
+        save_idx = works_pdf.index("await window.prksSavePdfAnnotationDurably")
+        save_tail = works_pdf[save_idx:save_idx + 1600]
+        self.assertIn("Do NOT materialize PDF bytes here", save_tail)
+        self.assertNotIn("requestFlush('materialize')", save_tail)
+        self.assertNotIn("pendingMaterializationRevision =", save_tail)
+        # Materialization flush lives only inside coherent catch-up.
+        only_flush = works_pdf.count("requestFlush('materialize')")
+        self.assertEqual(only_flush, 1)
+        self.assertIn("void requestFlush('materialize');", catch_up_body)
         # 6. SENT successor rebased against actual ACK server_revision
         self.assertIn("rebasePdfAnnotationDependents", store)
         self.assertIn("rebasePdfAnnotationDependents", state)

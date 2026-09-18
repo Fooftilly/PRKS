@@ -202,10 +202,35 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("endProgrammaticAnnotationMutation(): void;", src)
         viewer_path = os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "viewer.tsx")
         viewer = _read(viewer_path)
-        self.assertIn("allowsProgrammaticAnnotationMutation()", viewer)
+        self.assertIn("allowsAnnotationMutation()", viewer)
+        self.assertIn("controller.setUserMutationEnabled(enabled)", viewer)
+        controller = _read(os.path.join(_PROJECT_DIR, "tools", "pdf-viewer", "src", "controller.ts"))
+        self.assertIn("setUserMutationEnabled", controller)
+        self.assertIn("allowsAnnotationMutation()", controller)
+        # Synchronous gate: setUserMutationEnabled before React mode flip.
+        start = viewer.index("handle.setMutationEnabled = (enabled: boolean) => {")
+        end = viewer.index("\n    };", start)
+        body = viewer[start:end]
+        self.assertLess(
+            body.index("controller.setUserMutationEnabled(enabled)"),
+            body.index("currentMode = nextMode;"),
+        )
         reconcile = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "pdf-annotation-reconcile.js"))
         self.assertIn("beginProgrammaticAnnotationMutation", reconcile)
         self.assertIn("endProgrammaticAnnotationMutation", reconcile)
+
+    def test_sidebar_delete_waits_out_materialization_not_programmatic(self):
+        """User Delete/comment must wait for materialization; programmatic is reconcile-only."""
+        works = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "works-pdf.js"))
+        self.assertIn("prksWaitOutAnnotationMaterialization", works)
+        del_at = works.index("window.deletePdfAnnotationFromEditor")
+        del_body = works[del_at:del_at + 1200]
+        self.assertIn("prksWaitOutAnnotationMaterialization", del_body)
+        self.assertNotIn("prksViewerProgrammaticDelete", del_body)
+        save_at = works.index("window.savePdfAnnotationComment")
+        save_body = works[save_at:save_at + 1600]
+        self.assertIn("prksWaitOutAnnotationMaterialization", save_body)
+        self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation
@@ -228,8 +253,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(viewer_path)
         for fn in ("undo: () => {", "redo: () => {"):
             at = src.index(fn)
-            snippet = src[at : at + 150]
-            self.assertIn("if (mode !== 'work') return;", snippet)
+            snippet = src[at : at + 180]
+            self.assertIn("allowsUserAnnotationMutation()", snippet)
 
     def test_setup_annotation_persistence_has_setup_time_eligibility_gate(self):
         """AGENTS.md 'persistence setup cannot install an active worker after

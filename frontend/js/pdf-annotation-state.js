@@ -493,8 +493,19 @@
             annotations: annotations,
             known_absent: knownAbsent,
         });
+        // Incremental ACK patches one annotation. Only advance the claimed
+        // coherent set revision when generation continuity proves there were
+        // no unseen intermediate set changes (prev + 1 === ack gen). A gap
+        // means another device may have changed a different annotation —
+        // keep the prior set label until a full /annotations-snapshot lands.
         if (Number.isSafeInteger(data.canonical_annotation_set_revision)) {
-            runtime.acknowledgedAnnotationSetRevision = data.canonical_annotation_set_revision;
+            const nextGen = data.canonical_annotation_set_revision;
+            const prevGen = Number.isSafeInteger(runtime.acknowledgedAnnotationSetRevision)
+                ? runtime.acknowledgedAnnotationSetRevision
+                : null;
+            if (prevGen === null || nextGen === prevGen || nextGen === prevGen + 1) {
+                runtime.acknowledgedAnnotationSetRevision = nextGen;
+            }
         }
         return true;
     }
