@@ -90,6 +90,36 @@ class TestAnnotationFidelityCodec(unittest.TestCase):
         }
         self.assertFalse(annotations_semantically_equal(_HIGHLIGHT, other))
 
+    def test_semantic_inequality_on_ink_list_and_vertices(self):
+        ink_a = {
+            "id": "ann-ink",
+            "type": 15,
+            "pageIndex": 0,
+            "inkList": [[[0, 0], [10, 10]]],
+            "rect": {"origin": {"x": 0, "y": 0}, "size": {"width": 10, "height": 10}},
+        }
+        ink_b = dict(ink_a)
+        ink_b = json.loads(json.dumps(ink_b))
+        ink_b["inkList"] = [[[0, 0], [20, 20]]]
+        self.assertFalse(annotations_semantically_equal(ink_a, ink_b))
+        self.assertTrue(
+            annotations_semantically_equal(ink_a, round_trip_annotation(ink_a))
+        )
+
+        poly_a = {
+            "id": "ann-poly",
+            "type": 7,
+            "pageIndex": 0,
+            "vertices": [[0, 0], [10, 0], [10, 10]],
+            "rect": {"origin": {"x": 0, "y": 0}, "size": {"width": 10, "height": 10}},
+        }
+        poly_b = json.loads(json.dumps(poly_a))
+        poly_b["vertices"] = [[0, 0], [10, 0], [5, 10]]
+        self.assertFalse(annotations_semantically_equal(poly_a, poly_b))
+        view = semantic_annotation_view(poly_a)
+        self.assertEqual(view["vertices"], poly_a["vertices"])
+        self.assertIn("inkList", semantic_annotation_view(ink_a))
+
     def test_fidelity_harness_artifacts_exist(self):
         browser = os.path.join(_PROJECT_DIR, "tests", "browser")
         self.assertTrue(

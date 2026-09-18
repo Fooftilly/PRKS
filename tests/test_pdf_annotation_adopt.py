@@ -156,8 +156,44 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, pdf_materialization.STALE_CODE)
         self.assertNotIn("ann-a", self._ids())
 
-    def test_adopt_when_current_does_not_invent_staleness(self) -> None:
-        self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])
+    def test_adopt_does_not_resurrect_known_absent_when_materialization_current(self) -> None:
+        """CREATE → mark → DELETE → mark (gens equal) must not resurrect from viewer."""
+        from backend import pdf_annotation_sync
+
+        self.db.sync_work_annotations(self.work_id, [_highlight("ann-a", "A")])
+        self.db.mark_work_pdf_materialized(self.work_id)
+        # Full-list delete advances per-annotation revision (tombstone).
+        self.db.sync_work_annotations(self.work_id, [])
+        self.db.mark_work_pdf_materialized(self.work_id)
+
+        mat = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertFalse(mat["stale"])
+        self.assertNotIn("ann-a", self._ids())
+        with self.db.connection() as conn:
+            self.assertGreater(
+                pdf_annotation_sync.get_revision(conn, self.work_id, "ann-a"), 0
+            )
+
+        result = self.db.adopt_byte_only_user_markup(
+            self.work_id, [_highlight("ann-a", "A")]
+        )
+        self.assertEqual(result["adopted"], [])
+        self.assertEqual(result["adopted_count"], 0)
+        self.assertGreaterEqual(result.get("skipped_known_absent", 0), 1)
+        self.assertNotIn("ann-a", self._ids())
+        mat_after = self.db.get_work_pdf_materialization(self.work_id)
+        self.assertEqual(
+            mat_after["canonical_annotation_set_revision"],
+            mat["canonical_annotation_set_revision"],
+        )
+        self.assertEqual(
+            mat_after["materialized_pdf_annotation_revision"],
+            mat["materialized_pdf_annotation_revision"],
+        )
+        self.assertFalse(mat_after["stale"])
+
+    def test_adopt_bumps_canonical_only_not_materialized(self) -> None:
+        """A client viewer list must not jointly advance materialization gens."""
         self.db.mark_work_pdf_materialized(self.work_id)
         mat = self.db.get_work_pdf_materialization(self.work_id)
         self.assertFalse(mat["stale"])
@@ -166,11 +202,16 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
             self.work_id, [_highlight("byte", "Byte")]
         )
         mat2 = self.db.get_work_pdf_materialization(self.work_id)
-        self.assertFalse(mat2["stale"])
-        self.assertEqual(
+        self.assertIn("byte", self._ids())
+        self.assertGreater(
             mat2["canonical_annotation_set_revision"],
-            mat2["materialized_pdf_annotation_revision"],
+            mat["canonical_annotation_set_revision"],
         )
+        self.assertEqual(
+            mat2["materialized_pdf_annotation_revision"],
+            mat["materialized_pdf_annotation_revision"],
+        )
+        self.assertTrue(mat2["stale"])
 
     def test_noop_when_viewer_empty_and_current(self) -> None:
         self.db.sync_work_annotations(self.work_id, [_highlight("a", "A")])

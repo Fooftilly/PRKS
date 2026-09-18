@@ -383,15 +383,23 @@ def adopt_byte_only_user_markup_on_conn(
     """Insert canonical rows for viewer user markup missing from metadata.
 
     Does not delete any annotation. Non-user artifacts are ignored.
-    Returns ``{adopted: [...ids], skipped_existing: n, skipped_non_user: n}``.
+    Returns ``{adopted: [...ids], skipped_existing: n, skipped_non_user: n,
+    skipped_known_absent: n}``.
 
     Known-stale PDF bytes are never authority: when
     ``canonical_annotation_set_revision > materialized_pdf_annotation_revision``,
     adoption is refused (do not resurrect deleted markup still embedded in an
     older PDF). Adoption is only for legacy/current when the two revisions
     match.
+
+    IDs with ``sync_entity_revisions.revision > 0`` are known-absent (or
+    previously mutated) and must never be re-inserted from a viewer list —
+    that path would clear a durable DELETE tombstone. A client viewer list is
+    also not proof the *server* managed PDF embeds the new tip: successful
+    adopt bumps only the canonical generation (leaving materialization lag),
+    never jointly advances ``materialized_pdf_annotation_revision``.
     """
-    from backend import pdf_materialization
+    from backend import pdf_annotation_sync, pdf_materialization
 
     is_user = is_user_markup or default_is_user_markup
     is_link = is_non_user or default_is_non_user
@@ -417,6 +425,7 @@ def adopt_byte_only_user_markup_on_conn(
     adopted: list[str] = []
     skipped_existing = 0
     skipped_non_user = 0
+    skipped_known_absent = 0
     seen: set[str] = set()
 
     for raw in viewer_items or []:
@@ -432,6 +441,10 @@ def adopt_byte_only_user_markup_on_conn(
         seen.add(ann_id)
         if ann_id in present:
             skipped_existing += 1
+            continue
+        # Tombstone / prior mutation: never resurrect from viewer bytes.
+        if pdf_annotation_sync.get_revision(conn, work_id, ann_id) > 0:
+            skipped_known_absent += 1
             continue
         owner = conn.execute(
             "SELECT work_id FROM annotations WHERE id = ?",
@@ -466,17 +479,9 @@ def adopt_byte_only_user_markup_on_conn(
         present.add(normalized["id"])
 
     if adopted:
-        # Bytes already contain the adopted annotations and materialization is
-        # current (gated above). Bump both revisions together so adoption does
-        # not invent staleness.
-        before = pdf_materialization.get_materialization_on_conn(conn, work_id)
+        # Metadata meaning changed. Do not mark materialization from a client
+        # viewer list — only a POST /pdf claim may advance that generation.
         pdf_materialization.bump_canonical_annotation_set_on_conn(conn, work_id)
-        if before is not None:
-            pdf_materialization.mark_pdf_materialized_on_conn(
-                conn,
-                work_id,
-                at_revision=int(before["materialized_pdf_annotation_revision"]) + 1,
-            )
 
     return {
         "work_id": work_id,
@@ -484,4 +489,5 @@ def adopt_byte_only_user_markup_on_conn(
         "adopted_count": len(adopted),
         "skipped_existing": skipped_existing,
         "skipped_non_user": skipped_non_user,
+        "skipped_known_absent": skipped_known_absent,
     }

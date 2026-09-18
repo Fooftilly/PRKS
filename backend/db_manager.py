@@ -3020,6 +3020,18 @@ class PRKSDatabase:
                         conn, work_id, row["id"], changed=True
                     )
             else:
+                # Mirror CREATE_PDF_ANNOTATION: a prior durable DELETE (or any
+                # mutation) leaves revision > 0 — never reinsert that id via
+                # full-list replace.
+                prior_rev = pdf_annotation_sync.get_revision(
+                    conn, work_id, row["id"]
+                )
+                if prior_rev > 0:
+                    raise WorkAnnotationError(
+                        "ANNOTATION_ID_REUSED",
+                        "Annotation ID was previously used and cannot be reinserted.",
+                        409,
+                    )
                 any_set_changed = True
                 # Construction: insert without advancing (revision stays 0).
                 conn.execute(

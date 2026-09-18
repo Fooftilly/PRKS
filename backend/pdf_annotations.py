@@ -152,6 +152,8 @@ _FIDELITY_GEOMETRY_KEYS = (
     "opacity",
     "blendMode",
     "custom",
+    "inkList",
+    "vertices",
 )
 
 

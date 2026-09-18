@@ -336,6 +336,51 @@ class PdfAnnotationSyncTests(unittest.TestCase):
         self.db.save_work_annotations(self.work_id, json.dumps([_ann()]))
         self.assertEqual(self.revision("ann-hi-1"), 0)
 
+    def test_full_list_replace_refuses_known_absent_id(self):
+        """After durable DELETE, POST /annotations must not resurrect the id."""
+        from backend.pdf_annotations import WorkAnnotationError
+
+        self.db.save_work_annotations(self.work_id, json.dumps([_ann()]))
+        self.db.save_work_annotations(self.work_id, json.dumps([]))
+        self.assertEqual(self.revision("ann-hi-1"), 1)
+        self.assertIsNone(self.stored("ann-hi-1"))
+        with self.assertRaises(WorkAnnotationError) as ctx:
+            self.db.save_work_annotations(self.work_id, json.dumps([_ann()]))
+        self.assertEqual(ctx.exception.code, "ANNOTATION_ID_REUSED")
+        self.assertIsNone(self.stored("ann-hi-1"))
+        self.assertEqual(self.revision("ann-hi-1"), 1)
+
+    def test_set_ink_list_change_is_detected_and_persisted(self):
+        ink = _ann(
+            {
+                "id": "ann-ink-1",
+                "type": 15,
+                "contents": "",
+                "inkList": [[[0, 0], [10, 10], [20, 5]]],
+                "segmentRects": [],
+                "custom": {},
+            }
+        )
+        self.create(ink)
+        edited = _ann(
+            {
+                "id": "ann-ink-1",
+                "type": 15,
+                "contents": "",
+                "inkList": [[[0, 0], [12, 12], [24, 8]]],
+                "segmentRects": [],
+                "custom": {},
+            }
+        )
+        status, result = self.set_ann(edited, 0)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertTrue(result["changed"])
+        self.assertEqual(result["server_revision"], 1)
+        stored = self.stored("ann-ink-1")
+        self.assertIsNotNone(stored)
+        geom = json.loads(stored["geometry_json"])
+        self.assertEqual(geom.get("inkList"), [[[0, 0], [12, 12], [24, 8]]])
+
     def test_annotations_state_lists_present(self):
         self.create(_ann())
         state = self.db.get_work_annotations_state(self.work_id)
