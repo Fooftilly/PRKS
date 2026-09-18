@@ -2220,6 +2220,7 @@ class TestServerAPI(unittest.TestCase):
         """
         from unittest import mock
         from backend.db_manager import managed_pdf_filename
+        from backend.services import work_pdf_replace
         import uuid as _uuid
 
         suffix = _uuid.uuid4().hex[:10]
@@ -2245,21 +2246,12 @@ class TestServerAPI(unittest.TestCase):
             for name in os.listdir(server_module.pdfs_dir)
             if name.endswith(".pdf")
         )
-        real_eq = self.__class__.test_db.execute_query
-
-        def _fail_cow_retarget(sql, params=None):
-            text = sql if isinstance(sql, str) else ""
-            if "SET file_path" in text and "UPDATE works" in text:
-                raise RuntimeError("forced cow retarget failure")
-            if params is None:
-                return real_eq(sql)
-            return real_eq(sql, params)
 
         pdf_a = _pdf_with_text_bytes("orphan-cow-exclusive-bytes")
         with mock.patch.object(
-            self.__class__.test_db,
-            "execute_query",
-            side_effect=_fail_cow_retarget,
+            work_pdf_replace,
+            "retarget_work_managed_file_path",
+            side_effect=RuntimeError("forced cow retarget failure"),
         ):
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 self._post_work_pdf(
@@ -2283,6 +2275,75 @@ class TestServerAPI(unittest.TestCase):
         # No new managed PDF may remain unreferenced after the failed retarget.
         self.assertEqual(after - before, set())
         self.assertEqual(managed_pdf_filename(row_a["file_path"]), shared_name)
+
+    def test_22c15_cow_retarget_zero_row_after_delete_removes_orphan(self):
+        """Concurrent Work delete after exclusive write must not orphan the PDF.
+
+        Delete does not take the PDF materialization lock. If the Work disappears
+        between exclusive write and retarget UPDATE, the UPDATE affects 0 rows —
+        require rowcount==1 before clearing the orphan flag; unlink and 404.
+        """
+        from unittest import mock
+        from backend.services import work_pdf_replace
+        import uuid as _uuid
+
+        suffix = _uuid.uuid4().hex[:10]
+        shared_name = f"shared-zerorow-cow-{suffix}.pdf"
+        seed = _pdf_with_text_bytes("shared seed for zerorow cow")
+        shared_abs = os.path.join(server_module.pdfs_dir, shared_name)
+        with open(shared_abs, "wb") as f:
+            f.write(seed)
+        a_id = self.__class__.test_db.add_work(
+            title="CowZeroRowA", file_path=f"/api/pdfs/{shared_name}"
+        )
+        self.__class__.test_db.add_work(
+            title="CowZeroRowB", file_path=f"/api/pdfs/{shared_name}"
+        )
+        ann_a = f"cow-zerorow-a-{suffix}"
+        with self._post_work_annotations(
+            a_id, {"annotations_json": json.dumps([self._ann_row(ann_a, "A")])}
+        ) as ar:
+            gen_a = json.loads(ar.read().decode())["canonical_annotation_set_revision"]
+
+        before = set(
+            name
+            for name in os.listdir(server_module.pdfs_dir)
+            if name.endswith(".pdf")
+        )
+        real_atomic = work_pdf_replace.atomic_replace_managed_pdf_bytes
+
+        def _write_then_delete_work(pdfs_dir, filename, body):
+            out = real_atomic(pdfs_dir, filename, body)
+            # Simulate concurrent delete after exclusive bytes land.
+            self.__class__.test_db.delete_work_record(a_id)
+            return out
+
+        pdf_a = _pdf_with_text_bytes("zerorow-cow-exclusive-bytes")
+        with mock.patch.object(
+            work_pdf_replace,
+            "atomic_replace_managed_pdf_bytes",
+            side_effect=_write_then_delete_work,
+        ):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self._post_work_pdf(
+                    a_id,
+                    {
+                        "file_b64": base64.b64encode(pdf_a).decode("utf-8"),
+                        "materialized_annotation_set_revision": gen_a,
+                    },
+                )
+        self.assertEqual(cm.exception.code, 404)
+        gone = self.__class__.test_db.execute_query(
+            "SELECT 1 AS ok FROM works WHERE id=?", (a_id,)
+        )
+        self.assertFalse(gone)
+        self.assertTrue(os.path.isfile(shared_abs))
+        after = set(
+            name
+            for name in os.listdir(server_module.pdfs_dir)
+            if name.endswith(".pdf")
+        )
+        self.assertEqual(after - before, set())
 
     def test_22c12_legacy_annotations_reject_stale_set_revision(self):
         """Stale full-list replace cannot overwrite newer annotations or delete B."""

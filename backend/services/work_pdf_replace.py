@@ -244,6 +244,27 @@ def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
         return False
 
 
+def retarget_work_managed_file_path(db, work_id: str, file_path: str) -> int:
+    """UPDATE ``works.file_path`` for ``work_id``; return affected row count.
+
+    A concurrent Work delete can leave this UPDATE with zero rows even though
+    ``execute_query`` returns normally. Callers must require exactly one row
+    before treating a COW exclusive write as referenced.
+    """
+    with db.connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE works
+            SET file_path = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (file_path, work_id),
+        )
+        n = int(cur.rowcount or 0)
+        conn.commit()
+        return n
+
+
 def replace_managed_work_pdf(
     db,
     *,
@@ -382,13 +403,8 @@ def replace_managed_work_pdf(
             if cow_retarget:
                 cow_exclusive_unreferenced = True
                 try:
-                    db.execute_query(
-                        """
-                        UPDATE works
-                        SET file_path = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                        """,
-                        (target_fp, work_id),
+                    updated = retarget_work_managed_file_path(
+                        db, work_id, target_fp
                     )
                 except Exception as e:
                     unlink_managed_pdf_best_effort(pdfs_dir, target_filename)
@@ -401,6 +417,21 @@ def replace_managed_work_pdf(
                     return {
                         "status": 500,
                         "body": {"error": "Failed to retarget managed PDF"},
+                        "wrote_pdf": False,
+                    }
+                if updated != 1:
+                    # Concurrent delete (or other miss): UPDATE ran with 0 rows.
+                    # Exclusive bytes are still unreferenced — remove them.
+                    unlink_managed_pdf_best_effort(pdfs_dir, target_filename)
+                    cow_exclusive_unreferenced = False
+                    LOGGER.info(
+                        "pdf_cow_retarget_work_gone work_id=%s rows=%s",
+                        safe_log_id(work_id),
+                        updated,
+                    )
+                    return {
+                        "status": 404,
+                        "body": {"error": "Work not found"},
                         "wrote_pdf": False,
                     }
                 # Retarget committed — exclusive file is now referenced.
