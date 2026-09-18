@@ -4,16 +4,88 @@ Legacy libraries may have highlights embedded in managed PDF bytes without
 rows in ``annotations``. Metadata is canonical for V2: discover viewer user
 markup, insert missing IDs, never silently delete byte-only markup, and never
 touch Links/widgets/non-user artifacts.
+
+``default_is_user_markup`` mirrors the browser
+``prksIsUserMarkupAnnotation`` classifier so every managed user type the
+viewer would persist (ink, free text, stamps, shapes, strikeout/squiggly,
+types 1 and 3–15, comments, segmentRects/inkList) can enter canonical
+metadata on adoption.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Iterable, Optional
 
 from backend.pdf_annotations import (
     WorkAnnotationError,
     normalize_annotation,
-    reconstruct_annotation,
+)
+
+# pdf.js AnnotationType numbers — Link (2) handled separately.
+_USER_TYPE_NUMS = frozenset({1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+_DENY_TYPE_NUMS = frozenset(
+    {2, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
+)
+_ALLOW_TOKENS = frozenset(
+    {
+        "highlight",
+        "underline",
+        "strikeout",
+        "strikethrough",
+        "strike",
+        "squiggly",
+        "ink",
+        "freetext",
+        "caret",
+        "stamp",
+        "square",
+        "circle",
+        "line",
+        "polygon",
+        "polyline",
+        "text",
+        "note",
+        "comment",
+    }
+)
+_DENY_TOKENS = frozenset(
+    {
+        "watermark",
+        "widget",
+        "popup",
+        "movie",
+        "sound",
+        "screen",
+        "trapnet",
+        "redact",
+        "attachment",
+    }
+)
+_DENY_SUBSTR = (
+    "watermark",
+    "widget",
+    "popup",
+    "fileattachment",
+    "movie",
+    "sound",
+    "screen",
+    "printermark",
+    "trapnet",
+    "redact",
+)
+_ALLOW_NEEDLES = (
+    "highlight",
+    "underline",
+    "strikeout",
+    "strikethrough",
+    "squiggly",
+    "freetext",
+    "textmarkup",
+)
+_RECORD_TYPE_RE = (
+    "highlight|underline|strike|squiggly|ink|freetext|textmarkup|"
+    "caret|line|polygon|polyline|square|circle|stamp"
 )
 
 
@@ -30,25 +102,125 @@ def _annotation_id(item: dict) -> str:
     return ""
 
 
-def default_is_user_markup(item: dict) -> bool:
-    """Conservative classifier mirroring the browser reconcile default."""
-    if not isinstance(item, dict) or not _annotation_id(item):
-        return False
-    type_num = item.get("type", item.get("annotationType"))
-    try:
-        n = int(type_num)
-    except (TypeError, ValueError):
-        n = None
-    if n in (9, 10):
+def _primary_type_number(item: dict) -> Optional[int]:
+    raw = item.get("type", item.get("annotationType", item.get("subtype", item.get("Subtype"))))
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float) and raw == int(raw):
+        return int(raw)
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return int(raw.strip())
+    return None
+
+
+def _type_blob(item: dict) -> str:
+    parts = []
+    for key in ("type", "annotationType", "subtype", "subType", "Subtype"):
+        value = item.get(key)
+        if value is None or value == "":
+            continue
+        parts.append(str(value).lower())
+    return " ".join(parts)
+
+
+def _has_geometry(item: dict) -> bool:
+    if item.get("rect") or item.get("rects") or item.get("quadPoints"):
         return True
-    typ = str(item.get("type") or item.get("annotationType") or item.get("subtype") or "").lower()
-    if typ in ("highlight", "underline"):
+    if item.get("points") or item.get("position") or item.get("location"):
         return True
-    custom = item.get("custom")
-    if isinstance(custom, dict) and isinstance(custom.get("prksComment"), str):
+    if item.get("box") or item.get("Rect") or item.get("QuadPoints"):
         return True
     segs = item.get("segmentRects")
     if isinstance(segs, list) and segs:
+        return True
+    ink = item.get("inkList")
+    if isinstance(ink, list) and ink:
+        return True
+    verts = item.get("vertices")
+    if isinstance(verts, list) and verts:
+        return True
+    return False
+
+
+def _is_likely_annotation_object(item: dict) -> bool:
+    if item.get("deleted") is True:
+        return False
+    if not _annotation_id(item):
+        return False
+    if not _has_geometry(item):
+        return False
+    type_raw = (
+        item.get("type")
+        or item.get("annotationType")
+        or item.get("subtype")
+        or item.get("subType")
+        or item.get("Subtype")
+        or ""
+    )
+    type_lo = (type_raw if isinstance(type_raw, str) else str(type_raw)).lower()
+    type_hints = (
+        "high",
+        "mark",
+        "text",
+        "comment",
+        "strike",
+        "under",
+        "stamp",
+        "note",
+        "ink",
+        "shape",
+        "freetext",
+        "square",
+        "circle",
+        "line",
+        "poly",
+        "squiggly",
+    )
+    has_type = any(t in type_lo for t in type_hints)
+    has_content = bool(
+        item.get("contents")
+        or item.get("content")
+        or item.get("comment")
+        or item.get("text")
+        or item.get("body")
+    )
+    return (
+        has_type
+        or has_content
+        or bool(item.get("rect") or item.get("rects") or item.get("quadPoints"))
+        or (isinstance(item.get("segmentRects"), list) and bool(item.get("segmentRects")))
+    )
+
+
+def _embed_type2_is_user_text_markup(item: dict) -> bool:
+    ink = item.get("inkList")
+    if isinstance(ink, list) and ink:
+        return True
+    segs = item.get("segmentRects")
+    if isinstance(segs, list) and segs:
+        return True
+    blob = " ".join(
+        str(item.get(k) or "").lower()
+        for k in ("subtype", "subType", "annotationType", "type", "name")
+        if item.get(k) not in (None, "")
+    )
+    if any(
+        tok in blob
+        for tok in (
+            "highlight",
+            "underline",
+            "strike",
+            "squiggly",
+            "ink",
+            "freetext",
+            "textmarkup",
+        )
+    ):
+        return True
+    custom = item.get("custom")
+    if isinstance(custom, dict) and custom:
         return True
     return False
 
@@ -56,18 +228,88 @@ def default_is_user_markup(item: dict) -> bool:
 def default_is_non_user(item: dict) -> bool:
     if not isinstance(item, dict):
         return True
-    type_num = item.get("type", item.get("annotationType"))
-    try:
-        n = int(type_num)
-    except (TypeError, ValueError):
-        n = None
-    if n == 2 and (item.get("uri") or item.get("url") or item.get("action") or item.get("A") or item.get("dest")):
+    n = _primary_type_number(item)
+    if n == 2 and (
+        item.get("uri")
+        or item.get("url")
+        or item.get("action")
+        or item.get("A")
+        or item.get("dest")
+    ):
         return True
-    blob = " ".join(
-        str(item.get(k) or "")
-        for k in ("type", "annotationType", "subtype", "subType")
-    ).lower()
+    blob = _type_blob(item)
     return any(tok in blob for tok in ("link", "uri", "goto", "widget", "watermark"))
+
+
+def default_is_user_markup(item: dict) -> bool:
+    """Shared equivalent of browser ``prksIsUserMarkupAnnotation``."""
+    if not isinstance(item, dict) or not _annotation_id(item):
+        return False
+    if default_is_non_user(item):
+        return False
+
+    geometry_backed = _is_likely_annotation_object(item)
+    typ_lo = str(
+        item.get("type") or item.get("annotationType") or item.get("subtype") or ""
+    ).lower()
+    page_ok = any(
+        item.get(k) is not None
+        for k in ("pageIndex", "page", "pageNumber", "page_index")
+    )
+    persisted_text_note = (
+        not geometry_backed
+        and page_ok
+        and typ_lo in ("note", "comment", "freetext", "text")
+        and bool(
+            item.get("contents")
+            or item.get("content")
+            or item.get("comment")
+            or item.get("text")
+        )
+    )
+    if not geometry_backed and not persisted_text_note:
+        return False
+
+    if geometry_backed:
+        segs = item.get("segmentRects")
+        if isinstance(segs, list) and segs:
+            return True
+        ink = item.get("inkList")
+        if isinstance(ink, list) and ink:
+            return True
+        for key in ("recordType", "schemaType", "annotationKind", "variant", "name"):
+            rec = item.get(key)
+            if isinstance(rec, str) and re.search(_RECORD_TYPE_RE, rec, re.I):
+                return True
+
+    type_num = _primary_type_number(item)
+    if type_num is not None:
+        if type_num == 2 and _embed_type2_is_user_text_markup(item):
+            return True
+        if type_num in _DENY_TYPE_NUMS:
+            return False
+        if type_num in _USER_TYPE_NUMS:
+            return True
+
+    blob = _type_blob(item)
+    if any(d in blob for d in _DENY_SUBSTR):
+        return False
+    tokens = [t for t in re.split(r"[^a-z0-9]+", blob) if t]
+    if any(t in _DENY_TOKENS for t in tokens):
+        return False
+    if any(t in _ALLOW_TOKENS for t in tokens):
+        return True
+    if any(n in blob for n in _ALLOW_NEEDLES):
+        return True
+
+    custom = item.get("custom")
+    if (
+        isinstance(custom, dict)
+        and isinstance(custom.get("prksComment"), str)
+        and custom.get("prksComment", "").strip()
+    ):
+        return True
+    return False
 
 
 def adopt_byte_only_user_markup_on_conn(

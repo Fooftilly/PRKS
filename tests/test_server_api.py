@@ -1501,8 +1501,9 @@ class TestServerAPI(unittest.TestCase):
                  "custom": {"prksComment": "m"}}]
         with self._post_work_annotations(w_id, {"annotations_json": json.dumps(meta)}) as res:
             self.assertEqual(res.status, 200)
-        # Adoption requires current materialization; annotation save leaves lag.
-        self.__class__.test_db.mark_work_pdf_materialized(w_id)
+            body = json.loads(res.read().decode())
+        # Legacy annotations POST marks materialization after replace.
+        self.assertFalse(body.get("stale", True))
         viewer = [
             {
                 "id": "byte-only",
@@ -1533,6 +1534,70 @@ class TestServerAPI(unittest.TestCase):
         ids = {row["id"] for row in self._get_work_annotations(w_id)}
         self.assertEqual(ids, {"meta-only", "byte-only"})
         self.assertNotIn("link-skip", ids)
+
+    def test_22c3_online_legacy_marks_after_annotation_replace(self):
+        """POST /pdf (legacy) then POST /annotations must not leave false staleness."""
+        pdf_bytes = _pdf_with_text_bytes("legacy mark order")
+        payload = {
+            "title": "Legacy Mat Order",
+            "status": "Planned",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "legacy_mat.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
+
+        updated = _pdf_with_text_bytes("legacy mark order v2")
+        pdf_req = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}/pdf",
+            data=json.dumps({
+                "file_b64": base64.b64encode(updated).decode("utf-8"),
+                "save_token": "legacy-handshake",
+            }).encode(),
+            method="POST",
+        )
+        pdf_req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(pdf_req) as pr:
+            self.assertEqual(pr.status, 200)
+            pdf_body = json.loads(pr.read().decode())
+        # Legacy PDF POST must not claim materialization at the pre-replace tip.
+        self.assertNotIn("materialized_pdf_annotation_revision", pdf_body)
+
+        ann = [{
+            "id": "legacy-ann-1",
+            "type": 9,
+            "contents": "hi",
+            "pageIndex": 0,
+            "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}],
+            "custom": {"prksComment": "hi"},
+        }]
+        with self._post_work_annotations(
+            w_id,
+            {
+                "annotations_json": json.dumps(ann),
+                "save_token": "legacy-handshake",
+            },
+        ) as ar:
+            self.assertEqual(ar.status, 200)
+            ann_body = json.loads(ar.read().decode())
+        self.assertEqual(
+            ann_body.get("canonical_annotation_set_revision"),
+            ann_body.get("materialized_pdf_annotation_revision"),
+        )
+        self.assertFalse(ann_body.get("stale"))
+        mat = self.__class__.test_db.get_work_pdf_materialization(w_id)
+        self.assertIsNotNone(mat)
+        self.assertEqual(
+            mat["canonical_annotation_set_revision"],
+            mat["materialized_pdf_annotation_revision"],
+        )
+        self.assertFalse(mat["stale"])
 
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")

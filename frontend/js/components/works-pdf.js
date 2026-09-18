@@ -1340,11 +1340,35 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 try {
                     if (!apply &&
                         (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION')) {
+                        let serverAnn = null;
+                        if (typeof result.current_value === 'string' && result.current_value) {
+                            try {
+                                const parsed = JSON.parse(result.current_value);
+                                if (parsed && typeof parsed === 'object') serverAnn = parsed;
+                            } catch (_eParse) { /* bounded preview only */ }
+                        }
+                        let present = typeof result.current_state === 'boolean'
+                            ? result.current_state
+                            : !!serverAnn;
+                        if (present && !serverAnn) {
+                            const ackItems =
+                                (runtime.annotationCache && runtime.annotationCache.items) || [];
+                            for (let ai = 0; ai < ackItems.length; ai += 1) {
+                                const item = ackItems[ai];
+                                if (!item || typeof item !== 'object') continue;
+                                const itemId = item.id || item.uuid || item.annotationId ||
+                                    item.annotation_id;
+                                if (itemId != null && String(itemId) === annId) {
+                                    serverAnn = item;
+                                    break;
+                                }
+                            }
+                        }
                         const ack = {
                             work_id: String(workId),
                             annotation_id: annId,
-                            present: !!result.current_annotation,
-                            annotation: result.current_annotation || null,
+                            present: present,
+                            annotation: serverAnn,
                             server_revision: result.current_revision,
                             code: 'ACKNOWLEDGED',
                             changed: true,

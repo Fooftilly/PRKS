@@ -221,7 +221,22 @@ class PdfAnnotationSyncTests(unittest.TestCase):
         )
         self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"))
         self.assertEqual(result["current_revision"], 1)
-        self.assertIn("current_annotation", result)
+        self.assertNotIn("current_annotation", result)
+        self.assertNotIn("requested_annotation", result)
+        self.assertTrue(result.get("current_state") is True)
+        self.assertTrue(result.get("requested_state") is True)
+        self.assertTrue(
+            isinstance(result.get("current_value"), str)
+            or isinstance(result.get("current_preview"), str)
+        )
+        # Must fit STRUCTURED_RESULT_KEYS (scalars only).
+        for key, value in result.items():
+            if key in ("work_id", "annotation_id", "code"):
+                continue
+            self.assertFalse(
+                isinstance(value, (dict, list)),
+                msg="conflict field %r must be a scalar, got %r" % (key, type(value)),
+            )
 
     def test_set_future_revision(self):
         self.create(_ann())
@@ -267,6 +282,9 @@ class PdfAnnotationSyncTests(unittest.TestCase):
         )
         status, result = self.delete("ann-hi-1", 0)
         self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertTrue(result.get("current_state") is True)
+        self.assertTrue(result.get("requested_state") is False)
+        self.assertNotIn("current_annotation", result)
 
     def test_create_after_delete_refuses_reuse(self):
         self.create(_ann())

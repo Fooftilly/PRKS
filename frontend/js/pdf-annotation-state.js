@@ -580,7 +580,17 @@
      * While stabilizing: Work gone / id reuse are consumed like Work-deletion
      * outcomes — discard, do not open a user-resolvable annotation conflict.
      * True revision conflicts remain user-resolvable.
+     *
+     * Conflict payloads must be STRUCTURED_RESULT_KEYS scalars only. Nested
+     * annotation objects are stripped — settle() rejects object-valued
+     * server_result and the op would retry forever.
      */
+    const TERMINAL_SCALAR_KEYS = Object.freeze([
+        'current_revision', 'current_state', 'requested_state',
+        'current_value', 'requested_value',
+        'current_preview', 'current_bytes', 'requested_bytes',
+    ]);
+
     function terminal(data) {
         if (!data || !data.code) return { discard: 'UNKNOWN' };
         if (data.code === 'ENTITY_NOT_FOUND' ||
@@ -589,11 +599,13 @@
             return { discard: data.code };
         }
         const out = { code: data.code };
-        if (Number.isSafeInteger(data.current_revision)) {
-            out.current_revision = data.current_revision;
+        for (let i = 0; i < TERMINAL_SCALAR_KEYS.length; i += 1) {
+            const key = TERMINAL_SCALAR_KEYS[i];
+            if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+            const value = data[key];
+            if (value !== null && typeof value === 'object') continue;
+            out[key] = value;
         }
-        if (data.current_annotation) out.current_annotation = data.current_annotation;
-        if (data.requested_annotation) out.requested_annotation = data.requested_annotation;
         return { conflict: out };
     }
 

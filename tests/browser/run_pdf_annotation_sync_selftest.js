@@ -171,13 +171,79 @@ function handlerShapes() {
     assert.equal(h.isResult({ code: 'ACKNOWLEDGED', work_id: 'W-1' }, createOp), false);
     const termConflict = h.terminal({
         code: 'REVISION_CONFLICT', current_revision: 3,
-        current_annotation: { id: 'ann-1' },
+        current_state: true, requested_state: true,
+        current_value: JSON.stringify({ id: 'ann-1', type: 'highlight', content: 'S' }),
+        requested_value: JSON.stringify({ id: 'ann-1', type: 'highlight', content: 'C' }),
+        // Object-valued keys must be stripped — STRUCTURED_RESULT_KEYS rejects them.
+        current_annotation: { id: 'ann-1', nested: true },
+        requested_annotation: { id: 'ann-1' },
     });
     assert.equal(termConflict.conflict.code, 'REVISION_CONFLICT');
+    assert.equal(termConflict.conflict.current_revision, 3);
+    assert.equal(termConflict.conflict.current_state, true);
+    assert.equal(typeof termConflict.conflict.current_value, 'string');
+    assert.equal(termConflict.conflict.current_annotation, undefined);
+    assert.equal(termConflict.conflict.requested_annotation, undefined);
     const termGone = h.terminal({ code: 'ENTITY_NOT_FOUND' });
     assert.equal(termGone.discard, 'ENTITY_NOT_FOUND');
     const termReuse = h.terminal({ code: 'ANNOTATION_ID_REUSED', current_revision: 1 });
     assert.equal(termReuse.discard, 'ANNOTATION_ID_REUSED');
+}
+
+/**
+ * P1 regression: terminal → settle → updateOperationSyncState must persist a
+ * conflict. Object-valued current_annotation previously made settle throw
+ * invalid_result and left the op retrying forever.
+ */
+async function conflictTerminalSettlesThroughStore() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid: uuid, now: () => Date.now() });
+    await store.getOrCreateDeviceId();
+    const body = highlight('ann-settle', 'base');
+    const edited = highlight('ann-settle', 'mine');
+    const observed = { present: true, revision: 0, annotation: body, annotation_id: 'ann-settle' };
+    const created = await store.savePdfAnnotation(
+        'W-settle',
+        { annotation_id: 'ann-settle', annotation: edited },
+        observed
+    );
+    assert.ok(created && created.op_id);
+    const h = globalThis.prksPdfAnnotationSyncHandler;
+    assert.ok(h && typeof h.terminal === 'function');
+    const disposition = h.terminal({
+        code: 'REVISION_CONFLICT',
+        work_id: 'W-settle',
+        annotation_id: 'ann-settle',
+        current_revision: 2,
+        current_state: true,
+        requested_state: true,
+        current_value: JSON.stringify({
+            id: 'ann-settle', type: 'highlight', content: 'server', page_index: 0, color: null,
+        }),
+        requested_value: JSON.stringify({
+            id: 'ann-settle', type: 'highlight', content: 'mine', page_index: 0, color: null,
+        }),
+        current_annotation: { id: 'ann-settle', contents: 'server' },
+        requested_annotation: { id: 'ann-settle', contents: 'mine' },
+    });
+    assert.ok(disposition.conflict);
+    assert.equal(disposition.conflict.current_annotation, undefined);
+    // Mirror sync-runtime settle(op, disposition) for a conflict outcome.
+    const settled = await store.updateOperationSyncState(created.op_id, {
+        status: 'conflict',
+        server_result: disposition.conflict,
+        last_error: null,
+    });
+    assert.equal(settled.status, 'conflict');
+    assert.equal(settled.server_result.code, 'REVISION_CONFLICT');
+    assert.equal(settled.server_result.current_revision, 2);
+    assert.equal(typeof settled.server_result.current_value, 'string');
+    assert.equal(settled.server_result.current_annotation, undefined);
+    const rows = await store.listOperations();
+    const row = rows.find((r) => r.op_id === created.op_id);
+    assert.ok(row);
+    assert.equal(row.status, 'conflict');
+    assert.equal(row.server_result.code, 'REVISION_CONFLICT');
 }
 
 function applyAckUpdatesLiveRuntimeRevision() {
@@ -230,6 +296,7 @@ async function main() {
     await coalesceCreateSetDelete();
     await coalesceSetCancelAndSentSuccessor();
     handlerShapes();
+    await conflictTerminalSettlesThroughStore();
     applyAckUpdatesLiveRuntimeRevision();
     console.log(checks + ' checks passed');
 }

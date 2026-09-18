@@ -199,6 +199,76 @@ class PdfAnnotationAdoptTests(unittest.TestCase):
             pdf_annotation_adopt.default_is_user_markup(_highlight("H1", "x"))
         )
 
+    def test_classifier_adopts_managed_user_types(self) -> None:
+        """Server classifier must match browser-managed user markup types."""
+        cases = [
+            {
+                "id": "ink-1",
+                "type": 15,
+                "pageIndex": 0,
+                "inkList": [[[0, 0], [10, 10]]],
+                "rect": {"origin": {"x": 0, "y": 0}, "size": {"width": 10, "height": 10}},
+            },
+            {
+                "id": "ft-1",
+                "type": 3,
+                "pageIndex": 0,
+                "contents": "Free text",
+                "rect": {"origin": {"x": 1, "y": 1}, "size": {"width": 40, "height": 12}},
+            },
+            {
+                "id": "stamp-1",
+                "type": 13,
+                "pageIndex": 0,
+                "subtype": "Stamp",
+                "rect": {"origin": {"x": 2, "y": 2}, "size": {"width": 40, "height": 40}},
+            },
+            {
+                "id": "sq-1",
+                "type": 4,
+                "pageIndex": 0,
+                "subtype": "Square",
+                "rect": {"origin": {"x": 3, "y": 3}, "size": {"width": 20, "height": 20}},
+            },
+            {
+                "id": "strike-1",
+                "type": 11,
+                "pageIndex": 0,
+                "subtype": "StrikeOut",
+                "segmentRects": [
+                    {"origin": {"x": 4, "y": 4}, "size": {"width": 80, "height": 10}}
+                ],
+                "rect": {"origin": {"x": 4, "y": 4}, "size": {"width": 80, "height": 10}},
+            },
+            {
+                "id": "squig-1",
+                "type": 12,
+                "pageIndex": 0,
+                "subtype": "Squiggly",
+                "segmentRects": [
+                    {"origin": {"x": 5, "y": 5}, "size": {"width": 80, "height": 10}}
+                ],
+                "rect": {"origin": {"x": 5, "y": 5}, "size": {"width": 80, "height": 10}},
+            },
+            {
+                "id": "note-1",
+                "type": "note",
+                "pageIndex": 0,
+                "contents": "A sticky note",
+            },
+        ]
+        for item in cases:
+            with self.subTest(ann_id=item["id"]):
+                self.assertTrue(
+                    pdf_annotation_adopt.default_is_user_markup(item),
+                    msg="expected user markup for %s" % item["id"],
+                )
+
+        self.db.mark_work_pdf_materialized(self.work_id)
+        result = self.db.adopt_byte_only_user_markup(self.work_id, cases)
+        self.assertEqual(sorted(result["adopted"]), sorted(c["id"] for c in cases))
+        self.assertEqual(self._ids(), {c["id"] for c in cases})
+
     def test_http_adopt_endpoint(self) -> None:
         # Fresh Work: both revisions at 0 (current). Adoption is allowed.
         result = self.db.adopt_byte_only_user_markup(

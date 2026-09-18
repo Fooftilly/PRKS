@@ -45,14 +45,15 @@ export interface PrksAnnotationEvent {
 export interface PrksPdfViewerHandle {
     destroy(): void;
     /**
-     * Live user-input mutation lock, independent of document/viewer lifetime.
-     * Never recreates the PDF engine or document -- toggles the same 'work' /
-    /**
      * Enable/disable user-driven annotation mutation. Synchronous: the
      * controller gate flips before any React mode rerender. Disabling leaves
      * existing annotations rendered and scroll/zoom/page navigation working;
      * it removes markup-tool activation and blocks user-driven
      * create/update/delete.
+     *
+     * Live user-input mutation lock, independent of document/viewer lifetime.
+     * Never recreates the PDF engine or document — toggles the same work-mode
+     * controller gate in place.
      *
      * Programmatic create/update/delete used by PRKS reconcile still run while
      * disabled when wrapped in begin/endProgrammaticAnnotationMutation.

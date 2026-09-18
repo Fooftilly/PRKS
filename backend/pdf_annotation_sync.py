@@ -310,14 +310,40 @@ def get_annotations_snapshot_on_conn(conn, work_id: str) -> Optional[dict]:
     }
 
 
-def _conflict_body(current: Optional[dict], desired: Optional[dict]) -> dict:
-    """Bounded conflict payload: semantic views, never raw megabyte geometry dumps beyond view."""
-    body: dict[str, Any] = {}
+def _view_json(item: Optional[dict]) -> str:
+    if item is None:
+        return ""
+    return json.dumps(
+        semantic_annotation_view(item),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _fit_conflict(
+    result: dict[str, Any],
+    current: Optional[dict],
+    desired: Optional[dict],
+) -> dict[str, Any]:
+    """Project disagreement into STRUCTURED_RESULT_KEYS-compatible scalars.
+
+    Nested ``current_annotation`` / ``requested_annotation`` objects are not
+    storable in ``prks-local-v1`` — ``settle()`` rejects them as
+    ``invalid_result`` and the op retries forever. Mirror the metadata model:
+    JSON string values when they fit, else bounded previews + byte sizes.
+    Presence uses ``current_state`` / ``requested_state`` booleans.
+    """
+    from backend import work_metadata_sync as meta
+
+    cur_s = _view_json(current)
+    des_s = _view_json(desired)
+    result["current_state"] = current is not None
+    result["requested_state"] = desired is not None
     if current is not None:
-        body["current_annotation"] = semantic_annotation_view(current)
+        result["current_value"] = cur_s
     if desired is not None:
-        body["requested_annotation"] = semantic_annotation_view(desired)
-    return body
+        result["requested_value"] = des_s
+    return meta.fit_terminal_result(result, cur_s, des_s)
 
 
 # ---- CREATE ---------------------------------------------------------------
@@ -362,12 +388,12 @@ def apply_create(db, conn, op, received_at):
                 canonical_annotation_set_revision=_canonical_set_revision(conn, work_id),
             )
             return 200, result
-        result.update(
-            code="ANNOTATION_EXISTS",
-            current_revision=revision,
-            **_conflict_body(current, desired),
-        )
-        return 409, result
+        body = {
+            "code": "ANNOTATION_EXISTS",
+            "current_revision": revision,
+        }
+        result.update(body)
+        return 409, _fit_conflict(result, current, desired)
 
     if revision > 0:
         # Durable delete (or prior mutation) already claimed this id.
@@ -403,8 +429,6 @@ def validate_set(op):
 
 def apply_set(db, conn, op, received_at):
     del db, received_at
-    from backend import work_metadata_sync as meta
-
     work_id = op["entity_id"]
     annotation_id = op["payload"]["annotation_id"]
     desired = _payload_annotation(op["payload"], annotation_id)
@@ -424,29 +448,11 @@ def apply_set(db, conn, op, received_at):
     revision = get_revision(conn, work_id, annotation_id)
     base = op["base_revision"]
     if base > revision:
-        body = {
-            "code": "FUTURE_REVISION",
-            "current_revision": revision,
-            **_conflict_body(current, desired),
-        }
-        result.update(body)
-        return 400, meta.fit_terminal_result(
-            result,
-            json.dumps(semantic_annotation_view(current), ensure_ascii=False),
-            json.dumps(semantic_annotation_view(desired), ensure_ascii=False),
-        )
+        result.update(code="FUTURE_REVISION", current_revision=revision)
+        return 400, _fit_conflict(result, current, desired)
     if base < revision and not annotations_semantically_equal(current, desired):
-        body = {
-            "code": "REVISION_CONFLICT",
-            "current_revision": revision,
-            **_conflict_body(current, desired),
-        }
-        result.update(body)
-        return 409, meta.fit_terminal_result(
-            result,
-            json.dumps(semantic_annotation_view(current), ensure_ascii=False),
-            json.dumps(semantic_annotation_view(desired), ensure_ascii=False),
-        )
+        result.update(code="REVISION_CONFLICT", current_revision=revision)
+        return 409, _fit_conflict(result, current, desired)
 
     changed, after, stored = update_annotation_on_conn(conn, work_id, desired)
     set_rev = _bump_canonical_set_if_changed(conn, work_id, changed=changed)
@@ -489,15 +495,8 @@ def apply_delete(db, conn, op, received_at):
     desired_absent = True
 
     if base > revision:
-        result.update(
-            code="FUTURE_REVISION",
-            current_revision=revision,
-            current_present=current is not None,
-            requested_present=not desired_absent,
-        )
-        if current is not None:
-            result["current_annotation"] = semantic_annotation_view(current)
-        return 400, result
+        result.update(code="FUTURE_REVISION", current_revision=revision)
+        return 400, _fit_conflict(result, current, None if desired_absent else current)
 
     if current is None:
         # Already absent: convergent ACK when base is not in the future.
@@ -512,14 +511,8 @@ def apply_delete(db, conn, op, received_at):
 
     if base < revision:
         # Stale delete against a present annotation — conflict.
-        result.update(
-            code="REVISION_CONFLICT",
-            current_revision=revision,
-            current_present=True,
-            requested_present=False,
-            current_annotation=semantic_annotation_view(current),
-        )
-        return 409, result
+        result.update(code="REVISION_CONFLICT", current_revision=revision)
+        return 409, _fit_conflict(result, current, None)
 
     changed, after = delete_annotation_on_conn(conn, work_id, annotation_id)
     set_rev = _bump_canonical_set_if_changed(conn, work_id, changed=changed)
