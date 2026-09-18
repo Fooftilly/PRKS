@@ -1369,7 +1369,16 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_role) as rr:
             self.assertEqual(rr.status, 200)
 
-        ann = [{"id": "a1", "type": "note", "contents": "hello", "pageIndex": 0, "color": "#fff"}]
+        # Unique id: annotations.id is globally unique across Works.
+        ann = [
+            {
+                "id": "role-work-ann-1",
+                "type": "note",
+                "contents": "hello",
+                "pageIndex": 0,
+                "color": "#fff",
+            }
+        ]
         # Legacy annotations-first handshake requires the acknowledged tip.
         with self._post_work_annotations(
             w_id, {"annotations_json": json.dumps(ann)}
