@@ -7,6 +7,9 @@ map the returned status/body; they do not own this workflow.
 Shared ``/api/pdfs/<file>`` references are copy-on-write: before overwriting
 bytes that another Work still points at, this Work is retargeted to an exclusive
 managed filename so siblings keep their prior bytes and materialization marks.
+
+All on-disk paths are resolved through ``safe_pdf_path_under_dir`` immediately
+before use so DB/user-derived basenames cannot escape the managed pdfs dir.
 """
 
 from __future__ import annotations
@@ -35,9 +38,12 @@ _PDF_PATH_LOCKS_GUARD = threading.Lock()
 _PDF_PATH_LOCKS: dict[str, threading.Lock] = {}
 
 
-def pdf_path_lock_for(pdf_path: str) -> threading.Lock:
-    """Serialize claim/replace/mark for a canonical on-disk managed PDF path."""
-    key = os.path.normpath(pdf_path)
+def managed_pdf_path_lock(pdfs_dir: str, filename: str) -> Optional[threading.Lock]:
+    """Lock for a managed PDF basename under ``pdfs_dir``, or None if unsafe."""
+    path = safe_pdf_path_under_dir(pdfs_dir, filename)
+    if not path:
+        return None
+    key = os.path.normpath(path)
     with _PDF_PATH_LOCKS_GUARD:
         lock = _PDF_PATH_LOCKS.get(key)
         if lock is None:
@@ -46,8 +52,11 @@ def pdf_path_lock_for(pdf_path: str) -> threading.Lock:
         return lock
 
 
-def fsync_parent_dir(path: str) -> None:
+def fsync_managed_pdf_parent(pdfs_dir: str, filename: str) -> None:
     """Best-effort directory fsync after rename (POSIX/Linux only)."""
+    path = safe_pdf_path_under_dir(pdfs_dir, filename)
+    if not path:
+        return
     if os.name != "posix":
         return
     parent = os.path.dirname(path) or "."
@@ -69,8 +78,17 @@ def fsync_parent_dir(path: str) -> None:
             pass
 
 
-def atomic_replace_file_bytes(path: str, body: bytes) -> None:
-    """Write ``body`` to ``path`` without truncating the live file first."""
+def atomic_replace_managed_pdf_bytes(
+    pdfs_dir: str, filename: str, body: bytes
+) -> str:
+    """Write ``body`` to managed ``filename`` under ``pdfs_dir`` without truncating first.
+
+    Resolves the destination through ``safe_pdf_path_under_dir`` before any
+    filesystem operation. Returns the absolute managed path written.
+    """
+    path = safe_pdf_path_under_dir(pdfs_dir, filename)
+    if not path:
+        raise ValueError("Invalid or unsafe PDF storage path")
     parent = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=parent)
     try:
@@ -87,7 +105,7 @@ def atomic_replace_file_bytes(path: str, body: bytes) -> None:
         raise
     try:
         os.replace(tmp, path)
-        fsync_parent_dir(path)
+        fsync_managed_pdf_parent(pdfs_dir, filename)
     except Exception:
         try:
             if os.path.isfile(tmp):
@@ -95,6 +113,7 @@ def atomic_replace_file_bytes(path: str, body: bytes) -> None:
         except OSError:
             pass
         raise
+    return path
 
 
 def _stale_body(db, work_id: str) -> dict[str, Any]:
@@ -156,7 +175,10 @@ def other_works_share_managed_filename(
 
 def allocate_exclusive_managed_filename(work_id: str, shared_filename: str) -> str:
     """Mint a Work-specific managed PDF basename under ``pdfs/``."""
-    base = os.path.basename(str(shared_filename or "")) or "work.pdf"
+    # shared_filename must already be a managed basename (from managed_pdf_filename).
+    base = managed_pdf_filename(f"/api/pdfs/{os.path.basename(str(shared_filename or ''))}")
+    if not base:
+        base = "work.pdf"
     safe_base = "".join(c for c in base if c.isalnum() or c in ".-_") or "work.pdf"
     if not safe_base.lower().endswith(".pdf"):
         safe_base = f"{safe_base}.pdf"
@@ -208,7 +230,15 @@ def replace_managed_work_pdf(
             "wrote_pdf": False,
         }
 
-    with pdf_path_lock_for(pdf_path):
+    shared_lock = managed_pdf_path_lock(pdfs_dir, filename)
+    if shared_lock is None:
+        return {
+            "status": 400,
+            "body": {"error": "Invalid or unsafe PDF storage path"},
+            "wrote_pdf": False,
+        }
+
+    with shared_lock:
         # Re-read under the shared-path lock: a concurrent COW may have moved us.
         res_path = db.execute_query(
             "SELECT file_path FROM works WHERE id=?", (work_id,)
@@ -227,15 +257,14 @@ def replace_managed_work_pdf(
                 "body": {"error": "Work has no managed PDF"},
                 "wrote_pdf": False,
             }
-        pdf_path = safe_pdf_path_under_dir(pdfs_dir, filename)
-        if not pdf_path:
+        if not safe_pdf_path_under_dir(pdfs_dir, filename):
             return {
                 "status": 400,
                 "body": {"error": "Invalid or unsafe PDF storage path"},
                 "wrote_pdf": False,
             }
 
-        target_path = pdf_path
+        target_filename = filename
         target_fp = stored_fp
         cow_retarget = False
         exclusive_lock = None
@@ -244,16 +273,21 @@ def replace_managed_work_pdf(
             db, filename, exclude_work_id=work_id
         ):
             exclusive_name = allocate_exclusive_managed_filename(work_id, filename)
-            exclusive_path = safe_pdf_path_under_dir(pdfs_dir, exclusive_name)
-            if not exclusive_path:
+            if not safe_pdf_path_under_dir(pdfs_dir, exclusive_name):
                 return {
                     "status": 400,
                     "body": {"error": "Invalid or unsafe PDF storage path"},
                     "wrote_pdf": False,
                 }
-            exclusive_lock = pdf_path_lock_for(exclusive_path)
+            exclusive_lock = managed_pdf_path_lock(pdfs_dir, exclusive_name)
+            if exclusive_lock is None:
+                return {
+                    "status": 400,
+                    "body": {"error": "Invalid or unsafe PDF storage path"},
+                    "wrote_pdf": False,
+                }
             exclusive_lock.acquire()
-            target_path = exclusive_path
+            target_filename = exclusive_name
             target_fp = f"/api/pdfs/{exclusive_name}"
             cow_retarget = True
 
@@ -280,7 +314,9 @@ def replace_managed_work_pdf(
                         "wrote_pdf": False,
                     }
 
-            atomic_replace_file_bytes(target_path, pdf_bytes)
+            target_path = atomic_replace_managed_pdf_bytes(
+                pdfs_dir, target_filename, pdf_bytes
+            )
             if cow_retarget:
                 db.execute_query(
                     """
@@ -297,7 +333,8 @@ def replace_managed_work_pdf(
             changed, reason = maybe_linearize_pdf_in_place(
                 target_path, context="work-pdf-overwrite"
             )
-            fsync_parent_dir(target_path)
+            # Linearize may os.replace again — re-resolve via sanitizer then fsync.
+            fsync_managed_pdf_parent(pdfs_dir, target_filename)
             LOGGER.info(
                 "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
                 "true" if changed else "false",

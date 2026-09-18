@@ -1951,7 +1951,8 @@ class TestServerAPI(unittest.TestCase):
         from backend.services import work_pdf_replace
 
         with tempfile.TemporaryDirectory(prefix="prks-atomic-pdf-") as tmp:
-            live = os.path.join(tmp, "doc.pdf")
+            filename = "doc.pdf"
+            live = os.path.join(tmp, filename)
             with open(live, "wb") as f:
                 f.write(b"%PDF-1.4 live-original")
             with open(live, "rb") as f:
@@ -1996,7 +1997,9 @@ class TestServerAPI(unittest.TestCase):
 
             with patch.object(work_pdf_replace.os, "fdopen", boom_fdopen):
                 with self.assertRaises(OSError):
-                    work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 new")
+                    work_pdf_replace.atomic_replace_managed_pdf_bytes(
+                        tmp, filename, b"%PDF-1.4 new"
+                    )
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), before)
             leftovers = [
@@ -2007,10 +2010,12 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(leftovers, [])
             with patch.object(
                 work_pdf_replace,
-                "fsync_parent_dir",
-                wraps=work_pdf_replace.fsync_parent_dir,
+                "fsync_managed_pdf_parent",
+                wraps=work_pdf_replace.fsync_managed_pdf_parent,
             ) as dir_sync:
-                work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 replaced")
+                work_pdf_replace.atomic_replace_managed_pdf_bytes(
+                    tmp, filename, b"%PDF-1.4 replaced"
+                )
             dir_sync.assert_called()
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), b"%PDF-1.4 replaced")
@@ -2026,11 +2031,13 @@ class TestServerAPI(unittest.TestCase):
         from backend.services import work_pdf_replace
 
         with tempfile.TemporaryDirectory(prefix="prks-atomic-pdf-uniq-") as tmp:
-            live = os.path.join(tmp, "shared.pdf")
+            filename = "shared.pdf"
+            live = os.path.join(tmp, filename)
             with open(live, "wb") as f:
                 f.write(b"%PDF-1.4 a")
-            lock_a = work_pdf_replace.pdf_path_lock_for(live)
-            lock_b = work_pdf_replace.pdf_path_lock_for(os.path.normpath(live))
+            lock_a = work_pdf_replace.managed_pdf_path_lock(tmp, filename)
+            lock_b = work_pdf_replace.managed_pdf_path_lock(tmp, filename)
+            self.assertIsNotNone(lock_a)
             self.assertIs(lock_a, lock_b)
             seen = []
             real_mkstemp = work_pdf_replace.tempfile.mkstemp
@@ -2041,8 +2048,12 @@ class TestServerAPI(unittest.TestCase):
                 return fd, path
 
             with patch.object(work_pdf_replace.tempfile, "mkstemp", tracking_mkstemp):
-                work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 b")
-                work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 c")
+                work_pdf_replace.atomic_replace_managed_pdf_bytes(
+                    tmp, filename, b"%PDF-1.4 b"
+                )
+                work_pdf_replace.atomic_replace_managed_pdf_bytes(
+                    tmp, filename, b"%PDF-1.4 c"
+                )
             self.assertEqual(len(seen), 2)
             self.assertNotEqual(seen[0], seen[1])
             self.assertTrue(all(os.path.dirname(p) == tmp for p in seen))
