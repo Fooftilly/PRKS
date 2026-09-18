@@ -1639,6 +1639,27 @@ class OfflineFoundationTests(unittest.TestCase):
             timeout=20000,
         )
         page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+        # Coherent catch-up holds the materialization gate (and hides markup
+        # tools) while projecting /annotations-snapshot into the live viewer.
+        # Settlement means the gate is released AND tools are reachable again —
+        # mode===work alone is not enough (viewer may still be input-locked).
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                if (!pdf || pdf._annotationMaterializing) return false;
+                const root = document.querySelector(
+                    '[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
+                if (!root) return false;
+                const primary = root.querySelector(
+                    '.prks-pdf-toolbar__group > button[aria-label="Highlight"]');
+                if (primary && primary.offsetParent !== null) return true;
+                const more = root.querySelector(
+                    '.prks-pdf-toolbar__more button[aria-label="More tools"]');
+                return !!(more && more.offsetParent !== null);
+            }""",
+            timeout=20000,
+        )
         self.assertTrue(_pdf_markup_tools_available(page))
         self.assertEqual(page.locator('[data-prks-role="pdf-viewer"]').count(), 1)
 
@@ -1657,7 +1678,8 @@ class OfflineFoundationTests(unittest.TestCase):
             """() => {
                 const pdf = (window.prksGetFocusedTabContext &&
                     window.prksGetFocusedTabContext().getResource('pdf'));
-                return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable);
+                return !!(pdf && pdf.mode === 'work' && pdf.annotationMutationDurable
+                    && !pdf._annotationMaterializing);
             }""",
             timeout=20000,
         )

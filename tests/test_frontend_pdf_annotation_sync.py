@@ -101,6 +101,16 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksRefreshPendingPdfAnnotations", catch_up_body)
         self.assertIn("prksBeginAnnotationMaterializationGate", catch_up_body)
         self.assertIn("prksEndAnnotationMaterializationGate", catch_up_body)
+        # Catch-up finally must always unlock + end gate (even when
+        # canonical <= materialized and no saveCopy runs) so reconnect cannot
+        # leave markup tools stranded behind a held gate.
+        catch_up_finally = catch_up_body[catch_up_body.rindex("} finally {"):]
+        self.assertIn("viewer.setMutationEnabled(runtime.mode === 'work')", catch_up_finally)
+        self.assertIn("prksEndAnnotationMaterializationGate(runtime)", catch_up_finally)
+        self.assertLess(
+            catch_up_finally.index("viewer.setMutationEnabled(runtime.mode === 'work')"),
+            catch_up_finally.index("prksEndAnnotationMaterializationGate(runtime)"),
+        )
         # ACK-drained path must also use coherent catch-up — never assign
         # pendingMaterializationRevision from an incremental ACK alone.
         ack_sub_at = works_pdf.index("const isPdfAck = ack && op && (")
