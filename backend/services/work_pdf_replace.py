@@ -215,12 +215,26 @@ def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
 
     Used to roll back a COW exclusive write when ``works.file_path`` was never
     retargeted — never unlink the shared path a sibling still references.
+
+    Runtime containment uses ``safe_pdf_path_under_dir``. The path passed to
+    ``os.remove`` is then rebuilt with the CodeQL-documented
+    ``normpath(join(base, basename))`` + ``startswith(base)`` pattern so the
+    sink does not carry a helper return CodeQL still treats as tainted. Do not
+    ``dirname`` a tainted path into the sink.
     """
-    path = safe_pdf_path_under_dir(pdfs_dir, filename)
-    if not path:
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
+        return False
+    base_path = os.path.realpath(pdfs_dir)
+    # CodeQL py/path-injection documented sanitizer (query help user_picture3):
+    # build with join+normpath, then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if not fullpath.startswith(base_path):
+        return False
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
         return False
     try:
-        os.remove(path)
+        os.remove(fullpath)
         return True
     except OSError as e:
         LOGGER.warning(
