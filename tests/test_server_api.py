@@ -1642,7 +1642,21 @@ class TestServerAPI(unittest.TestCase):
 
     def test_22c4_annotations_only_never_marks_materialization(self):
         """POST /annotations never marks bytes — even with a leftover PDF save_token."""
-        w_id = self._create_work_api("Ann Only No Mark")
+        pdf_bytes = _pdf_with_text_bytes("ann only seed")
+        payload = {
+            "title": "Ann Only No Mark",
+            "status": "Planned",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "ann_only.pdf",
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            w_id = json.loads(res.read().decode())["id"]
         before = self.__class__.test_db.get_work_pdf_materialization(w_id)
         # Plant a PDF save_token as if an older PDF-first client had uploaded.
         leftover = _pdf_with_text_bytes("token plant")
@@ -1925,7 +1939,7 @@ class TestServerAPI(unittest.TestCase):
 
     def test_22c9_atomic_pdf_replace_keeps_live_bytes_on_write_failure(self):
         """Failed temp write must leave the existing managed PDF intact."""
-        import tempfile
+        from backend.services import work_pdf_replace
 
         with tempfile.TemporaryDirectory(prefix="prks-atomic-pdf-") as tmp:
             live = os.path.join(tmp, "doc.pdf")
@@ -1945,9 +1959,9 @@ class TestServerAPI(unittest.TestCase):
                     fp.write = _boom  # type: ignore[method-assign]
                 return fp
 
-            with patch.object(server_module.os, "fdopen", boom_fdopen):
+            with patch.object(work_pdf_replace.os, "fdopen", boom_fdopen):
                 with self.assertRaises(OSError):
-                    server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 new")
+                    work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 new")
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), before)
             leftovers = [
@@ -1957,9 +1971,11 @@ class TestServerAPI(unittest.TestCase):
             ]
             self.assertEqual(leftovers, [])
             with patch.object(
-                server_module, "_fsync_parent_dir", wraps=server_module._fsync_parent_dir
+                work_pdf_replace,
+                "fsync_parent_dir",
+                wraps=work_pdf_replace.fsync_parent_dir,
             ) as dir_sync:
-                server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 replaced")
+                work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 replaced")
             dir_sync.assert_called()
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), b"%PDF-1.4 replaced")
@@ -1972,26 +1988,26 @@ class TestServerAPI(unittest.TestCase):
 
     def test_22c10_atomic_pdf_temps_are_unique_and_path_lock_is_shared(self):
         """Shared managed PDF paths share one path lock; temps are unique."""
-        import tempfile
+        from backend.services import work_pdf_replace
 
         with tempfile.TemporaryDirectory(prefix="prks-atomic-pdf-uniq-") as tmp:
             live = os.path.join(tmp, "shared.pdf")
             with open(live, "wb") as f:
                 f.write(b"%PDF-1.4 a")
-            lock_a = server_module._pdf_path_lock_for(live)
-            lock_b = server_module._pdf_path_lock_for(os.path.normpath(live))
+            lock_a = work_pdf_replace.pdf_path_lock_for(live)
+            lock_b = work_pdf_replace.pdf_path_lock_for(os.path.normpath(live))
             self.assertIs(lock_a, lock_b)
             seen = []
-            real_mkstemp = server_module.tempfile.mkstemp
+            real_mkstemp = work_pdf_replace.tempfile.mkstemp
 
             def tracking_mkstemp(*args, **kwargs):
                 fd, path = real_mkstemp(*args, **kwargs)
                 seen.append(path)
                 return fd, path
 
-            with patch.object(server_module.tempfile, "mkstemp", tracking_mkstemp):
-                server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 b")
-                server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 c")
+            with patch.object(work_pdf_replace.tempfile, "mkstemp", tracking_mkstemp):
+                work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 b")
+                work_pdf_replace.atomic_replace_file_bytes(live, b"%PDF-1.4 c")
             self.assertEqual(len(seen), 2)
             self.assertNotEqual(seen[0], seen[1])
             self.assertTrue(all(os.path.dirname(p) == tmp for p in seen))

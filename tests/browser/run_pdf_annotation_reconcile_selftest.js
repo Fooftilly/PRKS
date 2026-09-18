@@ -144,11 +144,29 @@ async function neverTouchLink() {
     );
 }
 
+async function knownAbsentRemovesStaleDeletedMarkup() {
+    // Stale PDF still embeds deleted managed markup; fresh viewer has empty
+    // managed-ID set. knownAbsent must seed deletion without touching legacy.
+    const viewer = fakeViewer([
+        highlight('deleted-ann', 'Gone', 700),
+        highlight('legacy-byte', 'Keep', 650),
+        linkAnn(),
+    ]);
+    const stats = await globalThis.prksReconcileViewerAnnotations(viewer, [], {
+        knownAbsent: { 'deleted-ann': 3 },
+        isManaged: globalThis.prksDefaultIsManagedPdfAnnotation,
+    });
+    assert.equal(stats.deleted, 1);
+    const ids = viewer.getAnnotations().map((x) => x.raw.id).sort((a, b) => a.localeCompare(b));
+    assert.deepEqual(ids, ['legacy-byte', 'link-1']);
+}
+
 (async () => {
     await createUpdateIdempotent();
     await updateAndManagedDelete();
     await suppressDepth();
     await neverTouchLink();
+    await knownAbsentRemovesStaleDeletedMarkup();
     console.log(checks + ' checks passed');
 })().catch((err) => {
     console.error(err);

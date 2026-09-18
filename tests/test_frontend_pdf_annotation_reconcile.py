@@ -38,6 +38,17 @@ class PdfAnnotationReconcileContractTests(unittest.TestCase):
         self.assertIn("prksViewerIsReconcilingAnnotations", src)
         self.assertIn("prksReconcileViewerAnnotations", src)
         self.assertIn("prksEffectiveWorkAnnotations", src)
+        self.assertIn("prksKnownAbsentAnnotationSeed", src)
+        self.assertIn("knownAbsent: prksKnownAbsentAnnotationSeed(runtime)", src)
+        # Every reconcile call must seed known-absent (4 call sites).
+        self.assertEqual(src.count("knownAbsent: prksKnownAbsentAnnotationSeed(runtime)"), 4)
+
+    def test_reconcile_accepts_known_absent_seed(self) -> None:
+        src = (ROOT / "frontend" / "js" / "pdf-annotation-reconcile.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("opts.knownAbsent", src)
+        self.assertIn("seedManagedIds", src)
 
     def test_selftest_exists(self) -> None:
         path = ROOT / "tests" / "browser" / "run_pdf_annotation_reconcile_selftest.js"
@@ -45,6 +56,8 @@ class PdfAnnotationReconcileContractTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn("link preserved", text)
         self.assertIn("seedManagedIds", text)
+        self.assertIn("knownAbsentRemovesStaleDeletedMarkup", text)
+        self.assertIn("knownAbsent:", text)
 
 
 if __name__ == "__main__":

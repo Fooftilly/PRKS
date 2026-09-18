@@ -123,6 +123,10 @@
      * @param {object} [options]
      * @param {function} [options.isManaged] user-markup predicate
      * @param {Iterable<string>} [options.seedManagedIds] ids known managed before this pass
+     *   (include known-absent tombstone ids so stale deleted markup is removed
+     *   when the viewer opens a lagging PDF with an empty managed-ID set)
+     * @param {object} [options.knownAbsent] map of tombstone annotation id → revision;
+     *   keys are merged into the managed seed (same role as seedManagedIds)
      * @returns {Promise<{created:number,updated:number,deleted:number,skipped:number}>}
      */
     async function reconcileViewerAnnotations(viewer, effectiveAnnotations, options) {
@@ -147,6 +151,12 @@
             for (const id of seeded) {
                 if (id) previously.add(String(id));
             }
+        }
+        const knownAbsent = opts.knownAbsent;
+        if (knownAbsent && typeof knownAbsent === 'object' && !Array.isArray(knownAbsent)) {
+            Object.keys(knownAbsent).forEach(function (id) {
+                if (id) previously.add(String(id));
+            });
         }
         const nextManaged = new Set(previously);
 

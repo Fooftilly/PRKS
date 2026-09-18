@@ -623,6 +623,14 @@ function prksClearMaterializationHandoff(runtime) {
     runtime._annotationMaterializationHandoff = false;
 }
 
+/** Tombstone ids from acknowledged state — seed reconciler managed set. */
+function prksKnownAbsentAnnotationSeed(runtime) {
+    const state = runtime && runtime.annotationState;
+    const known = state && state.known_absent;
+    if (!known || typeof known !== 'object' || Array.isArray(known)) return null;
+    return known;
+}
+
 /**
  * User-originated sidebar/editor mutations must not use the programmatic
  * escape hatch (that is reconcile-only). Wait out the materialization gate
@@ -1448,6 +1456,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                     : nextList;
                             await window.prksReconcileViewerAnnotations(viewer, effective, {
                                 isManaged: prksIsUserMarkupAnnotation,
+                                knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
                             });
                         }
                     }
@@ -1766,6 +1775,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         try {
             await window.prksReconcileViewerAnnotations(viewer, effective, {
                 isManaged: prksIsUserMarkupAnnotation,
+                knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
             });
         } catch (_e) {
             // Projection failure must not block viewing; mutations stay on
@@ -1851,6 +1861,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (typeof window.prksReconcileViewerAnnotations === 'function') {
             await window.prksReconcileViewerAnnotations(viewer, effective, {
                 isManaged: prksIsUserMarkupAnnotation,
+                knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
             });
         } else if (required) {
             throw new Error('ANNOTATION_PROJECTION_UNAVAILABLE');
@@ -1946,6 +1957,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 if (typeof window.prksReconcileViewerAnnotations === 'function') {
                     await window.prksReconcileViewerAnnotations(viewer, ackOnly, {
                         isManaged: prksIsUserMarkupAnnotation,
+                        knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
                     });
                 }
                 if (!stillLive()) return;
