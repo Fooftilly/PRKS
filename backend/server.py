@@ -513,6 +513,24 @@ def _prks_write_person_image_cache(cache_path: str, body: bytes) -> None:
     os.replace(tmp, cache_path)
 
 
+def _atomic_replace_file_bytes(path: str, body: bytes) -> None:
+    """Write ``body`` to ``path`` without truncating the live file first."""
+    tmp = path + ".prks-tmp"
+    try:
+        with open(tmp, "wb") as fp:
+            fp.write(body)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _prks_pixmap_to_jpeg_bytes(pix, quality: int = 82) -> bytes | None:
     """JPEG fallback when WebP encode is unavailable."""
     from io import BytesIO
@@ -3179,6 +3197,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
 
+                    # Existence before lock: unknown IDs must not grow
+                    # _PDF_MATERIALIZATION_LOCKS. Re-check under the lock for
+                    # deletion races.
+                    pre = db.execute_query(
+                        "SELECT 1 AS ok FROM works WHERE id=?", (w_id,)
+                    )
+                    if not pre:
+                        self.send_json(404, {'error': 'Work not found'})
+                        return
+
                     mat_lock = _pdf_materialization_lock_for(w_id)
                     with mat_lock:
                         res_path = db.execute_query(
@@ -3228,9 +3256,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 self.send_json(400, {'error': 'Invalid materialization revision'})
                                 return
 
-                        # 1. Overwrite managed PDF bytes (path resolved above).
-                        with open(pdf_path, 'wb') as f:
-                            f.write(pdf_bytes)
+                        # 1. Atomically overwrite managed PDF bytes (temp + replace).
+                        _atomic_replace_file_bytes(pdf_path, pdf_bytes)
                         changed, reason = maybe_linearize_pdf_in_place(pdf_path, context="work-pdf-overwrite")
                         LOGGER.info(
                             "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",

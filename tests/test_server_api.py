@@ -1907,6 +1907,43 @@ class TestServerAPI(unittest.TestCase):
             before.get("canonical_annotation_set_revision"),
         )
 
+    def test_22c8_pdf_post_missing_work_does_not_grow_lock_dict(self):
+        """404 for unknown work id must not create a materialization lock entry."""
+        missing = "W-missing-pdf-lock-probe"
+        self.assertNotIn(missing, server_module._PDF_MATERIALIZATION_LOCKS)
+        pdf_bytes = _pdf_with_text_bytes("lock probe")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_work_pdf(
+                missing,
+                {
+                    "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+                    "save_token": "lock-probe",
+                },
+            )
+        self.assertEqual(cm.exception.code, 404)
+        self.assertNotIn(missing, server_module._PDF_MATERIALIZATION_LOCKS)
+
+    def test_22c9_atomic_pdf_replace_keeps_live_bytes_on_write_failure(self):
+        """Failed temp write must leave the existing managed PDF intact."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="prks-atomic-pdf-") as tmp:
+            live = os.path.join(tmp, "doc.pdf")
+            with open(live, "wb") as f:
+                f.write(b"%PDF-1.4 live-original")
+            before = open(live, "rb").read()
+
+            def boom_open(path, mode="r", *args, **kwargs):
+                if path.endswith(".prks-tmp") and "w" in mode:
+                    raise OSError("simulated write failure")
+                return open(path, mode, *args, **kwargs)
+
+            with patch("builtins.open", boom_open):
+                with self.assertRaises(OSError):
+                    server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 new")
+            self.assertEqual(open(live, "rb").read(), before)
+            self.assertFalse(os.path.exists(live + ".prks-tmp"))
+
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")
         good = [{"id": "tok", "contents": "ok", "pageIndex": 0}]
