@@ -629,16 +629,30 @@ async function prksWaitOutAnnotationMaterialization(pdf) {
     }
 }
 
+function prksPdfUserMutationStillAllowed(pdf) {
+    if (!pdf) return false;
+    if (pdf.annotationMutationAllowed === false) return false;
+    if (pdf._annotationCatchUpBlocksMutation) return false;
+    if (pdf._annotationMaterializing) return false;
+    return true;
+}
+
+function prksRefusePdfUserMutation(pdf) {
+    if (typeof prksOfflineGuardMutation === 'function') {
+        prksOfflineGuardMutation(
+            'PDF annotation edits need a local PDF, a synchronized base, and durable storage.'
+        );
+    }
+}
+
 window.deletePdfAnnotationFromEditor = async function () {
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
-    if (pdf && pdf.annotationMutationAllowed === false) {
-        if (typeof prksOfflineGuardMutation === 'function') {
-            prksOfflineGuardMutation('PDF annotation edits need a local PDF, a synchronized base, and durable storage.');
-        }
+    if (!prksPdfUserMutationStillAllowed(pdf)) {
+        prksRefusePdfUserMutation(pdf);
         return;
     }
-    if ((!pdf || pdf.annotationMutationDurable !== true) &&
+    if (pdf.annotationMutationDurable !== true &&
         typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
         return;
     }
@@ -654,6 +668,16 @@ window.deletePdfAnnotationFromEditor = async function () {
     try {
         await prksWaitOutAnnotationMaterialization(pdf);
         if (owner && owner.destroyed) return;
+        // Capability may have changed while the gate was held — do not close
+        // the editor / assume a no-op viewer mutation succeeded.
+        if (!prksPdfUserMutationStillAllowed(pdf)) {
+            prksRefusePdfUserMutation(pdf);
+            return;
+        }
+        if (pdf.annotationMutationDurable !== true &&
+            typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
+            return;
+        }
         const viewer = prksPdfViewer(owner);
         if (!viewer || typeof viewer.deleteAnnotation !== 'function') return;
         // User path: plain delete after lock releases — never beginProgrammatic.
@@ -667,13 +691,11 @@ window.deletePdfAnnotationFromEditor = async function () {
 window.savePdfAnnotationComment = async function () {
     const owner = prksPdfOwnerOrFocused();
     const pdf = prksPdfRuntime(owner);
-    if (pdf && pdf.annotationMutationAllowed === false) {
-        if (typeof prksOfflineGuardMutation === 'function') {
-            prksOfflineGuardMutation('PDF annotation edits need a local PDF, a synchronized base, and durable storage.');
-        }
+    if (!prksPdfUserMutationStillAllowed(pdf)) {
+        prksRefusePdfUserMutation(pdf);
         return;
     }
-    if ((!pdf || pdf.annotationMutationDurable !== true) &&
+    if (pdf.annotationMutationDurable !== true &&
         typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
         return;
     }
@@ -685,6 +707,16 @@ window.savePdfAnnotationComment = async function () {
     try {
         await prksWaitOutAnnotationMaterialization(pdf);
         if (owner && owner.destroyed) return;
+        // Re-check after the gate: connectivity/capability may have flipped.
+        // Do not patch sidebar/editor UI as though the update succeeded.
+        if (!prksPdfUserMutationStillAllowed(pdf)) {
+            prksRefusePdfUserMutation(pdf);
+            return;
+        }
+        if (pdf.annotationMutationDurable !== true &&
+            typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) {
+            return;
+        }
         const viewer = prksPdfViewer(owner);
         if (!viewer || typeof viewer.updateAnnotation !== 'function') return;
         const liveAnn = prksFindViewerAnnotation(viewer, st.annId);
@@ -942,13 +974,11 @@ ${commentHtml}
             return;
         }
         if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {
-            if (pdf && pdf.annotationMutationAllowed === false) {
-                if (typeof prksOfflineGuardMutation === 'function') {
-                    prksOfflineGuardMutation('PDF annotation edits need a local PDF, a synchronized base, and durable storage.');
-                }
+            if (!prksPdfUserMutationStillAllowed(pdf)) {
+                prksRefusePdfUserMutation(pdf);
                 return;
             }
-            if ((!pdf || pdf.annotationMutationDurable !== true) &&
+            if (pdf.annotationMutationDurable !== true &&
                 typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             const cache = pdf && pdf.annotationCache;
             const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
@@ -962,6 +992,13 @@ ${commentHtml}
             if (owner && owner.destroyed) return;
             await prksWaitOutAnnotationMaterialization(pdf);
             if (owner && owner.destroyed) return;
+            // Re-check after the gate — do not close the editor as if delete ran.
+            if (!prksPdfUserMutationStillAllowed(pdf)) {
+                prksRefusePdfUserMutation(pdf);
+                return;
+            }
+            if (pdf.annotationMutationDurable !== true &&
+                typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
             const viewer = prksPdfViewer(owner);
             if (viewer && typeof viewer.deleteAnnotation === 'function') {
                 try {
@@ -1723,7 +1760,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     }
 
     async function restoreEffectiveViewerAnnotations(opts) {
-        if (!stillLive() || !viewer) return;
+        const required = !!(opts && opts.required);
+        if (!stillLive() || !viewer) {
+            if (required) throw new Error('ANNOTATION_PROJECTION_UNAVAILABLE');
+            return false;
+        }
         const paintList = !opts || opts.paintList !== false;
         const ackOnly = Array.isArray(runtime.annotationCache && runtime.annotationCache.items)
             ? runtime.annotationCache.items
@@ -1736,11 +1777,16 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             await window.prksReconcileViewerAnnotations(viewer, effective, {
                 isManaged: prksIsUserMarkupAnnotation,
             });
+        } else if (required) {
+            throw new Error('ANNOTATION_PROJECTION_UNAVAILABLE');
         }
-        if (!stillLive()) return;
+        if (!stillLive()) {
+            if (required) throw new Error('ANNOTATION_PROJECTION_UNAVAILABLE');
+            return false;
+        }
         // Materialization finally restores the viewer only: repainting the
         // sidebar would detach a live delete-confirm opener under load.
-        if (!paintList) return;
+        if (!paintList) return true;
         renderAnnotationFallbackList(
             effective,
             viewer.getDocumentId ? viewer.getDocumentId() : (
@@ -1749,6 +1795,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             workId,
             ctx
         );
+        return true;
     }
 
     async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
@@ -1780,11 +1827,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 } catch (_eWrite) { /* prior write failure already handled */ }
             }
             if (!stillLive()) return;
-            // Raise gate before locking user input. Release only at the very
-            // end of finally — after effective restore AND input unlock — so
-            // prksWaitOutAnnotationMaterialization does not release sidebar
-            // Delete/comment early.
-            prksBeginAnnotationMaterializationGate(runtime);
+            // Raise gate before locking user input. Require acquisition — do
+            // not proceed when another critical section still holds the gate.
+            // Release only at the very end of finally — after effective restore
+            // AND input unlock — so prksWaitOutAnnotationMaterialization does
+            // not release sidebar Delete/comment early.
+            if (!prksBeginAnnotationMaterializationGate(runtime)) return;
             let userInputLocked = false;
             try {
                 if (typeof viewer.setMutationEnabled === 'function') {
@@ -2012,6 +2060,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
      * (no saveCopy needed), the live viewer must show the snapshot bodies
      * before editing resumes — otherwise a reconnect can leave stale B4 on
      * screen while base_revision is already gen 5.
+     *
+     * Gate ownership: catch-up holds `_annotationMaterializationGate` only for
+     * snapshot+projection. It never hands that gate into async materialization.
+     * When a PDF export is needed it sets `shouldMaterialize`, releases the
+     * catch-up gate (and restores capability when projection succeeded), then
+     * starts `requestFlush('materialize')` so materialization acquires its own
+     * independent gate.
      */
     async function maybeCatchUpMaterialization() {
         if (!stillLive() || !runtime.annotationMutationDurable) return;
@@ -2025,6 +2080,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const startedGate = prksBeginAnnotationMaterializationGate(runtime);
         if (!startedGate) return;
         let userInputLocked = false;
+        let acceptedSnapshot = false;
+        let projectionReady = false;
+        let shouldMaterialize = false;
         try {
             if (typeof viewer.setMutationEnabled === 'function') {
                 viewer.setMutationEnabled(false);
@@ -2045,46 +2103,72 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             if (!stillLive()) return;
             if (!applyAnnotationSnapshotToRuntime(snapBody, 'DB')) return;
+            // Snapshot/revision state is now accepted. Pending hydration and
+            // viewer projection are fail-closed from here: do not unlock user
+            // mutation until effective ack+pending is successfully visible.
+            acceptedSnapshot = true;
+            runtime._annotationCatchUpBlocksMutation = true;
             if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
                 try {
                     await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
                 } catch (_ePub) { /* best-effort cache publish */ }
             }
             if (!stillLive()) return;
-            if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
-                try {
-                    await window.prksRefreshPendingPdfAnnotations();
-                } catch (_ePend) { /* best-effort */ }
+            if (typeof window.prksRefreshPendingPdfAnnotations !== 'function') {
+                throw new Error('ANNOTATION_PENDING_HYDRATION_UNAVAILABLE');
             }
+            await window.prksRefreshPendingPdfAnnotations();
             if (!stillLive()) return;
             // Project fresh ack+pending into the live viewer + sidebar before
             // unlocking user mutation (even when no PDF export is needed).
-            try {
-                await restoreEffectiveViewerAnnotations({ paintList: true });
-            } catch (_eProj) { /* best-effort projection */ }
+            await restoreEffectiveViewerAnnotations({ paintList: true, required: true });
             if (!stillLive()) return;
+            runtime._annotationCatchUpBlocksMutation = false;
+            projectionReady = true;
+            runtime._annotationCatchUpRetryAttempt = 0;
             const canonical = snapBody.canonical_annotation_set_revision;
             const materialized = snapBody.materialized_pdf_annotation_revision;
             if (!Number.isSafeInteger(canonical) || !Number.isSafeInteger(materialized)) return;
             if (canonical <= materialized) return;
             if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
-                try {
-                    if (await window.prksWorkHasUnresolvedPdfAnnotationOps(String(workId))) return;
-                } catch (_eDirty) {
-                    return;
-                }
+                if (await window.prksWorkHasUnresolvedPdfAnnotationOps(String(workId))) return;
             }
             if (!stillLive()) return;
             runtime.pendingMaterializationRevision = canonical;
+            shouldMaterialize = true;
             if (worker && worker.paused && typeof worker.resume === 'function') {
                 worker.resume();
             }
-            void requestFlush('materialize');
+            // Do NOT requestFlush here — release this catch-up gate first.
+        } catch (_eCatchUp) {
+            // Fail-closed only when projection has not yet succeeded. A later
+            // dirty-check/materialize-decision error must not re-lock editing
+            // after the viewer already shows effective ack+pending.
+            if (!projectionReady && acceptedSnapshot) {
+                runtime._annotationCatchUpBlocksMutation = true;
+            }
         } finally {
-            // Always unlock + end gate here. Materialization takes its own gate;
-            // never leave mutation disabled if the flush path does not enter
-            // its finally (would strand markup tools after reconnect).
-            if (userInputLocked && stillLive() && typeof viewer.setMutationEnabled === 'function') {
+            if (projectionReady && userInputLocked && stillLive() &&
+                typeof viewer.setMutationEnabled === 'function') {
+                viewer.setMutationEnabled(runtime.mode === 'work');
+                if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                    try {
+                        await prksApplyPdfAnnotationCapability(ctx, runtime, {
+                            id: workId,
+                            file_path: runtime.filePath,
+                        });
+                    } catch (_eCap) { /* unlock above already applied */ }
+                }
+            } else if (acceptedSnapshot && !projectionReady && userInputLocked && stillLive()) {
+                // Remain preview/read-only until a later catch-up projects successfully.
+                if (typeof viewer.setMutationEnabled === 'function') {
+                    viewer.setMutationEnabled(false);
+                }
+                runtime.annotationMutationAllowed = false;
+                runtime._annotationCatchUpBlocksMutation = true;
+                scheduleCatchUpProjectionRetry();
+            } else if (userInputLocked && stillLive() && typeof viewer.setMutationEnabled === 'function') {
+                // Snapshot never accepted (fetch/apply failed): restore capability.
                 viewer.setMutationEnabled(runtime.mode === 'work');
                 if (typeof prksApplyPdfAnnotationCapability === 'function') {
                     try {
@@ -2095,8 +2179,28 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     } catch (_eCap) { /* unlock above already applied */ }
                 }
             }
+            // Always end the catch-up gate here — never hand it to materialization.
             prksEndAnnotationMaterializationGate(runtime);
         }
+        // Independent materialization gate: only after catch-up gate is gone.
+        if (shouldMaterialize && stillLive()) {
+            void requestFlush('materialize');
+        }
+    }
+
+    function scheduleCatchUpProjectionRetry() {
+        if (!stillLive() || runtime._annotationCatchUpRetryScheduled) return;
+        if (!runtime._annotationCatchUpBlocksMutation) return;
+        runtime._annotationCatchUpRetryScheduled = true;
+        const attempt = Number(runtime._annotationCatchUpRetryAttempt) || 0;
+        runtime._annotationCatchUpRetryAttempt = attempt + 1;
+        const delay = Math.min(350 * Math.max(1, attempt + 1), 4000);
+        setTimeout(function () {
+            runtime._annotationCatchUpRetryScheduled = false;
+            if (!stillLive()) return;
+            if (!runtime._annotationCatchUpBlocksMutation) return;
+            void maybeCatchUpMaterialization();
+        }, delay);
     }
 
     /**
@@ -2585,6 +2689,22 @@ async function prksApplyPdfAnnotationCapability(ctx, runtime, work) {
     runtime.annotationMutationDurable = !!cap.durable;
     runtime.annotationMutationReason = cap.reason || '';
     runtime.filePath = runtime.filePath || (target && target.file_path) || '';
+    // Coherent catch-up accepted a fresh snapshot but has not yet projected
+    // effective ack+pending into the viewer — stay read-only until it does.
+    if (runtime._annotationCatchUpBlocksMutation) {
+        runtime.annotationMutationAllowed = false;
+        runtime.annotationMutationReason = 'catch_up_projection_pending';
+        if (runtime.viewer && typeof runtime.viewer.setMutationEnabled === 'function') {
+            runtime.viewer.setMutationEnabled(false);
+        } else if (runtime.viewer) {
+            prksReconcilePdfMutationMode(ctx, runtime);
+        }
+        return {
+            mode: 'preview',
+            durable: !!cap.durable,
+            reason: 'catch_up_projection_pending',
+        };
+    }
     if (runtime.viewer) {
         prksReconcilePdfMutationMode(ctx, runtime);
     }

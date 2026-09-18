@@ -93,23 +93,48 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         )
         # Fresh snapshot must project into live viewer+sidebar before unlock /
         # materialize decision — even when canonical <= materialized.
-        self.assertIn("restoreEffectiveViewerAnnotations({ paintList: true })", catch_up_body)
+        self.assertIn(
+            "restoreEffectiveViewerAnnotations({ paintList: true, required: true })",
+            catch_up_body,
+        )
         self.assertLess(
-            catch_up_body.index("restoreEffectiveViewerAnnotations({ paintList: true })"),
+            catch_up_body.index(
+                "restoreEffectiveViewerAnnotations({ paintList: true, required: true })"
+            ),
             catch_up_body.index("if (canonical <= materialized)"),
         )
         self.assertIn("prksRefreshPendingPdfAnnotations", catch_up_body)
+        # Pending hydrate + viewer projection are fail-closed after snapshot accept
+        # (no best-effort swallow that unlocks against a stale viewer).
+        self.assertIn("_annotationCatchUpBlocksMutation = true", catch_up_body)
+        self.assertIn("ANNOTATION_PENDING_HYDRATION_UNAVAILABLE", catch_up_body)
+        self.assertIn("required: true", catch_up_body)
+        self.assertNotIn("catch (_ePend)", catch_up_body)
+        self.assertNotIn("catch (_eProj)", catch_up_body)
+        self.assertIn("scheduleCatchUpProjectionRetry", catch_up_body)
         self.assertIn("prksBeginAnnotationMaterializationGate", catch_up_body)
         self.assertIn("prksEndAnnotationMaterializationGate", catch_up_body)
-        # Catch-up finally must always unlock + end gate (even when
-        # canonical <= materialized and no saveCopy runs) so reconnect cannot
-        # leave markup tools stranded behind a held gate.
-        catch_up_finally = catch_up_body[catch_up_body.rindex("} finally {"):]
-        self.assertIn("viewer.setMutationEnabled(runtime.mode === 'work')", catch_up_finally)
+        # Catch-up finally ends its own gate; unlock only when projectionReady.
+        # requestFlush('materialize') must run AFTER the catch-up gate is released
+        # (independent materialization gate — no overlap).
+        finally_at = catch_up_body.rindex("} finally {")
+        finally_end = catch_up_body.index(
+            "// Independent materialization gate", finally_at
+        )
+        catch_up_finally = catch_up_body[finally_at:finally_end]
         self.assertIn("prksEndAnnotationMaterializationGate(runtime)", catch_up_finally)
+        self.assertIn("projectionReady", catch_up_finally)
+        self.assertIn("scheduleCatchUpProjectionRetry", catch_up_finally)
+        self.assertNotIn("void requestFlush('materialize')", catch_up_finally)
+        try_end = catch_up_body.index("} catch (_eCatchUp)")
+        try_body = catch_up_body[:try_end]
+        self.assertNotIn("void requestFlush('materialize')", try_body)
+        self.assertIn("shouldMaterialize = true", try_body)
+        after_finally = catch_up_body[finally_end:]
+        self.assertIn("void requestFlush('materialize')", after_finally)
         self.assertLess(
-            catch_up_finally.index("viewer.setMutationEnabled(runtime.mode === 'work')"),
-            catch_up_finally.index("prksEndAnnotationMaterializationGate(runtime)"),
+            catch_up_body.rindex("prksEndAnnotationMaterializationGate(runtime)"),
+            catch_up_body.index("void requestFlush('materialize')"),
         )
         # ACK-drained path must also use coherent catch-up — never assign
         # pendingMaterializationRevision from an incremental ACK alone.
@@ -131,10 +156,16 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksEndAnnotationMaterializationGate", works_pdf)
         self.assertIn("_annotationMaterializationGate", works_pdf)
         self.assertIn("User path: plain delete after materialization lock", works_pdf)
+        self.assertIn("prksPdfUserMutationStillAllowed", works_pdf)
+        # Capability re-check after gate wait (Delete/comment) — no false UI settle.
+        del_at = works_pdf.index("window.deletePdfAnnotationFromEditor")
+        del_body = works_pdf[del_at:del_at + 1800]
+        wait_at = del_body.index("prksWaitOutAnnotationMaterialization")
+        self.assertIn("prksPdfUserMutationStillAllowed", del_body[wait_at:])
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
         mat_pass = works_pdf[mat_pass_at:mat_pass_at + 7500]
-        self.assertIn("prksBeginAnnotationMaterializationGate(runtime)", mat_pass)
+        self.assertIn("if (!prksBeginAnnotationMaterializationGate(runtime)) return;", mat_pass)
         self.assertIn("_annotationDurableWriteChain", mat_pass)
         self.assertIn("setMutationEnabled(false)", mat_pass)
         self.assertIn("restoreEffectiveViewerAnnotations", mat_pass)
@@ -148,6 +179,9 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertLess(restore_at, end_gate_at)
         self.assertLess(unlock_at, end_gate_at)
         self.assertGreater(end_gate_at, mat_pass.index("finally {"))
+        # Capability helper respects catch-up projection block.
+        self.assertIn("catch_up_projection_pending", works_pdf)
+        self.assertIn("_annotationCatchUpBlocksMutation", works_pdf)
         # Real write-chain serializer: enqueue write fn, do not start early.
         self.assertIn("function enqueueDurableAnnotationWrite", works_pdf)
         self.assertIn("enqueueDurableAnnotationWrite(async function", works_pdf)
@@ -173,8 +207,8 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("Do NOT materialize PDF bytes here", save_tail)
         self.assertNotIn("requestFlush('materialize')", save_tail)
         self.assertNotIn("pendingMaterializationRevision =", save_tail)
-        # Materialization flush lives only inside coherent catch-up.
-        only_flush = works_pdf.count("requestFlush('materialize')")
+        # Materialization flush lives only inside coherent catch-up, after gate release.
+        only_flush = works_pdf.count("void requestFlush('materialize')")
         self.assertEqual(only_flush, 1)
         self.assertIn("void requestFlush('materialize');", catch_up_body)
         # 6. SENT successor rebased against actual ACK server_revision

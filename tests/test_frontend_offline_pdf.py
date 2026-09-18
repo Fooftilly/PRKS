@@ -175,18 +175,24 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_annotation_mutation_entry_points_are_guarded(self):
         src = _read(_WORKS_PDF)
+        self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)
+        self.assertIn("annotationMutationAllowed === false", src)
         for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
             at = src.index(fn_name)
-            snippet = src[at : at + 550]
-            self.assertIn("annotationMutationAllowed", snippet, "%s must check capability" % fn_name)
+            snippet = src[at : at + 900]
+            self.assertIn(
+                "prksPdfUserMutationStillAllowed",
+                snippet,
+                "%s must check capability" % fn_name,
+            )
             self.assertIn("prksOfflineGuardMutation", snippet, "%s must retain legacy online guard" % fn_name)
 
     def test_sidebar_row_delete_is_guarded(self):
         src = _read(_WORKS_PDF)
         at = src.index(".annotation-row__delete")
         handler_at = src.index("annotation-row__delete", at + 1)
-        snippet = src[handler_at : handler_at + 700]
-        self.assertIn("annotationMutationAllowed", snippet)
+        snippet = src[handler_at : handler_at + 900]
+        self.assertIn("prksPdfUserMutationStillAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
     def test_vendor_handle_exposes_set_mutation_enabled(self):
@@ -228,14 +234,24 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         """User Delete/comment must wait for materialization; programmatic is reconcile-only."""
         works = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "works-pdf.js"))
         self.assertIn("prksWaitOutAnnotationMaterialization", works)
+        self.assertIn("prksPdfUserMutationStillAllowed", works)
         del_at = works.index("window.deletePdfAnnotationFromEditor")
-        del_body = works[del_at:del_at + 1200]
+        del_body = works[del_at:del_at + 1800]
         self.assertIn("prksWaitOutAnnotationMaterialization", del_body)
         self.assertNotIn("prksViewerProgrammaticDelete", del_body)
+        wait_at = del_body.index("await prksWaitOutAnnotationMaterialization")
+        self.assertIn("prksPdfUserMutationStillAllowed", del_body[wait_at:])
         save_at = works.index("window.savePdfAnnotationComment")
-        save_body = works[save_at:save_at + 1600]
+        save_body = works[save_at:save_at + 2000]
         self.assertIn("prksWaitOutAnnotationMaterialization", save_body)
         self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
+        save_wait = save_body.index("await prksWaitOutAnnotationMaterialization")
+        self.assertIn("prksPdfUserMutationStillAllowed", save_body[save_wait:])
+        # Sidebar row Delete also re-checks after the gate.
+        row_at = works.index(".annotation-row__delete")
+        row_body = works[row_at:row_at + 2200]
+        row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
+        self.assertIn("prksPdfUserMutationStillAllowed", row_body[row_wait:])
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation
