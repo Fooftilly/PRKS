@@ -180,6 +180,11 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         wait_fn_at = works_pdf.index("async function prksWaitOutAnnotationMaterialization")
         wait_fn_end = works_pdf.index("\nfunction prksPdfUserMutationStillAllowed", wait_fn_at)
         wait_fn = works_pdf[wait_fn_at:wait_fn_end]
+        # Deadline/lifecycle must cover the gate itself — no unbounded await gate.
+        self.assertNotIn("await gate", wait_fn)
+        self.assertIn("Promise.race", wait_fn)
+        self.assertLess(wait_fn.index("const deadline"), wait_fn.index("Promise.race"))
+        self.assertIn("lifecycleEscape", wait_fn)
         self.assertIn("pdf._destroyed", wait_fn)
         self.assertIn("persistence.destroyed", wait_fn)
         self.assertIn("persistence.paused", wait_fn)

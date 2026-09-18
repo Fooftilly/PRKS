@@ -625,28 +625,40 @@ function prksClearMaterializationHandoff(runtime) {
 
 /**
  * User-originated sidebar/editor mutations must not use the programmatic
- * escape hatch (that is reconcile-only). Await the materialization gate
- * Promise when present; also wait out a catch-up→materialize handoff block
- * (gate may be briefly null while mutation must stay disabled). Fall back to
- * a short poll if the flag is stuck without a gate.
+ * escape hatch (that is reconcile-only). Wait out the materialization gate
+ * and catch-up→materialize handoff under one deadline/lifecycle loop — never
+ * an unbounded `await gate` (destroy/pause does not resolve the gate Promise).
  */
 async function prksWaitOutAnnotationMaterialization(pdf) {
     if (!pdf) return;
-    const gate = pdf._annotationMaterializationGate;
-    if (gate && typeof gate.then === 'function') {
-        try {
-            await gate;
-        } catch (_e) { /* settle anyway */ }
-    }
-    // Destroy, persistence teardown, or a stuck gate must not hang callers
-    // forever — they re-check prksPdfUserMutationStillAllowed afterward.
     const deadline = Date.now() + 30000;
-    while (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff) {
-        if (pdf._destroyed) return;
+
+    function lifecycleEscape() {
+        if (pdf._destroyed) return true;
         const persistence = pdf.annotationPersistence;
-        if (persistence && (persistence.destroyed || persistence.paused)) return;
+        if (persistence && (persistence.destroyed || persistence.paused)) return true;
+        return false;
+    }
+
+    function stillBusy() {
+        if (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff) {
+            return true;
+        }
+        const gate = pdf._annotationMaterializationGate;
+        return !!(gate && typeof gate.then === 'function');
+    }
+
+    while (stillBusy()) {
+        if (lifecycleEscape()) return;
         if (Date.now() >= deadline) return;
-        await new Promise(function (resolve) { setTimeout(resolve, 25); });
+        const gate = pdf._annotationMaterializationGate;
+        const slice = Math.min(25, Math.max(0, deadline - Date.now()));
+        await Promise.race([
+            (gate && typeof gate.then === 'function')
+                ? Promise.resolve(gate).then(function () {}, function () {})
+                : Promise.resolve(),
+            new Promise(function (resolve) { setTimeout(resolve, slice); }),
+        ]);
     }
 }
 

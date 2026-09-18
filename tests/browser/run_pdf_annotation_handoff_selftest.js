@@ -74,6 +74,43 @@ function clearHandoff(runtime) {
     runtime._annotationMaterializationHandoff = false;
 }
 
+/**
+ * Mirror of prksWaitOutAnnotationMaterialization — deadline/lifecycle must
+ * cover the gate Promise itself (no unbounded await gate).
+ */
+async function waitOutMaterialization(pdf, { deadlineMs = 30000 } = {}) {
+    if (!pdf) return;
+    const deadline = Date.now() + deadlineMs;
+
+    function lifecycleEscape() {
+        if (pdf._destroyed) return true;
+        const persistence = pdf.annotationPersistence;
+        if (persistence && (persistence.destroyed || persistence.paused)) return true;
+        return false;
+    }
+
+    function stillBusy() {
+        if (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff) {
+            return true;
+        }
+        const gate = pdf._annotationMaterializationGate;
+        return !!(gate && typeof gate.then === 'function');
+    }
+
+    while (stillBusy()) {
+        if (lifecycleEscape()) return;
+        if (Date.now() >= deadline) return;
+        const gate = pdf._annotationMaterializationGate;
+        const slice = Math.min(25, Math.max(0, deadline - Date.now()));
+        await Promise.race([
+            (gate && typeof gate.then === 'function')
+                ? Promise.resolve(gate).then(() => {}, () => {})
+                : Promise.resolve(),
+            new Promise((resolve) => setTimeout(resolve, slice)),
+        ]);
+    }
+}
+
 function userMutationStillAllowed(runtime, viewer) {
     if (!runtime) return false;
     if (runtime.annotationMutationAllowed === false) return false;
@@ -206,6 +243,41 @@ async function materializationFinallyUnlock(runtime, viewer, { resolveCapability
     assert.equal(runtime2._annotationMaterializationHandoff, false);
     assert.equal(viewer2.isUserMutationEnabled(), true);
     assert.equal(runtime2.annotationMutationAllowed, true);
+
+    // Unresolved gate + destroy: wait must return without the gate settling.
+    const stuck = {
+        _destroyed: false,
+        _annotationMaterializing: false,
+        _annotationMaterializationHandoff: false,
+        annotationPersistence: { paused: false, destroyed: false },
+    };
+    assert.equal(beginGate(stuck), true);
+    const unresolvedGate = stuck._annotationMaterializationGate;
+    let gateSettled = false;
+    unresolvedGate.then(() => { gateSettled = true; });
+    stuck._destroyed = true;
+    stuck.annotationPersistence.destroyed = true;
+    const tDestroy = Date.now();
+    await waitOutMaterialization(stuck);
+    assert.ok(Date.now() - tDestroy < 500, 'destroy must not wait on unresolved gate');
+    assert.equal(gateSettled, false);
+    assert.equal(stuck._annotationMaterializing, true);
+
+    // Unresolved gate + paused persistence worker.
+    const paused = {
+        _destroyed: false,
+        _annotationMaterializing: false,
+        _annotationMaterializationHandoff: false,
+        annotationPersistence: { paused: false, destroyed: false },
+    };
+    assert.equal(beginGate(paused), true);
+    let pausedGateSettled = false;
+    paused._annotationMaterializationGate.then(() => { pausedGateSettled = true; });
+    paused.annotationPersistence.paused = true;
+    const tPause = Date.now();
+    await waitOutMaterialization(paused);
+    assert.ok(Date.now() - tPause < 500, 'pause must not wait on unresolved gate');
+    assert.equal(pausedGateSettled, false);
 
     console.log(checks + ' checks passed');
 })().catch((err) => {
