@@ -214,7 +214,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("_annotationDurableWriteChain", mat_pass)
         self.assertIn("setMutationEnabled(false)", mat_pass)
         self.assertIn("restoreEffectiveViewerAnnotations", mat_pass)
-        self.assertIn("await window.prksReconcileViewerAnnotations(viewer, ackOnly", mat_pass)
+        self.assertIn("await window.prksReconcileViewerAnnotations(matLive, ackOnly", mat_pass)
         self.assertNotIn("catch (_eRec)", mat_pass)
         # Legacy path: annotations first, then PDF with claimed replace generation.
         legacy_ann = mat_pass.index("`/api/works/${workId}/annotations`")
@@ -236,14 +236,14 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         end_gate_at = mat_pass.rindex("prksEndAnnotationMaterializationGate")
         restore_at = mat_pass.index("restoreEffectiveViewerAnnotations")
         clear_handoff_at = mat_pass.index("prksClearMaterializationHandoff(runtime)")
-        unlock_at = mat_pass.index("viewer.setMutationEnabled(unlockToWork)")
+        unlock_at = mat_pass.index("unlockViewer.setMutationEnabled(unlockToWork)")
         self.assertLess(restore_at, end_gate_at)
         self.assertLess(clear_handoff_at, unlock_at)
         self.assertLess(unlock_at, end_gate_at)
         self.assertGreater(end_gate_at, mat_pass.index("finally {"))
         mat_finally = mat_pass[mat_pass.rindex("} finally {") : end_gate_at + 80]
         # No await between enabling user mutation and ending the gate.
-        enable_at = mat_finally.index("viewer.setMutationEnabled(unlockToWork)")
+        enable_at = mat_finally.index("unlockViewer.setMutationEnabled(unlockToWork)")
         gate_end_at = mat_finally.index("prksEndAnnotationMaterializationGate")
         between = mat_finally[enable_at:gate_end_at]
         self.assertNotIn("await ", between)
@@ -294,6 +294,55 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         # 7. Terminal discard for gone Work / id reuse
         self.assertIn("discard: data.code", state)
         self.assertIn("ANNOTATION_ID_REUSED", state)
+
+    def test_export_applies_cow_file_path_retarget(self):
+        """After shared-PDF COW, client must adopt returned file_path.
+
+        Regression: A+B share path → A materializes (COW) → client applies
+        exclusive path + Cache Storage key + remounts viewer without bumping
+        viewerSetupToken, so B overwriting the old shared file cannot affect
+        A's live/offline capability.
+        """
+        works_pdf = (ROOT / "frontend" / "js" / "components" / "works-pdf.js").read_text(
+            encoding="utf-8"
+        )
+        export_at = works_pdf.index("async function exportAndPersistPdfCopy(")
+        export_end = works_pdf.index(
+            "\n    async function restoreEffectiveViewerAnnotations(", export_at
+        )
+        # Helpers that implement COW apply live immediately above export.
+        helpers_at = works_pdf.rindex("function liveAnnotationViewer()", 0, export_at)
+        cow_region = works_pdf[helpers_at:export_end]
+        self.assertIn("okBody.file_path", cow_region)
+        self.assertIn("applyCowPdfRetarget", cow_region)
+        self.assertIn("runtime.filePath = path", cow_region)
+        self.assertIn("runtime.work.file_path = path", cow_region)
+        self.assertIn("cacheManagedPdfBytes", cow_region)
+        self.assertIn("caches.open", cow_region)
+        self.assertIn("cache.put(path, response)", cow_region)
+        self.assertIn("remountPdfViewerAfterCowRetarget", cow_region)
+        self.assertIn("createPrksPdfViewer", cow_region)
+        self.assertIn("detachAnnotationViewer", cow_region)
+        # Persistence identity must survive remount: rebind viewer, do not bump token.
+        remount_at = cow_region.index("async function remountPdfViewerAfterCowRetarget")
+        remount_end = cow_region.index("\n    async function applyCowPdfRetarget", remount_at)
+        remount = cow_region[remount_at:remount_end]
+        self.assertIn("runtime.viewer = newViewer", remount)
+        self.assertIn("viewer = newViewer", remount)
+        self.assertNotIn("viewerSetupToken =", remount)
+        self.assertNotIn("viewerSetupToken || 0) + 1", remount)
+        self.assertIn("leave viewerSetupToken", remount)
+        self.assertIn("onAnnotationEvent(onAnnotationEvent)", remount)
+        # Capability re-resolve after materialization must see the exclusive path.
+        mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
+        mat_pass = works_pdf[
+            mat_pass_at : works_pdf.index(
+                "\n    // PRKS may go offline mid-confirmation-loop", mat_pass_at
+            )
+        ]
+        self.assertIn("file_path: runtime.filePath", mat_pass)
+        self.assertIn("liveAnnotationViewer", mat_pass)
+        self.assertIn("unlockViewer.setMutationEnabled(unlockToWork)", mat_pass)
 
 
 if __name__ == "__main__":
