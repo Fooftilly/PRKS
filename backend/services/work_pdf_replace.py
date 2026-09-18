@@ -210,6 +210,26 @@ def allocate_exclusive_managed_filename(work_id: str, shared_filename: str) -> s
     return f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_{safe_base}"
 
 
+def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
+    """Best-effort delete of a managed PDF basename under ``pdfs_dir``.
+
+    Used to roll back a COW exclusive write when ``works.file_path`` was never
+    retargeted — never unlink the shared path a sibling still references.
+    """
+    path = safe_pdf_path_under_dir(pdfs_dir, filename)
+    if not path:
+        return False
+    try:
+        os.remove(path)
+        return True
+    except OSError as e:
+        LOGGER.warning(
+            "pdf_cow_orphan_unlink_failed error_type=%s",
+            safe_error_type(e),
+        )
+        return False
+
+
 def replace_managed_work_pdf(
     db,
     *,
@@ -315,6 +335,10 @@ def replace_managed_work_pdf(
             target_fp = f"/api/pdfs/{exclusive_name}"
             cow_retarget = True
 
+        # True after an exclusive COW write until works.file_path is retargeted.
+        # If retarget never commits, the exclusive bytes are unreferenced and
+        # must be deleted so failures do not accumulate orphan managed files.
+        cow_exclusive_unreferenced = False
         try:
             if durable:
                 try:
@@ -342,14 +366,31 @@ def replace_managed_work_pdf(
                 pdfs_dir, target_filename, pdf_bytes
             )
             if cow_retarget:
-                db.execute_query(
-                    """
-                    UPDATE works
-                    SET file_path = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (target_fp, work_id),
-                )
+                cow_exclusive_unreferenced = True
+                try:
+                    db.execute_query(
+                        """
+                        UPDATE works
+                        SET file_path = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (target_fp, work_id),
+                    )
+                except Exception as e:
+                    unlink_managed_pdf_best_effort(pdfs_dir, target_filename)
+                    cow_exclusive_unreferenced = False
+                    LOGGER.warning(
+                        "pdf_cow_retarget_failed work_id=%s error_type=%s",
+                        safe_log_id(work_id),
+                        safe_error_type(e),
+                    )
+                    return {
+                        "status": 500,
+                        "body": {"error": "Failed to retarget managed PDF"},
+                        "wrote_pdf": False,
+                    }
+                # Retarget committed — exclusive file is now referenced.
+                cow_exclusive_unreferenced = False
                 LOGGER.info(
                     "pdf_cow_retarget work_id=%s",
                     safe_log_id(work_id),
@@ -427,6 +468,11 @@ def replace_managed_work_pdf(
                     ]
                     body["stale"] = mat["stale"]
             return {"status": 200, "body": body, "wrote_pdf": True}
+        except Exception:
+            if cow_exclusive_unreferenced:
+                unlink_managed_pdf_best_effort(pdfs_dir, target_filename)
+                cow_exclusive_unreferenced = False
+            raise
         finally:
             if exclusive_lock is not None:
                 exclusive_lock.release()

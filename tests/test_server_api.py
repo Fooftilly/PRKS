@@ -2211,6 +2211,79 @@ class TestServerAPI(unittest.TestCase):
         # Shared seed must still exist for the sibling Work.
         self.assertTrue(os.path.isfile(shared_abs))
 
+    def test_22c14_cow_retarget_db_failure_removes_orphan_exclusive(self):
+        """Exclusive COW write + failed file_path UPDATE must not leave an orphan.
+
+        Regression for Greptile P2: bytes land under a new managed name before
+        works.file_path is retargeted. If that UPDATE fails, delete the exclusive
+        file and leave the Work on the shared path.
+        """
+        from unittest import mock
+        from backend.db_manager import managed_pdf_filename
+        import uuid as _uuid
+
+        suffix = _uuid.uuid4().hex[:10]
+        shared_name = f"shared-orphan-cow-{suffix}.pdf"
+        seed = _pdf_with_text_bytes("shared seed for orphan cow")
+        shared_abs = os.path.join(server_module.pdfs_dir, shared_name)
+        with open(shared_abs, "wb") as f:
+            f.write(seed)
+        a_id = self.__class__.test_db.add_work(
+            title="CowOrphanA", file_path=f"/api/pdfs/{shared_name}"
+        )
+        self.__class__.test_db.add_work(
+            title="CowOrphanB", file_path=f"/api/pdfs/{shared_name}"
+        )
+        ann_a = f"cow-orphan-a-{suffix}"
+        with self._post_work_annotations(
+            a_id, {"annotations_json": json.dumps([self._ann_row(ann_a, "A")])}
+        ) as ar:
+            gen_a = json.loads(ar.read().decode())["canonical_annotation_set_revision"]
+
+        before = set(
+            name
+            for name in os.listdir(server_module.pdfs_dir)
+            if name.endswith(".pdf")
+        )
+        real_eq = self.__class__.test_db.execute_query
+
+        def _fail_cow_retarget(sql, params=None):
+            text = sql if isinstance(sql, str) else ""
+            if "SET file_path" in text and "UPDATE works" in text:
+                raise RuntimeError("forced cow retarget failure")
+            if params is None:
+                return real_eq(sql)
+            return real_eq(sql, params)
+
+        pdf_a = _pdf_with_text_bytes("orphan-cow-exclusive-bytes")
+        with mock.patch.object(
+            self.__class__.test_db,
+            "execute_query",
+            side_effect=_fail_cow_retarget,
+        ):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self._post_work_pdf(
+                    a_id,
+                    {
+                        "file_b64": base64.b64encode(pdf_a).decode("utf-8"),
+                        "materialized_annotation_set_revision": gen_a,
+                    },
+                )
+        self.assertEqual(cm.exception.code, 500)
+        row_a = self.__class__.test_db.execute_query(
+            "SELECT file_path FROM works WHERE id=?", (a_id,)
+        )[0]
+        self.assertEqual(row_a["file_path"], f"/api/pdfs/{shared_name}")
+        self.assertTrue(os.path.isfile(shared_abs))
+        after = set(
+            name
+            for name in os.listdir(server_module.pdfs_dir)
+            if name.endswith(".pdf")
+        )
+        # No new managed PDF may remain unreferenced after the failed retarget.
+        self.assertEqual(after - before, set())
+        self.assertEqual(managed_pdf_filename(row_a["file_path"]), shared_name)
+
     def test_22c12_legacy_annotations_reject_stale_set_revision(self):
         """Stale full-list replace cannot overwrite newer annotations or delete B."""
         import uuid as _uuid
