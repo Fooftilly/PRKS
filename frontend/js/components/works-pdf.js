@@ -1653,20 +1653,22 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (!Number.isSafeInteger(claimed) || claimed < 0) {
                 return;
             }
-            // Fail-closed + serialized with annotation mutation: mutation-lock,
-            // await in-flight durable writes, recheck queue, ACK-only reconcile
-            // (must succeed), recheck clean, then saveCopy/upload.
+            // Fail-closed + serialized with annotation mutation: drain in-flight
+            // durable writes first, then mutation-lock, recheck queue, ACK-only
+            // reconcile (must succeed), recheck clean, then saveCopy/upload.
+            // Lock AFTER draining so deferred annotation-event writes that wait
+            // on `_annotationMaterializing` cannot deadlock with this await.
+            if (runtime._annotationDurableWriteChain) {
+                try {
+                    await runtime._annotationDurableWriteChain;
+                } catch (_eWrite) { /* prior write failure already handled */ }
+            }
+            if (!stillLive()) return;
             runtime._annotationMaterializing = true;
             if (viewer && typeof viewer.setMutationEnabled === 'function') {
                 try { viewer.setMutationEnabled(false); } catch (_eLock) { /* best-effort */ }
             }
             try {
-                if (runtime._annotationDurableWriteChain) {
-                    try {
-                        await runtime._annotationDurableWriteChain;
-                    } catch (_eWrite) { /* prior write failure already handled */ }
-                }
-                if (!stillLive()) return;
                 if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
                     try {
                         await window.prksRefreshPendingPdfAnnotations();
@@ -1920,9 +1922,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     function onAnnotationEvent(evt) {
         if (worker && worker.destroyed) return;
         if (!stillLive()) return;
-        // Materialization holds a temporary mutation lock; ignore events that
-        // race the ACK-only export window.
-        if (runtime._annotationMaterializing) return;
         // Reconcile create/update/delete must not look like user mutations.
         if (typeof window.prksViewerIsReconcilingAnnotations === 'function' &&
             window.prksViewerIsReconcilingAnnotations(viewer)) {
@@ -1937,8 +1936,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (runtime.annotationMutationDurable &&
             typeof window.prksSavePdfAnnotationDurably === 'function') {
             const writeTask = (async function () {
+                // Never drop user intent that races materialization: wait out
+                // the temporary mutation lock, then commit durably.
+                while (runtime._annotationMaterializing && stillLive()) {
+                    await new Promise(function (resolve) { setTimeout(resolve, 25); });
+                }
                 if (!stillLive()) return;
-                if (runtime._annotationMaterializing) return;
                 const annId = evt.annotationId || (evt.annotation && (
                     evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
                 ));
