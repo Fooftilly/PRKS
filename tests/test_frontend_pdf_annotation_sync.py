@@ -333,6 +333,26 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertNotIn("viewerSetupToken || 0) + 1", remount)
         self.assertIn("leave viewerSetupToken", remount)
         self.assertIn("onAnnotationEvent(onAnnotationEvent)", remount)
+        # P2: staging-first remount — never destroy old viewer before new succeeds.
+        self.assertIn("pdf-viewer-cow-staging", remount)
+        self.assertIn("keepOldViewerMutationDisabled", remount)
+        detach_at = remount.index("detachAnnotationViewer(oldViewer)")
+        create_at = remount.index("await createPrksPdfViewer(")
+        self.assertLess(create_at, detach_at)
+        apply_at = cow_region.index("async function applyCowPdfRetarget")
+        apply_fn = cow_region[apply_at:]
+        self.assertIn("PDF_COW_REMOUNT_FAILED", apply_fn)
+        self.assertIn("scheduleCowViewerRemount", apply_fn)
+        # P1 failure path: apply file_path from non-OK bodies before throw.
+        export_fn = works_pdf[export_at:export_end]
+        err_path = export_fn.index("if (!pdfRes.ok)")
+        err_block = export_fn[err_path : export_fn.index("Shared-PDF COW may retarget", err_path)]
+        self.assertIn("errBody.file_path", err_block)
+        self.assertIn("applyCowPdfRetarget(errRetarget, buffer)", err_block)
+        self.assertLess(
+            err_block.index("applyCowPdfRetarget(errRetarget, buffer)"),
+            err_block.index("if (code === 'ANNOTATION_MATERIALIZATION_STALE')"),
+        )
         # Capability re-resolve after materialization must see the exclusive path.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
         mat_pass = works_pdf[

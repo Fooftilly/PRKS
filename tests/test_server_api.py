@@ -2149,6 +2149,68 @@ class TestServerAPI(unittest.TestCase):
         # Impossible for both to be non-stale while sharing one file with only B's bytes.
         self.assertNotEqual(path_a, path_b)
 
+    def test_22c13_cow_stale_final_mark_returns_retargeted_file_path(self):
+        """COW retarget that then hits STALE still returns exclusive file_path.
+
+        Race: accept claim → write exclusive + UPDATE works.file_path → final
+        mark sees advanced canonical → 409. Client must learn the new path.
+        """
+        from unittest import mock
+        from backend.pdf_materialization import STALE_CODE
+        from backend.db_manager import managed_pdf_filename
+        import uuid as _uuid
+
+        suffix = _uuid.uuid4().hex[:10]
+        shared_name = f"shared-stale-cow-{suffix}.pdf"
+        seed = _pdf_with_text_bytes("shared seed for stale cow")
+        shared_abs = os.path.join(server_module.pdfs_dir, shared_name)
+        with open(shared_abs, "wb") as f:
+            f.write(seed)
+        a_id = self.__class__.test_db.add_work(
+            title="CowStaleA", file_path=f"/api/pdfs/{shared_name}"
+        )
+        self.__class__.test_db.add_work(
+            title="CowStaleB", file_path=f"/api/pdfs/{shared_name}"
+        )
+        ann_a = f"cow-stale-a-{suffix}"
+        with self._post_work_annotations(
+            a_id, {"annotations_json": json.dumps([self._ann_row(ann_a, "A")])}
+        ) as ar:
+            gen_a = json.loads(ar.read().decode())["canonical_annotation_set_revision"]
+
+        def _stale_after_cow(work_id, claimed_revision):
+            raise ValueError(STALE_CODE)
+
+        pdf_a = _pdf_with_text_bytes("stale-cow-exclusive-bytes")
+        with mock.patch.object(
+            self.__class__.test_db,
+            "mark_work_pdf_materialized_if_claim_current",
+            side_effect=_stale_after_cow,
+        ):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self._post_work_pdf(
+                    a_id,
+                    {
+                        "file_b64": base64.b64encode(pdf_a).decode("utf-8"),
+                        "materialized_annotation_set_revision": gen_a,
+                    },
+                )
+        self.assertEqual(cm.exception.code, 409)
+        err = json.loads(cm.exception.read().decode())
+        self.assertEqual(err.get("code"), "ANNOTATION_MATERIALIZATION_STALE")
+        self.assertIn("file_path", err)
+        self.assertNotEqual(err["file_path"], f"/api/pdfs/{shared_name}")
+        row_a = self.__class__.test_db.execute_query(
+            "SELECT file_path FROM works WHERE id=?", (a_id,)
+        )[0]
+        self.assertEqual(row_a["file_path"], err["file_path"])
+        exclusive = managed_pdf_filename(err["file_path"])
+        self.assertIsNotNone(exclusive)
+        exclusive_abs = os.path.join(server_module.pdfs_dir, exclusive)
+        self.assertTrue(os.path.isfile(exclusive_abs))
+        # Shared seed must still exist for the sibling Work.
+        self.assertTrue(os.path.isfile(shared_abs))
+
     def test_22c12_legacy_annotations_reject_stale_set_revision(self):
         """Stale full-list replace cannot overwrite newer annotations or delete B."""
         import uuid as _uuid

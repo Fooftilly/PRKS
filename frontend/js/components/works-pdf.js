@@ -1839,11 +1839,41 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (viewer === oldViewer) viewer = null;
     }
 
+    function scheduleCowViewerRemount(path) {
+        if (!runtime || runtime._destroyed) return;
+        if (runtime._cowRemountRetryScheduled) return;
+        runtime._cowRemountRetryScheduled = true;
+        const attempt = Number(runtime._cowRemountRetryAttempt) || 0;
+        if (attempt >= 5) {
+            runtime._cowRemountRetryScheduled = false;
+            return;
+        }
+        runtime._cowRemountRetryAttempt = attempt + 1;
+        const delay = Math.min(400 * Math.max(1, attempt + 1), 4000);
+        setTimeout(function () {
+            runtime._cowRemountRetryScheduled = false;
+            if (!runtime || runtime._destroyed) return;
+            if (liveAnnotationViewer()) return;
+            void (async function () {
+                const ok = await remountPdfViewerAfterCowRetarget(path);
+                if (ok) {
+                    runtime._cowRemountRetryAttempt = 0;
+                    try {
+                        await restoreEffectiveViewerAnnotations({ paintList: true });
+                    } catch (_eRestore) { /* best-effort */ }
+                    return;
+                }
+                scheduleCowViewerRemount(path);
+            })();
+        }, delay);
+    }
+
     /**
      * After shared-PDF COW, the canonical Work path is exclusive. Rebind the
      * live viewer to that path without restarting annotation persistence
-     * (do not bump viewerSetupToken). Destroy the old viewer so Range reads
-     * cannot keep hitting the shared sibling URL.
+     * (do not bump viewerSetupToken). Create into a staging host first so a
+     * failed remount keeps the previous viewer (mutation-disabled) instead of
+     * leaving the runtime permanently viewer-less.
      */
     async function remountPdfViewerAfterCowRetarget(newPath) {
         const oldViewer = liveAnnotationViewer();
@@ -1867,14 +1897,27 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? prksPdfDesiredMode(runtime)
             : (runtime && runtime.mode) || 'work';
 
-        // Stop shared-URL traffic before (or even without) a successful remount.
-        detachAnnotationViewer(oldViewer);
+        function keepOldViewerMutationDisabled() {
+            if (oldViewer && typeof oldViewer.setMutationEnabled === 'function') {
+                try { oldViewer.setMutationEnabled(false); } catch (_eLock) { /* best-effort */ }
+            }
+        }
 
-        if (!targetNode) return false;
+        if (!targetNode || !targetNode.parentNode) {
+            keepOldViewerMutationDisabled();
+            return false;
+        }
+
+        const staging = document.createElement('div');
+        staging.setAttribute('data-prks-role', 'pdf-viewer-cow-staging');
+        staging.hidden = true;
+        if (targetNode.className) staging.className = targetNode.className;
+        targetNode.parentNode.insertBefore(staging, targetNode.nextSibling);
+
         let newViewer = null;
         try {
             newViewer = await createPrksPdfViewer({
-                target: targetNode,
+                target: staging,
                 src,
                 mode: desiredMode,
                 annotationAuthor: author,
@@ -1899,9 +1942,31 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (newViewer && typeof newViewer.destroy === 'function') {
                 try { newViewer.destroy(); } catch (_e) {}
             }
+            try { staging.remove(); } catch (_eSt) {}
             return false;
         }
-        if (!newViewer) return false;
+        if (!newViewer) {
+            try { staging.remove(); } catch (_eSt2) {}
+            keepOldViewerMutationDisabled();
+            return false;
+        }
+
+        // Staging mount succeeded — only now detach the shared-URL viewer and
+        // promote staging into the pdf-viewer slot (replaceWith keeps the
+        // viewer rooted on the node it was created against).
+        detachAnnotationViewer(oldViewer);
+        staging.hidden = false;
+        staging.setAttribute('data-prks-role', 'pdf-viewer');
+        try {
+            targetNode.replaceWith(staging);
+        } catch (_eReplace) {
+            try { staging.remove(); } catch (_eSt3) {}
+            if (newViewer && typeof newViewer.destroy === 'function') {
+                try { newViewer.destroy(); } catch (_eDestroyNew) {}
+            }
+            keepOldViewerMutationDisabled();
+            return false;
+        }
 
         // Rebind closed-over viewer + runtime.viewer; leave viewerSetupToken
         // unchanged so stillLive() / the installed persistence worker stay valid.
@@ -1925,15 +1990,25 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const path = managedPdfApiPath(newPath);
         if (!path) return false;
         const prev = managedPdfApiPath(runtime && runtime.filePath);
-        if (path === prev) return false;
-        runtime.filePath = path;
-        if (runtime.work && typeof runtime.work === 'object') {
-            runtime.work.file_path = path;
+        if (path === prev) {
+            // Path already applied (e.g. error-path then success-path); still
+            // require a live viewer on the exclusive source.
+            if (liveAnnotationViewer()) return false;
+        } else {
+            runtime.filePath = path;
+            if (runtime.work && typeof runtime.work === 'object') {
+                runtime.work.file_path = path;
+            }
+            // Seed Cache Storage under the exclusive key before offline capability
+            // may re-resolve — do not leave capability pointing at the shared key.
+            await cacheManagedPdfBytes(path, buffer);
         }
-        // Seed Cache Storage under the exclusive key before offline capability
-        // may re-resolve — do not leave capability pointing at the shared key.
-        await cacheManagedPdfBytes(path, buffer);
-        await remountPdfViewerAfterCowRetarget(path);
+        const remounted = await remountPdfViewerAfterCowRetarget(path);
+        if (!remounted) {
+            scheduleCowViewerRemount(path);
+            throw new Error('PDF_COW_REMOUNT_FAILED');
+        }
+        runtime._cowRemountRetryAttempt = 0;
         return true;
     }
 
@@ -1961,10 +2036,24 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         });
         if (!pdfRes.ok) {
             let code = '';
+            let errBody = null;
             try {
-                const errBody = await pdfRes.json();
+                errBody = await pdfRes.json();
                 code = errBody && errBody.code ? String(errBody.code) : '';
             } catch (_e) {}
+            // Post-write failures (e.g. ANNOTATION_MATERIALIZATION_STALE after
+            // COW) may still carry the committed exclusive file_path — apply it
+            // before throwing so the client leaves the shared URL.
+            const errRetarget = errBody && typeof errBody.file_path === 'string'
+                ? managedPdfApiPath(errBody.file_path)
+                : '';
+            if (errRetarget) {
+                try {
+                    await applyCowPdfRetarget(errRetarget, buffer);
+                } catch (_eErrCow) {
+                    // Path/cache applied; remount may have failed — still throw.
+                }
+            }
             if (code === 'ANNOTATION_MATERIALIZATION_STALE') {
                 throw new Error('ANNOTATION_MATERIALIZATION_STALE');
             }
@@ -1982,7 +2071,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (retarget) {
                 await applyCowPdfRetarget(retarget, buffer);
             }
-        } catch (_eCow) {
+        } catch (eCow) {
+            if (eCow && String(eCow.message || '') === 'PDF_COW_REMOUNT_FAILED') {
+                throw eCow;
+            }
             // Missing/malformed body: keep previous path (no COW).
         }
         if (typeof prksOfflineMarkEntityChanged === 'function') {

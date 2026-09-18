@@ -382,16 +382,25 @@ def replace_managed_work_pdf(
                         work_id, claimed_set_rev
                     )
             except LookupError:
+                body_404: dict[str, Any] = {"error": "Work not found"}
+                if cow_retarget:
+                    body_404["file_path"] = target_fp
                 return {
                     "status": 404,
-                    "body": {"error": "Work not found"},
+                    "body": body_404,
                     "wrote_pdf": True,
                 }
             except ValueError as e:
                 if str(e) == STALE_CODE:
+                    # COW may already have committed works.file_path to the
+                    # exclusive file. Surface that path so the client can leave
+                    # the shared URL even though materialization is stale.
+                    stale = _stale_body(db, work_id)
+                    if cow_retarget:
+                        stale["file_path"] = target_fp
                     return {
                         "status": 409,
-                        "body": _stale_body(db, work_id),
+                        "body": stale,
                         "wrote_pdf": True,
                     }
                 LOGGER.warning(
