@@ -2034,7 +2034,13 @@ def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
 
 
 def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
-    """Annotation set vs materialized PDF generation tracking (Slice F)."""
+    """Annotation set vs materialized PDF generation tracking (Slice F).
+
+    Also creates ``idx_roles_person_work_role_unique`` for databases that already
+    sat at schema 14 when that index was added to INDEX_SPECS / db_schema.sql
+    without a version bump (fef456a). Fresh and pre-v10 upgrade paths already
+    have it; in-place v14 libraries do not until this step.
+    """
     if not column_exists(conn, "works", "canonical_annotation_set_revision"):
         conn.execute(
             "ALTER TABLE works ADD COLUMN canonical_annotation_set_revision "
@@ -2045,6 +2051,28 @@ def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
             "ALTER TABLE works ADD COLUMN materialized_pdf_annotation_revision "
             "INTEGER NOT NULL DEFAULT 0"
         )
+    _ensure_roles_person_work_role_unique(conn)
+
+
+def _ensure_roles_person_work_role_unique(conn: sqlite3.Connection) -> None:
+    if not table_exists(conn, "roles"):
+        return
+    spec = _index_spec("idx_roles_person_work_role_unique")
+    if spec is None or _index_matches_spec(conn, spec):
+        return
+    conflict = conn.execute(
+        "SELECT 1 FROM roles GROUP BY person_id, work_id, role_type "
+        "HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if conflict is not None:
+        raise MigrationError(
+            "legacy_constraint_conflict",
+            "Legacy database has conflicting rows for a uniqueness constraint.",
+            constraint="roles_person_work_role_unique",
+        )
+    if index_exists(conn, spec.name):
+        conn.execute(f"DROP INDEX {_ident(spec.name)}")
+    conn.execute(_INDEX_SQL[spec.name])
 
 
 MIGRATIONS: Tuple[Migration, ...] = (
