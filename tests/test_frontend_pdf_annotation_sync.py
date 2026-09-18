@@ -186,7 +186,10 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("prksPdfUserMutationStillAllowed", del_body[wait_at:])
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
-        mat_pass = works_pdf[mat_pass_at:mat_pass_at + 9000]
+        mat_pass_end = works_pdf.index(
+            "\n    // PRKS may go offline mid-confirmation-loop", mat_pass_at
+        )
+        mat_pass = works_pdf[mat_pass_at:mat_pass_end]
         self.assertIn("if (!prksBeginAnnotationMaterializationGate(runtime))", mat_pass)
         self.assertIn("_annotationDurableWriteChain", mat_pass)
         self.assertIn("setMutationEnabled(false)", mat_pass)
