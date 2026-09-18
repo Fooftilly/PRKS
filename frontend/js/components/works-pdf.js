@@ -2025,7 +2025,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const startedGate = prksBeginAnnotationMaterializationGate(runtime);
         if (!startedGate) return;
         let userInputLocked = false;
-        let handoffToMaterialize = false;
         try {
             if (typeof viewer.setMutationEnabled === 'function') {
                 viewer.setMutationEnabled(false);
@@ -2080,26 +2079,23 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (worker && worker.paused && typeof worker.resume === 'function') {
                 worker.resume();
             }
-            // Keep the gate held across handoff so user mutation cannot sneak
-            // in between catch-up projection and the materialization pass.
-            handoffToMaterialize = true;
             void requestFlush('materialize');
         } finally {
-            if (!handoffToMaterialize) {
-                if (userInputLocked && stillLive() && typeof viewer.setMutationEnabled === 'function') {
-                    viewer.setMutationEnabled(runtime.mode === 'work');
-                    if (typeof prksApplyPdfAnnotationCapability === 'function') {
-                        try {
-                            await prksApplyPdfAnnotationCapability(ctx, runtime, {
-                                id: workId,
-                                file_path: runtime.filePath,
-                            });
-                        } catch (_eCap) { /* unlock above already applied */ }
-                    }
+            // Always unlock + end gate here. Materialization takes its own gate;
+            // never leave mutation disabled if the flush path does not enter
+            // its finally (would strand markup tools after reconnect).
+            if (userInputLocked && stillLive() && typeof viewer.setMutationEnabled === 'function') {
+                viewer.setMutationEnabled(runtime.mode === 'work');
+                if (typeof prksApplyPdfAnnotationCapability === 'function') {
+                    try {
+                        await prksApplyPdfAnnotationCapability(ctx, runtime, {
+                            id: workId,
+                            file_path: runtime.filePath,
+                        });
+                    } catch (_eCap) { /* unlock above already applied */ }
                 }
-                if (startedGate) prksEndAnnotationMaterializationGate(runtime);
             }
-            // handoff: materialization pass owns restore/unlock/endGate
+            prksEndAnnotationMaterializationGate(runtime);
         }
     }
 
