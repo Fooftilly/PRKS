@@ -1934,21 +1934,69 @@ class TestServerAPI(unittest.TestCase):
             with open(live, "rb") as f:
                 before = f.read()
 
-            def boom_open(path, mode="r", *args, **kwargs):
-                if path.endswith(".prks-tmp") and "w" in mode:
-                    raise OSError("simulated write failure")
-                return open(path, mode, *args, **kwargs)
+            real_fdopen = os.fdopen
 
-            with patch("builtins.open", boom_open):
+            def boom_fdopen(fd, mode="r", *args, **kwargs):
+                fp = real_fdopen(fd, mode, *args, **kwargs)
+                if "w" in mode:
+                    def _boom(_data):
+                        raise OSError("simulated write failure")
+
+                    fp.write = _boom  # type: ignore[method-assign]
+                return fp
+
+            with patch.object(server_module.os, "fdopen", boom_fdopen):
                 with self.assertRaises(OSError):
                     server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 new")
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), before)
-            self.assertFalse(os.path.exists(live + ".prks-tmp"))
-            server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 replaced")
+            leftovers = [
+                name
+                for name in os.listdir(tmp)
+                if name.startswith(".prks-write-") and name.endswith(".tmp")
+            ]
+            self.assertEqual(leftovers, [])
+            with patch.object(
+                server_module, "_fsync_parent_dir", wraps=server_module._fsync_parent_dir
+            ) as dir_sync:
+                server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 replaced")
+            dir_sync.assert_called()
             with open(live, "rb") as f:
                 self.assertEqual(f.read(), b"%PDF-1.4 replaced")
-            self.assertFalse(os.path.exists(live + ".prks-tmp"))
+            leftovers = [
+                name
+                for name in os.listdir(tmp)
+                if name.startswith(".prks-write-") and name.endswith(".tmp")
+            ]
+            self.assertEqual(leftovers, [])
+
+    def test_22c10_atomic_pdf_temps_are_unique_and_path_lock_is_shared(self):
+        """Shared managed PDF paths share one path lock; temps are unique."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="prks-atomic-pdf-uniq-") as tmp:
+            live = os.path.join(tmp, "shared.pdf")
+            with open(live, "wb") as f:
+                f.write(b"%PDF-1.4 a")
+            lock_a = server_module._pdf_path_lock_for(live)
+            lock_b = server_module._pdf_path_lock_for(os.path.normpath(live))
+            self.assertIs(lock_a, lock_b)
+            seen = []
+            real_mkstemp = server_module.tempfile.mkstemp
+
+            def tracking_mkstemp(*args, **kwargs):
+                fd, path = real_mkstemp(*args, **kwargs)
+                seen.append(path)
+                return fd, path
+
+            with patch.object(server_module.tempfile, "mkstemp", tracking_mkstemp):
+                server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 b")
+                server_module._atomic_replace_file_bytes(live, b"%PDF-1.4 c")
+            self.assertEqual(len(seen), 2)
+            self.assertNotEqual(seen[0], seen[1])
+            self.assertTrue(all(os.path.dirname(p) == tmp for p in seen))
+            with open(live, "rb") as f:
+                self.assertEqual(f.read(), b"%PDF-1.4 c")
 
     def test_22d_annotation_save_token_only_after_success(self):
         w_id = self._create_work_api("Ann Token")
