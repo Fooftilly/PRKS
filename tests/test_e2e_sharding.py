@@ -370,5 +370,32 @@ class RunnerDiscoveryTests(unittest.TestCase):
             self.assertRegex(test_id, r"^tests\.e2e\.[A-Za-z_]+\.[A-Za-z_]+\.test_")
 
 
+class HungWorkerDiagnosticsTests(unittest.TestCase):
+    def test_last_started_test_reads_final_nonempty_log_line(self):
+        """Hard-timeout / SIGTERM must name the in-flight id before the temp
+        workdir is deleted — that id is the last line _TimingResult printed."""
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hung-log-") as raw:
+                path = Path(raw) / "worker-0.log"
+                path.write_text(
+                    "tests.e2e.test_app.A.test_one\n"
+                    "tests.e2e.test_app.A.test_two\n"
+                    "\n"
+                    "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests"
+                    ".test_a_cleared_year_falls_back_to_the_pending_published_date\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    runner._last_started_test(path),
+                    "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests"
+                    ".test_a_cleared_year_falls_back_to_the_pending_published_date",
+                )
+                missing = Path(raw) / "absent.log"
+                self.assertEqual(runner._last_started_test(missing), "")
+                empty = Path(raw) / "empty.log"
+                empty.write_text("", encoding="utf-8")
+                self.assertEqual(runner._last_started_test(empty), "")
+
+
 if __name__ == "__main__":
     unittest.main()

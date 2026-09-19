@@ -536,6 +536,28 @@ def _tail(path, limit=4000):
         return ""
 
 
+def _last_started_test(log_file) -> str:
+    """Last test id a worker printed before hanging (see _TimingResult.startTest)."""
+    try:
+        with open(log_file, encoding="utf-8", errors="replace") as handle:
+            lines = [ln.strip() for ln in handle if ln.strip()]
+    except OSError:
+        return ""
+    return lines[-1] if lines else ""
+
+
+def _print_hung_worker(worker, jobs):
+    """Name the in-flight test when a shard dies without a report document."""
+    last = _last_started_test(worker["log_file"])
+    print("", file=sys.stderr)
+    print("--- Worker %d/%d hung / no report ---" % (worker["index"] + 1, jobs), file=sys.stderr)
+    if last:
+        print("last started test: %s" % last, file=sys.stderr)
+    else:
+        print("last started test: (worker log empty or unreadable)", file=sys.stderr)
+    sys.stderr.flush()
+
+
 def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
     buckets = assign_shards(test_ids, jobs, timings)
     estimates = shard_estimates(buckets, timings)
@@ -553,7 +575,12 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
         def _shutdown(signum, _frame):
             # A signal does not run the finally below, so stop the shards here
             # rather than leaving four Chromiums and four PRKS servers behind.
+            # Print in-flight test ids first — the temp workdir is deleted when
+            # this with-block unwinds, and hard-timeout SIGTERM is the common
+            # path for a single hung shard after its peer finished cleanly.
             for worker in workers:
+                if worker["proc"].poll() is None:
+                    _print_hung_worker(worker, jobs)
                 _stop_worker(worker)
             print("[E2E] terminated by signal %d" % signum, file=sys.stderr, flush=True)
             raise KeyboardInterrupt
@@ -680,6 +707,9 @@ def _print_worker_failure(worker, jobs, report):
             % worker["proc"].returncode,
             file=sys.stderr,
         )
+        last = _last_started_test(worker["log_file"])
+        if last:
+            print("last started test: %s" % last, file=sys.stderr)
         print("assigned tests: %s" % ", ".join(worker["shard"][:20]), file=sys.stderr)
         if len(worker["shard"]) > 20:
             print("  (+%d more)" % (len(worker["shard"]) - 20), file=sys.stderr)
