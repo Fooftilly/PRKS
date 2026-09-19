@@ -1473,6 +1473,12 @@ class TestPdfMaterializationMigration(MigrationTestCase):
         try:
             self.assertEqual(read_schema_version(check), 14)
             self.assertFalse(index_exists(check, "idx_roles_person_work_role_unique"))
+            self.assertFalse(
+                column_exists(check, "works", "canonical_annotation_set_revision")
+            )
+            self.assertFalse(
+                column_exists(check, "works", "materialized_pdf_annotation_revision")
+            )
             count = check.execute(
                 "SELECT COUNT(*) FROM roles WHERE person_id = ? AND work_id = ?",
                 (person_id, work_id),
