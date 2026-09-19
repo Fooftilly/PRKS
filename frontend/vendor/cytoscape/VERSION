@@ -1,7 +1,7 @@
-3.34.0
+3.34.3
 source: https://github.com/cytoscape/cytoscape.js
-npm: cytoscape@3.34.0
+npm: cytoscape@3.34.3
 asset: node_modules/cytoscape/dist/cytoscape.min.js
-sha256: 9c2a3bf2592e0b14a1f7bec07c03a54f16dedf32af9cd0af155c716aa6c87bc3
+sha256: 5f3b5b529546d5af1fc5628590af033b74511a5b6f789f5f4682845863228b91
 license: MIT
 fetched: 2026-09-19
