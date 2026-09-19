@@ -83,7 +83,7 @@ class FrontendDependencyTests(unittest.TestCase):
 
     def test_dompurify_unchanged(self):
         version = _read(os.path.join(_VENDOR, "dompurify", "VERSION"))
-        self.assertIn("3.4.14", version)
+        self.assertIn("3.4.15", version)
 
     def test_cytoscape_vendor_pin(self):
         js = os.path.join(_VENDOR, "cytoscape", "cytoscape.min.js")
