@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { resolvePython3 } from "../resolve-python3.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(root, "..", "..");
@@ -32,7 +33,7 @@ writeFileSync(join(destDir, "VERSION"), version + "\n");
 console.log("vendored cytoscape " + pkg.version + " sha256=" + sha256);
 
 const gate = spawnSync(
-  "python3",
+  resolvePython3(),
   [join(repoRoot, "scripts", "dependency_gate.py"), "--write-manifest"],
   { cwd: repoRoot, stdio: "inherit" }
 );

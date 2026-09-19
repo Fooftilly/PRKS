@@ -405,28 +405,23 @@ def remediation_message(
 
 
 def assert_remediation_is_safe(message: str) -> None:
-    """Raise AssertionError if a remediation message suggests unsafe pip."""
-    # Ban affirmative advice only — "Do not use sudo pip" is allowed.
-    if re.search(r"(?i)(?<!do not use )(?<!never )(?<!don't use )\bsudo\s+pip\b", message):
-        # Also ban bare "sudo pip" / "sudo python ... pip" command lines.
-        for line in message.splitlines():
-            stripped = line.strip().lstrip("#").strip()
-            if re.match(r"(?i)^(sudo\s+)?pip\b", stripped) and "sudo" in stripped.lower():
-                raise AssertionError("remediation must never suggest sudo pip")
-            if re.search(r"(?i)^\s*sudo\s+.*\bpip\b", stripped):
-                raise AssertionError("remediation must never suggest sudo pip")
-            if re.search(r"(?i)\bsudo\s+pip\b", stripped) and not re.search(
-                r"(?i)\b(do not|don't|never)\b.*\bsudo\b", stripped
-            ):
-                raise AssertionError("remediation must never suggest sudo pip")
-    if "--break-system-packages" in message.lower():
-        # Allowed only when telling the user not to use it.
-        for line in message.splitlines():
-            lowered = line.lower()
-            if "--break-system-packages" in lowered and not re.search(
-                r"(?i)\b(do not|don't|never)\b", lowered
-            ):
-                raise AssertionError("remediation must never suggest --break-system-packages")
+    """Raise AssertionError if a remediation message suggests unsafe pip.
+
+    Negated warnings ("Do not use sudo pip") are allowed; affirmative command
+    lines are not. Uses simple token checks rather than backtracking regexes.
+    """
+    for line in message.splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        lowered = stripped.lower()
+        negated = (
+            lowered.startswith("do not ")
+            or lowered.startswith("don't ")
+            or lowered.startswith("never ")
+        )
+        if not negated and "sudo" in lowered and "pip" in lowered:
+            raise AssertionError("remediation must never suggest sudo pip")
+        if not negated and "--break-system-packages" in lowered:
+            raise AssertionError("remediation must never suggest --break-system-packages")
 
 
 # ---------------------------------------------------------------------------
@@ -1246,31 +1241,20 @@ def validate_vendor_registration(repo_root: Path | None = None) -> GateResult:
 
     # No orphan third-party runtime files under vendor/.
     vendor_root = root / "frontend" / "vendor"
+    runtime_suffixes = (".js", ".css", ".wasm", ".woff2", ".woff", ".ttf")
     for path in vendor_root.rglob("*"):
         if not path.is_file():
             continue
         rel = path.relative_to(vendor_root).as_posix()
         if path.name in meta_names or "LICENSES" in path.parts:
             continue
-        if path.suffix.lower() in (".md", ".txt", ".json") and path.name != "purify.min.js":
-            if path.name.endswith(".json") and path.name not in (
-                "BUILD-MANIFEST.json",
-                "DEPENDENCY-MANIFEST.json",
-            ):
-                pass
         url = "/vendor/" + rel
-        # Runtime-ish extensions
-        if path.suffix.lower() in (".js", ".css", ".wasm", ".woff2", ".woff", ".ttf"):
-            if url not in registered and rel not in {
-                # nothing
-            }:
-                # Must be registered
-                if url not in registered:
-                    result.fail(
-                        "unregistered_vendor_file",
-                        f"vendor runtime file not in DEPENDENCY-MANIFEST: {url}",
-                        str(path),
-                    )
+        if path.suffix.lower() in runtime_suffixes and url not in registered:
+            result.fail(
+                "unregistered_vendor_file",
+                f"vendor runtime file not in DEPENDENCY-MANIFEST: {url}",
+                str(path),
+            )
     return result
 
 
