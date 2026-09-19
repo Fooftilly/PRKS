@@ -17,7 +17,7 @@ import threading
 from contextlib import nullcontext
 from dataclasses import replace
 from email.message import Message
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, quote, unquote
 from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
@@ -638,7 +638,10 @@ def _fetch_youtube_oembed(url: str) -> dict | None:
     """
     if not url or not str(url).strip():
         return None
-    oembed_url = "https://www.youtube.com/oembed?format=json&url=" + str(url).strip()
+    # Percent-encode the caller's URL before it becomes a query-parameter value.
+    # Unencoded it both truncates real YouTube URLs at the first `&`/`#` and
+    # lets the request body decide part of the outbound query string.
+    oembed_url = "https://www.youtube.com/oembed?format=json&url=" + quote(str(url).strip(), safe="")
     try:
         req = Request(
             oembed_url,
@@ -873,6 +876,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             pass
         if self._prks_request_id:
             self.send_header("X-Request-ID", self._prks_request_id)
+        # Every response declares its own Content-Type; no response may be
+        # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
+        # class for JSON/API bodies that echo library content back to the page.
+        self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
 
     def log_request(self, code="-", size="-"):
@@ -2693,22 +2700,28 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     os.makedirs(pdfs_dir, exist_ok=True)
                     safe_name = "".join(c for c in data['file_name'] if c.isalnum() or c in ".-_")
                     local_filename = f"{int(time.time())}_{safe_name}"
+                    # Resolve through the same containment helper the rest of the
+                    # managed-PDF paths use, and write only to the resolved path:
+                    # the upload write must not be the one place that trusts a
+                    # name derived from the request body.
+                    abs_uploaded_path = safe_pdf_path_under_dir(pdfs_dir, local_filename)
+                    if not abs_uploaded_path:
+                        self.send_json(400, {'error': 'Invalid file_name'})
+                        return
                     try:
                         decoded_pdf = base64.b64decode(data['file_b64'], validate=True)
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    with open(os.path.join(pdfs_dir, local_filename), "wb") as f:
+                    with open(abs_uploaded_path, "wb") as f:
                         f.write(decoded_pdf)
-                    abs_uploaded_path = safe_pdf_path_under_dir(pdfs_dir, local_filename)
-                    if abs_uploaded_path:
-                        changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
-                        LOGGER.info(
-                            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
-                            "true" if changed else "false",
-                            safe_log_label(reason),
-                        )
-                    file_path = f"/api/pdfs/{local_filename}"
+                    changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
+                    LOGGER.info(
+                        "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
+                        "true" if changed else "false",
+                        safe_log_label(reason),
+                    )
+                    file_path = f"/api/pdfs/{os.path.basename(abs_uploaded_path)}"
 
                 provider = (data.get('provider') or '').strip().lower()
                 provider_id = (data.get('provider_id') or '').strip()
@@ -3270,7 +3283,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
 
         def write_line(payload: dict) -> None:

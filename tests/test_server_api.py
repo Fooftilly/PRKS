@@ -5014,5 +5014,84 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 304)
 
 
+    def _response_headers(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        conn.request("GET", path)
+        response = conn.getresponse()
+        response.read()
+        headers = dict(response.getheaders())
+        status = response.status
+        conn.close()
+        return status, headers
+
+    def test_every_response_forbids_mime_sniffing(self):
+        """JSON bodies echo library content back to the page. Without nosniff a
+        crafted title can be sniffed as HTML and run in the app's own origin, so
+        the header belongs on every response, not on one streaming endpoint."""
+        db = server_module.db
+        db.add_work("<html><body>sniffable</body></html>")
+        for path in ("/api/works", "/", "/index.html", "/api/no-such-endpoint"):
+            status, headers = self._response_headers(path)
+            self.assertIn(status, (200, 304, 404), path)
+            self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff", path)
+
+    def test_pdf_upload_writes_only_inside_the_managed_pdf_directory(self):
+        """The upload write resolves through the same containment helper as
+        every other managed-PDF path, so a file_name from the request body can
+        never name a destination outside pdfs_dir."""
+        pdfs_dir = server_module.pdfs_dir
+        parent = os.path.dirname(os.path.realpath(pdfs_dir))
+        before = set(os.listdir(parent))
+        status, created = self._sv_json("POST", "/api/works", {
+            "title": "Traversal Upload",
+            "file_name": "../../escaped.pdf",
+            "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+        })
+        self.assertEqual(status, 200, created)
+        row = self._sv_json("GET", "/api/works/" + created["id"], None)[1]
+        stored = row["file_path"]
+        self.assertTrue(stored.startswith("/api/pdfs/"), stored)
+        name = stored[len("/api/pdfs/"):]
+        self.assertNotIn("/", name)
+        self.assertTrue(
+            os.path.isfile(os.path.join(os.path.realpath(pdfs_dir), name)), stored)
+        self.assertEqual(set(os.listdir(parent)) - before, set())
+
+    def test_oembed_url_is_a_percent_encoded_query_value(self):
+        """Appended raw, a YouTube URL's own `&`/`#` both truncate the lookup
+        and let the request body append parameters to the outbound query."""
+        seen = []
+
+        class _FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def read(self_inner):
+                return b'{"title": "T"}'
+
+        def fake_urlopen(req, timeout=None):
+            seen.append(req.full_url)
+            return _FakeResponse()
+
+        with patch.object(server_module, "urlopen", fake_urlopen):
+            meta = server_module._fetch_youtube_oembed(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
+
+        self.assertEqual(meta, {"title": "T"})
+        self.assertEqual(len(seen), 1)
+        requested = seen[0]
+        prefix = "https://www.youtube.com/oembed?format=json&url="
+        self.assertTrue(requested.startswith(prefix), requested)
+        value = requested[len(prefix):]
+        self.assertNotIn("&", value)
+        self.assertNotIn("#", value)
+        self.assertEqual(
+            urllib.parse.unquote(value),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
+
+
 if __name__ == '__main__':
     unittest.main()
