@@ -1,5 +1,5 @@
 # package: @embedpdf/plugin-selection
-# version: 2.15.0
+# version: 2.15.1
 # file: dist/index.js
 # why: text selection never captured the pointer, so pointerup outside the page never ended selecting
 # what: capture on drag begin (same helper marquee uses); shared idempotent end for pointerup/pointercancel

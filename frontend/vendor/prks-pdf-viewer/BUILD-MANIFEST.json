@@ -1,5 +1,5 @@
 {
-  "embedpdf": "2.15.0",
+  "embedpdf": "2.15.1",
   "react": "18.3.1",
   "reactDom": "18.3.1",
   "fontFallback": null,
@@ -18,27 +18,27 @@
   "outputSha256": {
     "js": "15c6914aaba70daf69981652a11b17f2c9cf61dabebf3d774963e8fd11fb9ec5",
     "css": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae",
-    "wasm": "c0af5a6aca30d7e54a149c3a68e317116ca906d6edc28fd3318b12c7d9478ac8"
+    "wasm": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
   },
-  "builtAt": "2026-09-18T09:24:52.045Z",
+  "builtAt": "2026-09-19T06:57:17.581Z",
   "embedpdfPatches": [
     {
       "package": "@embedpdf/plugin-pan",
-      "version": "2.15.0",
-      "patch": "embedpdf-plugin-pan-2.15.0.patch",
-      "sha256": "6ce0b17b4179b97d894cf2625b86ec5681dc80691436725a5fd9064802943e86"
+      "version": "2.15.1",
+      "patch": "embedpdf-plugin-pan-2.15.1.patch",
+      "sha256": "499b628c12b2df8ea04046e2dcaa7cacdf9b4545808aefc1e9b4ca1808a6e643"
     },
     {
       "package": "@embedpdf/plugin-selection",
-      "version": "2.15.0",
-      "patch": "embedpdf-plugin-selection-2.15.0.patch",
-      "sha256": "51511f3d1b302ab6a12e6d38862a8d795400194bf11555c00a32149655b0b2c1"
+      "version": "2.15.1",
+      "patch": "embedpdf-plugin-selection-2.15.1.patch",
+      "sha256": "bf2f6b3632512b789a68e1f416e5cb1a830f513643a232fd82779b33e0f180d6"
     },
     {
       "package": "@embedpdf/plugin-viewport",
-      "version": "2.15.0",
-      "patch": "embedpdf-plugin-viewport-2.15.0.patch",
-      "sha256": "ae3aaac03a0786c887c055a6c2517a6b6f2e33b491c5a27658c1421d170a818b"
+      "version": "2.15.1",
+      "patch": "embedpdf-plugin-viewport-2.15.1.patch",
+      "sha256": "30a5bbd6646e7a6dbcd7467b981b05c47fe32fe2e4c38492cfd872e96dba72ba"
     }
   ]
 }

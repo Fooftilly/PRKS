@@ -716,7 +716,7 @@ npm ci
 npm run build
 ```
 
-That writes `frontend/vendor/prks-pdf-viewer/` (EmbedPDF 2.15.0 + React 18.3.1, bundled). React is not part of the PRKS UI; it exists only inside that file. The PDF fixture is served by the same test-only server as the sanitizer fixture: open the printed `tests/browser/pdf_viewer.html` URL. It must report PASS with no jsDelivr / Google Fonts / unpkg requests.
+That writes `frontend/vendor/prks-pdf-viewer/` (EmbedPDF 2.15.1 + React 18.3.1, bundled). React is not part of the PRKS UI; it exists only inside that file. The PDF fixture is served by the same test-only server as the sanitizer fixture: open the printed `tests/browser/pdf_viewer.html` URL. It must report PASS with no jsDelivr / Google Fonts / unpkg requests.
 
 The sanitizer-boundary browser fixture is not served by the app. From the repo root:
 
