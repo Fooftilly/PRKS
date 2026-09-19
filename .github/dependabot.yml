@@ -1,0 +1,44 @@
+version: 2
+
+updates:
+  # Python runtime and maintainer/browser-test dependencies.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
+
+  # Maintainer-only EmbedPDF build dependencies.
+  - package-ecosystem: "npm"
+    directory: "/tools/pdf-viewer"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      embedpdf:
+        patterns:
+          - "@embedpdf/*"
+      react-stack:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+
+  # Maintainer-only Cytoscape.js research-graph build dependency.
+  - package-ecosystem: "npm"
+    directory: "/tools/research-graph"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
+
+  # Keep the Python base image in the root Dockerfile visible to Dependabot.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
