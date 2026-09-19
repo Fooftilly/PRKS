@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -104,8 +104,11 @@ const thirdParty = [
 ].join('\n');
 writeFileSync(join(outDir, 'THIRD_PARTY.md'), thirdParty + '\n');
 
+// embedpdf version is derived from package.json pins (compatibility contract:
+// patches under patches/* are valid only for this EmbedPDF line).
+const embedpdfVersion = pkg.dependencies['@embedpdf/core'];
 const manifest = {
-    embedpdf: '2.15.1',
+    embedpdf: embedpdfVersion,
     react: pkg.dependencies.react,
     reactDom: pkg.dependencies['react-dom'],
     fontFallback: null,
@@ -118,7 +121,6 @@ const manifest = {
         css: cssHash,
         wasm: sha256(readFileSync(join(outDir, 'pdfium.wasm'))),
     },
-    builtAt: new Date().toISOString(),
     embedpdfPatches: patchRecords.map((r) => ({
         package: r.package,
         version: r.version,
@@ -129,7 +131,7 @@ const manifest = {
 writeFileSync(join(outDir, 'BUILD-MANIFEST.json'), JSON.stringify(manifest, null, 2) + '\n');
 writeFileSync(
     join(outDir, 'VERSION'),
-    `embedpdf 2.15.1\nreact ${pkg.dependencies.react}\nreact-dom ${pkg.dependencies['react-dom']}\nfontFallback null\n`,
+    `embedpdf ${embedpdfVersion}\nreact ${pkg.dependencies.react}\nreact-dom ${pkg.dependencies['react-dom']}\nfontFallback null\n`,
 );
 
 if (/cdn\.jsdelivr\.net.*react/.test(jsText) || /unpkg\.com.*react/.test(jsText)) {
@@ -147,3 +149,13 @@ if (!reactInputs.length) {
 }
 
 console.log('wrote', outDir);
+
+// Refresh aggregated vendor manifest + SW revision (deterministic; no timestamps).
+const gate = spawnSync(
+    'python3',
+    [join(repoRoot, 'scripts', 'dependency_gate.py'), '--write-manifest'],
+    { cwd: repoRoot, stdio: 'inherit' },
+);
+if (gate.status !== 0) {
+    process.exit(gate.status || 1);
+}

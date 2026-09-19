@@ -35,6 +35,14 @@ updates:
     commit-message:
       prefix: "build(deps)"
 
+  # Maintainer-only ordinary frontend vendor pins (DOMPurify, EasyMDE, CodeMirror, Lucide).
+  - package-ecosystem: "npm"
+    directory: "/tools/frontend-vendor"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
+
   # Keep the Python base image in the root Dockerfile visible to Dependabot.
   - package-ecosystem: "docker"
     directory: "/"

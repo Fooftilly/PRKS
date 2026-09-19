@@ -1,0 +1,106 @@
+{
+  "dependencies": [
+    {
+      "name": "codemirror",
+      "runtime_files": [
+        {
+          "path": "/vendor/codemirror/codemirror.js",
+          "sha256": "34d60ac46ee8476f0cef4c23e8cf2ca477a08d4a12e746a10b62f15209e66bec"
+        },
+        {
+          "path": "/vendor/codemirror/show-hint.js",
+          "sha256": "f5cba0672058459ef1d9d7f3c7dc94c0078a4a73604fdd4366b2fb51a9aa498d"
+        },
+        {
+          "path": "/vendor/codemirror/show-hint.css",
+          "sha256": "9058c1c14fcdae199b490bb6214f36a216b9ce84d7df2084830ebb6a60337651"
+        }
+      ],
+      "source_category": "npm:tools/frontend-vendor",
+      "version": "5.65.15"
+    },
+    {
+      "name": "cytoscape",
+      "runtime_files": [
+        {
+          "path": "/vendor/cytoscape/cytoscape.min.js",
+          "sha256": "5f3b5b529546d5af1fc5628590af033b74511a5b6f789f5f4682845863228b91"
+        }
+      ],
+      "source_category": "npm:tools/research-graph",
+      "version": "3.34.3"
+    },
+    {
+      "name": "dompurify",
+      "runtime_files": [
+        {
+          "path": "/vendor/dompurify/purify.min.js",
+          "sha256": "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"
+        }
+      ],
+      "source_category": "npm:tools/frontend-vendor",
+      "version": "3.4.15"
+    },
+    {
+      "name": "easymde",
+      "runtime_files": [
+        {
+          "path": "/vendor/easymde/easymde.min.js",
+          "sha256": "2c06bddfd0c89176db08ccf9d42e2beaa9b4f1a4ff8fb2ec0bf1bed25ce08e05"
+        },
+        {
+          "path": "/vendor/easymde/easymde.min.css",
+          "sha256": "6eee36340432776d682e7372ec4a7eb29be4fdb3ffada32c0bfa5e31a5ef34a2"
+        }
+      ],
+      "source_category": "npm:tools/frontend-vendor",
+      "version": "2.21.0"
+    },
+    {
+      "name": "inter",
+      "runtime_files": [
+        {
+          "path": "/vendor/inter/inter.css",
+          "sha256": "6e167509c8f9f732267a86c22bb5d8d7a720178d0e35aef5dde606830350829d"
+        },
+        {
+          "path": "/vendor/inter/InterVariable.woff2",
+          "sha256": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3"
+        }
+      ],
+      "source_category": "raw-vendor",
+      "version": "4.1"
+    },
+    {
+      "name": "lucide",
+      "runtime_files": [
+        {
+          "path": "/vendor/lucide/lucide.min.js",
+          "sha256": "333ec22f7cab33d8cc36367add323645237ebe54b52213772f99162001fc06b3"
+        }
+      ],
+      "source_category": "npm:tools/frontend-vendor",
+      "version": "0.511.0"
+    },
+    {
+      "name": "prks-pdf-viewer",
+      "runtime_files": [
+        {
+          "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
+          "sha256": "a81fdf82f94880f5613a58823a95a74116cccaec8e01666ccafbf3825051363d"
+        },
+        {
+          "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.css",
+          "sha256": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae"
+        },
+        {
+          "path": "/vendor/prks-pdf-viewer/pdfium.wasm",
+          "sha256": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
+        }
+      ],
+      "source_category": "npm:tools/pdf-viewer",
+      "version": "2.15.1"
+    }
+  ],
+  "schema_version": 1
+}
