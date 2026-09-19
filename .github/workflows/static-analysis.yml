@@ -9,9 +9,6 @@ on:
       - master
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: static-analysis-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -23,6 +20,8 @@ env:
 
 jobs:
   ruff:
+    permissions:
+      contents: read
     name: Ruff bug checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -45,6 +44,8 @@ jobs:
         run: ruff check --config ruff.toml prks_app.py backend
 
   pyright:
+    permissions:
+      contents: read
     name: Pyright data-flow checks
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -72,6 +73,8 @@ jobs:
         run: npm exec --yes --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
 
   eslint:
+    permissions:
+      contents: read
     name: ESLint bug checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
