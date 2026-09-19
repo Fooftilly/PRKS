@@ -1,0 +1,14 @@
+{
+  "include": [
+    "prks_app.py",
+    "backend"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedVariable": "none"
+}
