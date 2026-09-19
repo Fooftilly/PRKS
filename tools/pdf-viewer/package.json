@@ -25,11 +25,11 @@
     "@embedpdf/plugin-viewport": "2.15.1",
     "@embedpdf/plugin-zoom": "2.15.1",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@types/react": "18.3.18",
-    "@types/react-dom": "18.3.5",
+    "@types/react-dom": "19.3.0",
     "esbuild": "0.25.9",
     "typescript": "5.9.2"
   },
