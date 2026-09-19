@@ -36,8 +36,10 @@ TemporaryDirectory, but the template is copied into it instead of rebuilding the
 same SQLite/PDF/index fixture repeatedly. After the first build, templates are
 WAL-checkpointed and leftover `-wal`/`-shm` companions are removed **only when**
 `PRAGMA wal_checkpoint(TRUNCATE)` reports `busy=0`. A blocked/incomplete
-checkpoint leaves the companions in place (cloning WAL state) rather than
-deleting them after a partial merge into the main DB.
+checkpoint **refuses** the snapshot (raises; nothing is inserted into the
+immutable seed cache) rather than caching a directory that may still have a
+live SQLite user. Finalize connects with `timeout=0` so a leaked writer fails
+immediately.
 
 The returned fixture ID dictionary is deep-copied too, so a test cannot mutate
 metadata used by another test.

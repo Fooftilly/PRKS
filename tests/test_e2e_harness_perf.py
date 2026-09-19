@@ -86,9 +86,10 @@ class E2ESeedCacheTests(unittest.TestCase):
             conn.close()
             self.assertEqual([r[0] for r in rows], ["ok", "wal"])
 
-    def test_finalize_retains_companions_when_checkpoint_busy(self):
-        """A blocked wal_checkpoint must not unlink -wal/-shm after a partial merge."""
+    def test_finalize_refuses_snapshot_when_checkpoint_busy(self):
+        """A blocked wal_checkpoint must raise rather than cache an active template."""
         import sqlite3
+        import time
 
         with tempfile.TemporaryDirectory(prefix="prks-wal-busy-") as template:
             db_path = Path(template, "prks_data.db")
@@ -100,20 +101,55 @@ class E2ESeedCacheTests(unittest.TestCase):
             holder.execute("BEGIN IMMEDIATE")
             holder.execute("INSERT INTO t(v) VALUES ('held')")
             try:
-                # Another connection sees busy=1; finalize must retain companions.
-                probe = sqlite3.connect(str(db_path), timeout=0.1)
+                probe = sqlite3.connect(str(db_path), timeout=0)
                 row = probe.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 probe.close()
                 self.assertTrue(harness._wal_checkpoint_ok((0, 0, 0)))
                 self.assertFalse(harness._wal_checkpoint_ok(row))
                 self.assertTrue(Path(str(db_path) + "-wal").exists())
 
-                harness._finalize_seed_template(template)
+                started = time.perf_counter()
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"active SQLite user",
+                ):
+                    harness._finalize_seed_template(template)
+                # timeout=0 must not burn SQLite's default ~5s busy wait.
+                self.assertLess(time.perf_counter() - started, 1.0)
                 self.assertTrue(
                     Path(str(db_path) + "-wal").exists(),
-                    "busy checkpoint must not delete the WAL companion",
+                    "busy refuse path must not delete the WAL companion",
                 )
             finally:
+                holder.rollback()
+                holder.close()
+
+    def test_materialize_does_not_cache_busy_seed_template(self):
+        """Busy finalize must leave _SEED_SNAPSHOTS empty for that seed_fn."""
+        import sqlite3
+
+        holders = []
+
+        def seed(root):
+            db_path = Path(root, "prks_data.db")
+            holder = sqlite3.connect(str(db_path))
+            holder.execute("PRAGMA journal_mode=WAL")
+            holder.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+            holder.execute("INSERT INTO t(v) VALUES ('base')")
+            holder.commit()
+            holder.execute("BEGIN IMMEDIATE")
+            holder.execute("INSERT INTO t(v) VALUES ('held')")
+            holders.append(holder)
+            return {"id": "busy-seed"}
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-busy-dest-") as dest:
+                with self.assertRaisesRegex(RuntimeError, r"active SQLite user"):
+                    harness._materialize_seed(seed, dest)
+            self.assertNotIn(seed, harness._SEED_SNAPSHOTS)
+            self.assertEqual(harness._SEED_SNAPSHOTS, {})
+        finally:
+            for holder in holders:
                 holder.rollback()
                 holder.close()
 

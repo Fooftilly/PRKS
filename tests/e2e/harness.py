@@ -122,14 +122,16 @@ def _finalize_seed_template(template: str) -> None:
     """Checkpoint SQLite WAL into main DB files so clones are self-contained.
 
     Seed builders open PRKSDatabase without an explicit close. On some Python /
-    SQLite timings the template can retain ``-wal``/``-shm`` companions. Cloning
-    those as the immutable snapshot is fine, but a successful checkpoint makes
-    each clone a single consistent ``.db`` and avoids rare WAL-replay surprises
-    when the server opens a fresh copy.
+    SQLite timings the template can retain ``-wal``/``-shm`` companions. A
+    successful checkpoint makes each clone a single consistent ``.db`` and
+    avoids rare WAL-replay surprises when the server opens a fresh copy.
 
     Fail closed: companions are removed only when ``wal_checkpoint(TRUNCATE)``
-    reports ``busy=0``. A blocked/incomplete checkpoint leaves ``-wal``/``-shm``
-    in place rather than deleting them after a partial merge into the main DB.
+    reports ``busy=0``. A blocked/incomplete checkpoint raises so the caller
+    never inserts the template into the immutable seed cache — a live connection
+    can still mutate the directory after caching, which breaks that contract.
+    Connect with ``timeout=0`` so a leaked writer fails immediately instead of
+    waiting on SQLite's default busy timeout.
     """
     import sqlite3
 
@@ -139,22 +141,24 @@ def _finalize_seed_template(template: str) -> None:
                 continue
             db_path = os.path.join(root, name)
             try:
-                conn = sqlite3.connect(db_path)
-            except sqlite3.Error:
-                continue
-            checkpoint_ok = False
+                conn = sqlite3.connect(db_path, timeout=0)
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    "E2E seed template SQLite connect failed during WAL finalize"
+                ) from exc
             try:
                 row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 conn.commit()
-                checkpoint_ok = _wal_checkpoint_ok(row)
-            except sqlite3.Error:
-                checkpoint_ok = False
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    "E2E seed template WAL checkpoint failed"
+                ) from exc
             finally:
                 conn.close()
-            if not checkpoint_ok:
-                # Retain companions; cloning WAL state is safer than dropping it
-                # after an incomplete checkpoint.
-                continue
+            if not _wal_checkpoint_ok(row):
+                raise RuntimeError(
+                    "E2E seed template still has an active SQLite user"
+                )
             for suffix in ("-wal", "-shm"):
                 companion = db_path + suffix
                 try:
@@ -172,6 +176,9 @@ def _materialize_seed(seed_fn, destination: str):
     tests merely copy that pristine template instead of rebuilding SQLite,
     PDFs and research indexes from scratch. Returned fixture IDs are deep
     copied so a test cannot mutate the cache's metadata.
+
+    A failed WAL finalize removes the partial template and does not insert it
+    into ``_SEED_SNAPSHOTS``.
     """
     if not seed_cache_enabled():
         started = time.perf_counter()
@@ -186,8 +193,15 @@ def _materialize_seed(seed_fn, destination: str):
         template = os.path.join(cache_root, "seed-%d" % len(_SEED_SNAPSHOTS))
         os.makedirs(template, exist_ok=False)
         started = time.perf_counter()
-        ids = seed_fn(template) or {}
-        _finalize_seed_template(template)
+        try:
+            ids = seed_fn(template) or {}
+            _finalize_seed_template(template)
+        except Exception:
+            try:
+                shutil.rmtree(template, ignore_errors=True)
+            except OSError:
+                pass
+            raise
         _profile_phase("seed_build", time.perf_counter() - started)
         cached = (template, copy.deepcopy(ids))
         _SEED_SNAPSHOTS[seed_fn] = cached
