@@ -427,17 +427,29 @@ class DesignSystemContractTests(unittest.TestCase):
         trailing = rest[rest.rfind("}") + 1 :].strip()
         self.assertEqual(trailing, "")
 
-    def test_border_shorthand_never_resets_an_earlier_longhand(self):
-        """`border: 2px solid transparent` after `border-color: var(--x)` drops
-        the longhand silently: the rule still parses, and the custom property
-        simply stops reaching the element. Doc-type badges lost their per-type
-        border that way, so order is now an invariant rather than a review item.
+    def test_border_longhand_is_never_written_before_a_border_shorthand(self):
+        """A PRKS stylesheet convention, not a law of CSS.
+
+        `border: …` always resets `border-color`/`border-width`/`border-style`,
+        so writing a longhand first and the shorthand after makes the longhand
+        dead code. `.doc-type-badge` set `border-color: var(--doc-type-border)`
+        and then `border: 2px solid transparent`, and the per-type colour
+        silently stopped reaching the badge.
+
+        A deliberate reset — `border-color: red; border: 0` — has the same shape
+        and is not a bug, which is why this is a house rule rather than a
+        universal invariant: in one stylesheet there is no reason to set a
+        longhand you intend to discard three lines later, so write the shorthand
+        first (`border: 0`) and any longhand after it. Relax this rule here if
+        that ever stops being true.
 
         Restricted to the border family on purpose. `background-color` before
         `background` looks like the same mistake but is a real idiom: a browser
-        that cannot parse the shorthand's value drops that declaration and keeps
-        the longhand. No such fallback exists for `border` — the shorthand always
-        resets the longhands, whether or not its own value parses."""
+        that cannot parse the shorthand's value drops that declaration under
+        normal CSS error handling and the longhand stands. `border` has no such
+        fallback — with `var()` an unresolvable value is invalid at
+        computed-value time, which unsets the property rather than dropping the
+        declaration."""
         css = _read(_CSS)
         offenders = []
         for match in re.finditer(r"\{([^{}]*)\}", css):
@@ -451,7 +463,10 @@ class DesignSystemContractTests(unittest.TestCase):
                 short_at = re.search(r"(?<![-\w])%s\s*:" % shorthand, block)
                 if long_at and short_at and short_at.start() > long_at.start():
                     line = css[: match.start()].count("\n") + 1
-                    offenders.append("line %d: %s before %s" % (line, longhand, shorthand))
+                    offenders.append(
+                        "line %d: %s written before %s, which resets it"
+                        % (line, longhand, shorthand)
+                    )
         self.assertEqual(offenders, [])
 
     def test_doc_type_badge_border_carries_the_per_type_token(self):
