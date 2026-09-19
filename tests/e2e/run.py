@@ -272,9 +272,21 @@ class _TimingResult(unittest.TextTestResult):
         # Workers redirect stdout to their log file; print the id so a hung
         # shard names the test it never left (TextTestRunner stream is StringIO).
         print(test.id(), flush=True)
+        try:
+            from tests.e2e.harness import e2e_diag
+
+            e2e_diag("START", test.id())
+        except Exception:
+            pass
         super().startTest(test)
 
     def stopTest(self, test):
+        try:
+            from tests.e2e.harness import e2e_diag
+
+            e2e_diag("STOP", test.id())
+        except Exception:
+            pass
         super().stopTest(test)
         if self._started_at is not None:
             self.timings[test.id()] = time.perf_counter() - self._started_at

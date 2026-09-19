@@ -94,6 +94,19 @@ parallel run to a serial run when judging an individual-test optimization.
 instrumented or cache-off durations into them would poison later normal runs.
 Profile/slowest output for the current run still prints as usual.
 
+### Opt-in hang diagnostics and Chromium recycle
+
+`PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,
+`SERVER_READY`, `CONTEXT_READY`, `APP_READY`, `BODY_DONE`, `CONTEXT_CLOSED`,
+`SERVER_STOPPED`, plus runner `STOP`) so a hang can be attributed to a lifecycle
+stage rather than only "last started test".
+
+Heavy service-worker modules (starting with Offline Work metadata) may relaunch
+Chromium after every N closed BrowserContexts. Default for that module is **12**;
+override with `PRKS_E2E_CHROMIUM_RECYCLE_EVERY` (`0` disables). Fresh contexts
+remain per-test — only the browser process is recycled. Chosen below the
+observed full-gate stall window (~18–25 contexts into this class).
+
 ## Remaining opportunities to measure
 
 These should be changed only when profiling demonstrates a material gain and the

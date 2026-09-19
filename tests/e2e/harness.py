@@ -84,6 +84,85 @@ def seed_cache_enabled() -> bool:
     return _env_enabled("PRKS_E2E_SEED_CACHE", default=True)
 
 
+def diagnostic_enabled() -> bool:
+    """Opt-in stage/heartbeat markers for hang diagnosis (``PRKS_E2E_DIAGNOSTIC=1``)."""
+    return _env_enabled("PRKS_E2E_DIAGNOSTIC")
+
+
+def e2e_diag(stage: str, test_id: str = "") -> None:
+    """Print a privacy-safe stage marker when diagnostic mode is on.
+
+    Only stage names and unittest ids — never storage paths, titles, or bodies.
+    """
+    if not diagnostic_enabled():
+        return
+    stage_s = str(stage or "").strip() or "?"
+    tid = str(test_id or "").strip()
+    if tid:
+        print("[e2e-diag] %s %s" % (stage_s, tid), flush=True)
+    else:
+        print("[e2e-diag] %s" % stage_s, flush=True)
+
+
+def chromium_recycle_every(default: int = 0) -> int:
+    """How many closed BrowserContexts before relaunching Chromium.
+
+    ``PRKS_E2E_CHROMIUM_RECYCLE_EVERY`` overrides. ``0`` disables. Modules that
+    open many service-worker contexts may pass a positive module default.
+    """
+    raw = os.environ.get("PRKS_E2E_CHROMIUM_RECYCLE_EVERY")
+    if raw is None or not str(raw).strip():
+        return max(0, int(default))
+    try:
+        return max(0, int(str(raw).strip()))
+    except ValueError:
+        return max(0, int(default))
+
+
+class ChromiumHolder:
+    """Module-scoped Playwright + Chromium with optional periodic relaunch.
+
+    Fresh BrowserContexts remain per-test. After ``recycle_every`` contexts have
+    been closed, Chromium itself is restarted to shed service-worker / process
+    accumulation that can stall long SW-heavy modules.
+    """
+
+    def __init__(self, *, recycle_every: int | None = None):
+        if recycle_every is None:
+            recycle_every = chromium_recycle_every(0)
+        self.recycle_every = max(0, int(recycle_every))
+        self._contexts_since_launch = 0
+        self.pw, self.browser = require_chromium()
+
+    def after_context_closed(self) -> None:
+        self._contexts_since_launch += 1
+        if self.recycle_every and self._contexts_since_launch >= self.recycle_every:
+            self.recycle()
+
+    def recycle(self) -> None:
+        e2e_diag(
+            "CHROMIUM_RECYCLE",
+            "after_%d_contexts" % self._contexts_since_launch,
+        )
+        try:
+            try:
+                self.browser.close()
+            finally:
+                try:
+                    self.pw.stop()
+                except Exception:
+                    pass
+            self.pw, self.browser = require_chromium()
+        finally:
+            self._contexts_since_launch = 0
+
+    def close(self) -> None:
+        try:
+            self.browser.close()
+        finally:
+            self.pw.stop()
+
+
 def clear_seed_cache() -> None:
     """Drop worker-local seed snapshots. Primarily used by unit tests/benchmarks."""
     global _SEED_CACHE_TMP

@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.e2e import harness
 
@@ -228,6 +229,64 @@ class E2ESeedCacheTests(unittest.TestCase):
         self.assertFalse(harness._wal_checkpoint_ok(None))
         self.assertFalse(harness._wal_checkpoint_ok(()))
         self.assertFalse(harness._wal_checkpoint_ok(("x",)))
+
+
+class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
+    def setUp(self):
+        self._diag = os.environ.get("PRKS_E2E_DIAGNOSTIC")
+        self._recycle = os.environ.get("PRKS_E2E_CHROMIUM_RECYCLE_EVERY")
+        os.environ.pop("PRKS_E2E_DIAGNOSTIC", None)
+        os.environ.pop("PRKS_E2E_CHROMIUM_RECYCLE_EVERY", None)
+
+    def tearDown(self):
+        if self._diag is None:
+            os.environ.pop("PRKS_E2E_DIAGNOSTIC", None)
+        else:
+            os.environ["PRKS_E2E_DIAGNOSTIC"] = self._diag
+        if self._recycle is None:
+            os.environ.pop("PRKS_E2E_CHROMIUM_RECYCLE_EVERY", None)
+        else:
+            os.environ["PRKS_E2E_CHROMIUM_RECYCLE_EVERY"] = self._recycle
+
+    def test_e2e_diag_is_silent_unless_enabled(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            harness.e2e_diag("START", "tests.e2e.fake.T.test_x")
+        self.assertEqual(buf.getvalue(), "")
+
+        os.environ["PRKS_E2E_DIAGNOSTIC"] = "1"
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            harness.e2e_diag("SERVER_READY", "tests.e2e.fake.T.test_x")
+        self.assertIn("[e2e-diag] SERVER_READY tests.e2e.fake.T.test_x", buf.getvalue())
+
+    def test_chromium_recycle_every_env_and_default(self):
+        self.assertEqual(harness.chromium_recycle_every(default=20), 20)
+        os.environ["PRKS_E2E_CHROMIUM_RECYCLE_EVERY"] = "15"
+        self.assertEqual(harness.chromium_recycle_every(default=20), 15)
+        os.environ["PRKS_E2E_CHROMIUM_RECYCLE_EVERY"] = "0"
+        self.assertEqual(harness.chromium_recycle_every(default=20), 0)
+
+    def test_chromium_holder_recycles_after_n_closed_contexts(self):
+        launches = []
+
+        def fake_require():
+            launches.append(1)
+            return ("pw-%d" % len(launches), "browser-%d" % len(launches))
+
+        with mock.patch.object(harness, "require_chromium", side_effect=fake_require):
+            holder = harness.ChromiumHolder(recycle_every=2)
+            self.assertEqual(len(launches), 1)
+            holder.browser = mock.Mock()
+            holder.pw = mock.Mock()
+            holder.after_context_closed()
+            self.assertEqual(len(launches), 1)
+            holder.after_context_closed()
+            self.assertEqual(len(launches), 2)
+            self.assertEqual(holder._contexts_since_launch, 0)
 
 
 if __name__ == "__main__":
