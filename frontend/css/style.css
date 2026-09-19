@@ -10867,11 +10867,12 @@ html.prks-force-mobile .project-card--work .project-card__rail {
     letter-spacing: 0.02em;
     text-transform: uppercase;
     background: var(--doc-type-color, var(--surface-muted));
-    border-color: var(--doc-type-border, transparent);
     color: var(--text-inverse);
     padding: 3px 8px;
     border-radius: var(--radius-sm);
-    border: 2px solid transparent;
+    /* One declaration: a later `border` shorthand silently resets border-color,
+       which is how the per-type --doc-type-border stopped reaching the badge. */
+    border: 2px solid var(--doc-type-border, transparent);
     vertical-align: middle;
     line-height: 1.2;
     max-width: 100%;

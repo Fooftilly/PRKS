@@ -427,6 +427,56 @@ class DesignSystemContractTests(unittest.TestCase):
         trailing = rest[rest.rfind("}") + 1 :].strip()
         self.assertEqual(trailing, "")
 
+    def test_shorthand_never_resets_an_earlier_longhand(self):
+        """`border: 2px solid transparent` after `border-color: var(--x)` drops
+        the longhand silently: the rule still parses, and the custom property
+        simply stops reaching the element. Doc-type badges lost their per-type
+        border that way, so order is now an invariant rather than a review item."""
+        css = _read(_CSS)
+        offenders = []
+        for match in re.finditer(r"\{([^{}]*)\}", css):
+            block = match.group(1)
+            for longhand, shorthand in (
+                ("border-color", "border"),
+                ("border-width", "border"),
+                ("border-style", "border"),
+                ("background-color", "background"),
+            ):
+                long_at = re.search(r"(?<![-\w])%s\s*:" % longhand, block)
+                short_at = re.search(r"(?<![-\w])%s\s*:" % shorthand, block)
+                if long_at and short_at and short_at.start() > long_at.start():
+                    line = css[: match.start()].count("\n") + 1
+                    offenders.append("line %d: %s before %s" % (line, longhand, shorthand))
+        self.assertEqual(offenders, [])
+
+    def test_doc_type_badge_border_carries_the_per_type_token(self):
+        css = _read(_CSS)
+        match = re.search(r"\n\.doc-type-badge\s*\{([^{}]*)\}", css)
+        self.assertIsNotNone(match, "the doc-type badge base rule")
+        block = match.group(1)
+        self.assertIn("var(--doc-type-color", block)
+        self.assertIn("var(--doc-type-border", block)
+
+    def test_every_visible_input_has_an_accessible_name(self):
+        """Accessibility is part of the design system, and the gallery is the
+        production-class reference: an unlabelled text field is a defect in
+        both. `type=hidden` carries no accessible name by definition."""
+        for path in (_INDEX, _GALLERY):
+            html = _read(path)
+            # A wrapping <label> names its control on its own; what is left has
+            # to say so itself.
+            unwrapped = re.sub(r"<label\b.*?</label>", "", html, flags=re.S)
+            for tag in re.findall(r"<input\b[^>]*>", unwrapped):
+                if re.search(r'type\s*=\s*"hidden"', tag):
+                    continue
+                if "aria-label=" in tag or "aria-labelledby=" in tag:
+                    continue
+                identifier = re.search(r'id\s*=\s*"([^"]+)"', tag)
+                self.assertTrue(
+                    identifier and ('for="%s"' % identifier.group(1)) in html,
+                    "%s has no accessible name: %s" % (os.path.basename(path), tag),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
