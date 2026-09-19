@@ -5,7 +5,7 @@
   "fontFallback": null,
   "tiling": false,
   "pdfiumWasm": "pdfium.wasm",
-  "esbuild": "0.25.9",
+  "esbuild": "0.28.2",
   "reactMetafileInputs": [
     "node_modules/react/cjs/react.production.min.js",
     "node_modules/react/index.js",
@@ -16,11 +16,11 @@
     "node_modules/react/jsx-runtime.js"
   ],
   "outputSha256": {
-    "js": "15c6914aaba70daf69981652a11b17f2c9cf61dabebf3d774963e8fd11fb9ec5",
+    "js": "a81fdf82f94880f5613a58823a95a74116cccaec8e01666ccafbf3825051363d",
     "css": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae",
     "wasm": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
   },
-  "builtAt": "2026-09-19T06:57:17.581Z",
+  "builtAt": "2026-09-19T08:19:33.148Z",
   "embedpdfPatches": [
     {
       "package": "@embedpdf/plugin-pan",
