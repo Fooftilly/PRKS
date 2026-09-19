@@ -25,9 +25,10 @@ def load_tests(loader, standard_tests, pattern):
 # Override with PRKS_E2E_CHROMIUM_RECYCLE_EVERY (0 disables).
 # Measured (class alone, PRKS_E2E_DIAGNOSTIC=1): PASS often, but intermittent
 # hangs after APP_READY at varying depths — ~case 47 (recycle=20), ~13
-# (recycle=15), and ~5 (recycle=12). Full-gate stalls historically ~18–25 into
-# this class. Interval 4 relaunches before the earliest observed stall window.
-_DEFAULT_RECYCLE_EVERY = 4
+# (recycle=15), ~5 (recycle=12). Quiet run with recycle=4 still hung on
+# acknowledgement (~case 24): Playwright wedged so pending()'s 25s JS
+# deadline never fired. Recycle every 1 = fresh Chromium per test here.
+_DEFAULT_RECYCLE_EVERY = 1
 _HOLDER = None
 
 

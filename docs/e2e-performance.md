@@ -102,11 +102,11 @@ Profile/slowest output for the current run still prints as usual.
 stage rather than only "last started test".
 
 Heavy service-worker modules (starting with Offline Work metadata) may relaunch
-Chromium after every N closed BrowserContexts. Default for that module is **4**;
-override with `PRKS_E2E_CHROMIUM_RECYCLE_EVERY` (`0` disables). Fresh contexts
-remain per-test — only the browser process is recycled. Chosen below the
-earliest observed class-alone stall (~5 contexts after APP_READY) and the
-full-gate stall window (~18–25 into this class).
+Chromium after every N closed BrowserContexts. Default for that module is **1**
+(fresh Chromium per test); override with `PRKS_E2E_CHROMIUM_RECYCLE_EVERY`
+(`0` disables). Fresh contexts remain per-test — only the browser process is
+recycled. Measured below intermittent post-`APP_READY` stalls (as early as
+~case 5 with recycle=12; still observed at ~case 24 with recycle=4).
 
 ## Remaining opportunities to measure
 
