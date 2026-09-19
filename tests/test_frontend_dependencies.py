@@ -89,7 +89,7 @@ class FrontendDependencyTests(unittest.TestCase):
         js = os.path.join(_VENDOR, "cytoscape", "cytoscape.min.js")
         version = _read(os.path.join(_VENDOR, "cytoscape", "VERSION"))
         self.assertTrue(os.path.isfile(js))
-        self.assertIn("3.31.2", version)
+        self.assertIn("3.34.0", version)
         self.assertGreater(os.path.getsize(js), 10000)
         self.assertNotIn("cdn.jsdelivr.net", version)
 
