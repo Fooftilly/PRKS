@@ -427,11 +427,17 @@ class DesignSystemContractTests(unittest.TestCase):
         trailing = rest[rest.rfind("}") + 1 :].strip()
         self.assertEqual(trailing, "")
 
-    def test_shorthand_never_resets_an_earlier_longhand(self):
+    def test_border_shorthand_never_resets_an_earlier_longhand(self):
         """`border: 2px solid transparent` after `border-color: var(--x)` drops
         the longhand silently: the rule still parses, and the custom property
         simply stops reaching the element. Doc-type badges lost their per-type
-        border that way, so order is now an invariant rather than a review item."""
+        border that way, so order is now an invariant rather than a review item.
+
+        Restricted to the border family on purpose. `background-color` before
+        `background` looks like the same mistake but is a real idiom: a browser
+        that cannot parse the shorthand's value drops that declaration and keeps
+        the longhand. No such fallback exists for `border` — the shorthand always
+        resets the longhands, whether or not its own value parses."""
         css = _read(_CSS)
         offenders = []
         for match in re.finditer(r"\{([^{}]*)\}", css):
@@ -440,7 +446,6 @@ class DesignSystemContractTests(unittest.TestCase):
                 ("border-color", "border"),
                 ("border-width", "border"),
                 ("border-style", "border"),
-                ("background-color", "background"),
             ):
                 long_at = re.search(r"(?<![-\w])%s\s*:" % longhand, block)
                 short_at = re.search(r"(?<![-\w])%s\s*:" % shorthand, block)
