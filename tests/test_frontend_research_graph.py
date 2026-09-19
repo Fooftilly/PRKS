@@ -36,7 +36,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         license_txt = _read(os.path.join(_VENDOR, "LICENSE"))
         self.assertTrue(os.path.isfile(js))
         self.assertGreater(os.path.getsize(js), 10000)
-        self.assertIn("3.31.2", version)
+        self.assertIn("3.34.0", version)
         self.assertIn("cytoscape.js", version)
         self.assertIn("sha256:", version)
         self.assertIn("MIT", license_txt)

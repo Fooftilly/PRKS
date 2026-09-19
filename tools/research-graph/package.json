@@ -8,6 +8,6 @@
     "build": "node build.mjs"
   },
   "dependencies": {
-    "cytoscape": "3.31.2"
+    "cytoscape": "3.34.0"
   }
 }
