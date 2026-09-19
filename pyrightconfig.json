@@ -1,0 +1,14 @@
+{
+  "include": [
+    "prks_app.py",
+    "backend"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "off",
+  "reportUndefinedVariable": "error",
+  "reportUnboundVariable": "error",
+  "reportUnusedExcept": "error"
+}

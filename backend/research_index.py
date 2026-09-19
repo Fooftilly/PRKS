@@ -97,8 +97,6 @@ class PRKSResearchIndex:
             reason = exc.reason
         except sqlite3.DatabaseError:
             reason = "corrupt"
-        except sqlite3.OperationalError:
-            reason = "corrupt"
         self._recreate(reason)
 
     def _prepare_schema(self) -> None:
