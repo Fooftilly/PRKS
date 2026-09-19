@@ -19,7 +19,7 @@ class TestThumbnailEncode(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            import fitz  # noqa: F401
+            import pymupdf as fitz  # noqa: F401
 
             cls._fitz = fitz
         except ImportError:

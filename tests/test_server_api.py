@@ -48,7 +48,7 @@ def _tiny_test_portrait_png_bytes() -> bytes:
 
 
 def _pdf_with_text_bytes(text: str) -> bytes:
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open()
     page = doc.new_page()
@@ -2145,7 +2145,7 @@ class TestServerAPI(unittest.TestCase):
             bytes_b = f.read()
         self.assertNotEqual(bytes_a, bytes_b)
         # Extracted page text must match each Work's materialization payload.
-        import fitz
+        import pymupdf as fitz
 
         def _page_text(pdf_bytes: bytes) -> str:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")

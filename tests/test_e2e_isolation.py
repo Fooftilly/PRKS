@@ -59,8 +59,8 @@ class E2EIsolationTests(unittest.TestCase):
         from tests.e2e.install_browser import pinned_playwright_version
 
         dev = _read(_REQ_DEV)
-        self.assertRegex(dev, r"(?m)^playwright==1\.62\.0\s*$")
-        self.assertEqual(pinned_playwright_version(), "1.62.0")
+        self.assertRegex(dev, r"(?m)^playwright==1\.63\.0\s*$")
+        self.assertEqual(pinned_playwright_version(), "1.63.0")
 
     def test_no_production_fake_e2e_api(self):
         server = _read(_SERVER)
@@ -111,38 +111,38 @@ class E2EIsolationTests(unittest.TestCase):
     def test_playwright_pin_mismatch_fails_before_download(self):
         from tests.e2e.install_browser import decide_e2e_browser_setup, ensure_chromium_installed
 
-        action, err = decide_e2e_browser_setup("1.62.1", "1.62.0", False)
+        action, err = decide_e2e_browser_setup("1.63.1", "1.63.0", False)
         self.assertEqual(action, "fail")
-        self.assertIn("Installed Playwright 1.62.1 does not match project pin 1.62.0.", err)
+        self.assertIn("Installed Playwright 1.63.1 does not match project pin 1.63.0.", err)
         self.assertIn("-m pip install -r requirements-dev.txt", err)
         calls = []
         with self.assertRaises(RuntimeError) as ctx:
             ensure_chromium_installed(
-                setup=("1.62.1", "1.62.0", False),
+                setup=("1.63.1", "1.63.0", False),
                 install_fn=lambda: calls.append("install") or 0,
                 cached_after_install=True,
             )
         self.assertEqual(calls, [])
-        self.assertIn("1.62.1", str(ctx.exception))
-        self.assertIn("1.62.0", str(ctx.exception))
+        self.assertIn("1.63.1", str(ctx.exception))
+        self.assertIn("1.63.0", str(ctx.exception))
 
     def test_matching_pin_reuses_cache_or_installs_into_repo_dir(self):
         from tests.e2e.install_browser import decide_e2e_browser_setup, ensure_chromium_installed
 
-        action, err = decide_e2e_browser_setup("1.62.0", "1.62.0", True)
+        action, err = decide_e2e_browser_setup("1.63.0", "1.63.0", True)
         self.assertEqual(action, "reuse")
         self.assertIsNone(err)
-        action, err = decide_e2e_browser_setup("1.62.0", "1.62.0", False)
+        action, err = decide_e2e_browser_setup("1.63.0", "1.63.0", False)
         self.assertEqual(action, "install")
         self.assertIsNone(err)
         calls = []
         ensure_chromium_installed(
-            setup=("1.62.0", "1.62.0", True),
+            setup=("1.63.0", "1.63.0", True),
             install_fn=lambda: calls.append("install") or 0,
         )
         self.assertEqual(calls, [])
         ensure_chromium_installed(
-            setup=("1.62.0", "1.62.0", False),
+            setup=("1.63.0", "1.63.0", False),
             install_fn=lambda: calls.append("install") or 0,
             cached_after_install=True,
         )

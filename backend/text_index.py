@@ -147,7 +147,7 @@ def _normalize_sql(sql: str | None) -> str:
 
 def extractor_available() -> bool:
     try:
-        import fitz  # noqa: F401
+        import pymupdf as fitz  # noqa: F401
     except Exception:
         return False
     return True
@@ -157,7 +157,7 @@ def extract_pdf(
     pdf_path: str, max_chars: int = _MAX_EXTRACTED_CHARS
 ) -> PDFTextExtraction:
     try:
-        import fitz
+        import pymupdf as fitz
     except Exception:
         raise PDFTextExtractorUnavailable() from None
     parts: List[str] = []

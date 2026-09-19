@@ -89,7 +89,7 @@ def _restore_bind(snapshot):
 
 
 def _pdf_bytes(text: str) -> bytes:
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open()
     page = doc.new_page()

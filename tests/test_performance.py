@@ -70,7 +70,7 @@ def _find_free_port() -> int:
 
 
 def _pdf_with_text_bytes(text: str) -> bytes:
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open()
     page = doc.new_page()
