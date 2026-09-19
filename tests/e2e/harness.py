@@ -102,6 +102,35 @@ def _seed_cache_root() -> str:
     return _SEED_CACHE_TMP.name
 
 
+def _finalize_seed_template(template: str) -> None:
+    """Checkpoint SQLite WAL into main DB files so clones are self-contained.
+
+    Seed builders open PRKSDatabase without an explicit close. On some Python /
+    SQLite timings the template can retain ``-wal``/``-shm`` companions. Cloning
+    those as the immutable snapshot is fine, but checkpointing first makes each
+    clone a single consistent ``.db`` and avoids rare WAL-replay surprises when
+    the server opens a fresh copy.
+    """
+    import sqlite3
+
+    for root, _dirs, files in os.walk(template):
+        for name in files:
+            if not name.endswith(".db"):
+                continue
+            db_path = os.path.join(root, name)
+            try:
+                conn = sqlite3.connect(db_path)
+            except sqlite3.Error:
+                continue
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.commit()
+            except sqlite3.Error:
+                pass
+            finally:
+                conn.close()
+
+
 def _materialize_seed(seed_fn, destination: str):
     """Populate destination from a worker-local immutable seed snapshot.
 
@@ -125,12 +154,14 @@ def _materialize_seed(seed_fn, destination: str):
         os.makedirs(template, exist_ok=False)
         started = time.perf_counter()
         ids = seed_fn(template) or {}
+        _finalize_seed_template(template)
         _profile_phase("seed_build", time.perf_counter() - started)
         cached = (template, copy.deepcopy(ids))
         _SEED_SNAPSHOTS[seed_fn] = cached
 
     template, cached_ids = cached
     started = time.perf_counter()
+    # Destination is a fresh TemporaryDirectory root; copy contents into it.
     shutil.copytree(template, destination, dirs_exist_ok=True)
     _profile_phase("seed_clone", time.perf_counter() - started)
     return copy.deepcopy(cached_ids), hit

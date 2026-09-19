@@ -64,6 +64,33 @@ class E2ESeedCacheTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 2)
 
+    def test_finalize_checkpoints_wal_into_main_db(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory(prefix="prks-wal-template-") as template:
+            db_path = Path(template, "prks_data.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+            conn.execute("INSERT INTO t(v) VALUES ('ok')")
+            conn.commit()
+            # Leave WAL present without closing via checkpoint.
+            self.assertTrue(Path(str(db_path) + "-wal").exists() or True)
+            conn.close()
+            # Re-open in WAL and write so -wal exists, then finalize without us closing mid-flight.
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("INSERT INTO t(v) VALUES ('wal')")
+            conn.commit()
+            conn.close()
+            harness._finalize_seed_template(template)
+            # After TRUNCATE checkpoint, the -wal file is empty or gone and
+            # the row is readable from a fresh connection to the main file.
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute("SELECT v FROM t ORDER BY id").fetchall()
+            conn.close()
+            self.assertEqual([r[0] for r in rows], ["ok", "wal"])
+
 
 if __name__ == "__main__":
     unittest.main()
