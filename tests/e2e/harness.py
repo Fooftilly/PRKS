@@ -779,11 +779,16 @@ class FixtureServer:
 
 def open_app_page(browser, origin: str, service_workers: str = "block"):
     started = time.perf_counter()
-    context = browser.new_context(
-        viewport={"width": 1400, "height": 900},
-        service_workers=service_workers,
-        reduced_motion="reduce",
-    )
+    # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
+    # it by default breaks layout/scroll assertions that measure real overflow
+    # and compact collapsed chrome (global CSS zeroes transition durations).
+    context_kwargs = {
+        "viewport": {"width": 1400, "height": 900},
+        "service_workers": service_workers,
+    }
+    if _env_enabled("PRKS_E2E_REDUCED_MOTION"):
+        context_kwargs["reduced_motion"] = "reduce"
+    context = browser.new_context(**context_kwargs)
     page = context.new_page()
     collector = PageCollector(page, origin)
     _profile_phase("browser_context", time.perf_counter() - started)

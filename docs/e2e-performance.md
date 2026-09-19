@@ -46,12 +46,15 @@ python tests/e2e/run.py --no-seed-cache ...
 
 The cache is process-local. Parallel workers never share a template or storage tree.
 
-### Reduced motion in the common browser context
+### Reduced motion in the common browser context (opt-in)
 
-The common `open_app_page()` context requests `prefers-reduced-motion: reduce`.
-PRKS already treats reduced motion as a supported accessibility mode and no
-functional behavior should depend on animations completing. This removes avoidable
-UI-motion latency without adding test-only production behavior.
+`open_app_page()` can request `prefers-reduced-motion: reduce` when
+`PRKS_E2E_REDUCED_MOTION=1` is set. PRKS already treats reduced motion as a
+supported accessibility mode. It is **off by default** in E2E because the
+global reduced-motion CSS zeroes transition durations and changes overflow /
+collapsed-chrome layout enough to break scroll-restore and compact-notes
+assertions. Enable it for motion-latency experiments; leave it off for the
+ordinary gate.
 
 ### Opt-in infrastructure profiling
 
