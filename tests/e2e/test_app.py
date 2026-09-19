@@ -10202,6 +10202,24 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             arg={"title": title, "parentId": parent_id},
         )
 
+    def _wait_work_modal_folder(self, page, folder_id, folder_label):
+        """Wait for openModal's after-continuation to populate folder fields.
+
+        `#work-modal:not(.hidden)` appears before `populateUploadComboboxes()`
+        finishes and writes `#work-folder-id`. A bare `input_value()` read races
+        that continuation under parallel load (#64).
+        """
+        page.wait_for_function(
+            """(expected) => {
+                const idEl = document.getElementById('work-folder-id');
+                const searchEl = document.getElementById('work-folder-search');
+                return !!(idEl && searchEl
+                    && idEl.value === expected.id
+                    && searchEl.value === expected.label);
+            }""",
+            arg={"id": folder_id, "label": folder_label},
+        )
+
     def _work_folder_title(self, page, work_id):
         return page.evaluate(
             """async (id) => {
@@ -10318,6 +10336,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         try:
             page.locator("#prks-ribbon-new-file").click()
             page.wait_for_selector("#work-modal:not(.hidden)")
+            self._wait_work_modal_folder(page, folder_id, "Split Secondary Folder")
             self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
             self.assertEqual(
                 page.locator("#work-folder-search").input_value(), "Split Secondary Folder"
@@ -10350,6 +10369,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/folders/') === 0")
         page.locator("#prks-ribbon-new-file").click()
         page.wait_for_selector("#work-modal:not(.hidden)")
+        self._wait_work_modal_folder(page, folder_id, "Single Pane Folder")
         self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Single Pane Folder")
 
