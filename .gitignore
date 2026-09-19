@@ -21,6 +21,7 @@ env/
 # --- PDF viewer maintainer Node island ---
 tools/pdf-viewer/node_modules/
 tools/research-graph/node_modules/
+tools/frontend-vendor/node_modules/
 frontend/vendor/prks-pdf-viewer/esbuild-meta.json
 
 # --- Python packaging / build outputs ---

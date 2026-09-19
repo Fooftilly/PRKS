@@ -20,7 +20,6 @@
     "css": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae",
     "wasm": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
   },
-  "builtAt": "2026-09-19T08:19:33.148Z",
   "embedpdfPatches": [
     {
       "package": "@embedpdf/plugin-pan",

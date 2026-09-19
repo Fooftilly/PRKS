@@ -4,4 +4,3 @@ npm: cytoscape@3.34.3
 asset: node_modules/cytoscape/dist/cytoscape.min.js
 sha256: 5f3b5b529546d5af1fc5628590af033b74511a5b6f789f5f4682845863228b91
 license: MIT
-fetched: 2026-09-19

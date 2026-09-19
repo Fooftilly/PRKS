@@ -1,0 +1,16 @@
+{
+  "name": "prks-frontend-vendor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Maintainer-only pins for ordinary PRKS frontend vendor libraries. Not a PRKS runtime dependency.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "codemirror": "5.65.15",
+    "dompurify": "3.4.15",
+    "easymde": "2.21.0",
+    "lucide": "0.511.0"
+  }
+}

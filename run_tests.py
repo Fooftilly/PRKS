@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 
 def apply_isolated_test_env(project_dir: str) -> None:
@@ -57,6 +58,40 @@ def parse_mode(argv=None):
     return "unit"
 
 
+def dependency_preflight(project_dir: str, mode: str) -> int:
+    """Fail before the suite when accepted dependency pins diverge.
+
+    unit/all: repo consistency + runtime Python pins (no Playwright required).
+    e2e: runtime + Playwright pins.
+    """
+    from backend.dependency_gate import (
+        format_gate_report,
+        run_repo_gate,
+        run_runtime_gate,
+        run_test_gate,
+    )
+
+    root = Path(project_dir)
+    if mode in ("unit", "all"):
+        print("Dependency preflight (repo + runtime)...")
+        repo_result = run_repo_gate(repo_root=root)
+        if not repo_result.ok:
+            print(format_gate_report(repo_result), file=sys.stderr)
+            return 1
+        runtime_result = run_runtime_gate(repo_root=root)
+        if not runtime_result.ok:
+            print(format_gate_report(runtime_result), file=sys.stderr)
+            return 1
+    if mode in ("e2e", "all"):
+        print("Dependency preflight (test env: runtime + Playwright)...")
+        test_result = run_test_gate(repo_root=root)
+        if not test_result.ok:
+            print(format_gate_report(test_result), file=sys.stderr)
+            return 1
+    print("Dependency preflight: OK")
+    return 0
+
+
 def run_unit_tests(project_dir: str) -> int:
     apply_isolated_test_env(project_dir)
     print("Discovering and running tests...")
@@ -97,6 +132,11 @@ def main(argv=None) -> int:
     mode = parse_mode(sys.argv[1:] if argv is None else argv)
     if mode == "ux-tour":
         return run_ux_tour(project_dir)
+
+    preflight_rc = dependency_preflight(project_dir, mode)
+    if preflight_rc != 0:
+        return preflight_rc
+
     unit_rc = 0
     if mode in ("unit", "all"):
         unit_rc = run_unit_tests(project_dir)

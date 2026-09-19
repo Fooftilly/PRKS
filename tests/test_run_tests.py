@@ -107,6 +107,7 @@ class TestRunTests(unittest.TestCase):
             src = handle.read()
         self.assertNotIn('PRKS_E2E"] = "1"', src)
         self.assertIn("run_e2e_tests", src)
+        self.assertIn("dependency_preflight", src)
         self.assertIn("tests", src)
         self.assertIn("e2e", src)
         self.assertIn("run.py", src)

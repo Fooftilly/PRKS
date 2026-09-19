@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -50,23 +49,17 @@ def install_command() -> str:
 
 
 def pinned_playwright_version() -> str:
-    """Exact Playwright pin from requirements-dev.txt."""
-    path = REPO / "requirements-dev.txt"
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if line.startswith("playwright=="):
-            pin = line.split("==", 1)[1].strip()
-            if pin:
-                return pin
-    raise RuntimeError("requirements-dev.txt has no playwright== pin")
+    """Exact Playwright pin from requirements-dev.txt (via dependency_gate)."""
+    from backend.dependency_gate import pinned_playwright_version as _pinned
+
+    return _pinned(REPO)
 
 
 def installed_playwright_version() -> str | None:
     """Installed Playwright distribution version, or None if the package is absent."""
-    try:
-        return version("playwright")
-    except PackageNotFoundError:
-        return None
+    from backend.dependency_gate import installed_distribution_version
+
+    return installed_distribution_version("playwright")
 
 
 def decide_e2e_browser_setup(installed_version, pinned_version, chromium_cached):

@@ -22,5 +22,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8080
 
 ENV PYTHONUNBUFFERED=1
+# Reliable container marker for dependency-gate remediation (do not rely only on /.dockerenv).
+ENV PRKS_CONTAINER=1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

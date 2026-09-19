@@ -31,17 +31,25 @@ def _read(path: str) -> str:
 
 class FrontendResearchGraphTests(unittest.TestCase):
     def test_local_cytoscape_pin(self):
+        import json
+
+        with open(
+            os.path.join(_PROJECT_DIR, "tools", "research-graph", "package.json"),
+            encoding="utf-8",
+        ) as fh:
+            want = json.load(fh)["dependencies"]["cytoscape"]
         js = os.path.join(_VENDOR, "cytoscape.min.js")
         version = _read(os.path.join(_VENDOR, "VERSION"))
         license_txt = _read(os.path.join(_VENDOR, "LICENSE"))
         self.assertTrue(os.path.isfile(js))
         self.assertGreater(os.path.getsize(js), 10000)
-        self.assertIn("3.34.3", version)
+        self.assertIn(want, version)
         self.assertIn("cytoscape.js", version)
         self.assertIn("sha256:", version)
         self.assertIn("MIT", license_txt)
         self.assertNotIn("cdn.jsdelivr.net", version)
         self.assertNotIn("unpkg.com", version)
+        self.assertNotIn("fetched:", version.lower())
 
     def test_index_loads_local_cytoscape_before_graph(self):
         html = _read(_INDEX)

@@ -14,8 +14,12 @@
 (function (root) {
     'use strict';
 
-    const SHELL_CACHE = 'prks-shell-v1';
-    const STATIC_CACHE = 'prks-static-v1';
+    // DEPENDENCY_REVISION is derived from frontend/vendor/DEPENDENCY-MANIFEST.json
+    // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
+    // --repo fails if it drifts. Changing vendor bytes retires old shell/static caches.
+    const DEPENDENCY_REVISION = 'a5c11a0a67c0';
+    const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
+    const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
     // unable to poison the active shell cache"): a currently-active worker
