@@ -660,6 +660,12 @@ class RepoGateLiveTests(unittest.TestCase):
         docker = (_PROJECT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("PRKS_CONTAINER=1", docker)
         self.assertIn("requirements.txt", docker)
+        # Startup runs ensure_runtime_or_exit → load_inventory; the image must
+        # ship dependency-inventory.json or every container start fails.
+        self.assertRegex(
+            docker,
+            r"(?m)^\s*COPY\s+dependency-inventory\.json\s+",
+        )
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))

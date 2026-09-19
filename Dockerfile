@@ -12,6 +12,9 @@ RUN mkdir -p /app /data/pdfs /app/data/pdfs \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Runtime gate (ensure_runtime_or_exit) reads python_min_version and package
+# pins from this inventory before storage/DB startup — must be in the image.
+COPY dependency-inventory.json ./
 COPY prks_app.py ./
 COPY backend ./backend
 COPY frontend ./frontend
