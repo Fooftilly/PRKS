@@ -1,0 +1,28 @@
+target-version = "py312"
+extend-exclude = [
+  ".playwright-browsers",
+  "data",
+  "data_testing",
+  "frontend/vendor",
+  "tools/**/node_modules",
+]
+
+[lint]
+# Keep CI focused on likely defects instead of formatting/style churn.
+select = [
+  "E9",
+  "F63",
+  "F7",
+  "F82",
+  "B006",
+  "B012",
+  "B013",
+  "B014",
+  "B018",
+  "B023",
+  "B025",
+  "B032",
+  "B033",
+  "B039",
+  "B909",
+]
