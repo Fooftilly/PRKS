@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 _PROJECT = Path(__file__).resolve().parents[1]
 if str(_PROJECT) not in sys.path:
