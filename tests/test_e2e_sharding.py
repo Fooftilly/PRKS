@@ -297,7 +297,7 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         sink = io.StringIO()
         with _import_runner() as runner:
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                ok, observed, _failed = runner.run_parallel(ids, jobs, {}, fail_fast)
+                ok, observed, _failed, _phases = runner.run_parallel(ids, jobs, {}, fail_fast)
                 return ok, observed
 
     def test_passing_shards_report_success_and_timings(self):
@@ -313,7 +313,7 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         sink = io.StringIO()
         with _import_runner() as runner:
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                ok, _observed, failed = runner.run_parallel(ids, 2, {}, False)
+                ok, _observed, failed, _phases = runner.run_parallel(ids, 2, {}, False)
         self.assertFalse(ok)
         self.assertTrue(any(fid.endswith("test_fails") for fid in failed))
 
