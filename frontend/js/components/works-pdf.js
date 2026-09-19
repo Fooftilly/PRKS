@@ -2436,7 +2436,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             } catch (_e) {}
             if (!stillLive() || pausedOffline()) return false;
             const wait = attempt < 2 ? 250 : attempt < 5 ? 450 : 800;
-            await new Promise((r) => setTimeout(r, wait));
+            await new Promise((resolve) => {
+                setTimeout(resolve, wait);
+            });
         }
         return false;
     }
