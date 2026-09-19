@@ -1,5 +1,5 @@
 # package: @embedpdf/plugin-pan
-# version: 2.15.0
+# version: 2.15.1
 # file: dist/index.js
 # why: mouse handlers ended drag on leave and had no capture, so pan stopped or kept scrolling incorrectly
 # what: Pointer Events; capture on down; end on pointerup/pointercancel only (not leave)

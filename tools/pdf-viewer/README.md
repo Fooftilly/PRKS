@@ -10,13 +10,13 @@ npm ci
 npm run build
 ```
 
-Pins EmbedPDF **2.15.0** and React **18.3.1** / React DOM **18.3.1**. React exists only inside the generated bundle.
+Pins EmbedPDF **2.15.1** and React **18.3.1** / React DOM **18.3.1**. React exists only inside the generated bundle.
 
 Open documents through DocumentManager (`initialDocuments`, `openDocumentUrl`, `openDocumentBuffer`). `engine.saveAsCopy()` is for export only.
 
 `fontFallback` is `null` — no CDN latin/CJK font packs. Pan is included (`defaultMode: 'never'`). Tiling stays off until a fixture shows RenderLayer failing on a large or highly zoomed PDF.
 
-Do not add `@embedpdf/snippet` or `@embedpdf/react-pdf-viewer`. Do not fork the EmbedPDF repository. Reviewed 2.15.0 plugin patches in `patches/` are allowed and applied by `postinstall` / `npm run build` (see `patches/README.md`). Whole-repo forks are not.
+Do not add `@embedpdf/snippet` or `@embedpdf/react-pdf-viewer`. Do not fork the EmbedPDF repository. Reviewed 2.15.1 plugin patches in `patches/` are allowed and applied by `postinstall` / `npm run build` (see `patches/README.md`). Whole-repo forks are not.
 
 Viewer-shell KEEP / INTENTIONALLY_REMOVED / PRKS_REPLACEMENT lives in `tests/PDF_VIEWER_PARITY.md`. Manual UX checks live in `tests/PDF_VIEWER_MANUAL.md`. Highlight and underline colors come from `src/markup.ts` via `AnnotationPluginConfig.tools` and the selection popup. Application JS talks only through `PrksPdfViewerHandle`.
 
