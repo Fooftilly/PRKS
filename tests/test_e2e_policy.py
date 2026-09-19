@@ -470,7 +470,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                 with mock.patch.object(
                                     runner,
                                     "run_serial",
-                                    return_value=(False, observed, failed),
+                                    return_value=(False, observed, failed, {}),
                                 ) as serial:
                                     with mock.patch.object(
                                         runner, "load_timings", return_value={}
@@ -625,7 +625,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                 with mock.patch.object(
                                     runner,
                                     "run_serial",
-                                    return_value=(True, {ids[0]: 0.1}, []),
+                                    return_value=(True, {ids[0]: 0.1}, [], {}),
                                 ):
                                     with mock.patch.object(
                                         runner,

@@ -6,6 +6,7 @@ assertions fail.
 """
 from __future__ import annotations
 
+import copy
 import os
 import random
 import shutil
@@ -33,6 +34,137 @@ REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
 READY_TIMEOUT_S = 25.0
 STOP_TIMEOUT_S = 8.0
+
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+_ACTIVE_PROFILE = None
+_SEED_CACHE_TMP = None
+_SEED_SNAPSHOTS = {}
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in _FALSE_ENV_VALUES
+
+
+def start_test_profile(test_id: str) -> None:
+    """Begin opt-in per-test infrastructure profiling for the runner."""
+    global _ACTIVE_PROFILE
+    if not _env_enabled("PRKS_E2E_PROFILE"):
+        _ACTIVE_PROFILE = None
+        return
+    _ACTIVE_PROFILE = {"test_id": test_id, "phases": {}}
+
+
+def _profile_phase(name: str, seconds: float) -> None:
+    profile = _ACTIVE_PROFILE
+    if profile is None:
+        return
+    phases = profile["phases"]
+    phases[name] = phases.get(name, 0.0) + max(0.0, float(seconds))
+
+
+def finish_test_profile(test_id: str) -> dict:
+    """Return and clear phase timings for test_id; empty when profiling is off."""
+    global _ACTIVE_PROFILE
+    profile = _ACTIVE_PROFILE
+    _ACTIVE_PROFILE = None
+    if not profile or profile.get("test_id") != test_id:
+        return {}
+    return {
+        key: round(float(value), 6)
+        for key, value in sorted(profile["phases"].items())
+        if value > 0
+    }
+
+
+def seed_cache_enabled() -> bool:
+    """Worker-local immutable seed snapshots are on unless explicitly disabled."""
+    return _env_enabled("PRKS_E2E_SEED_CACHE", default=True)
+
+
+def clear_seed_cache() -> None:
+    """Drop worker-local seed snapshots. Primarily used by unit tests/benchmarks."""
+    global _SEED_CACHE_TMP
+    _SEED_SNAPSHOTS.clear()
+    if _SEED_CACHE_TMP is not None:
+        try:
+            _SEED_CACHE_TMP.cleanup()
+        finally:
+            _SEED_CACHE_TMP = None
+
+
+def _seed_cache_root() -> str:
+    global _SEED_CACHE_TMP
+    if _SEED_CACHE_TMP is None:
+        _SEED_CACHE_TMP = tempfile.TemporaryDirectory(prefix="prks-e2e-seed-cache-")
+    return _SEED_CACHE_TMP.name
+
+
+def _finalize_seed_template(template: str) -> None:
+    """Checkpoint SQLite WAL into main DB files so clones are self-contained.
+
+    Seed builders open PRKSDatabase without an explicit close. On some Python /
+    SQLite timings the template can retain ``-wal``/``-shm`` companions. Cloning
+    those as the immutable snapshot is fine, but checkpointing first makes each
+    clone a single consistent ``.db`` and avoids rare WAL-replay surprises when
+    the server opens a fresh copy.
+    """
+    import sqlite3
+
+    for root, _dirs, files in os.walk(template):
+        for name in files:
+            if not name.endswith(".db"):
+                continue
+            db_path = os.path.join(root, name)
+            try:
+                conn = sqlite3.connect(db_path)
+            except sqlite3.Error:
+                continue
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.commit()
+            except sqlite3.Error:
+                pass
+            finally:
+                conn.close()
+
+
+def _materialize_seed(seed_fn, destination: str):
+    """Populate destination from a worker-local immutable seed snapshot.
+
+    The first use of a seed function builds a template in a private temporary
+    directory. Every AppServer still gets its own fresh storage tree; later
+    tests merely copy that pristine template instead of rebuilding SQLite,
+    PDFs and research indexes from scratch. Returned fixture IDs are deep
+    copied so a test cannot mutate the cache's metadata.
+    """
+    if not seed_cache_enabled():
+        started = time.perf_counter()
+        ids = seed_fn(destination) or {}
+        _profile_phase("seed_build", time.perf_counter() - started)
+        return copy.deepcopy(ids), False
+
+    cached = _SEED_SNAPSHOTS.get(seed_fn)
+    hit = cached is not None
+    if cached is None:
+        cache_root = _seed_cache_root()
+        template = os.path.join(cache_root, "seed-%d" % len(_SEED_SNAPSHOTS))
+        os.makedirs(template, exist_ok=False)
+        started = time.perf_counter()
+        ids = seed_fn(template) or {}
+        _finalize_seed_template(template)
+        _profile_phase("seed_build", time.perf_counter() - started)
+        cached = (template, copy.deepcopy(ids))
+        _SEED_SNAPSHOTS[seed_fn] = cached
+
+    template, cached_ids = cached
+    started = time.perf_counter()
+    # Destination is a fresh TemporaryDirectory root; copy contents into it.
+    shutil.copytree(template, destination, dirs_exist_ok=True)
+    _profile_phase("seed_clone", time.perf_counter() - started)
+    return copy.deepcopy(cached_ids), hit
 
 
 def python_for_subprocess() -> str:
@@ -165,18 +297,22 @@ def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: 
     Kept API-compatible with `wait_for_function` (`arg`, `timeout` in ms) so a
     call site converts by swapping the call, not by being rewritten.
     """
+    started = time.perf_counter()
     deadline = time.monotonic() + (timeout / 1000.0)
     last = None
-    while True:
-        last = page.evaluate(expression, arg)
-        if last:
-            return last
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                (message or "condition never became true")
-                + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
-            )
-        page.wait_for_timeout(50)
+    try:
+        while True:
+            last = page.evaluate(expression, arg)
+            if last:
+                return last
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    (message or "condition never became true")
+                    + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
+                )
+            page.wait_for_timeout(50)
+    finally:
+        _profile_phase("async_wait", time.perf_counter() - started)
 
 
 def _port_window():
@@ -372,6 +508,7 @@ class PageCollector:
         return req_host in loopback and allow_host in loopback
 
     def _on_route(self, route):
+        started = time.perf_counter()
         url = route.request.url
         try:
             if url.startswith("blob:") or url.startswith("data:") or url.startswith("about:"):
@@ -394,6 +531,8 @@ class PageCollector:
                     route.abort()
                 except Exception:
                     pass
+        finally:
+            _profile_phase("request_routing", time.perf_counter() - started)
 
     def reset_handshake(self) -> None:
         self._pdf_posts.clear()
@@ -471,6 +610,7 @@ class AppServer:
         self._stdout = None
         self._stderr = None
         self._seed_fn = seed_fn
+        self.seed_cache_hit = False
         # Optional subprocess env overrides (e.g. HTTPS_PROXY to deny a specific
         # best-effort outbound call deterministically). Never used to change how the
         # app talks to its own storage/port.
@@ -478,7 +618,9 @@ class AppServer:
 
     def start(self):
         if self._seed_fn is not None:
-            self.ids = self._seed_fn(self.storage_root) or {}
+            self.ids, self.seed_cache_hit = _materialize_seed(
+                self._seed_fn, self.storage_root
+            )
         env = os.environ.copy()
         env["PRKS_TESTING"] = "1"
         env["PRKS_STORAGE"] = self.storage_root
@@ -488,9 +630,11 @@ class AppServer:
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
+            started = time.perf_counter()
             self._spawn(env)
             try:
                 wait_http(self.origin + "/api/works")
+                _profile_phase("server_start", time.perf_counter() - started)
                 return self
             except Exception:
                 # Read the captured output *before* teardown: the log files live
@@ -562,26 +706,30 @@ class AppServer:
         )
 
     def stop(self):
+        started = time.perf_counter()
         try:
             if self.proc is not None:
                 _terminate(self.proc)
                 if self.proc.poll() is None:
                     raise RuntimeError("PRKS E2E server process did not exit")
         finally:
-            for handle in (self._stdout, self._stderr):
-                if handle is not None:
-                    try:
-                        handle.close()
-                    except OSError:
-                        pass
-            self._stdout = None
-            self._stderr = None
-            self.proc = None
             try:
-                _LIVE_SERVERS.remove(self)
-            except ValueError:
-                pass
-            self._tmpdir.cleanup()
+                for handle in (self._stdout, self._stderr):
+                    if handle is not None:
+                        try:
+                            handle.close()
+                        except OSError:
+                            pass
+                self._stdout = None
+                self._stderr = None
+                self.proc = None
+                try:
+                    _LIVE_SERVERS.remove(self)
+                except ValueError:
+                    pass
+                self._tmpdir.cleanup()
+            finally:
+                _profile_phase("server_stop", time.perf_counter() - started)
 
 
 class FixtureServer:
@@ -630,12 +778,22 @@ class FixtureServer:
 
 
 def open_app_page(browser, origin: str, service_workers: str = "block"):
-    context = browser.new_context(
-        viewport={"width": 1400, "height": 900},
-        service_workers=service_workers,
-    )
+    started = time.perf_counter()
+    # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
+    # it by default breaks layout/scroll assertions that measure real overflow
+    # and compact collapsed chrome (global CSS zeroes transition durations).
+    context_kwargs = {
+        "viewport": {"width": 1400, "height": 900},
+        "service_workers": service_workers,
+    }
+    if _env_enabled("PRKS_E2E_REDUCED_MOTION"):
+        context_kwargs["reduced_motion"] = "reduce"
+    context = browser.new_context(**context_kwargs)
     page = context.new_page()
     collector = PageCollector(page, origin)
+    _profile_phase("browser_context", time.perf_counter() - started)
+
+    started = time.perf_counter()
     page.goto(origin + "/", wait_until="domcontentloaded")
     page.wait_for_selector("#sidebar")
     page.wait_for_selector("#page-content")
@@ -643,6 +801,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # Empty location.hash is treated as Folders; click the nav link like a user.
     page.locator('#sidebar a.nav-link[href="#/folders"]').click()
     page.wait_for_function("() => location.hash === '#/folders'")
+    _profile_phase("app_ready", time.perf_counter() - started)
     return page, context, collector
 
 

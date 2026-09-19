@@ -2560,6 +2560,32 @@ def _open_annotations_tab(page):
     page.wait_for_selector("#annotation-fallback-list")
 
 
+def _wait_annotation_list_rendered(page, expected_rows):
+    """Wait until the focused PDF context has painted the shared annotation list.
+
+    `#annotation-fallback-list` is part of the right panel's annotations-tab
+    markup, so waiting for the element only proves the tab is up -- the list
+    still holds whatever was painted into it last. Only
+    `renderAnnotationFallbackList` fills it, and that returns early unless the
+    owning context is the focused one (`prksIsFocusedPdfCtx`), so a mutation
+    made while another tab held focus is not reflected until a render runs for
+    the refocused tab. The status line is emitted on both the empty and the
+    populated path, which makes it the signal that a render actually ran rather
+    than that the markup merely exists.
+
+    Same missing-wait pattern as #10 / #64: assert after the settle signal, not
+    after markup existence alone.
+    """
+    page.wait_for_function(
+        """(expected) => {
+            const list = document.getElementById('annotation-fallback-list');
+            if (!list || !list.querySelector('.annotation-list-status')) return false;
+            return list.querySelectorAll('.annotation-row').length === expected;
+        }""",
+        arg=expected_rows,
+    )
+
+
 def _sync_success_at(page):
     return int(
         page.evaluate(
@@ -2754,7 +2780,10 @@ class PdfPersistenceTests(_BrowserE2E):
         self.assertIn(work_id, page.evaluate("() => location.hash"))
         _wait_pdf_viewer(page)
         _open_annotations_tab(page)
-        page.wait_for_selector("#annotation-fallback-list")
+        # A reload starts this list empty, so asserting zero before the render
+        # would also pass if the delete had NOT persisted and the row were
+        # still on its way back. Wait for the render that read persisted state.
+        _wait_annotation_list_rendered(page, 0)
         self.assertEqual(page.locator(".annotation-row").count(), 0)
 
     def test_annotation_delete_confirm_preserves_owner_across_focus_change(self):
@@ -2838,6 +2867,12 @@ class PdfPersistenceTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         _open_annotations_tab(page)
+        # The delete was confirmed while Work B held focus, so the shared list
+        # could not be repainted then; only this refocused render corrects it.
+        # Rows only ever render into that one shared list in the right panel --
+        # which sits in <aside id="right-panel">, outside <main> and so outside
+        # the warm-parking host -- so the page-wide count is the same claim.
+        _wait_annotation_list_rendered(page, 0)
         self.assertEqual(page.locator(".annotation-row").count(), 0)
 
     def test_annotation_delete_confirm_cancel_does_not_delete(self):
@@ -10202,6 +10237,30 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             arg={"title": title, "parentId": parent_id},
         )
 
+    def _wait_work_modal_folder(self, page, folder_id, folder_label):
+        """Wait for openModal's after-continuation to populate folder fields.
+
+        `#work-modal:not(.hidden)` appears before `populateUploadComboboxes()`
+        finishes and writes `#work-folder-id`. A bare `input_value()` read races
+        that continuation under parallel load (#64). For the Uncategorized
+        default, folder_id is "" and folder_label is "Uncategorized" — waiting
+        on the label avoids the vacuous-empty pass before the continuation runs.
+        """
+        page.wait_for_function(
+            """(expected) => {
+                const idEl = document.getElementById('work-folder-id');
+                const searchEl = document.getElementById('work-folder-search');
+                return !!(idEl && searchEl
+                    && idEl.value === expected.id
+                    && searchEl.value === expected.label);
+            }""",
+            arg={"id": folder_id, "label": folder_label},
+        )
+
+    def _wait_work_modal_uncategorized(self, page):
+        """Settle on the default Uncategorized destination after modal open."""
+        self._wait_work_modal_folder(page, "", "Uncategorized")
+
     def _work_folder_title(self, page, work_id):
         return page.evaluate(
             """async (id) => {
@@ -10220,6 +10279,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
         page.wait_for_selector("#work-modal:not(.hidden)")
+        self._wait_work_modal_uncategorized(page)
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
         self.assertEqual(page.locator("#work-folder-id").input_value(), "")
         page.fill("#work-title", "Default Folder E2E Work")
@@ -10235,6 +10295,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         philosophy_id = self._create_folder_via_api(page, "Philosophy")
         page.locator("#prks-ribbon-new-file").click()
         page.wait_for_selector("#work-modal:not(.hidden)")
+        self._wait_work_modal_uncategorized(page)
         page.fill("#work-title", "Typed Folder E2E Work")
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")
@@ -10263,6 +10324,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
         page.wait_for_selector("#work-modal:not(.hidden)")
+        self._wait_work_modal_uncategorized(page)
         page.fill("#work-title", "Explicit Default E2E Work")
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")
@@ -10318,6 +10380,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         try:
             page.locator("#prks-ribbon-new-file").click()
             page.wait_for_selector("#work-modal:not(.hidden)")
+            self._wait_work_modal_folder(page, folder_id, "Split Secondary Folder")
             self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
             self.assertEqual(
                 page.locator("#work-folder-search").input_value(), "Split Secondary Folder"
@@ -10340,6 +10403,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self._focus_secondary_leaf(page)
         page.locator("#prks-ribbon-new-file").click()
         page.wait_for_selector("#work-modal:not(.hidden)")
+        self._wait_work_modal_uncategorized(page)
         self.assertEqual(page.locator("#work-folder-id").input_value(), "")
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
 
@@ -10350,6 +10414,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/folders/') === 0")
         page.locator("#prks-ribbon-new-file").click()
         page.wait_for_selector("#work-modal:not(.hidden)")
+        self._wait_work_modal_folder(page, folder_id, "Single Pane Folder")
         self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Single Pane Folder")
 

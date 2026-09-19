@@ -1510,6 +1510,11 @@ class OfflineFoundationTests(unittest.TestCase):
                 timeout=30000,
             )
             self.assertGreaterEqual(sync_post_count[0], 1)
+            # Reconnect can leave mode===work while catch-up still locks input
+            # and hides markup tools. Sibling reconnect tests wait for tools;
+            # asserting immediately races remount under parallel load (#64).
+            page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
+            _wait_pdf_markup_tools_settled(page)
             self.assertEqual(_pdf_mode(page), "work")
             self.assertTrue(_pdf_markup_tools_available(page))
         finally:
