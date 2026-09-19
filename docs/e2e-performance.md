@@ -39,7 +39,10 @@ WAL-checkpointed and leftover `-wal`/`-shm` companions are removed **only when**
 checkpoint **refuses** the snapshot (raises; nothing is inserted into the
 immutable seed cache) rather than caching a directory that may still have a
 live SQLite user. Finalize connects with `timeout=0` so a leaked writer fails
-immediately.
+immediately. Each build attempt uses a unique `mkdtemp` under the cache root
+so a leftover failed template cannot block a later retry (`FileExistsError` on
+a reused `seed-N` path — especially on Windows when an open handle blocks
+`rmtree`).
 
 The returned fixture ID dictionary is deep-copied too, so a test cannot mutate
 metadata used by another test.

@@ -177,8 +177,10 @@ def _materialize_seed(seed_fn, destination: str):
     PDFs and research indexes from scratch. Returned fixture IDs are deep
     copied so a test cannot mutate the cache's metadata.
 
-    A failed WAL finalize removes the partial template and does not insert it
-    into ``_SEED_SNAPSHOTS``.
+    A failed WAL finalize does not insert into ``_SEED_SNAPSHOTS``. Each build
+    attempt uses a unique temporary directory under the cache root so a leftover
+    failed template (e.g. Windows refusing to delete an open SQLite DB) cannot
+    poison a later retry via ``FileExistsError`` on a reused ``seed-N`` path.
     """
     if not seed_cache_enabled():
         started = time.perf_counter()
@@ -190,8 +192,8 @@ def _materialize_seed(seed_fn, destination: str):
     hit = cached is not None
     if cached is None:
         cache_root = _seed_cache_root()
-        template = os.path.join(cache_root, "seed-%d" % len(_SEED_SNAPSHOTS))
-        os.makedirs(template, exist_ok=False)
+        # Unique path per attempt — never derive from len(_SEED_SNAPSHOTS).
+        template = tempfile.mkdtemp(prefix="seed-", dir=cache_root)
         started = time.perf_counter()
         try:
             ids = seed_fn(template) or {}

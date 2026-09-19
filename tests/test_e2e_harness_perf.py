@@ -153,6 +153,75 @@ class E2ESeedCacheTests(unittest.TestCase):
                 holder.rollback()
                 holder.close()
 
+    def test_failed_seed_attempt_does_not_poison_retry(self):
+        """Leftover failed templates must not FileExistsError a later build.
+
+        Simulates Windows-style cleanup failure (rmtree no-op while a writer is
+        held) then a second attempt that succeeds under a fresh unique path.
+        """
+        import shutil
+        import sqlite3
+
+        holders = []
+        attempts = {"n": 0}
+        original_rmtree = shutil.rmtree
+
+        def sticky_rmtree(path, *args, **kwargs):
+            # Leave the directory in place (open-handle / Windows delete denial).
+            return None
+
+        def seed(root):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                db_path = Path(root, "prks_data.db")
+                holder = sqlite3.connect(str(db_path))
+                holder.execute("PRAGMA journal_mode=WAL")
+                holder.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+                holder.execute("INSERT INTO t(v) VALUES ('held')")
+                holder.commit()
+                holder.execute("BEGIN IMMEDIATE")
+                holders.append(holder)
+                return {"id": "first-busy"}
+            Path(root, "fixture.txt").write_text("recovered", encoding="utf-8")
+            return {"id": "second-ok"}
+
+        # Also pre-poison cache-root with fixed seed-N dirs (old naming scheme).
+        cache_root = harness._seed_cache_root()
+        for name in ("seed-0", "seed-1", "seed-2"):
+            Path(cache_root, name).mkdir(exist_ok=True)
+            Path(cache_root, name, "stale.txt").write_text("poison", encoding="utf-8")
+
+        try:
+            shutil.rmtree = sticky_rmtree
+            with tempfile.TemporaryDirectory(prefix="prks-retry-a-") as dest:
+                with self.assertRaisesRegex(RuntimeError, r"active SQLite user"):
+                    harness._materialize_seed(seed, dest)
+            self.assertEqual(harness._SEED_SNAPSHOTS, {})
+
+            for holder in holders:
+                holder.rollback()
+                holder.close()
+            holders.clear()
+
+            with tempfile.TemporaryDirectory(prefix="prks-retry-b-") as dest:
+                ids, hit = harness._materialize_seed(seed, dest)
+                self.assertFalse(hit)
+                self.assertEqual(ids, {"id": "second-ok"})
+                self.assertEqual(
+                    Path(dest, "fixture.txt").read_text(encoding="utf-8"),
+                    "recovered",
+                )
+            self.assertIn(seed, harness._SEED_SNAPSHOTS)
+            self.assertEqual(attempts["n"], 2)
+        finally:
+            shutil.rmtree = original_rmtree
+            for holder in holders:
+                try:
+                    holder.rollback()
+                    holder.close()
+                except Exception:
+                    pass
+
     def test_wal_checkpoint_ok_requires_busy_zero(self):
         self.assertTrue(harness._wal_checkpoint_ok((0, 1, 1)))
         self.assertFalse(harness._wal_checkpoint_ok((1, 3, 3)))
