@@ -86,6 +86,44 @@ class E2ESeedCacheTests(unittest.TestCase):
             conn.close()
             self.assertEqual([r[0] for r in rows], ["ok", "wal"])
 
+    def test_finalize_retains_companions_when_checkpoint_busy(self):
+        """A blocked wal_checkpoint must not unlink -wal/-shm after a partial merge."""
+        import sqlite3
+
+        with tempfile.TemporaryDirectory(prefix="prks-wal-busy-") as template:
+            db_path = Path(template, "prks_data.db")
+            holder = sqlite3.connect(str(db_path))
+            holder.execute("PRAGMA journal_mode=WAL")
+            holder.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+            holder.execute("INSERT INTO t(v) VALUES ('base')")
+            holder.commit()
+            holder.execute("BEGIN IMMEDIATE")
+            holder.execute("INSERT INTO t(v) VALUES ('held')")
+            try:
+                # Another connection sees busy=1; finalize must retain companions.
+                probe = sqlite3.connect(str(db_path), timeout=0.1)
+                row = probe.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                probe.close()
+                self.assertTrue(harness._wal_checkpoint_ok((0, 0, 0)))
+                self.assertFalse(harness._wal_checkpoint_ok(row))
+                self.assertTrue(Path(str(db_path) + "-wal").exists())
+
+                harness._finalize_seed_template(template)
+                self.assertTrue(
+                    Path(str(db_path) + "-wal").exists(),
+                    "busy checkpoint must not delete the WAL companion",
+                )
+            finally:
+                holder.rollback()
+                holder.close()
+
+    def test_wal_checkpoint_ok_requires_busy_zero(self):
+        self.assertTrue(harness._wal_checkpoint_ok((0, 1, 1)))
+        self.assertFalse(harness._wal_checkpoint_ok((1, 3, 3)))
+        self.assertFalse(harness._wal_checkpoint_ok(None))
+        self.assertFalse(harness._wal_checkpoint_ok(()))
+        self.assertFalse(harness._wal_checkpoint_ok(("x",)))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -102,14 +102,34 @@ def _seed_cache_root() -> str:
     return _SEED_CACHE_TMP.name
 
 
+def _wal_checkpoint_ok(row) -> bool:
+    """True when ``PRAGMA wal_checkpoint`` completed without a blocked writer.
+
+    SQLite returns ``(busy, log, checkpointed)``. ``busy != 0`` means the
+    checkpoint did not finish; that is not raised as ``sqlite3.Error``, so
+    callers must inspect the row before treating the main ``.db`` as complete.
+    """
+    if row is None:
+        return False
+    try:
+        busy = int(row[0])
+    except (TypeError, ValueError, IndexError):
+        return False
+    return busy == 0
+
+
 def _finalize_seed_template(template: str) -> None:
     """Checkpoint SQLite WAL into main DB files so clones are self-contained.
 
     Seed builders open PRKSDatabase without an explicit close. On some Python /
     SQLite timings the template can retain ``-wal``/``-shm`` companions. Cloning
-    those as the immutable snapshot is fine, but checkpointing first makes each
-    clone a single consistent ``.db`` and avoids rare WAL-replay surprises when
-    the server opens a fresh copy.
+    those as the immutable snapshot is fine, but a successful checkpoint makes
+    each clone a single consistent ``.db`` and avoids rare WAL-replay surprises
+    when the server opens a fresh copy.
+
+    Fail closed: companions are removed only when ``wal_checkpoint(TRUNCATE)``
+    reports ``busy=0``. A blocked/incomplete checkpoint leaves ``-wal``/``-shm``
+    in place rather than deleting them after a partial merge into the main DB.
     """
     import sqlite3
 
@@ -122,14 +142,19 @@ def _finalize_seed_template(template: str) -> None:
                 conn = sqlite3.connect(db_path)
             except sqlite3.Error:
                 continue
+            checkpoint_ok = False
             try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 conn.commit()
+                checkpoint_ok = _wal_checkpoint_ok(row)
             except sqlite3.Error:
-                pass
+                checkpoint_ok = False
             finally:
                 conn.close()
-            # Drop any leftover companions so clones never copy open-WAL state.
+            if not checkpoint_ok:
+                # Retain companions; cloning WAL state is safer than dropping it
+                # after an incomplete checkpoint.
+                continue
             for suffix in ("-wal", "-shm"):
                 companion = db_path + suffix
                 try:

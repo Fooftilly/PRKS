@@ -558,7 +558,7 @@ def _print_hung_worker(worker, jobs):
     sys.stderr.flush()
 
 
-def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
+def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, dict]:
     buckets = assign_shards(test_ids, jobs, timings)
     estimates = shard_estimates(buckets, timings)
     browsers_path = apply_e2e_playwright_env()
