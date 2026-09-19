@@ -1335,7 +1335,6 @@ async function run() {
         assertEq('D focused after split', snap.focusedTabId, D);
 
         /* Visible-pane cap: 1 Main + 3 Secondary already mounted -> further splits refused. */
-        assertEq('cap reached', h.ws.snapshot ? true : true, true);
         const capBefore = fingerprint(h);
         const capResult = await h.ws.splitLeaf(D, 'left-right', { hash: '#/works/WE' });
         assertEq('split refused at cap', capResult, false);

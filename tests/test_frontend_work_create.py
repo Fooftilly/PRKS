@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -108,6 +109,23 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertNotIn("Library root", ui)
         self.assertIn("prksSyncWorkModalDisclosureInert", ui)
         self.assertIn("switched: true", ui)
+
+    def test_work_modal_open_settles_after_exactly_once(self):
+        """The work-modal open path must run its `after` continuation once."""
+        ui = _read(_UI)
+        chunk = ui.split("const after = () => {", 1)[1].split("} else if (id ===", 1)[0]
+        # Two-argument then: one of the two handlers runs, never both.
+        self.assertIn("populateUploadComboboxes().then(after, after);", chunk)
+        # Negative checks look at code only -- the source comment right above
+        # the call names the rejected form in order to explain it.
+        code = re.sub(r"//[^\n]*", "", chunk)
+        # .then(after).catch(after) would re-run `after` when the fulfilment
+        # call itself throws, re-focusing the modal and re-capturing its
+        # baseline over the state the first run already established.
+        self.assertNotIn(".catch(after)", code)
+        # populateUploadComboboxes is async, so there is no non-promise arm to
+        # fall back to; a resurrected one would be dead code.
+        self.assertNotIn("typeof p.then === 'function'", code)
 
     def test_folder_combobox_commit_semantics(self):
         ui = _read(_UI)

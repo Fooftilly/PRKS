@@ -145,15 +145,22 @@ function prksGetWikiLinkAutocompleteContext(cm) {
     const cur = cm.getCursor();
     const lineText = cm.getLine(cur.line);
     const before = lineText.slice(0, cur.ch);
-    const m = before.match(/\[\[([^\]|]*)$/);
-    if (!m) return null;
-    const query = m[1] || '';
+    // Anchor on the last '[[' and reject a query holding ']' or '|'. Same
+    // acceptance as the old /\[\[([^\]|]*)$/ scan (an earlier opener can only
+    // be clean when the last one is) but linear instead of super-linear, and
+    // read off the very opener `from` points at -- the regex reported the
+    // leftmost opener while `from` has always used the last one, so a nested
+    // '[[a[[b' queried 'a[[b' while offering to replace only 'b'.
+    const openAt = before.lastIndexOf('[[');
+    if (openAt < 0) return null;
+    const startCh = openAt + 2;
+    const query = before.slice(startCh);
+    if (/[\]|]/.test(query)) return null;
     if (/^(pdf:|concept:|argument:)/i.test(query)) return null;
-    const startCh = before.lastIndexOf('[[') + 2;
     const CM = cm.constructor;
     const from = CM.Pos(cur.line, startCh);
     const to = cur;
-    return { from, to, query: m[1] || '' };
+    return { from, to, query };
 }
 
 function prksFilterWorksForWikiHint(rows, query) {
@@ -2053,4 +2060,14 @@ function initWorkDetailRightPanelActions(work, ownerCtx) {
     if (delBtn) {
         delBtn.addEventListener('click', () => void deleteWork(work.id, ownerCtx));
     }
+}
+
+/* Node selftests import the pure note-editor helpers directly (see
+ * tests/browser/run_wiki_link_autocomplete_selftest.js). Inert in the browser,
+ * where `module` is undefined and these stay ordinary file-scope functions. */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        prksGetWikiLinkAutocompleteContext,
+        prksFilterWorksForWikiHint,
+    };
 }

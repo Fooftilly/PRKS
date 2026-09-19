@@ -353,7 +353,7 @@ function createFakeIndexedDBFactory() {
                 const db = databases.get(name);
                 if (db && db._openConnections > 0) {
                     // A caller that never closed its own handle blocks itself.
-                    req.onblocked ? req.onblocked({ target: req }) : null;
+                    if (req.onblocked) req.onblocked({ target: req });
                     return;
                 }
                 databases.delete(name);

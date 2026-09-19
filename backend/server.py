@@ -797,21 +797,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
     def parse_request(self):
         ok = super().parse_request()
-        if not ok:
-            return ok
-        try:
-            parsed = urlparse(getattr(self, "path", "") or "")
-            path = parsed.path or "/"
-            if path.startswith("/api/"):
-                method = (getattr(self, "command", "") or "GET").upper()
-                route = safe_route(path)
-                begin_request(
-                    method,
-                    route,
-                    excluded=is_excluded_route(route) or is_excluded_route(path),
-                )
-        except Exception:
-            pass
+        if ok:
+            try:
+                parsed = urlparse(getattr(self, "path", "") or "")
+                path = parsed.path or "/"
+                if path.startswith("/api/"):
+                    method = (getattr(self, "command", "") or "GET").upper()
+                    route = safe_route(path)
+                    begin_request(
+                        method,
+                        route,
+                        excluded=is_excluded_route(route) or is_excluded_route(path),
+                    )
+            except Exception:
+                pass
         return ok
 
     def handle_one_request(self):

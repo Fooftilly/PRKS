@@ -4619,7 +4619,10 @@ class PRKSDatabase:
         if not s:
             return None
         parts: List[str] = []
-        for seg in re.split(r"\s*;\s*", s):
+        # Plain str.split: the per-segment strip below already absorbs the
+        # whitespace a r"\s*;\s*" pattern would have consumed, without its
+        # super-linear backtracking on long whitespace runs.
+        for seg in s.split(";"):
             seg = re.sub(r"\s+", " ", seg.strip())
             if seg:
                 parts.append(seg)
