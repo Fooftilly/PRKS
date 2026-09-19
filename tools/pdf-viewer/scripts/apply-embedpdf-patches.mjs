@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const patchesDir = join(root, 'patches');
-const EXPECTED = '2.15.0';
+const EXPECTED = '2.15.1';
 
 function sha256(buf) {
     return createHash('sha256').update(buf).digest('hex');
@@ -80,7 +80,7 @@ function applyHunks(source, hunks) {
         }
         if (!text.includes(oldBlock)) {
             throw new Error(
-                'hunk does not match file (not vanilla 2.15.0 and not already applied)',
+                'hunk does not match file (not vanilla 2.15.1 and not already applied)',
             );
         }
         text = text.replace(oldBlock, newBlock);

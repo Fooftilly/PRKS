@@ -12,7 +12,7 @@ const repoRoot = join(here, '..', '..');
 const outDir = join(repoRoot, 'frontend', 'vendor', 'prks-pdf-viewer');
 const wasmSrc = join(here, 'node_modules', '@embedpdf', 'pdfium', 'dist', 'pdfium.wasm');
 const localWasmUrl = '/vendor/prks-pdf-viewer/pdfium.wasm';
-const cdnWasmNeedle = 'https://cdn.jsdelivr.net/npm/@embedpdf/pdfium@2.15.0/dist/pdfium.wasm';
+const cdnWasmNeedle = 'https://cdn.jsdelivr.net/npm/@embedpdf/pdfium@2.15.1/dist/pdfium.wasm';
 
 function sha256(buf) {
     return createHash('sha256').update(buf).digest('hex');
@@ -105,7 +105,7 @@ const thirdParty = [
 writeFileSync(join(outDir, 'THIRD_PARTY.md'), thirdParty + '\n');
 
 const manifest = {
-    embedpdf: '2.15.0',
+    embedpdf: '2.15.1',
     react: pkg.dependencies.react,
     reactDom: pkg.dependencies['react-dom'],
     fontFallback: null,
@@ -129,7 +129,7 @@ const manifest = {
 writeFileSync(join(outDir, 'BUILD-MANIFEST.json'), JSON.stringify(manifest, null, 2) + '\n');
 writeFileSync(
     join(outDir, 'VERSION'),
-    `embedpdf 2.15.0\nreact ${pkg.dependencies.react}\nreact-dom ${pkg.dependencies['react-dom']}\nfontFallback null\n`,
+    `embedpdf 2.15.1\nreact ${pkg.dependencies.react}\nreact-dom ${pkg.dependencies['react-dom']}\nfontFallback null\n`,
 );
 
 if (/cdn\.jsdelivr\.net.*react/.test(jsText) || /unpkg\.com.*react/.test(jsText)) {

@@ -30,9 +30,9 @@ _COVERAGE_TOKEN = re.compile(r"^(browser|playwright|python|manual):([a-z0-9-]+)$
 _COVERAGE_EMPTY = frozenset({"", "—", "-", "–"})
 
 _REQUIRED_PATCHES = (
-    "embedpdf-plugin-selection-2.15.0.patch",
-    "embedpdf-plugin-pan-2.15.0.patch",
-    "embedpdf-plugin-viewport-2.15.0.patch",
+    "embedpdf-plugin-selection-2.15.1.patch",
+    "embedpdf-plugin-pan-2.15.1.patch",
+    "embedpdf-plugin-viewport-2.15.1.patch",
 )
 
 _BANNED = ("@embedpdf/snippet", "@embedpdf/react-pdf-viewer")
@@ -112,15 +112,15 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         manifest = json.loads(_read(os.path.join(_VENDOR, "BUILD-MANIFEST.json")))
         version = _read(os.path.join(_VENDOR, "VERSION"))
         pkg = json.loads(_read(_PACKAGE))
-        self.assertEqual(manifest["embedpdf"], "2.15.0")
+        self.assertEqual(manifest["embedpdf"], "2.15.1")
         self.assertEqual(manifest["react"], "18.3.1")
         self.assertEqual(manifest["reactDom"], "18.3.1")
         self.assertIsNone(manifest["fontFallback"])
         self.assertFalse(manifest["tiling"])
         self.assertEqual(pkg["dependencies"]["react"], "18.3.1")
         self.assertEqual(pkg["dependencies"]["react-dom"], "18.3.1")
-        self.assertEqual(pkg["dependencies"]["@embedpdf/core"], "2.15.0")
-        self.assertIn("embedpdf 2.15.0", version)
+        self.assertEqual(pkg["dependencies"]["@embedpdf/core"], "2.15.1")
+        self.assertIn("embedpdf 2.15.1", version)
         self.assertIn("react 18.3.1", version)
         self.assertIn("fontFallback null", version)
         js = os.path.join(_VENDOR, "prks-pdf-viewer.js")
@@ -151,7 +151,7 @@ class PdfViewerIntegrationTests(unittest.TestCase):
             with open(path, "rb") as fh:
                 digest = hashlib.sha256(fh.read()).hexdigest()
             match = next(p for p in patches if p["patch"] == name)
-            self.assertEqual(match["version"], "2.15.0")
+            self.assertEqual(match["version"], "2.15.1")
             self.assertEqual(match["sha256"], digest)
             self.assertEqual(len(match["sha256"]), 64)
         self.assertEqual(listed, set(_REQUIRED_PATCHES))
