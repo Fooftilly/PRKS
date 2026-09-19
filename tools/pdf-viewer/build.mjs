@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { applyEmbedpdfPatches } from './scripts/apply-embedpdf-patches.mjs';
 import { runGuards } from './scripts/guard.mjs';
-import { resolvePython3 } from '../resolve-python3.mjs';
+import { resolvePython } from '../resolve-python3.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
@@ -152,9 +152,14 @@ if (!reactInputs.length) {
 console.log('wrote', outDir);
 
 // Refresh aggregated vendor manifest + SW revision (deterministic; no timestamps).
+const py = resolvePython();
 const gate = spawnSync(
-    resolvePython3(),
-    [join(repoRoot, 'scripts', 'dependency_gate.py'), '--write-manifest'],
+    py.executable,
+    [
+        ...py.args,
+        join(repoRoot, 'scripts', 'dependency_gate.py'),
+        '--write-manifest',
+    ],
     { cwd: repoRoot, stdio: 'inherit' },
 );
 if (gate.status !== 0) {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,7 +13,10 @@ if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
 from backend.dependency_gate import (
+    RequirementsPinError,
     assert_remediation_is_safe,
+    default_venv_python_cmd,
+    derived_inventory_names,
     detect_platform_context,
     format_pip_install_command,
     format_venv_create_commands,
@@ -23,8 +27,10 @@ from backend.dependency_gate import (
     run_repo_gate,
     run_runtime_gate,
     validate_installed_pins,
+    validate_inventory,
     validate_npm_island,
     validate_python_version,
+    validate_requirements_file,
 )
 
 
@@ -35,6 +41,62 @@ class RequirementsParsingTests(unittest.TestCase):
             parse_requirements_pins(text),
             {"PyMuPDF": "1.28.2", "Pillow": "12.3.0"},
         )
+
+    def test_parse_allows_trailing_comment(self):
+        text = "Pillow==12.3.0  # keep exact\n"
+        self.assertEqual(parse_requirements_pins(text), {"Pillow": "12.3.0"})
+
+    def test_parse_rejects_gte_operator(self):
+        with self.assertRaises(RequirementsPinError) as ctx:
+            parse_requirements_pins("Pillow>=12.3.0\n", source="requirements.txt")
+        self.assertIn("exact name==version", str(ctx.exception))
+        self.assertIn("Pillow>=12.3.0", str(ctx.exception))
+
+    def test_parse_rejects_unpinned_and_malformed(self):
+        with self.assertRaises(RequirementsPinError):
+            parse_requirements_pins("Pillow\n")
+        with self.assertRaises(RequirementsPinError):
+            parse_requirements_pins("not a requirement!!!\n")
+        with self.assertRaises(RequirementsPinError):
+            parse_requirements_pins("Pillow~=12.3.0\n")
+
+    def test_validate_requirements_file_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            path.write_text("Pillow>=12.3.0\n", encoding="utf-8")
+            result, pins = validate_requirements_file(path)
+            self.assertFalse(result.ok)
+            self.assertEqual(pins, {})
+            self.assertEqual(result.issues[0].code, "non_exact_requirement")
+
+    def test_runtime_gate_fails_on_non_exact_requirements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text(
+                "PyMuPDF==1.28.2\nPillow>=12.3.0\n",
+                encoding="utf-8",
+            )
+            (root / "dependency-inventory.json").write_text(
+                json.dumps({"python_min_version": [3, 12], "dependencies": []}),
+                encoding="utf-8",
+            )
+            result = run_runtime_gate(
+                repo_root=root,
+                version_lookup=lambda _n: "1.28.2",
+                current_python=(3, 12, 0),
+                ctx=detect_platform_context(
+                    prefix="/tmp/venv",
+                    base_prefix="/usr",
+                    executable="/tmp/venv/bin/python",
+                    system="Linux",
+                    environ={},
+                    externally_managed=False,
+                ),
+            )
+            self.assertFalse(result.ok)
+            self.assertTrue(
+                any(i.code == "non_exact_requirement" for i in result.issues)
+            )
 
     def test_playwright_pin_from_repo(self):
         pin = pinned_playwright_version(_PROJECT)
@@ -108,6 +170,33 @@ class RemediationMessageTests(unittest.TestCase):
         self.assertIn(".venv", cmd)
         self.assertIn("-m pip install -r", cmd)
 
+    def test_windows_venv_commands_prefer_py_launcher(self):
+        self.assertEqual(default_venv_python_cmd(is_windows=True), "py -3")
+        self.assertEqual(default_venv_python_cmd(is_windows=False), "python3")
+        cmds = format_venv_create_commands(is_windows=True)
+        self.assertEqual(cmds[0], "py -3 -m venv .venv")
+        self.assertIn(r".venv\Scripts\python.exe", cmds[1])
+        self.assertNotIn("python3", cmds[0])
+        # Explicit override still honored.
+        overridden = format_venv_create_commands(
+            is_windows=True, python_cmd=r"C:\Python312\python.exe"
+        )
+        self.assertTrue(overridden[0].startswith(r"C:\Python312\python.exe"))
+
+    def test_windows_remediation_uses_py_not_python3(self):
+        ctx = detect_platform_context(
+            prefix=r"C:\Python312",
+            base_prefix=r"C:\Python312",
+            executable=r"C:\Python312\python.exe",
+            system="Windows",
+            environ={},
+            externally_managed=False,
+        )
+        msg = remediation_message(missing=["Pillow"], ctx=ctx)
+        assert_remediation_is_safe(msg)
+        self.assertIn("py -3 -m venv .venv", msg)
+        self.assertNotIn("python3 -m venv", msg)
+
     def test_externally_managed_never_sudo_or_break(self):
         ctx = detect_platform_context(
             prefix="/usr",
@@ -147,6 +236,63 @@ class RemediationMessageTests(unittest.TestCase):
             assert_remediation_is_safe("pip install --break-system-packages foo")
         # Negated warnings are fine.
         assert_remediation_is_safe("Do not use sudo pip or pip --break-system-packages.")
+
+
+class ResolvePythonTests(unittest.TestCase):
+    def test_builders_use_resolve_python_not_bare_python3(self):
+        for rel in (
+            "tools/frontend-vendor/build.mjs",
+            "tools/pdf-viewer/build.mjs",
+            "tools/research-graph/build.mjs",
+        ):
+            text = (_PROJECT / rel).read_text(encoding="utf-8")
+            self.assertIn("resolvePython()", text)
+            self.assertNotIn('spawnSync(\n  "python3"', text)
+            self.assertNotIn("spawnSync('python3'", text)
+            self.assertNotIn('spawnSync("python3"', text)
+
+    def test_resolve_python_module_windows_candidates(self):
+        script = r"""
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const path = require("node:path");
+const fs = require("node:fs");
+const src = fs.readFileSync(path.resolve("tools/resolve-python3.mjs"), "utf8");
+if (!src.includes("Windows") || !src.includes("py.exe")) {
+  throw new Error("missing Windows py launcher candidate");
+}
+if (!src.includes("resolvePython")) throw new Error("missing resolvePython export");
+if (src.includes('spawnSync("python3"')) throw new Error("bare python3 spawn");
+console.log("ok");
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=str(_PROJECT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+    def test_resolve_python_runs_on_host(self):
+        proc = subprocess.run(
+            [
+                "node",
+                "--input-type=module",
+                "-e",
+                "import { resolvePython } from './tools/resolve-python3.mjs'; "
+                "const p = resolvePython(); "
+                "if (!p.executable.startsWith('/')) process.exit(2); "
+                "console.log(p.executable);",
+            ],
+            cwd=str(_PROJECT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(proc.stdout.strip().startswith("/"))
 
 
 class NpmIslandTests(unittest.TestCase):
@@ -213,6 +359,137 @@ class NpmIslandTests(unittest.TestCase):
             self.assertTrue(any(i.code == "react_dom_mismatch" for i in result.issues))
 
 
+class InventoryCoverageTests(unittest.TestCase):
+    def test_derived_matches_live_inventory(self):
+        inv = json.loads(
+            (_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8")
+        )
+        declared = {d["name"] for d in inv["dependencies"]}
+        self.assertEqual(declared, derived_inventory_names(_PROJECT))
+
+    def test_missing_inventory_entry_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Minimal mirrors of authoritative manifests.
+            (root / "requirements.txt").write_text(
+                "PyMuPDF==1.28.2\nPillow==12.3.0\n", encoding="utf-8"
+            )
+            (root / "requirements-dev.txt").write_text(
+                "playwright==1.63.0\n", encoding="utf-8"
+            )
+            for island, deps in (
+                ("pdf-viewer", {"react": "18.3.1"}),
+                ("research-graph", {"cytoscape": "3.34.3"}),
+                ("frontend-vendor", {"dompurify": "3.0.0"}),
+            ):
+                d = root / "tools" / island
+                d.mkdir(parents=True)
+                (d / "package.json").write_text(
+                    json.dumps({"dependencies": deps}), encoding="utf-8"
+                )
+            # Inventory omits Pillow and python structural entries.
+            (root / "dependency-inventory.json").write_text(
+                json.dumps(
+                    {
+                        "python_min_version": [3, 12],
+                        "dependencies": [
+                            {
+                                "name": "PyMuPDF",
+                                "authoritative_source": "requirements.txt",
+                                "manifest": "requirements.txt",
+                                "exact_installed_version_check": True,
+                                "scope": "runtime",
+                            },
+                            {
+                                "name": "playwright",
+                                "authoritative_source": "requirements-dev.txt",
+                                "manifest": "requirements-dev.txt",
+                                "exact_installed_version_check": True,
+                                "scope": "test",
+                            },
+                            {
+                                "name": "react",
+                                "authoritative_source": "tools/pdf-viewer/package.json",
+                                "manifest": "tools/pdf-viewer/package.json",
+                                "scope": "build",
+                            },
+                            {
+                                "name": "cytoscape",
+                                "authoritative_source": "tools/research-graph/package.json",
+                                "manifest": "tools/research-graph/package.json",
+                                "scope": "vendor",
+                            },
+                            {
+                                "name": "dompurify",
+                                "authoritative_source": "tools/frontend-vendor/package.json",
+                                "manifest": "tools/frontend-vendor/package.json",
+                                "scope": "vendor",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = validate_inventory(root)
+            self.assertFalse(result.ok)
+            missing = {
+                i.message.split(" missing ", 1)[-1].split(" ", 1)[0]
+                for i in result.issues
+                if i.code == "inventory_missing"
+            }
+            self.assertIn("Pillow", missing)
+            self.assertIn("python", missing)
+            self.assertIn("inter", missing)
+
+    def test_extra_inventory_entry_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text("Pillow==12.3.0\n", encoding="utf-8")
+            (root / "requirements-dev.txt").write_text(
+                "playwright==1.63.0\n", encoding="utf-8"
+            )
+            for island in ("pdf-viewer", "research-graph", "frontend-vendor"):
+                d = root / "tools" / island
+                d.mkdir(parents=True)
+                (d / "package.json").write_text(
+                    json.dumps({"dependencies": {}}), encoding="utf-8"
+                )
+            expected_structural = [
+                "Pillow",
+                "playwright",
+                "inter",
+                "python",
+                "python-base-image",
+                "qpdf",
+                "ghost-package",
+            ]
+            (root / "dependency-inventory.json").write_text(
+                json.dumps(
+                    {
+                        "python_min_version": [3, 12],
+                        "dependencies": [
+                            {
+                                "name": n,
+                                "authoritative_source": "test",
+                                "manifest": "requirements.txt",
+                                "scope": "runtime",
+                            }
+                            for n in expected_structural
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = validate_inventory(root)
+            self.assertFalse(result.ok)
+            self.assertTrue(
+                any(
+                    i.code == "inventory_extra" and "ghost-package" in i.message
+                    for i in result.issues
+                )
+            )
+
+
 class RepoGateLiveTests(unittest.TestCase):
     def test_current_repo_passes(self):
         result = run_repo_gate(repo_root=_PROJECT)
@@ -253,6 +530,8 @@ class RepoGateLiveTests(unittest.TestCase):
             "react",
             "inter",
             "qpdf",
+            "python",
+            "python-base-image",
         ):
             self.assertIn(required, names)
 

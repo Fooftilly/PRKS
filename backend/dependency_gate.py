@@ -91,12 +91,25 @@ REGISTERED_VENDOR_RUNTIME_FILES = (
     "prks-pdf-viewer/pdfium.wasm",
 )
 
-_REQ_PIN_RE = re.compile(r"^([A-Za-z0-9_.\-]+)\s*==\s*([^#\s]+)")
+# Exact pin only: name==version with optional trailing comment. Fail closed otherwise.
+_REQ_PIN_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*==\s*([^#\s]+)\s*(?:#.*)?$"
+)
 _SW_REV_RE = re.compile(
     r"const\s+DEPENDENCY_REVISION\s*=\s*['\"]([0-9a-fA-F]+)['\"]\s*;"
 )
 _SW_REV_ANY_RE = re.compile(
     r"const\s+DEPENDENCY_REVISION\s*=\s*['\"]([^'\"]+)['\"]\s*;"
+)
+
+# Inventory entries that are not derived from requirements*.txt / package.json.
+_INVENTORY_STRUCTURAL_NAMES = frozenset(
+    {
+        "inter",
+        "python",
+        "python-base-image",
+        "qpdf",
+    }
 )
 
 
@@ -140,22 +153,60 @@ def load_inventory(repo_root: Path | None = None) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def parse_requirements_pins(text: str) -> dict[str, str]:
-    """Parse exact == pins from a requirements file body. Ignores comments/blank."""
+class RequirementsPinError(ValueError):
+    """Raised when a requirements file contains a non-exact or malformed pin."""
+
+
+def parse_requirements_pins(text: str, *, source: str = "requirements") -> dict[str, str]:
+    """Parse exact name==version pins. Fail closed on any other active line.
+
+    Blank lines and full-line comments are ignored. Every other non-empty line
+    must be an exact ``name==version`` pin (optional trailing ``#`` comment).
+    Operators such as ``>=``, ``~=``, unpinned names, and includes are rejected.
+    """
     pins: dict[str, str] = {}
-    for raw in text.splitlines():
+    for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         m = _REQ_PIN_RE.match(line)
         if not m:
-            continue
-        pins[m.group(1)] = m.group(2)
+            raise RequirementsPinError(
+                f"{source}:{lineno}: requirement must be an exact name==version "
+                f"pin; got {line!r}"
+            )
+        name, ver = m.group(1), m.group(2)
+        if name in pins:
+            raise RequirementsPinError(
+                f"{source}:{lineno}: duplicate pin for {name!r}"
+            )
+        pins[name] = ver
     return pins
 
 
 def read_requirements_pins(path: Path) -> dict[str, str]:
-    return parse_requirements_pins(path.read_text(encoding="utf-8"))
+    return parse_requirements_pins(
+        path.read_text(encoding="utf-8"),
+        source=str(path),
+    )
+
+
+def validate_requirements_file(path: Path) -> tuple[GateResult, dict[str, str]]:
+    """Return GateResult + pins for one requirements file (fail closed)."""
+    result = GateResult(ok=True)
+    if not path.is_file():
+        result.fail(
+            "missing_requirements",
+            f"requirements file missing: {path.name}",
+            str(path),
+        )
+        return result, {}
+    try:
+        pins = read_requirements_pins(path)
+    except RequirementsPinError as exc:
+        result.fail("non_exact_requirement", str(exc), str(path))
+        return result, {}
+    return result, pins
 
 
 def runtime_requirement_pins(repo_root: Path | None = None) -> dict[str, str]:
@@ -165,7 +216,7 @@ def runtime_requirement_pins(repo_root: Path | None = None) -> dict[str, str]:
 
 def test_requirement_pins(repo_root: Path | None = None) -> dict[str, str]:
     root = Path(repo_root) if repo_root is not None else REPO_ROOT
-    pins = runtime_requirement_pins(root)
+    pins = dict(runtime_requirement_pins(root))
     pins.update(read_requirements_pins(root / "requirements-dev.txt"))
     return pins
 
@@ -294,18 +345,31 @@ def format_pip_install_command(
     return f"{exe} -m pip install -r {req}"
 
 
+def default_venv_python_cmd(*, is_windows: bool) -> str:
+    """Platform-appropriate interpreter name for remediation examples.
+
+    Windows installs typically expose ``py`` / ``python``, not ``python3``.
+    """
+    return "py -3" if is_windows else "python3"
+
+
 def format_venv_create_commands(
     *,
     is_windows: bool,
-    python_cmd: str = "python3",
+    python_cmd: str | None = None,
 ) -> list[str]:
+    cmd = (
+        python_cmd
+        if python_cmd is not None
+        else default_venv_python_cmd(is_windows=is_windows)
+    )
     if is_windows:
         return [
-            f"{python_cmd} -m venv .venv",
+            f"{cmd} -m venv .venv",
             r".venv\Scripts\python.exe -m pip install -r requirements.txt",
         ]
     return [
-        f"{python_cmd} -m venv .venv",
+        f"{cmd} -m venv .venv",
         "./.venv/bin/python -m pip install -r requirements.txt",
     ]
 
@@ -502,9 +566,12 @@ def validate_runtime_python(
     result = GateResult(ok=True)
     py = validate_python_version(current=current_python, repo_root=root)
     result.extend(py)
-    pins = runtime_requirement_pins(root)
-    pin_result = validate_installed_pins(pins, version_lookup=version_lookup)
-    result.extend(pin_result)
+    req_path = root / "requirements.txt"
+    req_result, pins = validate_requirements_file(req_path)
+    result.extend(req_result)
+    if req_result.ok:
+        pin_result = validate_installed_pins(pins, version_lookup=version_lookup)
+        result.extend(pin_result)
 
     if not result.ok:
         missing = []
@@ -521,15 +588,18 @@ def validate_runtime_python(
         if any(i.code == "python_too_old" for i in result.issues):
             have = current_python or sys.version_info[:3]
             py_old = (have[:2], python_min_version(root)[:2])
-        msg = remediation_message(
-            missing=missing or None,
-            mismatched=mismatched or None,
-            python_too_old=py_old,
-            ctx=ctx or detect_platform_context(),
-            requirements_file=str(root / "requirements.txt"),
-        )
-        assert_remediation_is_safe(msg)
-        result.details.append(msg)
+        # Non-exact requirements still get a remediation block when packages fail;
+        # parser failures are self-describing via the issue message.
+        if missing or mismatched or py_old is not None:
+            msg = remediation_message(
+                missing=missing or None,
+                mismatched=mismatched or None,
+                python_too_old=py_old,
+                ctx=ctx or detect_platform_context(),
+                requirements_file=str(req_path),
+            )
+            assert_remediation_is_safe(msg)
+            result.details.append(msg)
     return result
 
 
@@ -548,7 +618,11 @@ def validate_test_python(
         current_python=current_python,
     )
     # Always also check playwright even if runtime already failed — collect all.
-    pins = read_requirements_pins(root / "requirements-dev.txt")
+    dev_path = root / "requirements-dev.txt"
+    dev_result, pins = validate_requirements_file(dev_path)
+    result.extend(dev_result)
+    if not dev_result.ok:
+        return result
     extra = validate_installed_pins(pins, version_lookup=version_lookup)
     if not extra.ok:
         # Rebuild remediation pointing at requirements-dev.txt when only test deps fail.
@@ -568,7 +642,7 @@ def validate_test_python(
                 missing=missing or None,
                 mismatched=mismatched or None,
                 ctx=ctx or detect_platform_context(),
-                requirements_file=str(root / "requirements-dev.txt"),
+                requirements_file=str(dev_path),
             )
             assert_remediation_is_safe(msg)
             extra.details.append(msg)
@@ -1284,42 +1358,89 @@ def validate_no_cdn_in_loaders(repo_root: Path | None = None) -> GateResult:
 # ---------------------------------------------------------------------------
 
 
+def derived_inventory_names(repo_root: Path | None = None) -> set[str]:
+    """Names that must appear in dependency-inventory.json, from manifests.
+
+    Sources: requirements*.txt exact pins, npm island direct dependencies
+    (``@embedpdf/*`` collapsed), plus structural entries (Inter, python, …).
+    """
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    names: set[str] = set(_INVENTORY_STRUCTURAL_NAMES)
+
+    for rel in ("requirements.txt", "requirements-dev.txt"):
+        path = root / rel
+        if not path.is_file():
+            continue
+        # Fail closed is enforced separately; still derive what we can.
+        try:
+            names.update(read_requirements_pins(path))
+        except RequirementsPinError:
+            continue
+
+    for raw in NPM_ISLANDS:
+        island_dir = root / Path(raw["dir"]).relative_to(REPO_ROOT)
+        pkg_path = island_dir / "package.json"
+        if not pkg_path.is_file():
+            continue
+        pkg = load_json(pkg_path)
+        for dep_name in package_direct_pins(pkg):
+            if dep_name.startswith("@embedpdf/"):
+                names.add("@embedpdf/*")
+            else:
+                names.add(dep_name)
+    return names
+
+
 def validate_inventory(repo_root: Path | None = None) -> GateResult:
     root = Path(repo_root) if repo_root is not None else REPO_ROOT
     result = GateResult(ok=True)
+
+    for rel in ("requirements.txt", "requirements-dev.txt"):
+        req_result, _pins = validate_requirements_file(root / rel)
+        result.extend(req_result)
+
+    inv_path = root / "dependency-inventory.json"
+    if not inv_path.is_file():
+        result.fail(
+            "inventory_missing_file",
+            "dependency-inventory.json missing",
+            str(inv_path),
+        )
+        return result
+
     inv = load_inventory(root)
     deps = inv.get("dependencies") or []
-    names = {d.get("name") for d in deps}
-    required = {
-        "PyMuPDF",
-        "Pillow",
-        "playwright",
-        "react",
-        "react-dom",
-        "@types/react",
-        "@types/react-dom",
-        "typescript",
-        "esbuild",
-        "@embedpdf/*",
-        "cytoscape",
-        "dompurify",
-        "easymde",
-        "codemirror",
-        "lucide",
-        "inter",
-        "qpdf",
-    }
-    missing = sorted(required - names)
-    for name in missing:
-        result.fail("inventory_missing", f"dependency-inventory.json missing {name}")
+    declared = {d.get("name") for d in deps if d.get("name")}
+    expected = derived_inventory_names(root)
+
+    for name in sorted(expected - declared):
+        result.fail(
+            "inventory_missing",
+            f"dependency-inventory.json missing {name} (required by authoritative manifests)",
+        )
+    for name in sorted(declared - expected):
+        result.fail(
+            "inventory_extra",
+            f"dependency-inventory.json has {name} not present in authoritative manifests",
+        )
 
     for dep in deps:
         auth = dep.get("authoritative_source")
         if not auth:
-            result.fail("inventory_no_source", f"{dep.get('name')}: missing authoritative_source")
-        if dep.get("exact_installed_version_check") and dep.get("scope") in ("runtime", "test"):
+            result.fail(
+                "inventory_no_source",
+                f"{dep.get('name')}: missing authoritative_source",
+            )
+        if dep.get("exact_installed_version_check") and dep.get("scope") in (
+            "runtime",
+            "test",
+        ):
             manifest = dep.get("manifest")
-            if manifest and not (root / manifest).is_file() and manifest != "dependency-inventory.json":
+            if (
+                manifest
+                and not (root / manifest).is_file()
+                and manifest != "dependency-inventory.json"
+            ):
                 result.fail(
                     "inventory_bad_manifest",
                     f"{dep.get('name')}: manifest {manifest} missing",

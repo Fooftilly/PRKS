@@ -8,7 +8,7 @@ import { createHash } from "crypto";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { spawnSync } from "child_process";
-import { resolvePython3 } from "../resolve-python3.mjs";
+import { resolvePython } from "../resolve-python3.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(root, "..", "..");
@@ -128,9 +128,14 @@ function tryCopyLicense(pkgName, destDir) {
   console.log("vendored lucide", version, hash);
 }
 
+const py = resolvePython();
 const gate = spawnSync(
-  resolvePython3(),
-  [join(repoRoot, "scripts", "dependency_gate.py"), "--write-manifest"],
+  py.executable,
+  [
+    ...py.args,
+    join(repoRoot, "scripts", "dependency_gate.py"),
+    "--write-manifest",
+  ],
   { cwd: repoRoot, stdio: "inherit" }
 );
 if (gate.status !== 0) {
