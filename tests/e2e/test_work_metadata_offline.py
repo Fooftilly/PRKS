@@ -23,11 +23,11 @@ def load_tests(loader, standard_tests, pattern):
 
 # Heavy service-worker module: recycle Chromium after N closed contexts.
 # Override with PRKS_E2E_CHROMIUM_RECYCLE_EVERY (0 disables).
-# Measured: class alone often PASSes 57/57; diagnostic re-runs have hung in the
-# test body after APP_READY (once ~case 47 with recycle=20, once ~case 13 with
-# recycle=15). Full-gate hangs landed around cases ~18–25 in this class.
-# Interval 12 relaunches Chromium before that historical window.
-_DEFAULT_RECYCLE_EVERY = 12
+# Measured (class alone, PRKS_E2E_DIAGNOSTIC=1): PASS often, but intermittent
+# hangs after APP_READY at varying depths — ~case 47 (recycle=20), ~13
+# (recycle=15), and ~5 (recycle=12). Full-gate stalls historically ~18–25 into
+# this class. Interval 4 relaunches before the earliest observed stall window.
+_DEFAULT_RECYCLE_EVERY = 4
 _HOLDER = None
 
 
