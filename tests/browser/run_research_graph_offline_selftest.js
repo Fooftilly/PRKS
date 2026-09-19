@@ -23,7 +23,7 @@ const snapshot = {
 };
 function environment() {
     const entities = new Map();
-    let request = async () => ({ok:true,status:200,json:async()=>copy(snapshot)});
+    let request = async (..._args) => ({ok:true,status:200,json:async()=>copy(snapshot)});
     let sweep = async kind => { entities.delete(kind); return true; };
     const store = {
         putEntity: async (kind, id, value) => {entities.set(kind,{value,cachedAt:1000});return true;},

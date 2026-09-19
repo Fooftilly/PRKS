@@ -446,7 +446,7 @@ function makeGraphHost() {
     assertEq(rows, 'empty focus does not require people', g.peopleRequiredForFocus(''), false);
 
     const fetchCalls = [];
-    let fetchImpl = async function () {
+    let fetchImpl = async function (_opts) {
         return fixture;
     };
     sandbox.fetchResearchGraph = async function (opts) {
