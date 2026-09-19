@@ -79,6 +79,8 @@ class E2ESeedCacheTests(unittest.TestCase):
             # WAL companion may or may not still be present after close; finalize
             # must leave a readable main DB either way.
             harness._finalize_seed_template(template)
+            self.assertFalse(Path(str(db_path) + "-wal").exists())
+            self.assertFalse(Path(str(db_path) + "-shm").exists())
             conn = sqlite3.connect(str(db_path))
             rows = conn.execute("SELECT v FROM t ORDER BY id").fetchall()
             conn.close()

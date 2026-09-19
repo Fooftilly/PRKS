@@ -129,6 +129,14 @@ def _finalize_seed_template(template: str) -> None:
                 pass
             finally:
                 conn.close()
+            # Drop any leftover companions so clones never copy open-WAL state.
+            for suffix in ("-wal", "-shm"):
+                companion = db_path + suffix
+                try:
+                    if os.path.exists(companion):
+                        os.unlink(companion)
+                except OSError:
+                    pass
 
 
 def _materialize_seed(seed_fn, destination: str):

@@ -2751,13 +2751,13 @@ class PdfPersistenceTests(_BrowserE2E):
         since = _sync_success_at(page)
         _commit_pdf_highlight(page)
         _open_annotations_tab(page)
-        page.wait_for_selector(".annotation-row")
+        _wait_annotation_list_rendered(page, 1)
         collector.wait_pdf_handshake(page, since_ms=since)
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_id, page.evaluate("() => location.hash"))
         _wait_pdf_viewer(page)
         _open_annotations_tab(page)
-        page.wait_for_selector(".annotation-row")
+        _wait_annotation_list_rendered(page, 1)
         page.locator(".annotation-row__jump").first.click()
         page.wait_for_function(
             """() => {
@@ -2772,9 +2772,7 @@ class PdfPersistenceTests(_BrowserE2E):
         since_delete = _sync_success_at(page)
         page.locator(".annotation-row__delete").first.click()
         page.locator("#prks-modal-confirm-ok").click()
-        page.wait_for_function(
-            "() => document.querySelectorAll('.annotation-row').length === 0"
-        )
+        _wait_annotation_list_rendered(page, 0)
         collector.wait_pdf_handshake(page, since_ms=since_delete)
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_id, page.evaluate("() => location.hash"))
@@ -2797,7 +2795,7 @@ class PdfPersistenceTests(_BrowserE2E):
         _wait_pdf_viewer(page)
         _commit_pdf_highlight(page)
         _open_annotations_tab(page)
-        page.wait_for_selector(".annotation-row")
+        _wait_annotation_list_rendered(page, 1)
         self.assertEqual(page.locator(".annotation-row").count(), 1)
 
         page.evaluate("""(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""", arg=work_b)
@@ -2816,7 +2814,7 @@ class PdfPersistenceTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         _open_annotations_tab(page)
-        page.wait_for_selector(".annotation-row")
+        _wait_annotation_list_rendered(page, 1)
 
         page.locator(".annotation-row__delete").first.click()
         page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
@@ -2880,12 +2878,13 @@ class PdfPersistenceTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         _commit_pdf_highlight(page)
         _open_annotations_tab(page)
-        page.wait_for_selector(".annotation-row")
+        _wait_annotation_list_rendered(page, 1)
 
         page.locator(".annotation-row__delete").first.click()
         page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
         page.locator("#prks-modal-confirm-cancel").click()
         page.wait_for_selector("#prks-modal-confirm", state="hidden")
+        # Cancel expects no repaint; the pre-cancel render already settled at 1.
         self.assertEqual(page.locator(".annotation-row").count(), 1)
         # Cancel restores focus to the Delete button that opened the dialog.
         page.wait_for_function(
@@ -2897,7 +2896,7 @@ class PdfPersistenceTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         _commit_pdf_highlight(page)
         _open_annotations_tab(page)
-        page.wait_for_selector(".annotation-row")
+        _wait_annotation_list_rendered(page, 1)
 
         page.evaluate(
             """() => {
@@ -10314,6 +10313,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertNotIn("Typed Folder E2E Work", titles)
 
         page.locator("#folder-results .result-item", has_text="Philosophy").first.click()
+        self._wait_work_modal_folder(page, philosophy_id, "Philosophy")
         self.assertEqual(page.locator("#work-folder-id").input_value(), philosophy_id)
         page.locator("#save-work-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0")

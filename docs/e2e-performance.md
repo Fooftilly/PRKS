@@ -33,7 +33,9 @@ leaks.
 A seed function is now executed once per worker. Its completed storage tree is kept
 as a private immutable template. Every AppServer still receives a new
 TemporaryDirectory, but the template is copied into it instead of rebuilding the
-same SQLite/PDF/index fixture repeatedly.
+same SQLite/PDF/index fixture repeatedly. After the first build, templates are
+WAL-checkpointed and any leftover `-wal`/`-shm` companions are removed so each
+clone opens a single consistent `.db`.
 
 The returned fixture ID dictionary is deep-copied too, so a test cannot mutate
 metadata used by another test.
