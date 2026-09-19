@@ -18,6 +18,8 @@ from backend.dependency_gate import (
     default_venv_python_cmd,
     derived_inventory_names,
     detect_platform_context,
+    dockerfile_apt_packages,
+    dockerfile_python_base_version,
     format_pip_install_command,
     format_venv_create_commands,
     parse_requirements_pins,
@@ -26,6 +28,7 @@ from backend.dependency_gate import (
     remediation_message,
     run_repo_gate,
     run_runtime_gate,
+    validate_dockerfile,
     validate_installed_pins,
     validate_inventory,
     validate_npm_island,
@@ -459,8 +462,6 @@ class InventoryCoverageTests(unittest.TestCase):
                 "playwright",
                 "inter",
                 "python",
-                "python-base-image",
-                "qpdf",
                 "ghost-package",
             ]
             (root / "dependency-inventory.json").write_text(
@@ -488,6 +489,149 @@ class InventoryCoverageTests(unittest.TestCase):
                     for i in result.issues
                 )
             )
+
+
+class DockerfileConsistencyTests(unittest.TestCase):
+    def _write_minimal_manifests(self, root: Path) -> None:
+        (root / "requirements.txt").write_text("Pillow==12.3.0\n", encoding="utf-8")
+        (root / "requirements-dev.txt").write_text(
+            "playwright==1.63.0\n", encoding="utf-8"
+        )
+        for island in ("pdf-viewer", "research-graph", "frontend-vendor"):
+            d = root / "tools" / island
+            d.mkdir(parents=True)
+            (d / "package.json").write_text(
+                json.dumps({"dependencies": {}}), encoding="utf-8"
+            )
+
+    def _inventory(self, *, names: list[str], python_min=(3, 12)) -> str:
+        deps = []
+        for n in names:
+            entry = {
+                "name": n,
+                "authoritative_source": "test",
+                "manifest": (
+                    "Dockerfile"
+                    if n in ("python-base-image", "qpdf", "curl")
+                    else "requirements.txt"
+                ),
+                "scope": "system" if n in ("qpdf", "curl") else "runtime",
+            }
+            deps.append(entry)
+        return json.dumps(
+            {"python_min_version": list(python_min), "dependencies": deps}
+        )
+
+    def test_parse_from_and_apt_packages(self):
+        text = (
+            "FROM python:3.12-slim\n"
+            "RUN apt-get update \\\n"
+            "    && apt-get install -y --no-install-recommends qpdf curl \\\n"
+            "    && rm -rf /var/lib/apt/lists/*\n"
+        )
+        self.assertEqual(dockerfile_python_base_version(text), (3, 12))
+        self.assertEqual(dockerfile_apt_packages(text), ["qpdf", "curl"])
+
+    def test_older_base_image_fails_repo_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_minimal_manifests(root)
+            (root / "Dockerfile").write_text(
+                "FROM python:3.11-slim\n"
+                "RUN apt-get install -y --no-install-recommends qpdf\n",
+                encoding="utf-8",
+            )
+            names = [
+                "Pillow",
+                "playwright",
+                "inter",
+                "python",
+                "python-base-image",
+                "qpdf",
+            ]
+            (root / "dependency-inventory.json").write_text(
+                self._inventory(names=names, python_min=(3, 12)),
+                encoding="utf-8",
+            )
+            result = validate_dockerfile(root)
+            self.assertFalse(result.ok)
+            self.assertTrue(
+                any(i.code == "dockerfile_python_version" for i in result.issues)
+            )
+            inv_result = validate_inventory(root)
+            self.assertFalse(inv_result.ok)
+            self.assertTrue(
+                any(i.code == "dockerfile_python_version" for i in inv_result.issues)
+            )
+
+    def test_removed_apt_package_leaves_inventory_extra(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_minimal_manifests(root)
+            # Dockerfile no longer installs qpdf.
+            (root / "Dockerfile").write_text(
+                "FROM python:3.12-slim\n",
+                encoding="utf-8",
+            )
+            names = [
+                "Pillow",
+                "playwright",
+                "inter",
+                "python",
+                "python-base-image",
+                "qpdf",
+            ]
+            (root / "dependency-inventory.json").write_text(
+                self._inventory(names=names),
+                encoding="utf-8",
+            )
+            result = validate_inventory(root)
+            self.assertFalse(result.ok)
+            self.assertTrue(
+                any(
+                    i.code == "inventory_extra" and "qpdf" in i.message
+                    for i in result.issues
+                )
+            )
+
+    def test_new_apt_package_requires_inventory_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_minimal_manifests(root)
+            (root / "Dockerfile").write_text(
+                "FROM python:3.12-slim\n"
+                "RUN apt-get install -y --no-install-recommends qpdf curl\n",
+                encoding="utf-8",
+            )
+            names = [
+                "Pillow",
+                "playwright",
+                "inter",
+                "python",
+                "python-base-image",
+                "qpdf",
+            ]
+            (root / "dependency-inventory.json").write_text(
+                self._inventory(names=names),
+                encoding="utf-8",
+            )
+            result = validate_inventory(root)
+            self.assertFalse(result.ok)
+            self.assertTrue(
+                any(
+                    i.code == "inventory_missing" and "curl" in i.message
+                    for i in result.issues
+                )
+            )
+
+    def test_live_dockerfile_matches_inventory(self):
+        docker = (_PROJECT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertEqual(
+            dockerfile_python_base_version(docker),
+            tuple(python_min_version(_PROJECT)[:2]),
+        )
+        self.assertIn("qpdf", dockerfile_apt_packages(docker))
+        self.assertTrue(validate_dockerfile(_PROJECT).ok)
 
 
 class RepoGateLiveTests(unittest.TestCase):

@@ -102,14 +102,24 @@ _SW_REV_ANY_RE = re.compile(
     r"const\s+DEPENDENCY_REVISION\s*=\s*['\"]([^'\"]+)['\"]\s*;"
 )
 
-# Inventory entries that are not derived from requirements*.txt / package.json.
+# Inventory entries that are not derived from requirements*.txt / package.json /
+# Dockerfile. Docker base image + apt packages come from the Dockerfile itself.
 _INVENTORY_STRUCTURAL_NAMES = frozenset(
     {
         "inter",
         "python",
-        "python-base-image",
-        "qpdf",
     }
+)
+
+# First-stage (or any) `FROM python:X.Y…` image tag.
+_DOCKER_FROM_PYTHON_RE = re.compile(
+    r"(?im)^\s*FROM\s+(?:--\S+\s+)*python:(\d+)\.(\d+)(?:[^\s]*)?"
+)
+# Collapse Dockerfile line continuations before apt token scans.
+_DOCKER_LINE_CONT_RE = re.compile(r"\\\s*\n")
+_DOCKER_APT_INSTALL_RE = re.compile(
+    r"apt-get\s+install\b([^&\n|;]*)",
+    re.IGNORECASE,
 )
 
 
@@ -1354,6 +1364,108 @@ def validate_no_cdn_in_loaders(repo_root: Path | None = None) -> GateResult:
 
 
 # ---------------------------------------------------------------------------
+# Dockerfile (system / base image)
+# ---------------------------------------------------------------------------
+
+
+def dockerfile_python_base_version(text: str) -> tuple[int, int] | None:
+    """Return ``(major, minor)`` from the first ``FROM python:X.Y…`` line."""
+    match = _DOCKER_FROM_PYTHON_RE.search(text)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def dockerfile_apt_packages(text: str) -> list[str]:
+    """Direct ``apt-get install`` package names, in first-seen order."""
+    collapsed = _DOCKER_LINE_CONT_RE.sub(" ", text)
+    packages: list[str] = []
+    seen: set[str] = set()
+    for match in _DOCKER_APT_INSTALL_RE.finditer(collapsed):
+        for token in match.group(1).split():
+            if token.startswith("-"):
+                continue
+            # Drop apt version/arch suffixes: pkg=1.2.3 / pkg:amd64
+            name = token.split("=", 1)[0].split(":", 1)[0].strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            packages.append(name)
+    return packages
+
+
+def derived_dockerfile_inventory_names(repo_root: Path | None = None) -> set[str]:
+    """Inventory names implied by the Dockerfile (base image + apt packages)."""
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    path = root / "Dockerfile"
+    if not path.is_file():
+        return set()
+    text = path.read_text(encoding="utf-8")
+    names: set[str] = set()
+    if dockerfile_python_base_version(text) is not None:
+        names.add("python-base-image")
+    names.update(dockerfile_apt_packages(text))
+    return names
+
+
+def validate_dockerfile(repo_root: Path | None = None) -> GateResult:
+    """Fail closed when the Dockerfile drifts from python_min_version / inventory.
+
+    A missing Dockerfile is OK only when the inventory does not claim any
+    Dockerfile-backed entries. Version checks run whenever a Dockerfile exists.
+    """
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    result = GateResult(ok=True)
+    path = root / "Dockerfile"
+    inv_path = root / "dependency-inventory.json"
+
+    if not path.is_file():
+        if inv_path.is_file():
+            inv = load_inventory(root)
+            claimed = [
+                d.get("name")
+                for d in (inv.get("dependencies") or [])
+                if d.get("manifest") == "Dockerfile"
+                or d.get("name") == "python-base-image"
+            ]
+            if claimed:
+                result.fail(
+                    "dockerfile_missing",
+                    (
+                        "Dockerfile missing but dependency-inventory.json still "
+                        f"lists Dockerfile-backed entries: {', '.join(sorted(map(str, claimed)))}"
+                    ),
+                    str(path),
+                )
+        return result
+
+    text = path.read_text(encoding="utf-8")
+    image_ver = dockerfile_python_base_version(text)
+    if image_ver is None:
+        result.fail(
+            "dockerfile_python_base",
+            "Dockerfile has no FROM python:X.Y image tag",
+            str(path),
+        )
+        return result
+
+    if not inv_path.is_file():
+        return result
+
+    need = python_min_version(root)[:2]
+    if image_ver < need:
+        result.fail(
+            "dockerfile_python_version",
+            (
+                f"Dockerfile FROM python:{image_ver[0]}.{image_ver[1]} is older than "
+                f"python_min_version {need[0]}.{need[1]}"
+            ),
+            str(path),
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Inventory coverage
 # ---------------------------------------------------------------------------
 
@@ -1362,10 +1474,12 @@ def derived_inventory_names(repo_root: Path | None = None) -> set[str]:
     """Names that must appear in dependency-inventory.json, from manifests.
 
     Sources: requirements*.txt exact pins, npm island direct dependencies
-    (``@embedpdf/*`` collapsed), plus structural entries (Inter, python, …).
+    (``@embedpdf/*`` collapsed), Dockerfile (``python-base-image`` + apt
+    packages), plus structural entries (Inter, python).
     """
     root = Path(repo_root) if repo_root is not None else REPO_ROOT
     names: set[str] = set(_INVENTORY_STRUCTURAL_NAMES)
+    names.update(derived_dockerfile_inventory_names(root))
 
     for rel in ("requirements.txt", "requirements-dev.txt"):
         path = root / rel
@@ -1407,6 +1521,8 @@ def validate_inventory(repo_root: Path | None = None) -> GateResult:
             str(inv_path),
         )
         return result
+
+    result.extend(validate_dockerfile(root))
 
     inv = load_inventory(root)
     deps = inv.get("dependencies") or []

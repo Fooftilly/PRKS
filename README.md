@@ -725,7 +725,7 @@ PRKS separates **freshness discovery** (Dependabot / optional `python scripts/de
 
 `python run_tests.py` preflights `--repo` + `--runtime` before unit tests; `--e2e` preflights `--test`.
 
-Authoritative pins live in `requirements*.txt`, `tools/*/package.json`, and (for Inter) `frontend/vendor/inter/VERSION`. `dependency-inventory.json` references those sources — it does not duplicate version literals when an authoritative file already exists.
+Authoritative pins live in `requirements*.txt`, `tools/*/package.json`, the `Dockerfile` (`FROM python:X.Y` and direct `apt-get install` packages), and (for Inter) `frontend/vendor/inter/VERSION`. `dependency-inventory.json` references those sources — it does not duplicate version literals when an authoritative file already exists.
 
 Rebuild vendored assets after changing a pin:
 
