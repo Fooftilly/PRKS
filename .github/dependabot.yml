@@ -42,3 +42,11 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "build(deps)"
+
+  # Keep GitHub Actions used by CI and security workflows current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
