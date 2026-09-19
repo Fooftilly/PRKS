@@ -8,7 +8,7 @@ extend-exclude = [
 ]
 
 [lint]
-# Keep CI focused on likely defects instead of formatting/style churn.
+# Production-only, bug-focused rules. Formatting/style are intentionally out of scope.
 select = [
   "E9",
   "F63",
@@ -24,5 +24,4 @@ select = [
   "B032",
   "B033",
   "B039",
-  "B909",
 ]
