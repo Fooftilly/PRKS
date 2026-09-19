@@ -42,6 +42,11 @@ if __name__ == "__main__":
     if args.testing:
         os.environ["PRKS_TESTING"] = "1"
 
+    # Fail before storage/DB/migrations/server when the Python env is wrong.
+    from backend.dependency_gate import ensure_runtime_or_exit
+
+    ensure_runtime_or_exit()
+
     config = StorageConfig.from_env()
     recover_incomplete_restore(config)
     config = bind_storage(config)

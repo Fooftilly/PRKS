@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "description": "PRKS accepted-dependency inventory. Prefer authoritative_source references over duplicated version literals. Freshness is Dependabot/explicit watchers; consistency is scripts/dependency_gate.py (offline).",
+  "python_min_version": [3, 12],
+  "dependencies": [
+    {
+      "name": "PyMuPDF",
+      "scope": "runtime",
+      "authoritative_source": "requirements.txt",
+      "manifest": "requirements.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "Pillow",
+      "scope": "runtime",
+      "authoritative_source": "requirements.txt",
+      "manifest": "requirements.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "playwright",
+      "scope": "test",
+      "authoritative_source": "requirements-dev.txt",
+      "manifest": "requirements-dev.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "react",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> dependencies.react",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
+        "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json -> react",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "react-dom",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> dependencies.react-dom",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
+        "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json -> reactDom",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@types/react",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> devDependencies.@types/react",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@types/react-dom",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> devDependencies.@types/react-dom",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "typescript",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> devDependencies.typescript",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "esbuild",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> devDependencies.esbuild",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json -> esbuild",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@embedpdf/*",
+      "scope": "build",
+      "authoritative_source": "tools/pdf-viewer/package.json -> dependencies.@embedpdf/*",
+      "manifest": "tools/pdf-viewer/package.json",
+      "lockfile": "tools/pdf-viewer/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
+        "frontend/vendor/prks-pdf-viewer/prks-pdf-viewer.css",
+        "frontend/vendor/prks-pdf-viewer/pdfium.wasm",
+        "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vendor/prks-pdf-viewer/BUILD-MANIFEST.json -> embedpdf",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "compatibility_contract": "EmbedPDF patches under tools/pdf-viewer/patches/ are valid only for the pinned 2.15.1 line; bumping EmbedPDF requires regenerating those patches."
+    },
+    {
+      "name": "cytoscape",
+      "scope": "vendor",
+      "authoritative_source": "tools/research-graph/package.json -> dependencies.cytoscape",
+      "manifest": "tools/research-graph/package.json",
+      "lockfile": "tools/research-graph/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/cytoscape/cytoscape.min.js",
+        "frontend/vendor/cytoscape/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/cytoscape/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "dompurify",
+      "scope": "vendor",
+      "authoritative_source": "tools/frontend-vendor/package.json -> dependencies.dompurify",
+      "manifest": "tools/frontend-vendor/package.json",
+      "lockfile": "tools/frontend-vendor/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/dompurify/purify.min.js",
+        "frontend/vendor/dompurify/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/dompurify/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "easymde",
+      "scope": "vendor",
+      "authoritative_source": "tools/frontend-vendor/package.json -> dependencies.easymde",
+      "manifest": "tools/frontend-vendor/package.json",
+      "lockfile": "tools/frontend-vendor/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/easymde/easymde.min.js",
+        "frontend/vendor/easymde/easymde.min.css",
+        "frontend/vendor/easymde/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/easymde/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "codemirror",
+      "scope": "vendor",
+      "authoritative_source": "tools/frontend-vendor/package.json -> dependencies.codemirror",
+      "manifest": "tools/frontend-vendor/package.json",
+      "lockfile": "tools/frontend-vendor/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/codemirror/codemirror.js",
+        "frontend/vendor/codemirror/show-hint.js",
+        "frontend/vendor/codemirror/show-hint.css",
+        "frontend/vendor/codemirror/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/codemirror/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "lucide",
+      "scope": "vendor",
+      "authoritative_source": "tools/frontend-vendor/package.json -> dependencies.lucide",
+      "manifest": "tools/frontend-vendor/package.json",
+      "lockfile": "tools/frontend-vendor/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/lucide/lucide.min.js",
+        "frontend/vendor/lucide/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/lucide/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "inter",
+      "scope": "vendor",
+      "authoritative_source": "frontend/vendor/inter/VERSION",
+      "manifest": "frontend/vendor/inter/VERSION",
+      "lockfile": null,
+      "generated_assets": [
+        "frontend/vendor/inter/InterVariable.woff2",
+        "frontend/vendor/inter/inter.css"
+      ],
+      "version_metadata": "frontend/vendor/inter/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": false,
+      "freshness": "raw-vendor: tracked in VERSION (GitHub release rsms/inter); Dependabot cannot manage font zip assets without altering the CSS/woff2 contract"
+    },
+    {
+      "name": "python",
+      "scope": "runtime",
+      "authoritative_source": "dependency-inventory.json -> python_min_version",
+      "manifest": "dependency-inventory.json",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": false
+    },
+    {
+      "name": "python-base-image",
+      "scope": "build",
+      "authoritative_source": "Dockerfile -> FROM",
+      "manifest": "Dockerfile",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "qpdf",
+      "scope": "system",
+      "authoritative_source": "Dockerfile apt package (unpinned; optional host capability)",
+      "manifest": "Dockerfile",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": false,
+      "optional": true,
+      "notes": "Optional PDF linearization capability. Not required for PRKS startup; do not make mandatory."
+    }
+  ]
+}
