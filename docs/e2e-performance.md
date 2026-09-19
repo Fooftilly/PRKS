@@ -89,6 +89,11 @@ python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile -
 Compare the same selection, commit, worker count and machine. Do not compare a
 parallel run to a serial run when judging an individual-test optimization.
 
+`--profile` and `--no-seed-cache` do **not** update `.tests/e2e-timings.json`
+(or last-failed history). Those files train ordinary-gate LPT sharding; writing
+instrumented or cache-off durations into them would poison later normal runs.
+Profile/slowest output for the current run still prints as usual.
+
 ## Remaining opportunities to measure
 
 These should be changed only when profiling demonstrates a material gain and the

@@ -346,6 +346,16 @@ def _persist_timings(observed, known_ids):
         save_timings(path, merged)
 
 
+def _is_benchmark_mode(args) -> bool:
+    """True for non-representative runs that must not train LPT / last-failed history.
+
+    ``--profile`` adds instrumentation overhead; ``--no-seed-cache`` measures a
+    slower non-default configuration. Persisting either into
+    ``.tests/e2e-timings.json`` poisons later normal-gate shard balancing.
+    """
+    return bool(getattr(args, "profile", False) or getattr(args, "no_seed_cache", False))
+
+
 # --- worker mode ---------------------------------------------------------
 
 
@@ -856,13 +866,17 @@ def build_parser():
         action="store_true",
         help=(
             "Measure per-test E2E infrastructure phases (seed build/clone, server startup, "
-            "browser context, app readiness, async waits, request routing, shutdown)."
+            "browser context, app readiness, async waits, request routing, shutdown). "
+            "Does not update .tests/e2e-timings.json or last-failed history."
         ),
     )
     parser.add_argument(
         "--no-seed-cache",
         action="store_true",
-        help="Disable worker-local immutable fixture seed snapshots for A/B benchmarking.",
+        help=(
+            "Disable worker-local immutable fixture seed snapshots for A/B benchmarking. "
+            "Does not update .tests/e2e-timings.json or last-failed history."
+        ),
     )
     # Internal: how the parent invokes one shard.
     parser.add_argument("--worker-index", type=int, default=None, help=argparse.SUPPRESS)
@@ -1133,38 +1147,43 @@ def main(argv=None) -> int:
             print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
 
     targeted = tier != "full"
-    _persist_timings(observed, test_ids if not targeted else None)
+    # Benchmark modes still print profile / slowest for this run, but must not
+    # train LPT history or mutate last-failed — those files drive ordinary gates.
+    persist_history = not _is_benchmark_mode(args)
+    if persist_history:
+        _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
 
     # Persist unresolved failures from actual completions only — never treat
     # the pre-run selection as executed (fail-fast / cancelled / crashed).
-    executed_ids = _executed_ids_from_observation(observed, failed_ids)
-    previous = load_last_failed(REPO / LAST_FAILED_PATH)
-    previous_ids = (previous or {}).get("test_ids") or []
-    unresolved = merge_last_failed(
-        previous_ids, executed_ids, failed_ids, known_ids=all_ids
-    )
-    last_failed_path = REPO / LAST_FAILED_PATH
-    if unresolved:
-        save_last_failed(
-            last_failed_path,
-            unresolved,
-            meta={
-                "tier": tier,
-                "note": note,
-                "executed": len(executed_ids),
-                "selected": len(test_ids),
-                "failed_this_run": len(failed_ids),
-            },
+    if persist_history:
+        executed_ids = _executed_ids_from_observation(observed, failed_ids)
+        previous = load_last_failed(REPO / LAST_FAILED_PATH)
+        previous_ids = (previous or {}).get("test_ids") or []
+        unresolved = merge_last_failed(
+            previous_ids, executed_ids, failed_ids, known_ids=all_ids
         )
-        print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
-    elif last_failed_path.is_file():
-        try:
-            last_failed_path.unlink()
-        except OSError:
-            pass
-        if previous_ids:
-            print("Cleared last-failed (all previously failed tests resolved)")
+        last_failed_path = REPO / LAST_FAILED_PATH
+        if unresolved:
+            save_last_failed(
+                last_failed_path,
+                unresolved,
+                meta={
+                    "tier": tier,
+                    "note": note,
+                    "executed": len(executed_ids),
+                    "selected": len(test_ids),
+                    "failed_this_run": len(failed_ids),
+                },
+            )
+            print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
+        elif last_failed_path.is_file():
+            try:
+                last_failed_path.unlink()
+            except OSError:
+                pass
+            if previous_ids:
+                print("Cleared last-failed (all previously failed tests resolved)")
 
     pointer = None
     if ok and not args.no_pointer_capture:
