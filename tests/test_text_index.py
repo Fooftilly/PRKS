@@ -70,7 +70,7 @@ END;
 
 
 def _pdf_with_text_bytes(text: str) -> bytes:
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open()
     page = doc.new_page()
@@ -81,7 +81,7 @@ def _pdf_with_text_bytes(text: str) -> bytes:
 
 
 def _empty_pdf_bytes() -> bytes:
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open()
     doc.new_page()
