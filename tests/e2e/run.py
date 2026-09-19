@@ -33,7 +33,9 @@ os.environ["PRKS_E2E"] = "1"
 
 from tests.e2e.harness import (
     apply_e2e_playwright_env,
+    finish_test_profile,
     python_for_subprocess,
+    start_test_profile,
     stop_all_servers,
 )
 from tests.e2e.install_browser import ensure_chromium_installed
@@ -261,10 +263,12 @@ class _TimingResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.timings = {}
+        self.phase_timings = {}
         self._started_at = None
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
+        start_test_profile(test.id())
         # Workers redirect stdout to their log file; print the id so a hung
         # shard names the test it never left (TextTestRunner stream is StringIO).
         print(test.id(), flush=True)
@@ -275,6 +279,9 @@ class _TimingResult(unittest.TextTestResult):
         if self._started_at is not None:
             self.timings[test.id()] = time.perf_counter() - self._started_at
             self._started_at = None
+        phases = finish_test_profile(test.id())
+        if phases:
+            self.phase_timings[test.id()] = phases
 
 
 def _result_factory(stream, descriptions, verbosity):
@@ -399,6 +406,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         "skipped": 0,
         "failed_ids": [],
         "timings": {},
+        "phase_timings": {},
         "output": "",
         "detail": "",
     }
@@ -417,6 +425,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         report["skipped"] = len(result.skipped)
         report["failed_ids"] = _failed_ids_from_result(result)
         report["timings"] = {k: round(v, 3) for k, v in result.timings.items()}
+        report["phase_timings"] = result.phase_timings
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
     except BaseException as exc:  # noqa: BLE001 - must still report, then re-raise nothing
@@ -532,6 +541,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
     estimates = shard_estimates(buckets, timings)
     browsers_path = apply_e2e_playwright_env()
     observed = {}
+    phase_timings = {}
     reports = []
     failed_ids = []
     started = time.perf_counter()
@@ -589,6 +599,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
                     reports.append(entry)
                     if report:
                         observed.update(report.get("timings") or {})
+                        phase_timings.update(report.get("phase_timings") or {})
                         for fid in report.get("failed_ids") or []:
                             if fid not in failed_ids:
                                 failed_ids.append(fid)
@@ -656,7 +667,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
     )
     for problem in problems:
         print("  %s" % problem, file=sys.stderr)
-    return ok, observed, failed_ids
+    return ok, observed, failed_ids, phase_timings
 
 
 def _print_worker_failure(worker, jobs, report):
@@ -685,7 +696,7 @@ def _print_worker_failure(worker, jobs, report):
 # --- serial parent -------------------------------------------------------
 
 
-def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list]:
+def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list, dict]:
     runner = unittest.TextTestRunner(
         verbosity=2, failfast=fail_fast, resultclass=_result_factory
     )
@@ -705,6 +716,7 @@ def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list]:
         result.wasSuccessful(),
         {k: round(v, 3) for k, v in result.timings.items()},
         _failed_ids_from_result(result),
+        result.phase_timings,
     )
 
 
@@ -808,6 +820,19 @@ def build_parser():
         "--list-features",
         action="store_true",
         help="Print the E2E feature-group catalog and exit.",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "Measure per-test E2E infrastructure phases (seed build/clone, server startup, "
+            "browser context, app readiness, async waits, request routing, shutdown)."
+        ),
+    )
+    parser.add_argument(
+        "--no-seed-cache",
+        action="store_true",
+        help="Disable worker-local immutable fixture seed snapshots for A/B benchmarking.",
     )
     # Internal: how the parent invokes one shard.
     parser.add_argument("--worker-index", type=int, default=None, help=argparse.SUPPRESS)
@@ -932,6 +957,11 @@ def _resolve_selection(args, all_ids):
 def main(argv=None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
+    if args.profile:
+        os.environ["PRKS_E2E_PROFILE"] = "1"
+    if args.no_seed_cache:
+        os.environ["PRKS_E2E_SEED_CACHE"] = "0"
+
     if args.worker_index is not None:
         return run_worker(
             args.worker_index, args.worker_count or 1, args.tests_file, args.report_file
@@ -1039,11 +1069,38 @@ def main(argv=None) -> int:
 
     timings = load_timings(REPO / TIMINGS_PATH)
     if jobs == 1:
-        ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
+        ok, observed, failed_ids, phase_timings = run_serial(test_ids, args.fail_fast)
     else:
-        ok, observed, failed_ids = run_parallel(
+        ok, observed, failed_ids, phase_timings = run_parallel(
             test_ids, jobs, timings, args.fail_fast
         )
+
+    if args.profile and phase_timings:
+        totals = {}
+        for phases in phase_timings.values():
+            for name, seconds in phases.items():
+                totals[name] = totals.get(name, 0.0) + float(seconds)
+        print("")
+        print("E2E infrastructure profile (sum across selected tests):")
+        for name, seconds in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
+            print("  %-18s %8.2fs" % (name, seconds))
+        print("")
+        print("Slowest profiled tests:")
+        ranked = sorted(
+            (
+                (sum(float(v) for v in phases.values()), test_id, phases)
+                for test_id, phases in phase_timings.items()
+            ),
+            reverse=True,
+        )[:20]
+        for infra_seconds, test_id, phases in ranked:
+            detail = ", ".join(
+                "%s=%.2f" % (name, float(value))
+                for name, value in sorted(
+                    phases.items(), key=lambda item: (-float(item[1]), item[0])
+                )
+            )
+            print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
 
     targeted = tier != "full"
     _persist_timings(observed, test_ids if not targeted else None)
