@@ -2061,3 +2061,13 @@ function initWorkDetailRightPanelActions(work, ownerCtx) {
         delBtn.addEventListener('click', () => void deleteWork(work.id, ownerCtx));
     }
 }
+
+/* Node selftests import the pure note-editor helpers directly (see
+ * tests/browser/run_wiki_link_autocomplete_selftest.js). Inert in the browser,
+ * where `module` is undefined and these stay ordinary file-scope functions. */
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        prksGetWikiLinkAutocompleteContext,
+        prksFilterWorksForWikiHint,
+    };
+}

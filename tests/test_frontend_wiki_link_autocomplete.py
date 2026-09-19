@@ -50,5 +50,25 @@ class FrontendWikiLinkAutocompleteTests(unittest.TestCase):
         self.assertNotIn("[^\\]|]*$", body)
 
 
+    def test_selftest_imports_the_module_rather_than_evaluating_it(self):
+        """The selftest must import works.js, not execute a slice of its source."""
+        runner = _read(_RUNNER)
+        works = _read(_WORKS)
+        # works.js carries the repo's standard Node export guard, so the helper
+        # can be imported directly -- same shape as navigation.js/concepts.js.
+        self.assertIn("if (typeof module !== 'undefined' && module.exports)", works)
+        self.assertIn("prksGetWikiLinkAutocompleteContext,", works)
+        self.assertIn(
+            "require('../../frontend/js/components/works.js')",
+            runner,
+        )
+        # No dynamic code execution: that is what javascript:S1523 flags, and
+        # slicing source out of a file to eval it is also needlessly fragile.
+        self.assertNotIn("vm.runInContext", runner)
+        self.assertNotIn("require('vm')", runner)
+        self.assertNotIn("readFileSync", runner)
+        self.assertNotIn("eval(", runner)
+
+
 if __name__ == "__main__":
     unittest.main()

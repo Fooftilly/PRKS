@@ -5,32 +5,17 @@
  * prksGetWikiLinkAutocompleteContext in isolation.
  *
  * The function only touches cm.getCursor(), cm.getLine() and cm.constructor.Pos,
- * so it runs against a tiny CodeMirror stand-in -- no EasyMDE, no DOM. Sliced
- * out of works.js the same way run_research_graph_offline_selftest.js slices
- * app.js, so the assertions run against the shipped source, not a copy.
+ * so it runs against a tiny CodeMirror stand-in -- no EasyMDE, no DOM. It is
+ * imported straight from the shipped works.js through that file's Node export
+ * guard, the same way run_concept_sync_selftest.js imports concept-state.js, so
+ * the assertions run against the real implementation rather than a copy.
+ *
+ * works.js is a classic browser script that assigns to `window` at load, so the
+ * shim below stands in for it -- the same one those selftests rely on.
  */
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
-
-const rootDir = path.resolve(__dirname, '../..');
-const worksSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/components/works.js'), 'utf8');
-
-const START = 'function prksGetWikiLinkAutocompleteContext(cm) {';
-const END = 'function prksFilterWorksForWikiHint(';
-const startAt = worksSrc.indexOf(START);
-const endAt = worksSrc.indexOf(END);
-if (startAt === -1 || endAt === -1 || endAt < startAt) {
-    console.error('FAIL  could not slice prksGetWikiLinkAutocompleteContext out of works.js');
-    process.exit(1);
-}
-
-const sandbox = { console };
-sandbox.window = sandbox;
-vm.createContext(sandbox);
-vm.runInContext(worksSrc.slice(startAt, endAt), sandbox);
-const contextOf = sandbox.prksGetWikiLinkAutocompleteContext;
+global.window = global;
+const { prksGetWikiLinkAutocompleteContext: contextOf } = require('../../frontend/js/components/works.js');
 
 /* Minimal CodeMirror stand-in: one line, cursor at `ch`. */
 class FakeCM {
@@ -94,7 +79,7 @@ function assertContext(name, text, ch, expectedQuery, expectedFromCh) {
     );
 }
 
-record('function sliced out of works.js', typeof contextOf === 'function');
+record('function imported from works.js', typeof contextOf === 'function');
 
 /* Plain opener. */
 assertContext('bare opener yields an empty query', '[[', 2, '', 2);
