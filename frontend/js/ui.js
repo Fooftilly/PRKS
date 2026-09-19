@@ -615,12 +615,11 @@ function openModal(id) {
             }
             prksScheduleModalBaselineCapture('work-modal');
         };
-        const p = populateUploadComboboxes();
-        if (p && typeof p.then === 'function') {
-            p.then(after).catch(after);
-        } else {
-            after();
-        }
+        // populateUploadComboboxes is async, so it always yields a promise.
+        // Two-argument then, not .then(after).catch(after): the latter would run
+        // `after` a second time if the fulfilment call threw, re-focusing the
+        // modal and re-capturing its baseline. `after` runs exactly once here.
+        populateUploadComboboxes().then(after, after);
     } else if (id === 'person-modal') {
         resetPersonAliasAutoSyncState();
         syncPersonAliasesFromNames();
