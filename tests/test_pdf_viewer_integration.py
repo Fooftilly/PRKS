@@ -29,10 +29,10 @@ _MANUAL = os.path.join(_PROJECT_DIR, "tests", "PDF_VIEWER_MANUAL.md")
 _COVERAGE_TOKEN = re.compile(r"^(browser|playwright|python|manual):([a-z0-9-]+)$")
 _COVERAGE_EMPTY = frozenset({"", "—", "-", "–"})
 
-_REQUIRED_PATCHES = (
-    "embedpdf-plugin-selection-2.15.1.patch",
-    "embedpdf-plugin-pan-2.15.1.patch",
-    "embedpdf-plugin-viewport-2.15.1.patch",
+_REQUIRED_PATCH_TEMPLATES = (
+    "embedpdf-plugin-selection-{ver}.patch",
+    "embedpdf-plugin-pan-{ver}.patch",
+    "embedpdf-plugin-viewport-{ver}.patch",
 )
 
 _BANNED = ("@embedpdf/snippet", "@embedpdf/react-pdf-viewer")
@@ -109,19 +109,23 @@ def _iter_production_js():
 
 class PdfViewerIntegrationTests(unittest.TestCase):
     def test_vendor_bundle_and_manifest_pins(self):
+        # Compatibility contract: EmbedPDF patches under tools/pdf-viewer/patches/
+        # are valid only for the pinned EmbedPDF line in package.json.
         manifest = json.loads(_read(os.path.join(_VENDOR, "BUILD-MANIFEST.json")))
         version = _read(os.path.join(_VENDOR, "VERSION"))
         pkg = json.loads(_read(_PACKAGE))
-        self.assertEqual(manifest["embedpdf"], "2.15.1")
-        self.assertEqual(manifest["react"], "18.3.1")
-        self.assertEqual(manifest["reactDom"], "18.3.1")
+        deps = pkg["dependencies"]
+        embed = deps["@embedpdf/core"]
+        required_patches = tuple(t.format(ver=embed) for t in _REQUIRED_PATCH_TEMPLATES)
+        self.assertEqual(manifest["embedpdf"], embed)
+        self.assertEqual(manifest["react"], deps["react"])
+        self.assertEqual(manifest["reactDom"], deps["react-dom"])
+        self.assertEqual(deps["react"], deps["react-dom"])
         self.assertIsNone(manifest["fontFallback"])
         self.assertFalse(manifest["tiling"])
-        self.assertEqual(pkg["dependencies"]["react"], "18.3.1")
-        self.assertEqual(pkg["dependencies"]["react-dom"], "18.3.1")
-        self.assertEqual(pkg["dependencies"]["@embedpdf/core"], "2.15.1")
-        self.assertIn("embedpdf 2.15.1", version)
-        self.assertIn("react 18.3.1", version)
+        self.assertNotIn("builtAt", manifest)
+        self.assertIn(f"embedpdf {embed}", version)
+        self.assertIn(f"react {deps['react']}", version)
         self.assertIn("fontFallback null", version)
         js = os.path.join(_VENDOR, "prks-pdf-viewer.js")
         css = os.path.join(_VENDOR, "prks-pdf-viewer.css")
@@ -133,6 +137,15 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         self.assertGreater(os.path.getsize(wasm), 100000)
         self.assertTrue(os.path.isfile(os.path.join(_VENDOR, "LICENSES", "react-LICENSE")))
         self.assertTrue(os.path.isfile(os.path.join(_VENDOR, "THIRD_PARTY.md")))
+        for key, name in (
+            ("js", "prks-pdf-viewer.js"),
+            ("css", "prks-pdf-viewer.css"),
+            ("wasm", "pdfium.wasm"),
+        ):
+            path = os.path.join(_VENDOR, name)
+            with open(path, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            self.assertEqual(manifest["outputSha256"][key], digest, name)
         patches = manifest.get("embedpdfPatches") or []
         self.assertEqual(len(patches), 3, patches)
         names = {p["package"] for p in patches}
@@ -145,18 +158,20 @@ class PdfViewerIntegrationTests(unittest.TestCase):
             },
         )
         listed = {p["patch"] for p in patches}
-        for name in _REQUIRED_PATCHES:
+        for name in required_patches:
             path = os.path.join(_PATCHES, name)
             self.assertTrue(os.path.isfile(path), name)
             with open(path, "rb") as fh:
                 digest = hashlib.sha256(fh.read()).hexdigest()
             match = next(p for p in patches if p["patch"] == name)
-            self.assertEqual(match["version"], "2.15.1")
+            self.assertEqual(match["version"], embed)
             self.assertEqual(match["sha256"], digest)
             self.assertEqual(len(match["sha256"]), 64)
-        self.assertEqual(listed, set(_REQUIRED_PATCHES))
+        self.assertEqual(listed, set(required_patches))
         self.assertTrue(os.path.isfile(_APPLY))
         self.assertIn("apply-embedpdf-patches.mjs", pkg.get("scripts", {}).get("postinstall", ""))
+        esbuild_pin = (pkg.get("devDependencies") or {}).get("esbuild")
+        self.assertEqual(manifest.get("esbuild"), esbuild_pin)
 
     def test_react_bundled_once_in_metafile_inputs(self):
         manifest = json.loads(_read(os.path.join(_VENDOR, "BUILD-MANIFEST.json")))

@@ -1,5 +1,6 @@
 """Isolation guards for the real-browser E2E layer. Does not launch Chromium."""
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,11 +57,12 @@ class E2EIsolationTests(unittest.TestCase):
         self.assertNotIn("playwright", docker.lower())
 
     def test_dev_requirements_pin_playwright(self):
-        from tests.e2e.install_browser import pinned_playwright_version
+        from backend.dependency_gate import pinned_playwright_version
+        from tests.e2e.install_browser import pinned_playwright_version as install_pin
 
-        dev = _read(_REQ_DEV)
-        self.assertRegex(dev, r"(?m)^playwright==1\.63\.0\s*$")
-        self.assertEqual(pinned_playwright_version(), "1.63.0")
+        pin = pinned_playwright_version()
+        self.assertEqual(install_pin(), pin)
+        self.assertRegex(_read(_REQ_DEV), rf"(?m)^playwright=={re.escape(pin)}\s*$")
 
     def test_no_production_fake_e2e_api(self):
         server = _read(_SERVER)

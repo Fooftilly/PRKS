@@ -1,11 +1,17 @@
-"""Structural guards: ordinary UI deps are local and version-pinned."""
+"""Structural guards: ordinary UI deps are local and version-pinned.
+
+Expected versions come from authoritative sources (tools/*/package.json,
+frontend/vendor/*/VERSION, DEPENDENCY-MANIFEST), not hard-coded literals.
+"""
+import json
 import os
 import unittest
+from pathlib import Path
 
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
-_INDEX = os.path.join(_FRONTEND, "index.html")
-_VENDOR = os.path.join(_FRONTEND, "vendor")
+_PROJECT_DIR = Path(__file__).resolve().parents[1]
+_FRONTEND = _PROJECT_DIR / "frontend"
+_INDEX = _FRONTEND / "index.html"
+_VENDOR = _FRONTEND / "vendor"
 
 _DEP_CDN_MARKERS = (
     "fonts.googleapis.com",
@@ -17,81 +23,102 @@ _DEP_CDN_MARKERS = (
 )
 
 
-def _read(path: str) -> str:
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _frontend_vendor_pins() -> dict:
+    return json.loads((_PROJECT_DIR / "tools" / "frontend-vendor" / "package.json").read_text())[
+        "dependencies"
+    ]
+
+
+def _cytoscape_pin() -> str:
+    return json.loads((_PROJECT_DIR / "tools" / "research-graph" / "package.json").read_text())[
+        "dependencies"
+    ]["cytoscape"]
 
 
 def _iter_production_loader_files():
     yield _INDEX
-    css = os.path.join(_FRONTEND, "css")
-    if os.path.isdir(css):
-        for root, _dirs, files in os.walk(css):
-            for name in files:
-                if name.endswith(".css"):
-                    yield os.path.join(root, name)
-    js = os.path.join(_FRONTEND, "js")
-    if os.path.isdir(js):
-        for root, _dirs, files in os.walk(js):
-            for name in files:
-                if name.endswith(".js"):
-                    yield os.path.join(root, name)
+    css = _FRONTEND / "css"
+    if css.is_dir():
+        for path in css.rglob("*.css"):
+            yield path
+    js = _FRONTEND / "js"
+    if js.is_dir():
+        for path in js.rglob("*.js"):
+            yield path
 
 
 class FrontendDependencyTests(unittest.TestCase):
     def test_inter_vendor_pin(self):
-        woff = os.path.join(_VENDOR, "inter", "InterVariable.woff2")
-        version = _read(os.path.join(_VENDOR, "inter", "VERSION"))
-        license_txt = _read(os.path.join(_VENDOR, "inter", "LICENSE"))
-        css = _read(os.path.join(_VENDOR, "inter", "inter.css"))
-        self.assertTrue(os.path.isfile(woff))
-        self.assertGreater(os.path.getsize(woff), 10000)
-        self.assertIn("4.1", version)
+        woff = _VENDOR / "inter" / "InterVariable.woff2"
+        version = _read(_VENDOR / "inter" / "VERSION")
+        license_txt = _read(_VENDOR / "inter" / "LICENSE")
+        css = _read(_VENDOR / "inter" / "inter.css")
+        self.assertTrue(woff.is_file())
+        self.assertGreater(woff.stat().st_size, 10000)
         self.assertIn("github.com/rsms/inter", version)
-        self.assertIn(
-            "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3",
-            version,
-        )
+        self.assertIn("sha256:", version)
         self.assertIn("SIL Open Font License", license_txt)
         self.assertIn("/vendor/inter/InterVariable.woff2", css)
+        self.assertNotIn("fetched:", version.lower())
 
     def test_easymde_vendor_pin(self):
-        js = os.path.join(_VENDOR, "easymde", "easymde.min.js")
-        css = os.path.join(_VENDOR, "easymde", "easymde.min.css")
-        version = _read(os.path.join(_VENDOR, "easymde", "VERSION"))
-        self.assertTrue(os.path.isfile(js))
-        self.assertTrue(os.path.isfile(css))
-        self.assertIn("2.21.0", version)
-        self.assertGreater(os.path.getsize(js), 10000)
+        want = _frontend_vendor_pins()["easymde"]
+        js = _VENDOR / "easymde" / "easymde.min.js"
+        css = _VENDOR / "easymde" / "easymde.min.css"
+        version = _read(_VENDOR / "easymde" / "VERSION")
+        self.assertTrue(js.is_file())
+        self.assertTrue(css.is_file())
+        self.assertIn(want, version)
+        self.assertGreater(js.stat().st_size, 10000)
+        self.assertNotIn("fetched:", version.lower())
 
     def test_codemirror_vendor_pin(self):
-        lib = os.path.join(_VENDOR, "codemirror", "codemirror.js")
-        hint = os.path.join(_VENDOR, "codemirror", "show-hint.js")
-        hint_css = os.path.join(_VENDOR, "codemirror", "show-hint.css")
-        version = _read(os.path.join(_VENDOR, "codemirror", "VERSION"))
-        self.assertTrue(os.path.isfile(lib))
-        self.assertTrue(os.path.isfile(hint))
-        self.assertTrue(os.path.isfile(hint_css))
-        self.assertIn("5.65.15", version)
+        want = _frontend_vendor_pins()["codemirror"]
+        lib = _VENDOR / "codemirror" / "codemirror.js"
+        hint = _VENDOR / "codemirror" / "show-hint.js"
+        hint_css = _VENDOR / "codemirror" / "show-hint.css"
+        version = _read(_VENDOR / "codemirror" / "VERSION")
+        self.assertTrue(lib.is_file())
+        self.assertTrue(hint.is_file())
+        self.assertTrue(hint_css.is_file())
+        self.assertIn(want, version)
+        self.assertNotIn("fetched:", version.lower())
 
     def test_lucide_vendor_pin(self):
-        js = os.path.join(_VENDOR, "lucide", "lucide.min.js")
-        version = _read(os.path.join(_VENDOR, "lucide", "VERSION"))
-        self.assertTrue(os.path.isfile(js))
-        self.assertIn("0.511.0", version)
-        self.assertGreater(os.path.getsize(js), 10000)
+        want = _frontend_vendor_pins()["lucide"]
+        js = _VENDOR / "lucide" / "lucide.min.js"
+        version = _read(_VENDOR / "lucide" / "VERSION")
+        self.assertTrue(js.is_file())
+        self.assertIn(want, version)
+        self.assertGreater(js.stat().st_size, 10000)
+        self.assertNotIn("fetched:", version.lower())
 
     def test_dompurify_unchanged(self):
-        version = _read(os.path.join(_VENDOR, "dompurify", "VERSION"))
-        self.assertIn("3.4.15", version)
+        want = _frontend_vendor_pins()["dompurify"]
+        version = _read(_VENDOR / "dompurify" / "VERSION")
+        self.assertIn(want, version)
+        self.assertIn("sha256:", version)
+        self.assertNotIn("fetched:", version.lower())
 
     def test_cytoscape_vendor_pin(self):
-        js = os.path.join(_VENDOR, "cytoscape", "cytoscape.min.js")
-        version = _read(os.path.join(_VENDOR, "cytoscape", "VERSION"))
-        self.assertTrue(os.path.isfile(js))
-        self.assertIn("3.34.3", version)
-        self.assertGreater(os.path.getsize(js), 10000)
+        want = _cytoscape_pin()
+        js = _VENDOR / "cytoscape" / "cytoscape.min.js"
+        version = _read(_VENDOR / "cytoscape" / "VERSION")
+        self.assertTrue(js.is_file())
+        self.assertIn(want, version)
+        self.assertGreater(js.stat().st_size, 10000)
         self.assertNotIn("cdn.jsdelivr.net", version)
+        self.assertNotIn("fetched:", version.lower())
+
+    def test_dependency_manifest_lists_vendor_runtime(self):
+        manifest = json.loads(_read(_VENDOR / "DEPENDENCY-MANIFEST.json"))
+        names = {d["name"] for d in manifest["dependencies"]}
+        for name in ("dompurify", "easymde", "codemirror", "lucide", "cytoscape", "inter", "prks-pdf-viewer"):
+            self.assertIn(name, names)
 
     def test_index_loads_local_deps_in_order(self):
         html = _read(_INDEX)

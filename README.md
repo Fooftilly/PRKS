@@ -11,7 +11,7 @@ PRKS is a self-hosted web application for organizing research materials: PDFs, M
 ## Requirements
 
 - **Python 3.12+**
-- **PyMuPDF** 1.28.2
+- **PyMuPDF** and **Pillow** — exact pins in `requirements.txt` (currently `PyMuPDF==1.28.2`, `Pillow==12.3.0`)
 
 The HTTP server and SQLite access use the Python standard library.
 
@@ -21,12 +21,15 @@ It is not offline support.
 
 ## Quick start (local)
 
-From the repository root:
+Prefer a project-local virtual environment (required on PEP 668 “externally managed” systems — never use `sudo pip` or `--break-system-packages`):
 
 ```bash
-pip install -r requirements.txt
-python prks_app.py
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python prks_app.py
 ```
+
+`prks_app.py` validates the Python environment (minimum version + exact `requirements.txt` pins via `importlib.metadata`) **before** DB recovery, migrations, storage binding, or server startup. A mismatch exits non-zero with platform-aware remediation. It never auto-runs `pip` and never contacts PyPI.
 
 The process listens on **127.0.0.1:8080** only. Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. No extra firewall or network setup is required for this case.
 
@@ -645,7 +648,7 @@ python -m pip install -r requirements-dev.txt
 python run_tests.py --e2e
 ```
 
-`python tests/e2e/run.py` remains the direct E2E entry point. Before any browser download, the runner checks `importlib.metadata.version("playwright")` against the exact pin in `requirements-dev.txt` (`playwright==1.63.0`). A mismatch fails immediately. If the pin matches and Chromium is missing, it installs into repository-local `.playwright-browsers/` (gitignored). Later runs reuse that cache. `python tests/e2e/install_browser.py` is the same installer on its own. Test execution sets `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so Playwright cannot silently fetch browsers into the virtualenv or OS user cache.
+`python tests/e2e/run.py` remains the direct E2E entry point. Before any browser download, the runner checks `importlib.metadata.version("playwright")` against the exact pin in `requirements-dev.txt` (shared with `scripts/dependency_gate.py --test`). A mismatch fails immediately. If the pin matches and Chromium is missing, it installs into repository-local `.playwright-browsers/` (gitignored). Later runs reuse that cache. `python tests/e2e/install_browser.py` is the same installer on its own. Test execution sets `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so Playwright cannot silently fetch browsers into the virtualenv or OS user cache.
 
 Every E2E run creates a fresh temporary `PRKS_STORAGE` with `PRKS_TESTING=1`, binds `127.0.0.1`, and deletes that tree on teardown. It never targets `data/` or a live production storage directory.
 
@@ -708,7 +711,42 @@ These controls reduce accidental/cross-origin access and DNS-rebinding risk. The
 
 Research notes (`works.text_content`) are stored as raw Markdown, including literal `[[concept:Name]]` and `[[argument:A-ID|Label]]` markup. A preprocessor turns recognized references into internal hash links, then EasyMDE/Marked renders Markdown, then a pinned local DOMPurify allowlist sanitizes the preview (`frontend/vendor/dompurify`, `frontend/js/markdown-sanitize.js`). Markup inside code spans/fences or escaped as `\[[` is not a semantic reference. Arbitrary or active HTML is not a supported contract: unsafe tags, attributes, and URL schemes are stripped from the preview only. Sanitization never rewrites saved Markdown.
 
-Frontend libraries (Inter, EasyMDE, CodeMirror, Lucide, DOMPurify, the PDF viewer) are local files under `frontend/vendor/`. Node is not a runtime dependency. Docker does not run npm. To rebuild the PDF viewer after changing `tools/pdf-viewer/`:
+Frontend libraries (Inter, EasyMDE, CodeMirror, Lucide, DOMPurify, Cytoscape, the PDF viewer) are local files under `frontend/vendor/`. Node is not a runtime dependency. Docker does not run npm.
+
+### Dependency consistency
+
+PRKS separates **freshness discovery** (Dependabot / optional `python scripts/dependency_gate.py --check-latest`) from **consistency enforcement** (`scripts/dependency_gate.py`, fully offline):
+
+| Mode | What it checks |
+| ---- | -------------- |
+| `--runtime` | Python min version + exact `requirements.txt` pins (used at `prks_app.py` startup) |
+| `--test` | Runtime + `requirements-dev.txt` (Playwright) |
+| `--repo` | Inventory, npm package.json↔lockfile, vendor VERSION/SHA-256, PDF BUILD-MANIFEST hashes, `DEPENDENCY-MANIFEST.json`, SW cache revision, no CDN loaders |
+
+`python run_tests.py` preflights `--repo` + `--runtime` before unit tests; `--e2e` preflights `--test`.
+
+Authoritative pins live in `requirements*.txt`, `tools/*/package.json`, and (for Inter) `frontend/vendor/inter/VERSION`. `dependency-inventory.json` references those sources — it does not duplicate version literals when an authoritative file already exists.
+
+Rebuild vendored assets after changing a pin:
+
+```bash
+# Ordinary UI vendor (DOMPurify, EasyMDE, CodeMirror, Lucide)
+cd tools/frontend-vendor && npm ci && npm run build
+
+# Research Graph Cytoscape
+cd tools/research-graph && npm ci && npm run build
+
+# PDF viewer (EmbedPDF + React)
+cd tools/pdf-viewer && npm ci && npm run build
+```
+
+Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes change. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
+
+`npm ci` + build with unchanged inputs must leave a clean tree for that island (no `builtAt` / `fetched:` timestamps). Reproducibility is a separate maintainer path — `--repo` never requires npm or network.
+
+Docker installs exact pins from `requirements.txt`, sets `PRKS_CONTAINER=1` for remediation messaging, and does not reach the Internet at container runtime for dependency checks. Fix a stale container by rebuilding the image, not by pip-installing into it.
+
+To rebuild the PDF viewer after changing `tools/pdf-viewer/`:
 
 ```bash
 cd tools/pdf-viewer
@@ -716,7 +754,7 @@ npm ci
 npm run build
 ```
 
-That writes `frontend/vendor/prks-pdf-viewer/` (EmbedPDF 2.15.1 + React 18.3.1, bundled). React is not part of the PRKS UI; it exists only inside that file. The PDF fixture is served by the same test-only server as the sanitizer fixture: open the printed `tests/browser/pdf_viewer.html` URL. It must report PASS with no jsDelivr / Google Fonts / unpkg requests.
+That writes `frontend/vendor/prks-pdf-viewer/` (EmbedPDF + React from `package.json`, bundled). React is not part of the PRKS UI; it exists only inside that file. The PDF fixture is served by the same test-only server as the sanitizer fixture: open the printed `tests/browser/pdf_viewer.html` URL. It must report PASS with no jsDelivr / Google Fonts / unpkg requests.
 
 The sanitizer-boundary browser fixture is not served by the app. From the repo root:
 
