@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 UA = "PRKS-demo-seed/1.0 (https://github.com; README screenshots)"
 DEMO_LIBRARY = "Public domain library"

@@ -1884,7 +1884,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         except OSError:
                             pass
                     try:
-                        import fitz  # PyMuPDF
+                        import pymupdf as fitz  # PyMuPDF
                     except Exception as e:
                         # Common when the image/venv omits `pip install -r requirements.txt` (see Dockerfile).
                         LOGGER.warning(

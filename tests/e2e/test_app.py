@@ -2589,7 +2589,7 @@ def _pdf_text_band_fractions():
 
     PyMuPDF uses a top-left origin matching the rendered page image.
     """
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open(str(MINIMAL_PDF))
     try:
