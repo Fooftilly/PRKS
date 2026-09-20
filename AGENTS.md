@@ -4,7 +4,7 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 
 ## Engineering audit findings
 
-Engineering/audit findings are tracked canonically as GitHub Issues whose titles start with `[Audit Finding]` and carry a stable `EF-xxx` ID in the issue body. They are separate from `[Roadmap]` issues.
+Engineering/audit findings are tracked canonically as GitHub Issues with the `audit-finding` label, titles starting with `[Audit Finding]`, and a stable `EF-xxx` ID in the issue body. The label is the primary search key; the title prefix remains a human-readable taxonomy and fallback. Audit findings are separate from `[Roadmap]` issues.
 
 Before creating a new audit finding, search both open and closed issues with the `audit-finding` label, inspect existing `EF-xxx` IDs, and assign the next unused ID. Use the `[Audit Finding]` title prefix as a fallback search for legacy or misclassified issues. Re-check immediately before submitting so concurrent agents do not knowingly reuse an ID. Apply the `audit-finding` and `candidate` labels, plus the appropriate `priority:P1`/`priority:P2`/`priority:P3` and relevant `area:*` labels when the classification is known.
 
