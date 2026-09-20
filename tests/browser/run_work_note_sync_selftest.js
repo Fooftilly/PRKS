@@ -211,8 +211,9 @@ async function mutationTestAtoBtoA() {
     assert.ok(src.includes(needle), 'cancel-to-base check must exist to mutation-test');
     const mutated = src.replace(needle, '/* mutated: no cancel to observed.value */');
     assert.notEqual(mutated, src);
-    const tmp = path.join(os.tmpdir(), 'prks-mutated-note-store-' + process.pid + '.js');
-    fs.writeFileSync(tmp, mutated);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prks-mutated-note-store-'));
+    const tmp = path.join(tmpDir, 'local-store.js');
+    fs.writeFileSync(tmp, mutated, { mode: 0o600 });
     try {
         const { createPrksLocalStore: createMutated } = require(tmp);
         const store = createMutated({ indexedDB: createFakeIndexedDBFactory(), uuid });
@@ -222,7 +223,7 @@ async function mutationTestAtoBtoA() {
         assert.equal(rows.length, 1, 'without the cancel, A->B->A leaves an A operation');
         assert.equal(rows[0].payload.text, 'A');
     } finally {
-        try { fs.unlinkSync(tmp); } catch (_e) { /* best-effort */ }
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_e) { /* best-effort */ }
     }
 }
 

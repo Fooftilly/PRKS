@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { applyEmbedpdfPatches } from './scripts/apply-embedpdf-patches.mjs';
+import { bundleReferencesCdnReact } from './scripts/cdn-react-guard.mjs';
 import { runGuards } from './scripts/guard.mjs';
 import { resolvePython } from '../resolve-python3.mjs';
 
@@ -135,7 +136,7 @@ writeFileSync(
     `embedpdf ${embedpdfVersion}\nreact ${pkg.dependencies.react}\nreact-dom ${pkg.dependencies['react-dom']}\nfontFallback null\n`,
 );
 
-if (/cdn\.jsdelivr\.net.*react/.test(jsText) || /unpkg\.com.*react/.test(jsText)) {
+if (bundleReferencesCdnReact(jsText)) {
     throw new Error('bundle references CDN React');
 }
 if (

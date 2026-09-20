@@ -139,15 +139,6 @@ _GALLERY_SECTIONS = (
     "workspace",
 )
 
-_ALLOWED_INLINE_STYLE = re.compile(
-    r"""style\s*=\s*(['"])\s*(?:--[a-zA-Z0-9-]+\s*:\s*[^;"']+\s*;?\s*)+\1""",
-)
-
-_STATIC_LAYOUT_HINT = re.compile(
-    r"""style\s*=\s*['"][^'"]*(?:display\s*:|margin\s*:|margin-(?:top|bottom|left|right)\s*:|padding\s*:|font-size\s*:|gap\s*:|flex\s*:|width\s*:|height\s*:|color\s*:)""",
-    re.I,
-)
-
 
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as fh:
@@ -245,8 +236,6 @@ class DesignSystemContractTests(unittest.TestCase):
                 value = match.group(1).strip()
                 if not value:
                     violations.append("%s: empty style" % rel)
-                    continue
-                if _ALLOWED_INLINE_STYLE.search(raw) and not _STATIC_LAYOUT_HINT.search(raw):
                     continue
                 decls = [part.strip() for part in value.split(";") if part.strip()]
                 if decls and all(part.startswith("--") for part in decls):

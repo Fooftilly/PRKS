@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -266,6 +267,120 @@ class PdfViewerIntegrationTests(unittest.TestCase):
             src = _read(path)
             for marker in _CDN_MARKERS:
                 self.assertNotIn(marker, src, f"{path} contains {marker}")
+
+    def test_cdn_react_guard_catches_every_url_shape(self):
+        """The build guard must survive the shapes a bundler actually emits."""
+        cases = {
+            "flag": [
+                'fetch("https://unpkg.com/react@18/umd/react.production.min.js")',
+                'import("//unpkg.com/react@18/umd/react.production.min.js")',
+                'src="cdn.jsdelivr.net/npm/react@18/umd/react.js"',
+                'var u="https:\\/\\/cdn.jsdelivr.net\\/npm\\/react@18\\/react.js"',
+                'fetch("https://cdn.jsdelivr.net/npm/lib?dep=react")',
+                'fetch("https://UNPKG.COM/React@18/umd/react.js")',
+                'fetch("https://unpkg.com:443/react@18/react.js")',
+                # Trailing-dot FQDNs name the same DNS host.
+                'fetch("https://unpkg.com./react@18/react.js")',
+                'fetch("https://cdn.jsdelivr.net./npm/react@18/react.js")',
+                # WHATWG treats '\\' as a separator for special schemes, so
+                # these name the CDN host and really do load from it.
+                'fetch("https:\\unpkg.com\\react@18\\react.js")',
+                'fetch("https:\\\\cdn.jsdelivr.net\\\\npm\\\\react@18\\\\react.js")',
+            ],
+            "allow": [
+                'fetch("/vendor/prks-pdf-viewer/pdfium.wasm")',
+                'fetch("https://cdn.jsdelivr.net/npm/@embedpdf/pdfium@2.15.1/dist/pdfium.wasm")',
+                # Exact-hostname matching, not substring: lookalikes must not
+                # trip the guard.
+                'fetch("https://evil-unpkg.com/react@18/react.js")',
+                'fetch("https://unpkg.com.example.org/react@18/react.js")',
+                'fetch("https://unpkg.com.example.org./react@18/react.js")',
+                'const react = require("./react-shim.js");',
+                # Backslash normalisation must not invent a CDN host.
+                'require("C:\\\\node_modules\\\\react\\\\index.js")',
+            ],
+        }
+        script = """
+import { bundleReferencesCdnReact } from './tools/pdf-viewer/scripts/cdn-react-guard.mjs';
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (c) => { raw += c; });
+process.stdin.on('end', () => {
+  const cases = JSON.parse(raw);
+  const bad = [];
+  for (const text of cases.flag) {
+    if (!bundleReferencesCdnReact(text)) bad.push('missed: ' + text);
+  }
+  for (const text of cases.allow) {
+    if (bundleReferencesCdnReact(text)) bad.push('false positive: ' + text);
+  }
+  if (bad.length) { console.error(bad.join('\\n')); process.exit(1); }
+  console.log('ok');
+});
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=_PROJECT_DIR,
+            input=json.dumps(cases),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+    def test_cdn_react_guard_scan_is_linear(self):
+        """A long dotted token must not make the guard scan quadratically.
+
+        A host-like token that never reaches the required '/' used to be
+        re-scanned from every offset inside itself, so a generated bundle
+        carrying one could stall the build: 32k labels took ~11.6s before
+        the pattern rejected mid-token start positions, ~4ms after.
+        """
+        script = """
+import { bundleReferencesCdnReact } from './tools/pdf-viewer/scripts/cdn-react-guard.mjs';
+const chain = Array(64000).fill('ab').join('.');
+const started = Date.now();
+bundleReferencesCdnReact(chain);
+console.log(String(Date.now() - started));
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        elapsed_ms = int(proc.stdout.strip())
+        # Linear scanning lands in single-digit milliseconds; the quadratic
+        # form needed ~46s at this size. The bound is deliberately loose so
+        # a slow CI runner cannot flake it.
+        self.assertLess(elapsed_ms, 15000, f"guard scan took {elapsed_ms}ms")
+
+    def test_cdn_react_guard_passes_the_shipped_bundle(self):
+        """The guard must not fail the build on the bundle we actually ship."""
+        bundle = os.path.join(_VENDOR, "prks-pdf-viewer.js")
+        if not os.path.isfile(bundle):
+            self.skipTest("vendored bundle not built")
+        script = """
+import { readFileSync } from 'node:fs';
+import { bundleReferencesCdnReact } from './tools/pdf-viewer/scripts/cdn-react-guard.mjs';
+const text = readFileSync(process.argv[1], 'utf8');
+if (bundleReferencesCdnReact(text)) {
+  console.error('guard flagged the shipped bundle');
+  process.exit(1);
+}
+console.log('ok');
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script, bundle],
+            cwd=_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
 
     def test_fixture_and_assets(self):
         html = _read(_FIXTURE)
