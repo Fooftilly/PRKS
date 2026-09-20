@@ -42,6 +42,10 @@ from tests.e2e.harness import (
 from tests.e2e.install_browser import ensure_chromium_installed
 from tests.e2e.policy import (
     LAST_FAILED_PATH,
+    PROFILE_ENV,
+    SEED_CACHE_ENV,
+    ChangeDiscoveryError,
+    benchmark_modes,
     format_feature_catalog,
     full_gate_timeout_s,
     list_changed_paths,
@@ -364,14 +368,21 @@ def _persist_timings(observed, known_ids):
         save_timings(path, merged)
 
 
-def _is_benchmark_mode(args) -> bool:
-    """True for non-representative runs that must not train LPT / last-failed history.
+def _apply_runtime_modes(args) -> tuple:
+    """Export CLI benchmark flags, then decide the effective benchmark modes once.
 
-    ``--profile`` adds instrumentation overhead; ``--no-seed-cache`` measures a
-    slower non-default configuration. Persisting either into
-    ``.tests/e2e-timings.json`` poisons later normal-gate shard balancing.
+    ``--profile`` / ``--no-seed-cache`` configure the harness through
+    PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE, and those variables are equally
+    supported on their own. Exporting first and asking the environment after
+    keeps one canonical decision for both entry paths, so an env-only benchmark
+    run cannot train ``.tests/e2e-timings.json`` (poisoning later shard
+    balancing) or mutate last-failed state that ordinary runs rely on.
     """
-    return bool(getattr(args, "profile", False) or getattr(args, "no_seed_cache", False))
+    if args.profile:
+        os.environ[PROFILE_ENV] = "1"
+    if args.no_seed_cache:
+        os.environ[SEED_CACHE_ENV] = "0"
+    return benchmark_modes(os.environ)
 
 
 # --- worker mode ---------------------------------------------------------
@@ -894,7 +905,8 @@ def build_parser():
         help=(
             "Measure per-test E2E infrastructure phases (seed build/clone, server startup, "
             "browser context, app readiness, async waits, request routing, shutdown). "
-            "Does not update .tests/e2e-timings.json or last-failed history."
+            "Does not update .tests/e2e-timings.json or last-failed history "
+            "(same for PRKS_E2E_PROFILE=1 without this flag)."
         ),
     )
     parser.add_argument(
@@ -902,7 +914,8 @@ def build_parser():
         action="store_true",
         help=(
             "Disable worker-local immutable fixture seed snapshots for A/B benchmarking. "
-            "Does not update .tests/e2e-timings.json or last-failed history."
+            "Does not update .tests/e2e-timings.json or last-failed history "
+            "(same for PRKS_E2E_SEED_CACHE=0 without this flag)."
         ),
     )
     # Internal: how the parent invokes one shard.
@@ -1028,10 +1041,7 @@ def _resolve_selection(args, all_ids):
 def main(argv=None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
-    if args.profile:
-        os.environ["PRKS_E2E_PROFILE"] = "1"
-    if args.no_seed_cache:
-        os.environ["PRKS_E2E_SEED_CACHE"] = "0"
+    active_benchmark_modes = _apply_runtime_modes(args)
 
     if args.worker_index is not None:
         return run_worker(
@@ -1048,6 +1058,16 @@ def main(argv=None) -> int:
     all_ids = discover_test_ids()
     try:
         tier, test_ids, note = _resolve_selection(args, all_ids)
+    except ChangeDiscoveryError as exc:
+        # Fail closed: an unusable Git comparison is not "nothing changed".
+        print("affected: %s" % exc, file=sys.stderr)
+        print(
+            "refusing to report zero affected tests from failed change discovery; "
+            "check --base/the checkout, or select tests explicitly with "
+            "--smoke / --feature.",
+            file=sys.stderr,
+        )
+        return 2
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1176,7 +1196,12 @@ def main(argv=None) -> int:
     targeted = tier != "full"
     # Benchmark modes still print profile / slowest for this run, but must not
     # train LPT history or mutate last-failed — those files drive ordinary gates.
-    persist_history = not _is_benchmark_mode(args)
+    persist_history = not active_benchmark_modes
+    if active_benchmark_modes:
+        print(
+            "benchmark mode (%s): not persisting timing or last-failed history"
+            % ",".join(active_benchmark_modes)
+        )
     if persist_history:
         _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
@@ -1192,7 +1217,7 @@ def main(argv=None) -> int:
         )
         last_failed_path = REPO / LAST_FAILED_PATH
         if unresolved:
-            save_last_failed(
+            written = save_last_failed(
                 last_failed_path,
                 unresolved,
                 meta={
@@ -1203,7 +1228,14 @@ def main(argv=None) -> int:
                     "failed_this_run": len(failed_ids),
                 },
             )
-            print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
+            if written:
+                print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
+            else:
+                # Atomic write never committed: any previous state is still valid.
+                print(
+                    "warning: could not write last-failed state → %s" % LAST_FAILED_PATH,
+                    file=sys.stderr,
+                )
         elif last_failed_path.is_file():
             try:
                 last_failed_path.unlink()

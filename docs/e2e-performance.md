@@ -94,6 +94,13 @@ parallel run to a serial run when judging an individual-test optimization.
 instrumented or cache-off durations into them would poison later normal runs.
 Profile/slowest output for the current run still prints as usual.
 
+The same applies when the run is configured through the environment instead of
+the flags: `PRKS_E2E_PROFILE=1` or `PRKS_E2E_SEED_CACHE=0` make the run
+non-representative on their own, so the runner suppresses history persistence
+for them too and prints which benchmark mode is active. `tests/e2e/policy.py`
+(`benchmark_modes()`) makes that decision once, from the effective
+configuration after CLI flags are exported into the environment.
+
 ### Opt-in hang diagnostics and Chromium recycle
 
 `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe stage heartbeats (`START`,

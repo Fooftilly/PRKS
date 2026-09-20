@@ -1,6 +1,7 @@
 """Declarative E2E selection: tiers, feature groups, affected-file mapping.
 
-Pure logic — no Playwright, no subprocesses. Covered by
+Pure selection logic — no Playwright, no browser; the only subprocesses are
+read-only Git queries for ``--affected`` discovery. Covered by
 `tests/test_e2e_policy.py`. The runner (`tests/e2e/run.py`) is the only
 entry point that applies these selections to a real Chromium run.
 """
@@ -12,6 +13,52 @@ import subprocess
 from pathlib import Path
 
 LAST_FAILED_PATH = Path(".tests") / "e2e-last-failed.json"
+
+# ---------------------------------------------------------------------------
+# Effective runtime configuration (CLI flags and the equivalent environment)
+# ---------------------------------------------------------------------------
+
+# Runner/harness env switches. The harness reads them to configure a run; the
+# runner reads the same names to decide whether a run may train history.
+PROFILE_ENV = "PRKS_E2E_PROFILE"
+SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
+
+FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def env_flag_enabled(name: str, default: bool = False, environ=None) -> bool:
+    """Canonical truthiness for PRKS E2E env switches (unset → default)."""
+    env = os.environ if environ is None else environ
+    raw = env.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in FALSE_ENV_VALUES
+
+
+def benchmark_modes(environ=None) -> tuple:
+    """Active non-representative modes for the *effective* configuration.
+
+    ``--profile`` adds instrumentation overhead and ``--no-seed-cache`` measures
+    a slower non-default configuration; both are also reachable through
+    ``PRKS_E2E_PROFILE`` / ``PRKS_E2E_SEED_CACHE`` without the matching flag.
+    The runner exports its flags into the environment before asking, so this is
+    the single decision covering CLI- and environment-driven benchmark runs.
+    """
+    modes = []
+    if env_flag_enabled(PROFILE_ENV, environ=environ):
+        modes.append("profile")
+    if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
+        modes.append("no-seed-cache")
+    return tuple(modes)
+
+
+class ChangeDiscoveryError(RuntimeError):
+    """Git could not report the working-tree changes ``--affected`` needs.
+
+    Distinct from "Git reported no changes": the first must fail closed, the
+    second is an ordinary successful no-op.
+    """
+
 
 # ---------------------------------------------------------------------------
 # Tiers
@@ -770,6 +817,35 @@ UNTRACKED_AFFECTED_PREFIXES = (
 )
 
 
+def _git_lines(repo: Path, args, what: str) -> list:
+    """Run one read-only git command; raise ChangeDiscoveryError on any failure.
+
+    Git failures (missing executable, damaged checkout, invalid base ref) must
+    never be indistinguishable from "no changes" — see fail-closed note on
+    ``list_changed_paths``.
+    """
+    cmd = ["git", "-C", str(repo), *args]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise ChangeDiscoveryError(
+            "%s failed: could not run `git %s` (%s)"
+            % (what, " ".join(args), exc.__class__.__name__)
+        ) from exc
+    if proc.returncode != 0:
+        detail = [line.strip() for line in (proc.stderr or "").splitlines() if line.strip()]
+        raise ChangeDiscoveryError(
+            "%s failed: `git %s` exited %d%s"
+            % (
+                what,
+                " ".join(args),
+                proc.returncode,
+                (" — " + detail[0]) if detail else "",
+            )
+        )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
 def list_changed_paths(repo: Path, base: str | None = None, include_untracked=True):
     """Working-tree changes vs base (default: HEAD). Explicit --base overrides.
 
@@ -777,57 +853,38 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
     against HEAD (or against `base` when provided). Includes Added/Copied/
     Modified/Renamed/Deleted (D). Also includes untracked files under
     frontend/, backend/, tests/e2e/, tools/, scripts/ when include_untracked.
+
+    Fails closed: any Git/change-discovery failure raises ChangeDiscoveryError
+    instead of degrading to an empty (and therefore "nothing affected") list.
+    A genuinely empty diff still returns [].
     """
     repo = Path(repo)
     ref = base or "HEAD"
     paths = []
     # Staged + unstaged vs ref — include deletes so removed production/E2E
     # files still drive feature selection.
-    cmd = ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=ACMRD", ref]
-    try:
-        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        out = ""
-    for line in out.splitlines():
-        line = line.strip()
-        if line:
-            paths.append(line)
+    for line in _git_lines(
+        repo,
+        ["diff", "--name-only", "--diff-filter=ACMRD", ref],
+        "change discovery vs %s" % ref,
+    ):
+        paths.append(line)
     # Also include staged-only relative to HEAD when base is HEAD — already covered
     # by diff HEAD. When base is another ref, also include uncommitted local work:
     if base and base != "HEAD":
-        try:
-            local = subprocess.check_output(
-                [
-                    "git",
-                    "-C",
-                    str(repo),
-                    "diff",
-                    "--name-only",
-                    "--diff-filter=ACMRD",
-                    "HEAD",
-                ],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-            for line in local.splitlines():
-                line = line.strip()
-                if line and line not in paths:
-                    paths.append(line)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
+        for line in _git_lines(
+            repo,
+            ["diff", "--name-only", "--diff-filter=ACMRD", "HEAD"],
+            "local change discovery vs HEAD",
+        ):
+            if line not in paths:
+                paths.append(line)
     if include_untracked:
-        try:
-            untracked = subprocess.check_output(
-                ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            untracked = ""
-        for line in untracked.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+        for line in _git_lines(
+            repo,
+            ["ls-files", "--others", "--exclude-standard"],
+            "untracked change discovery",
+        ):
             if any(
                 line.startswith(p) or line == p.rstrip("/")
                 for p in UNTRACKED_AFFECTED_PREFIXES
@@ -869,14 +926,32 @@ def merge_last_failed(previous_ids, executed_ids, current_failed_ids, known_ids=
     return merged
 
 
-def save_last_failed(path: Path, test_ids, meta=None):
+def save_last_failed(path: Path, test_ids, meta=None) -> bool:
+    """Persist unresolved failures atomically; returns False when nothing was written.
+
+    Same temp-file + os.replace commit used for timing history
+    (tests/e2e/sharding.save_timings): a crash or disk error before the replace
+    leaves the previous valid file untouched rather than a truncated one that
+    load_last_failed would report as "no saved failures".
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "test_ids": list(test_ids),
         "meta": meta or {},
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
 
 
 def load_last_failed(path: Path):

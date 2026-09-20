@@ -2044,6 +2044,16 @@ paths select nothing. Add new production areas by editing `AFFECTED_RULES`
 and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E module by adding
 its module/class prefix to the right feature's `selectors`.
 
+`--affected` fails closed: when Git change discovery itself fails (invalid
+`--base` ref, unusable checkout, missing/failing `git`, or untracked-file
+discovery failure) the runner exits nonzero with a diagnostic instead of
+reporting zero affected tests. A genuine empty diff remains a successful no-op.
+
+Benchmark/profile runs never train history. `--profile` / `--no-seed-cache`
+**and** their environment equivalents (`PRKS_E2E_PROFILE`,
+`PRKS_E2E_SEED_CACHE=0`) suppress `.tests/e2e-timings.json` and last-failed
+persistence; `policy.benchmark_modes()` is the single decision.
+
 Optional stress: `tests/e2e/stress_cache_offline.py` — never part of normal
 iteration or the full gate.
 
