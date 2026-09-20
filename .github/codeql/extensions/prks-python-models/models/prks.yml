@@ -1,0 +1,31 @@
+extensions:
+  - addsTo:
+      pack: codeql/python-all
+      extensible: barrierModel
+    data:
+      # Logging boundary helpers return constrained labels/routes rather than
+      # arbitrary request/library text. Keep these barriers query-specific so
+      # they do not suppress unrelated taint flows.
+      - ["backend.log_safety", "Member[safe_log_id].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_log_label].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_error_type].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_bind_scope].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_client_error_kind].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_error_name].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_client_source].ReturnValue", "log-injection"]
+      - ["backend.log_safety", "Member[safe_route].ReturnValue", "log-injection"]
+
+      # These helpers either return a canonical path proven to remain beneath
+      # its managed root, or a single validated managed filename.
+      - ["backend.db_manager", "Member[safe_pdf_path_under_dir].ReturnValue", "path-injection"]
+      - ["backend.db_manager", "Member[managed_pdf_filename].ReturnValue", "path-injection"]
+      - ["backend.db_manager", "Member[referenced_managed_pdf_filename].ReturnValue", "path-injection"]
+      - ["backend.db_manager", "Member[safe_processing_path_under_dir].ReturnValue", "path-injection"]
+
+  - addsTo:
+      pack: codeql/python-all
+      extensible: barrierGuardModel
+    data:
+      # _path_is_under resolves both operands with realpath and only accepts a
+      # child equal to, or beneath, the requested parent.
+      - ["backend.backup_restore", "Member[_path_is_under].Argument[0,child:]", "true", "path-injection"]
