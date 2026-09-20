@@ -32,6 +32,20 @@ Lifecycle: both audit findings and roadmap proposals use `candidate`/`accepted` 
 
 When GitHub access is available, before proposing broad architecture, maintainability, tooling, or refactoring work, search both open and closed issues with the `audit-finding` label (and the `[Audit Finding]` title prefix as a fallback) to avoid duplicates and to understand previously identified concerns, including findings that were resolved, rejected, or superseded. Audit findings are **not implementation instructions**: do not implement one unless the maintainer explicitly assigns/approves it or the current task names it. Re-verify older findings against current `master` before acting. Suspected vulnerabilities, security-boundary bypasses, exploit details, or sensitive reproductions must not be put in public `[Audit Finding]` issues; follow the private reporting process in `SECURITY.md` instead. If a finding conflicts with this file, this file remains authoritative until the maintainer explicitly approves a policy change. Agents without GitHub access should continue using this repository's checked-in engineering rules; they are not required to have an offline copy of audit findings.
 
+## UX / UI findings
+
+UX/UI findings are tracked as GitHub Issues using `.github/ISSUE_TEMPLATE/ux-ui-finding.md`. This applies to automated UX audits (including Grok Bot), manual usability reviews, accessibility observations, discoverability problems, interaction inconsistencies, misleading feedback, and visual/interface defects. New UX/UI findings start with the `candidate` and `area:ux` labels. Only the maintainer may replace `candidate` with `accepted`. `accepted` means the finding is acknowledged as valid/tracked; it does **not** authorize implementation.
+
+Before creating a UX/UI finding, search both open and closed issues for the same workflow, symptom, UI text, and likely root cause. Search `area:ux` issues plus relevant title/body terms, including legacy `UX:`, `UI:`, and `A11y:` prefixes. Prefer updating or commenting on an existing issue when it substantially overlaps. Do not create a second issue merely because a later audit observed the same problem differently. Group multiple symptoms only when they are tightly coupled to the same interaction lifecycle/root cause; otherwise keep findings focused.
+
+Automated UX/UI findings must follow the checked-in template rather than inventing a new structure. Record the tested commit, affected surface, classification, confidence, reproduction steps, current behavior, expected/improved behavior, user impact, evidence, acceptance criteria, and overlap check. Distinguish directly observed behavior from implementation hypotheses. If a behavior is intermittent, say so and include reproduction frequency when available. Do not present an inferred implementation cause as confirmed without code evidence.
+
+Apply `priority:P1`/`priority:P2`/`priority:P3` when the evidence supports triage; otherwise leave priority as needing triage. Add other relevant `area:*` labels (for example correctness, reliability, testing, sync, or tooling) only when supported by the finding. Do not use the generic GitHub `bug` or `enhancement` labels for these findings.
+
+UX audit screenshots and artifacts must use testing/synthetic library data and must not expose real research content, notes, names, filenames, URLs, or other private library data. Suspected security vulnerabilities or sensitive security reproductions do not belong in UX/UI issues; follow `SECURITY.md`.
+
+When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it with the appropriate disposition and GitHub close reason where applicable. A UX/UI finding is a tracking artifact, not an implementation instruction: do not implement it unless the maintainer explicitly assigns/approves it or the current task names it.
+
 ## Layout
 
 - `prks_app.py` CLI (the only process entry)
