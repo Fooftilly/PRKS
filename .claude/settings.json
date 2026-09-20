@@ -8,12 +8,6 @@
             "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.sh\" claude-pre-tool-use",
             "timeout": 60
-          },
-          {
-            "type": "command",
-            "shell": "powershell",
-            "command": "& \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\sonar-secrets\\run_hook.ps1\" claude-pre-tool-use",
-            "timeout": 60
           }
         ]
       }
@@ -25,12 +19,6 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.sh\" claude-prompt-submit",
-            "timeout": 60
-          },
-          {
-            "type": "command",
-            "shell": "powershell",
-            "command": "& \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\sonar-secrets\\run_hook.ps1\" claude-prompt-submit",
             "timeout": 60
           }
         ]
