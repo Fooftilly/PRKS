@@ -11,12 +11,20 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: publish-wiki-${{ github.repository }}
+  cancel-in-progress: true
+
 jobs:
   publish:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Check out canonical documentation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
 
       - name: Publish docs/wiki to GitHub Wiki
         env:
@@ -28,13 +36,11 @@ jobs:
 
           wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
 
-          if ! git ls-remote "$wiki_url" HEAD >/dev/null 2>&1; then
-            echo "::notice::GitHub Wiki is enabled but has not been initialized yet."
-            echo "::notice::Create the first Wiki page once in GitHub, then rerun this workflow."
-            exit 0
+          if ! git clone --depth 1 "$wiki_url" .wiki; then
+            echo "::error::Unable to clone the GitHub Wiki repository."
+            echo "::error::If this is the first publication, create the initial Wiki page in GitHub once, then rerun this workflow."
+            exit 1
           fi
-
-          git clone --depth 1 "$wiki_url" .wiki
 
           find .wiki -maxdepth 1 -type f -name '*.md' -delete
           for source in docs/wiki/*.md; do
@@ -44,9 +50,8 @@ jobs:
             cp "$source" ".wiki/$(basename "$source")"
           done
 
-          # Repository source uses *.md links so docs/wiki is browsable in normal
-          # GitHub code views. GitHub Wiki Markdown links should target rendered
-          # wiki page URLs instead, so rewrite only local page links in the copy.
+          # Repository source keeps *.md links so docs/wiki is browsable in normal
+          # GitHub code views. Rewrite only the published copy to Wiki page URLs.
           python - <<'PY'
           import os
           import re
@@ -70,7 +75,9 @@ jobs:
               )
               path.write_text(content, encoding="utf-8")
 
-          relative_md_link = re.compile(r"\]\((?!https?://|mailto:|#)[^)]+\.md(?:#[^)]*)?\)")
+          relative_md_link = re.compile(
+              r"\]\((?!https?://|mailto:|#)[^)]+\.md(?:#[^)]*)?\)"
+          )
           unresolved = []
           for path in wiki_dir.glob("*.md"):
               for match in relative_md_link.finditer(path.read_text(encoding="utf-8")):

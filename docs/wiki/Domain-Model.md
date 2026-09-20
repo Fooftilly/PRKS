@@ -63,8 +63,8 @@ Work source fields are not independent metadata. For video Works, source kind/pr
 
 ## IDs and offline creation
 
-Durable local-first creation requires IDs that can safely exist before a server round-trip. Domain-specific synchronization modules and \`backend/entity_ids.py\` handle the relevant boundaries.
+Durable local-first creation requires IDs that can safely exist before a server round-trip. Domain-specific synchronization modules and `backend/entity_ids.py` handle the relevant boundaries.
 
 ## Database authority
 
-The exact current schema is defined by \`backend/db_schema.sql\` plus ordered migrations in \`backend/db_migrations.py\`. Do not treat this page as a column-level schema reference; use those files when implementing migrations or queries.
+The exact current schema is defined by `backend/db_schema.sql` plus ordered migrations in `backend/db_migrations.py`. Do not treat this page as a column-level schema reference; use those files when implementing migrations or queries.

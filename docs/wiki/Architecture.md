@@ -6,7 +6,7 @@ PRKS is a local-first research application with a Python backend, SQLite persist
 
 At a high level:
 
-\`\`\`text
+```text
 Browser / PWA
   |
   | HTTP / API
@@ -20,25 +20,25 @@ PRKS threaded HTTP server
   +--> managed files (PDFs, person files)
   |
   +--> derived indexes / caches
-\`\`\`
+```
 
-The normal process entry point is \`prks_app.py\`. Backend modules under \`backend/\` own storage, migrations, API/server behavior, synchronization families, PDF processing, backup/restore, indexing, logging, and research-network operations.
+The normal process entry point is `prks_app.py`. Backend modules under `backend/` own storage, migrations, API/server behavior, synchronization families, PDF processing, backup/restore, indexing, logging, and research-network operations.
 
-The frontend under \`frontend/\` is a browser SPA composed from vanilla JavaScript modules and CSS. It deliberately does not use a framework runtime.
+The frontend under `frontend/` is a browser SPA composed from vanilla JavaScript modules and CSS. It deliberately does not use a framework runtime.
 
 ## Backend boundaries
 
 Important backend areas include:
 
-- \`backend/server.py\` — HTTP/API routing and request handling.
-- \`backend/db_manager.py\` — database access and canonical persistence operations.
-- \`backend/db_migrations.py\` and \`backend/db_schema.sql\` — schema evolution and baseline schema.
-- \`backend/concurrency.py\` — storage-access coordination.
-- \`backend/*_sync.py\` — durable operation families and canonical synchronization boundaries.
-- \`backend/backup_restore.py\` — verified backup and restore.
-- \`backend/text_index.py\` and \`backend/research_index.py\` — derived search/reference indexes.
-- \`backend/pdf_*.py\` — PDF annotation, adoption, materialization, and related services.
-- \`backend/research_*.py\` — research graph/network/index behavior.
+- `backend/server.py` — HTTP/API routing and request handling.
+- `backend/db_manager.py` — database access and canonical persistence operations.
+- `backend/db_migrations.py` and `backend/db_schema.sql` — schema evolution and baseline schema.
+- `backend/concurrency.py` — storage-access coordination.
+- `backend/*_sync.py` — durable operation families and canonical synchronization boundaries.
+- `backend/backup_restore.py` — verified backup and restore.
+- `backend/text_index.py` and `backend/research_index.py` — derived search/reference indexes.
+- `backend/pdf_*.py` — PDF annotation, adoption, materialization, and related services.
+- `backend/research_*.py` — research graph/network/index behavior.
 
 SQLite connections are operation-scoped; PRKS does not rely on a general-purpose connection pool. Canonical writes are serialized through the application’s mutation boundary so thread-per-request HTTP does not become uncontrolled concurrent SQLite writing.
 
@@ -46,13 +46,13 @@ SQLite connections are operation-scoped; PRKS does not rely on a general-purpose
 
 Important frontend areas include:
 
-- \`frontend/js/app.js\` and \`navigation.js\` — app shell and route/navigation behavior.
-- \`components/\` — route-level UI surfaces.
-- \`tab-context.js\` and \`workspace-*.js\` — in-app tabs, split view, pane layout, and persistence.
-- \`local-store.js\`, \`sync-runtime.js\`, and domain \`*-state.js\` modules — durable local-first intent and reconciliation.
-- \`offline-store.js\` / \`offline-runtime.js\` — disposable offline read projections and availability behavior.
-- \`request-coordinator.js\` — short-lived request coordination/cache for normal online traffic; this is not durable offline storage.
-- \`pdf-*.js\` and \`components/works-pdf.js\` — PDF viewer lifecycle and annotation integration.
+- `frontend/js/app.js` and `navigation.js` — app shell and route/navigation behavior.
+- `components/` — route-level UI surfaces.
+- `tab-context.js` and `workspace-*.js` — in-app tabs, split view, pane layout, and persistence.
+- `local-store.js`, `sync-runtime.js`, and domain `*-state.js` modules — durable local-first intent and reconciliation.
+- `offline-store.js` / `offline-runtime.js` — disposable offline read projections and availability behavior.
+- `request-coordinator.js` — short-lived request coordination/cache for normal online traffic; this is not durable offline storage.
+- `pdf-*.js` and `components/works-pdf.js` — PDF viewer lifecycle and annotation integration.
 
 ## Canonical data vs derived data
 
