@@ -638,11 +638,14 @@ def _fetch_youtube_oembed(url: str) -> dict | None:
     """
     if not url or not str(url).strip():
         return None
-    # Percent-encode the caller's URL before it becomes a query-parameter value.
-    # Unencoded it both truncates real YouTube URLs at the first `&`/`#` and
-    # lets the request body decide part of the outbound query string.
-    oembed_url = "https://www.youtube.com/oembed?format=json&url=" + quote(str(url).strip(), safe="")
     try:
+        # Percent-encode the caller's URL before it becomes a query-parameter
+        # value. Unencoded it both truncates real YouTube URLs at the first
+        # `&`/`#` and lets the request body decide part of the outbound query
+        # string. Inside the try because quote() raises UnicodeEncodeError on a
+        # lone surrogate, which json.loads accepts: this helper stays
+        # best-effort and never turns optional metadata into a failed request.
+        oembed_url = "https://www.youtube.com/oembed?format=json&url=" + quote(str(url).strip(), safe="")
         req = Request(
             oembed_url,
             headers={

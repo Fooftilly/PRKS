@@ -5057,6 +5057,25 @@ class TestServerAPI(unittest.TestCase):
             os.path.isfile(os.path.join(os.path.realpath(pdfs_dir), name)), stored)
         self.assertEqual(set(os.listdir(parent)) - before, set())
 
+    def test_oembed_stays_best_effort_for_malformed_unicode(self):
+        """`quote()` raises UnicodeEncodeError on a lone surrogate, and
+        `json.loads` happily produces one from `\\ud800`. Percent-encoding the
+        lookup URL must not turn an optional metadata fetch into a failed
+        request, so the encode belongs inside the helper's own try."""
+        lone_surrogate = json.loads('"https://www.youtube.com/watch?v=\\ud800"')
+        self.assertIsNone(server_module._fetch_youtube_oembed(lone_surrogate))
+
+        # And the same value through the real creation endpoint: a Work whose
+        # source URL cannot be encoded is still created, without a 500.
+        status, created = self._sv_json("POST", "/api/works", {
+            "title": "Malformed Source URL",
+            "source_kind": "video",
+            "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        })
+        self.assertEqual(status, 200, created)
+        status, row = self._sv_json("GET", "/api/works/" + created["id"], None)
+        self.assertEqual(status, 200, row)
+
     def test_oembed_url_is_a_percent_encoded_query_value(self):
         """Appended raw, a YouTube URL's own `&`/`#` both truncate the lookup
         and let the request body append parameters to the outbound query."""

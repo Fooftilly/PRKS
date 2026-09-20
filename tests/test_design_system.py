@@ -450,24 +450,50 @@ class DesignSystemContractTests(unittest.TestCase):
         fallback — with `var()` an unresolvable value is invalid at
         computed-value time, which unsets the property rather than dropping the
         declaration."""
-        css = _read(_CSS)
+        self.assertEqual(self._border_ordering_offenders(_read(_CSS)), [])
+
+    def test_border_ordering_check_sees_a_reset_after_an_earlier_shorthand(self):
+        """The check compares every declaration, not just the first of each.
+
+        `border: 0; border-color: red; border: 2px solid transparent` resets the
+        longhand exactly like the badge did, but a first-match-only comparison
+        sees `border:` before `border-color:` and reports nothing."""
+        offenders = self._border_ordering_offenders(
+            ".x {\n  border: 0;\n  border-color: red;\n  border: 2px solid transparent;\n}"
+        )
+        self.assertEqual(len(offenders), 1, offenders)
+        self.assertIn("border-color", offenders[0])
+        # And the genuinely correct order stays accepted.
+        self.assertEqual(
+            self._border_ordering_offenders(".y {\n  border: 0;\n  border-color: red;\n}"),
+            [],
+        )
+
+    @staticmethod
+    def _border_ordering_offenders(css: str) -> list[str]:
         offenders = []
         for match in re.finditer(r"\{([^{}]*)\}", css):
             block = match.group(1)
-            for longhand, shorthand in (
-                ("border-color", "border"),
-                ("border-width", "border"),
-                ("border-style", "border"),
-            ):
-                long_at = re.search(r"(?<![-\w])%s\s*:" % longhand, block)
-                short_at = re.search(r"(?<![-\w])%s\s*:" % shorthand, block)
-                if long_at and short_at and short_at.start() > long_at.start():
+            shorthand_at = [
+                m.start() for m in re.finditer(r"(?<![-\w])border\s*:", block)
+            ]
+            if not shorthand_at:
+                continue
+            last_shorthand = shorthand_at[-1]
+            for longhand in ("border-color", "border-width", "border-style"):
+                # Any longhand before the LAST shorthand is reset by it; taking
+                # the first occurrence of each would miss a later reset.
+                first_longhand = next(
+                    (m.start() for m in re.finditer(r"(?<![-\w])%s\s*:" % longhand, block)),
+                    None,
+                )
+                if first_longhand is not None and last_shorthand > first_longhand:
                     line = css[: match.start()].count("\n") + 1
                     offenders.append(
                         "line %d: %s written before %s, which resets it"
-                        % (line, longhand, shorthand)
+                        % (line, longhand, "border")
                     )
-        self.assertEqual(offenders, [])
+        return offenders
 
     def test_doc_type_badge_border_carries_the_per_type_token(self):
         css = _read(_CSS)
@@ -475,7 +501,12 @@ class DesignSystemContractTests(unittest.TestCase):
         self.assertIsNotNone(match, "the doc-type badge base rule")
         block = match.group(1)
         self.assertIn("var(--doc-type-color", block)
-        self.assertIn("var(--doc-type-border", block)
+        # The token has to be on the `border` declaration itself. Finding it
+        # anywhere in the rule is what the regression looked like: the value was
+        # present, on a `border-color` a later shorthand had already discarded.
+        border_decl = re.search(r"(?<![-\w])border\s*:([^;]*);", block)
+        self.assertIsNotNone(border_decl, block)
+        self.assertIn("var(--doc-type-border", border_decl.group(1))
 
     def test_every_visible_input_has_an_accessible_name(self):
         """Accessibility is part of the design system, and the gallery is the

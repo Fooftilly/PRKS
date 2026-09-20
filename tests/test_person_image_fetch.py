@@ -2,6 +2,7 @@ import io
 import ipaddress
 import os
 import socket
+import ssl
 import struct
 import sys
 import tempfile
@@ -162,6 +163,10 @@ class FakeSSLContext:
     def __init__(self):
         self.alpn = None
         self.wraps = []
+        # Real contexts already carry a minimum; the wrapper reads it to raise
+        # the floor without lowering a stricter default, so the double has to
+        # model it rather than only accept a write.
+        self.minimum_version = ssl.TLSVersion.TLSv1_2
 
     def set_alpn_protocols(self, protocols):
         self.alpn = list(protocols)
@@ -524,6 +529,32 @@ class TestPinnedFetch(unittest.TestCase):
         self.assertIn("Connection: close", sent)
         self.assertIn("Accept-Encoding: identity", sent)
         self.assertNotIn("example.com", sock.connected_to)
+
+    def test_tls_minimum_is_a_floor_and_never_lowers_a_stricter_default(self):
+        """The wrapper states TLS 1.2 as a minimum, not as a pin. Assigning it
+        unconditionally would downgrade a future interpreter whose own default
+        had already risen past it."""
+        png = _png_bytes()
+        body = _http_bytes(
+            headers=[("Content-Length", str(len(png)))], body=png
+        )
+        for started_at, expected in (
+            (ssl.TLSVersion.TLSv1_1, ssl.TLSVersion.TLSv1_2),
+            (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_2),
+            (ssl.TLSVersion.TLSv1_3, ssl.TLSVersion.TLSv1_3),
+        ):
+            ctx = FakeSSLContext()
+            ctx.minimum_version = started_at
+            result, _created, used = self._fetch(
+                "https://example.com/p.jpg", body, _public_addrinfo(), ssl_ctx=ctx
+            )
+            self.assertIsNotNone(result)
+            self.assertIs(used, ctx)
+            self.assertEqual(
+                used.minimum_version,
+                expected,
+                "starting at %s should end at %s" % (started_at, expected),
+            )
 
     def test_httpconnection_connect_never_used(self):
         png = _png_bytes()
