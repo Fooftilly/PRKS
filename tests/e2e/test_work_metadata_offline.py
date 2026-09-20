@@ -57,7 +57,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         server.start()
         e2e_diag("SERVER_READY", tid)
         page, context, collector = open_app_page(
-            _HOLDER.browser, server.origin, service_workers='allow'
+            _HOLDER.get_browser(), server.origin, service_workers='allow'
         )
         e2e_diag("CONTEXT_READY", tid)
 

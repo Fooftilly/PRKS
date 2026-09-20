@@ -270,7 +270,7 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
         os.environ["PRKS_E2E_CHROMIUM_RECYCLE_EVERY"] = "0"
         self.assertEqual(harness.chromium_recycle_every(default=20), 0)
 
-    def test_chromium_holder_recycles_after_n_closed_contexts(self):
+    def test_chromium_holder_recycles_lazily_on_next_get_browser(self):
         launches = []
 
         def fake_require():
@@ -284,9 +284,33 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
             holder.pw = mock.Mock()
             holder.after_context_closed()
             self.assertEqual(len(launches), 1)
+            self.assertFalse(holder._needs_recycle)
             holder.after_context_closed()
+            self.assertEqual(len(launches), 1)
+            self.assertTrue(holder._needs_recycle)
+            browser = holder.get_browser()
             self.assertEqual(len(launches), 2)
+            self.assertIs(browser, holder.browser)
+            self.assertFalse(holder._needs_recycle)
             self.assertEqual(holder._contexts_since_launch, 0)
+
+    def test_chromium_holder_close_skips_pending_relaunch(self):
+        launches = []
+
+        def fake_require():
+            launches.append(1)
+            return ("pw-%d" % len(launches), "browser-%d" % len(launches))
+
+        with mock.patch.object(harness, "require_chromium", side_effect=fake_require):
+            holder = harness.ChromiumHolder(recycle_every=1)
+            holder.browser = mock.Mock()
+            holder.pw = mock.Mock()
+            holder.after_context_closed()
+            self.assertTrue(holder._needs_recycle)
+            self.assertEqual(len(launches), 1)
+            holder.close()
+            self.assertEqual(len(launches), 1)
+            self.assertFalse(holder._needs_recycle)
 
 
 if __name__ == "__main__":

@@ -123,8 +123,10 @@ class ChromiumHolder:
     """Module-scoped Playwright + Chromium with optional periodic relaunch.
 
     Fresh BrowserContexts remain per-test. After ``recycle_every`` contexts have
-    been closed, Chromium itself is restarted to shed service-worker / process
-    accumulation that can stall long SW-heavy modules.
+    been closed, the next ``get_browser()`` restarts Chromium to shed
+    service-worker / process accumulation. Recycle is lazy: the last closed
+    context only sets a flag, so ``tearDownModule`` / ``close()`` never launches
+    an unused browser.
     """
 
     def __init__(self, *, recycle_every: int | None = None):
@@ -132,12 +134,19 @@ class ChromiumHolder:
             recycle_every = chromium_recycle_every(0)
         self.recycle_every = max(0, int(recycle_every))
         self._contexts_since_launch = 0
+        self._needs_recycle = False
         self.pw, self.browser = require_chromium()
+
+    def get_browser(self):
+        """Return the live browser, relaunching first when a recycle is pending."""
+        if self._needs_recycle:
+            self.recycle()
+        return self.browser
 
     def after_context_closed(self) -> None:
         self._contexts_since_launch += 1
         if self.recycle_every and self._contexts_since_launch >= self.recycle_every:
-            self.recycle()
+            self._needs_recycle = True
 
     def recycle(self) -> None:
         e2e_diag(
@@ -155,8 +164,11 @@ class ChromiumHolder:
             self.pw, self.browser = require_chromium()
         finally:
             self._contexts_since_launch = 0
+            self._needs_recycle = False
 
     def close(self) -> None:
+        """Stop Chromium without relaunching, even if a recycle was pending."""
+        self._needs_recycle = False
         try:
             self.browser.close()
         finally:
