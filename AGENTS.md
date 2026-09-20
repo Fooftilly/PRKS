@@ -2,16 +2,6 @@
 
 PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. Full run, Docker, and config live in README.md.
 
-## Engineering audit findings
-
-Engineering/audit findings are tracked canonically as GitHub Issues with the `audit-finding` label, titles starting with `[Audit Finding]`, and a stable `EF-xxx` ID in the issue body. The label is the primary search key; the title prefix remains a human-readable taxonomy and fallback. Audit findings are separate from `[Roadmap]` issues.
-
-Before creating a new audit finding, search both open and closed issues with the `audit-finding` label, inspect existing `EF-xxx` IDs, and assign the next unused ID. Use the `[Audit Finding]` title prefix as a fallback search for legacy or misclassified issues. Re-check immediately before submitting so concurrent agents do not knowingly reuse an ID. Apply the `audit-finding` and `candidate` labels, plus the appropriate `priority:P1`/`priority:P2`/`priority:P3` and relevant `area:*` labels when the classification is known.
-
-Lifecycle: new findings start as `candidate`. Only the maintainer may replace `candidate` with `accepted`; `accepted` means the finding itself is acknowledged as valid/tracked, **not** that implementation is authorized. Implementation still requires explicit maintainer assignment/approval or a current task that names the finding. When a finding is fixed, obsolete, rejected, superseded, or duplicated, close the issue and record the disposition; use GitHub's close reason where it fits (`completed` for resolved work, `not planned` for rejected/obsolete/superseded items, `duplicate` for duplicates) rather than inventing additional lifecycle labels.
-
-When GitHub access is available, before proposing broad architecture, maintainability, tooling, or refactoring work, search both open and closed issues with the `audit-finding` label (and the `[Audit Finding]` title prefix as a fallback) to avoid duplicates and to understand previously identified concerns, including findings that were resolved, rejected, or superseded. Candidate findings are **not implementation instructions**: do not implement one unless the maintainer explicitly assigns/approves it or the current task names it. Re-verify older findings against current `master` before acting. Suspected vulnerabilities, security-boundary bypasses, exploit details, or sensitive reproductions must not be put in public `[Audit Finding]` issues; follow the private reporting process in `SECURITY.md` instead. If a finding conflicts with this file, this file remains authoritative until the maintainer explicitly approves a policy change. Agents without GitHub access should continue using this repository's checked-in engineering rules; they are not required to have an offline copy of audit findings.
-
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
@@ -31,6 +21,17 @@ Default. Do not write `data/` or a live `PRKS_STORAGE` tree. `python run_tests.p
 Run-real. An instruction to run the real app or Compose authorizes normal application writes only. Creating or updating records the way the app does.
 
 Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB, or clearing production storage needs a separate explicit confirmation that names that action. Run-real is not that confirmation.
+
+
+## Engineering audit findings
+
+Engineering/audit findings are tracked canonically as GitHub Issues with the `audit-finding` label, titles starting with `[Audit Finding]`, and a stable `EF-xxx` ID in the issue body. The label is the primary search key; the title prefix remains a human-readable taxonomy and fallback. Audit findings are separate from `[Roadmap]` issues.
+
+Before creating a new audit finding, search both open and closed issues with the `audit-finding` label, inspect existing `EF-xxx` IDs, and assign the next unused ID. Use the `[Audit Finding]` title prefix as a fallback search for legacy or misclassified issues. Re-check immediately before submitting so concurrent agents do not knowingly reuse an ID. Apply the `audit-finding` and `candidate` labels, plus the appropriate `priority:P1`/`priority:P2`/`priority:P3` and relevant `area:*` labels when the classification is known.
+
+Lifecycle: new findings start as `candidate`. Only the maintainer may replace `candidate` with `accepted`; `accepted` means the finding itself is acknowledged as valid/tracked, **not** that implementation is authorized. Implementation still requires explicit maintainer assignment/approval or a current task that names the finding. When a finding is fixed, obsolete, rejected, superseded, or duplicated, close the issue and record the disposition; use GitHub's close reason where it fits (`completed` for resolved work, `not planned` for rejected/obsolete/superseded items, `duplicate` for duplicates) rather than inventing additional lifecycle labels.
+
+When GitHub access is available, before proposing broad architecture, maintainability, tooling, or refactoring work, search both open and closed issues with the `audit-finding` label (and the `[Audit Finding]` title prefix as a fallback) to avoid duplicates and to understand previously identified concerns, including findings that were resolved, rejected, or superseded. Audit findings are **not implementation instructions**: do not implement one unless the maintainer explicitly assigns/approves it or the current task names it. Re-verify older findings against current `master` before acting. Suspected vulnerabilities, security-boundary bypasses, exploit details, or sensitive reproductions must not be put in public `[Audit Finding]` issues; follow the private reporting process in `SECURITY.md` instead. If a finding conflicts with this file, this file remains authoritative until the maintainer explicitly approves a policy change. Agents without GitHub access should continue using this repository's checked-in engineering rules; they are not required to have an offline copy of audit findings.
 
 ## Layout
 
@@ -1941,7 +1942,6 @@ and had the same effect as the prune bug: the source row was deleted and the
 FK cascade left a staged Processing File holding neither tag. A merge means
 "replace S with T everywhere"; explicit `delete_tag()` is the one path where
 cascading the relationship away is correct.
-
 
 ## Interaction feedback
 
