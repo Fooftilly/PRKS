@@ -2,7 +2,7 @@
 name: Roadmap / planning epic
 about: Record a maintainer-approved product or engineering direction for focused follow-up work
 title: "[Roadmap] "
-labels: ""
+labels: "roadmap"
 assignees: ""
 ---
 
