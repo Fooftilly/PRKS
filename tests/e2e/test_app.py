@@ -1331,8 +1331,16 @@ class PersonGroupPolishTests(_BrowserE2E):
                 member_requests.append((req.method, req.url))
 
         page.on("request", on_request)
+        # Combobox search is async; under parallel load a bare click races the
+        # result list (30s Locator.click timeout with empty results). Wait for
+        # the picker row the same way Work→Person linking does.
+        page.wait_for_function(
+            "() => typeof document.getElementById('group-add-member-search')?.oninput === 'function'"
+        )
         page.locator("#group-add-member-search").fill(PERSON_DISPLAY)
-        page.locator("#group-add-member-results .result-item--person-pick").click()
+        pick = page.locator("#group-add-member-results .result-item--person-pick").first
+        pick.wait_for(state="visible")
+        pick.click()
         page.locator("#group-add-member-btn").click()
         page.locator(".prks-people-list__title", has_text=PERSON_DISPLAY).wait_for()
         self.assertEqual(member_requests, [])
