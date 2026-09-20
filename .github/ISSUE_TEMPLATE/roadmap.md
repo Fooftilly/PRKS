@@ -1,12 +1,12 @@
 ---
 name: Roadmap / planning epic
-about: Record a maintainer-approved product or engineering direction for focused follow-up work
+about: Propose a product or engineering direction for maintainer review and focused follow-up work
 title: "[Roadmap] "
-labels: "roadmap"
+labels: "roadmap,candidate"
 assignees: ""
 ---
 
-> **Status:** Maintainer-approved roadmap/planning item. If this is only an engineering observation or audit result, use an `[Audit Finding]` issue instead; do not promote a candidate finding to roadmap work without maintainer approval.
+> **Status:** Proposed roadmap/planning item — not maintainer-approved yet. The `roadmap` label classifies the issue; `candidate`/`accepted` records approval state. If this is only an engineering observation or audit result, use an `[Audit Finding]` issue instead.
 
 ## Goal
 
