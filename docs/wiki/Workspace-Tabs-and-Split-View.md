@@ -56,4 +56,4 @@ Drag/drop is an optional shortcut for tab reorder, creating/adding split panes, 
 
 Not every route is appropriate in a Secondary pane. Eligibility should be explicit and centralized rather than reimplemented ad hoc by individual pages. Operational surfaces such as Processing Files can have different workspace rules from ordinary research pages.
 
-For the implementation contract and current UI rules, use [DESIGN.md](https://github.com/Fooftilly/PRKS/blob/master/DESIGN.md), \`frontend/js/tab-context.js\`, and the \`frontend/js/workspace-*.js\` modules.
+For the implementation contract and current UI rules, use [DESIGN.md](https://github.com/Fooftilly/PRKS/blob/master/DESIGN.md), `frontend/js/tab-context.js`, and the `frontend/js/workspace-*.js` modules.

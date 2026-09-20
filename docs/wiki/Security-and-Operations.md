@@ -4,9 +4,9 @@ PRKS is primarily a local/self-hosted application. Its default deployment assump
 
 ## Network binding
 
-The default process binds to \`127.0.0.1:8080\`, limiting access to the local machine.
+The default process binds to `127.0.0.1:8080`, limiting access to the local machine.
 
-Binding to \`0.0.0.0\` or otherwise publishing PRKS to a LAN/VPN changes the trust boundary.
+Binding to `0.0.0.0` or otherwise publishing PRKS to a LAN/VPN changes the trust boundary.
 
 PRKS currently has no application-level authentication. Do not expose it to untrusted networks without an access layer you control.
 
@@ -14,7 +14,7 @@ Docker Compose publishes host loopback by default even though the container proc
 
 ## Sensitive research data
 
-The library database, managed files, notes, annotations, and \`.prks-backup\` files can contain private research information. Store backups with the same care as the live library.
+The library database, managed files, notes, annotations, and `.prks-backup` files can contain private research information. Store backups with the same care as the live library.
 
 Browser-local workspace state is separate from server backups.
 

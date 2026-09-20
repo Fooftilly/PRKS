@@ -8,10 +8,10 @@ PRKS validates Python and exact runtime dependency pins before normal startup.
 
 Check:
 
-\`\`\`bash
+```bash
 python --version
 python -m pip install -r requirements.txt
-\`\`\`
+```
 
 Prefer the project virtual environment. On PEP 668 systems, create/use a venv rather than forcing a global pip install.
 
@@ -21,9 +21,9 @@ Confirm the process bind address and port.
 
 Default local URL:
 
-\`\`\`text
+```text
 http://127.0.0.1:8080
-\`\`\`
+```
 
 Testing mode normally uses port 8070.
 
@@ -58,7 +58,7 @@ If it is supported, distinguish:
 - acknowledgement/revision;
 - conflict/reconciliation.
 
-Do not use \`navigator.onLine\` as the sole diagnostic signal.
+Do not use `navigator.onLine` as the sole diagnostic signal.
 
 ## Workspace page behaves differently in split view
 
@@ -78,6 +78,6 @@ Do not bypass validation by manually unpacking the archive into storage. Verify 
 
 ## Demo screenshot capture fails
 
-The screenshot tooling expects a testing server and seeded synthetic/public-domain library. Run the demo seed before capture, and ensure the Playwright/Chrome assumptions of \`scripts/capture_demo_screenshots.py\` are satisfied.
+The screenshot tooling expects a testing server and seeded synthetic/public-domain library. Run the demo seed before capture, and ensure the Playwright/Chrome assumptions of `scripts/capture_demo_screenshots.py` are satisfied.
 
 Never point screenshot automation at the normal personal library.

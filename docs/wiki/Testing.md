@@ -4,29 +4,29 @@ PRKS uses layered tests. Contributors should run the cheapest test that proves a
 
 ## Main runner
 
-\`\`\`bash
+```bash
 python run_tests.py
-\`\`\`
+```
 
 Runs the Python/API/structural/Node suite without Chromium.
 
-\`\`\`bash
+```bash
 python run_tests.py --e2e
-\`\`\`
+```
 
 Runs the full real-browser E2E gate against real PRKS server processes.
 
-\`\`\`bash
+```bash
 python run_tests.py --all
-\`\`\`
+```
 
 Runs the ordinary suite followed by E2E.
 
 There is also an opt-in UX interaction tour:
 
-\`\`\`bash
+```bash
 python run_tests.py --ux-tour
-\`\`\`
+```
 
 ## E2E iteration
 
@@ -34,17 +34,17 @@ The browser runner supports targeted/domain-oriented execution so development do
 
 Useful modes include:
 
-\`\`\`bash
+```bash
 python tests/e2e/run.py --smoke
 python tests/e2e/run.py --feature <group>
 python tests/e2e/run.py --affected
 python tests/e2e/run.py --last-failed
 python tests/e2e/run.py --dev --feature <group>
-\`\`\`
+```
 
 The advertised full gate runs in parallel; debugging a single failure should normally use one worker.
 
-\`tests/e2e/policy.py\` is the declarative source for feature groups, affected-file mapping, smoke cases, and related selection policy.
+`tests/e2e/policy.py` is the declarative source for feature groups, affected-file mapping, smoke cases, and related selection policy.
 
 ## E2E isolation
 
@@ -70,7 +70,7 @@ The UX interaction tour is separate from the normal E2E gate because it produces
 
 README promotional screenshots use dedicated synthetic/public-domain demo tooling:
 
-- \`scripts/seed_demo_library.py\`;
-- \`scripts/capture_demo_screenshots.py\`.
+- `scripts/seed_demo_library.py`;
+- `scripts/capture_demo_screenshots.py`.
 
 Never use a real personal research library to generate documentation or UX-audit screenshots.

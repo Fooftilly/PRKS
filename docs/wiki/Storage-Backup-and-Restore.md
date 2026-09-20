@@ -4,12 +4,12 @@ PRKS stores canonical research data locally and provides an application-level ba
 
 ## Storage root
 
-\`PRKS_STORAGE\` selects the persistent-data root. Without it, normal repository runs use \`data/\`.
+`PRKS_STORAGE` selects the persistent-data root. Without it, normal repository runs use `data/`.
 
 Typical storage includes:
 
-- \`prks_data.db\` — canonical SQLite database;
-- \`pdfs/\` — managed PDFs;
+- `prks_data.db` — canonical SQLite database;
+- `pdfs/` — managed PDFs;
 - person-managed/cache files where applicable;
 - processing-queue data when configured inside the storage root;
 - derived indexes/caches/logs.
@@ -28,7 +28,7 @@ Derived data includes thumbnail caches, PDF text-search indexes, research-refere
 
 Use **Settings → Backup & restore → Download backup**.
 
-A \`.prks-backup\` archive contains a consistent SQLite snapshot plus managed research files covered by the backup format. Treat it as private research data.
+A `.prks-backup` archive contains a consistent SQLite snapshot plus managed research files covered by the backup format. Treat it as private research data.
 
 Creating a backup coordinates with canonical mutations so the archive is internally consistent.
 
@@ -42,7 +42,7 @@ If replacement is interrupted before commit completes, restore logic is designed
 
 ## What backup does not preserve
 
-Machine-specific deployment configuration is not research data. Bind address, Docker UID/GID, \`PRKS_STORAGE\`, processing-directory location, and other deployment settings are not portable library state.
+Machine-specific deployment configuration is not research data. Bind address, Docker UID/GID, `PRKS_STORAGE`, processing-directory location, and other deployment settings are not portable library state.
 
 Browser-local workspace state—theme, open tabs, split layout, and similar localStorage state—is also not part of the server backup.
 
