@@ -16,6 +16,17 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "build(deps)"
+    # React 19 needs a coordinated react + react-dom + types migration
+    # (and EmbedPDF compatibility check). Keep 18.x patch/minor updates.
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
     groups:
       embedpdf:
         patterns:
@@ -42,6 +53,12 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "build(deps)"
+    # PRKS consumes CodeMirror 5 (lib/codemirror.js + hint addons / global
+    # CodeMirror). CM6 is a deliberate migration, not a Dependabot bump.
+    # Keep 5.x patch/minor updates.
+    ignore:
+      - dependency-name: "codemirror"
+        update-types: ["version-update:semver-major"]
 
   # Keep the Python base image in the root Dockerfile visible to Dependabot.
   - package-ecosystem: "docker"
