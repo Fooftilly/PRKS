@@ -549,11 +549,10 @@ def _wrap_tls(sock, server_hostname: str, deadline: float):
         return None
     try:
         context = ssl.create_default_context()
-        # A floor, not a pin: PRKS already requires Python 3.12, whose defaults
-        # are TLS 1.2+, but state the minimum so it cannot drift downwards.
-        # `max` rather than a bare assignment, which would *lower* a future
-        # interpreter whose own default had risen above TLS 1.2.
-        context.minimum_version = max(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        # A floor, not a pin: only raise a weaker interpreter default to TLS 1.2.
+        # A future interpreter whose default is stricter keeps that stricter floor.
+        if context.minimum_version < ssl.TLSVersion.TLSv1_2:
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.set_alpn_protocols(["http/1.1"])
         wrapped = context.wrap_socket(sock, server_hostname=server_hostname)
     except (ssl.SSLError, OSError, ValueError):
