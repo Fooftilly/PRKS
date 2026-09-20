@@ -7,36 +7,74 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import (
+    AppServer,
+    ChromiumHolder,
+    chromium_recycle_every,
+    e2e_diag,
+    open_app_page,
+    wait_for_async,
+)
 
 
 def load_tests(loader, standard_tests, pattern):
     return standard_tests if os.environ.get('PRKS_E2E') == '1' else unittest.TestSuite()
 
 
+# Heavy service-worker module: recycle Chromium after N closed contexts.
+# Override with PRKS_E2E_CHROMIUM_RECYCLE_EVERY (0 disables).
+# Measured (class alone, PRKS_E2E_DIAGNOSTIC=1): PASS often, but intermittent
+# hangs after APP_READY at varying depths — ~case 47 (recycle=20), ~13
+# (recycle=15), ~5 (recycle=12). Quiet run with recycle=4 still hung on
+# acknowledgement (~case 24): Playwright wedged so pending()'s 25s JS
+# deadline never fired. Recycle every 1 = fresh Chromium per test here.
+_DEFAULT_RECYCLE_EVERY = 1
+_HOLDER = None
+
+
 def setUpModule():
-    global _PW, _BROWSER
-    _PW, _BROWSER = require_chromium()
+    global _HOLDER
+    every = chromium_recycle_every(default=_DEFAULT_RECYCLE_EVERY)
+    _HOLDER = ChromiumHolder(recycle_every=every)
 
 
 def tearDownModule():
-    _BROWSER.close(); _PW.stop()
+    global _HOLDER
+    if _HOLDER is not None:
+        _HOLDER.close()
+        _HOLDER = None
 
 
 class OfflineWorkMetadataTests(unittest.TestCase):
     FIELD_OPS = "r.operation === 'SET_WORK_METADATA_FIELD'"
 
     def start(self):
+        tid = self.id()
+        e2e_diag("START", tid)
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop); server.start()
-        page, context, collector = open_app_page(_BROWSER, server.origin, service_workers='allow')
+        self.addCleanup(lambda: e2e_diag("SERVER_STOPPED", tid))
+        self.addCleanup(server.stop)
+        server.start()
+        e2e_diag("SERVER_READY", tid)
+        page, context, collector = open_app_page(
+            _HOLDER.get_browser(), server.origin, service_workers='allow'
+        )
+        e2e_diag("CONTEXT_READY", tid)
+
+        def _after_context():
+            e2e_diag("CONTEXT_CLOSED", tid)
+            _HOLDER.after_context_closed()
+
+        self.addCleanup(_after_context)
         self.addCleanup(context.close)
+        self.addCleanup(lambda: e2e_diag("BODY_DONE", tid))
         self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
         o._wait_sw_active(page)
         o._open_work_from_home(page, WORK_A_TITLE)
         o._wait_entity_cached(page, 'work', server.ids['work_a'])
         self.edit(page)
         o._wait_entity_cached(page, 'work-metadata-state', server.ids['work_a'])
+        e2e_diag("APP_READY", tid)
         return server, page, context
 
     # ---- helpers ------------------------------------------------------------

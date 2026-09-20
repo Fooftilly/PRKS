@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -33,7 +34,9 @@ os.environ["PRKS_E2E"] = "1"
 
 from tests.e2e.harness import (
     apply_e2e_playwright_env,
+    finish_test_profile,
     python_for_subprocess,
+    start_test_profile,
     stop_all_servers,
 )
 from tests.e2e.install_browser import ensure_chromium_installed
@@ -62,6 +65,11 @@ from tests.e2e.sharding import (
     save_timings,
     shard_estimates,
     worker_port_range,
+)
+
+# Bare test.id() lines printed by _TimingResult.startTest (not diag/unittest chatter).
+_E2E_TEST_ID_LINE = re.compile(
+    r"^tests\.e2e\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.test_[A-Za-z0-9_]+$"
 )
 
 E2E_MODULES = (
@@ -261,20 +269,37 @@ class _TimingResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.timings = {}
+        self.phase_timings = {}
         self._started_at = None
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
+        start_test_profile(test.id())
         # Workers redirect stdout to their log file; print the id so a hung
         # shard names the test it never left (TextTestRunner stream is StringIO).
         print(test.id(), flush=True)
+        try:
+            from tests.e2e.harness import e2e_diag
+
+            e2e_diag("START", test.id())
+        except Exception:
+            pass
         super().startTest(test)
 
     def stopTest(self, test):
+        try:
+            from tests.e2e.harness import e2e_diag
+
+            e2e_diag("STOP", test.id())
+        except Exception:
+            pass
         super().stopTest(test)
         if self._started_at is not None:
             self.timings[test.id()] = time.perf_counter() - self._started_at
             self._started_at = None
+        phases = finish_test_profile(test.id())
+        if phases:
+            self.phase_timings[test.id()] = phases
 
 
 def _result_factory(stream, descriptions, verbosity):
@@ -339,6 +364,16 @@ def _persist_timings(observed, known_ids):
         save_timings(path, merged)
 
 
+def _is_benchmark_mode(args) -> bool:
+    """True for non-representative runs that must not train LPT / last-failed history.
+
+    ``--profile`` adds instrumentation overhead; ``--no-seed-cache`` measures a
+    slower non-default configuration. Persisting either into
+    ``.tests/e2e-timings.json`` poisons later normal-gate shard balancing.
+    """
+    return bool(getattr(args, "profile", False) or getattr(args, "no_seed_cache", False))
+
+
 # --- worker mode ---------------------------------------------------------
 
 
@@ -399,6 +434,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         "skipped": 0,
         "failed_ids": [],
         "timings": {},
+        "phase_timings": {},
         "output": "",
         "detail": "",
     }
@@ -417,6 +453,7 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         report["skipped"] = len(result.skipped)
         report["failed_ids"] = _failed_ids_from_result(result)
         report["timings"] = {k: round(v, 3) for k, v in result.timings.items()}
+        report["phase_timings"] = result.phase_timings
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
     except BaseException as exc:  # noqa: BLE001 - must still report, then re-raise nothing
@@ -527,11 +564,43 @@ def _tail(path, limit=4000):
         return ""
 
 
-def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
+def _last_started_test(log_file) -> str:
+    """Last test id a worker printed before hanging (see _TimingResult.startTest).
+
+    ``startTest`` prints a bare ``test.id()`` line. Diagnostic / recycle /
+    unittest chatter after that must not steal attribution — only lines that
+    look like E2E test ids count.
+    """
+    last = ""
+    try:
+        with open(log_file, encoding="utf-8", errors="replace") as handle:
+            for ln in handle:
+                s = ln.strip()
+                if _E2E_TEST_ID_LINE.match(s):
+                    last = s
+    except OSError:
+        return ""
+    return last
+
+
+def _print_hung_worker(worker, jobs):
+    """Name the in-flight test when a shard dies without a report document."""
+    last = _last_started_test(worker["log_file"])
+    print("", file=sys.stderr)
+    print("--- Worker %d/%d hung / no report ---" % (worker["index"] + 1, jobs), file=sys.stderr)
+    if last:
+        print("last started test: %s" % last, file=sys.stderr)
+    else:
+        print("last started test: (worker log empty or unreadable)", file=sys.stderr)
+    sys.stderr.flush()
+
+
+def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, dict]:
     buckets = assign_shards(test_ids, jobs, timings)
     estimates = shard_estimates(buckets, timings)
     browsers_path = apply_e2e_playwright_env()
     observed = {}
+    phase_timings = {}
     reports = []
     failed_ids = []
     started = time.perf_counter()
@@ -543,7 +612,12 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
         def _shutdown(signum, _frame):
             # A signal does not run the finally below, so stop the shards here
             # rather than leaving four Chromiums and four PRKS servers behind.
+            # Print in-flight test ids first — the temp workdir is deleted when
+            # this with-block unwinds, and hard-timeout SIGTERM is the common
+            # path for a single hung shard after its peer finished cleanly.
             for worker in workers:
+                if worker["proc"].poll() is None:
+                    _print_hung_worker(worker, jobs)
                 _stop_worker(worker)
             print("[E2E] terminated by signal %d" % signum, file=sys.stderr, flush=True)
             raise KeyboardInterrupt
@@ -589,6 +663,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
                     reports.append(entry)
                     if report:
                         observed.update(report.get("timings") or {})
+                        phase_timings.update(report.get("phase_timings") or {})
                         for fid in report.get("failed_ids") or []:
                             if fid not in failed_ids:
                                 failed_ids.append(fid)
@@ -656,7 +731,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list]:
     )
     for problem in problems:
         print("  %s" % problem, file=sys.stderr)
-    return ok, observed, failed_ids
+    return ok, observed, failed_ids, phase_timings
 
 
 def _print_worker_failure(worker, jobs, report):
@@ -669,6 +744,9 @@ def _print_worker_failure(worker, jobs, report):
             % worker["proc"].returncode,
             file=sys.stderr,
         )
+        last = _last_started_test(worker["log_file"])
+        if last:
+            print("last started test: %s" % last, file=sys.stderr)
         print("assigned tests: %s" % ", ".join(worker["shard"][:20]), file=sys.stderr)
         if len(worker["shard"]) > 20:
             print("  (+%d more)" % (len(worker["shard"]) - 20), file=sys.stderr)
@@ -685,7 +763,7 @@ def _print_worker_failure(worker, jobs, report):
 # --- serial parent -------------------------------------------------------
 
 
-def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list]:
+def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list, dict]:
     runner = unittest.TextTestRunner(
         verbosity=2, failfast=fail_fast, resultclass=_result_factory
     )
@@ -705,6 +783,7 @@ def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list]:
         result.wasSuccessful(),
         {k: round(v, 3) for k, v in result.timings.items()},
         _failed_ids_from_result(result),
+        result.phase_timings,
     )
 
 
@@ -808,6 +887,23 @@ def build_parser():
         "--list-features",
         action="store_true",
         help="Print the E2E feature-group catalog and exit.",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "Measure per-test E2E infrastructure phases (seed build/clone, server startup, "
+            "browser context, app readiness, async waits, request routing, shutdown). "
+            "Does not update .tests/e2e-timings.json or last-failed history."
+        ),
+    )
+    parser.add_argument(
+        "--no-seed-cache",
+        action="store_true",
+        help=(
+            "Disable worker-local immutable fixture seed snapshots for A/B benchmarking. "
+            "Does not update .tests/e2e-timings.json or last-failed history."
+        ),
     )
     # Internal: how the parent invokes one shard.
     parser.add_argument("--worker-index", type=int, default=None, help=argparse.SUPPRESS)
@@ -932,6 +1028,11 @@ def _resolve_selection(args, all_ids):
 def main(argv=None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
+    if args.profile:
+        os.environ["PRKS_E2E_PROFILE"] = "1"
+    if args.no_seed_cache:
+        os.environ["PRKS_E2E_SEED_CACHE"] = "0"
+
     if args.worker_index is not None:
         return run_worker(
             args.worker_index, args.worker_count or 1, args.tests_file, args.report_file
@@ -1039,45 +1140,77 @@ def main(argv=None) -> int:
 
     timings = load_timings(REPO / TIMINGS_PATH)
     if jobs == 1:
-        ok, observed, failed_ids = run_serial(test_ids, args.fail_fast)
+        ok, observed, failed_ids, phase_timings = run_serial(test_ids, args.fail_fast)
     else:
-        ok, observed, failed_ids = run_parallel(
+        ok, observed, failed_ids, phase_timings = run_parallel(
             test_ids, jobs, timings, args.fail_fast
         )
 
+    if args.profile and phase_timings:
+        totals = {}
+        for phases in phase_timings.values():
+            for name, seconds in phases.items():
+                totals[name] = totals.get(name, 0.0) + float(seconds)
+        print("")
+        print("E2E infrastructure profile (sum across selected tests):")
+        for name, seconds in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
+            print("  %-18s %8.2fs" % (name, seconds))
+        print("")
+        print("Slowest profiled tests:")
+        ranked = sorted(
+            (
+                (sum(float(v) for v in phases.values()), test_id, phases)
+                for test_id, phases in phase_timings.items()
+            ),
+            reverse=True,
+        )[:20]
+        for infra_seconds, test_id, phases in ranked:
+            detail = ", ".join(
+                "%s=%.2f" % (name, float(value))
+                for name, value in sorted(
+                    phases.items(), key=lambda item: (-float(item[1]), item[0])
+                )
+            )
+            print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
+
     targeted = tier != "full"
-    _persist_timings(observed, test_ids if not targeted else None)
+    # Benchmark modes still print profile / slowest for this run, but must not
+    # train LPT history or mutate last-failed — those files drive ordinary gates.
+    persist_history = not _is_benchmark_mode(args)
+    if persist_history:
+        _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
 
     # Persist unresolved failures from actual completions only — never treat
     # the pre-run selection as executed (fail-fast / cancelled / crashed).
-    executed_ids = _executed_ids_from_observation(observed, failed_ids)
-    previous = load_last_failed(REPO / LAST_FAILED_PATH)
-    previous_ids = (previous or {}).get("test_ids") or []
-    unresolved = merge_last_failed(
-        previous_ids, executed_ids, failed_ids, known_ids=all_ids
-    )
-    last_failed_path = REPO / LAST_FAILED_PATH
-    if unresolved:
-        save_last_failed(
-            last_failed_path,
-            unresolved,
-            meta={
-                "tier": tier,
-                "note": note,
-                "executed": len(executed_ids),
-                "selected": len(test_ids),
-                "failed_this_run": len(failed_ids),
-            },
+    if persist_history:
+        executed_ids = _executed_ids_from_observation(observed, failed_ids)
+        previous = load_last_failed(REPO / LAST_FAILED_PATH)
+        previous_ids = (previous or {}).get("test_ids") or []
+        unresolved = merge_last_failed(
+            previous_ids, executed_ids, failed_ids, known_ids=all_ids
         )
-        print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
-    elif last_failed_path.is_file():
-        try:
-            last_failed_path.unlink()
-        except OSError:
-            pass
-        if previous_ids:
-            print("Cleared last-failed (all previously failed tests resolved)")
+        last_failed_path = REPO / LAST_FAILED_PATH
+        if unresolved:
+            save_last_failed(
+                last_failed_path,
+                unresolved,
+                meta={
+                    "tier": tier,
+                    "note": note,
+                    "executed": len(executed_ids),
+                    "selected": len(test_ids),
+                    "failed_this_run": len(failed_ids),
+                },
+            )
+            print("Wrote last-failed (%d) → %s" % (len(unresolved), LAST_FAILED_PATH))
+        elif last_failed_path.is_file():
+            try:
+                last_failed_path.unlink()
+            except OSError:
+                pass
+            if previous_ids:
+                print("Cleared last-failed (all previously failed tests resolved)")
 
     pointer = None
     if ok and not args.no_pointer_capture:

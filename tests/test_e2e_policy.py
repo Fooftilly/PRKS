@@ -470,7 +470,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                 with mock.patch.object(
                                     runner,
                                     "run_serial",
-                                    return_value=(False, observed, failed),
+                                    return_value=(False, observed, failed, {}),
                                 ) as serial:
                                     with mock.patch.object(
                                         runner, "load_timings", return_value={}
@@ -625,7 +625,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                                 with mock.patch.object(
                                     runner,
                                     "run_serial",
-                                    return_value=(True, {ids[0]: 0.1}, []),
+                                    return_value=(True, {ids[0]: 0.1}, [], {}),
                                 ):
                                     with mock.patch.object(
                                         runner,
@@ -876,6 +876,128 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 os.environ.pop("PRKS_E2E", None)
             else:
                 os.environ["PRKS_E2E"] = previous_env
+
+    def test_benchmark_modes_do_not_persist_timing_or_last_failed_history(self):
+        """--profile / --no-seed-cache must not train LPT timings or last-failed."""
+        from tests.e2e import run as runner
+        from tests.e2e.sharding import load_timings, save_timings
+
+        previous = os.environ.get("PRKS_E2E")
+        profile_prev = os.environ.get("PRKS_E2E_PROFILE")
+        seed_prev = os.environ.get("PRKS_E2E_SEED_CACHE")
+        os.environ["PRKS_E2E"] = "1"
+        os.environ.pop("PRKS_E2E_PROFILE", None)
+        os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+        try:
+            test_id = "tests.e2e.fake.BenchTests.test_x"
+            prior_failed = ["tests.e2e.fake.Other.test_keep"]
+            prior_timings = {test_id: 1.25, prior_failed[0]: 2.0}
+            # Distinct from prior so a mistaken persist is obvious.
+            observed = {test_id: 99.0}
+
+            with tempfile.TemporaryDirectory() as raw:
+                repo = Path(raw)
+                tests_dir = repo / ".tests"
+                tests_dir.mkdir()
+                timings_path = tests_dir / "e2e-timings.json"
+                last_path = tests_dir / "e2e-last-failed.json"
+                save_timings(timings_path, prior_timings)
+                policy.save_last_failed(
+                    last_path, prior_failed, meta={"tier": "full"}
+                )
+                prior_timings_bytes = timings_path.read_bytes()
+                prior_last_bytes = last_path.read_bytes()
+
+                def _invoke(extra_flags):
+                    with mock.patch.object(runner, "REPO", repo):
+                        with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
+                            with mock.patch.object(
+                                runner, "ensure_chromium_installed"
+                            ):
+                                with mock.patch.object(
+                                    runner,
+                                    "discover_test_ids",
+                                    return_value=[test_id] + prior_failed,
+                                ):
+                                    with mock.patch.object(
+                                        runner,
+                                        "run_serial",
+                                        return_value=(
+                                            True,
+                                            observed,
+                                            [],
+                                            {test_id: {"seed_build": 0.01}},
+                                        ),
+                                    ):
+                                        with mock.patch.object(
+                                            runner, "_print_slowest"
+                                        ) as print_slow:
+                                            with mock.patch.object(
+                                                runner,
+                                                "_run_pointer_capture",
+                                                return_value=0,
+                                            ):
+                                                code = runner.main(
+                                                    [
+                                                        test_id,
+                                                        "--jobs",
+                                                        "1",
+                                                        "--no-pointer-capture",
+                                                        *extra_flags,
+                                                    ]
+                                                )
+                    return code, print_slow
+
+                for flags in (
+                    ["--profile"],
+                    ["--no-seed-cache"],
+                    ["--profile", "--no-seed-cache"],
+                ):
+                    timings_path.write_bytes(prior_timings_bytes)
+                    last_path.write_bytes(prior_last_bytes)
+                    code, print_slow = _invoke(flags)
+                    self.assertEqual(code, 0)
+                    print_slow.assert_called_once()
+                    self.assertEqual(
+                        timings_path.read_bytes(),
+                        prior_timings_bytes,
+                        "benchmark flags=%s must leave timing history untouched"
+                        % flags,
+                    )
+                    self.assertEqual(
+                        last_path.read_bytes(),
+                        prior_last_bytes,
+                        "benchmark flags=%s must leave last-failed untouched"
+                        % flags,
+                    )
+                    os.environ.pop("PRKS_E2E_PROFILE", None)
+                    os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+
+                timings_path.write_bytes(prior_timings_bytes)
+                last_path.write_bytes(prior_last_bytes)
+                code, print_slow = _invoke([])
+                self.assertEqual(code, 0)
+                print_slow.assert_called_once()
+                loaded = load_timings(timings_path)
+                self.assertEqual(loaded[test_id], 99.0)
+                self.assertNotEqual(timings_path.read_bytes(), prior_timings_bytes)
+                # Ordinary success still merges last-failed (unexecuted priors remain).
+                data = policy.load_last_failed(last_path)
+                self.assertIsNotNone(data)
+                self.assertEqual(data["test_ids"], prior_failed)
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+            if profile_prev is None:
+                os.environ.pop("PRKS_E2E_PROFILE", None)
+            else:
+                os.environ["PRKS_E2E_PROFILE"] = profile_prev
+            if seed_prev is None:
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+            else:
+                os.environ["PRKS_E2E_SEED_CACHE"] = seed_prev
 
     def test_no_sigalrm_watchdog_in_runner(self):
         """Full-gate deadline must not depend on POSIX-only alarm APIs."""

@@ -297,7 +297,7 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         sink = io.StringIO()
         with _import_runner() as runner:
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                ok, observed, _failed = runner.run_parallel(ids, jobs, {}, fail_fast)
+                ok, observed, _failed, _phases = runner.run_parallel(ids, jobs, {}, fail_fast)
                 return ok, observed
 
     def test_passing_shards_report_success_and_timings(self):
@@ -313,7 +313,7 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         sink = io.StringIO()
         with _import_runner() as runner:
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                ok, _observed, failed = runner.run_parallel(ids, 2, {}, False)
+                ok, _observed, failed, _phases = runner.run_parallel(ids, 2, {}, False)
         self.assertFalse(ok)
         self.assertTrue(any(fid.endswith("test_fails") for fid in failed))
 
@@ -368,6 +368,61 @@ class RunnerDiscoveryTests(unittest.TestCase):
         self.assertEqual({module_of(t) for t in ids}, expected_modules)
         for test_id in ids:
             self.assertRegex(test_id, r"^tests\.e2e\.[A-Za-z_]+\.[A-Za-z_]+\.test_")
+
+
+class HungWorkerDiagnosticsTests(unittest.TestCase):
+    def test_last_started_test_reads_final_nonempty_log_line(self):
+        """Hard-timeout / SIGTERM must name the in-flight id before the temp
+        workdir is deleted — that id is the last line _TimingResult printed."""
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hung-log-") as raw:
+                path = Path(raw) / "worker-0.log"
+                path.write_text(
+                    "tests.e2e.test_app.A.test_one\n"
+                    "tests.e2e.test_app.A.test_two\n"
+                    "\n"
+                    "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests"
+                    ".test_a_cleared_year_falls_back_to_the_pending_published_date\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    runner._last_started_test(path),
+                    "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests"
+                    ".test_a_cleared_year_falls_back_to_the_pending_published_date",
+                )
+                missing = Path(raw) / "absent.log"
+                self.assertEqual(runner._last_started_test(missing), "")
+                empty = Path(raw) / "empty.log"
+                empty.write_text("", encoding="utf-8")
+                self.assertEqual(runner._last_started_test(empty), "")
+
+    def test_last_started_test_ignores_diagnostic_and_chatter_lines(self):
+        """Lifecycle / recycle / unittest lines must not overwrite the test id."""
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hung-log-") as raw:
+                path = Path(raw) / "worker-0.log"
+                path.write_text(
+                    "tests.e2e.test_app.A.test_one\n"
+                    "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests"
+                    ".test_acknowledgement_keeps_the_work_in_its_new_group\n"
+                    "[e2e-diag] APP_READY tests.e2e.test_work_metadata_offline."
+                    "OfflineWorkMetadataTests.test_acknowledgement_keeps_the_work_in_its_new_group\n"
+                    "[e2e-diag] CHROMIUM_RECYCLE after_1_contexts\n"
+                    "ok\n"
+                    "Ran 1 test in 3.7s\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    runner._last_started_test(path),
+                    "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests"
+                    ".test_acknowledgement_keeps_the_work_in_its_new_group",
+                )
+                chatter_only = Path(raw) / "chatter.log"
+                chatter_only.write_text(
+                    "[e2e-diag] CHROMIUM_RECYCLE after_1_contexts\nE2E FAIL\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._last_started_test(chatter_only), "")
 
 
 if __name__ == "__main__":

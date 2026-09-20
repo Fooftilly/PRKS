@@ -6,6 +6,7 @@ assertions fail.
 """
 from __future__ import annotations
 
+import copy
 import os
 import random
 import shutil
@@ -33,6 +34,300 @@ REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
 READY_TIMEOUT_S = 25.0
 STOP_TIMEOUT_S = 8.0
+
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+_ACTIVE_PROFILE = None
+_SEED_CACHE_TMP = None
+_SEED_SNAPSHOTS = {}
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in _FALSE_ENV_VALUES
+
+
+def start_test_profile(test_id: str) -> None:
+    """Begin opt-in per-test infrastructure profiling for the runner."""
+    global _ACTIVE_PROFILE
+    if not _env_enabled("PRKS_E2E_PROFILE"):
+        _ACTIVE_PROFILE = None
+        return
+    _ACTIVE_PROFILE = {"test_id": test_id, "phases": {}}
+
+
+def _profile_phase(name: str, seconds: float) -> None:
+    profile = _ACTIVE_PROFILE
+    if profile is None:
+        return
+    phases = profile["phases"]
+    phases[name] = phases.get(name, 0.0) + max(0.0, float(seconds))
+
+
+def finish_test_profile(test_id: str) -> dict:
+    """Return and clear phase timings for test_id; empty when profiling is off."""
+    global _ACTIVE_PROFILE
+    profile = _ACTIVE_PROFILE
+    _ACTIVE_PROFILE = None
+    if not profile or profile.get("test_id") != test_id:
+        return {}
+    return {
+        key: round(float(value), 6)
+        for key, value in sorted(profile["phases"].items())
+        if value > 0
+    }
+
+
+def seed_cache_enabled() -> bool:
+    """Worker-local immutable seed snapshots are on unless explicitly disabled."""
+    return _env_enabled("PRKS_E2E_SEED_CACHE", default=True)
+
+
+def diagnostic_enabled() -> bool:
+    """Opt-in stage/heartbeat markers for hang diagnosis (``PRKS_E2E_DIAGNOSTIC=1``)."""
+    return _env_enabled("PRKS_E2E_DIAGNOSTIC")
+
+
+def e2e_diag(stage: str, test_id: str = "") -> None:
+    """Print a privacy-safe stage marker when diagnostic mode is on.
+
+    Only stage names and unittest ids — never storage paths, titles, or bodies.
+    """
+    if not diagnostic_enabled():
+        return
+    stage_s = str(stage or "").strip() or "?"
+    tid = str(test_id or "").strip()
+    if tid:
+        print("[e2e-diag] %s %s" % (stage_s, tid), flush=True)
+    else:
+        print("[e2e-diag] %s" % stage_s, flush=True)
+
+
+def chromium_recycle_every(default: int = 0) -> int:
+    """How many closed BrowserContexts before relaunching Chromium.
+
+    ``PRKS_E2E_CHROMIUM_RECYCLE_EVERY`` overrides. ``0`` disables. Modules that
+    open many service-worker contexts may pass a positive module default.
+    """
+    raw = os.environ.get("PRKS_E2E_CHROMIUM_RECYCLE_EVERY")
+    if raw is None or not str(raw).strip():
+        return max(0, int(default))
+    try:
+        return max(0, int(str(raw).strip()))
+    except ValueError:
+        return max(0, int(default))
+
+
+class ChromiumHolder:
+    """Module-scoped Playwright + Chromium with optional periodic relaunch.
+
+    Fresh BrowserContexts remain per-test. After ``recycle_every`` contexts have
+    been closed, the next ``get_browser()`` restarts Chromium to shed
+    service-worker / process accumulation. Recycle is lazy: the last closed
+    context only sets a flag, so ``tearDownModule`` / ``close()`` never launches
+    an unused browser.
+    """
+
+    def __init__(self, *, recycle_every: int | None = None):
+        if recycle_every is None:
+            recycle_every = chromium_recycle_every(0)
+        self.recycle_every = max(0, int(recycle_every))
+        self._contexts_since_launch = 0
+        self._needs_recycle = False
+        self.pw, self.browser = require_chromium()
+
+    def get_browser(self):
+        """Return the live browser, relaunching first when a recycle is pending."""
+        if self._needs_recycle or self.browser is None:
+            self.recycle()
+        return self.browser
+
+    def after_context_closed(self) -> None:
+        self._contexts_since_launch += 1
+        if self.recycle_every and self._contexts_since_launch >= self.recycle_every:
+            self._needs_recycle = True
+
+    def recycle(self) -> None:
+        e2e_diag(
+            "CHROMIUM_RECYCLE",
+            "after_%d_contexts" % self._contexts_since_launch,
+        )
+        # Stop the old process, then drop refs *before* relaunch so a failed
+        # require_chromium cannot leave get_browser() serving closed instances.
+        # Only clear _needs_recycle after a successful relaunch — otherwise the
+        # next get_browser() retries instead of returning stale handles.
+        try:
+            if self.browser is not None:
+                try:
+                    self.browser.close()
+                except Exception:
+                    pass
+            if self.pw is not None:
+                try:
+                    self.pw.stop()
+                except Exception:
+                    pass
+        finally:
+            self.browser = None
+            self.pw = None
+        try:
+            self.pw, self.browser = require_chromium()
+        except Exception:
+            self.browser = None
+            self.pw = None
+            raise
+        self._contexts_since_launch = 0
+        self._needs_recycle = False
+
+    def close(self) -> None:
+        """Stop Chromium without relaunching, even if a recycle was pending."""
+        self._needs_recycle = False
+        try:
+            if self.browser is not None:
+                try:
+                    self.browser.close()
+                except Exception:
+                    pass
+        finally:
+            try:
+                if self.pw is not None:
+                    self.pw.stop()
+            finally:
+                self.browser = None
+                self.pw = None
+
+
+def clear_seed_cache() -> None:
+    """Drop worker-local seed snapshots. Primarily used by unit tests/benchmarks."""
+    global _SEED_CACHE_TMP
+    _SEED_SNAPSHOTS.clear()
+    if _SEED_CACHE_TMP is not None:
+        try:
+            _SEED_CACHE_TMP.cleanup()
+        finally:
+            _SEED_CACHE_TMP = None
+
+
+def _seed_cache_root() -> str:
+    global _SEED_CACHE_TMP
+    if _SEED_CACHE_TMP is None:
+        _SEED_CACHE_TMP = tempfile.TemporaryDirectory(prefix="prks-e2e-seed-cache-")
+    return _SEED_CACHE_TMP.name
+
+
+def _wal_checkpoint_ok(row) -> bool:
+    """True when ``PRAGMA wal_checkpoint`` completed without a blocked writer.
+
+    SQLite returns ``(busy, log, checkpointed)``. ``busy != 0`` means the
+    checkpoint did not finish; that is not raised as ``sqlite3.Error``, so
+    callers must inspect the row before treating the main ``.db`` as complete.
+    """
+    if row is None:
+        return False
+    try:
+        busy = int(row[0])
+    except (TypeError, ValueError, IndexError):
+        return False
+    return busy == 0
+
+
+def _finalize_seed_template(template: str) -> None:
+    """Checkpoint SQLite WAL into main DB files so clones are self-contained.
+
+    Seed builders open PRKSDatabase without an explicit close. On some Python /
+    SQLite timings the template can retain ``-wal``/``-shm`` companions. A
+    successful checkpoint makes each clone a single consistent ``.db`` and
+    avoids rare WAL-replay surprises when the server opens a fresh copy.
+
+    Fail closed: companions are removed only when ``wal_checkpoint(TRUNCATE)``
+    reports ``busy=0``. A blocked/incomplete checkpoint raises so the caller
+    never inserts the template into the immutable seed cache — a live connection
+    can still mutate the directory after caching, which breaks that contract.
+    Connect with ``timeout=0`` so a leaked writer fails immediately instead of
+    waiting on SQLite's default busy timeout.
+    """
+    import sqlite3
+
+    for root, _dirs, files in os.walk(template):
+        for name in files:
+            if not name.endswith(".db"):
+                continue
+            db_path = os.path.join(root, name)
+            try:
+                conn = sqlite3.connect(db_path, timeout=0)
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    "E2E seed template SQLite connect failed during WAL finalize"
+                ) from exc
+            try:
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                conn.commit()
+            except sqlite3.Error as exc:
+                raise RuntimeError(
+                    "E2E seed template WAL checkpoint failed"
+                ) from exc
+            finally:
+                conn.close()
+            if not _wal_checkpoint_ok(row):
+                raise RuntimeError(
+                    "E2E seed template still has an active SQLite user"
+                )
+            for suffix in ("-wal", "-shm"):
+                companion = db_path + suffix
+                try:
+                    if os.path.exists(companion):
+                        os.unlink(companion)
+                except OSError:
+                    pass
+
+
+def _materialize_seed(seed_fn, destination: str):
+    """Populate destination from a worker-local immutable seed snapshot.
+
+    The first use of a seed function builds a template in a private temporary
+    directory. Every AppServer still gets its own fresh storage tree; later
+    tests merely copy that pristine template instead of rebuilding SQLite,
+    PDFs and research indexes from scratch. Returned fixture IDs are deep
+    copied so a test cannot mutate the cache's metadata.
+
+    A failed WAL finalize does not insert into ``_SEED_SNAPSHOTS``. Each build
+    attempt uses a unique temporary directory under the cache root so a leftover
+    failed template (e.g. Windows refusing to delete an open SQLite DB) cannot
+    poison a later retry via ``FileExistsError`` on a reused ``seed-N`` path.
+    """
+    if not seed_cache_enabled():
+        started = time.perf_counter()
+        ids = seed_fn(destination) or {}
+        _profile_phase("seed_build", time.perf_counter() - started)
+        return copy.deepcopy(ids), False
+
+    cached = _SEED_SNAPSHOTS.get(seed_fn)
+    hit = cached is not None
+    if cached is None:
+        cache_root = _seed_cache_root()
+        # Unique path per attempt — never derive from len(_SEED_SNAPSHOTS).
+        template = tempfile.mkdtemp(prefix="seed-", dir=cache_root)
+        started = time.perf_counter()
+        try:
+            ids = seed_fn(template) or {}
+            _finalize_seed_template(template)
+        except Exception:
+            try:
+                shutil.rmtree(template, ignore_errors=True)
+            except OSError:
+                pass
+            raise
+        _profile_phase("seed_build", time.perf_counter() - started)
+        cached = (template, copy.deepcopy(ids))
+        _SEED_SNAPSHOTS[seed_fn] = cached
+
+    template, cached_ids = cached
+    started = time.perf_counter()
+    # Destination is a fresh TemporaryDirectory root; copy contents into it.
+    shutil.copytree(template, destination, dirs_exist_ok=True)
+    _profile_phase("seed_clone", time.perf_counter() - started)
+    return copy.deepcopy(cached_ids), hit
 
 
 def python_for_subprocess() -> str:
@@ -165,18 +460,22 @@ def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: 
     Kept API-compatible with `wait_for_function` (`arg`, `timeout` in ms) so a
     call site converts by swapping the call, not by being rewritten.
     """
+    started = time.perf_counter()
     deadline = time.monotonic() + (timeout / 1000.0)
     last = None
-    while True:
-        last = page.evaluate(expression, arg)
-        if last:
-            return last
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                (message or "condition never became true")
-                + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
-            )
-        page.wait_for_timeout(50)
+    try:
+        while True:
+            last = page.evaluate(expression, arg)
+            if last:
+                return last
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    (message or "condition never became true")
+                    + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
+                )
+            page.wait_for_timeout(50)
+    finally:
+        _profile_phase("async_wait", time.perf_counter() - started)
 
 
 def _port_window():
@@ -372,6 +671,7 @@ class PageCollector:
         return req_host in loopback and allow_host in loopback
 
     def _on_route(self, route):
+        started = time.perf_counter()
         url = route.request.url
         try:
             if url.startswith("blob:") or url.startswith("data:") or url.startswith("about:"):
@@ -394,6 +694,8 @@ class PageCollector:
                     route.abort()
                 except Exception:
                     pass
+        finally:
+            _profile_phase("request_routing", time.perf_counter() - started)
 
     def reset_handshake(self) -> None:
         self._pdf_posts.clear()
@@ -471,6 +773,7 @@ class AppServer:
         self._stdout = None
         self._stderr = None
         self._seed_fn = seed_fn
+        self.seed_cache_hit = False
         # Optional subprocess env overrides (e.g. HTTPS_PROXY to deny a specific
         # best-effort outbound call deterministically). Never used to change how the
         # app talks to its own storage/port.
@@ -478,7 +781,9 @@ class AppServer:
 
     def start(self):
         if self._seed_fn is not None:
-            self.ids = self._seed_fn(self.storage_root) or {}
+            self.ids, self.seed_cache_hit = _materialize_seed(
+                self._seed_fn, self.storage_root
+            )
         env = os.environ.copy()
         env["PRKS_TESTING"] = "1"
         env["PRKS_STORAGE"] = self.storage_root
@@ -488,9 +793,11 @@ class AppServer:
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
+            started = time.perf_counter()
             self._spawn(env)
             try:
                 wait_http(self.origin + "/api/works")
+                _profile_phase("server_start", time.perf_counter() - started)
                 return self
             except Exception:
                 # Read the captured output *before* teardown: the log files live
@@ -562,26 +869,30 @@ class AppServer:
         )
 
     def stop(self):
+        started = time.perf_counter()
         try:
             if self.proc is not None:
                 _terminate(self.proc)
                 if self.proc.poll() is None:
                     raise RuntimeError("PRKS E2E server process did not exit")
         finally:
-            for handle in (self._stdout, self._stderr):
-                if handle is not None:
-                    try:
-                        handle.close()
-                    except OSError:
-                        pass
-            self._stdout = None
-            self._stderr = None
-            self.proc = None
             try:
-                _LIVE_SERVERS.remove(self)
-            except ValueError:
-                pass
-            self._tmpdir.cleanup()
+                for handle in (self._stdout, self._stderr):
+                    if handle is not None:
+                        try:
+                            handle.close()
+                        except OSError:
+                            pass
+                self._stdout = None
+                self._stderr = None
+                self.proc = None
+                try:
+                    _LIVE_SERVERS.remove(self)
+                except ValueError:
+                    pass
+                self._tmpdir.cleanup()
+            finally:
+                _profile_phase("server_stop", time.perf_counter() - started)
 
 
 class FixtureServer:
@@ -630,12 +941,22 @@ class FixtureServer:
 
 
 def open_app_page(browser, origin: str, service_workers: str = "block"):
-    context = browser.new_context(
-        viewport={"width": 1400, "height": 900},
-        service_workers=service_workers,
-    )
+    started = time.perf_counter()
+    # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
+    # it by default breaks layout/scroll assertions that measure real overflow
+    # and compact collapsed chrome (global CSS zeroes transition durations).
+    context_kwargs = {
+        "viewport": {"width": 1400, "height": 900},
+        "service_workers": service_workers,
+    }
+    if _env_enabled("PRKS_E2E_REDUCED_MOTION"):
+        context_kwargs["reduced_motion"] = "reduce"
+    context = browser.new_context(**context_kwargs)
     page = context.new_page()
     collector = PageCollector(page, origin)
+    _profile_phase("browser_context", time.perf_counter() - started)
+
+    started = time.perf_counter()
     page.goto(origin + "/", wait_until="domcontentloaded")
     page.wait_for_selector("#sidebar")
     page.wait_for_selector("#page-content")
@@ -643,6 +964,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     # Empty location.hash is treated as Folders; click the nav link like a user.
     page.locator('#sidebar a.nav-link[href="#/folders"]').click()
     page.wait_for_function("() => location.hash === '#/folders'")
+    _profile_phase("app_ready", time.perf_counter() - started)
     return page, context, collector
 
 
