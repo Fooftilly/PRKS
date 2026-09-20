@@ -1943,6 +1943,7 @@ FK cascade left a staged Processing File holding neither tag. A merge means
 "replace S with T everywhere"; explicit `delete_tag()` is the one path where
 cascading the relationship away is correct.
 
+
 ## Interaction feedback
 
 Do not replace the synchronous pending-annotation-sync navigation guard
