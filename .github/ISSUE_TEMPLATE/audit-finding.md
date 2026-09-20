@@ -6,9 +6,9 @@ labels: "audit-finding,candidate"
 assignees: ""
 ---
 
+<!-- Before submitting, replace EF-XXX with the next unused ID after searching open and closed issues labeled `audit-finding`. -->
 > **Status:** Candidate audit finding — not approved implementation work.
 >
-<!-- Before submitting, replace EF-XXX with the next unused ID after searching open and closed issues labeled `audit-finding`. -->
 > **Finding ID:** EF-XXX
 > **Last verified:** `master@COMMIT_SHA`
 > **Source:** audit/review date and origin
