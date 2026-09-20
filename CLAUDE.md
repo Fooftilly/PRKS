@@ -5,8 +5,6 @@ authoritative engineering and testing policy for this repository.
 
 For any UI or interaction work, also read `DESIGN.md` before changing code.
 
-For architecture, maintainability, tooling, or refactoring work, also consult `docs/engineering-findings.md`. Candidate audit findings are informational only unless the maintainer explicitly approves or assigns them.
-
 Important PRKS rules:
 
 - Never use production `data/` or a live `PRKS_STORAGE`.
