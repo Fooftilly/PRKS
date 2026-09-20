@@ -2,14 +2,15 @@
 """Run an optional Sonar secrets hook for Claude Code.
 
 Invokes ``sonar hook <name>`` when the SonarQube CLI is on PATH; otherwise
-exits 0. Platform-specific launchers (``run_hook.sh`` / ``run_hook.ps1``)
-locate a Python 3 interpreter using the same preference order as PRKS
-(``python3`` on POSIX, ``python`` / ``py -3`` on Windows).
+exits 0. The shared Claude settings use ``run_hook.sh`` (POSIX / Git Bash).
+``run_hook.ps1`` remains available for a local Windows PowerShell override.
+Launchers locate a Python 3 interpreter using the same preference order as
+PRKS (``python3`` on POSIX, ``python`` / ``py -3`` on Windows).
 
-Claude may run both launchers in parallel for one event. This script reads
-stdin once, claims an atomic request-scoped lock derived from a stable digest
-of (project, hook, payload), and only the winner forwards that same payload
-to ``sonar hook``.
+This script reads stdin once, claims an atomic request-scoped lock derived
+from a stable digest of (project, hook, payload), and only the winner
+forwards that same payload to ``sonar hook`` (safe if a local override adds
+a second handler).
 """
 
 from __future__ import annotations
