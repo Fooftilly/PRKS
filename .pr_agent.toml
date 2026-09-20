@@ -1,3 +1,10 @@
+# Qodo Review v2: publish findings inline rather than creating a
+# top-level review summary. This avoids noisy "no issues found" comments
+# while still surfacing actual findings on the relevant lines.
+[review_agent]
+comments_location_policy = "inline"
+
+# Legacy Qodo Merge / PR-Agent settings kept for compatibility.
 [pr_reviewer]
 publish_output_no_suggestions = false
 
