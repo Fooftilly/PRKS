@@ -113,10 +113,15 @@ export function applyEmbedpdfPatches() {
             throw new Error(`${parsed.pkg} is ${ver}, expected ${EXPECTED}`);
         }
         const target = join(pkgDir, parsed.file);
-        if (!existsSync(target)) {
-            throw new Error(`missing ${parsed.pkg}/${parsed.file}`);
+        let before;
+        try {
+            before = readFileSync(target, 'utf8');
+        } catch (err) {
+            if (err && err.code === 'ENOENT') {
+                throw new Error(`missing ${parsed.pkg}/${parsed.file}`);
+            }
+            throw err;
         }
-        const before = readFileSync(target, 'utf8');
         const { text, applied, already } = applyHunks(before, parsed.hunks);
         if (applied) writeFileSync(target, text);
         records.push({
