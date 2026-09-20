@@ -136,7 +136,7 @@ writeFileSync(
 );
 
 function bundleReferencesCdnReact(text) {
-    for (const match of text.matchAll(/https?:\\/\\/[^\\s"'\`\\)]+/g)) {
+    for (const match of text.matchAll(/https?:\/\/[^\s"'\`)]+/g)) {
         let url;
         try {
             url = new URL(match[0]);
