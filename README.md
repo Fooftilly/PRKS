@@ -560,11 +560,11 @@ To use them, install the [SonarQube CLI](https://docs.sonarsource.com/sonarqube-
 so `sonar` is on your `PATH`, then authenticate locally (`sonar auth login`).
 No tokens are committed; `.mcp.json` only names the project.
 
-- Hooks call a portable Python launcher
-  (`.claude/hooks/sonar-secrets/run_hook.py`) via Claude Code exec form
-  (`python3` + `args`), so the same config works on Windows, macOS, and Linux
-  without adding Node as a dependency. If `sonar` is missing, the hooks exit 0
-  and do nothing. `python3` on `PATH` is already required by PRKS.
+- Hooks use platform-aware launchers (`run_hook.sh` / `run_hook.ps1`) that
+  locate Python the same way PRKS does (`python3` on POSIX; `python` / `py -3`
+  on Windows — never a bare Windows `python3` requirement), then call
+  `run_hook.py`. If `sonar` or a usable interpreter is missing, the hooks exit 0
+  and do nothing.
 - `.mcp.json` always launches `sonar run mcp …`. Without the CLI, that MCP
   server fails to initialize — install Sonar, or disable/remove that MCP entry
   in your client. See `.claude/README.md` for the full agent-config notes.

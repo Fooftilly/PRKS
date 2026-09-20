@@ -6,11 +6,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.py",
-              "claude-pre-tool-use"
-            ],
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.sh\" claude-pre-tool-use",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "& \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\sonar-secrets\\run_hook.ps1\" claude-pre-tool-use",
             "timeout": 60
           }
         ]
@@ -22,11 +24,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.py",
-              "claude-prompt-submit"
-            ],
+            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.sh\" claude-prompt-submit",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "& \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\sonar-secrets\\run_hook.ps1\" claude-prompt-submit",
             "timeout": 60
           }
         ]
