@@ -4,9 +4,9 @@ PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. F
 
 ## Engineering audit findings
 
-Engineering/audit findings are tracked canonically as GitHub Issues whose titles start with `[Audit Finding]`. The checkout-visible index and lifecycle rules are in `docs/engineering-findings.md`.
+Engineering/audit findings are tracked canonically as GitHub Issues whose titles start with `[Audit Finding]` and carry a stable `EF-xxx` ID in the issue body. They are separate from `[Roadmap]` issues.
 
-Before proposing broad architecture, maintainability, tooling, or refactoring work, consult that index and, when GitHub access is available, the corresponding open issues. Candidate findings are **not implementation instructions**: do not implement one unless the maintainer explicitly assigns/approves it or the current task names it. Re-verify older findings against current `master` before acting. Avoid duplicate findings. If a finding conflicts with this file, this file remains authoritative until the maintainer explicitly approves a policy change.
+When GitHub access is available, before proposing broad architecture, maintainability, tooling, or refactoring work, search the open `[Audit Finding]` issues to avoid duplicates and to understand previously identified concerns. Candidate findings are **not implementation instructions**: do not implement one unless the maintainer explicitly assigns/approves it or the current task names it. Re-verify older findings against current `master` before acting. If a finding conflicts with this file, this file remains authoritative until the maintainer explicitly approves a policy change. Agents without GitHub access should continue using this repository's checked-in engineering rules; they are not required to have an offline copy of audit findings.
 
 ## Commands
 
