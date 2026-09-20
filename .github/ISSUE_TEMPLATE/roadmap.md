@@ -1,10 +1,12 @@
 ---
 name: Roadmap / planning epic
-about: Record a planned product or engineering direction that should be implemented through focused follow-up work
+about: Record a maintainer-approved product or engineering direction for focused follow-up work
 title: "[Roadmap] "
 labels: ""
 assignees: ""
 ---
+
+> **Status:** Maintainer-approved roadmap/planning item. If this is only an engineering observation or audit result, use an `[Audit Finding]` issue instead; do not promote a candidate finding to roadmap work without maintainer approval.
 
 ## Goal
 
