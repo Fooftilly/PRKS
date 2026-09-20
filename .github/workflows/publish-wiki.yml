@@ -1,0 +1,186 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/publish-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Do not cancel a run that may already be pushing: a cancelled push can still
+  # land, leaving the next run to push from a revision it no longer descends
+  # from. Runs queue instead, and each one mirrors the current master.
+  group: publish-wiki-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out canonical documentation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Publish docs/wiki to GitHub Wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIKI_BASE_URL: https://github.com/${{ github.repository }}/wiki
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+
+          # 0 published (or already current), 1 push rejected (retryable),
+          # 2 fatal. The whole mirror is rebuilt from master on every attempt,
+          # so retrying after a rejected push is safe and idempotent.
+          publish_attempt() {
+            rm -rf .wiki
+
+            if ! git clone --depth 1 "$wiki_url" .wiki; then
+              echo "::error::Unable to clone the GitHub Wiki repository."
+              echo "::error::If this is the first publication, create the initial Wiki page in GitHub once, then rerun this workflow."
+              return 2
+            fi
+
+            find .wiki -maxdepth 1 -type f -name '*.md' -delete || return 2
+            for source in docs/wiki/*.md; do
+              if [[ "$(basename "$source")" == "README.md" ]]; then
+                continue
+              fi
+              cp "$source" ".wiki/$(basename "$source")" || return 2
+            done
+
+            # Repository source keeps *.md links so docs/wiki is browsable in normal
+            # GitHub code views. Rewrite only the published copy to Wiki page URLs.
+            python3 - <<'PY' || return 2
+          import os
+          import re
+          from pathlib import Path
+
+          wiki_dir = Path(".wiki")
+          wiki_base = os.environ["WIKI_BASE_URL"].rstrip("/")
+
+          # Sibling page links in the repository source, e.g. [Testing](Testing.md).
+          link_re = re.compile(
+              r"(?P<prefix>\]\()(?P<page>[A-Za-z0-9_-]+)\.md"
+              r"(?P<anchor>#[^)]*)?(?P<suffix>\))"
+          )
+          # Any repository-style relative link left over after the rewrite.
+          relative_md_link = re.compile(
+              r"\]\((?!https?://|mailto:|#)[^)]+\.md(?:#[^)]*)?\)"
+          )
+          fence_re = re.compile(r"(`{3,}|~{3,})")
+          inline_code_re = re.compile(r"(`+[^`]*`+)")
+
+
+          def map_prose(content, transform):
+              """Apply transform to Markdown prose only.
+
+              Fenced code blocks and inline code spans pass through untouched, so a
+              page that documents link syntax is neither rewritten inside its own
+              examples nor rejected by the validation below.
+              """
+              out = []
+              fence = ""
+              for line in content.split("\n"):
+                  stripped = line.lstrip()
+                  if fence:
+                      out.append(line)
+                      if stripped.startswith(fence):
+                          fence = ""
+                      continue
+                  opening = fence_re.match(stripped)
+                  if opening:
+                      fence = opening.group(1)
+                      out.append(line)
+                      continue
+                  parts = inline_code_re.split(line)
+                  out.append(
+                      "".join(
+                          part if index % 2 else transform(part)
+                          for index, part in enumerate(parts)
+                      )
+                  )
+              return "\n".join(out)
+
+
+          def to_wiki_url(match):
+              return (
+                  f'{match.group("prefix")}{wiki_base}/{match.group("page")}'
+                  f'{match.group("anchor") or ""}{match.group("suffix")}'
+              )
+
+
+          unresolved = []
+
+          for path in sorted(wiki_dir.glob("*.md")):
+              content = map_prose(
+                  path.read_text(encoding="utf-8"),
+                  lambda text: link_re.sub(to_wiki_url, text),
+              )
+              path.write_text(content, encoding="utf-8")
+
+              def collect(text, name=path.name):
+                  for match in relative_md_link.finditer(text):
+                      unresolved.append(f"{name}: {match.group(0)}")
+                  return text
+
+              map_prose(content, collect)
+
+          if unresolved:
+              raise SystemExit(
+                  "Published wiki still contains repository-style Markdown links:\n"
+                  + "\n".join(unresolved)
+              )
+          PY
+
+            git -C .wiki config user.name "github-actions[bot]" || return 2
+            git -C .wiki config user.email "41898282+github-actions[bot]@users.noreply.github.com" || return 2
+            git -C .wiki add -A || return 2
+
+            if git -C .wiki diff --cached --quiet; then
+              echo "Wiki already matches docs/wiki."
+              return 0
+            fi
+
+            git -C .wiki commit -m "docs: sync wiki from ${GITHUB_SHA}" || return 2
+
+            if git -C .wiki push origin HEAD:master; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          max_attempts=3
+          attempt=1
+
+          while true; do
+            if publish_attempt; then
+              break
+            else
+              status=$?
+            fi
+
+            if [[ "$status" -ne 1 ]]; then
+              exit "$status"
+            fi
+
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "::error::Wiki push was rejected after ${max_attempts} attempts."
+              exit 1
+            fi
+
+            echo "Wiki push rejected, most likely by a concurrent publish. Re-cloning and retrying."
+            attempt=$((attempt + 1))
+            sleep $((attempt * 3))
+          done
