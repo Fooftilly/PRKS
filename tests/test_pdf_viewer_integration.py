@@ -282,6 +282,10 @@ class PdfViewerIntegrationTests(unittest.TestCase):
                 # Trailing-dot FQDNs name the same DNS host.
                 'fetch("https://unpkg.com./react@18/react.js")',
                 'fetch("https://cdn.jsdelivr.net./npm/react@18/react.js")',
+                # WHATWG treats '\\' as a separator for special schemes, so
+                # these name the CDN host and really do load from it.
+                'fetch("https:\\unpkg.com\\react@18\\react.js")',
+                'fetch("https:\\\\cdn.jsdelivr.net\\\\npm\\\\react@18\\\\react.js")',
             ],
             "allow": [
                 'fetch("/vendor/prks-pdf-viewer/pdfium.wasm")',
@@ -292,6 +296,8 @@ class PdfViewerIntegrationTests(unittest.TestCase):
                 'fetch("https://unpkg.com.example.org/react@18/react.js")',
                 'fetch("https://unpkg.com.example.org./react@18/react.js")',
                 'const react = require("./react-shim.js");',
+                # Backslash normalisation must not invent a CDN host.
+                'require("C:\\\\node_modules\\\\react\\\\index.js")',
             ],
         }
         script = """

@@ -8,6 +8,7 @@
 //   //unpkg.com/react@18/umd/react.js         protocol-relative
 //   unpkg.com/react@18/umd/react.js           bare
 //   https:\/\/unpkg.com\/react@18\/react.js   escaped, inside a string literal
+//   https:\unpkg.com\react@18\react.js      backslash separators
 //   https://unpkg.com./react@18/react.js      trailing-dot FQDN
 //   https://cdn.jsdelivr.net/npm/lib?dep=react   carried in the query
 //
@@ -28,9 +29,18 @@ const CDN_REACT_HOSTNAMES = new Set(['cdn.jsdelivr.net', 'unpkg.com']);
 // so only the first offset does real work.
 const HOST_LIKE = /(?<![a-z0-9.-])[a-z0-9-]+(?:\.[a-z0-9-]+)+\.?(?::\d+)?\/[^\s"'`)\\<>]*/gi;
 
-// Bounded repetition: escaped separators nest at most a couple of levels in
-// practice, and a bounded quantifier keeps this linear.
-const ESCAPED_SLASH = /\\{1,4}\//g;
+// Separator runs, normalised to a plain '/'.
+//
+// Two forms reach us. Inside a string literal a '/' is often written '\/',
+// and the literal itself may be nested, so the backslashes double up. A bare
+// backslash is also a separator in its own right: WHATWG treats '\' as '/'
+// for special schemes, so new URL('https:\unpkg.com\react@18\react.js')
+// really does name unpkg.com, and a bundle written that way loads React from
+// the CDN. Both must normalise or the guard reads past a live reference.
+//
+// Bounded repetition: separators nest at most a couple of levels in practice,
+// and a bounded quantifier keeps this linear.
+const SEPARATOR_ESCAPE = /\\{1,4}\/?/g;
 
 /**
  * Report whether a built bundle references React on a public CDN.
@@ -39,7 +49,7 @@ const ESCAPED_SLASH = /\\{1,4}\//g;
  * @returns {boolean} True when a supported CDN host serves a React asset.
  */
 export function bundleReferencesCdnReact(text) {
-    const normalised = String(text).replace(ESCAPED_SLASH, '/');
+    const normalised = String(text).replace(SEPARATOR_ESCAPE, '/');
     for (const match of normalised.matchAll(HOST_LIKE)) {
         let url;
         try {
