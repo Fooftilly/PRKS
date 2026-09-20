@@ -2,13 +2,13 @@
 name: Engineering audit finding
 about: Record an engineering observation that is not automatically approved roadmap work
 title: "[Audit Finding] "
-labels: ""
+labels: "audit-finding,candidate"
 assignees: ""
 ---
 
 > **Status:** Candidate audit finding — not approved implementation work.
 >
-> **Finding ID:** EF-XXX
+> **Finding ID:** EF-XXX (use the next unused ID after searching open and closed `[Audit Finding]` issues)
 > **Last verified:** `master@COMMIT_SHA`
 > **Source:** audit/review date and origin
 >
@@ -42,6 +42,7 @@ explain the distinction.
 
 ## Assessment
 
+- Priority:
 - Impact:
 - Effort:
 - Change risk:
