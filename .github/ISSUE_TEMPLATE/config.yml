@@ -1,2 +1,5 @@
 blank_issues_enabled: true
-contact_links: []
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Fooftilly/PRKS/security/policy
+    about: Use the private vulnerability-reporting process; do not disclose sensitive details in a public issue.
