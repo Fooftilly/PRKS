@@ -2,26 +2,34 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Read",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/build-scripts/pretool-secrets.sh\"",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run-hook.mjs",
+              "claude-pre-tool-use"
+            ],
             "timeout": 60
           }
-        ],
-        "matcher": "Read"
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/build-scripts/prompt-secrets.sh\"",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run-hook.mjs",
+              "claude-prompt-submit"
+            ],
             "timeout": 60
           }
-        ],
-        "matcher": "*"
+        ]
       }
     ]
   }
