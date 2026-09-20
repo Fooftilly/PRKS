@@ -822,11 +822,24 @@ def mint_managed_pdf_filename(original_name: str) -> str:
     """
     safe = _processing_safe_dest_name(os.path.basename(str(original_name or "")))
     prefix = f"{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_"
-    stem = safe[: -len(".pdf")] if safe.lower().endswith(".pdf") else safe
+    return bound_managed_pdf_basename(prefix, safe)
+
+
+def bound_managed_pdf_basename(prefix: str, stem: str) -> str:
+    """Join ``prefix`` and ``stem`` into a ``.pdf`` basename a filesystem holds.
+
+    Every managed name is bounded here rather than at each caller, because the
+    copy-on-write path re-prefixes a name that was already minted: a stem sized
+    to the limit plus a second timestamp, Work id and uuid overruns it, and the
+    replace then fails with ENAMETOOLONG. Bounding the joined result keeps that
+    composition safe however many times a name is re-minted, including for names
+    already stored before this existed.
+    """
+    if stem.lower().endswith(".pdf"):
+        stem = stem[: -len(".pdf")]
     budget = _MANAGED_PDF_NAME_MAX_BYTES - len(prefix.encode("utf-8")) - len(".pdf")
-    if budget > 0:
-        # Truncating bytes can split a multi-byte character; drop the partial tail.
-        stem = stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+    # Truncating bytes can split a multi-byte character; drop the partial tail.
+    stem = stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore") if budget > 0 else ""
     return f"{prefix}{stem.strip('._') or 'file'}.pdf"
 
 

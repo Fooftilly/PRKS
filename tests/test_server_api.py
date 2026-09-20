@@ -5166,6 +5166,31 @@ class TestServerAPI(unittest.TestCase):
             "a refused create left its uploaded PDF behind",
         )
 
+    def test_managed_pdf_names_survive_being_re_minted_for_copy_on_write(self):
+        """A managed name can be re-prefixed after it is minted. The
+        copy-on-write path prepends its own timestamp, Work id and uuid, so a
+        stem already sized to the limit overran the filesystem and the replace
+        failed with ENAMETOOLONG."""
+        from backend.services.work_pdf_replace import allocate_exclusive_managed_filename
+
+        minted = db_manager_module.mint_managed_pdf_filename("a" * 300 + ".pdf")
+        self.assertEqual(len(minted.encode("utf-8")), 255, "the worst case is a maximal name")
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        name = minted
+        for work_id in ("W-" + "A" * 32, "W-" + "B" * 32):
+            name = allocate_exclusive_managed_filename(work_id, name)
+            self.assertLessEqual(
+                len(name.encode("utf-8")), 255,
+                "re-minting must stay inside the filesystem's limit: %s" % name,
+            )
+            self.assertTrue(name.endswith(".pdf"), name)
+            # The bound is only meaningful if the name is actually writable.
+            path = os.path.join(root, name)
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.4\n%%EOF\n")
+            os.remove(path)
+
     def test_a_linearization_failure_does_not_fail_or_orphan_the_upload(self):
         """Linearization is an optimization and the stored bytes are already the
         PDF the caller sent. It swallows its own failures but can still raise

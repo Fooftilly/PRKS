@@ -23,6 +23,7 @@ import uuid
 from typing import Any, Optional
 
 from backend.db_manager import (
+    bound_managed_pdf_basename,
     managed_pdf_filename,
     mint_managed_pdf_filename,
     prks_thumb_cache_safe_wid,
@@ -208,7 +209,12 @@ def allocate_exclusive_managed_filename(work_id: str, shared_filename: str) -> s
     if not safe_base.lower().endswith(".pdf"):
         safe_base = f"{safe_base}.pdf"
     safe_wid = prks_thumb_cache_safe_wid(work_id)
-    return f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_{safe_base}"
+    # `shared_filename` may already be a maximal managed name, so bound the
+    # joined result: prepending a second timestamp, Work id and uuid to a
+    # 255-byte stem overruns the filesystem and the replace fails.
+    return bound_managed_pdf_basename(
+        f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_", safe_base
+    )
 
 
 class ManagedPdfStoreError(Exception):
