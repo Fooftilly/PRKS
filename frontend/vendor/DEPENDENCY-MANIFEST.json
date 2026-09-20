@@ -5,11 +5,11 @@
       "runtime_files": [
         {
           "path": "/vendor/codemirror/codemirror.js",
-          "sha256": "34d60ac46ee8476f0cef4c23e8cf2ca477a08d4a12e746a10b62f15209e66bec"
+          "sha256": "e98aac5ffa07bae58acd4ff07c4293059f8921c0ae0eba506929d8c6f41c9288"
         },
         {
           "path": "/vendor/codemirror/show-hint.js",
-          "sha256": "f5cba0672058459ef1d9d7f3c7dc94c0078a4a73604fdd4366b2fb51a9aa498d"
+          "sha256": "6d940e45a07c13abd1e872802ba20f91f809d4b583afcd58a8058e25c7f0cfce"
         },
         {
           "path": "/vendor/codemirror/show-hint.css",
@@ -17,7 +17,7 @@
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "5.65.15"
+      "version": "5.65.21"
     },
     {
       "name": "cytoscape",
