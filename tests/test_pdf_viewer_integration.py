@@ -279,6 +279,9 @@ class PdfViewerIntegrationTests(unittest.TestCase):
                 'fetch("https://cdn.jsdelivr.net/npm/lib?dep=react")',
                 'fetch("https://UNPKG.COM/React@18/umd/react.js")',
                 'fetch("https://unpkg.com:443/react@18/react.js")',
+                # Trailing-dot FQDNs name the same DNS host.
+                'fetch("https://unpkg.com./react@18/react.js")',
+                'fetch("https://cdn.jsdelivr.net./npm/react@18/react.js")',
             ],
             "allow": [
                 'fetch("/vendor/prks-pdf-viewer/pdfium.wasm")',
@@ -287,6 +290,7 @@ class PdfViewerIntegrationTests(unittest.TestCase):
                 # trip the guard.
                 'fetch("https://evil-unpkg.com/react@18/react.js")',
                 'fetch("https://unpkg.com.example.org/react@18/react.js")',
+                'fetch("https://unpkg.com.example.org./react@18/react.js")',
                 'const react = require("./react-shim.js");',
             ],
         }
@@ -317,6 +321,35 @@ process.stdin.on('end', () => {
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("ok", proc.stdout)
+
+    def test_cdn_react_guard_scan_is_linear(self):
+        """A long dotted token must not make the guard scan quadratically.
+
+        A host-like token that never reaches the required '/' used to be
+        re-scanned from every offset inside itself, so a generated bundle
+        carrying one could stall the build: 32k labels took ~11.6s before
+        the pattern rejected mid-token start positions, ~4ms after.
+        """
+        script = """
+import { bundleReferencesCdnReact } from './tools/pdf-viewer/scripts/cdn-react-guard.mjs';
+const chain = Array(64000).fill('ab').join('.');
+const started = Date.now();
+bundleReferencesCdnReact(chain);
+console.log(String(Date.now() - started));
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        elapsed_ms = int(proc.stdout.strip())
+        # Linear scanning lands in single-digit milliseconds; the quadratic
+        # form needed ~46s at this size. The bound is deliberately loose so
+        # a slow CI runner cannot flake it.
+        self.assertLess(elapsed_ms, 15000, f"guard scan took {elapsed_ms}ms")
 
     def test_cdn_react_guard_passes_the_shipped_bundle(self):
         """The guard must not fail the build on the bundle we actually ship."""

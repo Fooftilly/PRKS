@@ -8,6 +8,7 @@
 //   //unpkg.com/react@18/umd/react.js         protocol-relative
 //   unpkg.com/react@18/umd/react.js           bare
 //   https:\/\/unpkg.com\/react@18\/react.js   escaped, inside a string literal
+//   https://unpkg.com./react@18/react.js      trailing-dot FQDN
 //   https://cdn.jsdelivr.net/npm/lib?dep=react   carried in the query
 //
 // So: normalise the escapes, extract every host-like token with a generic
@@ -17,9 +18,15 @@
 
 const CDN_REACT_HOSTNAMES = new Set(['cdn.jsdelivr.net', 'unpkg.com']);
 
-// Dot-separated labels, then a path. Labels cannot contain '.', so each
-// repetition is unambiguous and the pattern cannot backtrack quadratically.
-const HOST_LIKE = /[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?\/[^\s"'`)\\<>]*/gi;
+// Dot-separated labels, an optional root dot, an optional port, then a path.
+//
+// The leading lookbehind is load-bearing for performance, not just for
+// correctness. Without it, a long dotted token that never reaches the
+// required '/' is re-scanned from every offset inside itself, which is
+// quadratic in the token length: a synthetic 32k-label chain took ~11.6s.
+// Rejecting any start position that sits mid-token makes those retries O(1),
+// so only the first offset does real work.
+const HOST_LIKE = /(?<![a-z0-9.-])[a-z0-9-]+(?:\.[a-z0-9-]+)+\.?(?::\d+)?\/[^\s"'`)\\<>]*/gi;
 
 // Bounded repetition: escaped separators nest at most a couple of levels in
 // practice, and a bounded quantifier keeps this linear.
@@ -43,7 +50,10 @@ export function bundleReferencesCdnReact(text) {
         } catch {
             continue;
         }
-        if (!CDN_REACT_HOSTNAMES.has(url.hostname.toLowerCase())) {
+        // "unpkg.com." is the same DNS host as "unpkg.com"; the URL parser
+        // keeps the root dot, so drop it before the exact comparison.
+        const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+        if (!CDN_REACT_HOSTNAMES.has(hostname)) {
             continue;
         }
         if ((url.pathname + url.search).toLowerCase().includes('react')) {
