@@ -1,0 +1,5 @@
+[pr_reviewer]
+publish_output_no_suggestions = false
+
+[pr_code_suggestions]
+publish_output_no_suggestions = false
