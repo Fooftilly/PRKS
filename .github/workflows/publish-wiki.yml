@@ -21,6 +21,7 @@ jobs:
       - name: Publish docs/wiki to GitHub Wiki
         env:
           GH_TOKEN: ${{ github.token }}
+          WIKI_BASE_URL: https://github.com/${{ github.repository }}/wiki
         shell: bash
         run: |
           set -euo pipefail
@@ -42,6 +43,45 @@ jobs:
             fi
             cp "$source" ".wiki/$(basename "$source")"
           done
+
+          # Repository source uses *.md links so docs/wiki is browsable in normal
+          # GitHub code views. GitHub Wiki Markdown links should target rendered
+          # wiki page URLs instead, so rewrite only local page links in the copy.
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          wiki_dir = Path(".wiki")
+          wiki_base = os.environ["WIKI_BASE_URL"].rstrip("/")
+          link_re = re.compile(
+              r"(?P<prefix>\]\()(?P<page>[A-Za-z0-9_-]+)\.md"
+              r"(?P<anchor>#[^)]*)?(?P<suffix>\))"
+          )
+
+          for path in wiki_dir.glob("*.md"):
+              content = path.read_text(encoding="utf-8")
+              content = link_re.sub(
+                  lambda match: (
+                      f'{match.group("prefix")}{wiki_base}/{match.group("page")}'
+                      f'{match.group("anchor") or ""}{match.group("suffix")}'
+                  ),
+                  content,
+              )
+              path.write_text(content, encoding="utf-8")
+
+          relative_md_link = re.compile(r"\]\((?!https?://|mailto:|#)[^)]+\.md(?:#[^)]*)?\)")
+          unresolved = []
+          for path in wiki_dir.glob("*.md"):
+              for match in relative_md_link.finditer(path.read_text(encoding="utf-8")):
+                  unresolved.append(f"{path.name}: {match.group(0)}")
+
+          if unresolved:
+              raise SystemExit(
+                  "Published wiki still contains repository-style Markdown links:\n"
+                  + "\n".join(unresolved)
+              )
+          PY
 
           cd .wiki
           git config user.name "github-actions[bot]"
