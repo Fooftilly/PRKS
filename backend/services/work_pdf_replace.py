@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from backend.db_manager import (
     managed_pdf_filename,
+    mint_managed_pdf_filename,
     prks_thumb_cache_safe_wid,
     referenced_managed_pdf_filename,
     safe_pdf_path_under_dir,
@@ -208,6 +209,70 @@ def allocate_exclusive_managed_filename(work_id: str, shared_filename: str) -> s
         safe_base = f"{safe_base}.pdf"
     safe_wid = prks_thumb_cache_safe_wid(work_id)
     return f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_{safe_base}"
+
+
+class ManagedPdfStoreError(Exception):
+    """A new managed PDF could not be stored. Carries the HTTP status to map."""
+
+    def __init__(self, reason: str, message: str, *, http_status: int = 500):
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+        self.http_status = http_status
+
+
+def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) -> str:
+    """Store ``body`` as a brand-new managed PDF; return its basename.
+
+    Owns the whole filesystem side of an upload so the HTTP adapter does not:
+    mints the name, contains it, creates it exclusively, and linearizes.
+
+    Exclusive create is the point. The create path used to name files
+    ``<unix-seconds>_<sanitized>``, so two uploads of one filename inside a
+    second resolved to the same path and the second write replaced the first
+    Work's bytes while both rows still referenced it. A managed PDF is never
+    written over here.
+
+    Containment follows this module's existing pattern: ``safe_pdf_path_under_dir``
+    at runtime, then the sink path rebuilt with
+    ``normpath(join(base, basename))`` + ``startswith(base)`` so the sink does
+    not carry a helper return CodeQL still treats as tainted.
+    """
+    os.makedirs(pdfs_dir, exist_ok=True)
+    filename = mint_managed_pdf_filename(original_name)
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+    base_path = os.path.realpath(pdfs_dir)
+    # CodeQL py/path-injection documented sanitizer: build with join+normpath,
+    # then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+
+    try:
+        with open(fullpath, "xb") as fp:
+            fp.write(body)
+            fp.flush()
+            os.fsync(fp.fileno())
+    except FileExistsError as exc:
+        raise ManagedPdfStoreError(
+            "name_taken", "Could not allocate a managed PDF path", http_status=409
+        ) from exc
+    except OSError as exc:
+        LOGGER.error("pdf_upload_write_failed error_type=%s", safe_error_type(exc))
+        raise ManagedPdfStoreError(
+            "write_failed", "Could not store the uploaded PDF"
+        ) from exc
+    fsync_managed_pdf_parent(pdfs_dir, name)
+
+    changed, reason = maybe_linearize_pdf_in_place(fullpath, context="work-create-upload")
+    LOGGER.info(
+        "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
+        "true" if changed else "false",
+        safe_log_label(reason),
+    )
+    return name
 
 
 def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:

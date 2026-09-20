@@ -28,7 +28,6 @@ from backend.db_manager import (
     effective_source_kind,
     SavedViewError,
     managed_pdf_filename,
-    mint_managed_pdf_filename,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -2701,54 +2700,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
-                    os.makedirs(pdfs_dir, exist_ok=True)
-                    # One minting shape for every managed PDF, shared with the
-                    # processing-inbox import. The request filename is advisory:
-                    # it is sanitized for readability and never decides placement.
-                    local_filename = mint_managed_pdf_filename(data['file_name'])
-                    if not safe_pdf_path_under_dir(pdfs_dir, local_filename):
-                        self.send_json(400, {'error': 'Invalid file_name'})
-                        return
                     try:
                         decoded_pdf = base64.b64decode(data['file_b64'], validate=True)
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    # Rebuild the sink path inline with the repository's
-                    # documented join+normpath+startswith pattern rather than
-                    # passing a helper return into open() — see
-                    # services/work_pdf_replace.unlink_managed_pdf_best_effort.
-                    pdfs_root = os.path.realpath(pdfs_dir)
-                    abs_uploaded_path = os.path.normpath(
-                        os.path.join(pdfs_root, os.path.basename(local_filename))
-                    )
-                    if not abs_uploaded_path.startswith(pdfs_root + os.sep):
-                        self.send_json(400, {'error': 'Invalid file_name'})
-                        return
+                    # Minting, containment, exclusive create and linearization
+                    # belong to the managed-PDF service; this adapter only maps
+                    # the outcome onto a response.
                     try:
-                        # Exclusive create: a managed PDF is never written over.
-                        # Two same-second uploads of one filename used to resolve
-                        # to the same path, and the second silently replaced the
-                        # first Work's bytes while both rows still referenced it.
-                        with open(abs_uploaded_path, "xb") as f:
-                            f.write(decoded_pdf)
-                    except FileExistsError:
-                        self.send_json(409, {'error': 'Could not allocate a managed PDF path'})
-                        return
-                    except OSError as exc:
-                        LOGGER.error(
-                            "pdf_upload_write_failed error_type=%s",
-                            safe_error_type(exc),
+                        stored_name = work_pdf_replace.store_new_managed_pdf_bytes(
+                            pdfs_dir, data['file_name'], decoded_pdf
                         )
-                        self.send_json(500, {'error': 'Could not store the uploaded PDF'})
+                    except work_pdf_replace.ManagedPdfStoreError as exc:
+                        self.send_json(exc.http_status, {'error': exc.message})
                         return
-                    changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
-                    LOGGER.info(
-                        "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
-                        "true" if changed else "false",
-                        safe_log_label(reason),
-                    )
-                    file_path = f"/api/pdfs/{os.path.basename(abs_uploaded_path)}"
+                    file_path = f"/api/pdfs/{stored_name}"
 
                 provider = (data.get('provider') or '').strip().lower()
                 provider_id = (data.get('provider_id') or '').strip()
