@@ -2800,9 +2800,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except ValueError as e:
                     # The upload is stored before the row exists, so a refused
                     # create would otherwise leave a PDF nothing references.
-                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name)
+                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
                     self.send_json(400, {'error': str(e)})
                     return
+                except Exception:
+                    # A refusal is not the only exit from this window: add_work
+                    # reaches SQLite, so a locked database or a failed commit
+                    # leaves the same orphan. The service keeps the file unless
+                    # it can prove no Work references it.
+                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
+                    raise
                 try:
                     text_index.sync_work(w_id, file_path)
                 except Exception as e:

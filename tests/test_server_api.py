@@ -5166,6 +5166,64 @@ class TestServerAPI(unittest.TestCase):
             "a refused create left its uploaded PDF behind",
         )
 
+    def test_an_unexpected_add_work_failure_leaves_no_stored_pdf_behind(self):
+        """A refusal is not the only exit between storing the bytes and owning
+        them. `add_work` reaches SQLite, so a locked database escapes the
+        ValueError branch entirely and used to leave the upload behind."""
+        import sqlite3
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        titles_before = self._work_titles()
+
+        with patch.object(
+            server_module.db, "add_work",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            status, body = self._sv_json("POST", "/api/works", {
+                "title": "Locked Database Upload",
+                "file_name": "paper.pdf",
+                "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+            })
+
+        self.assertEqual(status, 500, body)
+        self.assertEqual(self._work_titles(), titles_before, "no Work was created")
+        self.assertEqual(
+            set(os.listdir(root)) - before,
+            set(),
+            "an unexpected add_work failure left its uploaded PDF behind",
+        )
+
+    def test_rollback_keeps_the_pdf_when_ownership_cannot_be_established(self):
+        """Fail-safe, not fail-clean. The failure may have arrived after the row
+        committed, so an unreadable database must keep the bytes."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+
+        real_execute = server_module.db.execute_query
+
+        def unreadable(sql, *a, **kw):
+            if "FROM works WHERE file_path" in sql:
+                raise sqlite3.OperationalError("database is locked")
+            return real_execute(sql, *a, **kw)
+
+        import sqlite3
+        with patch.object(server_module.db, "execute_query", side_effect=unreadable):
+            with patch.object(
+                server_module.db, "add_work",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ):
+                status, body = self._sv_json("POST", "/api/works", {
+                    "title": "Ownership Unknown",
+                    "file_name": "paper.pdf",
+                    "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+                })
+        self.assertEqual(status, 500, body)
+        self.assertEqual(
+            len(set(os.listdir(root)) - before), 1,
+            "the PDF must be kept when ownership cannot be proven",
+        )
+
     def test_a_rejected_create_never_removes_a_pdf_it_did_not_upload(self):
         """The rollback is only ever allowed to touch a name this request just
         minted. A caller referencing an existing managed PDF is pointing at

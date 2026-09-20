@@ -284,7 +284,7 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     return name
 
 
-def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str]) -> None:
+def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db=None) -> bool:
     """Roll back a `store_new_managed_pdf_bytes()` that never gained an owner.
 
     Work creation stores the bytes before the row exists, so a create rejected
@@ -292,15 +292,22 @@ def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str]) -> No
     nothing references, and a client retrying an invalid request accumulates
     them.
 
-    Only ever pass a name this request just minted and that no Work row was
-    given. A name taken from `works.file_path` is a sibling's bytes, and
+    A create can fail after the store in more ways than a refusal: `add_work`
+    reaches SQLite, so a locked database or a failed commit leaves the same
+    orphan. Only ever pass a name this request just minted. A name taken from `works.file_path` is a sibling's bytes, and
     removing that is the data-loss this module exists to prevent; `None` (the
     request referenced an existing `file_path` rather than uploading) is a
     no-op for the same reason.
     """
     if not stored_name:
-        return
-    unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
+        return False
+    # One-directional on purpose: remove only what is proven unreferenced.
+    # `other_works_share_managed_filename` fails closed on a query error, so an
+    # unreadable database keeps the bytes rather than risking a Work's PDF —
+    # and a failure can arrive *after* a commit, when the row does own the file.
+    if db is not None and other_works_share_managed_filename(db, stored_name, exclude_work_id=""):
+        return False
+    return unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
 
 
 def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
