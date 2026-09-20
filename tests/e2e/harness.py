@@ -139,7 +139,7 @@ class ChromiumHolder:
 
     def get_browser(self):
         """Return the live browser, relaunching first when a recycle is pending."""
-        if self._needs_recycle:
+        if self._needs_recycle or self.browser is None:
             self.recycle()
         return self.browser
 
@@ -153,26 +153,49 @@ class ChromiumHolder:
             "CHROMIUM_RECYCLE",
             "after_%d_contexts" % self._contexts_since_launch,
         )
+        # Stop the old process, then drop refs *before* relaunch so a failed
+        # require_chromium cannot leave get_browser() serving closed instances.
+        # Only clear _needs_recycle after a successful relaunch — otherwise the
+        # next get_browser() retries instead of returning stale handles.
         try:
-            try:
-                self.browser.close()
-            finally:
+            if self.browser is not None:
+                try:
+                    self.browser.close()
+                except Exception:
+                    pass
+            if self.pw is not None:
                 try:
                     self.pw.stop()
                 except Exception:
                     pass
-            self.pw, self.browser = require_chromium()
         finally:
-            self._contexts_since_launch = 0
-            self._needs_recycle = False
+            self.browser = None
+            self.pw = None
+        try:
+            self.pw, self.browser = require_chromium()
+        except Exception:
+            self.browser = None
+            self.pw = None
+            raise
+        self._contexts_since_launch = 0
+        self._needs_recycle = False
 
     def close(self) -> None:
         """Stop Chromium without relaunching, even if a recycle was pending."""
         self._needs_recycle = False
         try:
-            self.browser.close()
+            if self.browser is not None:
+                try:
+                    self.browser.close()
+                except Exception:
+                    pass
         finally:
-            self.pw.stop()
+            try:
+                if self.pw is not None:
+                    self.pw.stop()
+            finally:
+                self.browser = None
+                self.pw = None
 
 
 def clear_seed_cache() -> None:

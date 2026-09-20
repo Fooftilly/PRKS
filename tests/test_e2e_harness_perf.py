@@ -311,6 +311,46 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
             holder.close()
             self.assertEqual(len(launches), 1)
             self.assertFalse(holder._needs_recycle)
+            self.assertIsNone(holder.browser)
+            self.assertIsNone(holder.pw)
+
+    def test_chromium_holder_failed_recycle_keeps_retry_flag(self):
+        """A failed relaunch must not clear _needs_recycle or leave stale refs."""
+        launches = []
+
+        def fake_require():
+            launches.append(1)
+            if len(launches) == 1:
+                return ("pw-1", "browser-1")
+            raise RuntimeError("chromium relaunch failed")
+
+        with mock.patch.object(harness, "require_chromium", side_effect=fake_require):
+            holder = harness.ChromiumHolder(recycle_every=1)
+            old_browser = mock.Mock()
+            old_pw = mock.Mock()
+            holder.browser = old_browser
+            holder.pw = old_pw
+            holder.after_context_closed()
+            self.assertTrue(holder._needs_recycle)
+            with self.assertRaises(RuntimeError):
+                holder.get_browser()
+            self.assertEqual(len(launches), 2)
+            self.assertTrue(holder._needs_recycle)
+            self.assertIsNone(holder.browser)
+            self.assertIsNone(holder.pw)
+            old_browser.close.assert_called()
+            old_pw.stop.assert_called()
+
+            # Next call retries relaunch instead of returning the closed browser.
+            def recover_require():
+                launches.append(1)
+                return ("pw-ok", "browser-ok")
+
+            with mock.patch.object(harness, "require_chromium", side_effect=recover_require):
+                browser = holder.get_browser()
+            self.assertEqual(browser, "browser-ok")
+            self.assertFalse(holder._needs_recycle)
+            self.assertEqual(holder.browser, "browser-ok")
 
 
 if __name__ == "__main__":

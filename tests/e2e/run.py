@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -64,6 +65,11 @@ from tests.e2e.sharding import (
     save_timings,
     shard_estimates,
     worker_port_range,
+)
+
+# Bare test.id() lines printed by _TimingResult.startTest (not diag/unittest chatter).
+_E2E_TEST_ID_LINE = re.compile(
+    r"^tests\.e2e\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.test_[A-Za-z0-9_]+$"
 )
 
 E2E_MODULES = (
@@ -559,13 +565,22 @@ def _tail(path, limit=4000):
 
 
 def _last_started_test(log_file) -> str:
-    """Last test id a worker printed before hanging (see _TimingResult.startTest)."""
+    """Last test id a worker printed before hanging (see _TimingResult.startTest).
+
+    ``startTest`` prints a bare ``test.id()`` line. Diagnostic / recycle /
+    unittest chatter after that must not steal attribution — only lines that
+    look like E2E test ids count.
+    """
+    last = ""
     try:
         with open(log_file, encoding="utf-8", errors="replace") as handle:
-            lines = [ln.strip() for ln in handle if ln.strip()]
+            for ln in handle:
+                s = ln.strip()
+                if _E2E_TEST_ID_LINE.match(s):
+                    last = s
     except OSError:
         return ""
-    return lines[-1] if lines else ""
+    return last
 
 
 def _print_hung_worker(worker, jobs):
