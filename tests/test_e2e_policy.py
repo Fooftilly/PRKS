@@ -409,6 +409,7 @@ class ListChangedPathsTests(unittest.TestCase):
     def test_invokes_git_diff_against_base_including_deletes(self):
         with mock.patch("subprocess.run") as run:
             run.side_effect = [
+                _git_ok("deadbeef\n"),  # rev-parse: base resolves to one commit
                 _git_ok("frontend/js/app.js\nfrontend/js/gone.js\n"),  # diff vs base (incl D)
                 _git_ok("frontend/js/app.js\nbackend/x.py\n"),  # local vs HEAD when base != HEAD
                 _git_ok("scripts/e2e\nfrontend/js/new.js\n"),  # untracked
@@ -422,8 +423,9 @@ class ListChangedPathsTests(unittest.TestCase):
             self.assertIn("frontend/js/new.js", paths)
             self.assertIn("scripts/e2e", paths)
             # Diff filter must include Deleted (D).
-            first_cmd = run.call_args_list[0][0][0]
-            self.assertIn("--diff-filter=ACMRD", first_cmd)
+            diff_cmd = run.call_args_list[1][0][0]
+            self.assertIn("--diff-filter=ACMRD", diff_cmd)
+            self.assertIn("rev-parse", run.call_args_list[0][0][0])
 
     def test_untracked_scripts_and_e2e_policy_are_discoverable(self):
         with mock.patch("subprocess.run") as run:
@@ -468,10 +470,14 @@ class ListChangedPathsTests(unittest.TestCase):
     def test_diff_commands_terminate_revision_parsing(self):
         """`--` stops git reading a base that is also a path as a pathspec."""
         with mock.patch("subprocess.run") as run:
-            run.side_effect = [_git_ok(""), _git_ok(""), _git_ok("")]
+            run.side_effect = [_git_ok("deadbeef\n"), _git_ok(""), _git_ok(""), _git_ok("")]
             policy.list_changed_paths(Path("/tmp/repo"), base="origin/master")
-            for call in run.call_args_list[:2]:
-                self.assertEqual(call[0][0][-1], "--")
+            diff_calls = [
+                call[0][0] for call in run.call_args_list if "diff" in call[0][0]
+            ]
+            self.assertEqual(len(diff_calls), 2)
+            for cmd in diff_calls:
+                self.assertEqual(cmd[-1], "--")
 
     def test_missing_git_executable_fails_closed(self):
         with mock.patch("subprocess.run", side_effect=FileNotFoundError("git")):
@@ -483,6 +489,7 @@ class ListChangedPathsTests(unittest.TestCase):
         """The secondary working-tree diff is required too — never silently skipped."""
         with mock.patch("subprocess.run") as run:
             run.side_effect = [
+                _git_ok("deadbeef\n"),
                 _git_ok("frontend/js/app.js\n"),
                 _git_fail("fatal: not a git repository"),
             ]
@@ -496,6 +503,19 @@ class ListChangedPathsTests(unittest.TestCase):
             with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
                 policy.list_changed_paths(Path("/tmp/repo"), include_untracked=True)
             self.assertIn("untracked change discovery", str(ctx.exception))
+
+    def test_revision_range_base_fails_closed(self):
+        """A range switches git diff to commit-vs-commit and drops the working tree."""
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_fail("fatal: Needed a single revision")]
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(Path("/tmp/repo"), base="release..main")
+            message = str(ctx.exception)
+            self.assertIn("release..main", message)
+            self.assertIn("not a single revision", message)
+            # Rejected before any diff runs.
+            self.assertEqual(run.call_count, 1)
+            self.assertIn("rev-parse", run.call_args_list[0][0][0])
 
     def test_untracked_failure_is_irrelevant_when_discovery_is_disabled(self):
         with mock.patch("subprocess.run") as run:
@@ -518,6 +538,26 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             text=True,
         )
 
+    def _seeded_repo(self, repo: Path) -> Path:
+        """A repo with one commit touching backend/server.py."""
+        self._git(repo, "init", "--quiet")
+        (repo / "backend").mkdir()
+        (repo / "backend" / "server.py").write_text("x = 1\n", encoding="utf-8")
+        self._git(repo, "add", "backend/server.py")
+        self._git(
+            repo,
+            "-c",
+            "user.email=e2e@example.invalid",
+            "-c",
+            "user.name=E2E",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "seed",
+        )
+        return repo
+
     def test_unusable_head_fails_closed(self):
         with tempfile.TemporaryDirectory() as raw:
             repo = Path(raw)
@@ -529,23 +569,7 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
 
     def test_clean_checkout_reports_no_changes(self):
         with tempfile.TemporaryDirectory() as raw:
-            repo = Path(raw)
-            self._git(repo, "init", "--quiet")
-            (repo / "backend").mkdir()
-            (repo / "backend" / "server.py").write_text("x = 1\n", encoding="utf-8")
-            self._git(repo, "add", "backend/server.py")
-            self._git(
-                repo,
-                "-c",
-                "user.email=e2e@example.invalid",
-                "-c",
-                "user.name=E2E",
-                "commit",
-                "--quiet",
-                "--no-gpg-sign",
-                "-m",
-                "seed",
-            )
+            repo = self._seeded_repo(Path(raw))
             self.assertEqual(policy.list_changed_paths(repo), [])
             (repo / "backend" / "server.py").write_text("x = 2\n", encoding="utf-8")
             self.assertEqual(policy.list_changed_paths(repo), ["backend/server.py"])
@@ -557,26 +581,24 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             with self.assertRaises(policy.ChangeDiscoveryError):
                 policy.list_changed_paths(repo, base="origin/definitely-missing")
 
+    def test_revision_range_base_fails_closed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = self._seeded_repo(Path(raw))
+            self._git(repo, "branch", "other", "HEAD")
+            # A range resolves for git, but answers a different question: the
+            # working tree is left out entirely.
+            (repo / "frontend").mkdir()
+            (repo / "frontend" / "app.js").write_text("// x\n", encoding="utf-8")
+            self._git(repo, "add", "frontend/app.js")
+            self.assertIn("frontend/app.js", policy.list_changed_paths(repo, base="other"))
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(repo, base="other..HEAD")
+            self.assertIn("not a single revision", str(ctx.exception))
+
     def test_base_that_is_a_path_fails_closed(self):
         """`--base backend` is a pathspec to git, and would diff nothing at all."""
         with tempfile.TemporaryDirectory() as raw:
-            repo = Path(raw)
-            self._git(repo, "init", "--quiet")
-            (repo / "backend").mkdir()
-            (repo / "backend" / "server.py").write_text("x = 1\n", encoding="utf-8")
-            self._git(repo, "add", "backend/server.py")
-            self._git(
-                repo,
-                "-c",
-                "user.email=e2e@example.invalid",
-                "-c",
-                "user.name=E2E",
-                "commit",
-                "--quiet",
-                "--no-gpg-sign",
-                "-m",
-                "seed",
-            )
+            repo = self._seeded_repo(Path(raw))
             with self.assertRaises(policy.ChangeDiscoveryError):
                 policy.list_changed_paths(repo, base="backend")
 

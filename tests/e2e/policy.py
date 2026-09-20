@@ -847,6 +847,27 @@ def _git_lines(repo: Path, args, what: str) -> list:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
+def _verify_base_revision(repo: Path, base: str) -> None:
+    """--affected compares the working tree to ONE base commit.
+
+    Git accepts a range (`a..b`) and silently switches `git diff` to
+    commit-vs-commit, dropping the working tree from the comparison, so a base
+    that is not a single resolvable revision has to fail closed rather than
+    answer a different question.
+    """
+    try:
+        _git_lines(
+            repo,
+            ["rev-parse", "--verify", "%s^{commit}" % base],
+            "base revision check vs %s" % base,
+        )
+    except ChangeDiscoveryError as exc:
+        raise ChangeDiscoveryError(
+            "invalid --base %r: not a single revision this repository resolves "
+            "(a range like 'a..b', a path, or an unknown ref) — %s" % (base, exc)
+        ) from exc
+
+
 def list_changed_paths(repo: Path, base: str | None = None, include_untracked=True):
     """Working-tree changes vs base (default: HEAD). Explicit --base overrides.
 
@@ -859,10 +880,11 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
     instead of degrading to an empty (and therefore "nothing affected") list.
     A genuinely empty diff still returns [].
 
-    `base` must name a revision. A leading "-" is rejected (git would parse it
-    as an option), and the "--" terminator stops git from silently reading a
-    base that happens to be an existing path as a pathspec; both otherwise exit
-    0 with no paths, which is the fail-open this guards against.
+    `base` must name a single revision. A leading "-" is rejected (git would
+    parse it as an option), the base is then verified to resolve to one commit
+    (a range or a path does not), and the diff terminates revision parsing with
+    "--". Each of those otherwise answers a different question, or exits 0 with
+    no paths at all, which is the fail-open this guards against.
     """
     repo = Path(repo)
     if base is not None and base.startswith("-"):
@@ -870,6 +892,8 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
             "invalid --base %r: a revision cannot start with '-' "
             "(git would read it as an option and report no changes)" % base
         )
+    if base is not None and base != "HEAD":
+        _verify_base_revision(repo, base)
     ref = base or "HEAD"
     paths = []
     # Staged + unstaged vs ref — include deletes so removed production/E2E
