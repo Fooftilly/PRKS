@@ -1,0 +1,57 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/publish-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Publish docs/wiki to GitHub Wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wiki_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+
+          if ! git ls-remote "$wiki_url" HEAD >/dev/null 2>&1; then
+            echo "::notice::GitHub Wiki is enabled but has not been initialized yet."
+            echo "::notice::Create the first Wiki page once in GitHub, then rerun this workflow."
+            exit 0
+          fi
+
+          git clone --depth 1 "$wiki_url" .wiki
+
+          find .wiki -maxdepth 1 -type f -name '*.md' -delete
+          for source in docs/wiki/*.md; do
+            if [[ "$(basename "$source")" == "README.md" ]]; then
+              continue
+            fi
+            cp "$source" ".wiki/$(basename "$source")"
+          done
+
+          cd .wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Wiki already matches docs/wiki."
+            exit 0
+          fi
+
+          git commit -m "docs: sync wiki from ${GITHUB_SHA}"
+          git push origin HEAD:master
