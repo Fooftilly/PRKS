@@ -6,7 +6,7 @@ Managed PDFs are first-class PRKS Work sources. PRKS separates annotation meanin
 
 The Work page mounts the PRKS PDF viewer for managed PDF Works. Viewer lifecycle is scoped to the Work's TabContext, which is important when several Works are open or visible in split panes.
 
-The viewer integration is implemented across the \`frontend/js/pdf-*.js\`, \`components/works-pdf.js\`, backend PDF modules, and the vendored PRKS viewer package.
+The viewer integration is implemented across the `frontend/js/pdf-*.js`, `components/works-pdf.js`, backend PDF modules, and the vendored PRKS viewer package.
 
 ## Canonical annotation data
 
@@ -26,11 +26,11 @@ The backend tracks whether the managed PDF bytes reflect the latest canonical an
 
 Relevant backend modules include:
 
-- \`pdf_annotations.py\`;
-- \`pdf_annotation_sync.py\`;
-- \`pdf_annotation_adopt.py\`;
-- \`pdf_materialization.py\`;
-- \`pdf_linearize.py\`.
+- `pdf_annotations.py`;
+- `pdf_annotation_sync.py`;
+- `pdf_annotation_adopt.py`;
+- `pdf_materialization.py`;
+- `pdf_linearize.py`.
 
 ## PDF text search
 

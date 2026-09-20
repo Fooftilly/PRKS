@@ -14,13 +14,13 @@ For supported mutation families, PRKS records the change in durable browser stor
 
 ### Request coordinator cache
 
-Normal online \`/api\` requests pass through a short-lived in-memory request coordinator. This reduces duplicate/nearby request work but is not offline storage and is not durable.
+Normal online `/api` requests pass through a short-lived in-memory request coordinator. This reduces duplicate/nearby request work but is not offline storage and is not durable.
 
 Keeping these mechanisms conceptually separate prevents a common architecture error: treating a cache hit as proof that a mutation is durable.
 
 ## Reachability
 
-PRKS judges server reachability from actual request/probe results rather than trusting \`navigator.onLine\`. Any real HTTP response means the server was reachable; transport failure means it was not.
+PRKS judges server reachability from actual request/probe results rather than trusting `navigator.onLine`. Any real HTTP response means the server was reachable; transport failure means it was not.
 
 ## Operation families
 
