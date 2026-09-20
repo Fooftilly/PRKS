@@ -59,6 +59,12 @@ htmlcov/
 !/.cursor/rules/
 !/.cursor/rules/**
 
+# --- Agent local overrides ---
+# Claude Code personal project settings (MCP opt-in, experiments)
+.claude/settings.local.json
+# Codex integrate currently writes an absolute machine path into hooks.json
+.codex/
+
 # --- Logs ---
 *.log
 

@@ -550,6 +550,29 @@ python run_tests.py --ux-tour                    # UX interaction tour (see belo
 PRKS_UX_RECORD=1 python run_tests.py --ux-tour   # record every scenario for review
 ```
 
+### Optional SonarQube CLI (Claude Code)
+
+Shared Claude Code secrets hooks (`.claude/settings.json`) and the project
+SonarQube MCP server (`.mcp.json`, project key `Fooftilly_PRKS`) are **optional**.
+They are not required to develop, test, or run PRKS.
+
+To use them, install the [SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli)
+so `sonar` is on your `PATH`, then authenticate locally (`sonar auth login`).
+No tokens are committed; `.mcp.json` only names the project.
+
+- Hooks use a single shared bash-form launcher (`run_hook.sh`) that locates
+  Python the same way PRKS does (`python3` on POSIX / Git Bash; then `python` /
+  `py -3`), then calls `run_hook.py`. If `sonar` or a usable interpreter is
+  missing, the hooks exit 0 and do nothing. Native Windows without Git Bash
+  should install Git Bash or add the PowerShell launcher via
+  `.claude/settings.local.json` (see `.claude/README.md`) — do not register
+  both handlers in shared settings (Claude runs every match in parallel).
+- `.mcp.json` always launches `sonar run mcp …`. Without the CLI, that MCP
+  server fails to initialize — install Sonar, or disable/remove that MCP entry
+  in your client. See `.claude/README.md` for the full agent-config notes.
+- Machine-local overrides (`.claude/settings.local.json`, `.codex/`) stay
+  gitignored.
+
 ### E2E tiers (agent-friendly)
 
 PRKS E2E is `tests/e2e/run.py` (Python unittest + Playwright), not npm Playwright.
