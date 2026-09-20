@@ -275,12 +275,23 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
         ) from exc
     fsync_managed_pdf_parent(pdfs_dir, name)
 
-    changed, reason = maybe_linearize_pdf_in_place(fullpath, context="work-create-upload")
-    LOGGER.info(
-        "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
-        "true" if changed else "false",
-        safe_log_label(reason),
-    )
+    # Linearization is an optimization, and the bytes on disk are already the
+    # PDF the caller sent. It swallows its own failures but can still raise
+    # before its internal try — `tempfile.mkstemp` sits above it — and letting
+    # that escape would fail a good upload and leave it unowned. Never fail the
+    # store for it.
+    try:
+        changed, reason = maybe_linearize_pdf_in_place(fullpath, context="work-create-upload")
+        LOGGER.info(
+            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
+            "true" if changed else "false",
+            safe_log_label(reason),
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "pdf_linearize_error context=work-create-upload error_type=%s",
+            safe_error_type(exc),
+        )
     return name
 
 

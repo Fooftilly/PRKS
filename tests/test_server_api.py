@@ -5166,6 +5166,26 @@ class TestServerAPI(unittest.TestCase):
             "a refused create left its uploaded PDF behind",
         )
 
+    def test_a_linearization_failure_does_not_fail_or_orphan_the_upload(self):
+        """Linearization is an optimization and the stored bytes are already the
+        PDF the caller sent. It swallows its own failures but can still raise
+        before its internal try (`tempfile.mkstemp` sits above it), which used
+        to fail a good upload and leave it with no Work to own it."""
+        from backend.services import work_pdf_replace as wpr
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        with patch.object(
+            wpr, "maybe_linearize_pdf_in_place",
+            side_effect=OSError(28, "No space left on device"),
+        ):
+            status, created = self._upload_work("Linearize Fails", "paper.pdf")
+
+        self.assertEqual(status, 200, created)
+        stored = self._sv_json("GET", "/api/works/" + created["id"], None)[1]["file_path"]
+        name = stored[len("/api/pdfs/"):]
+        self.assertIn(name, set(os.listdir(root)) - before, "the Work owns its stored PDF")
+
     def test_an_unexpected_add_work_failure_leaves_no_stored_pdf_behind(self):
         """A refusal is not the only exit between storing the bytes and owning
         them. `add_work` reaches SQLite, so a locked database escapes the
