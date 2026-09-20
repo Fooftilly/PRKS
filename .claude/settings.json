@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node",
+            "command": "python3",
             "args": [
-              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run-hook.mjs",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.py",
               "claude-pre-tool-use"
             ],
             "timeout": 60
@@ -22,9 +22,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node",
+            "command": "python3",
             "args": [
-              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run-hook.mjs",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/sonar-secrets/run_hook.py",
               "claude-prompt-submit"
             ],
             "timeout": 60
