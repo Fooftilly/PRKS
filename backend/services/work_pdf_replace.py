@@ -239,6 +239,7 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     not carry a helper return CodeQL still treats as tainted.
     """
     os.makedirs(pdfs_dir, exist_ok=True)
+    created = False
     filename = mint_managed_pdf_filename(original_name)
     if not safe_pdf_path_under_dir(pdfs_dir, filename):
         raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
@@ -252,14 +253,22 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
 
     try:
         with open(fullpath, "xb") as fp:
+            created = True
             fp.write(body)
             fp.flush()
             os.fsync(fp.fileno())
     except FileExistsError as exc:
+        # The name was already taken, so the file on disk is not ours to remove.
         raise ManagedPdfStoreError(
             "name_taken", "Could not allocate a managed PDF path", http_status=409
         ) from exc
     except OSError as exc:
+        # Create can succeed and write or fsync still fail — a full disk is the
+        # likeliest cause and the likeliest to be retried. No Work row will
+        # reference this path, so leaving the partial file behind would
+        # accumulate orphans exactly when space is short.
+        if created:
+            unlink_managed_pdf_best_effort(pdfs_dir, name)
         LOGGER.error("pdf_upload_write_failed error_type=%s", safe_error_type(exc))
         raise ManagedPdfStoreError(
             "write_failed", "Could not store the uploaded PDF"

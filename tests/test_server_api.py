@@ -12,6 +12,7 @@ import sys
 import base64
 import tempfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +32,7 @@ from backend.person_image import PortraitImage, decode_and_transcode
 from backend.storage.config import StorageConfig
 
 import backend.server as server_module
+import backend.db_manager as db_manager_module
 
 unittest.defaultTestLoader.sortTestMethodsUsing = None
 
@@ -5072,8 +5074,23 @@ class TestServerAPI(unittest.TestCase):
         bytes while both rows still pointed at it."""
         first_body = b"%PDF-1.4\n%% FIRST-WORK-CONTENT\n%%EOF\n"
         second_body = b"%PDF-1.4\n%% SECOND-WORK-CONTENT\n%%EOF\n"
-        status_a, work_a = self._upload_work("Collide A", "paper.pdf", first_body)
-        status_b, work_b = self._upload_work("Collide B", "paper.pdf", second_body)
+        # Freeze the clock the minter reads. Left to real time this crosses a
+        # second boundary now and then, and on those runs the timestamp-only
+        # implementation also produced two names — so the test would pass
+        # against the very bug it exists for.
+        frozen = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+        class _FrozenDatetime:
+            @staticmethod
+            def now(tz=None):
+                return frozen
+
+        with patch.object(db_manager_module, "datetime", _FrozenDatetime):
+            minted = [db_manager_module.mint_managed_pdf_filename("paper.pdf") for _ in range(2)]
+            stamps = {name.split("_", 1)[0] for name in minted}
+            self.assertEqual(len(stamps), 1, "both names carry one timestamp: %s" % minted)
+            status_a, work_a = self._upload_work("Collide A", "paper.pdf", first_body)
+            status_b, work_b = self._upload_work("Collide B", "paper.pdf", second_body)
         self.assertEqual((status_a, status_b), (200, 200))
 
         path_a = self._sv_json("GET", "/api/works/" + work_a["id"], None)[1]["file_path"]
@@ -5084,6 +5101,49 @@ class TestServerAPI(unittest.TestCase):
         for stored, expected in ((path_a, b"FIRST-WORK-CONTENT"), (path_b, b"SECOND-WORK-CONTENT")):
             with open(os.path.join(root, stored[len("/api/pdfs/"):]), "rb") as handle:
                 self.assertIn(expected, handle.read(), stored)
+
+    def test_a_failed_pdf_write_leaves_no_orphan_in_the_managed_directory(self):
+        """`open(..., "xb")` can succeed and the write or fsync still fail — a
+        full disk is both the likeliest cause and the likeliest to be retried.
+        No Work row would reference the partial file, so it has to go."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        real_open = open
+
+        class _FullDisk:
+            """Open succeeds — `O_CREAT|O_EXCL` is atomic, so a create either
+            happens or does not. The disk fills on the write that follows."""
+
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self._handle.close()
+                return False
+
+            def write(self, _data):
+                raise OSError(28, "No space left on device")
+
+            def __getattr__(self, name):
+                return getattr(self._handle, name)
+
+        def failing_open(path, mode="r", *args, **kwargs):
+            handle = real_open(path, mode, *args, **kwargs)
+            return _FullDisk(handle) if "x" in mode else handle
+
+        with patch("builtins.open", failing_open):
+            status, body = self._sv_json("POST", "/api/works", {
+                "title": "Disk Full Upload",
+                "file_name": "paper.pdf",
+                "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+            })
+        self.assertEqual(status, 500, body)
+        self.assertEqual(
+            set(os.listdir(root)) - before, set(), "a failed write left a managed file behind"
+        )
 
     def test_upload_filenames_are_sanitized_without_being_mangled(self):
         """The old filter deleted disallowed characters, so
@@ -5119,16 +5179,19 @@ class TestServerAPI(unittest.TestCase):
         lone_surrogate = json.loads('"https://www.youtube.com/watch?v=\\ud800"')
         self.assertIsNone(server_module._fetch_youtube_oembed(lone_surrogate))
 
-        # And the same value through the real creation endpoint: a Work whose
-        # source URL cannot be encoded is still created, without a 500.
-        status, created = self._sv_json("POST", "/api/works", {
+        # And the same value through the real creation endpoint. `json.dumps`
+        # escapes the surrogate to ASCII, so it survives the wire and the
+        # server's own `json.loads` hands it back to the enrichment path.
+        status, body = self._sv_json("POST", "/api/works", {
             "title": "Malformed Source URL",
-            "source_kind": "video",
-            "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "source_url": lone_surrogate,
         })
-        self.assertEqual(status, 200, created)
-        status, row = self._sv_json("GET", "/api/works/" + created["id"], None)
-        self.assertEqual(status, 200, row)
+        self.assertNotEqual(status, 500, body)
+        self.assertIn(status, (200, 400), body)
+        if status == 200:
+            self.assertEqual(
+                self._sv_json("GET", "/api/works/" + body["id"], None)[0], 200
+            )
 
     def test_oembed_url_is_a_percent_encoded_query_value(self):
         """Appended raw, a YouTube URL's own `&`/`#` both truncate the lookup
