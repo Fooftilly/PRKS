@@ -2,21 +2,28 @@
 name: UX / UI finding
 about: Record an observed usability, accessibility, discoverability, consistency, feedback, or interaction problem
 title: "UX: "
-labels: "candidate,area:ux"
+labels: "ux-finding,candidate,area:ux"
 assignees: ""
 ---
 
 > **Status:** Candidate UX/UI finding — not approved implementation work.
 >
-> **Source:** Grok Bot UX audit / manual review / other
+> **Source:** automated UX audit (name the tool) / manual review / other
 > **Last verified:** `master@COMMIT_SHA`
-> **Surface:** Work / People / Research / Folders / PDF / Graph / Settings / Global / other
+> **Surface:** the sidebar nav surface as labeled (Folders, Recent, Saved Views, File Types,
+> Playlists, People, Research, Concepts, Positions, Arguments & Stances, Graph, Tags,
+> Publishers, Progress), or Work / PDF / Workspace tabs / Search & command palette /
+> Settings / Global / other
 > **Classification:** UI-BUG / UX-FRICTION / ACCESSIBILITY / DISCOVERABILITY / CONSISTENCY / FEEDBACK / VISUAL
 > **Confidence:** high / medium / low
+>
+> **Security:** Do not use this public issue template for a suspected vulnerability,
+> security-boundary bypass, exploit details, secrets, private data, or a sensitive
+> reproduction. Follow the private reporting process in `SECURITY.md` instead.
 
 <!--
 Before submitting:
-- Search both open and closed issues for the same workflow, symptom, and likely root cause.
+- Search both open and closed issues labeled `ux-finding` for the same workflow, symptom, and likely root cause.
 - Prefer updating an existing issue over creating a duplicate.
 - Use testing/synthetic data for reproduction and screenshots. Do not expose real library content.
 - Keep observed behavior separate from hypotheses about implementation/root cause.
