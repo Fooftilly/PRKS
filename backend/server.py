@@ -2688,6 +2688,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             elif path == '/api/works':
                 file_path = data.get('file_path', '')
+                # Set only when this request uploads bytes, so the rejection
+                # path below can tell "we just minted this" from "the caller
+                # pointed at an existing managed PDF".
+                stored_name = None
                 source_kind = (data.get('source_kind') or '').strip().lower()
                 source_url = (data.get('source_url') or '').strip()
 
@@ -2794,6 +2798,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         private_notes=data.get('private_notes', ''),
                     )
                 except ValueError as e:
+                    # The upload is stored before the row exists, so a refused
+                    # create would otherwise leave a PDF nothing references.
+                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name)
                     self.send_json(400, {'error': str(e)})
                     return
                 try:

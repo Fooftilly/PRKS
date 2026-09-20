@@ -5145,6 +5145,51 @@ class TestServerAPI(unittest.TestCase):
             set(os.listdir(root)) - before, set(), "a failed write left a managed file behind"
         )
 
+    def test_a_rejected_work_create_leaves_no_stored_pdf_behind(self):
+        """The upload is stored before the row exists, so a create refused
+        afterwards would leave a managed PDF nothing references — and a client
+        retrying an invalid request would accumulate them."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        # A file-backed Work classified as PDF, carrying video-only identity:
+        # add_work() refuses this at the creation boundary.
+        status, body = self._sv_json("POST", "/api/works", {
+            "title": "Rejected upload",
+            "file_name": "paper.pdf",
+            "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+            "provider": "youtube",
+        })
+        self.assertEqual(status, 400, body)
+        self.assertEqual(
+            set(os.listdir(root)) - before,
+            set(),
+            "a refused create left its uploaded PDF behind",
+        )
+
+    def test_a_rejected_create_never_removes_a_pdf_it_did_not_upload(self):
+        """The rollback is only ever allowed to touch a name this request just
+        minted. A caller referencing an existing managed PDF is pointing at
+        another Work's bytes, and removing those is the data loss the exclusive
+        write exists to prevent."""
+        status, owner = self._upload_work("Owns The PDF", "shared.pdf")
+        self.assertEqual(status, 200, owner)
+        stored = self._sv_json("GET", "/api/works/" + owner["id"], None)[1]["file_path"]
+        root = os.path.realpath(server_module.pdfs_dir)
+        name = stored[len("/api/pdfs/"):]
+        self.assertTrue(os.path.isfile(os.path.join(root, name)))
+
+        # Same refusal, but the PDF came from file_path rather than an upload.
+        status, body = self._sv_json("POST", "/api/works", {
+            "title": "Rejected reference",
+            "file_path": stored,
+            "provider": "youtube",
+        })
+        self.assertEqual(status, 400, body)
+        self.assertTrue(
+            os.path.isfile(os.path.join(root, name)),
+            "the rollback deleted a PDF this request did not upload",
+        )
+
     def test_upload_filenames_are_sanitized_without_being_mangled(self):
         """The old filter deleted disallowed characters, so
         `../../etc/passwd` became the literal name `....etcpasswd`. Taking the

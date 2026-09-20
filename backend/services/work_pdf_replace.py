@@ -284,6 +284,25 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     return name
 
 
+def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str]) -> None:
+    """Roll back a `store_new_managed_pdf_bytes()` that never gained an owner.
+
+    Work creation stores the bytes before the row exists, so a create rejected
+    afterwards — a contradictory source identity, say — leaves a managed PDF
+    nothing references, and a client retrying an invalid request accumulates
+    them.
+
+    Only ever pass a name this request just minted and that no Work row was
+    given. A name taken from `works.file_path` is a sibling's bytes, and
+    removing that is the data-loss this module exists to prevent; `None` (the
+    request referenced an existing `file_path` rather than uploading) is a
+    no-op for the same reason.
+    """
+    if not stored_name:
+        return
+    unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
+
+
 def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
     """Best-effort delete of a managed PDF basename under ``pdfs_dir``.
 
