@@ -1039,6 +1039,24 @@ def _resolve_selection(args, all_ids):
 
 
 def main(argv=None) -> int:
+    """Entry point; runtime-mode env exports stay scoped to this invocation.
+
+    _apply_runtime_modes() publishes the CLI flags through the environment so
+    workers and the harness see them, which would otherwise leak into a later
+    in-process main() and silently suppress that run's history persistence.
+    """
+    saved_modes = {name: os.environ.get(name) for name in (PROFILE_ENV, SEED_CACHE_ENV)}
+    try:
+        return _main(argv)
+    finally:
+        for name, value in saved_modes.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _main(argv=None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
 
     active_benchmark_modes = _apply_runtime_modes(args)

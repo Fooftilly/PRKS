@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 LAST_FAILED_PATH = Path(".tests") / "e2e-last-failed.json"
@@ -933,24 +934,32 @@ def save_last_failed(path: Path, test_ids, meta=None) -> bool:
     (tests/e2e/sharding.save_timings): a crash or disk error before the replace
     leaves the previous valid file untouched rather than a truncated one that
     load_last_failed would report as "no saved failures".
+
+    The temp file gets a unique name so two runners sharing one checkout cannot
+    write into, commit, or clean up each other's uncommitted state.
     """
     path = Path(path)
     payload = {
         "test_ids": list(test_ids),
         "meta": meta or {},
     }
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as handle:
+        handle_fd, raw_tmp = tempfile.mkstemp(
+            dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+        )
+        tmp = Path(raw_tmp)
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, path)
         return True
     except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         return False
 
 

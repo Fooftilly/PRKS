@@ -278,16 +278,57 @@ class LastFailedPersistenceTests(unittest.TestCase):
             )
 
     def test_failed_temp_write_preserves_previous_valid_state(self):
+        def _fail_after_opening(fd, *args, **kwargs):
+            os.close(fd)
+            raise OSError("no space left on device")
+
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "e2e-last-failed.json"
             policy.save_last_failed(path, ["a.b.C.test_keep"])
             before = path.read_bytes()
 
-            with mock.patch("builtins.open", side_effect=OSError("no space left")):
+            with mock.patch("os.fdopen", side_effect=_fail_after_opening):
                 self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(
                 policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+            )
+            self.assertEqual(
+                sorted(q.name for q in path.parent.iterdir()),
+                ["e2e-last-failed.json"],
+            )
+
+    def test_unavailable_temp_file_preserves_previous_valid_state(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-last-failed.json"
+            policy.save_last_failed(path, ["a.b.C.test_keep"])
+            before = path.read_bytes()
+
+            with mock.patch("tempfile.mkstemp", side_effect=OSError("read-only")):
+                self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_concurrent_writers_do_not_share_a_temp_file(self):
+        """Two runners in one checkout must never write the same uncommitted file."""
+        seen = []
+        real_mkstemp = tempfile.mkstemp
+
+        def _record(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            seen.append(name)
+            return fd, name
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-last-failed.json"
+            with mock.patch("tempfile.mkstemp", side_effect=_record):
+                self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_one"]))
+                self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_two"]))
+            self.assertEqual(len(seen), 2)
+            self.assertNotEqual(seen[0], seen[1])
+            for name in seen:
+                self.assertEqual(Path(name).parent, path.parent)
+            self.assertEqual(
+                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_two"]
             )
 
     def test_corrupt_or_missing_returns_none(self):
@@ -1195,6 +1236,34 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             code, _ = _run({"PRKS_E2E_SEED_CACHE": "1"})
             self.assertEqual(code, 0)
             self.assertEqual(load_timings(timings_path)[test_id], 99.0)
+
+    def test_benchmark_flags_do_not_leak_into_a_later_in_process_run(self):
+        """CLI mode exports are scoped to one main(); the next run persists again."""
+        from tests.e2e.sharding import load_timings, save_timings
+
+        test_id = "tests.e2e.fake.BenchTests.test_x"
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            (repo / ".tests").mkdir()
+            timings_path = repo / ".tests" / "e2e-timings.json"
+            last_path = repo / ".tests" / "e2e-last-failed.json"
+            save_timings(timings_path, {test_id: 1.25})
+
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_PROFILE", None)
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+
+                code, _ = self._invoke_runner_history_case(
+                    repo, last_path, test_id, argv_extra=["--profile"]
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(load_timings(timings_path)[test_id], 1.25)
+                # The benchmark run must not leave the process in benchmark mode.
+                self.assertEqual(policy.benchmark_modes(os.environ), ())
+
+                code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
+                self.assertEqual(code, 0)
+                self.assertEqual(load_timings(timings_path)[test_id], 99.0)
 
     def test_failed_last_failed_write_warns_and_keeps_previous_state(self):
         """A last-failed write that never commits is reported, not silently lost."""
