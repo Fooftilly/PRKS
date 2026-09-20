@@ -2,6 +2,12 @@
 
 PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. Full run, Docker, and config live in README.md.
 
+## Engineering audit findings
+
+Engineering/audit findings are tracked canonically as GitHub Issues whose titles start with `[Audit Finding]`. The checkout-visible index and lifecycle rules are in `docs/engineering-findings.md`.
+
+Before proposing broad architecture, maintainability, tooling, or refactoring work, consult that index and, when GitHub access is available, the corresponding open issues. Candidate findings are **not implementation instructions**: do not implement one unless the maintainer explicitly assigns/approves it or the current task names it. Re-verify older findings against current `master` before acting. Avoid duplicate findings. If a finding conflicts with this file, this file remains authoritative until the maintainer explicitly approves a policy change.
+
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
