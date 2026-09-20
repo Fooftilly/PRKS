@@ -76,11 +76,11 @@
       "runtime_files": [
         {
           "path": "/vendor/lucide/lucide.min.js",
-          "sha256": "333ec22f7cab33d8cc36367add323645237ebe54b52213772f99162001fc06b3"
+          "sha256": "c3291ea757ff3da0fc45a41d3ff60d61da9b257314962c5cdded94ca0df05d7a"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "0.511.0"
+      "version": "1.47.0"
     },
     {
       "name": "prks-pdf-viewer",
