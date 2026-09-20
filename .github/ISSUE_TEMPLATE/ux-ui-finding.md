@@ -1,6 +1,6 @@
 ---
 name: UX / UI finding
-about: Record an observed usability, accessibility, discoverability, consistency, feedback, or interaction problem
+about: Record an observed usability, accessibility, discoverability, consistency, or interaction problem
 title: "UX: "
 labels: "ux-finding,candidate,area:ux"
 assignees: ""
@@ -19,11 +19,13 @@ assignees: ""
 >
 > **Security:** Do not use this public issue template for a suspected vulnerability,
 > security-boundary bypass, exploit details, secrets, private data, or a sensitive
-> reproduction. Follow the private reporting process in `SECURITY.md` instead.
+> reproduction. Follow the private reporting process in
+> [`SECURITY.md`](https://github.com/Fooftilly/PRKS/security/policy) instead.
 
 <!--
 Before submitting:
-- Search both open and closed issues labeled `ux-finding` for the same workflow, symptom, and likely root cause.
+- Search both open and closed issues labeled `ux-finding` for the same workflow, symptom, UI text, and likely root cause.
+- Then fall back to `area:ux` issues and title/body terms, including the `UX:` title prefix and the legacy `UI:` and `A11y:` prefixes used by issues that predate this template.
 - Prefer updating an existing issue over creating a duplicate.
 - Use testing/synthetic data for reproduction and screenshots. Do not expose real library content.
 - Keep observed behavior separate from hypotheses about implementation/root cause.
