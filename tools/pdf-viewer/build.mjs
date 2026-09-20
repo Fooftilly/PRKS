@@ -135,7 +135,12 @@ writeFileSync(
     `embedpdf ${embedpdfVersion}\nreact ${pkg.dependencies.react}\nreact-dom ${pkg.dependencies['react-dom']}\nfontFallback null\n`,
 );
 
-if (/cdn\.jsdelivr\.net.*react/.test(jsText) || /unpkg\.com.*react/.test(jsText)) {
+const bundleReferencesCdnReact = jsText.split('\n').some(
+    (line) =>
+        (line.includes('cdn.jsdelivr.net') || line.includes('unpkg.com')) &&
+        line.includes('react'),
+);
+if (bundleReferencesCdnReact) {
     throw new Error('bundle references CDN React');
 }
 if (
