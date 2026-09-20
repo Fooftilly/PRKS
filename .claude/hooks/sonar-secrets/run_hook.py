@@ -61,8 +61,11 @@ def _try_claim(digest: str) -> bool:
             return False
         try:
             fd = os.open(str(path), flags)
-        except FileExistsError:
+        except OSError:
             return False
+    except OSError:
+        # Hostile/unavailable tempdir: soft-skip rather than abort the hook.
+        return False
     try:
         os.write(fd, str(os.getpid()).encode("ascii", errors="replace"))
     finally:
