@@ -139,11 +139,6 @@ _GALLERY_SECTIONS = (
     "workspace",
 )
 
-_STATIC_LAYOUT_HINT = re.compile(
-    r"""style\s*=\s*['"][^'"]*(?:display\s*:|margin\s*:|margin-(?:top|bottom|left|right)\s*:|padding\s*:|font-size\s*:|gap\s*:|flex\s*:|width\s*:|height\s*:|color\s*:)""",
-    re.I,
-)
-
 
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as fh:
