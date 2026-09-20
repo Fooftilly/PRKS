@@ -8,6 +8,21 @@ PRKS is a self-hosted web application for organizing research materials: PDFs, M
 
 ![People in the library](docs/screenshots/people.png)
 
+## Documentation
+
+The repository README remains the concise source for installation, configuration, current runtime behavior, and commands. Broader user and contributor documentation lives in the version-controlled [PRKS Wiki source](docs/wiki/Home.md) and is published to the [GitHub Wiki](https://github.com/Fooftilly/PRKS/wiki).
+
+Useful starting points:
+
+- [Getting Started](docs/wiki/Getting-Started.md)
+- [User Guide](docs/wiki/User-Guide.md)
+- [Architecture](docs/wiki/Architecture.md)
+- [Offline and Sync](docs/wiki/Offline-and-Sync.md)
+- [Testing](docs/wiki/Testing.md)
+- [Troubleshooting](docs/wiki/Troubleshooting.md)
+
+Deep implementation authorities remain in [AGENTS.md](AGENTS.md), [DESIGN.md](DESIGN.md), [docs/local-first-sync.md](docs/local-first-sync.md), [docs/local-first-rollout-status.md](docs/local-first-rollout-status.md), and [SECURITY.md](SECURITY.md). Wiki pages summarize and connect those sources instead of duplicating fast-moving implementation tables.
+
 ## Requirements
 
 - **Python 3.12+**
