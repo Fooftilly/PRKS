@@ -34,8 +34,10 @@ secrets scans twice per event:
 - default shell form → `run_hook.sh` (macOS, Linux, Windows + Git Bash)
 - `"shell": "powershell"` → `run_hook.ps1` (native Windows without Git Bash)
 
-`run_hook.py` dedupes a second launcher within a few seconds so Windows does
-not double-scan when both hook entries fire.
+`run_hook.py` reads the Claude stdin payload once, claims an **atomic**
+request-scoped lock keyed by a stable digest of (project, hook, payload), and
+only the winning process forwards that same payload to `sonar hook`. That
+prevents double scans when both hook entries fire in parallel on Windows.
 
 ## Local-only files
 
