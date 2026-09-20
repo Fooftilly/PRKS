@@ -22,7 +22,6 @@ Run-real. An instruction to run the real app or Compose authorizes normal applic
 
 Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB, or clearing production storage needs a separate explicit confirmation that names that action. Run-real is not that confirmation.
 
-
 ## Engineering audit findings
 
 Engineering/audit findings are tracked canonically as GitHub Issues with the `audit-finding` label, titles starting with `[Audit Finding]`, and a stable `EF-xxx` ID in the issue body. The label is the primary search key; the title prefix remains a human-readable taxonomy and fallback. Audit findings are separate from `[Roadmap]` issues.
