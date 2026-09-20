@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -266,6 +267,81 @@ class PdfViewerIntegrationTests(unittest.TestCase):
             src = _read(path)
             for marker in _CDN_MARKERS:
                 self.assertNotIn(marker, src, f"{path} contains {marker}")
+
+    def test_cdn_react_guard_catches_every_url_shape(self):
+        """The build guard must survive the shapes a bundler actually emits."""
+        cases = {
+            "flag": [
+                'fetch("https://unpkg.com/react@18/umd/react.production.min.js")',
+                'import("//unpkg.com/react@18/umd/react.production.min.js")',
+                'src="cdn.jsdelivr.net/npm/react@18/umd/react.js"',
+                'var u="https:\\/\\/cdn.jsdelivr.net\\/npm\\/react@18\\/react.js"',
+                'fetch("https://cdn.jsdelivr.net/npm/lib?dep=react")',
+                'fetch("https://UNPKG.COM/React@18/umd/react.js")',
+                'fetch("https://unpkg.com:443/react@18/react.js")',
+            ],
+            "allow": [
+                'fetch("/vendor/prks-pdf-viewer/pdfium.wasm")',
+                'fetch("https://cdn.jsdelivr.net/npm/@embedpdf/pdfium@2.15.1/dist/pdfium.wasm")',
+                # Exact-hostname matching, not substring: lookalikes must not
+                # trip the guard.
+                'fetch("https://evil-unpkg.com/react@18/react.js")',
+                'fetch("https://unpkg.com.example.org/react@18/react.js")',
+                'const react = require("./react-shim.js");',
+            ],
+        }
+        script = """
+import { bundleReferencesCdnReact } from './tools/pdf-viewer/scripts/cdn-react-guard.mjs';
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (c) => { raw += c; });
+process.stdin.on('end', () => {
+  const cases = JSON.parse(raw);
+  const bad = [];
+  for (const text of cases.flag) {
+    if (!bundleReferencesCdnReact(text)) bad.push('missed: ' + text);
+  }
+  for (const text of cases.allow) {
+    if (bundleReferencesCdnReact(text)) bad.push('false positive: ' + text);
+  }
+  if (bad.length) { console.error(bad.join('\\n')); process.exit(1); }
+  console.log('ok');
+});
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=_PROJECT_DIR,
+            input=json.dumps(cases),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+    def test_cdn_react_guard_passes_the_shipped_bundle(self):
+        """The guard must not fail the build on the bundle we actually ship."""
+        bundle = os.path.join(_VENDOR, "prks-pdf-viewer.js")
+        if not os.path.isfile(bundle):
+            self.skipTest("vendored bundle not built")
+        script = """
+import { readFileSync } from 'node:fs';
+import { bundleReferencesCdnReact } from './tools/pdf-viewer/scripts/cdn-react-guard.mjs';
+const text = readFileSync(process.argv[1], 'utf8');
+if (bundleReferencesCdnReact(text)) {
+  console.error('guard flagged the shipped bundle');
+  process.exit(1);
+}
+console.log('ok');
+"""
+        proc = subprocess.run(
+            ["node", "--input-type=module", "-e", script, bundle],
+            cwd=_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
 
     def test_fixture_and_assets(self):
         html = _read(_FIXTURE)
