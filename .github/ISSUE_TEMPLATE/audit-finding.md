@@ -11,6 +11,10 @@ assignees: ""
 > **Finding ID:** EF-XXX
 > **Last verified:** `master@COMMIT_SHA`
 > **Source:** audit/review date and origin
+>
+> **Security:** Do not use this public issue template for a suspected vulnerability,
+> security-boundary bypass, exploit details, secrets, private data, or a sensitive
+> reproduction. Follow the private reporting process in `SECURITY.md` instead.
 
 ## Finding
 
