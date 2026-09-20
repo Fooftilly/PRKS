@@ -5057,6 +5057,60 @@ class TestServerAPI(unittest.TestCase):
             os.path.isfile(os.path.join(os.path.realpath(pdfs_dir), name)), stored)
         self.assertEqual(set(os.listdir(parent)) - before, set())
 
+    def _upload_work(self, title, file_name, body=b"%PDF-1.4\n%%EOF\n"):
+        status, created = self._sv_json("POST", "/api/works", {
+            "title": title,
+            "file_name": file_name,
+            "file_b64": base64.b64encode(body).decode("utf-8"),
+        })
+        return status, created
+
+    def test_two_same_second_uploads_do_not_share_one_managed_pdf(self):
+        """A managed PDF is never written over. The name used to be
+        `<seconds>_<sanitized>`, so two uploads of `paper.pdf` inside one second
+        resolved to the same path: the second write replaced the first Work's
+        bytes while both rows still pointed at it."""
+        first_body = b"%PDF-1.4\n%% FIRST-WORK-CONTENT\n%%EOF\n"
+        second_body = b"%PDF-1.4\n%% SECOND-WORK-CONTENT\n%%EOF\n"
+        status_a, work_a = self._upload_work("Collide A", "paper.pdf", first_body)
+        status_b, work_b = self._upload_work("Collide B", "paper.pdf", second_body)
+        self.assertEqual((status_a, status_b), (200, 200))
+
+        path_a = self._sv_json("GET", "/api/works/" + work_a["id"], None)[1]["file_path"]
+        path_b = self._sv_json("GET", "/api/works/" + work_b["id"], None)[1]["file_path"]
+        self.assertNotEqual(path_a, path_b, "each Work owns its own managed PDF")
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        for stored, expected in ((path_a, b"FIRST-WORK-CONTENT"), (path_b, b"SECOND-WORK-CONTENT")):
+            with open(os.path.join(root, stored[len("/api/pdfs/"):]), "rb") as handle:
+                self.assertIn(expected, handle.read(), stored)
+
+    def test_upload_filenames_are_sanitized_without_being_mangled(self):
+        """The old filter deleted disallowed characters, so
+        `../../etc/passwd` became the literal name `....etcpasswd`. Taking the
+        basename first keeps a readable name and makes containment explicit
+        rather than a side effect of which characters happen to be allowed."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        cases = (
+            ("../../../../etc/passwd", "passwd.pdf"),
+            ("***", "file.pdf"),
+            ("..", "file.pdf"),
+            ("report.PDF", "report.pdf"),
+            ("a" * 300 + ".pdf", None),
+        )
+        for raw, expected_suffix in cases:
+            status, created = self._upload_work("Upload " + raw[:12], raw)
+            self.assertEqual(status, 200, "%r -> %s" % (raw, created))
+            stored = self._sv_json("GET", "/api/works/" + created["id"], None)[1]["file_path"]
+            name = stored[len("/api/pdfs/"):]
+            self.assertNotIn("/", name, raw)
+            self.assertTrue(name.endswith(".pdf"), name)
+            # Whatever the caller sent, the component fits what a filesystem takes.
+            self.assertLessEqual(len(name.encode("utf-8")), 255, raw)
+            self.assertTrue(os.path.isfile(os.path.join(root, name)), stored)
+            if expected_suffix:
+                self.assertTrue(name.endswith(expected_suffix), "%r -> %s" % (raw, name))
+
     def test_oembed_stays_best_effort_for_malformed_unicode(self):
         """`quote()` raises UnicodeEncodeError on a lone surrogate, and
         `json.loads` happily produces one from `\\ud800`. Percent-encoding the

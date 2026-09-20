@@ -28,6 +28,7 @@ from backend.db_manager import (
     effective_source_kind,
     SavedViewError,
     managed_pdf_filename,
+    mint_managed_pdf_filename,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -2701,14 +2702,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
                     os.makedirs(pdfs_dir, exist_ok=True)
-                    safe_name = "".join(c for c in data['file_name'] if c.isalnum() or c in ".-_")
-                    local_filename = f"{int(time.time())}_{safe_name}"
-                    # Resolve through the same containment helper the rest of the
-                    # managed-PDF paths use, and write only to the resolved path:
-                    # the upload write must not be the one place that trusts a
-                    # name derived from the request body.
-                    abs_uploaded_path = safe_pdf_path_under_dir(pdfs_dir, local_filename)
-                    if not abs_uploaded_path:
+                    # One minting shape for every managed PDF, shared with the
+                    # processing-inbox import. The request filename is advisory:
+                    # it is sanitized for readability and never decides placement.
+                    local_filename = mint_managed_pdf_filename(data['file_name'])
+                    if not safe_pdf_path_under_dir(pdfs_dir, local_filename):
                         self.send_json(400, {'error': 'Invalid file_name'})
                         return
                     try:
@@ -2716,8 +2714,34 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    with open(abs_uploaded_path, "wb") as f:
-                        f.write(decoded_pdf)
+                    # Rebuild the sink path inline with the repository's
+                    # documented join+normpath+startswith pattern rather than
+                    # passing a helper return into open() — see
+                    # services/work_pdf_replace.unlink_managed_pdf_best_effort.
+                    pdfs_root = os.path.realpath(pdfs_dir)
+                    abs_uploaded_path = os.path.normpath(
+                        os.path.join(pdfs_root, os.path.basename(local_filename))
+                    )
+                    if not abs_uploaded_path.startswith(pdfs_root + os.sep):
+                        self.send_json(400, {'error': 'Invalid file_name'})
+                        return
+                    try:
+                        # Exclusive create: a managed PDF is never written over.
+                        # Two same-second uploads of one filename used to resolve
+                        # to the same path, and the second silently replaced the
+                        # first Work's bytes while both rows still referenced it.
+                        with open(abs_uploaded_path, "xb") as f:
+                            f.write(decoded_pdf)
+                    except FileExistsError:
+                        self.send_json(409, {'error': 'Could not allocate a managed PDF path'})
+                        return
+                    except OSError as exc:
+                        LOGGER.error(
+                            "pdf_upload_write_failed error_type=%s",
+                            safe_error_type(exc),
+                        )
+                        self.send_json(500, {'error': 'Could not store the uploaded PDF'})
+                        return
                     changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
                     LOGGER.info(
                         "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
