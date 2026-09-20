@@ -8,7 +8,7 @@
     "build": "node build.mjs"
   },
   "dependencies": {
-    "codemirror": "5.65.15",
+    "codemirror": "5.65.21",
     "dompurify": "3.4.15",
     "easymde": "2.21.0",
     "lucide": "1.47.0"
