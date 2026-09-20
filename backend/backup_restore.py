@@ -1742,7 +1742,11 @@ def _read_journal_file(path: str) -> dict[str, Any]:
     phase = data.get("phase")
     if phase not in _PHASES:
         raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
-    if not isinstance(data.get("transaction_id"), str):
+    # The transaction id is a path segment for the rollback tree: recovery
+    # joins it under maintenance_root() and then removes and re-installs
+    # whatever it finds there. Validate it exactly like the staging token, so a
+    # damaged or hand-edited journal can never point rollback outside that root.
+    if not isinstance(data.get("transaction_id"), str) or not _TOKEN_RE.fullmatch(data["transaction_id"]):
         raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
     components = data.get("components")
     if not isinstance(components, dict):

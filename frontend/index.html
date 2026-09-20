@@ -451,7 +451,7 @@
                         <h5 id="prks-settings-backup-restore-heading" class="prks-settings-section__title">Restore backup</h5>
                         <p class="prks-settings-hint">Choose a PRKS backup and verify it before restoring. Before restoring, download a backup of the current library if you may want to return to it.</p>
                         <div class="prks-backup-restore-row">
-                            <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip">
+                            <input type="file" id="prks-backup-file-input" class="prks-backup-file-input" accept=".prks-backup,application/octet-stream,application/zip" aria-label="PRKS backup file">
                             <button type="button" class="prks-btn prks-btn--secondary" id="prks-backup-choose-btn">Choose backup…</button>
                             <span class="prks-settings-hint" id="prks-backup-file-label">No file selected</span>
                         </div>
@@ -574,7 +574,7 @@
                 <section class="prks-create-section" aria-labelledby="work-create-source-heading">
                     <h4 id="work-create-source-heading" class="prks-create-section__title">Source</h4>
                     <p id="work-file-kind-label" class="form-field-label">Source type</p>
-                    <input type="hidden" id="work-source-kind" value="pdf" autocomplete="off">
+                    <input type="hidden" id="work-source-kind" value="pdf">
                     <div class="prks-kind-toggle" role="tablist" aria-labelledby="work-file-kind-label">
                         <button type="button" class="prks-kind-toggle__btn is-active" data-kind="pdf" role="tab" aria-selected="true">
                             <span class="prks-kind-toggle__icon"><i data-lucide="file-text" class="prks-icon" aria-hidden="true"></i></span>
@@ -602,7 +602,7 @@
                                 <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="upload-pdf-change-btn" title="Choose a different PDF">Change</button>
                             </div>
                             <div id="upload-pdf-preview-actions" class="upload-pdf-preview-actions hidden" hidden></div>
-                            <input type="file" id="work-file" accept=".pdf,application/pdf" class="file-input-hidden">
+                            <input type="file" id="work-file" accept=".pdf,application/pdf" class="file-input-hidden" aria-label="PDF file">
                         </div>
                         <p id="work-file-error" class="folder-field-error hidden" data-prks-field-error="work-file" role="alert"></p>
                     </div>

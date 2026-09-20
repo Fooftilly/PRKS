@@ -17,7 +17,7 @@ import threading
 from contextlib import nullcontext
 from dataclasses import replace
 from email.message import Message
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, quote, unquote
 from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
@@ -638,8 +638,14 @@ def _fetch_youtube_oembed(url: str) -> dict | None:
     """
     if not url or not str(url).strip():
         return None
-    oembed_url = "https://www.youtube.com/oembed?format=json&url=" + str(url).strip()
     try:
+        # Percent-encode the caller's URL before it becomes a query-parameter
+        # value. Unencoded it both truncates real YouTube URLs at the first
+        # `&`/`#` and lets the request body decide part of the outbound query
+        # string. Inside the try because quote() raises UnicodeEncodeError on a
+        # lone surrogate, which json.loads accepts: this helper stays
+        # best-effort and never turns optional metadata into a failed request.
+        oembed_url = "https://www.youtube.com/oembed?format=json&url=" + quote(str(url).strip(), safe="")
         req = Request(
             oembed_url,
             headers={
@@ -873,6 +879,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             pass
         if self._prks_request_id:
             self.send_header("X-Request-ID", self._prks_request_id)
+        # Every response declares its own Content-Type; no response may be
+        # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
+        # class for JSON/API bodies that echo library content back to the page.
+        self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
 
     def log_request(self, code="-", size="-"):
@@ -2678,6 +2688,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             elif path == '/api/works':
                 file_path = data.get('file_path', '')
+                # Set only when this request uploads bytes, so the rejection
+                # path below can tell "we just minted this" from "the caller
+                # pointed at an existing managed PDF".
+                stored_name = None
                 source_kind = (data.get('source_kind') or '').strip().lower()
                 source_url = (data.get('source_url') or '').strip()
 
@@ -2690,25 +2704,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
-                    os.makedirs(pdfs_dir, exist_ok=True)
-                    safe_name = "".join(c for c in data['file_name'] if c.isalnum() or c in ".-_")
-                    local_filename = f"{int(time.time())}_{safe_name}"
                     try:
                         decoded_pdf = base64.b64decode(data['file_b64'], validate=True)
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    with open(os.path.join(pdfs_dir, local_filename), "wb") as f:
-                        f.write(decoded_pdf)
-                    abs_uploaded_path = safe_pdf_path_under_dir(pdfs_dir, local_filename)
-                    if abs_uploaded_path:
-                        changed, reason = maybe_linearize_pdf_in_place(abs_uploaded_path, context="work-create-upload")
-                        LOGGER.info(
-                            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
-                            "true" if changed else "false",
-                            safe_log_label(reason),
+                    # Minting, containment, exclusive create and linearization
+                    # belong to the managed-PDF service; this adapter only maps
+                    # the outcome onto a response.
+                    try:
+                        stored_name = work_pdf_replace.store_new_managed_pdf_bytes(
+                            pdfs_dir, data['file_name'], decoded_pdf
                         )
-                    file_path = f"/api/pdfs/{local_filename}"
+                    except work_pdf_replace.ManagedPdfStoreError as exc:
+                        self.send_json(exc.http_status, {'error': exc.message})
+                        return
+                    file_path = f"/api/pdfs/{stored_name}"
 
                 provider = (data.get('provider') or '').strip().lower()
                 provider_id = (data.get('provider_id') or '').strip()
@@ -2787,8 +2798,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         private_notes=data.get('private_notes', ''),
                     )
                 except ValueError as e:
+                    # The upload is stored before the row exists, so a refused
+                    # create would otherwise leave a PDF nothing references.
+                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
                     self.send_json(400, {'error': str(e)})
                     return
+                except Exception:
+                    # A refusal is not the only exit from this window: add_work
+                    # reaches SQLite, so a locked database or a failed commit
+                    # leaves the same orphan. The service keeps the file unless
+                    # it can prove no Work references it.
+                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
+                    raise
                 try:
                     text_index.sync_work(w_id, file_path)
                 except Exception as e:
@@ -3270,7 +3291,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
 
         def write_line(payload: dict) -> None:

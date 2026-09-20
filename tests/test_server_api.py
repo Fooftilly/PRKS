@@ -12,6 +12,7 @@ import sys
 import base64
 import tempfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +32,7 @@ from backend.person_image import PortraitImage, decode_and_transcode
 from backend.storage.config import StorageConfig
 
 import backend.server as server_module
+import backend.db_manager as db_manager_module
 
 unittest.defaultTestLoader.sortTestMethodsUsing = None
 
@@ -5012,6 +5014,367 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         status, _etag2, _ = self._conditional_get("/api/folders", etag=etag1)
         self.assertEqual(status, 304)
+
+
+    def _response_headers(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        conn.request("GET", path)
+        response = conn.getresponse()
+        response.read()
+        headers = dict(response.getheaders())
+        status = response.status
+        conn.close()
+        return status, headers
+
+    def test_every_response_forbids_mime_sniffing(self):
+        """JSON bodies echo library content back to the page. Without nosniff a
+        crafted title can be sniffed as HTML and run in the app's own origin, so
+        the header belongs on every response, not on one streaming endpoint."""
+        db = server_module.db
+        db.add_work("<html><body>sniffable</body></html>")
+        for path in ("/api/works", "/", "/index.html", "/api/no-such-endpoint"):
+            status, headers = self._response_headers(path)
+            self.assertIn(status, (200, 304, 404), path)
+            self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff", path)
+
+    def test_pdf_upload_writes_only_inside_the_managed_pdf_directory(self):
+        """The upload write resolves through the same containment helper as
+        every other managed-PDF path, so a file_name from the request body can
+        never name a destination outside pdfs_dir."""
+        pdfs_dir = server_module.pdfs_dir
+        parent = os.path.dirname(os.path.realpath(pdfs_dir))
+        before = set(os.listdir(parent))
+        status, created = self._sv_json("POST", "/api/works", {
+            "title": "Traversal Upload",
+            "file_name": "../../escaped.pdf",
+            "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+        })
+        self.assertEqual(status, 200, created)
+        row = self._sv_json("GET", "/api/works/" + created["id"], None)[1]
+        stored = row["file_path"]
+        self.assertTrue(stored.startswith("/api/pdfs/"), stored)
+        name = stored[len("/api/pdfs/"):]
+        self.assertNotIn("/", name)
+        self.assertTrue(
+            os.path.isfile(os.path.join(os.path.realpath(pdfs_dir), name)), stored)
+        self.assertEqual(set(os.listdir(parent)) - before, set())
+
+    def _upload_work(self, title, file_name, body=b"%PDF-1.4\n%%EOF\n"):
+        status, created = self._sv_json("POST", "/api/works", {
+            "title": title,
+            "file_name": file_name,
+            "file_b64": base64.b64encode(body).decode("utf-8"),
+        })
+        return status, created
+
+    def test_two_same_second_uploads_do_not_share_one_managed_pdf(self):
+        """A managed PDF is never written over. The name used to be
+        `<seconds>_<sanitized>`, so two uploads of `paper.pdf` inside one second
+        resolved to the same path: the second write replaced the first Work's
+        bytes while both rows still pointed at it."""
+        first_body = b"%PDF-1.4\n%% FIRST-WORK-CONTENT\n%%EOF\n"
+        second_body = b"%PDF-1.4\n%% SECOND-WORK-CONTENT\n%%EOF\n"
+        # Freeze the clock the minter reads. Left to real time this crosses a
+        # second boundary now and then, and on those runs the timestamp-only
+        # implementation also produced two names — so the test would pass
+        # against the very bug it exists for.
+        frozen = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+        class _FrozenDatetime:
+            @staticmethod
+            def now(tz=None):
+                return frozen
+
+        with patch.object(db_manager_module, "datetime", _FrozenDatetime):
+            minted = [db_manager_module.mint_managed_pdf_filename("paper.pdf") for _ in range(2)]
+            stamps = {name.split("_", 1)[0] for name in minted}
+            self.assertEqual(len(stamps), 1, "both names carry one timestamp: %s" % minted)
+            status_a, work_a = self._upload_work("Collide A", "paper.pdf", first_body)
+            status_b, work_b = self._upload_work("Collide B", "paper.pdf", second_body)
+        self.assertEqual((status_a, status_b), (200, 200))
+
+        path_a = self._sv_json("GET", "/api/works/" + work_a["id"], None)[1]["file_path"]
+        path_b = self._sv_json("GET", "/api/works/" + work_b["id"], None)[1]["file_path"]
+        self.assertNotEqual(path_a, path_b, "each Work owns its own managed PDF")
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        for stored, expected in ((path_a, b"FIRST-WORK-CONTENT"), (path_b, b"SECOND-WORK-CONTENT")):
+            with open(os.path.join(root, stored[len("/api/pdfs/"):]), "rb") as handle:
+                self.assertIn(expected, handle.read(), stored)
+
+    def test_a_failed_pdf_write_leaves_no_orphan_in_the_managed_directory(self):
+        """`open(..., "xb")` can succeed and the write or fsync still fail — a
+        full disk is both the likeliest cause and the likeliest to be retried.
+        No Work row would reference the partial file, so it has to go."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        real_open = open
+
+        class _FullDisk:
+            """Open succeeds — `O_CREAT|O_EXCL` is atomic, so a create either
+            happens or does not. The disk fills on the write that follows."""
+
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self._handle.close()
+                return False
+
+            def write(self, _data):
+                raise OSError(28, "No space left on device")
+
+            def __getattr__(self, name):
+                return getattr(self._handle, name)
+
+        def failing_open(path, mode="r", *args, **kwargs):
+            handle = real_open(path, mode, *args, **kwargs)
+            return _FullDisk(handle) if "x" in mode else handle
+
+        with patch("builtins.open", failing_open):
+            status, body = self._sv_json("POST", "/api/works", {
+                "title": "Disk Full Upload",
+                "file_name": "paper.pdf",
+                "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+            })
+        self.assertEqual(status, 500, body)
+        self.assertEqual(
+            set(os.listdir(root)) - before, set(), "a failed write left a managed file behind"
+        )
+
+    def test_a_rejected_work_create_leaves_no_stored_pdf_behind(self):
+        """The upload is stored before the row exists, so a create refused
+        afterwards would leave a managed PDF nothing references — and a client
+        retrying an invalid request would accumulate them."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        # A file-backed Work classified as PDF, carrying video-only identity:
+        # add_work() refuses this at the creation boundary.
+        status, body = self._sv_json("POST", "/api/works", {
+            "title": "Rejected upload",
+            "file_name": "paper.pdf",
+            "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+            "provider": "youtube",
+        })
+        self.assertEqual(status, 400, body)
+        self.assertEqual(
+            set(os.listdir(root)) - before,
+            set(),
+            "a refused create left its uploaded PDF behind",
+        )
+
+    def test_managed_pdf_names_survive_being_re_minted_for_copy_on_write(self):
+        """A managed name can be re-prefixed after it is minted. The
+        copy-on-write path prepends its own timestamp, Work id and uuid, so a
+        stem already sized to the limit overran the filesystem and the replace
+        failed with ENAMETOOLONG."""
+        from backend.services.work_pdf_replace import allocate_exclusive_managed_filename
+
+        minted = db_manager_module.mint_managed_pdf_filename("a" * 300 + ".pdf")
+        self.assertEqual(len(minted.encode("utf-8")), 255, "the worst case is a maximal name")
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        name = minted
+        for work_id in ("W-" + "A" * 32, "W-" + "B" * 32):
+            name = allocate_exclusive_managed_filename(work_id, name)
+            self.assertLessEqual(
+                len(name.encode("utf-8")), 255,
+                "re-minting must stay inside the filesystem's limit: %s" % name,
+            )
+            self.assertTrue(name.endswith(".pdf"), name)
+            # The bound is only meaningful if the name is actually writable.
+            path = os.path.join(root, name)
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.4\n%%EOF\n")
+            os.remove(path)
+
+    def test_a_linearization_failure_does_not_fail_or_orphan_the_upload(self):
+        """Linearization is an optimization and the stored bytes are already the
+        PDF the caller sent. It swallows its own failures but can still raise
+        before its internal try (`tempfile.mkstemp` sits above it), which used
+        to fail a good upload and leave it with no Work to own it."""
+        from backend.services import work_pdf_replace as wpr
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        with patch.object(
+            wpr, "maybe_linearize_pdf_in_place",
+            side_effect=OSError(28, "No space left on device"),
+        ):
+            status, created = self._upload_work("Linearize Fails", "paper.pdf")
+
+        self.assertEqual(status, 200, created)
+        stored = self._sv_json("GET", "/api/works/" + created["id"], None)[1]["file_path"]
+        name = stored[len("/api/pdfs/"):]
+        self.assertIn(name, set(os.listdir(root)) - before, "the Work owns its stored PDF")
+
+    def test_an_unexpected_add_work_failure_leaves_no_stored_pdf_behind(self):
+        """A refusal is not the only exit between storing the bytes and owning
+        them. `add_work` reaches SQLite, so a locked database escapes the
+        ValueError branch entirely and used to leave the upload behind."""
+        import sqlite3
+
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+        titles_before = self._work_titles()
+
+        with patch.object(
+            server_module.db, "add_work",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ):
+            status, body = self._sv_json("POST", "/api/works", {
+                "title": "Locked Database Upload",
+                "file_name": "paper.pdf",
+                "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+            })
+
+        self.assertEqual(status, 500, body)
+        self.assertEqual(self._work_titles(), titles_before, "no Work was created")
+        self.assertEqual(
+            set(os.listdir(root)) - before,
+            set(),
+            "an unexpected add_work failure left its uploaded PDF behind",
+        )
+
+    def test_rollback_keeps_the_pdf_when_ownership_cannot_be_established(self):
+        """Fail-safe, not fail-clean. The failure may have arrived after the row
+        committed, so an unreadable database must keep the bytes."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        before = set(os.listdir(root))
+
+        real_execute = server_module.db.execute_query
+
+        def unreadable(sql, *a, **kw):
+            if "FROM works WHERE file_path" in sql:
+                raise sqlite3.OperationalError("database is locked")
+            return real_execute(sql, *a, **kw)
+
+        import sqlite3
+        with patch.object(server_module.db, "execute_query", side_effect=unreadable):
+            with patch.object(
+                server_module.db, "add_work",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ):
+                status, body = self._sv_json("POST", "/api/works", {
+                    "title": "Ownership Unknown",
+                    "file_name": "paper.pdf",
+                    "file_b64": base64.b64encode(b"%PDF-1.4\n%%EOF\n").decode("utf-8"),
+                })
+        self.assertEqual(status, 500, body)
+        self.assertEqual(
+            len(set(os.listdir(root)) - before), 1,
+            "the PDF must be kept when ownership cannot be proven",
+        )
+
+    def test_a_rejected_create_never_removes_a_pdf_it_did_not_upload(self):
+        """The rollback is only ever allowed to touch a name this request just
+        minted. A caller referencing an existing managed PDF is pointing at
+        another Work's bytes, and removing those is the data loss the exclusive
+        write exists to prevent."""
+        status, owner = self._upload_work("Owns The PDF", "shared.pdf")
+        self.assertEqual(status, 200, owner)
+        stored = self._sv_json("GET", "/api/works/" + owner["id"], None)[1]["file_path"]
+        root = os.path.realpath(server_module.pdfs_dir)
+        name = stored[len("/api/pdfs/"):]
+        self.assertTrue(os.path.isfile(os.path.join(root, name)))
+
+        # Same refusal, but the PDF came from file_path rather than an upload.
+        status, body = self._sv_json("POST", "/api/works", {
+            "title": "Rejected reference",
+            "file_path": stored,
+            "provider": "youtube",
+        })
+        self.assertEqual(status, 400, body)
+        self.assertTrue(
+            os.path.isfile(os.path.join(root, name)),
+            "the rollback deleted a PDF this request did not upload",
+        )
+
+    def test_upload_filenames_are_sanitized_without_being_mangled(self):
+        """The old filter deleted disallowed characters, so
+        `../../etc/passwd` became the literal name `....etcpasswd`. Taking the
+        basename first keeps a readable name and makes containment explicit
+        rather than a side effect of which characters happen to be allowed."""
+        root = os.path.realpath(server_module.pdfs_dir)
+        cases = (
+            ("../../../../etc/passwd", "passwd.pdf"),
+            ("***", "file.pdf"),
+            ("..", "file.pdf"),
+            ("report.PDF", "report.pdf"),
+            ("a" * 300 + ".pdf", None),
+        )
+        for raw, expected_suffix in cases:
+            status, created = self._upload_work("Upload " + raw[:12], raw)
+            self.assertEqual(status, 200, "%r -> %s" % (raw, created))
+            stored = self._sv_json("GET", "/api/works/" + created["id"], None)[1]["file_path"]
+            name = stored[len("/api/pdfs/"):]
+            self.assertNotIn("/", name, raw)
+            self.assertTrue(name.endswith(".pdf"), name)
+            # Whatever the caller sent, the component fits what a filesystem takes.
+            self.assertLessEqual(len(name.encode("utf-8")), 255, raw)
+            self.assertTrue(os.path.isfile(os.path.join(root, name)), stored)
+            if expected_suffix:
+                self.assertTrue(name.endswith(expected_suffix), "%r -> %s" % (raw, name))
+
+    def test_oembed_stays_best_effort_for_malformed_unicode(self):
+        """`quote()` raises UnicodeEncodeError on a lone surrogate, and
+        `json.loads` happily produces one from `\\ud800`. Percent-encoding the
+        lookup URL must not turn an optional metadata fetch into a failed
+        request, so the encode belongs inside the helper's own try."""
+        lone_surrogate = json.loads('"https://www.youtube.com/watch?v=\\ud800"')
+        self.assertIsNone(server_module._fetch_youtube_oembed(lone_surrogate))
+
+        # And the same value through the real creation endpoint. `json.dumps`
+        # escapes the surrogate to ASCII, so it survives the wire and the
+        # server's own `json.loads` hands it back to the enrichment path.
+        status, body = self._sv_json("POST", "/api/works", {
+            "title": "Malformed Source URL",
+            "source_url": lone_surrogate,
+        })
+        self.assertNotEqual(status, 500, body)
+        self.assertIn(status, (200, 400), body)
+        if status == 200:
+            self.assertEqual(
+                self._sv_json("GET", "/api/works/" + body["id"], None)[0], 200
+            )
+
+    def test_oembed_url_is_a_percent_encoded_query_value(self):
+        """Appended raw, a YouTube URL's own `&`/`#` both truncate the lookup
+        and let the request body append parameters to the outbound query."""
+        seen = []
+
+        class _FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def read(self_inner):
+                return b'{"title": "T"}'
+
+        def fake_urlopen(req, timeout=None):
+            seen.append(req.full_url)
+            return _FakeResponse()
+
+        with patch.object(server_module, "urlopen", fake_urlopen):
+            meta = server_module._fetch_youtube_oembed(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
+
+        self.assertEqual(meta, {"title": "T"})
+        self.assertEqual(len(seen), 1)
+        requested = seen[0]
+        prefix = "https://www.youtube.com/oembed?format=json&url="
+        self.assertTrue(requested.startswith(prefix), requested)
+        value = requested[len(prefix):]
+        self.assertNotIn("&", value)
+        self.assertNotIn("#", value)
+        self.assertEqual(
+            urllib.parse.unquote(value),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
 
 
 if __name__ == '__main__':

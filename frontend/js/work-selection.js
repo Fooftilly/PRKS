@@ -393,7 +393,9 @@
 
     function cssEscape(id) {
         if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(id);
-        return String(id).replace(/"/g, '\\"');
+        // Backslash first: escaping quotes alone leaves a trailing `\` able to
+        // escape the closing quote of the attribute selector this feeds.
+        return String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     }
 
     function onCardClickCapture(e) {

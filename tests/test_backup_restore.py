@@ -53,6 +53,14 @@ from backend.text_index import get_text_index, reset_text_index
 import backend.backup_restore as backup_module
 import backend.server as server_module
 
+# Restore journals carry a `secrets.token_urlsafe(16)` transaction id, and
+# recovery now validates that shape before using it as a rollback path segment.
+# Fixtures use real-shaped ids so they exercise the same code path production
+# does.
+_JOURNAL_TXN_A = "fixture-txn-aaaaaaaaaa"
+_JOURNAL_TXN_B = "fixture-txn-bbbbbbbbbb"
+_JOURNAL_TXN_C = "fixture-txn-canonical0"
+
 
 def _capture_bind():
     try:
@@ -1014,7 +1022,7 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
     def test_incomplete_journal_restores_previous(self):
         lib = self._bind_library(title="Original", pdf_name="orig.pdf")
         cfg = lib["cfg"]
-        maint = os.path.join(cfg.root, ".prks-maintenance", "rollback", "txn1")
+        maint = os.path.join(cfg.root, ".prks-maintenance", "rollback", _JOURNAL_TXN_A)
         os.makedirs(os.path.join(maint, "database"), exist_ok=True)
         os.makedirs(os.path.join(maint, "pdfs"), exist_ok=True)
         os.makedirs(os.path.join(maint, "people"), exist_ok=True)
@@ -1028,7 +1036,7 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
         journal = {
             "format": "prks-restore-journal",
             "format_version": 1,
-            "transaction_id": "txn1",
+            "transaction_id": _JOURNAL_TXN_A,
             "phase": "installing_new",
             "components": {
                 "database": {"old_moved": True, "new_installed": False},
@@ -1047,17 +1055,41 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
         self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
         self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "partial.pdf")))
 
+    def test_journal_with_an_unusable_transaction_id_is_refused(self):
+        """The transaction id becomes a path segment under maintenance_root and
+        recovery then removes and re-installs whatever it finds there. A journal
+        naming something else must be refused, not followed."""
+        lib = self._bind_library(title="Original", pdf_name="orig.pdf")
+        cfg = lib["cfg"]
+        maintenance = os.path.join(cfg.root, ".prks-maintenance")
+        os.makedirs(maintenance, exist_ok=True)
+        journal_file = os.path.join(maintenance, "restore-journal.json")
+        for bad in ("../../../../tmp", "..", "with/slash", "short", ""):
+            journal = {
+                "format": "prks-restore-journal",
+                "format_version": 1,
+                "transaction_id": bad,
+                "phase": "installing_new",
+                "components": {"database": {"old_moved": True}},
+            }
+            with open(journal_file, "w") as handle:
+                json.dump(journal, handle)
+            with self.assertRaises(RestoreError) as ctx:
+                recover_incomplete_restore(cfg)
+            self.assertEqual(ctx.exception.reason, "journal_invalid", bad)
+        self.assertTrue(os.path.isfile(journal_file), "a refused journal is kept")
+
     def test_committed_journal_keeps_new_and_cleans_rollback(self):
         lib = self._bind_library(title="New Library", pdf_name="new.pdf")
         cfg = lib["cfg"]
-        rollback = os.path.join(cfg.root, ".prks-maintenance", "rollback", "txn2")
+        rollback = os.path.join(cfg.root, ".prks-maintenance", "rollback", _JOURNAL_TXN_B)
         os.makedirs(rollback, exist_ok=True)
         with open(os.path.join(rollback, "leftover"), "w") as handle:
             handle.write("old")
         journal = {
             "format": "prks-restore-journal",
             "format_version": 1,
-            "transaction_id": "txn2",
+            "transaction_id": _JOURNAL_TXN_B,
             "phase": "committed",
             "components": {
                 "database": {"old_moved": True, "new_installed": True},
@@ -1087,7 +1119,7 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
             person_bytes=b"NEW-PORTRAIT",
         )
         cfg = orig["cfg"]
-        txn = "txn-canonical"
+        txn = _JOURNAL_TXN_C
         rollback = os.path.join(cfg.root, ".prks-maintenance", "rollback", txn)
         os.makedirs(os.path.join(rollback, "database"), exist_ok=True)
         db_name = os.path.basename(cfg.db_path)

@@ -23,7 +23,9 @@ import uuid
 from typing import Any, Optional
 
 from backend.db_manager import (
+    bound_managed_pdf_basename,
     managed_pdf_filename,
+    mint_managed_pdf_filename,
     prks_thumb_cache_safe_wid,
     referenced_managed_pdf_filename,
     safe_pdf_path_under_dir,
@@ -207,7 +209,122 @@ def allocate_exclusive_managed_filename(work_id: str, shared_filename: str) -> s
     if not safe_base.lower().endswith(".pdf"):
         safe_base = f"{safe_base}.pdf"
     safe_wid = prks_thumb_cache_safe_wid(work_id)
-    return f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_{safe_base}"
+    # `shared_filename` may already be a maximal managed name, so bound the
+    # joined result: prepending a second timestamp, Work id and uuid to a
+    # 255-byte stem overruns the filesystem and the replace fails.
+    return bound_managed_pdf_basename(
+        f"{int(time.time())}_{safe_wid}_{uuid.uuid4().hex[:8]}_", safe_base
+    )
+
+
+class ManagedPdfStoreError(Exception):
+    """A new managed PDF could not be stored. Carries the HTTP status to map."""
+
+    def __init__(self, reason: str, message: str, *, http_status: int = 500):
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+        self.http_status = http_status
+
+
+def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) -> str:
+    """Store ``body`` as a brand-new managed PDF; return its basename.
+
+    Owns the whole filesystem side of an upload so the HTTP adapter does not:
+    mints the name, contains it, creates it exclusively, and linearizes.
+
+    Exclusive create is the point. The create path used to name files
+    ``<unix-seconds>_<sanitized>``, so two uploads of one filename inside a
+    second resolved to the same path and the second write replaced the first
+    Work's bytes while both rows still referenced it. A managed PDF is never
+    written over here.
+
+    Containment follows this module's existing pattern: ``safe_pdf_path_under_dir``
+    at runtime, then the sink path rebuilt with
+    ``normpath(join(base, basename))`` + ``startswith(base)`` so the sink does
+    not carry a helper return CodeQL still treats as tainted.
+    """
+    os.makedirs(pdfs_dir, exist_ok=True)
+    created = False
+    filename = mint_managed_pdf_filename(original_name)
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+    base_path = os.path.realpath(pdfs_dir)
+    # CodeQL py/path-injection documented sanitizer: build with join+normpath,
+    # then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+
+    try:
+        with open(fullpath, "xb") as fp:
+            created = True
+            fp.write(body)
+            fp.flush()
+            os.fsync(fp.fileno())
+    except FileExistsError as exc:
+        # The name was already taken, so the file on disk is not ours to remove.
+        raise ManagedPdfStoreError(
+            "name_taken", "Could not allocate a managed PDF path", http_status=409
+        ) from exc
+    except OSError as exc:
+        # Create can succeed and write or fsync still fail — a full disk is the
+        # likeliest cause and the likeliest to be retried. No Work row will
+        # reference this path, so leaving the partial file behind would
+        # accumulate orphans exactly when space is short.
+        if created:
+            unlink_managed_pdf_best_effort(pdfs_dir, name)
+        LOGGER.error("pdf_upload_write_failed error_type=%s", safe_error_type(exc))
+        raise ManagedPdfStoreError(
+            "write_failed", "Could not store the uploaded PDF"
+        ) from exc
+    fsync_managed_pdf_parent(pdfs_dir, name)
+
+    # Linearization is an optimization, and the bytes on disk are already the
+    # PDF the caller sent. It swallows its own failures but can still raise
+    # before its internal try — `tempfile.mkstemp` sits above it — and letting
+    # that escape would fail a good upload and leave it unowned. Never fail the
+    # store for it.
+    try:
+        changed, reason = maybe_linearize_pdf_in_place(fullpath, context="work-create-upload")
+        LOGGER.info(
+            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
+            "true" if changed else "false",
+            safe_log_label(reason),
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "pdf_linearize_error context=work-create-upload error_type=%s",
+            safe_error_type(exc),
+        )
+    return name
+
+
+def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db=None) -> bool:
+    """Roll back a `store_new_managed_pdf_bytes()` that never gained an owner.
+
+    Work creation stores the bytes before the row exists, so a create rejected
+    afterwards — a contradictory source identity, say — leaves a managed PDF
+    nothing references, and a client retrying an invalid request accumulates
+    them.
+
+    A create can fail after the store in more ways than a refusal: `add_work`
+    reaches SQLite, so a locked database or a failed commit leaves the same
+    orphan. Only ever pass a name this request just minted. A name taken from `works.file_path` is a sibling's bytes, and
+    removing that is the data-loss this module exists to prevent; `None` (the
+    request referenced an existing `file_path` rather than uploading) is a
+    no-op for the same reason.
+    """
+    if not stored_name:
+        return False
+    # One-directional on purpose: remove only what is proven unreferenced.
+    # `other_works_share_managed_filename` fails closed on a query error, so an
+    # unreadable database keeps the bytes rather than risking a Work's PDF —
+    # and a failure can arrive *after* a commit, when the row does own the file.
+    if db is not None and other_works_share_managed_filename(db, stored_name, exclude_work_id=""):
+        return False
+    return unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
 
 
 def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
