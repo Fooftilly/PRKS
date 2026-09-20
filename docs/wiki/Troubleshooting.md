@@ -6,14 +6,14 @@ This page provides first-response diagnosis. For exact current commands/configur
 
 PRKS validates Python and exact runtime dependency pins before normal startup.
 
+Use the project virtual environment. On PEP 668 systems, create and use a venv rather than forcing a global pip install.
+
 Check:
 
 ```bash
-python --version
-python -m pip install -r requirements.txt
+./.venv/bin/python --version
+./.venv/bin/python -m pip install -r requirements.txt
 ```
-
-Prefer the project virtual environment. On PEP 668 systems, create/use a venv rather than forcing a global pip install.
 
 ## Browser cannot reach PRKS
 
