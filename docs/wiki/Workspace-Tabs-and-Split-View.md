@@ -2,6 +2,23 @@
 
 PRKS keeps a strip of in-app tabs under the top ribbon. Stacked mode shows one page at a time. Split view shows Main on the left and a Secondary area on the right that can itself be split further, up to 4 panes on screen at once (Main plus 3 Secondary). PRKS remembers your open tabs and split layout between sessions on this browser/device. That memory is local to the browser profile; there is no server-side workspace synchronization in this version.
 
+```mermaid
+flowchart TB
+    Tabs[Open PRKS tabs] --> Main[Main pane<br/>owns browser URL]
+    Tabs --> Secondary[Secondary tree<br/>recursive splits]
+    Tabs --> Parked[Parked tabs<br/>not currently mounted]
+    Secondary --> S1[Secondary pane]
+    Secondary --> S2[Secondary pane]
+    S1 --> S3[Optional nested split]
+
+    Main -. per-tab .-> C1[TabContext]
+    S1 -. per-tab .-> C2[TabContext]
+    S2 -. per-tab .-> C3[TabContext]
+```
+
+Each visible pane has its own TabContext; parked tabs remain open without necessarily keeping their page resources mounted. Main is a permanent root pane beside the Secondary tree — nested splits live only under Secondary.
+
+
 ## Workspace tabs
 
 Opening supported destinations creates or reuses PRKS tabs. Tabs can be switched, reordered, closed, or parked.
