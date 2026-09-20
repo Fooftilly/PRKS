@@ -455,6 +455,24 @@ class ListChangedPathsTests(unittest.TestCase):
             self.assertIn("origin/nope", message)
             self.assertIn("bad revision", message)
 
+    def test_option_like_base_fails_closed_without_running_git(self):
+        """A leading '-' would be parsed as a git option and report no changes."""
+        with mock.patch("subprocess.run") as run:
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(
+                    Path("/tmp/repo"), base="--relative=definitely-no-such-prefix"
+                )
+            self.assertIn("cannot start with", str(ctx.exception))
+            run.assert_not_called()
+
+    def test_diff_commands_terminate_revision_parsing(self):
+        """`--` stops git reading a base that is also a path as a pathspec."""
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_ok(""), _git_ok(""), _git_ok("")]
+            policy.list_changed_paths(Path("/tmp/repo"), base="origin/master")
+            for call in run.call_args_list[:2]:
+                self.assertEqual(call[0][0][-1], "--")
+
     def test_missing_git_executable_fails_closed(self):
         with mock.patch("subprocess.run", side_effect=FileNotFoundError("git")):
             with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
@@ -538,6 +556,29 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             self._git(repo, "init", "--quiet")
             with self.assertRaises(policy.ChangeDiscoveryError):
                 policy.list_changed_paths(repo, base="origin/definitely-missing")
+
+    def test_base_that_is_a_path_fails_closed(self):
+        """`--base backend` is a pathspec to git, and would diff nothing at all."""
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            self._git(repo, "init", "--quiet")
+            (repo / "backend").mkdir()
+            (repo / "backend" / "server.py").write_text("x = 1\n", encoding="utf-8")
+            self._git(repo, "add", "backend/server.py")
+            self._git(
+                repo,
+                "-c",
+                "user.email=e2e@example.invalid",
+                "-c",
+                "user.name=E2E",
+                "commit",
+                "--quiet",
+                "--no-gpg-sign",
+                "-m",
+                "seed",
+            )
+            with self.assertRaises(policy.ChangeDiscoveryError):
+                policy.list_changed_paths(repo, base="backend")
 
 
 class BenchmarkModeTests(unittest.TestCase):
@@ -1264,6 +1305,66 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
                 self.assertEqual(code, 0)
                 self.assertEqual(load_timings(timings_path)[test_id], 99.0)
+
+    def test_env_only_profiling_still_prints_the_infrastructure_profile(self):
+        """PRKS_E2E_PROFILE=1 pays the profiling cost, so it must show the report."""
+        import io
+        from contextlib import redirect_stdout
+
+        test_id = "tests.e2e.fake.BenchTests.test_x"
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            (repo / ".tests").mkdir()
+            last_path = repo / ".tests" / "e2e-last-failed.json"
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                os.environ["PRKS_E2E_PROFILE"] = "1"
+                with redirect_stdout(out):
+                    code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
+            self.assertEqual(code, 0)
+            printed = out.getvalue()
+            self.assertIn("E2E infrastructure profile", printed)
+            self.assertIn("seed_build", printed)
+            self.assertIn("benchmark mode (profile)", printed)
+
+    def test_benchmark_mode_does_not_clear_stale_last_failed_state(self):
+        """Pruning the stale file is a history mutation; benchmark runs skip it."""
+        import io
+        from contextlib import redirect_stdout
+        from tests.e2e import run as runner
+
+        known = ["tests.e2e.live.T.test_ok"]
+        stale = ["tests.e2e.gone.Old.test_a"]
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            last_path = repo / "e2e-last-failed.json"
+            policy.save_last_failed(last_path, stale, meta={"tier": "full"})
+            before = last_path.read_bytes()
+
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_PROFILE", None)
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                with contextlib.ExitStack() as stack:
+                    enter = stack.enter_context
+                    enter(mock.patch.object(runner, "REPO", repo))
+                    enter(mock.patch.object(runner, "LAST_FAILED_PATH", last_path))
+                    enter(
+                        mock.patch.object(
+                            runner, "discover_test_ids", return_value=known
+                        )
+                    )
+                    ensure = enter(
+                        mock.patch.object(runner, "ensure_chromium_installed")
+                    )
+                    with redirect_stdout(out):
+                        code = runner.main(["--last-failed", "--profile"])
+            self.assertEqual(code, 0)
+            ensure.assert_not_called()
+            self.assertTrue(last_path.is_file())
+            self.assertEqual(last_path.read_bytes(), before)
+            self.assertIn("leaves the state untouched", out.getvalue())
 
     def test_failed_last_failed_write_warns_and_keeps_previous_state(self):
         """A last-failed write that never commits is reported, not silently lost."""

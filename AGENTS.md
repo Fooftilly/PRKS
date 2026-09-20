@@ -2048,6 +2048,9 @@ its module/class prefix to the right feature's `selectors`.
 `--base` ref, unusable checkout, missing/failing `git`, or untracked-file
 discovery failure) the runner exits nonzero with a diagnostic instead of
 reporting zero affected tests. A genuine empty diff remains a successful no-op.
+`--base` must name a revision: a leading `-` is rejected and the diff
+terminates revision parsing with `--`, so an option-like or path-like base
+cannot quietly produce an empty selection.
 
 Benchmark/profile runs never train history. `--profile` / `--no-seed-cache`
 **and** their environment equivalents (`PRKS_E2E_PROFILE`,

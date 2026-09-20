@@ -1116,6 +1116,13 @@ def _main(argv=None) -> int:
         return 0
 
     if tier == "last-failed-stale":
+        if active_benchmark_modes:
+            # Clearing the file is a history mutation like any other.
+            print(
+                "last-failed: every persisted failure is stale, but benchmark mode "
+                "(%s) leaves the state untouched" % ",".join(active_benchmark_modes)
+            )
+            return 0
         last_failed_path = REPO / LAST_FAILED_PATH
         cleared = True
         if last_failed_path.is_file():
@@ -1184,7 +1191,7 @@ def _main(argv=None) -> int:
             test_ids, jobs, timings, args.fail_fast
         )
 
-    if args.profile and phase_timings:
+    if "profile" in active_benchmark_modes and phase_timings:
         totals = {}
         for phases in phase_timings.values():
             for name, seconds in phases.items():

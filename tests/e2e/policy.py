@@ -858,15 +858,25 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
     Fails closed: any Git/change-discovery failure raises ChangeDiscoveryError
     instead of degrading to an empty (and therefore "nothing affected") list.
     A genuinely empty diff still returns [].
+
+    `base` must name a revision. A leading "-" is rejected (git would parse it
+    as an option), and the "--" terminator stops git from silently reading a
+    base that happens to be an existing path as a pathspec; both otherwise exit
+    0 with no paths, which is the fail-open this guards against.
     """
     repo = Path(repo)
+    if base is not None and base.startswith("-"):
+        raise ChangeDiscoveryError(
+            "invalid --base %r: a revision cannot start with '-' "
+            "(git would read it as an option and report no changes)" % base
+        )
     ref = base or "HEAD"
     paths = []
     # Staged + unstaged vs ref — include deletes so removed production/E2E
     # files still drive feature selection.
     for line in _git_lines(
         repo,
-        ["diff", "--name-only", "--diff-filter=ACMRD", ref],
+        ["diff", "--name-only", "--diff-filter=ACMRD", ref, "--"],
         "change discovery vs %s" % ref,
     ):
         paths.append(line)
@@ -875,7 +885,7 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
     if base and base != "HEAD":
         for line in _git_lines(
             repo,
-            ["diff", "--name-only", "--diff-filter=ACMRD", "HEAD"],
+            ["diff", "--name-only", "--diff-filter=ACMRD", "HEAD", "--"],
             "local change discovery vs HEAD",
         ):
             if line not in paths:
