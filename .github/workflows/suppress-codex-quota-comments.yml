@@ -1,4 +1,4 @@
-name: Suppress Codex quota comments
+name: Suppress noisy review bot comments
 
 on:
   issue_comment:
@@ -11,13 +11,29 @@ permissions:
   pull-requests: write
 
 jobs:
-  remove-quota-comment:
+  remove-noise-comment:
     if: >-
-      contains(github.event.comment.body, 'You have reached your Codex usage limits') &&
-      contains(github.event.comment.body, 'code reviews') &&
       (
-        github.event.comment.user.login == 'chatgpt-codex-connector[bot]' ||
-        github.event.comment.performed_via_github_app.slug == 'chatgpt-codex-connector'
+        (
+          contains(github.event.comment.body, 'You have reached your Codex usage limits') &&
+          contains(github.event.comment.body, 'code reviews') &&
+          (
+            github.event.comment.user.login == 'chatgpt-codex-connector[bot]' ||
+            github.event.comment.performed_via_github_app.slug == 'chatgpt-codex-connector'
+          )
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          contains(github.event.comment.body, 'Great, no issues found!') &&
+          contains(
+            github.event.comment.body,
+            'Qodo reviewed your code and found no material issues that require review'
+          ) &&
+          (
+            github.event.comment.user.login == 'qodo-code-review[bot]' ||
+            github.event.comment.performed_via_github_app.slug == 'qodo-code-review'
+          )
+        )
       ) &&
       (
         github.event_name == 'pull_request_review_comment' ||
@@ -28,7 +44,7 @@ jobs:
     timeout-minutes: 2
 
     steps:
-      - name: Delete Codex quota comment
+      - name: Delete matched bot-noise comment
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
