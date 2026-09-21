@@ -33,7 +33,7 @@ import time
 import zipfile
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any, Callable, Iterator, Optional
 
 from backend.db_manager import PRKS_SCHEMA_VERSION
@@ -504,13 +504,12 @@ def _ensure_maintenance_dirs(config: StorageConfig) -> str:
 
 
 def _path_is_under(child: str, parent: str) -> bool:
-    """Return whether the resolved child is the parent or lies beneath it."""
+    """Return whether the real child is the parent or lies beneath it."""
     try:
-        parent_real = Path(parent).resolve(strict=False)
-        child_real = Path(child).resolve(strict=False)
-        child_real.relative_to(parent_real)
-        return True
-    except (OSError, RuntimeError, ValueError):
+        parent_real = os.path.realpath(parent)
+        child_real = os.path.realpath(child)
+        return os.path.commonpath((parent_real, child_real)) == parent_real
+    except (OSError, ValueError):
         return False
 
 
@@ -585,13 +584,11 @@ def _safe_remove_under(root: str, path: str) -> None:
     leaf = os.path.basename(normalized)
     if not leaf or leaf in (".", ".."):
         raise ValueError("refusing ambiguous removal path")
-    try:
-        root_real = Path(root).resolve(strict=False)
-        parent_real = Path(os.path.dirname(normalized)).resolve(strict=False)
-        parent_real.relative_to(root_real)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise ValueError("removal path escapes allowed root") from exc
-    _safe_remove(str(parent_real / leaf))
+    parent = os.path.dirname(normalized)
+    if not _path_is_under(parent, root):
+        raise ValueError("removal path escapes allowed root")
+    parent_real = os.path.realpath(parent)
+    _safe_remove(os.path.join(parent_real, leaf))
 
 
 def _dir_size_bytes(path: str) -> int:
@@ -1648,7 +1645,7 @@ def _staging_dir(config: StorageConfig, token: str) -> str:
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     root = os.path.join(maintenance_root(config), "restore-staging")
     candidate = os.path.join(root, token)
-    if not _path_is_under(candidate, root) or Path(candidate).resolve(strict=False) == Path(root).resolve(strict=False):
+    if not _path_is_under(candidate, root):
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     return candidate
 
