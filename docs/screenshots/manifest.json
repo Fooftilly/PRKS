@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "source_commit": null,
+  "capture_set": "legacy-existing",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_scale_factor": 1,
+  "theme": "light",
+  "generator": "scripts/capture_demo_screenshots.py",
+  "seed": "scripts/seed_demo_library.py",
+  "note": "Existing committed screenshots predate manifest tracking. Every expected PNG is listed without a capture revision until regenerated with scripts/update_demo_screenshots.py.",
+  "screenshots": [
+    {
+      "file": "folders.png",
+      "scenario": "public-domain-folder",
+      "source_commit": null
+    },
+    {
+      "file": "work.png",
+      "scenario": "origin-of-species-work-pdf",
+      "source_commit": null
+    },
+    {
+      "file": "people.png",
+      "scenario": "people-library",
+      "source_commit": null
+    },
+    {
+      "file": "all-folders.png",
+      "scenario": "folder-library",
+      "source_commit": null
+    },
+    {
+      "file": "tags.png",
+      "scenario": "tags",
+      "source_commit": null
+    },
+    {
+      "file": "search.png",
+      "scenario": "search-darwin",
+      "source_commit": null
+    },
+    {
+      "file": "progress.png",
+      "scenario": "progress-in-progress",
+      "source_commit": null
+    },
+    {
+      "file": "types.png",
+      "scenario": "file-types",
+      "source_commit": null
+    },
+    {
+      "file": "person.png",
+      "scenario": "darwin-person",
+      "source_commit": null
+    },
+    {
+      "file": "note.png",
+      "scenario": "commonplace-note",
+      "source_commit": null
+    },
+    {
+      "file": "group.png",
+      "scenario": "nineteenth-century-group",
+      "source_commit": null
+    }
+  ]
+}
