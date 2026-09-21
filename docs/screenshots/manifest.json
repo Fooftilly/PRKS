@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "source_commit": null,
-  "capture_set": "legacy-existing",
+  "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36",
+  "capture_set": "all",
   "viewport": {
     "width": 1440,
     "height": 900
@@ -10,62 +10,66 @@
   "theme": "light",
   "generator": "scripts/capture_demo_screenshots.py",
   "seed": "scripts/seed_demo_library.py",
-  "note": "Existing committed screenshots predate manifest tracking. Every expected PNG is listed without a capture revision until regenerated with scripts/update_demo_screenshots.py.",
+  "png_optimize": {
+    "library": "Pillow",
+    "version": "12.3.0",
+    "mode": "lossless"
+  },
   "screenshots": [
     {
       "file": "folders.png",
       "scenario": "public-domain-folder",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "work.png",
       "scenario": "origin-of-species-work-pdf",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "people.png",
       "scenario": "people-library",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "all-folders.png",
       "scenario": "folder-library",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "tags.png",
       "scenario": "tags",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "search.png",
       "scenario": "search-darwin",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "progress.png",
       "scenario": "progress-in-progress",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "types.png",
       "scenario": "file-types",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "person.png",
       "scenario": "darwin-person",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "note.png",
       "scenario": "commonplace-note",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     },
     {
       "file": "group.png",
       "scenario": "nineteenth-century-group",
-      "source_commit": null
+      "source_commit": "144d56f877bf2f99e9fe22aa3b292c6643d28c36"
     }
   ]
 }
