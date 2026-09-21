@@ -687,6 +687,22 @@ def _storage_root_identity(root_real: str) -> Optional[os.stat_result]:
         return None
 
 
+def _storage_root_keeps_identity(
+    root_real: str, expected: Optional[os.stat_result]
+) -> bool:
+    """Whether ``root_real`` still names the directory captured as ``expected``.
+
+    The portable branch has no descriptor to bind to, so this is the only way it
+    can tell that the pathname it is about to delete through still refers to the
+    directory the caller authorized. An absent expectation is not a pass: a
+    destructive path that cannot confirm what it is acting on must refuse.
+    """
+    if expected is None:
+        return False
+    current = _storage_root_identity(root_real)
+    return current is not None and os.path.samestat(current, expected)
+
+
 def _open_maintenance_subroot_from(
     root_real: str,
     *names: str,
@@ -902,13 +918,21 @@ def _remove_maintenance_child(
     # No descriptor support (native Windows). Verification and removal are both
     # path-based here, so they cannot be bound to one descriptor -- but they do
     # share the single root snapshot above, so retargeting config.root cannot
-    # redirect the cleanup. What remains is the narrower case of an actor
-    # replacing directories *inside* the already-authorized tree between the
-    # check and the unlink; _remove_reparse_aware() shrinks that further by
-    # never traversing a link or reparse point at any depth.
+    # redirect the cleanup.
     verified_root = _verified_maintenance_subroot_from(root_real, *subroot)
     if verified_root is None:
         return
+    # The snapshot is a pathname, and a pathname is not an identity: root_real
+    # itself can be renamed away and another real directory moved into its
+    # place, which every check above would follow without noticing. The
+    # descriptor branch catches that by fstat-ing what it opened; here the same
+    # captured identity is re-checked as late as possible instead.
+    if not _storage_root_keeps_identity(root_real, root_identity):
+        raise ValueError("storage root changed identity during removal")
+    # What remains is the narrower case of an actor replacing directories
+    # *inside* the already-authorized tree between this point and the unlink;
+    # _remove_reparse_aware() shrinks that further by never traversing a link or
+    # reparse point at any depth.
     _remove_proven_child(verified_root, leaf, None)
 
 
