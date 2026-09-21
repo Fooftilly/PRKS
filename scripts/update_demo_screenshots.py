@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlunparse
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -91,7 +92,9 @@ def _start_isolated_server(runtime: Path) -> tuple[subprocess.Popen, str, Path, 
 
     for attempt in range(SERVER_START_ATTEMPTS):
         port = _free_port()
-        origin = f"http://127.0.0.1:{port}"
+        # Isolated --testing child speaks plain HTTP on 127.0.0.1 only.
+        origin = urlunparse(("http", f"127.0.0.1:{port}", "", "", "", ""))  # NOSONAR python:S5332
+        origin = origin.rstrip("/")
         env = os.environ.copy()
         env["PRKS_TESTING"] = "1"
         env["PRKS_STORAGE"] = str(runtime)

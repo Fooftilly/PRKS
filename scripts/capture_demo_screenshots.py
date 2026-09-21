@@ -11,7 +11,7 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "docs" / "screenshots"
@@ -53,10 +53,10 @@ def _assert_loopback_base(base_url: str) -> str:
             "bases with no path/query; refusing remote or opaque URLs."
         )
     port = parsed.port
-    origin = f"http://{host}"
-    if port is not None:
-        origin = f"{origin}:{port}"
-    return origin
+    # PRKS `--testing` serves plain HTTP on loopback only; HTTPS is not configured.
+    netloc = f"{host}:{port}" if port is not None else host
+    origin = urlunparse(("http", netloc, "", "", "", ""))  # NOSONAR python:S5332
+    return origin.rstrip("/")
 
 
 def _get(base: str, path: str):
