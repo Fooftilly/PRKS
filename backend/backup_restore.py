@@ -571,54 +571,73 @@ def _backup_filename(dt: datetime) -> str:
 
 
 def _safe_remove(path: str) -> None:
-    """Remove one already-authorized path without following any symlink.
-
-    A link is unlinked, never traversed. Directory trees go through
-    ``shutil.rmtree``, whose fd-based implementation is symlink-attack
-    resistant where the platform supports it: the hand-rolled ``os.walk``
-    teardown this replaces re-opened every component by path, so a directory
-    swapped for a symlink mid-walk was followed.
-    """
+    """Remove one already-authorized path without following directory symlinks."""
     if not os.path.lexists(path):
         return
-    if os.path.islink(path) or not os.path.isdir(path):
+    if os.path.islink(path) or os.path.isfile(path):
         os.unlink(path)
         return
-    shutil.rmtree(path)
+    for dirpath, dirnames, filenames in os.walk(path, topdown=False, followlinks=False):
+        for name in filenames:
+            os.unlink(os.path.join(dirpath, name))
+        for name in dirnames:
+            child = os.path.join(dirpath, name)
+            if os.path.islink(child):
+                os.unlink(child)
+            elif os.path.isdir(child):
+                os.rmdir(child)
+            else:
+                os.unlink(child)
+    os.rmdir(path)
 
 
+# Descriptor-relative, no-follow removal needs POSIX-only open flags and fd
+# support. On a platform without them (native Windows) every reference below
+# would raise AttributeError, so the whole descriptor implementation is gated
+# and the portable path-based fallback is used instead.
 _SUPPORTS_DIR_FD = (
     os.unlink in os.supports_dir_fd
     and os.stat in os.supports_dir_fd
+    and os.open in os.supports_dir_fd
+    and os.listdir in os.supports_fd
     and hasattr(os, "O_DIRECTORY")
     and hasattr(os, "O_NOFOLLOW")
     and shutil.rmtree.avoids_symlink_attacks
 )
 
 
-def _remove_entry_at(dir_fd: int, name: str) -> None:
-    """Remove one entry relative to an open directory, never following a link."""
-    try:
-        st = os.lstat(name, dir_fd=dir_fd)
-    except FileNotFoundError:
-        return
-    if stat.S_ISDIR(st.st_mode):
-        shutil.rmtree(name, dir_fd=dir_fd)
-        return
-    os.unlink(name, dir_fd=dir_fd)
+def _verified_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[str]:
+    """Portable proof that a maintenance subroot is a real directory.
+
+    Returns its path, or None when it does not exist yet. Raises ValueError when
+    something is there that is not a real directory -- notably a symlink, which
+    a containment check cannot catch because it resolves both operands, so a
+    link planted at ``restore-staging`` would silently move the whole cleanup
+    scope outside the library.
+    """
+    current = os.path.realpath(config.root)
+    for name in (MAINTENANCE_DIRNAME, *names):
+        current = os.path.join(current, name)
+        if not os.path.lexists(current):
+            return None
+        if os.path.islink(current) or not os.path.isdir(current):
+            raise ValueError("maintenance subroot is not a real directory")
+    return current
 
 
 def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[int]:
-    """Open a maintenance subroot by descending from the storage root.
+    """Descriptor for a maintenance subroot, reached from the storage root.
 
     Every component below ``config.root`` is opened relative to the previous
-    descriptor with ``O_NOFOLLOW``, so the descriptor returned is the directory
-    that really sits at ``<storage>/.prks-maintenance/<names...>`` -- not
-    whatever a symlink planted at any level points at, and not whatever
-    replaces a component after a path-based check has passed. Returns None when
-    the subroot does not exist; raises ValueError when it exists but is not a
-    real directory.
+    descriptor with ``O_NOFOLLOW``, so the descriptor really is the directory at
+    ``<storage>/.prks-maintenance/<names...>`` -- not whatever a symlink planted
+    at any level points at, and not whatever replaces a component after a
+    path-based check has passed. Returns None when the subroot does not exist or
+    when the platform has no descriptor-relative removal; raises ValueError when
+    a component exists but is not a real directory.
     """
+    if not _SUPPORTS_DIR_FD:
+        return None
     try:
         fd = os.open(config.root, os.O_RDONLY | os.O_DIRECTORY)
     except FileNotFoundError:
@@ -643,6 +662,35 @@ def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[in
         os.close(fd)
         raise
     return fd
+
+
+def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
+    """Remove the entry of an already-proven subroot whose name equals ``leaf``.
+
+    The name handed to the syscall is the one the directory itself reports; the
+    caller's string only selects which enumerated entry to remove. Nothing
+    outside the enumerated subroot can therefore be named, and the entry is
+    never resolved, so a symlink is unlinked instead of followed.
+    """
+    try:
+        listing = os.listdir(root if dir_fd is None else dir_fd)
+    except OSError:
+        return
+    for entry in listing:
+        if entry != leaf:
+            continue
+        if dir_fd is None:
+            _safe_remove(os.path.join(root, entry))
+            return
+        try:
+            st = os.lstat(entry, dir_fd=dir_fd)
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(st.st_mode):
+            shutil.rmtree(entry, dir_fd=dir_fd)
+        else:
+            os.unlink(entry, dir_fd=dir_fd)
+        return
 
 
 def _remove_maintenance_child(
@@ -674,16 +722,15 @@ def _remove_maintenance_child(
         raise ValueError("removal path could not be resolved") from exc
     if parent_real != expected_root:
         raise ValueError("removal path is not a direct child of its maintenance root")
-    fd = _open_maintenance_subroot(config, *subroot)
-    if fd is None:
+    verified_root = _verified_maintenance_subroot(config, *subroot)
+    if verified_root is None:
         return
+    fd = _open_maintenance_subroot(config, *subroot)
     try:
-        if not _SUPPORTS_DIR_FD:
-            _safe_remove(os.path.join(expected_root, leaf))
-            return
-        _remove_entry_at(fd, leaf)
+        _remove_proven_child(verified_root, leaf, fd)
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
 
 
 def _dir_size_bytes(path: str) -> int:
@@ -1624,22 +1671,19 @@ def _safe_extract_dest(extract_root: str, arcname: str) -> str:
 
 def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None) -> None:
     _assert_testing_safe(config)
-    staging_root = _maintenance_subroot(config, *_STAGING_SUBROOT)
     try:
-        fd = _open_maintenance_subroot(config, *_STAGING_SUBROOT)
+        staging_root = _verified_maintenance_subroot(config, *_STAGING_SUBROOT)
     except ValueError:
         # Something is at restore-staging that is not a real directory. Skip
         # cleanup rather than delete through it; startup must not be blocked.
         LOGGER.error("restore_staging_cleanup_skipped reason=unsafe_staging_root")
         return
-    if fd is None:
+    if staging_root is None:
         return
     try:
-        names = os.listdir(fd)
+        names = os.listdir(staging_root)
     except OSError:
         return
-    finally:
-        os.close(fd)
     current = time.time() if now is None else now
     for name in names:
         child = os.path.join(staging_root, name)

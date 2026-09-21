@@ -458,6 +458,59 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         self.assertTrue(os.path.isdir(stale))
         self.assertTrue(os.path.isfile(victim))
 
+    def test_scoped_remove_stays_correct_without_descriptor_support(self):
+        """The portable fallback must behave identically on a platform without
+        O_DIRECTORY/O_NOFOLLOW (native Windows), where touching those flags at
+        all would raise AttributeError during startup cleanup."""
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+        link = os.path.join(staging_root, "leaf")
+        self._symlink_or_skip(victim, link)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+            backup_module.cleanup_stale_staging(cfg)
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, link
+            )
+            with self.assertRaises(ValueError):
+                backup_module._remove_maintenance_child(
+                    cfg,
+                    backup_module._STAGING_SUBROOT,
+                    os.path.join(staging_root, "sub", "deep"),
+                )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertFalse(os.path.lexists(link))
+        self.assertTrue(os.path.isfile(victim))
+        self.assertTrue(os.path.isdir(staging_root))
+
+    def test_scoped_remove_rejects_a_symlinked_subroot_without_descriptors(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside, victim = self._outside_victim()
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT),
+            directory=True,
+        )
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+            with self.assertRaises(ValueError):
+                backup_module._remove_maintenance_child(
+                    cfg,
+                    backup_module._STAGING_SUBROOT,
+                    os.path.join(outside, "victim.txt"),
+                )
+            backup_module.cleanup_stale_staging(cfg)
+
+        self.assertTrue(os.path.isfile(victim))
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)
