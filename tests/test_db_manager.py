@@ -983,40 +983,150 @@ class TestDBManager(unittest.TestCase):
         finally:
             shutil.rmtree(pdfs)
 
-    def test_safe_processing_path_requires_a_genuine_relative_path(self):
+    def test_safe_processing_path_rejects_path_shaped_input_everywhere(self):
         root = tempfile.mkdtemp()
         try:
             for unsafe in (
+                "",
+                ".",
+                "..",
                 "../sample.pdf",
                 "batch/../sample.pdf",
+                "batch/sample.pdf/..",
                 "/sample.pdf",
-                r"\\server\\share\\sample.pdf",
-                r"C:\sample.pdf",
+                "//server/share/sample.pdf",
+                r"\\server\share\sample.pdf",
+                "\\sample.pdf",
                 "batch//sample.pdf",
                 "batch/./sample.pdf",
+                "batch/sample.pdf/",
                 "bad\x00name.pdf",
             ):
                 with self.subTest(unsafe=unsafe):
                     self.assertIsNone(safe_processing_path_under_dir(root, unsafe))
+        finally:
+            shutil.rmtree(root)
+
+    def test_safe_processing_path_resolves_exact_relative_paths(self):
+        root = tempfile.mkdtemp()
+        try:
             expected = os.path.realpath(os.path.join(root, "batch", "sample.pdf"))
             self.assertEqual(
                 safe_processing_path_under_dir(root, "batch/sample.pdf"),
                 expected,
             )
-            self.assertEqual(
-                safe_processing_path_under_dir(root, r"batch\sample.pdf"),
-                expected,
-            )
-            self.assertEqual(
-                safe_processing_path_under_dir(root, "C:sample.pdf"),
-                os.path.realpath(os.path.join(root, "C:sample.pdf")),
-            )
+            # Leading whitespace is part of the directory name, not noise to trim.
             self.assertEqual(
                 safe_processing_path_under_dir(root, " batch/sample.pdf"),
                 os.path.realpath(os.path.join(root, " batch", "sample.pdf")),
             )
+            # A percent-encoded separator is a literal filename character here:
+            # rel_path is a filesystem path, never a URL, so nothing is decoded.
+            self.assertEqual(
+                safe_processing_path_under_dir(root, "batch%2Fsample.pdf"),
+                os.path.realpath(os.path.join(root, "batch%2Fsample.pdf")),
+            )
         finally:
             shutil.rmtree(root)
+
+    def test_safe_processing_path_keeps_posix_names_that_look_like_windows_paths(self):
+        root = tempfile.mkdtemp()
+        try:
+            # On POSIX these are ordinary filename characters. Rejecting them
+            # would make discovery advertise files that preview cannot serve and
+            # that import deletes as "no longer present".
+            for name in ("C:sample.pdf", r"C:\sample.pdf", r"batch\sample.pdf"):
+                with self.subTest(name=name):
+                    self.assertEqual(
+                        safe_processing_path_under_dir(
+                            root, name, windows_semantics=False
+                        ),
+                        os.path.realpath(os.path.join(root, name)),
+                    )
+        finally:
+            shutil.rmtree(root)
+
+    # Runs on every host: "\\" and "C:" only mean something on Windows.
+    def test_safe_processing_path_rejects_windows_drive_and_separator_spellings(self):
+        root = tempfile.mkdtemp()
+        try:
+            for unsafe in (
+                "C:sample.pdf",
+                "D:sample.pdf",
+                r"C:\sample.pdf",
+                r"batch\sample.pdf",
+                r"batch\..\..\sample.pdf",
+                "../sample.pdf",
+                "/sample.pdf",
+                "batch//sample.pdf",
+            ):
+                with self.subTest(unsafe=unsafe):
+                    self.assertIsNone(
+                        safe_processing_path_under_dir(
+                            root, unsafe, windows_semantics=True
+                        )
+                    )
+        finally:
+            shutil.rmtree(root)
+
+    @unittest.skipIf(os.name == "nt", "POSIX filename semantics")
+    def test_processing_backslash_name_survives_rescan_preview_and_import(self):
+        """Discovery, reconciliation, preview and import must agree byte-for-byte.
+
+        A POSIX filename containing a backslash used to be folded to '/' by some
+        consumers and not others: rescans re-inserted the row forever, and
+        preview resolved a different (or missing) file than import used.
+        """
+        processing_root = self.storage.processing_dir
+        odd_name = "weird\\name.pdf"
+        decoy_dir = os.path.join(processing_root, "weird")
+        os.makedirs(decoy_dir, exist_ok=True)
+        with open(os.path.join(processing_root, odd_name), "wb") as f:
+            f.write(b"%PDF-1.4 odd")
+        with open(os.path.join(decoy_dir, "name.pdf"), "wb") as f:
+            f.write(b"%PDF-1.4 decoy")
+
+        staged = self.db.scan_processing_files()
+        by_rel = {row["rel_path"]: row for row in staged}
+        self.assertIn(odd_name, by_rel)
+        self.assertIn("weird/name.pdf", by_rel)
+        self.assertEqual(by_rel[odd_name]["folder"], "/")
+
+        # A second scan must recognise the row it just wrote, not duplicate it.
+        staged_again = self.db.scan_processing_files()
+        self.assertEqual(
+            len([r for r in staged_again if r["rel_path"] == odd_name]), 1
+        )
+
+        row_id = by_rel[odd_name]["id"]
+        preview = self.db.get_processing_file_pdf_path(row_id)
+        self.assertEqual(preview, os.path.realpath(os.path.join(processing_root, odd_name)))
+        with open(preview, "rb") as f:
+            self.assertEqual(f.read(), b"%PDF-1.4 odd")
+
+        self.db.import_processing_file(row_id)
+        self.assertFalse(os.path.exists(os.path.join(processing_root, odd_name)))
+        self.assertTrue(os.path.isfile(os.path.join(decoy_dir, "name.pdf")))
+
+    def test_processing_preview_does_not_strip_into_a_different_file(self):
+        """A stored leading space must not make preview serve the unpadded file."""
+        processing_root = self.storage.processing_dir
+        padded_dir = os.path.join(processing_root, " batch")
+        plain_dir = os.path.join(processing_root, "batch")
+        os.makedirs(padded_dir, exist_ok=True)
+        os.makedirs(plain_dir, exist_ok=True)
+        with open(os.path.join(padded_dir, "sample.pdf"), "wb") as f:
+            f.write(b"%PDF-1.4 padded")
+        with open(os.path.join(plain_dir, "sample.pdf"), "wb") as f:
+            f.write(b"%PDF-1.4 plain")
+
+        staged = self.db.scan_processing_files()
+        by_rel = {row["rel_path"]: row for row in staged}
+        self.assertIn(" batch/sample.pdf", by_rel)
+
+        preview = self.db.get_processing_file_pdf_path(by_rel[" batch/sample.pdf"]["id"])
+        with open(preview, "rb") as f:
+            self.assertEqual(f.read(), b"%PDF-1.4 padded")
 
     def test_delete_work_with_unsafe_pdf_path_still_removes_row(self):
         w_id = self.db.add_work(title="Unsafe fp", file_path="/api/pdfs/..")

@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import posixpath
 import re
 import uuid
 import json
@@ -751,9 +752,19 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
 
 
 def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Managed filename a stored file_path can resolve to, matching current serving identity."""
-    fp = str(file_path or "")
-    if not fp or fp != fp.strip() or not fp.startswith("/api/pdfs/"):
+    """Managed filename a stored file_path can resolve to, matching current serving identity.
+
+    Deliberately looser than ``managed_pdf_filename()``. That helper answers
+    "does this row *own* a managed PDF?" and must be exact. This one answers
+    "could this row still be pointing at managed PDF X?" and is only ever used
+    to decide whether deleting bytes is safe, so it must over-approximate:
+    a malformed or legacy spelling that fails to resolve here would let cleanup
+    delete a PDF another row still references. Outer whitespace is therefore
+    tolerated, while the filename itself is preserved exactly rather than
+    normalized into some other managed resource.
+    """
+    fp = str(file_path or "").strip()
+    if not fp.startswith("/api/pdfs/"):
         return None
     segment = fp.split("/")[-1]
     name = os.path.basename(unquote(segment))
@@ -762,19 +773,41 @@ def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
     return name
 
 
-def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> Optional[str]:
-    """Resolve an explicitly relative processing path beneath processing_dir.
+_WINDOWS_PATH_SEMANTICS = os.name == "nt"
+_DRIVE_QUALIFIED_RE = re.compile(r"^[A-Za-z]:")
 
-    Absolute paths, drive-qualified paths, traversal, and ambiguous empty/dot
-    segments are rejected instead of being rewritten into a different path.
+
+def safe_processing_path_under_dir(
+    processing_dir: str,
+    relative_path: str,
+    *,
+    windows_semantics: bool = _WINDOWS_PATH_SEMANTICS,
+) -> Optional[str]:
+    """Resolve the exact stored relative processing path beneath processing_dir.
+
+    Discovery writes ``rel_path`` with ``/`` as the separator on every platform,
+    so the stored spelling is authoritative and is never rewritten here: every
+    consumer (listing, preview, import, deletion, reconciliation) resolves the
+    same bytes to the same file. Nothing is percent-decoded either, because a
+    ``%2F`` in a stored name is a literal filename character, not a separator.
+
+    Rejected: absolute and UNC-like spellings, traversal, empty/dot segments,
+    NUL, and -- where the platform gives them drive semantics -- backslash
+    separators and drive-qualified paths. On POSIX a backslash or a ``C:``
+    prefix is an ordinary filename character, so such names stay importable
+    instead of being dropped as unresolvable.
+
+    ``windows_semantics`` defaults to this platform and exists so the Windows
+    branch is exercised by the suite on any host; callers must not set it.
     """
     if relative_path is None:
         return None
-    raw_rel = str(relative_path)
-    if not raw_rel or not raw_rel.strip():
+    rel = str(relative_path)
+    if not rel or "\x00" in rel:
         return None
-    rel = raw_rel.replace("\\", "/")
-    if not rel or rel.startswith("/") or "\x00" in rel or re.match(r"^[A-Za-z]:/", rel):
+    if rel.startswith("/") or rel.startswith("\\"):
+        return None
+    if windows_semantics and ("\\" in rel or _DRIVE_QUALIFIED_RE.match(rel)):
         return None
     parts = rel.split("/")
     if any(part in ("", ".", "..") for part in parts):
@@ -1387,8 +1420,11 @@ class PRKSDatabase:
         roles: Optional[List[dict]] = None,
         tags: Optional[List[dict]] = None,
     ) -> dict:
-        rel_path = (row.get("rel_path") or "").replace("\\", "/")
-        folder_rel = os.path.dirname(rel_path).replace("\\", "/")
+        # rel_path is always '/'-separated (discovery normalizes os.sep). Keep it
+        # verbatim: rewriting a backslash here would report, and let the client
+        # address, a different file than the one that was discovered.
+        rel_path = row.get("rel_path") or ""
+        folder_rel = posixpath.dirname(rel_path)
         if folder_rel in ("", "."):
             folder_rel = "/"
         abs_path = (row.get("abs_path") or "").strip()
@@ -1396,7 +1432,7 @@ class PRKSDatabase:
         return {
             "id": row.get("id"),
             "rel_path": rel_path,
-            "filename": row.get("filename") or os.path.basename(rel_path),
+            "filename": row.get("filename") or posixpath.basename(rel_path),
             "folder": folder_rel,
             "status": row.get("status") or "pending",
             "last_error": row.get("last_error"),
@@ -1454,7 +1490,12 @@ class PRKSDatabase:
             ).fetchall()
             existing_by_rel: Dict[str, sqlite3.Row] = {}
             for row in existing_rows:
-                rel = str(row["rel_path"] or "").replace("\\", "/")
+                # Key on the stored spelling exactly as discovery wrote it.
+                # Folding '\\' into '/' made a discovered name containing a
+                # literal backslash miss its own row on every scan: the row was
+                # re-inserted as a duplicate and the DELETE below matched
+                # nothing, so rows accumulated without bound.
+                rel = str(row["rel_path"] or "")
                 if rel:
                     existing_by_rel[rel] = row
             inserts: List[tuple[str, str, str, str, str]] = []
@@ -1558,7 +1599,9 @@ class PRKSDatabase:
         if not rows:
             return None
         row = rows[0]
-        rel_path = (row.get("rel_path") or "").strip()
+        # The stored spelling is the file's identity: stripping it here would
+        # make preview resolve a different file than import and deletion do.
+        rel_path = row.get("rel_path") or ""
         if not rel_path.lower().endswith(".pdf"):
             return None
         processing_root = self.storage.processing_dir
