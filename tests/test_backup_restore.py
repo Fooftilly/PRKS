@@ -1715,6 +1715,64 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
         self.assertFalse(os.path.lexists(journal_file))
         self._assert_previous_library(cfg)
 
+    def _aged_rollback_tree(self, cfg, txn, age_seconds):
+        """A rollback tree holding previous-library bytes, aged by the clock."""
+        tree = os.path.join(cfg.root, ".prks-maintenance", "rollback", txn)
+        os.makedirs(os.path.join(tree, "pdfs"), exist_ok=True)
+        with open(os.path.join(tree, "pdfs", "previous.pdf"), "wb") as handle:
+            handle.write(b"PREVIOUS-LIBRARY")
+        stamp = time.time() - age_seconds
+        os.utime(tree, (stamp, stamp))
+        return tree
+
+    def test_startup_reclaims_a_rollback_tree_no_journal_can_name(self):
+        """The window the journal-first ordering leaves must not leak storage.
+
+        Exit after journal removal is confirmed but before its tree is removed,
+        and the next startup finds no journal -- so nothing names the tree, and
+        _rollback_from_journal() is its only reader. It is unreachable garbage
+        holding an entire previous library.
+        """
+        cfg = self._cfg()
+        tree = self._aged_rollback_tree(
+            cfg, _JOURNAL_TXN_B, backup_module.ROLLBACK_ORPHAN_TTL_SECONDS * 2
+        )
+
+        result = recover_incomplete_restore(cfg)
+
+        self.assertFalse(result["performed"])
+        self.assertFalse(os.path.lexists(tree))
+
+    def test_startup_leaves_a_fresh_rollback_tree_alone(self):
+        """apply_restore() creates the tree just before it writes the journal.
+
+        The age guard is what keeps this sweep from reaching into that window
+        and deleting the rollback material of a restore still in flight.
+        """
+        cfg = self._cfg()
+        tree = self._aged_rollback_tree(cfg, _JOURNAL_TXN_B, 0)
+
+        recover_incomplete_restore(cfg)
+
+        self.assertTrue(os.path.isdir(tree))
+
+    def test_a_failed_journal_removal_keeps_even_an_aged_rollback_tree(self):
+        """The sweep must be unreachable while a journal is still on disk.
+
+        Age alone must never authorize the removal: a tree a surviving journal
+        still names is replay material, not garbage, however old it looks.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+        stamp = time.time() - backup_module.ROLLBACK_ORPHAN_TTL_SECONDS * 2
+        os.utime(maint, (stamp, stamp))
+
+        with self._unenumerable_journal_dir():
+            with self.assertRaises(RestoreError):
+                recover_incomplete_restore(cfg)
+
+        self.assertTrue(os.path.isfile(journal_file))
+        self.assertTrue(os.path.isdir(maint))
+
     def test_replaying_a_journal_without_rollback_material_keeps_live_data(self):
         """Replay must not delete what it cannot put back.
 

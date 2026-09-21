@@ -56,6 +56,7 @@ CONFIRM_RESTORE = "RESTORE"
 IO_CHUNK_SIZE = 64 * 1024
 STAGING_TTL_SECONDS = 60 * 60
 READY_BACKUP_TTL_SECONDS = 60 * 60
+ROLLBACK_ORPHAN_TTL_SECONDS = 60 * 60
 _PROGRESS_EMIT_INTERVAL = 0.15
 _PROGRESS_PHASES = frozenset(
     {"snapshot", "archiving", "verifying", "ready", "cancelled", "failed"}
@@ -1970,6 +1971,63 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             _discard_maintenance_child(config, _STAGING_SUBROOT, child)
 
 
+def cleanup_orphan_rollback(config: StorageConfig, *, now: Optional[float] = None) -> None:
+    """Reclaim rollback trees that no journal can ever name again.
+
+    A rollback tree is only ever reached through a journal's transaction id --
+    ``_rollback_from_journal()`` is its single reader, and ``_rollback_dir()``
+    is only ever called with an id that came from a journal or from the restore
+    minting it. So once the journal is gone the tree is unreachable garbage,
+    and it can hold an entire previous library.
+
+    Recovery removes the journal first, deliberately: a surviving journal whose
+    rollback material was already cleaned is the combination that loses
+    canonical data. That ordering leaves a window -- exit after the journal is
+    confirmed gone but before its tree is removed, and the next startup finds no
+    journal and so nothing that names the tree. This sweep is what closes it.
+
+    Only safe where no journal is present, so it is called from
+    ``recover_incomplete_restore()`` alone and never from
+    ``cleanup_stale_staging()``, which also runs mid-restore. The age guard is
+    the second belt: ``apply_restore()`` creates the tree just before writing
+    the journal, and a tree that young is never touched here.
+    """
+    _assert_testing_safe(config)
+    try:
+        rollback_root = _verified_maintenance_subroot(config, *_ROLLBACK_SUBROOT)
+    except ValueError:
+        LOGGER.error("restore_rollback_cleanup_skipped reason=unsafe_rollback_root")
+        return
+    if rollback_root is None:
+        return
+    try:
+        names = os.listdir(rollback_root)
+    except OSError:
+        return
+    current = time.time() if now is None else now
+    for name in names:
+        child = os.path.join(rollback_root, name)
+        if os.path.islink(child):
+            _discard_maintenance_child(config, _ROLLBACK_SUBROOT, child)
+            continue
+        if not _TOKEN_RE.fullmatch(name):
+            continue
+        try:
+            age = current - os.path.getmtime(child)
+        except OSError:
+            age = ROLLBACK_ORPHAN_TTL_SECONDS + 1
+        if age < ROLLBACK_ORPHAN_TTL_SECONDS:
+            continue
+        LOGGER.info("restore_rollback_orphan_reclaimed")
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, child)
+
+
+def _sweep_maintenance_garbage(config: StorageConfig) -> None:
+    """The startup sweeps, run where the restore journal is known to be absent."""
+    cleanup_stale_staging(config)
+    cleanup_orphan_rollback(config)
+
+
 def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
     """Validate an uploaded archive in staging. Live storage is not modified."""
     _assert_testing_safe(config)
@@ -2626,7 +2684,7 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
     path = journal_path(config)
     result = {"performed": False, "outcome": None, "needs_reindex": False}
     if not os.path.lexists(path):
-        cleanup_stale_staging(config)
+        _sweep_maintenance_garbage(config)
         return result
     try:
         journal = _read_journal_file(path)
@@ -2656,7 +2714,7 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
         _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
         if staging_dir:
             _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
-        cleanup_stale_staging(config)
+        _sweep_maintenance_garbage(config)
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
         return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
@@ -2665,7 +2723,7 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
     _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
     if staging_dir:
         _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
-    cleanup_stale_staging(config)
+    _sweep_maintenance_garbage(config)
     LOGGER.info("restore_recovery_completed outcome=restored_previous")
     return {"performed": True, "outcome": "restored_previous", "needs_reindex": False}
 
