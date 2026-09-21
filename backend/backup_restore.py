@@ -944,6 +944,15 @@ def _remove_maintenance_child(
         finally:
             os.close(fd)
         return
+    # A None descriptor means one of two very different things, and only one of
+    # them is this branch's business. On a platform that has descriptors it
+    # means a component was absent during the O_NOFOLLOW descent -- so there is
+    # nothing to remove, and the subroot cannot hold the child either. Falling
+    # through would let an actor who renames a maintenance component away and
+    # back downgrade a descriptor-bound removal to a path-based one, which is
+    # exactly the weaker branch this boundary exists to avoid.
+    if _SUPPORTS_DIR_FD:
+        return
     # No descriptor support (native Windows). Verification and removal are both
     # path-based here, so they cannot be bound to one descriptor -- but they do
     # share the single root snapshot above, so retargeting config.root cannot

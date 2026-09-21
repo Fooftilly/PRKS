@@ -908,6 +908,41 @@ class TestBackupPathSafety(BackupRestoreTestCase):
 
         self.assertIn("identity", refusal)
 
+    def test_an_absent_component_does_not_downgrade_to_path_based_removal(self):
+        """A vanished component must not hand the removal to the weaker branch.
+
+        _open_maintenance_subroot_from() returns None both when the platform has
+        no descriptors and when a component was absent during the O_NOFOLLOW
+        descent. Treating the second like the first lets an actor who renames a
+        maintenance component away and back downgrade a descriptor-bound removal
+        to a path-based one -- and that branch is the raceable one.
+
+        The subroot stays on disk throughout; only the descent's open of it
+        fails, which is what a rename away and back looks like from here.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        cfg = self._cfg()
+        child = os.path.join(self._staging_root(cfg), "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+        subroot_name = backup_module._STAGING_SUBROOT[0]
+        real_open = os.open
+
+        def vanishing_open(path, *args, **kwargs):
+            if kwargs.get("dir_fd") is not None and path == subroot_name:
+                raise FileNotFoundError(2, "No such file or directory", path)
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(backup_module.os, "open", vanishing_open):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertTrue(
+            os.path.isdir(child),
+            "an absent component downgraded the removal to the path-based branch",
+        )
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)
