@@ -56,6 +56,7 @@ CONFIRM_RESTORE = "RESTORE"
 IO_CHUNK_SIZE = 64 * 1024
 STAGING_TTL_SECONDS = 60 * 60
 READY_BACKUP_TTL_SECONDS = 60 * 60
+ROLLBACK_ORPHAN_TTL_SECONDS = 60 * 60
 _PROGRESS_EMIT_INTERVAL = 0.15
 _PROGRESS_PHASES = frozenset(
     {"snapshot", "archiving", "verifying", "ready", "cancelled", "failed"}
@@ -454,6 +455,43 @@ def journal_path(config: StorageConfig) -> str:
     return os.path.join(maintenance_root(config), JOURNAL_FILENAME)
 
 
+# The three destructive scopes restore cleanup is allowed to touch. Each is a
+# fixed name under the maintenance root, never a caller-supplied string.
+_STAGING_SUBROOT: tuple[str, ...] = ("restore-staging",)
+_ROLLBACK_SUBROOT: tuple[str, ...] = ("rollback",)
+_JOURNAL_SUBROOT: tuple[str, ...] = ()
+
+
+def _maintenance_subroot(config: StorageConfig, *names: str) -> str:
+    """Expected path of a maintenance subroot, anchored to the storage root.
+
+    ``config.root`` is operator-supplied and may legitimately be a symlink, so
+    it is resolved once and everything below it is expected to be real. The
+    result is what a maintenance path *must* resolve to; it is not evidence
+    that the directory on disk actually is that.
+    """
+    return _maintenance_subroot_from(_resolved_storage_root(config), *names)
+
+
+def _resolved_storage_root(config: StorageConfig) -> str:
+    """One canonical snapshot of the storage root.
+
+    ``config.root`` is operator-supplied and may legitimately be a symlink. Each
+    destructive operation resolves it exactly once and reuses the result, so a
+    link or junction retargeted mid-operation cannot make authorization and
+    removal refer to different trees.
+    """
+    try:
+        return os.path.realpath(config.root)
+    except OSError as exc:
+        raise ValueError("storage root could not be resolved") from exc
+
+
+def _maintenance_subroot_from(root_real: str, *names: str) -> str:
+    """Expected maintenance path beneath an already-resolved storage root."""
+    return os.path.join(root_real, MAINTENANCE_DIRNAME, *names)
+
+
 def _assert_testing_safe(config: StorageConfig) -> None:
     testing = config.mode == "testing"
     paths.assert_safe_testing_path(config.root, testing=testing, what="PRKS_STORAGE")
@@ -494,22 +532,23 @@ def _mkdir_owner(path: str) -> None:
 
 
 def _ensure_maintenance_dirs(config: StorageConfig) -> str:
-    root = maintenance_root(config)
     _mkdir_owner(config.root)
+    root = _maintenance_subroot(config)
     _mkdir_owner(root)
     _mkdir_owner(os.path.join(root, "backup"))
-    _mkdir_owner(os.path.join(root, "restore-staging"))
-    _mkdir_owner(os.path.join(root, "rollback"))
+    _mkdir_owner(os.path.join(root, *_STAGING_SUBROOT))
+    _mkdir_owner(os.path.join(root, *_ROLLBACK_SUBROOT))
     return root
 
 
 def _path_is_under(child: str, parent: str) -> bool:
-    parent_real = os.path.realpath(parent)
-    child_real = os.path.realpath(child)
-    if child_real == parent_real:
-        return True
-    prefix = parent_real + os.sep
-    return child_real.startswith(prefix)
+    """Return whether the real child is the parent or lies beneath it."""
+    try:
+        parent_real = os.path.realpath(parent)
+        child_real = os.path.realpath(child)
+        return os.path.commonpath((parent_real, child_real)) == parent_real
+    except (OSError, ValueError):
+        return False
 
 
 def processing_is_under_storage(config: StorageConfig) -> bool:
@@ -552,6 +591,7 @@ def _backup_filename(dt: datetime) -> str:
 
 
 def _safe_remove(path: str) -> None:
+    """Remove one already-authorized path without following directory symlinks."""
     if not os.path.lexists(path):
         return
     if os.path.islink(path) or os.path.isfile(path):
@@ -569,6 +609,419 @@ def _safe_remove(path: str) -> None:
             else:
                 os.unlink(child)
     os.rmdir(path)
+
+
+# Descriptor-relative, no-follow removal needs POSIX-only open flags and fd
+# support. On a platform without them (native Windows) every reference below
+# would raise AttributeError, so the whole descriptor implementation is gated
+# and the portable path-based fallback is used instead.
+_SUPPORTS_DIR_FD = (
+    os.unlink in os.supports_dir_fd
+    and os.stat in os.supports_dir_fd
+    and os.open in os.supports_dir_fd
+    and os.listdir in os.supports_fd
+    and hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and shutil.rmtree.avoids_symlink_attacks
+)
+
+
+def _is_directory_reparse_point(path: str) -> bool:
+    """A directory reparse point that ``os.path.islink()`` does not report.
+
+    NTFS junctions are the case that matters: ``islink()`` is False for them and
+    ``os.walk(followlinks=False)`` does not treat them as links either, so a
+    junction planted at a maintenance subroot would otherwise pass verification
+    and let path-based cleanup reach its target. ``os.path.isjunction()`` is
+    always False on POSIX, so this costs nothing there.
+    """
+    checker = getattr(os.path, "isjunction", None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker(path))
+    except OSError:
+        return False
+
+
+def _verified_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[str]:
+    """Portable proof that a maintenance subroot is a real directory.
+
+    Returns its path, or None when it does not exist yet. Raises ValueError when
+    something is there that is not a real directory -- notably a symlink, which
+    a containment check cannot catch because it resolves both operands, so a
+    link planted at ``restore-staging`` would silently move the whole cleanup
+    scope outside the library. Directory reparse points are rejected too; see
+    ``_is_directory_reparse_point()``.
+    """
+    return _verified_maintenance_subroot_from(_resolved_storage_root(config), *names)
+
+
+def _verified_maintenance_subroot_from(
+    root_real: str, *names: str
+) -> Optional[str]:
+    """``_verified_maintenance_subroot()`` against a caller's root snapshot."""
+    current = root_real
+    for name in (MAINTENANCE_DIRNAME, *names):
+        current = os.path.join(current, name)
+        if not os.path.lexists(current):
+            return None
+        if (
+            os.path.islink(current)
+            or _is_directory_reparse_point(current)
+            or not os.path.isdir(current)
+        ):
+            raise ValueError("maintenance subroot is not a real directory")
+    return current
+
+
+def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[int]:
+    """Descriptor for a maintenance subroot, reached from the storage root."""
+    identity = _storage_root_identity(config.root)
+    return _open_maintenance_subroot_from(
+        _resolved_storage_root(config), *names, expect_identity=identity
+    )
+
+
+def _storage_root_identity(root: str) -> os.stat_result:
+    """Identity of the storage root, captured before it is canonicalized.
+
+    Takes the *configured* path and follows it, because the operator symlink at
+    ``config.root`` is legitimate and its target is what the identity describes.
+    Capturing after ``realpath()`` would capture whatever is at the canonical
+    pathname by then -- so a directory swapped in between the two would become
+    the identity every later check agrees with, and the guard would certify the
+    replacement instead of catching it.
+
+    A stat that fails here is not a benign absence either. It is the rename
+    window this identity exists to catch: the root vanishes precisely because
+    someone moved it, and ``os.path.realpath()`` is non-strict, so the
+    authorization check downstream would still pass on the pathname it left
+    behind. Refusing is the only reading that cannot be turned into a deletion
+    somewhere else.
+    """
+    try:
+        return os.stat(root)
+    except OSError as exc:
+        raise ValueError("storage root identity could not be captured") from exc
+
+
+def _storage_root_keeps_identity(root_real: str, expected: os.stat_result) -> bool:
+    """Whether ``root_real`` still names the directory captured as ``expected``.
+
+    The portable branch has no descriptor to bind to, so this is the only way it
+    can tell that the pathname it is about to delete through still refers to the
+    directory the caller authorized. A root that cannot be stat-ed now is not a
+    pass either: a destructive path that cannot confirm what it is acting on
+    must refuse.
+    """
+    try:
+        current = os.stat(root_real)
+    except OSError:
+        return False
+    return os.path.samestat(current, expected)
+
+
+def _open_maintenance_subroot_from(
+    root_real: str,
+    *names: str,
+    expect_identity: os.stat_result,
+) -> Optional[int]:
+    """``_open_maintenance_subroot()`` anchored to a caller's root snapshot.
+
+    Every component below the root is opened relative to the previous descriptor
+    with ``O_NOFOLLOW``, so the descriptor really is the directory at
+    ``<storage>/.prks-maintenance/<names...>`` -- not whatever a symlink planted
+    at any level points at, and not whatever replaces a component after a
+    path-based check has passed.
+
+    The descent starts from ``root_real``, never from ``config.root``. Opening
+    the operator-supplied path here would re-resolve that symlink independently
+    of the snapshot the caller authorized against, so a retarget between the two
+    could bind this descriptor to a different maintenance tree.
+
+    The root open itself is anchored twice over, because a pathname is not an
+    identity. ``root_real`` is already fully resolved and so must not be a
+    symlink: ``O_NOFOLLOW`` makes a link swapped in after resolution fail closed
+    rather than be followed. And ``expect_identity``, captured by the caller
+    before it authorized, is compared against the opened descriptor, which
+    catches the swap ``O_NOFOLLOW`` cannot see -- a different *real* directory
+    renamed into place. Either way the descent runs in the directory the caller
+    authorized, or not at all.
+
+    ``expect_identity`` is required rather than optional so that the comparison
+    cannot be skipped: an absent identity means the root could not be stat-ed,
+    which is the attack rather than an excuse to stop checking.
+
+    Returns None when the subroot does not exist or when the platform has no
+    descriptor-relative removal; raises ValueError when a component exists but
+    is not a real directory.
+    """
+    if not _SUPPORTS_DIR_FD:
+        return None
+    try:
+        fd = os.open(
+            root_real, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("storage root is not a real directory") from exc
+    if not os.path.samestat(os.fstat(fd), expect_identity):
+        os.close(fd)
+        raise ValueError("storage root changed identity during removal")
+    handed_over = False
+    try:
+        for name in (MAINTENANCE_DIRNAME, *names):
+            try:
+                nxt = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=fd,
+                )
+            except FileNotFoundError:
+                return None
+            except OSError as exc:
+                raise ValueError("maintenance subroot is not a real directory") from exc
+            os.close(fd)
+            fd = nxt
+        handed_over = True
+        return fd
+    finally:
+        # Every exit but a successful hand-off closes the descriptor. A bare
+        # `except` is not enough: the early return for a missing component is
+        # not an exception, so it leaked one descriptor per call -- and a
+        # missing subroot is a normal path, e.g. discarding rollback state that
+        # is already gone.
+        if not handed_over:
+            os.close(fd)
+
+
+def _remove_link_entry(path: str) -> None:
+    """Remove a link-like entry itself, never its target.
+
+    A Windows directory symlink or junction is removed with ``rmdir``, not
+    ``unlink``, so both are attempted.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        os.rmdir(path)
+
+
+def _remove_reparse_aware(path: str) -> None:
+    """Remove one already-authorized path, treating reparse points as links.
+
+    The maintenance boundary's own teardown for the platform that has no
+    descriptors. ``_safe_remove()`` is shared by a dozen callers outside this
+    boundary and treats only ``os.path.islink()`` as link-like, which misses an
+    NTFS junction: ``os.walk(followlinks=False)`` descends into one and would
+    delete its target. Here a junction is removed as the reparse entry it is and
+    never traversed, at the root or at any depth.
+
+    The walk is iterative so a deep staging tree cannot exhaust the stack.
+    """
+    if not os.path.lexists(path):
+        return
+    if os.path.islink(path) or _is_directory_reparse_point(path):
+        _remove_link_entry(path)
+        return
+    if not os.path.isdir(path):
+        os.unlink(path)
+        return
+    pending = [path]
+    directories: list[str] = []
+    while pending:
+        current = pending.pop()
+        directories.append(current)
+        with os.scandir(current) as entries:
+            for entry in entries:
+                child = entry.path
+                if entry.is_symlink() or _is_directory_reparse_point(child):
+                    _remove_link_entry(child)
+                elif entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+                else:
+                    os.unlink(child)
+    for directory in reversed(directories):
+        os.rmdir(directory)
+
+
+def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
+    """Remove the entry of an already-proven subroot whose name equals ``leaf``.
+
+    The name handed to the syscall is the one the directory itself reports; the
+    caller's string only selects which enumerated entry to remove. Nothing
+    outside the enumerated subroot can therefore be named, and the entry is
+    never resolved, so a symlink is unlinked instead of followed.
+
+    An enumeration failure propagates and is never swallowed: "the directory
+    could not be listed" must not be indistinguishable from "the child is
+    already gone", because callers read a quiet return as proof of removal.
+    A leaf that is genuinely absent from the listing is still a no-op.
+    """
+    listing = os.listdir(root if dir_fd is None else dir_fd)
+    for entry in listing:
+        if entry != leaf:
+            continue
+        if dir_fd is None:
+            _remove_reparse_aware(os.path.join(root, entry))
+            return
+        try:
+            st = os.lstat(entry, dir_fd=dir_fd)
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(st.st_mode):
+            shutil.rmtree(entry, dir_fd=dir_fd)
+        else:
+            os.unlink(entry, dir_fd=dir_fd)
+        return
+
+
+def _remove_maintenance_child(
+    config: StorageConfig, subroot: tuple[str, ...], path: str
+) -> None:
+    """Remove exactly one direct child of a maintenance subroot.
+
+    Every restore cleanup removes a single direct child of its own subroot -- a
+    staging token directory, a rollback transaction directory, or the restore
+    journal -- so the contract is stated that way rather than as the weaker
+    "somewhere beneath a root". Naming the subroot by ``config`` plus its fixed
+    name, instead of accepting a root string, keeps the authorization rule
+    structural: a caller cannot widen its own scope, and a symlink planted at
+    the subroot cannot redefine it (a path-based containment check resolves
+    both operands, so such a link would otherwise pass).
+
+    The removal is then performed relative to the subroot's descriptor, so
+    nothing swapped in after the check can redirect it, and the child itself is
+    never resolved: a symlink leaf is unlinked, not followed to its target.
+
+    Where descriptors exist there is exactly one resolution: the O_NOFOLLOW
+    descent that proves each component is a real directory produces the very
+    descriptor the removal runs against, so no separately resolved path can
+    disagree with what is acted on. The portable fallback cannot bind that way
+    -- see the comment on its branch.
+    """
+    # The identity is taken first, from the configured path, because it is the
+    # anchor everything else is judged against and so must predate the rest.
+    # Capturing it after canonicalization would capture whatever is at the
+    # canonical pathname by then, which a swap landing in between makes the
+    # replacement -- and every later check would then faithfully agree with it.
+    root_identity = _storage_root_identity(config.root)
+    # One canonical snapshot for the whole operation. Resolving config.root
+    # again between authorization and removal is what let a symlink or junction
+    # retargeted at that moment point the two at different trees.
+    root_real = _resolved_storage_root(config)
+    # Two independent observations that must agree, which is what makes the
+    # window between them checkable: a retarget of the operator symlink, or a
+    # directory moved into the canonical pathname, lands here rather than
+    # silently redefining what the rest of the operation protects.
+    if not _storage_root_keeps_identity(root_real, root_identity):
+        raise ValueError("storage root changed identity during removal")
+    expected_root = _maintenance_subroot_from(root_real, *subroot)
+    normalized = os.path.abspath(path)
+    leaf = os.path.basename(normalized)
+    if not leaf or leaf in (".", ".."):
+        raise ValueError("refusing ambiguous removal path")
+    try:
+        parent_real = os.path.realpath(os.path.dirname(normalized))
+    except OSError as exc:
+        raise ValueError("removal path could not be resolved") from exc
+    if parent_real != expected_root:
+        raise ValueError("removal path is not a direct child of its maintenance root")
+    fd = _open_maintenance_subroot_from(
+        root_real, *subroot, expect_identity=root_identity
+    )
+    if fd is not None:
+        # Bound to the descriptor the O_NOFOLLOW descent produced, and that
+        # descent starts from the same root_real the authorization check above
+        # used. expected_root is inert here: _remove_proven_child() consults it
+        # only without a descriptor. Re-resolving config.root for the open would
+        # let a retarget between the check and the open bind this descriptor to
+        # a different maintenance tree.
+        try:
+            _remove_proven_child(expected_root, leaf, fd)
+        finally:
+            os.close(fd)
+        return
+    # A None descriptor means one of two very different things, and only one of
+    # them is this branch's business. On a platform that has descriptors it
+    # means a component was absent during the O_NOFOLLOW descent -- so there is
+    # nothing to remove, and the subroot cannot hold the child either. Falling
+    # through would let an actor who renames a maintenance component away and
+    # back downgrade a descriptor-bound removal to a path-based one, which is
+    # exactly the weaker branch this boundary exists to avoid.
+    if _SUPPORTS_DIR_FD:
+        return
+    # No descriptor support (native Windows). Verification and removal are both
+    # path-based here, so they cannot be bound to one descriptor -- but they do
+    # share the single root snapshot above, so retargeting config.root cannot
+    # redirect the cleanup.
+    verified_root = _verified_maintenance_subroot_from(root_real, *subroot)
+    if verified_root is None:
+        return
+    # The snapshot is a pathname, and a pathname is not an identity: root_real
+    # itself can be renamed away and another real directory moved into its
+    # place, which every check above would follow without noticing. The
+    # descriptor branch catches that by fstat-ing what it opened; here the same
+    # captured identity is re-checked as late as possible instead.
+    if not _storage_root_keeps_identity(root_real, root_identity):
+        raise ValueError("storage root changed identity during removal")
+    # What remains is the narrower case of an actor replacing directories
+    # *inside* the already-authorized tree between this point and the unlink;
+    # _remove_reparse_aware() shrinks that further by never traversing a link or
+    # reparse point at any depth.
+    _remove_proven_child(verified_root, leaf, None)
+
+
+def _discard_maintenance_child(
+    config: StorageConfig, subroot: tuple[str, ...], path: str
+) -> None:
+    """Best-effort cleanup of maintenance garbage: log and carry on.
+
+    For entries whose survival is untidy but harmless. *Recovery's* journal
+    removal must use ``_remove_journal_or_fail()`` instead: that is the point
+    where a surviving journal would later be replayed against rollback state
+    this pass has already cleaned.
+
+    ``apply_restore()`` removes the journal through this helper deliberately. On
+    its rollback path raising here would mask the failure that triggered the
+    rollback, and after commit a surviving journal only ever replays as
+    ``keep_restored``. Either way a refused removal has deleted nothing, so
+    logging one is safe.
+    """
+    try:
+        _remove_maintenance_child(config, subroot, path)
+    except Exception as exc:
+        LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
+
+
+def _remove_journal_or_fail(config: StorageConfig) -> None:
+    """Remove the restore journal and prove it is gone.
+
+    The journal is what a later startup replays, so its removal is the commit
+    point of recovery: nothing that makes replay unsafe may happen until the
+    file is confirmed absent. A silently-failed removal that left the journal
+    behind while rollback state was cleaned would make the next startup roll
+    back a library whose rollback material no longer exists.
+    """
+    path = journal_path(config)
+    cause: Optional[Exception] = None
+    try:
+        _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
+    except Exception as exc:
+        cause = exc
+    if cause is None and not os.path.lexists(path):
+        return
+    LOGGER.error(
+        "restore_recovery_failed reason=journal_not_removed error_type=%s",
+        safe_error_type(cause) if cause is not None else "JournalStillPresent",
+    )
+    raise RestoreError(
+        "journal_not_removed",
+        "Incomplete restore could not be recovered.",
+        http_status=500,
+    ) from cause
 
 
 def _dir_size_bytes(path: str) -> int:
@@ -1507,21 +1960,44 @@ def _safe_extract_dest(extract_root: str, arcname: str) -> str:
     return dest
 
 
+def _sweep_entries(
+    config: StorageConfig, subroot: tuple[str, ...], *, event: str
+) -> list[tuple[str, str]]:
+    """Direct children of a verified maintenance subroot, ready to sweep.
+
+    Shared by the startup sweeps. A subroot that is not a real directory yields
+    nothing and is logged rather than deleted through: startup must not be
+    blocked, and must not delete through whatever is standing there. A link
+    among the entries is removed rather than returned -- neither sweep has any
+    use for one, and following it is what this boundary exists to prevent.
+    """
+    try:
+        root = _verified_maintenance_subroot(config, *subroot)
+    except ValueError:
+        LOGGER.error("%s reason=unsafe_root", event)
+        return []
+    if root is None:
+        return []
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    entries: list[tuple[str, str]] = []
+    for name in names:
+        child = os.path.join(root, name)
+        if os.path.islink(child):
+            _discard_maintenance_child(config, subroot, child)
+            continue
+        entries.append((name, child))
+    return entries
+
+
 def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None) -> None:
     _assert_testing_safe(config)
-    staging_root = os.path.join(maintenance_root(config), "restore-staging")
-    if not os.path.isdir(staging_root):
-        return
     current = time.time() if now is None else now
-    try:
-        names = os.listdir(staging_root)
-    except OSError:
-        return
-    for name in names:
-        child = os.path.join(staging_root, name)
-        if os.path.islink(child):
-            _safe_remove(child)
-            continue
+    for name, child in _sweep_entries(
+        config, _STAGING_SUBROOT, event="restore_staging_cleanup_skipped"
+    ):
         if os.path.isfile(child):
             if not name.startswith(".upload-"):
                 continue
@@ -1530,7 +2006,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except OSError:
                 age = STAGING_TTL_SECONDS + 1
             if age >= STAGING_TTL_SECONDS:
-                _safe_remove(child)
+                _discard_maintenance_child(config, _STAGING_SUBROOT, child)
             continue
         if not _TOKEN_RE.fullmatch(name):
             continue
@@ -1546,7 +2022,51 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 expired = True
         if expired:
-            _safe_remove(child)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, child)
+
+
+def cleanup_orphan_rollback(config: StorageConfig, *, now: Optional[float] = None) -> None:
+    """Reclaim rollback trees that no journal can ever name again.
+
+    A rollback tree is only ever reached through a journal's transaction id --
+    ``_rollback_from_journal()`` is its single reader, and ``_rollback_dir()``
+    is only ever called with an id that came from a journal or from the restore
+    minting it. So once the journal is gone the tree is unreachable garbage,
+    and it can hold an entire previous library.
+
+    Recovery removes the journal first, deliberately: a surviving journal whose
+    rollback material was already cleaned is the combination that loses
+    canonical data. That ordering leaves a window -- exit after the journal is
+    confirmed gone but before its tree is removed, and the next startup finds no
+    journal and so nothing that names the tree. This sweep is what closes it.
+
+    Only safe where no journal is present, so it is called from
+    ``recover_incomplete_restore()`` alone and never from
+    ``cleanup_stale_staging()``, which also runs mid-restore. The age guard is
+    the second belt: ``apply_restore()`` creates the tree just before writing
+    the journal, and a tree that young is never touched here.
+    """
+    _assert_testing_safe(config)
+    current = time.time() if now is None else now
+    for name, child in _sweep_entries(
+        config, _ROLLBACK_SUBROOT, event="restore_rollback_cleanup_skipped"
+    ):
+        if not _TOKEN_RE.fullmatch(name):
+            continue
+        try:
+            age = current - os.path.getmtime(child)
+        except OSError:
+            age = ROLLBACK_ORPHAN_TTL_SECONDS + 1
+        if age < ROLLBACK_ORPHAN_TTL_SECONDS:
+            continue
+        LOGGER.info("restore_rollback_orphan_reclaimed")
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, child)
+
+
+def _sweep_maintenance_garbage(config: StorageConfig) -> None:
+    """The startup sweeps, run where the restore journal is known to be absent."""
+    cleanup_stale_staging(config)
+    cleanup_orphan_rollback(config)
 
 
 def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
@@ -1556,7 +2076,7 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
     if not os.path.isfile(upload_path):
         raise RestoreError("missing_archive", "Backup archive could not be read.")
     token = secrets.token_urlsafe(24)
-    staging_dir = os.path.join(maintenance_root(config), "restore-staging", token)
+    staging_dir = _staging_dir(config, token)
     tree_dir = os.path.join(staging_dir, "tree")
     archive_dest = os.path.join(staging_dir, "archive" + BACKUP_EXTENSION)
     _mkdir_owner(staging_dir)
@@ -1608,11 +2128,11 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
         )
     except RestoreError as exc:
         LOGGER.error("restore_staged reason=%s error_type=%s", exc.reason, safe_error_type(exc))
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_staged reason=internal error_type=%s", safe_error_type(exc))
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "internal",
             "Backup could not be verified. Current PRKS data was not changed.",
@@ -1623,7 +2143,16 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
 def _staging_dir(config: StorageConfig, token: str) -> str:
     if not _TOKEN_RE.fullmatch(token or ""):
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
-    return os.path.join(maintenance_root(config), "restore-staging", token)
+    root = _maintenance_subroot(config, *_STAGING_SUBROOT)
+    candidate = os.path.join(root, token)
+    # Two separate escapes: the subroot itself being a symlink (a containment
+    # check resolves both operands, so it would otherwise pass), and the token
+    # directory being one.
+    if os.path.realpath(os.path.dirname(candidate)) != root:
+        raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
+    if not _path_is_under(candidate, root):
+        raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
+    return candidate
 
 
 def _load_staging_meta(config: StorageConfig, token: str) -> dict[str, Any]:
@@ -1638,10 +2167,10 @@ def _load_staging_meta(config: StorageConfig, token: str) -> dict[str, Any]:
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404) from exc
     created = float(meta.get("created_unix") or 0)
     if created <= 0 or (time.time() - created) > STAGING_TTL_SECONDS:
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     if not meta.get("verified"):
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     return meta
 
@@ -1656,6 +2185,18 @@ def _component_live_path(config: StorageConfig, name: str) -> str:
     if name == "processing":
         return config.processing_dir
     raise RestoreError("internal", "Restore could not complete.", http_status=500)
+
+
+def _rollback_dir(config: StorageConfig, transaction_id: str) -> str:
+    if not _TOKEN_RE.fullmatch(transaction_id or ""):
+        raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
+    root = _maintenance_subroot(config, *_ROLLBACK_SUBROOT)
+    candidate = os.path.join(root, transaction_id)
+    if os.path.realpath(os.path.dirname(candidate)) != root:
+        raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
+    if not _path_is_under(candidate, root):
+        raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
+    return candidate
 
 
 def _component_staged_path(tree_dir: str, name: str) -> str:
@@ -1792,6 +2333,32 @@ def _remove_live_component(config: StorageConfig, name: str) -> None:
                 _safe_remove(side)
 
 
+def _restore_rollback_sidecars(config: StorageConfig, rollback_root: str, name: str) -> None:
+    """Move a component's remaining rollback sidecars onto the live path.
+
+    Only the database has any. Each moves independently, so a pass that crashed
+    between the main file and its sidecars can be completed by a later one --
+    a WAL can hold committed pages, and abandoning it loses them.
+    """
+    if name != "database":
+        return
+    live = _component_live_path(config, name)
+    rolled_dir = os.path.dirname(_rollback_component_path(config, rollback_root, name))
+    base = os.path.basename(config.db_path)
+    pending = [
+        (os.path.join(rolled_dir, base + suffix), live + suffix)
+        for suffix in ("-wal", "-shm", "-journal")
+    ]
+    pending = [(src, dest) for src, dest in pending if os.path.lexists(src)]
+    if not pending:
+        return
+    parent = os.path.dirname(live)
+    if parent:
+        _mkdir_owner(parent)
+    for src, dest in pending:
+        os.replace(src, dest)
+
+
 def _restore_rollback_component(config: StorageConfig, rollback_root: str, name: str) -> None:
     live = _component_live_path(config, name)
     rolled = _rollback_component_path(config, rollback_root, name)
@@ -1801,23 +2368,35 @@ def _restore_rollback_component(config: StorageConfig, rollback_root: str, name:
     if parent:
         _mkdir_owner(parent)
     os.replace(rolled, live)
-    if name == "database":
-        rolled_dir = os.path.dirname(rolled)
-        base = os.path.basename(config.db_path)
-        for suffix in ("-wal", "-shm", "-journal"):
-            src = os.path.join(rolled_dir, base + suffix)
-            if os.path.lexists(src):
-                os.replace(src, live + suffix)
+    _restore_rollback_sidecars(config, rollback_root, name)
 
 
 def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> None:
     txn = journal["transaction_id"]
-    rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
+    rollback_root = _rollback_dir(config, txn)
     components = journal.get("components") or {}
     for name, state in components.items():
         if not isinstance(state, dict):
             continue
         flags = _component_flags(state)
+        # Never remove a live component this journal cannot put back. A first
+        # pass consumes the rollback copy (os.replace moves it onto the live
+        # path), so a replayed journal would delete the live component and then
+        # find nothing to restore -- destroying canonical data. Skipping keeps
+        # replay non-destructive and recovery re-runnable after a failure.
+        # A component that did not exist before has nothing to put back, and
+        # removing the newly installed one is the correct rollback for it.
+        if flags["old_existed"] and not os.path.lexists(
+            _rollback_component_path(config, rollback_root, name)
+        ):
+            # Partially applied: an earlier pass already moved this component's
+            # main rollback file onto the live path. Removing live now would
+            # destroy it with nothing to put back, so finish what remains
+            # instead of abandoning it -- for the database that is its
+            # WAL/journal sidecars, which would otherwise be deleted along with
+            # the rollback tree.
+            _restore_rollback_sidecars(config, rollback_root, name)
+            continue
         if flags["new_install_started"]:
             _remove_live_component(config, name)
         if flags["old_existed"]:
@@ -1931,12 +2510,12 @@ def apply_restore(
     tree_dir = os.path.join(staging_dir, "tree")
     staged_db = _component_staged_path(tree_dir, "database")
     if not os.path.isfile(staged_db):
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
 
     db_schema = read_schema_version(staged_db)
     if db_schema > supported_schema_ceiling(config):
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "schema_newer",
             "This backup was created by a newer PRKS database version. Update PRKS before restoring it.",
@@ -1957,7 +2536,7 @@ def apply_restore(
         )
 
     txn = secrets.token_urlsafe(16)
-    rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
+    rollback_root = _rollback_dir(config, txn)
     _mkdir_owner(rollback_root)
     components: dict[str, dict[str, bool]] = {
         "database": _empty_component_state(),
@@ -1999,8 +2578,10 @@ def apply_restore(
                     "restore_rolled_back reason=rebind_previous_failed error_type=%s",
                     safe_error_type(rebind_exc),
                 )
-        _safe_remove(rollback_root)
-        _safe_remove(journal_path(config))
+        # Journal first, for the same reason recovery does: a surviving journal
+        # whose rollback tree was already removed is the dangerous combination.
+        _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
 
     t_commit = clock_ns()
     try:
@@ -2086,12 +2667,9 @@ def apply_restore(
             summary["works"],
             summary["persons"],
         )
-        try:
-            _safe_remove(rollback_root)
-            _safe_remove(journal_path(config))
-            _safe_remove(staging_dir)
-        except Exception as exc:
-            LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
+        _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         return {
             "restored": True,
             "works": summary["works"],
@@ -2111,7 +2689,7 @@ def apply_restore(
                 _rollback_once(rebind_after=True)
             except Exception as exc:
                 LOGGER.error("restore_rolled_back reason=rollback_failed error_type=%s", safe_error_type(exc))
-            _safe_remove(staging_dir)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_rolled_back reason=internal error_type=%s", safe_error_type(exc))
@@ -2128,7 +2706,7 @@ def apply_restore(
                 "restore_rolled_back reason=rollback_failed error_type=%s",
                 safe_error_type(rollback_exc),
             )
-        _safe_remove(staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "restore_failed",
             "Restore failed. Current PRKS data was not changed.",
@@ -2147,7 +2725,7 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
     path = journal_path(config)
     result = {"performed": False, "outcome": None, "needs_reindex": False}
     if not os.path.lexists(path):
-        cleanup_stale_staging(config)
+        _sweep_maintenance_garbage(config)
         return result
     try:
         journal = _read_journal_file(path)
@@ -2164,25 +2742,29 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
 
     phase = journal.get("phase")
     txn = journal["transaction_id"]
-    rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
+    rollback_root = _rollback_dir(config, txn)
     token = journal.get("staging_token")
     staging_dir = _staging_dir(config, token) if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else None
 
+    # The journal goes first in both branches and its removal must be confirmed.
+    # Rollback and staging state outlive it, so a failure here leaves a
+    # recoverable library instead of a journal that replays against material
+    # that has already been cleaned away.
     if phase == "committed":
-        _safe_remove(rollback_root)
+        _remove_journal_or_fail(config)
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
         if staging_dir:
-            _safe_remove(staging_dir)
-        _safe_remove(path)
-        cleanup_stale_staging(config)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _sweep_maintenance_garbage(config)
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
         return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
     _rollback_from_journal(config, journal)
-    _safe_remove(rollback_root)
+    _remove_journal_or_fail(config)
+    _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
     if staging_dir:
-        _safe_remove(staging_dir)
-    _safe_remove(path)
-    cleanup_stale_staging(config)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+    _sweep_maintenance_garbage(config)
     LOGGER.info("restore_recovery_completed outcome=restored_previous")
     return {"performed": True, "outcome": "restored_previous", "needs_reindex": False}
 
@@ -2190,7 +2772,7 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
 def new_staging_upload_path(config: StorageConfig) -> str:
     _assert_testing_safe(config)
     root = _ensure_maintenance_dirs(config)
-    return os.path.join(root, "restore-staging", ".upload-" + secrets.token_urlsafe(8))
+    return os.path.join(root, *_STAGING_SUBROOT, ".upload-" + secrets.token_urlsafe(8))
 
 
 def discard_temp_path(path: str) -> None:

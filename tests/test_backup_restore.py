@@ -12,6 +12,7 @@ import unittest
 import zipfile
 from dataclasses import fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +61,18 @@ import backend.server as server_module
 _JOURNAL_TXN_A = "fixture-txn-aaaaaaaaaa"
 _JOURNAL_TXN_B = "fixture-txn-bbbbbbbbbb"
 _JOURNAL_TXN_C = "fixture-txn-canonical0"
+
+
+def _fspath_or_none(path):
+    try:
+        return os.fspath(path)
+    except TypeError:
+        return None
+
+
+def _unlink_if_link(path):
+    if os.path.islink(path):
+        os.unlink(path)
 
 
 def _capture_bind():
@@ -233,6 +246,719 @@ class BackupRestoreTestCase(unittest.TestCase):
     def _stage_copy(self, cfg, archive_path):
         copied = _copy_backup(archive_path, os.path.join(self._tmpdir(), "upload"))
         return stage_restore(cfg, copied)
+
+
+class TestBackupPathSafety(BackupRestoreTestCase):
+    """The destructive boundary: validated state -> proven subroot -> removal."""
+
+    def _symlink_or_skip(self, target, link, *, directory=False):
+        try:
+            os.symlink(target, link, target_is_directory=directory)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
+    def _staging_root(self, cfg):
+        root = backup_module._maintenance_subroot(
+            cfg, *backup_module._STAGING_SUBROOT
+        )
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    def _maintenance_dir(self, cfg):
+        root = backup_module._maintenance_subroot(cfg)
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    def _outside_victim(self):
+        outside = self._tmpdir("prks-outside-")
+        victim = os.path.join(outside, "victim.txt")
+        with open(victim, "w", encoding="utf-8") as handle:
+            handle.write("keep")
+        return outside, victim
+
+    def test_scoped_remove_accepts_a_real_child_tree(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(os.path.join(child, "tree", "files"))
+        with open(os.path.join(child, "tree", "files", "a.bin"), "wb") as handle:
+            handle.write(b"x")
+
+        backup_module._remove_maintenance_child(
+            cfg, backup_module._STAGING_SUBROOT, child
+        )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertTrue(os.path.isdir(staging_root))
+
+    def test_scoped_remove_rejects_intermediate_symlink_escape(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        outside, victim = self._outside_victim()
+        link = os.path.join(staging_root, "escape")
+        self._symlink_or_skip(outside, link, directory=True)
+
+        with self.assertRaises(ValueError):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, os.path.join(link, "victim.txt")
+            )
+
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_scoped_remove_unlinks_leaf_symlink_without_following_target(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        link = os.path.join(staging_root, "leaf")
+        self._symlink_or_skip(victim, link)
+
+        backup_module._remove_maintenance_child(
+            cfg, backup_module._STAGING_SUBROOT, link
+        )
+
+        self.assertFalse(os.path.lexists(link))
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_scoped_remove_rejects_a_symlinked_subroot(self):
+        """The allowed root must be proven, not merely resolved.
+
+        A containment check resolves both operands, so a symlink planted at
+        restore-staging would make every "scoped" removal pass while operating
+        on an arbitrary directory.
+        """
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside, victim = self._outside_victim()
+        staging_root = backup_module._maintenance_subroot(
+            cfg, *backup_module._STAGING_SUBROOT
+        )
+        self._symlink_or_skip(outside, staging_root, directory=True)
+
+        with self.assertRaises(ValueError):
+            backup_module._remove_maintenance_child(
+                cfg,
+                backup_module._STAGING_SUBROOT,
+                os.path.join(outside, "victim.txt"),
+            )
+        with self.assertRaises(ValueError):
+            backup_module._remove_maintenance_child(
+                cfg,
+                backup_module._STAGING_SUBROOT,
+                os.path.join(staging_root, "victim.txt"),
+            )
+
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_scoped_remove_cannot_reach_another_subroot(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        maintenance = self._maintenance_dir(cfg)
+        rollback_root = os.path.join(maintenance, "rollback")
+        os.makedirs(rollback_root, exist_ok=True)
+        staged = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(staged)
+        journal = os.path.join(maintenance, "restore-journal.json")
+        with open(journal, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+
+        for subroot, target in (
+            (backup_module._ROLLBACK_SUBROOT, staged),
+            (backup_module._JOURNAL_SUBROOT, staged),
+            (backup_module._STAGING_SUBROOT, journal),
+            (backup_module._STAGING_SUBROOT, rollback_root),
+        ):
+            with self.subTest(subroot=subroot, target=target):
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(cfg, subroot, target)
+
+        self.assertTrue(os.path.isdir(staged))
+        self.assertTrue(os.path.isfile(journal))
+        self.assertTrue(os.path.isdir(rollback_root))
+
+    def test_scoped_remove_rejects_ambiguous_and_nested_paths(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        nested = os.path.join(staging_root, "fixture-stage-aaaaaaaa", "tree")
+        os.makedirs(nested)
+
+        for unsafe in (
+            nested,
+            os.path.join(staging_root, ".."),
+            os.path.join(staging_root, "."),
+            os.path.join(staging_root, "fixture-stage-aaaaaaaa", "..", "..", "x"),
+        ):
+            with self.subTest(unsafe=unsafe):
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg, backup_module._STAGING_SUBROOT, unsafe
+                    )
+
+        self.assertTrue(os.path.isdir(nested))
+
+    def test_safe_remove_unlinks_symlinks_inside_a_tree(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(os.path.join(child, "tree"))
+        self._symlink_or_skip(victim, os.path.join(child, "tree", "link"))
+
+        backup_module._remove_maintenance_child(
+            cfg, backup_module._STAGING_SUBROOT, child
+        )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_staging_token_cannot_follow_a_symlink_outside_maintenance(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        outside = self._tmpdir("prks-stage-outside-")
+        token = "fixture-stage-aaaaaaaa"
+        self._symlink_or_skip(
+            outside, os.path.join(staging_root, token), directory=True
+        )
+
+        with self.assertRaises(RestoreError) as ctx:
+            backup_module._staging_dir(cfg, token)
+
+        self.assertEqual(ctx.exception.reason, "unknown_token")
+
+    def test_staging_dir_rejects_a_symlinked_staging_root(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside = self._tmpdir("prks-stage-outside-")
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT),
+            directory=True,
+        )
+
+        with self.assertRaises(RestoreError) as ctx:
+            backup_module._staging_dir(cfg, "fixture-stage-aaaaaaaa")
+
+        self.assertEqual(ctx.exception.reason, "unknown_token")
+
+    def test_rollback_dir_rejects_a_symlinked_rollback_root(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside = self._tmpdir("prks-rollback-outside-")
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._ROLLBACK_SUBROOT),
+            directory=True,
+        )
+
+        with self.assertRaises(RestoreError) as ctx:
+            backup_module._rollback_dir(cfg, _JOURNAL_TXN_A)
+
+        self.assertEqual(ctx.exception.reason, "journal_invalid")
+
+    def test_stale_staging_cleanup_skips_a_symlinked_staging_root(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside, victim = self._outside_victim()
+        stale = os.path.join(outside, "fixture-stage-aaaaaaaa")
+        os.makedirs(stale)
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT),
+            directory=True,
+        )
+
+        backup_module.cleanup_stale_staging(cfg)
+
+        self.assertTrue(os.path.isdir(stale))
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_scoped_remove_stays_correct_without_descriptor_support(self):
+        """The portable fallback must behave identically on a platform without
+        O_DIRECTORY/O_NOFOLLOW (native Windows), where touching those flags at
+        all would raise AttributeError during startup cleanup."""
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+        link = os.path.join(staging_root, "leaf")
+        self._symlink_or_skip(victim, link)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+            backup_module.cleanup_stale_staging(cfg)
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, link
+            )
+            with self.assertRaises(ValueError):
+                backup_module._remove_maintenance_child(
+                    cfg,
+                    backup_module._STAGING_SUBROOT,
+                    os.path.join(staging_root, "sub", "deep"),
+                )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertFalse(os.path.lexists(link))
+        self.assertTrue(os.path.isfile(victim))
+        self.assertTrue(os.path.isdir(staging_root))
+
+    def test_scoped_remove_rejects_a_symlinked_subroot_without_descriptors(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside, victim = self._outside_victim()
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT),
+            directory=True,
+        )
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+            with self.assertRaises(ValueError):
+                backup_module._remove_maintenance_child(
+                    cfg,
+                    backup_module._STAGING_SUBROOT,
+                    os.path.join(outside, "victim.txt"),
+                )
+            backup_module.cleanup_stale_staging(cfg)
+
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_verified_subroot_rejects_a_directory_reparse_point(self):
+        """NTFS junctions are directories that os.path.islink() reports False for.
+
+        Patched, because junctions cannot be created on POSIX: the contract under
+        test is that verification consults the junction check at all, since the
+        Windows fallback's os.walk(followlinks=False) would recurse into one.
+        """
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+
+        with patch.object(
+            backup_module.os.path, "isjunction", lambda p: p == staging_root
+        ):
+            with self.assertRaises(ValueError):
+                backup_module._verified_maintenance_subroot(
+                    cfg, *backup_module._STAGING_SUBROOT
+                )
+            with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg,
+                        backup_module._STAGING_SUBROOT,
+                        os.path.join(staging_root, "fixture-stage-aaaaaaaa"),
+                    )
+
+    def test_portable_removal_never_traverses_a_nested_reparse_point(self):
+        """A junction inside the tree must be removed, not descended into.
+
+        os.path.islink() is False for an NTFS junction and
+        os.walk(followlinks=False) does not treat one as a link, so the portable
+        path needs its own reparse-aware teardown. Patched, since junctions
+        cannot be created on POSIX; the assertion is that the walk never scans
+        the entry.
+        """
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        junction = os.path.join(child, "junction")
+        os.makedirs(junction)
+
+        scanned = []
+        real_scandir = os.scandir
+
+        def spy_scandir(target):
+            scanned.append(os.fspath(target))
+            return real_scandir(target)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False), patch.object(
+            backup_module.os.path, "isjunction", lambda p: p == junction
+        ), patch.object(backup_module.os, "scandir", spy_scandir):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertIn(child, scanned)
+        self.assertNotIn(junction, scanned)
+
+    def test_portable_removal_unlinks_a_nested_symlink_without_following(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(os.path.join(child, "tree"))
+        self._symlink_or_skip(victim, os.path.join(child, "tree", "link"))
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_opening_an_absent_subroot_does_not_leak_a_descriptor(self):
+        """A missing component is a normal path, not an exceptional one.
+
+        The early return for it does not reach an `except` clause, so relying on
+        one leaked a descriptor per call -- and discarding rollback state that is
+        already gone hits this on every restore.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        fd_dir = "/proc/self/fd"
+        if not os.path.isdir(fd_dir):
+            self.skipTest("no /proc/self/fd to count open descriptors")
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)  # 'rollback' deliberately absent
+
+        # Counting is necessary: a lowest-free-descriptor probe is blind here,
+        # because the leak accumulates above the descriptor the probe reclaims.
+        before = len(os.listdir(fd_dir))
+        for _ in range(20):
+            self.assertIsNone(
+                backup_module._open_maintenance_subroot(
+                    cfg, *backup_module._ROLLBACK_SUBROOT
+                )
+            )
+        self.assertEqual(len(os.listdir(fd_dir)), before)
+
+    def test_portable_removal_resolves_the_storage_root_only_once(self):
+        """Authorization and removal must share one canonical root snapshot.
+
+        Resolving config.root twice let a symlink or junction retargeted between
+        the two point verification and deletion at different trees. Counting the
+        resolutions is the direct way to pin that, since after the fix there is
+        no second resolution for a race to land in.
+        """
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+
+        real_realpath = os.path.realpath
+        resolutions = []
+
+        def spy_realpath(target, *args, **kwargs):
+            if os.fspath(target) == cfg.root:
+                resolutions.append(target)
+            return real_realpath(target, *args, **kwargs)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False), patch.object(
+            backup_module.os.path, "realpath", spy_realpath
+        ):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertEqual(
+            len(resolutions),
+            1,
+            f"storage root resolved {len(resolutions)} times, expected once",
+        )
+
+    def test_descriptor_removal_anchors_to_the_root_snapshot(self):
+        """The descriptor descent must start from the authorized snapshot.
+
+        Opening config.root re-resolves the operator symlink independently of
+        the snapshot the authorization check used, so a retarget between the two
+        could bind the descriptor to a different maintenance tree. The portable
+        test cannot catch this: it patches _SUPPORTS_DIR_FD off.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        real_root = self._tmpdir("prks-real-root-")
+        link_root = os.path.join(self._tmpdir("prks-link-"), "storage")
+        self._symlink_or_skip(real_root, link_root, directory=True)
+        cfg = self._cfg(link_root)
+        staging_root = backup_module._maintenance_subroot(
+            cfg, *backup_module._STAGING_SUBROOT
+        )
+        os.makedirs(staging_root, exist_ok=True)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+
+        opened = []
+        real_open = os.open
+
+        def spy_open(path, *args, **kwargs):
+            opened.append(_fspath_or_none(path))
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(backup_module.os, "open", spy_open):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertNotIn(
+            link_root,
+            opened,
+            "descriptor descent re-resolved config.root instead of the snapshot",
+        )
+        self.assertIn(os.path.realpath(link_root), opened)
+
+    def _root_swap_fixture(self):
+        """A pending removal plus a decoy the canonical root can be replaced with.
+
+        ``_remove_maintenance_child()`` authorizes against a pathname and then
+        acts through it. Whoever can rename the root's target can make the two
+        refer to different directories. The decoy stands in for the root, and
+        holds a maintenance tree with a same-named child, so a removal that
+        still runs has an obvious victim to destroy.
+
+        ``vacate()`` renames the real root away; ``swap(install)`` vacates and
+        then calls ``install(vacated, decoy)``; ``survived()`` probes the decoy
+        child *through* ``root_real``, which by then is the decoy itself or a
+        link to it, so one probe covers every swap shape.
+        """
+        cfg = self._cfg()
+        leaf = "fixture-stage-aaaaaaaa"
+        child = os.path.join(self._staging_root(cfg), leaf)
+        os.makedirs(child)
+        root_real = backup_module._resolved_storage_root(cfg)
+        decoy = os.path.realpath(self._tmpdir("prks-decoy-"))
+        victim = (
+            backup_module.MAINTENANCE_DIRNAME,
+            backup_module._STAGING_SUBROOT[0],
+            leaf,
+        )
+        os.makedirs(os.path.join(decoy, *victim))
+        moved = root_real + "-moved-away"
+        self.addCleanup(shutil.rmtree, moved, ignore_errors=True)
+        self.addCleanup(_unlink_if_link, root_real)
+
+        def vacate():
+            os.rename(root_real, moved)
+
+        def swap(install):
+            vacate()
+            install(root_real, decoy)
+
+        def survived():
+            # Probed at both, because the decoy may still be where it started
+            # (a refusal before the swap ever lands), or may have become
+            # root_real, or may be what root_real links to.
+            return any(
+                os.path.isdir(os.path.join(base, *victim))
+                for base in (root_real, decoy)
+            )
+
+        return SimpleNamespace(
+            cfg=cfg,
+            child=child,
+            root_real=root_real,
+            decoy=decoy,
+            vacate=vacate,
+            swap=swap,
+            survived=survived,
+        )
+
+    def _assert_swapped_root_refused(self, cfg, child, survived, *, swapped=None):
+        """Demand a refusal, and that the swapped-in tree was left alone.
+
+        ``swapped`` guards against a vacuous run for the cases whose swap is
+        driven from inside the removal; a case that vacates the root up front
+        needs no such guard, and must not assert one, since the fix can refuse
+        before the swap is ever reached.
+        """
+        refusal = None
+        try:
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+        except ValueError as exc:
+            refusal = exc
+        if swapped is not None:
+            self.assertTrue(
+                swapped(), "the swap never happened; the test proves nothing"
+            )
+        # Checked before the refusal so a regression reports the data loss
+        # rather than the missing exception.
+        self.assertTrue(
+            survived(),
+            "removal ran inside the directory swapped in after authorization",
+        )
+        self.assertIsNotNone(refusal, "removal accepted a swapped storage root")
+        return str(refusal)
+
+    def _descriptor_swap_refused(self, install_replacement):
+        """Swap the root at the descent's first open of it, and demand a refusal."""
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        fixture = self._root_swap_fixture()
+        return self._refused_with_open_spy(
+            fixture, lambda: fixture.swap(install_replacement)
+        )
+
+    def _refused_with_open_spy(self, fixture, at_first_root_open, *, guard=True):
+        """Run the removal, firing ``at_first_root_open`` at the root's open."""
+        done = []
+        real_open = os.open
+
+        def spy_open(path, *args, **kwargs):
+            if not done and _fspath_or_none(path) == fixture.root_real:
+                done.append(True)
+                at_first_root_open()
+            return real_open(path, *args, **kwargs)
+
+        guarded = (lambda: bool(done)) if guard else None
+        with patch.object(backup_module.os, "open", spy_open):
+            return self._assert_swapped_root_refused(
+                fixture.cfg, fixture.child, fixture.survived, swapped=guarded
+            )
+
+    def test_descriptor_removal_refuses_a_root_link_swapped_in_after_authorization(self):
+        """A resolved root is never a symlink, so the descent must not follow one."""
+        def install(vacated, decoy):
+            self._symlink_or_skip(decoy, vacated, directory=True)
+
+        self.assertIn("real directory", self._descriptor_swap_refused(install))
+
+    def test_descriptor_removal_refuses_a_root_directory_swapped_in_after_authorization(self):
+        """No-follow cannot see a real directory renamed into place; identity can."""
+        self.assertIn(
+            "changed identity",
+            self._descriptor_swap_refused(
+                lambda vacated, decoy: os.rename(decoy, vacated)
+            ),
+        )
+
+    def test_portable_removal_refuses_a_root_swapped_in_after_authorization(self):
+        """The fallback has no descriptor to bind to, so it must check identity.
+
+        Without descriptors every step is path-based, so a real directory
+        renamed into the canonical root's place is invisible to verification --
+        it simply describes the replacement. Only the identity captured before
+        authorization can tell the two apart.
+        """
+        fixture = self._root_swap_fixture()
+        done = []
+        real_verify = backup_module._verified_maintenance_subroot_from
+
+        def swapping_verify(*args, **kwargs):
+            if not done:
+                done.append(True)
+                fixture.swap(lambda vacated, decoy: os.rename(decoy, vacated))
+            return real_verify(*args, **kwargs)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False), patch.object(
+            backup_module, "_verified_maintenance_subroot_from", swapping_verify
+        ):
+            refusal = self._assert_swapped_root_refused(
+                fixture.cfg, fixture.child, fixture.survived,
+                swapped=lambda: bool(done),
+            )
+        self.assertIn("changed identity", refusal)
+
+    def test_removal_refuses_a_root_swapped_in_before_it_was_canonicalized(self):
+        """The identity must be anchored ahead of canonicalization.
+
+        Capturing it after realpath() captures whatever is at the canonical
+        pathname by then. A real directory moved in between the two would
+        therefore be recorded as the identity to trust, and authorization, the
+        descriptor fstat and the portable re-check would all faithfully agree
+        with the replacement. Taking the identity first turns that window into
+        two observations that have to match.
+        """
+        fixture = self._root_swap_fixture()
+        done = []
+        real_resolve = backup_module._resolved_storage_root
+
+        def swapping_resolve(*args, **kwargs):
+            if not done:
+                done.append(True)
+                fixture.swap(lambda vacated, decoy: os.rename(decoy, vacated))
+            return real_resolve(*args, **kwargs)
+
+        with patch.object(
+            backup_module, "_resolved_storage_root", swapping_resolve
+        ):
+            refusal = self._assert_swapped_root_refused(
+                fixture.cfg, fixture.child, fixture.survived,
+                swapped=lambda: bool(done),
+            )
+
+        self.assertIn("identity", refusal)
+
+    def test_removal_refuses_a_root_that_was_gone_when_identity_was_captured(self):
+        """A stat that fails is the rename window, not a benign absence.
+
+        Vacating the root before the capture used to disable the whole identity
+        check: os.stat() raised, the capture yielded None, and the comparison
+        was skipped. Authorization still passed -- os.path.realpath() is
+        non-strict and hands back the pathname of a missing directory -- so a
+        real directory renamed into that pathname was descended into and its
+        matching child deleted.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        fixture = self._root_swap_fixture()
+        fixture.vacate()
+
+        # No swap guard: with the root already gone, the capture refuses before
+        # the descent ever opens anything, so nothing fires the spy.
+        refusal = self._refused_with_open_spy(
+            fixture,
+            lambda: os.rename(fixture.decoy, fixture.root_real),
+            guard=False,
+        )
+
+        self.assertIn("identity", refusal)
+
+    def test_an_absent_component_does_not_downgrade_to_path_based_removal(self):
+        """A vanished component must not hand the removal to the weaker branch.
+
+        _open_maintenance_subroot_from() returns None both when the platform has
+        no descriptors and when a component was absent during the O_NOFOLLOW
+        descent. Treating the second like the first lets an actor who renames a
+        maintenance component away and back downgrade a descriptor-bound removal
+        to a path-based one -- and that branch is the raceable one.
+
+        The subroot stays on disk throughout; only the descent's open of it
+        fails, which is what a rename away and back looks like from here.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        cfg = self._cfg()
+        child = os.path.join(self._staging_root(cfg), "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+        subroot_name = backup_module._STAGING_SUBROOT[0]
+        real_open = os.open
+
+        def vanishing_open(path, *args, **kwargs):
+            if kwargs.get("dir_fd") is not None and path == subroot_name:
+                raise FileNotFoundError(2, "No such file or directory", path)
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(backup_module.os, "open", vanishing_open):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertTrue(
+            os.path.isdir(child),
+            "an absent component downgraded the removal to the path-based branch",
+        )
+
+    def test_stale_staging_cleanup_removes_expired_entries(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        expired = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(expired)
+        upload = os.path.join(staging_root, ".upload-old")
+        with open(upload, "wb") as handle:
+            handle.write(b"x")
+        old = time.time() - (backup_module.STAGING_TTL_SECONDS * 2)
+        os.utime(upload, (old, old))
+
+        backup_module.cleanup_stale_staging(cfg)
+
+        self.assertFalse(os.path.lexists(expired))
+        self.assertFalse(os.path.lexists(upload))
+        self.assertTrue(os.path.isdir(staging_root))
 
 
 class TestBackupInventory(BackupRestoreTestCase):
@@ -1019,7 +1745,8 @@ class TestRestoreRollback(BackupRestoreTestCase):
 
 
 class TestCrashJournalRecovery(BackupRestoreTestCase):
-    def test_incomplete_journal_restores_previous(self):
+    def _incomplete_journal_state(self):
+        """A pre-committed journal with its rollback material still intact."""
         lib = self._bind_library(title="Original", pdf_name="orig.pdf")
         cfg = lib["cfg"]
         maint = os.path.join(cfg.root, ".prks-maintenance", "rollback", _JOURNAL_TXN_A)
@@ -1045,15 +1772,184 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
             },
         }
         os.makedirs(os.path.join(cfg.root, ".prks-maintenance"), exist_ok=True)
-        with open(os.path.join(cfg.root, ".prks-maintenance", "restore-journal.json"), "w") as handle:
+        journal_file = backup_module.journal_path(cfg)
+        with open(journal_file, "w", encoding="utf-8") as handle:
             json.dump(journal, handle)
-        out = recover_incomplete_restore(cfg)
-        self.assertEqual(out["outcome"], "restored_previous")
+        return cfg, journal_file, maint, journal
+
+    def _assert_previous_library(self, cfg):
+        """The library is the pre-restore one, not the half-installed state."""
         bind_storage(cfg)
         titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Original"])
         self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
         self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "partial.pdf")))
+
+    def _unenumerable_journal_dir(self):
+        """Patch os.listdir so the directory holding the journal cannot be read.
+
+        Models a transient failure, or a Windows ACL that permits access to a
+        known file but not enumeration of its directory.
+        """
+        real_listdir = os.listdir
+
+        def failing_listdir(target):
+            entries = real_listdir(target)
+            if backup_module.JOURNAL_FILENAME in entries:
+                raise OSError(13, "Permission denied")
+            return entries
+
+        return patch.object(backup_module.os, "listdir", failing_listdir)
+
+    def test_journal_removal_surfaces_an_enumeration_failure(self):
+        """A directory that cannot be listed is not proof the child is gone."""
+        cfg, journal_file, _maint, _journal = self._incomplete_journal_state()
+
+        with self._unenumerable_journal_dir():
+            with self.assertRaises(OSError):
+                backup_module._remove_maintenance_child(
+                    cfg, backup_module._JOURNAL_SUBROOT, journal_file
+                )
+
+        self.assertTrue(os.path.isfile(journal_file))
+
+    def test_recovery_keeps_rollback_material_when_journal_removal_fails(self):
+        """Rollback state must outlive the journal.
+
+        If recovery reported success while leaving the journal behind, the next
+        startup would replay it: _rollback_from_journal() removes the live
+        components it believes are half-installed, then finds nothing to restore
+        because the rollback tree was already cleaned -- losing canonical data.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+
+        with self._unenumerable_journal_dir():
+            with self.assertRaises(RestoreError) as ctx:
+                recover_incomplete_restore(cfg)
+        self.assertEqual(ctx.exception.reason, "journal_not_removed")
+
+        # Failure is explicit, and nothing that replay depends on was discarded.
+        self.assertTrue(os.path.isfile(journal_file))
+        self.assertTrue(os.path.isdir(maint))
+
+        # Recovery stays possible once enumeration works again, and the library
+        # is the previous one rather than the half-installed state.
+        out = recover_incomplete_restore(cfg)
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertFalse(os.path.lexists(journal_file))
+        self._assert_previous_library(cfg)
+
+    def _aged_rollback_tree(self, cfg, txn, age_seconds):
+        """A rollback tree holding previous-library bytes, aged by the clock."""
+        tree = os.path.join(cfg.root, ".prks-maintenance", "rollback", txn)
+        os.makedirs(os.path.join(tree, "pdfs"), exist_ok=True)
+        with open(os.path.join(tree, "pdfs", "previous.pdf"), "wb") as handle:
+            handle.write(b"PREVIOUS-LIBRARY")
+        stamp = time.time() - age_seconds
+        os.utime(tree, (stamp, stamp))
+        return tree
+
+    def test_startup_reclaims_a_rollback_tree_no_journal_can_name(self):
+        """The window the journal-first ordering leaves must not leak storage.
+
+        Exit after journal removal is confirmed but before its tree is removed,
+        and the next startup finds no journal -- so nothing names the tree, and
+        _rollback_from_journal() is its only reader. It is unreachable garbage
+        holding an entire previous library.
+        """
+        cfg = self._cfg()
+        tree = self._aged_rollback_tree(
+            cfg, _JOURNAL_TXN_B, backup_module.ROLLBACK_ORPHAN_TTL_SECONDS * 2
+        )
+
+        result = recover_incomplete_restore(cfg)
+
+        self.assertFalse(result["performed"])
+        self.assertFalse(os.path.lexists(tree))
+
+    def test_startup_leaves_a_fresh_rollback_tree_alone(self):
+        """apply_restore() creates the tree just before it writes the journal.
+
+        The age guard is what keeps this sweep from reaching into that window
+        and deleting the rollback material of a restore still in flight.
+        """
+        cfg = self._cfg()
+        tree = self._aged_rollback_tree(cfg, _JOURNAL_TXN_B, 0)
+
+        recover_incomplete_restore(cfg)
+
+        self.assertTrue(os.path.isdir(tree))
+
+    def test_a_failed_journal_removal_keeps_even_an_aged_rollback_tree(self):
+        """The sweep must be unreachable while a journal is still on disk.
+
+        Age alone must never authorize the removal: a tree a surviving journal
+        still names is replay material, not garbage, however old it looks.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+        stamp = time.time() - backup_module.ROLLBACK_ORPHAN_TTL_SECONDS * 2
+        os.utime(maint, (stamp, stamp))
+
+        with self._unenumerable_journal_dir():
+            with self.assertRaises(RestoreError):
+                recover_incomplete_restore(cfg)
+
+        self.assertTrue(os.path.isfile(journal_file))
+        self.assertTrue(os.path.isdir(maint))
+
+    def test_replaying_a_journal_without_rollback_material_keeps_live_data(self):
+        """Replay must not delete what it cannot put back.
+
+        This is the state a silently-failed journal removal used to leave
+        behind: journal present, rollback copies gone.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+        recover_incomplete_restore(cfg)
+        self.assertFalse(os.path.lexists(journal_file))
+
+        # Restore the dangerous combination by hand: the journal is back, but
+        # the rollback material has been consumed by the first recovery.
+        with open(journal_file, "w", encoding="utf-8") as handle:
+            json.dump(_journal, handle)
+        for name in ("database", "pdfs", "people"):
+            self.assertFalse(
+                os.path.lexists(
+                    backup_module._rollback_component_path(cfg, maint, name)
+                )
+            )
+
+        out = recover_incomplete_restore(cfg)
+        self.assertEqual(out["outcome"], "restored_previous")
+        self._assert_previous_library(cfg)
+
+    def test_recovery_completes_database_sidecars_after_a_partial_pass(self):
+        """A crash between moving the rollback database and its sidecars.
+
+        The main rollback file is already on the live path, so the "no material"
+        guard would skip the whole component and the WAL -- which can hold
+        committed pages -- would be deleted along with the rollback tree.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+        db_name = os.path.basename(cfg.db_path)
+        rolled_db = os.path.join(maint, "database", db_name)
+        os.replace(rolled_db, cfg.db_path)
+        with open(rolled_db + "-wal", "wb") as handle:
+            handle.write(b"WAL-PAGES")
+
+        out = recover_incomplete_restore(cfg)
+
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertTrue(os.path.isfile(cfg.db_path))
+        self.assertTrue(os.path.isfile(cfg.db_path + "-wal"))
+        with open(cfg.db_path + "-wal", "rb") as handle:
+            self.assertEqual(handle.read(), b"WAL-PAGES")
+        self.assertFalse(os.path.lexists(journal_file))
+
+    def test_incomplete_journal_restores_previous(self):
+        cfg, _journal_file, _maint, _journal = self._incomplete_journal_state()
+        out = recover_incomplete_restore(cfg)
+        self.assertEqual(out["outcome"], "restored_previous")
+        self._assert_previous_library(cfg)
 
     def test_journal_with_an_unusable_transaction_id_is_refused(self):
         """The transaction id becomes a path segment under maintenance_root and
