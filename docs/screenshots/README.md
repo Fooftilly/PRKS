@@ -4,13 +4,13 @@ Committed screenshots must use only isolated testing data and synthetic/public-d
 
 ## Regenerate
 
-Install the maintainer/browser dependencies first:
+Install both the runtime dependency pin (Pillow for lossless PNG optimize, PyMuPDF for seeding) and the maintainer/browser pin (Playwright) first:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Commit any screenshot-affecting source edits (`frontend/`, capture/seed scripts, Playwright pin, and the other paths listed in `scripts/check_screenshot_freshness.py`) before regenerating. The capture records `git rev-parse HEAD`, so uncommitted UI changes would otherwise be labeled with an older revision and look stale after you commit them. Generated files under `docs/screenshots/` may remain dirty during regeneration.
+Commit any screenshot-affecting source edits (`frontend/`, capture/seed scripts, Playwright/Pillow pins, and the other paths listed in `scripts/check_screenshot_freshness.py`) before regenerating. The capture records `git rev-parse HEAD`, so uncommitted UI changes would otherwise be labeled with an older revision and look stale after you commit them. Generated files under `docs/screenshots/` may remain dirty during regeneration.
 
 Then run:
 

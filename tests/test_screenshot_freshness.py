@@ -49,6 +49,7 @@ class ScreenshotFreshnessPathParityTests(unittest.TestCase):
         required = {
             "scripts/update_demo_screenshots.py",
             "requirements-dev.txt",
+            "requirements.txt",
             "tests/e2e/install_browser.py",
             "backend/services/work_pdf_replace.py",
         }

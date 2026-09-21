@@ -11,6 +11,7 @@ on:
       - "backend/server.py"
       - "backend/services/work_pdf_replace.py"
       - "requirements-dev.txt"
+      - "requirements.txt"
       - "scripts/capture_demo_screenshots.py"
       - "scripts/seed_demo_library.py"
       - "scripts/update_demo_screenshots.py"

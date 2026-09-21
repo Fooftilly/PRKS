@@ -21,6 +21,7 @@ AFFECTING_PATHS = {
     "backend/server.py",
     "backend/services/work_pdf_replace.py",
     "requirements-dev.txt",
+    "requirements.txt",
     "scripts/capture_demo_screenshots.py",
     "scripts/check_screenshot_freshness.py",
     "scripts/seed_demo_library.py",
