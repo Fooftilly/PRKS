@@ -633,19 +633,20 @@ _validate_youtube_url = work_source_sync.validate_youtube_url
 
 def _fetch_youtube_oembed(url: str) -> dict | None:
     """
-    Best-effort metadata fetch for YouTube URLs via oEmbed (no API key).
-    Returns: {title, author_name, thumbnail_url} subset when successful.
+    Best-effort metadata fetch for a supported YouTube URL via oEmbed (no API key).
+
+    The outbound request is built from PRKS's validated provider identity, not
+    from the caller's URL spelling. This keeps the network boundary fixed even
+    when the source URL contains unrelated query parameters or malformed input.
     """
     if not url or not str(url).strip():
         return None
     try:
-        # Percent-encode the caller's URL before it becomes a query-parameter
-        # value. Unencoded it both truncates real YouTube URLs at the first
-        # `&`/`#` and lets the request body decide part of the outbound query
-        # string. Inside the try because quote() raises UnicodeEncodeError on a
-        # lone surrogate, which json.loads accepts: this helper stays
-        # best-effort and never turns optional metadata into a failed request.
-        oembed_url = "https://www.youtube.com/oembed?format=json&url=" + quote(str(url).strip(), safe="")
+        video_id = _validate_youtube_url(str(url).strip())
+        if not video_id:
+            return None
+        canonical_url = "https://www.youtube.com/watch?v=" + quote(video_id, safe="")
+        oembed_url = "https://www.youtube.com/oembed?format=json&url=" + quote(canonical_url, safe="")
         req = Request(
             oembed_url,
             headers={
