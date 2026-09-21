@@ -1393,11 +1393,25 @@ class OfflineFoundationTests(unittest.TestCase):
             ),
             pdf_path,
         )
+        # The PDF save drops the disposable Work snapshot. Re-read that JSON
+        # while still online so an offline reload can mount the page. This
+        # must not be a PDF GET: a whole-file network response would rewrite
+        # prks-pdf-v1 on its own and hide a missing cache seed.
+        warmed = page.evaluate(
+            """async (id) => {
+                const result = await prksOfflineReadEntity(
+                    'work', id, '/api/works/' + encodeURIComponent(id));
+                return !!(result && result.value && result.value.id === id);
+            }""",
+            work_a,
+        )
+        self.assertTrue(warmed)
+        _wait_entity_cached(page, "work", work_a)
+        self.assertEqual(_pdf_cache_fingerprint(page, pdf_path), after)
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
         self.assertIn(work_a, page.evaluate("() => location.hash"))
-        _wait_sw_active(page)
         _wait_pdf_viewer(page)
         offline_cache = _pdf_cache_fingerprint(page, pdf_path)
         self.assertEqual(offline_cache, after)
