@@ -172,6 +172,7 @@ def main() -> int:
         for path in screenshot_dir.glob("*.png")
         if path.is_file()
     }
+    missing_expected = sorted(EXPECTED_ALL_FILES - on_disk)
     untracked = sorted(
         name
         for name in (EXPECTED_ALL_FILES | on_disk)
@@ -189,6 +190,11 @@ def main() -> int:
             checked.append((name, rev))
 
     stale_notes: list[str] = []
+    if missing_expected:
+        preview = ", ".join(missing_expected[:8])
+        if len(missing_expected) > 8:
+            preview += f", +{len(missing_expected) - 8} more"
+        stale_notes.append(f"missing expected screenshots ({preview})")
     if untracked:
         preview = ", ".join(untracked[:8])
         if len(untracked) > 8:
@@ -197,7 +203,7 @@ def main() -> int:
             f"untracked or revisionless screenshots ({preview})"
         )
 
-    if not checked and not untracked:
+    if not checked and not untracked and not missing_expected:
         if not global_source:
             _warn(
                 "Existing screenshots predate the freshness manifest. Run "
@@ -252,7 +258,8 @@ def main() -> int:
         joined += f"; +{len(stale_notes) - 6} more"
     _warn(
         "Documentation screenshots may be stale: screenshot-affecting files changed "
-        f"after capture, or some screenshots lack a capture revision ({joined}). "
+        f"after capture, some screenshots lack a capture revision, or expected "
+        f"screenshot files are missing ({joined}). "
         "Regenerate with: python scripts/update_demo_screenshots.py"
     )
     # Default remains advisory (exit 0) for PR CI; opt into failing locally/CI

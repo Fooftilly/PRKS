@@ -451,6 +451,61 @@ class ScreenshotFreshnessStrictTests(unittest.TestCase):
                             code = check.main()
             self.assertEqual(code, 1)
 
+    def test_missing_expected_png_warns_even_when_fully_revisioned(self):
+        """Deleting an expected PNG must not pass as fresh after a full capture."""
+        capture = _load_capture()
+        check = _load_check()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "screenshots"
+            out.mkdir()
+            rows = []
+            for name in sorted(capture.EXPECTED_ALL_FILES):
+                if name != "work.png":
+                    (out / name).write_bytes(b"png")
+                rows.append(
+                    {
+                        "file": name,
+                        "scenario": capture.SCENARIO_BY_FILE[name],
+                        "source_commit": "fullcap01",
+                    }
+                )
+            manifest = out / "manifest.json"
+            import json
+
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "source_commit": "fullcap01",
+                        "screenshots": rows,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertFalse((out / "work.png").exists())
+
+            with mock.patch.object(check, "MANIFEST", manifest):
+                with mock.patch.object(check, "_affecting_after", return_value=[]):
+                    with mock.patch.object(check, "_warn") as warn:
+                        with mock.patch.dict(os.environ, {}, clear=False):
+                            code_advisory = check.main()
+            self.assertEqual(code_advisory, 0)
+            joined = " ".join(str(c.args[0]) for c in warn.call_args_list)
+            self.assertIn("missing expected screenshots", joined)
+            self.assertIn("work.png", joined)
+
+            with mock.patch.object(check, "MANIFEST", manifest):
+                with mock.patch.object(check, "_affecting_after", return_value=[]):
+                    with mock.patch.object(check, "_warn"):
+                        with mock.patch.dict(
+                            os.environ,
+                            {"PRKS_SCREENSHOT_FRESHNESS_STRICT": "1"},
+                            clear=False,
+                        ):
+                            code_strict = check.main()
+            self.assertEqual(code_strict, 1)
+
 
 class ScreenshotDirtyTreeTests(unittest.TestCase):
     def test_require_clean_sources_refuses_dirty_frontend(self):
