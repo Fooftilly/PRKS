@@ -677,23 +677,31 @@ def _verified_maintenance_subroot_from(
 
 def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[int]:
     """Descriptor for a maintenance subroot, reached from the storage root."""
-    root_real = _resolved_storage_root(config)
+    identity = _storage_root_identity(config.root)
     return _open_maintenance_subroot_from(
-        root_real, *names, expect_identity=_storage_root_identity(root_real)
+        _resolved_storage_root(config), *names, expect_identity=identity
     )
 
 
-def _storage_root_identity(root_real: str) -> os.stat_result:
-    """Identity of the canonical storage root, captured before authorization.
+def _storage_root_identity(root: str) -> os.stat_result:
+    """Identity of the storage root, captured before it is canonicalized.
 
-    A stat that fails here is not a benign absence. It is the rename window this
-    identity exists to catch: the root vanishes precisely because someone moved
-    it, and ``os.path.realpath()`` is non-strict, so the authorization check
-    downstream would still pass on the pathname it left behind. Refusing is the
-    only reading that cannot be turned into a deletion somewhere else.
+    Takes the *configured* path and follows it, because the operator symlink at
+    ``config.root`` is legitimate and its target is what the identity describes.
+    Capturing after ``realpath()`` would capture whatever is at the canonical
+    pathname by then -- so a directory swapped in between the two would become
+    the identity every later check agrees with, and the guard would certify the
+    replacement instead of catching it.
+
+    A stat that fails here is not a benign absence either. It is the rename
+    window this identity exists to catch: the root vanishes precisely because
+    someone moved it, and ``os.path.realpath()`` is non-strict, so the
+    authorization check downstream would still pass on the pathname it left
+    behind. Refusing is the only reading that cannot be turned into a deletion
+    somewhere else.
     """
     try:
-        return os.stat(root_real)
+        return os.stat(root)
     except OSError as exc:
         raise ValueError("storage root identity could not be captured") from exc
 
@@ -894,14 +902,22 @@ def _remove_maintenance_child(
     disagree with what is acted on. The portable fallback cannot bind that way
     -- see the comment on its branch.
     """
+    # The identity is taken first, from the configured path, because it is the
+    # anchor everything else is judged against and so must predate the rest.
+    # Capturing it after canonicalization would capture whatever is at the
+    # canonical pathname by then, which a swap landing in between makes the
+    # replacement -- and every later check would then faithfully agree with it.
+    root_identity = _storage_root_identity(config.root)
     # One canonical snapshot for the whole operation. Resolving config.root
     # again between authorization and removal is what let a symlink or junction
     # retargeted at that moment point the two at different trees.
     root_real = _resolved_storage_root(config)
-    # Captured before authorization: the descriptor descent is checked against
-    # this, so a directory renamed into root_real's place afterwards cannot make
-    # authorization refer to one directory and removal to another.
-    root_identity = _storage_root_identity(root_real)
+    # Two independent observations that must agree, which is what makes the
+    # window between them checkable: a retarget of the operator symlink, or a
+    # directory moved into the canonical pathname, lands here rather than
+    # silently redefining what the rest of the operation protects.
+    if not _storage_root_keeps_identity(root_real, root_identity):
+        raise ValueError("storage root changed identity during removal")
     expected_root = _maintenance_subroot_from(root_real, *subroot)
     normalized = os.path.abspath(path)
     leaf = os.path.basename(normalized)

@@ -853,6 +853,36 @@ class TestBackupPathSafety(BackupRestoreTestCase):
             )
         self.assertIn("changed identity", refusal)
 
+    def test_removal_refuses_a_root_swapped_in_before_it_was_canonicalized(self):
+        """The identity must be anchored ahead of canonicalization.
+
+        Capturing it after realpath() captures whatever is at the canonical
+        pathname by then. A real directory moved in between the two would
+        therefore be recorded as the identity to trust, and authorization, the
+        descriptor fstat and the portable re-check would all faithfully agree
+        with the replacement. Taking the identity first turns that window into
+        two observations that have to match.
+        """
+        fixture = self._root_swap_fixture()
+        done = []
+        real_resolve = backup_module._resolved_storage_root
+
+        def swapping_resolve(*args, **kwargs):
+            if not done:
+                done.append(True)
+                fixture.swap(lambda vacated, decoy: os.rename(decoy, vacated))
+            return real_resolve(*args, **kwargs)
+
+        with patch.object(
+            backup_module, "_resolved_storage_root", swapping_resolve
+        ):
+            refusal = self._assert_swapped_root_refused(
+                fixture.cfg, fixture.child, fixture.survived,
+                swapped=lambda: bool(done),
+            )
+
+        self.assertIn("identity", refusal)
+
     def test_removal_refuses_a_root_that_was_gone_when_identity_was_captured(self):
         """A stat that fails is the rename window, not a benign absence.
 
