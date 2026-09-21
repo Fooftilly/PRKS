@@ -41,6 +41,12 @@ Docker:
 
 ```bash
 docker compose stop prks
+# copy the host storage directory (normally ./data) to a backup location
+# outside the live storage tree
+docker compose start prks
+```
+
+The copy destination must be outside the live storage tree. Do not copy into `./data` or into `/data`.
 
 ## Schema compatibility
 

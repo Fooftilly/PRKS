@@ -56,6 +56,36 @@ See **E2E TESTING POLICY** in `AGENTS.md` for the authoritative agent rules.
 Declarative feature/smoke/affected mapping: `tests/e2e/policy.py`.
 
 ```bash
+# One test
+python tests/e2e/run.py --jobs 1 tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation
+
+# One feature/domain group
+python tests/e2e/run.py --list-features
+python tests/e2e/run.py --feature graph --jobs 2 --no-pointer-capture
+scripts/e2e feature sync --jobs 2
+
+# Git-diff → likely feature groups (working tree vs HEAD; override with --base)
+python tests/e2e/run.py --affected
+python tests/e2e/run.py --affected --base origin/master
+
+# Curated smoke (~9 essential tests)
+python tests/e2e/run.py --smoke --jobs 2
+scripts/e2e smoke --jobs 2
+
+# Rerun only previous failures / fail-fast dev loop
+python tests/e2e/run.py --last-failed
+python tests/e2e/run.py --dev --feature tabs
+
+# Full regression gate (final validation only; runner hard-limits at 1200s)
+python run_tests.py --e2e
+scripts/e2e full
+python tests/e2e/run.py --jobs 4
+# optional: timeout 1200 python tests/e2e/run.py --jobs 4
+```
+
+A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tier.
+
+`-e2e`, `-all`, and `-ux-tour` are the same flags. Unflagged `python run_tests.py` discovers tests under `tests/` and does not launch Chromium. It always forces `PRKS_TESTING=1` and `PRKS_STORAGE` to the repo’s `data_testing/` directory and clears `PRKS_FOR_PROCESSING_DIR` and `PRKS_LOG_FILE`. That is stricter than `python prks_app.py --testing`, which may honor an explicit safe `PRKS_STORAGE`. Neither path uses `./data` or container `/data`. `--ux-tour` is a separate, explicitly opt-in suite: it never runs as part of the default, `--e2e`, or `--all` modes.
 
 ## Project layout
 
@@ -102,6 +132,17 @@ Authoritative pins live in `requirements*.txt`, `tools/*/package.json`, the `Doc
 Rebuild vendored assets after changing a pin:
 
 ```bash
+# Ordinary UI vendor (DOMPurify, EasyMDE, CodeMirror, Lucide)
+cd tools/frontend-vendor && npm ci && npm run build
+
+# Research Graph Cytoscape
+cd tools/research-graph && npm ci && npm run build
+
+# PDF viewer (EmbedPDF + React)
+cd tools/pdf-viewer && npm ci && npm run build
+```
+
+Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes change. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
 
 ## See also
 

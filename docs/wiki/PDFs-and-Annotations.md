@@ -5,7 +5,7 @@ Managed PDFs are first-class PRKS Work sources. PRKS separates canonical annotat
 ## PDF annotations
 
 PRKS stores annotation *meaning* as structured rows in the `annotations` table
-(id, type, content, page, color, geometry). That metadata is the canonical
+(id, type, content, page_index, color, geometry_json). Those are the persisted column names. That metadata is the canonical
 source for the sidebar, comments, sync, and offline durable ops
 (`CREATE_PDF_ANNOTATION` / `SET_PDF_ANNOTATION` / `DELETE_PDF_ANNOTATION`).
 Managed PDF bytes are a materialized rendering of a known annotation-set
