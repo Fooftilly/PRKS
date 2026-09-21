@@ -712,6 +712,12 @@ def _remove_maintenance_child(
     The removal is then performed relative to the subroot's descriptor, so
     nothing swapped in after the check can redirect it, and the child itself is
     never resolved: a symlink leaf is unlinked, not followed to its target.
+
+    Where descriptors exist there is exactly one resolution: the O_NOFOLLOW
+    descent that proves each component is a real directory produces the very
+    descriptor the removal runs against, so no separately resolved path can
+    disagree with what is acted on. The portable fallback cannot bind that way
+    -- see the comment on its branch.
     """
     expected_root = _maintenance_subroot(config, *subroot)
     normalized = os.path.abspath(path)
@@ -724,15 +730,27 @@ def _remove_maintenance_child(
         raise ValueError("removal path could not be resolved") from exc
     if parent_real != expected_root:
         raise ValueError("removal path is not a direct child of its maintenance root")
+    fd = _open_maintenance_subroot(config, *subroot)
+    if fd is not None:
+        # Bound to the descriptor the O_NOFOLLOW descent produced. expected_root
+        # is inert here: _remove_proven_child() consults it only without a
+        # descriptor. Verifying by a second path resolution and then reopening
+        # config.root would let an ancestor retargeted in between name a
+        # different tree than the one that was verified.
+        try:
+            _remove_proven_child(expected_root, leaf, fd)
+        finally:
+            os.close(fd)
+        return
+    # No descriptor support (native Windows): verification and removal are both
+    # path-based, so they cannot be bound to one directory. An ancestor of
+    # config.root retargeted between them is a residual limitation of the
+    # fallback, not something this helper can close; failing closed instead
+    # would leave that platform with no maintenance cleanup at all.
     verified_root = _verified_maintenance_subroot(config, *subroot)
     if verified_root is None:
         return
-    fd = _open_maintenance_subroot(config, *subroot)
-    try:
-        _remove_proven_child(verified_root, leaf, fd)
-    finally:
-        if fd is not None:
-            os.close(fd)
+    _remove_proven_child(verified_root, leaf, None)
 
 
 def _discard_maintenance_child(
