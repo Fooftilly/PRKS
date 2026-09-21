@@ -760,25 +760,22 @@ def _remove_journal_or_fail(config: StorageConfig) -> None:
     back a library whose rollback material no longer exists.
     """
     path = journal_path(config)
+    cause: Optional[Exception] = None
     try:
         _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
     except Exception as exc:
-        LOGGER.error(
-            "restore_recovery_failed reason=journal_not_removed error_type=%s",
-            safe_error_type(exc),
-        )
-        raise RestoreError(
-            "journal_not_removed",
-            "Incomplete restore could not be recovered.",
-            http_status=500,
-        ) from exc
-    if os.path.lexists(path):
-        LOGGER.error("restore_recovery_failed reason=journal_not_removed")
-        raise RestoreError(
-            "journal_not_removed",
-            "Incomplete restore could not be recovered.",
-            http_status=500,
-        )
+        cause = exc
+    if cause is None and not os.path.lexists(path):
+        return
+    LOGGER.error(
+        "restore_recovery_failed reason=journal_not_removed error_type=%s",
+        safe_error_type(cause) if cause is not None else "JournalStillPresent",
+    )
+    raise RestoreError(
+        "journal_not_removed",
+        "Incomplete restore could not be recovered.",
+        http_status=500,
+    ) from cause
 
 
 def _dir_size_bytes(path: str) -> int:

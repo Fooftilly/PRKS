@@ -1345,6 +1345,14 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
             json.dump(journal, handle)
         return cfg, journal_file, maint, journal
 
+    def _assert_previous_library(self, cfg):
+        """The library is the pre-restore one, not the half-installed state."""
+        bind_storage(cfg)
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Original"])
+        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
+        self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "partial.pdf")))
+
     def _unenumerable_journal_dir(self):
         """Patch os.listdir so the directory holding the journal cannot be read.
 
@@ -1397,11 +1405,7 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
         out = recover_incomplete_restore(cfg)
         self.assertEqual(out["outcome"], "restored_previous")
         self.assertFalse(os.path.lexists(journal_file))
-        bind_storage(cfg)
-        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
-        self.assertEqual(titles, ["Original"])
-        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
-        self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "partial.pdf")))
+        self._assert_previous_library(cfg)
 
     def test_replaying_a_journal_without_rollback_material_keeps_live_data(self):
         """Replay must not delete what it cannot put back.
@@ -1426,46 +1430,13 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
 
         out = recover_incomplete_restore(cfg)
         self.assertEqual(out["outcome"], "restored_previous")
-        bind_storage(cfg)
-        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
-        self.assertEqual(titles, ["Original"])
-        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
+        self._assert_previous_library(cfg)
 
     def test_incomplete_journal_restores_previous(self):
-        lib = self._bind_library(title="Original", pdf_name="orig.pdf")
-        cfg = lib["cfg"]
-        maint = os.path.join(cfg.root, ".prks-maintenance", "rollback", _JOURNAL_TXN_A)
-        os.makedirs(os.path.join(maint, "database"), exist_ok=True)
-        os.makedirs(os.path.join(maint, "pdfs"), exist_ok=True)
-        os.makedirs(os.path.join(maint, "people"), exist_ok=True)
-        db_name = os.path.basename(cfg.db_path)
-        os.replace(cfg.db_path, os.path.join(maint, "database", db_name))
-        os.replace(cfg.pdfs_dir, os.path.join(maint, "pdfs"))
-        os.replace(cfg.people_dir, os.path.join(maint, "people"))
-        os.makedirs(cfg.pdfs_dir, exist_ok=True)
-        with open(os.path.join(cfg.pdfs_dir, "partial.pdf"), "wb") as handle:
-            handle.write(b"PARTIAL")
-        journal = {
-            "format": "prks-restore-journal",
-            "format_version": 1,
-            "transaction_id": _JOURNAL_TXN_A,
-            "phase": "installing_new",
-            "components": {
-                "database": {"old_moved": True, "new_installed": False},
-                "pdfs": {"old_moved": True, "new_installed": True},
-                "people": {"old_moved": True, "new_installed": False},
-            },
-        }
-        os.makedirs(os.path.join(cfg.root, ".prks-maintenance"), exist_ok=True)
-        with open(os.path.join(cfg.root, ".prks-maintenance", "restore-journal.json"), "w") as handle:
-            json.dump(journal, handle)
+        cfg, _journal_file, _maint, _journal = self._incomplete_journal_state()
         out = recover_incomplete_restore(cfg)
         self.assertEqual(out["outcome"], "restored_previous")
-        bind_storage(cfg)
-        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
-        self.assertEqual(titles, ["Original"])
-        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
-        self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "partial.pdf")))
+        self._assert_previous_library(cfg)
 
     def test_journal_with_an_unusable_transaction_id_is_refused(self):
         """The transaction id becomes a path segment under maintenance_root and
