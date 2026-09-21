@@ -606,6 +606,24 @@ _SUPPORTS_DIR_FD = (
 )
 
 
+def _is_directory_reparse_point(path: str) -> bool:
+    """A directory reparse point that ``os.path.islink()`` does not report.
+
+    NTFS junctions are the case that matters: ``islink()`` is False for them and
+    ``os.walk(followlinks=False)`` does not treat them as links either, so a
+    junction planted at a maintenance subroot would otherwise pass verification
+    and let path-based cleanup reach its target. ``os.path.isjunction()`` is
+    always False on POSIX, so this costs nothing there.
+    """
+    checker = getattr(os.path, "isjunction", None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker(path))
+    except OSError:
+        return False
+
+
 def _verified_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[str]:
     """Portable proof that a maintenance subroot is a real directory.
 
@@ -613,14 +631,19 @@ def _verified_maintenance_subroot(config: StorageConfig, *names: str) -> Optiona
     something is there that is not a real directory -- notably a symlink, which
     a containment check cannot catch because it resolves both operands, so a
     link planted at ``restore-staging`` would silently move the whole cleanup
-    scope outside the library.
+    scope outside the library. Directory reparse points are rejected too; see
+    ``_is_directory_reparse_point()``.
     """
     current = os.path.realpath(config.root)
     for name in (MAINTENANCE_DIRNAME, *names):
         current = os.path.join(current, name)
         if not os.path.lexists(current):
             return None
-        if os.path.islink(current) or not os.path.isdir(current):
+        if (
+            os.path.islink(current)
+            or _is_directory_reparse_point(current)
+            or not os.path.isdir(current)
+        ):
             raise ValueError("maintenance subroot is not a real directory")
     return current
 
@@ -2044,6 +2067,32 @@ def _remove_live_component(config: StorageConfig, name: str) -> None:
                 _safe_remove(side)
 
 
+def _restore_rollback_sidecars(config: StorageConfig, rollback_root: str, name: str) -> None:
+    """Move a component's remaining rollback sidecars onto the live path.
+
+    Only the database has any. Each moves independently, so a pass that crashed
+    between the main file and its sidecars can be completed by a later one --
+    a WAL can hold committed pages, and abandoning it loses them.
+    """
+    if name != "database":
+        return
+    live = _component_live_path(config, name)
+    rolled_dir = os.path.dirname(_rollback_component_path(config, rollback_root, name))
+    base = os.path.basename(config.db_path)
+    pending = [
+        (os.path.join(rolled_dir, base + suffix), live + suffix)
+        for suffix in ("-wal", "-shm", "-journal")
+    ]
+    pending = [(src, dest) for src, dest in pending if os.path.lexists(src)]
+    if not pending:
+        return
+    parent = os.path.dirname(live)
+    if parent:
+        _mkdir_owner(parent)
+    for src, dest in pending:
+        os.replace(src, dest)
+
+
 def _restore_rollback_component(config: StorageConfig, rollback_root: str, name: str) -> None:
     live = _component_live_path(config, name)
     rolled = _rollback_component_path(config, rollback_root, name)
@@ -2053,13 +2102,7 @@ def _restore_rollback_component(config: StorageConfig, rollback_root: str, name:
     if parent:
         _mkdir_owner(parent)
     os.replace(rolled, live)
-    if name == "database":
-        rolled_dir = os.path.dirname(rolled)
-        base = os.path.basename(config.db_path)
-        for suffix in ("-wal", "-shm", "-journal"):
-            src = os.path.join(rolled_dir, base + suffix)
-            if os.path.lexists(src):
-                os.replace(src, live + suffix)
+    _restore_rollback_sidecars(config, rollback_root, name)
 
 
 def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> None:
@@ -2080,6 +2123,13 @@ def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> No
         if flags["old_existed"] and not os.path.lexists(
             _rollback_component_path(config, rollback_root, name)
         ):
+            # Partially applied: an earlier pass already moved this component's
+            # main rollback file onto the live path. Removing live now would
+            # destroy it with nothing to put back, so finish what remains
+            # instead of abandoning it -- for the database that is its
+            # WAL/journal sidecars, which would otherwise be deleted along with
+            # the rollback tree.
+            _restore_rollback_sidecars(config, rollback_root, name)
             continue
         if flags["new_install_started"]:
             _remove_live_component(config, name)

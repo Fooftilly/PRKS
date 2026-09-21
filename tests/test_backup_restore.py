@@ -511,6 +511,31 @@ class TestBackupPathSafety(BackupRestoreTestCase):
 
         self.assertTrue(os.path.isfile(victim))
 
+    def test_verified_subroot_rejects_a_directory_reparse_point(self):
+        """NTFS junctions are directories that os.path.islink() reports False for.
+
+        Patched, because junctions cannot be created on POSIX: the contract under
+        test is that verification consults the junction check at all, since the
+        Windows fallback's os.walk(followlinks=False) would recurse into one.
+        """
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+
+        with patch.object(
+            backup_module.os.path, "isjunction", lambda p: p == staging_root
+        ):
+            with self.assertRaises(ValueError):
+                backup_module._verified_maintenance_subroot(
+                    cfg, *backup_module._STAGING_SUBROOT
+                )
+            with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg,
+                        backup_module._STAGING_SUBROOT,
+                        os.path.join(staging_root, "fixture-stage-aaaaaaaa"),
+                    )
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)
@@ -1431,6 +1456,29 @@ class TestCrashJournalRecovery(BackupRestoreTestCase):
         out = recover_incomplete_restore(cfg)
         self.assertEqual(out["outcome"], "restored_previous")
         self._assert_previous_library(cfg)
+
+    def test_recovery_completes_database_sidecars_after_a_partial_pass(self):
+        """A crash between moving the rollback database and its sidecars.
+
+        The main rollback file is already on the live path, so the "no material"
+        guard would skip the whole component and the WAL -- which can hold
+        committed pages -- would be deleted along with the rollback tree.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+        db_name = os.path.basename(cfg.db_path)
+        rolled_db = os.path.join(maint, "database", db_name)
+        os.replace(rolled_db, cfg.db_path)
+        with open(rolled_db + "-wal", "wb") as handle:
+            handle.write(b"WAL-PAGES")
+
+        out = recover_incomplete_restore(cfg)
+
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertTrue(os.path.isfile(cfg.db_path))
+        self.assertTrue(os.path.isfile(cfg.db_path + "-wal"))
+        with open(cfg.db_path + "-wal", "rb") as handle:
+            self.assertEqual(handle.read(), b"WAL-PAGES")
+        self.assertFalse(os.path.lexists(journal_file))
 
     def test_incomplete_journal_restores_previous(self):
         cfg, _journal_file, _maint, _journal = self._incomplete_journal_state()
