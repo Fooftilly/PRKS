@@ -708,14 +708,18 @@ def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[st
     Path-shaped input is rejected rather than normalized to a different
     filename. The containment check remains the final filesystem boundary.
     """
-    if not url_last_segment or not str(url_last_segment).strip():
+    if url_last_segment is None:
+        return None
+    raw_name = str(url_last_segment)
+    if not raw_name or raw_name != raw_name.strip():
         return None
     try:
-        name = unquote(str(url_last_segment).strip())
+        name = unquote(raw_name)
     except (TypeError, ValueError):
         return None
     if (
         not name
+        or name != name.strip()
         or name in (".", "..")
         or "/" in name
         or "\\" in name
@@ -767,7 +771,7 @@ def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> O
     if not relative_path or not str(relative_path).strip():
         return None
     rel = str(relative_path).strip().replace("\\", "/")
-    if not rel or rel.startswith("/") or "\x00" in rel or re.match(r"^[A-Za-z]:", rel):
+    if not rel or rel.startswith("/") or "\x00" in rel or re.match(r"^[A-Za-z]:/", rel):
         return None
     parts = rel.split("/")
     if any(part in ("", ".", "..") for part in parts):
