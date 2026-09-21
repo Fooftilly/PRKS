@@ -12,6 +12,7 @@ import unittest
 import zipfile
 from dataclasses import fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -708,11 +709,10 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         holds a maintenance tree with a same-named child, so a removal that
         still runs has an obvious victim to destroy.
 
-        Returns ``(cfg, child, root_real, swap, survived)``. ``swap(install)``
-        vacates the real root and calls ``install(vacated, decoy)``;
-        ``survived()`` probes the decoy child *through* ``root_real``, which by
-        then is the decoy itself or a link to it, so one probe covers both
-        swap shapes.
+        ``vacate()`` renames the real root away; ``swap(install)`` vacates and
+        then calls ``install(vacated, decoy)``; ``survived()`` probes the decoy
+        child *through* ``root_real``, which by then is the decoy itself or a
+        link to it, so one probe covers every swap shape.
         """
         cfg = self._cfg()
         leaf = "fixture-stage-aaaaaaaa"
@@ -730,17 +730,40 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         self.addCleanup(shutil.rmtree, moved, ignore_errors=True)
         self.addCleanup(_unlink_if_link, root_real)
 
-        def swap(install):
+        def vacate():
             os.rename(root_real, moved)
+
+        def swap(install):
+            vacate()
             install(root_real, decoy)
 
         def survived():
-            return os.path.isdir(os.path.join(root_real, *victim))
+            # Probed at both, because the decoy may still be where it started
+            # (a refusal before the swap ever lands), or may have become
+            # root_real, or may be what root_real links to.
+            return any(
+                os.path.isdir(os.path.join(base, *victim))
+                for base in (root_real, decoy)
+            )
 
-        return cfg, child, root_real, swap, survived
+        return SimpleNamespace(
+            cfg=cfg,
+            child=child,
+            root_real=root_real,
+            decoy=decoy,
+            vacate=vacate,
+            swap=swap,
+            survived=survived,
+        )
 
-    def _assert_swapped_root_refused(self, cfg, child, swapped, survived):
-        """Demand a refusal, and that the swapped-in tree was left alone."""
+    def _assert_swapped_root_refused(self, cfg, child, survived, *, swapped=None):
+        """Demand a refusal, and that the swapped-in tree was left alone.
+
+        ``swapped`` guards against a vacuous run for the cases whose swap is
+        driven from inside the removal; a case that vacates the root up front
+        needs no such guard, and must not assert one, since the fix can refuse
+        before the swap is ever reached.
+        """
         refusal = None
         try:
             backup_module._remove_maintenance_child(
@@ -748,7 +771,10 @@ class TestBackupPathSafety(BackupRestoreTestCase):
             )
         except ValueError as exc:
             refusal = exc
-        self.assertTrue(swapped(), "the swap never happened; the test proves nothing")
+        if swapped is not None:
+            self.assertTrue(
+                swapped(), "the swap never happened; the test proves nothing"
+            )
         # Checked before the refusal so a regression reports the data loss
         # rather than the missing exception.
         self.assertTrue(
@@ -762,19 +788,26 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         """Swap the root at the descent's first open of it, and demand a refusal."""
         if not backup_module._SUPPORTS_DIR_FD:
             self.skipTest("descriptor-relative removal unavailable")
-        cfg, child, root_real, swap, survived = self._root_swap_fixture()
+        fixture = self._root_swap_fixture()
+        return self._refused_with_open_spy(
+            fixture, lambda: fixture.swap(install_replacement)
+        )
+
+    def _refused_with_open_spy(self, fixture, at_first_root_open, *, guard=True):
+        """Run the removal, firing ``at_first_root_open`` at the root's open."""
         done = []
         real_open = os.open
 
         def spy_open(path, *args, **kwargs):
-            if not done and _fspath_or_none(path) == root_real:
+            if not done and _fspath_or_none(path) == fixture.root_real:
                 done.append(True)
-                swap(install_replacement)
+                at_first_root_open()
             return real_open(path, *args, **kwargs)
 
+        guarded = (lambda: bool(done)) if guard else None
         with patch.object(backup_module.os, "open", spy_open):
             return self._assert_swapped_root_refused(
-                cfg, child, lambda: bool(done), survived
+                fixture.cfg, fixture.child, fixture.survived, swapped=guarded
             )
 
     def test_descriptor_removal_refuses_a_root_link_swapped_in_after_authorization(self):
@@ -801,23 +834,49 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         it simply describes the replacement. Only the identity captured before
         authorization can tell the two apart.
         """
-        cfg, child, _root_real, swap, survived = self._root_swap_fixture()
+        fixture = self._root_swap_fixture()
         done = []
         real_verify = backup_module._verified_maintenance_subroot_from
 
         def swapping_verify(*args, **kwargs):
             if not done:
                 done.append(True)
-                swap(lambda vacated, decoy: os.rename(decoy, vacated))
+                fixture.swap(lambda vacated, decoy: os.rename(decoy, vacated))
             return real_verify(*args, **kwargs)
 
         with patch.object(backup_module, "_SUPPORTS_DIR_FD", False), patch.object(
             backup_module, "_verified_maintenance_subroot_from", swapping_verify
         ):
             refusal = self._assert_swapped_root_refused(
-                cfg, child, lambda: bool(done), survived
+                fixture.cfg, fixture.child, fixture.survived,
+                swapped=lambda: bool(done),
             )
         self.assertIn("changed identity", refusal)
+
+    def test_removal_refuses_a_root_that_was_gone_when_identity_was_captured(self):
+        """A stat that fails is the rename window, not a benign absence.
+
+        Vacating the root before the capture used to disable the whole identity
+        check: os.stat() raised, the capture yielded None, and the comparison
+        was skipped. Authorization still passed -- os.path.realpath() is
+        non-strict and hands back the pathname of a missing directory -- so a
+        real directory renamed into that pathname was descended into and its
+        matching child deleted.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        fixture = self._root_swap_fixture()
+        fixture.vacate()
+
+        # No swap guard: with the root already gone, the capture refuses before
+        # the descent ever opens anything, so nothing fires the spy.
+        refusal = self._refused_with_open_spy(
+            fixture,
+            lambda: os.rename(fixture.decoy, fixture.root_real),
+            guard=False,
+        )
+
+        self.assertIn("identity", refusal)
 
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()

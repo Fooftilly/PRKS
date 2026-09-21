@@ -677,37 +677,47 @@ def _verified_maintenance_subroot_from(
 
 def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[int]:
     """Descriptor for a maintenance subroot, reached from the storage root."""
-    return _open_maintenance_subroot_from(_resolved_storage_root(config), *names)
+    root_real = _resolved_storage_root(config)
+    return _open_maintenance_subroot_from(
+        root_real, *names, expect_identity=_storage_root_identity(root_real)
+    )
 
 
-def _storage_root_identity(root_real: str) -> Optional[os.stat_result]:
-    """Identity of the canonical storage root at snapshot time, if it exists."""
+def _storage_root_identity(root_real: str) -> os.stat_result:
+    """Identity of the canonical storage root, captured before authorization.
+
+    A stat that fails here is not a benign absence. It is the rename window this
+    identity exists to catch: the root vanishes precisely because someone moved
+    it, and ``os.path.realpath()`` is non-strict, so the authorization check
+    downstream would still pass on the pathname it left behind. Refusing is the
+    only reading that cannot be turned into a deletion somewhere else.
+    """
     try:
         return os.stat(root_real)
-    except OSError:
-        return None
+    except OSError as exc:
+        raise ValueError("storage root identity could not be captured") from exc
 
 
-def _storage_root_keeps_identity(
-    root_real: str, expected: Optional[os.stat_result]
-) -> bool:
+def _storage_root_keeps_identity(root_real: str, expected: os.stat_result) -> bool:
     """Whether ``root_real`` still names the directory captured as ``expected``.
 
     The portable branch has no descriptor to bind to, so this is the only way it
     can tell that the pathname it is about to delete through still refers to the
-    directory the caller authorized. An absent expectation is not a pass: a
-    destructive path that cannot confirm what it is acting on must refuse.
+    directory the caller authorized. A root that cannot be stat-ed now is not a
+    pass either: a destructive path that cannot confirm what it is acting on
+    must refuse.
     """
-    if expected is None:
+    try:
+        current = os.stat(root_real)
+    except OSError:
         return False
-    current = _storage_root_identity(root_real)
-    return current is not None and os.path.samestat(current, expected)
+    return os.path.samestat(current, expected)
 
 
 def _open_maintenance_subroot_from(
     root_real: str,
     *names: str,
-    expect_identity: Optional[os.stat_result] = None,
+    expect_identity: os.stat_result,
 ) -> Optional[int]:
     """``_open_maintenance_subroot()`` anchored to a caller's root snapshot.
 
@@ -731,6 +741,10 @@ def _open_maintenance_subroot_from(
     renamed into place. Either way the descent runs in the directory the caller
     authorized, or not at all.
 
+    ``expect_identity`` is required rather than optional so that the comparison
+    cannot be skipped: an absent identity means the root could not be stat-ed,
+    which is the attack rather than an excuse to stop checking.
+
     Returns None when the subroot does not exist or when the platform has no
     descriptor-relative removal; raises ValueError when a component exists but
     is not a real directory.
@@ -745,9 +759,7 @@ def _open_maintenance_subroot_from(
         return None
     except OSError as exc:
         raise ValueError("storage root is not a real directory") from exc
-    if expect_identity is not None and not os.path.samestat(
-        os.fstat(fd), expect_identity
-    ):
+    if not os.path.samestat(os.fstat(fd), expect_identity):
         os.close(fd)
         raise ValueError("storage root changed identity during removal")
     handed_over = False
