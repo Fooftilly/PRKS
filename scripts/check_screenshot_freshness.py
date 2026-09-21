@@ -129,9 +129,10 @@ def require_clean_capture_sources() -> None:
 
 
 def _entry_revision(entry: dict, global_source: str) -> str:
-    per_file = str(entry.get("source_commit") or "").strip()
-    if per_file:
-        return per_file
+    # Explicit null/empty per-file revision means revisionless — do not inherit
+    # the global source_commit. Fall back only when the key is absent (legacy).
+    if "source_commit" in entry:
+        return str(entry.get("source_commit") or "").strip()
     return global_source
 
 
@@ -237,7 +238,8 @@ def main() -> int:
 
     if not stale_notes:
         if compare_failed:
-            return 0
+            # Freshness is unknown; strict mode must not treat that as clean.
+            return 1 if strict else 0
         revs = sorted({rev for _, rev in checked})
         shown = ", ".join(r[:12] for r in revs[:3])
         if len(revs) > 3:

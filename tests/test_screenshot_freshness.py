@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -88,9 +89,72 @@ class ScreenshotManifestMergeTests(unittest.TestCase):
             by_file = {row["file"]: row for row in data["screenshots"]}
             self.assertEqual(by_file["folders.png"]["source_commit"], "bbb222")
             self.assertEqual(by_file["tags.png"]["source_commit"], "aaa111")
-            # Expected extras stay listed even when the prior manifest omitted them.
+            # Expected extras stay listed even when the prior manifest omitted them,
+            # and remain explicitly revisionless (do not inherit global aaa111).
             self.assertIn("person.png", by_file)
-            self.assertNotIn("source_commit", by_file["person.png"])
+            self.assertIn("source_commit", by_file["person.png"])
+            self.assertIsNone(by_file["person.png"]["source_commit"])
+            check = _load_check()
+            self.assertEqual(
+                check._entry_revision(by_file["person.png"], "aaa111"),
+                "",
+            )
+            self.assertEqual(
+                check._entry_revision(
+                    {"file": "legacy.png"},  # key absent → legacy global fallback
+                    "aaa111",
+                ),
+                "aaa111",
+            )
+
+    def test_seeded_null_revision_not_blessed_by_global(self):
+        """Non-null global revision must not cover newly seeded expected files."""
+        capture = _load_capture()
+        check = _load_check()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "screenshots"
+            out.mkdir()
+            for name in capture.EXPECTED_ALL_FILES:
+                (out / name).write_bytes(b"png")
+            manifest = out / "manifest.json"
+            manifest.write_text(
+                """{
+  "schema_version": 1,
+  "source_commit": "global999",
+  "capture_set": "all",
+  "screenshots": [
+    {"file": "folders.png", "scenario": "public-domain-folder", "source_commit": "global999"}
+  ]
+}
+""",
+                encoding="utf-8",
+            )
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ):
+                capture._write_manifest(
+                    "readme",
+                    [{"file": "folders.png", "scenario": "public-domain-folder"}],
+                    "partial111",
+                )
+            data = __import__("json").loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(data["source_commit"], "global999")
+            by_file = {row["file"]: row for row in data["screenshots"]}
+            self.assertEqual(by_file["folders.png"]["source_commit"], "partial111")
+            self.assertIsNone(by_file["tags.png"]["source_commit"])
+            self.assertEqual(
+                check._entry_revision(by_file["tags.png"], "global999"),
+                "",
+            )
+            with mock.patch.object(check, "MANIFEST", manifest):
+                with mock.patch.object(check, "_warn") as warn:
+                    with mock.patch.object(check, "_affecting_after", return_value=[]):
+                        with mock.patch.dict(os.environ, {}, clear=False):
+                            code = check.main()
+            self.assertEqual(code, 0)
+            joined = " ".join(str(c.args[0]) for c in warn.call_args_list)
+            self.assertIn("untracked or revisionless", joined)
+            self.assertIn("tags.png", joined)
 
     def test_legacy_readme_partial_keeps_extras_visible_to_freshness(self):
         capture = _load_capture()
@@ -132,7 +196,8 @@ class ScreenshotManifestMergeTests(unittest.TestCase):
             by_file = {row["file"]: row for row in data["screenshots"]}
             for name in capture.EXPECTED_EXTRA_FILES:
                 self.assertIn(name, by_file)
-                self.assertFalse(str(by_file[name].get("source_commit") or "").strip())
+                self.assertIn("source_commit", by_file[name])
+                self.assertIsNone(by_file[name]["source_commit"])
 
             with mock.patch.object(check, "MANIFEST", manifest):
                 with mock.patch.object(check, "_warn") as warn:
@@ -291,6 +356,102 @@ class ScreenshotPromotionRollbackTests(unittest.TestCase):
             self.assertEqual((out / "folders.png").read_bytes(), b"old-folders")
             self.assertEqual((out / "work.png").read_bytes(), b"old-work")
             self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+
+    def test_restore_failure_preserves_backup_dir(self):
+        capture = _load_capture()
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            out = parent / "screenshots"
+            out.mkdir()
+            stage = parent / "stage"
+            stage.mkdir()
+            manifest = out / "manifest.json"
+            (out / "folders.png").write_bytes(b"old-png")
+            (stage / "folders.png").write_bytes(b"new-png")
+            manifest.write_text(
+                '{"schema_version":1,"source_commit":"old","screenshots":[]}\n',
+                encoding="utf-8",
+            )
+            real_replace = os.replace
+            real_write = Path.write_text
+            preserved: list[Path] = []
+
+            def write_text_fail(self, data, encoding="utf-8", errors=None, newline=None):
+                if Path(self).resolve() == manifest.resolve():
+                    raise OSError("manifest write failed")
+                return real_write(
+                    self, data, encoding=encoding, errors=errors, newline=newline
+                )
+
+            def replace_fail_on_restore(src, dst):
+                src_path = Path(src)
+                dst_path = Path(dst)
+                # Fail when restoring the backed-up PNG into OUT_DIR.
+                if (
+                    dst_path.resolve() == (out / "folders.png").resolve()
+                    and "prks-shot-backup-" in str(src_path)
+                ):
+                    raise OSError("restore replace failed")
+                return real_replace(src, dst)
+
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ), mock.patch.object(Path, "write_text", write_text_fail), mock.patch.object(
+                capture.os, "replace", replace_fail_on_restore
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    capture._promote_capture(
+                        stage,
+                        "readme",
+                        [{"file": "folders.png", "scenario": "public-domain-folder"}],
+                        "newhead",
+                    )
+            msg = str(ctx.exception)
+            self.assertIn("backups retained at", msg)
+            marker = "backups retained at "
+            start = msg.index(marker) + len(marker)
+            # Path ends before the parenthetical error list.
+            path_text = msg[start:].split(" (", 1)[0].strip()
+            backup_dir = Path(path_text)
+            preserved.append(backup_dir)
+            self.assertTrue(backup_dir.is_dir(), msg)
+            self.assertTrue((backup_dir / "folders.png").is_file())
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+class ScreenshotFreshnessStrictTests(unittest.TestCase):
+    def test_compare_failed_returns_nonzero_when_strict(self):
+        check = _load_check()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "screenshots"
+            out.mkdir()
+            (out / "folders.png").write_bytes(b"png")
+            manifest = out / "manifest.json"
+            manifest.write_text(
+                """{
+  "schema_version": 1,
+  "source_commit": null,
+  "screenshots": [
+    {"file": "folders.png", "scenario": "public-domain-folder", "source_commit": "deadbeef"}
+  ]
+}
+""",
+                encoding="utf-8",
+            )
+            with mock.patch.object(check, "MANIFEST", manifest):
+                with mock.patch.object(
+                    check,
+                    "_affecting_after",
+                    side_effect=subprocess.CalledProcessError(128, ["git"]),
+                ):
+                    with mock.patch.object(check, "_warn"):
+                        with mock.patch.dict(
+                            os.environ,
+                            {"PRKS_SCREENSHOT_FRESHNESS_STRICT": "1"},
+                            clear=False,
+                        ):
+                            code = check.main()
+            self.assertEqual(code, 1)
 
 
 class ScreenshotDirtyTreeTests(unittest.TestCase):

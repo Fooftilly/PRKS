@@ -14,47 +14,58 @@
   "screenshots": [
     {
       "file": "folders.png",
-      "scenario": "public-domain-folder"
+      "scenario": "public-domain-folder",
+      "source_commit": null
     },
     {
       "file": "work.png",
-      "scenario": "origin-of-species-work-pdf"
+      "scenario": "origin-of-species-work-pdf",
+      "source_commit": null
     },
     {
       "file": "people.png",
-      "scenario": "people-library"
+      "scenario": "people-library",
+      "source_commit": null
     },
     {
       "file": "all-folders.png",
-      "scenario": "folder-library"
+      "scenario": "folder-library",
+      "source_commit": null
     },
     {
       "file": "tags.png",
-      "scenario": "tags"
+      "scenario": "tags",
+      "source_commit": null
     },
     {
       "file": "search.png",
-      "scenario": "search-darwin"
+      "scenario": "search-darwin",
+      "source_commit": null
     },
     {
       "file": "progress.png",
-      "scenario": "progress-in-progress"
+      "scenario": "progress-in-progress",
+      "source_commit": null
     },
     {
       "file": "types.png",
-      "scenario": "file-types"
+      "scenario": "file-types",
+      "source_commit": null
     },
     {
       "file": "person.png",
-      "scenario": "darwin-person"
+      "scenario": "darwin-person",
+      "source_commit": null
     },
     {
       "file": "note.png",
-      "scenario": "commonplace-note"
+      "scenario": "commonplace-note",
+      "source_commit": null
     },
     {
       "file": "group.png",
-      "scenario": "nineteenth-century-group"
+      "scenario": "nineteenth-century-group",
+      "source_commit": null
     }
   ]
 }

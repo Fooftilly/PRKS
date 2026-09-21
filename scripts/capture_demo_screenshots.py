@@ -159,6 +159,8 @@ def _build_manifest_payload(
             by_file[name] = {
                 "file": name,
                 "scenario": SCENARIO_BY_FILE[name],
+                # Explicit null: do not inherit the global source_commit.
+                "source_commit": None,
             }
 
     ordered: list[dict] = []
@@ -270,23 +272,32 @@ def _promote_capture(
 
         MANIFEST.write_text(manifest_text, encoding="utf-8")
         print("wrote", MANIFEST)
-    except Exception:
+    except Exception as exc:
         # Restore originals for every path we may have mutated.
+        restore_errors: list[str] = []
         for dest, prior in backed_up:
             try:
                 if prior is not None and prior.is_file():
                     os.replace(prior, dest)
                 elif dest.is_file() and dest in promoted:
                     dest.unlink()
-            except OSError:
-                pass
+            except OSError as restore_exc:
+                restore_errors.append(f"{dest.name}: {restore_exc}")
         if manifest_backup is not None and manifest_backup.is_file():
             try:
                 os.replace(manifest_backup, MANIFEST)
-            except OSError:
-                pass
+            except OSError as restore_exc:
+                restore_errors.append(f"manifest.json: {restore_exc}")
+        if restore_errors:
+            # Keep backup_dir so the operator can recover manually.
+            raise RuntimeError(
+                "Screenshot promotion failed and rollback could not restore "
+                f"all artifacts; backups retained at {backup_dir} "
+                f"({'; '.join(restore_errors)})"
+            ) from exc
+        shutil.rmtree(backup_dir, ignore_errors=True)
         raise
-    finally:
+    else:
         shutil.rmtree(backup_dir, ignore_errors=True)
 
 
