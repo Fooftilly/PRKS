@@ -5341,9 +5341,12 @@ class TestServerAPI(unittest.TestCase):
                 self._sv_json("GET", "/api/works/" + body["id"], None)[0], 200
             )
 
-    def test_oembed_url_is_a_percent_encoded_query_value(self):
-        """Appended raw, a YouTube URL's own `&`/`#` both truncate the lookup
-        and let the request body append parameters to the outbound query."""
+    def test_oembed_reconstructs_a_canonical_validated_youtube_url(self):
+        """The network helper sends only PRKS's validated provider identity.
+
+        Playlist/time parameters are presentation spelling, not video identity,
+        and non-YouTube input must never reach urlopen at all.
+        """
         seen = []
 
         class _FakeResponse:
@@ -5363,8 +5366,11 @@ class TestServerAPI(unittest.TestCase):
         with patch.object(server_module, "urlopen", fake_urlopen):
             meta = server_module._fetch_youtube_oembed(
                 "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
+            rejected = server_module._fetch_youtube_oembed(
+                "https://example.invalid/watch?v=dQw4w9WgXcQ")
 
         self.assertEqual(meta, {"title": "T"})
+        self.assertIsNone(rejected)
         self.assertEqual(len(seen), 1)
         requested = seen[0]
         prefix = "https://www.youtube.com/oembed?format=json&url="
@@ -5374,7 +5380,7 @@ class TestServerAPI(unittest.TestCase):
         self.assertNotIn("#", value)
         self.assertEqual(
             urllib.parse.unquote(value),
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
 
 if __name__ == '__main__':
