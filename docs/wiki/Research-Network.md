@@ -8,7 +8,7 @@ flowchart LR
     A -->|evidence / source| W
     W -->|research-note mentions| C[Concepts]
     C -->|parent of| C2[Child Concepts]
-    A -->|supports / opposes / qualifies| P[Positions]
+    A -->|supports / opposes / qualifies / holds| P[Positions]
     A -->|responds to| A2[Other Arguments]
     P --> G[Research Graph]
     A --> G
