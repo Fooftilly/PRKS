@@ -11,6 +11,7 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "docs" / "screenshots"
@@ -33,8 +34,35 @@ if str(SCRIPTS) not in sys.path:
 from check_screenshot_freshness import require_clean_capture_sources  # noqa: E402
 
 
+def _assert_loopback_base(base_url: str) -> str:
+    """Refuse non-loopback bases so CLI/URL input cannot be used for SSRF."""
+    parsed = urlparse((base_url or "").strip())
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "http"
+        or host not in ("127.0.0.1", "localhost")
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise RuntimeError(
+            "Screenshot capture only accepts http://127.0.0.1 (or localhost) "
+            "bases with no path/query; refusing remote or opaque URLs."
+        )
+    port = parsed.port
+    origin = f"http://{host}"
+    if port is not None:
+        origin = f"{origin}:{port}"
+    return origin
+
+
 def _get(base: str, path: str):
-    req = urllib.request.Request(base.rstrip("/") + path)
+    if not path.startswith("/"):
+        raise RuntimeError("Screenshot API paths must be absolute on the loopback base.")
+    req = urllib.request.Request(_assert_loopback_base(base) + path)
     with urllib.request.urlopen(req, timeout=20) as res:
         return json.loads(res.read().decode())
 
@@ -170,7 +198,7 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
     if not head:
         raise RuntimeError("Could not resolve git HEAD for screenshot provenance.")
 
-    base = base_url.rstrip("/")
+    base = _assert_loopback_base(base_url)
 
     folders = _get(base, "/api/folders")
     works = _get(base, "/api/works")

@@ -164,6 +164,12 @@ def main() -> int:
         else:
             stale_notes.append(f"{label} @ {source[:12]} ({preview})")
 
+    strict = os.environ.get("PRKS_SCREENSHOT_FRESHNESS_STRICT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     if not stale_notes:
         revs = sorted({rev for _, rev in checked})
         shown = ", ".join(r[:12] for r in revs[:3])
@@ -180,7 +186,9 @@ def main() -> int:
         f"after capture ({joined}). "
         "Regenerate with: python scripts/update_demo_screenshots.py"
     )
-    return 0
+    # Default remains advisory (exit 0) for PR CI; opt into failing locally/CI
+    # with PRKS_SCREENSHOT_FRESHNESS_STRICT=1.
+    return 1 if strict else 0
 
 
 if __name__ == "__main__":
