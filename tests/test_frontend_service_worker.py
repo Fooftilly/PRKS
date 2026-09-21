@@ -16,9 +16,9 @@ _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_sw_selftest.js")
 # <script src>/<link href>/<img src> in index.html:
 #   - '/' and '/index.html' are the navigation documents themselves.
 #   - the Inter variable-font file is only reachable via a CSS url().
-#   - pdf-viewer-runtime.js is statically import()ed by works-pdf.js (a
-#     type="module" script), so the browser's module graph fetches it eagerly
-#     even though no <script> tag names it directly.
+#   - pdf-viewer-runtime.js and pdf-cache-install.js are statically import()ed
+#     by works-pdf.js (a type="module" script), so the browser's module graph
+#     fetches them eagerly even though no <script> tag names them directly.
 #   - icon-512.png is only referenced from manifest.webmanifest (a separate
 #     JSON file, not index.html markup), for PWA install/splash icons.
 _SHELL_EXTRAS_NOT_IN_HTML = {
@@ -26,6 +26,7 @@ _SHELL_EXTRAS_NOT_IN_HTML = {
     "/index.html",
     "/vendor/inter/InterVariable.woff2",
     "/js/pdf-viewer-runtime.js",
+    "/js/pdf-cache-install.js",
     "/icons/icon-512.png",
 }
 

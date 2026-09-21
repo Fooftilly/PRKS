@@ -150,6 +150,7 @@
         // Statically import()ed by works-pdf.js -- needed to boot that module,
         // not the lazy heavy PDF-viewer bundle it in turn loads on demand.
         '/js/pdf-viewer-runtime.js',
+        '/js/pdf-cache-install.js',
         '/js/components/playlists.js',
         '/js/components/people.js',
         '/js/components/people-groups.js',
