@@ -1,32 +1,38 @@
 # Security and Operations
 
-PRKS is primarily a local/self-hosted application. Its default deployment assumptions matter to its security model.
+PRKS is primarily a local/self-hosted application. Its default deployment assumptions are part of the security model.
 
-## Network binding
+## Network and browser security
 
-The default process binds to `127.0.0.1:8080`, limiting access to the local machine.
+PRKS is a single-user app with **no built-in authentication**. Direct runs bind **127.0.0.1** by default. Docker Compose publishes the host port on **127.0.0.1** by default. Reaching it from another machine requires an explicit `--host` or `PRKS_PUBLISH_HOST` override. Do that only on a trusted network.
 
-Binding to `0.0.0.0` or otherwise publishing PRKS to a LAN/VPN changes the trust boundary.
+Local browser use through `http://127.0.0.1:8080` or `http://localhost:8080` works without extra Host configuration. LAN access by IP literal (after `PRKS_PUBLISH_HOST=0.0.0.0`) also needs no `PRKS_TRUSTED_HOSTS` setting.
 
-PRKS currently has no application-level authentication. Do not expose it to untrusted networks without an access layer you control.
+Custom LAN DNS names must be listed exactly:
 
-Docker Compose publishes host loopback by default even though the container process listens on all container interfaces.
+```bash
+PRKS_PUBLISH_HOST=0.0.0.0 \
+PRKS_TRUSTED_HOSTS=prks.home.arpa \
+docker compose up -d
+```
 
-## Sensitive research data
+Malformed `PRKS_TRUSTED_HOSTS` entries refuse to start the server. This variable is for extra DNS hostnames on direct HTTP/LAN access, not reverse-proxy or HTTPS termination.
 
-The library database, managed files, notes, annotations, and `.prks-backup` files can contain private research information. Store backups with the same care as the live library.
+The HTTP adapter validates `Host` on every request, rejects cross-origin state-changing `/api/` requests when `Origin` is supplied (`Origin: null` included), and requires `application/json` for JSON POST/PATCH bodies. Missing `Origin` remains allowed for local scripts and non-browser clients. PRKS does not send CORS headers and does not allow cross-origin API access.
 
-Browser-local workspace state is separate from server backups.
+These controls reduce accidental/cross-origin access and DNS-rebinding risk. They are not authentication. Public Internet exposure is still unsafe.
+
+Research notes (`works.text_content`) are stored as raw Markdown, including literal `[[concept:Name]]` and `[[argument:A-ID|Label]]` markup. A preprocessor turns recognized references into internal hash links, then EasyMDE/Marked renders Markdown, then a pinned local DOMPurify allowlist sanitizes the preview (`frontend/vendor/dompurify`, `frontend/js/markdown-sanitize.js`). Markup inside code spans/fences or escaped as `\[[` is not a semantic reference. Arbitrary or active HTML is not a supported contract: unsafe tags, attributes, and URL schemes are stripped from the preview only. Sanitization never rewrites saved Markdown.
+
+Frontend libraries (Inter, EasyMDE, CodeMirror, Lucide, DOMPurify, Cytoscape, the PDF viewer) are local files under `frontend/vendor/`. Node is not a runtime dependency. Docker does not run npm.
 
 ## Remote person images
 
 Remote portrait fetching is constrained to reduce SSRF/file-ingestion risk. Direct public HTTP/HTTPS resources are required; private/local/link-local targets and redirects are refused, download/decode work is bounded, and accepted images are transcoded before caching.
 
-## Logging
+## Logging and diagnostics
 
-Logging is configured to avoid turning normal diagnostics into a second copy of sensitive research content. Persistent error logging and retention are configurable.
-
-Use the privacy-safe logging helpers/policies already present instead of adding raw request/document dumps.
+Operational logging and performance diagnostics are documented in [Configuration and Operations](Configuration-and-Operations.md). PRKS deliberately avoids treating increased log verbosity as permission to log research contents.
 
 ## Backup/restore
 

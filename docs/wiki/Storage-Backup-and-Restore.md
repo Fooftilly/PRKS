@@ -6,52 +6,54 @@ PRKS stores canonical research data locally and provides an application-level ba
 
 `PRKS_STORAGE` selects the persistent-data root. Without it, normal repository runs use `data/`.
 
-Typical storage includes:
+Canonical data includes the main SQLite library database and managed research files. Thumbnail caches, PDF text-search indexes, research-reference indexes, and similar rebuildable artifacts are derived data.
 
-- `prks_data.db` — canonical SQLite database;
-- `pdfs/` — managed PDFs;
-- person-managed/cache files where applicable;
-- processing-queue data when configured inside the storage root;
-- derived indexes/caches/logs.
+For the full path/environment-variable reference, see [Configuration and Operations](Configuration-and-Operations.md).
 
-The exact current environment variables and paths are documented in the [README](https://github.com/Fooftilly/PRKS/blob/master/README.md).
+## Backup and restore
 
-## Canonical vs derived
+Use **Settings → Backup & restore → Download backup**. That is the supported way to preserve a PRKS library.
 
-Backups preserve research state, not every byte that happens to exist under the runtime directory.
+A verified `.prks-backup` archive contains:
 
-Canonical data includes the main library database and managed research files.
+- a consistent SQLite snapshot of the main database (works, people, roles, tags, folders, playlists, annotations, PDF annotation metadata, relationships, and app settings stored in the database)
+- managed PDFs
+- managed person files
+- the processing queue, when that directory lives under the configured PRKS storage root
 
-Derived data includes thumbnail caches, PDF text-search indexes, research-reference indexes, and similar rebuildable artifacts. These are excluded from the canonical archive and rebuilt/reconciled after restore.
+It does **not** include thumbnail cache, the PDF text-search index (`prks_text_index.db` and WAL/SHM files), the derived research-reference index (`prks_research_index.db` and WAL/SHM files), logs, or temporary maintenance files. After restore, thumbnails are discarded and the text index and research-reference index are rebuilt.
 
-## Supported backup
+`.prks-backup` files hold private research data. Store them as carefully as the live library. The archive is ZIP-based, but restore it through PRKS (**Settings → Backup & restore**) rather than unzipping it into `/data` by hand.
 
-Use **Settings → Backup & restore → Download backup**.
+Restore uploads the archive into a staging area, verifies structure, hashes, SQLite integrity, and schema compatibility, then asks you to type `RESTORE` before replacing the current library. A malformed or corrupt backup cannot change live data. If restore is interrupted before it commits, PRKS puts the previous library back.
 
-A `.prks-backup` archive contains a consistent SQLite snapshot plus managed research files covered by the backup format. Treat it as private research data.
+While PRKS is running, ordinary reads may overlap. Canonical mutations are serialized (one writer at a time). Creating a backup blocks canonical mutations for the whole snapshot and archive so the ZIP stays consistent; ordinary reads may continue. Restore is exclusive: it waits for in-flight storage access, then blocks new reads, mutations, and backups until replacement and rebind finish. SQLite connections remain per-operation. Threading does not mean parallel SQLite writes, and there is no connection pool.
 
-Creating a backup coordinates with canonical mutations so the archive is internally consistent.
+The backup does not include machine-specific deployment settings (`PRKS_STORAGE`, `PRKS_FOR_PROCESSING_DIR`, bind host, Docker UID/GID, and similar). A backup made under Docker `/data` can be restored to `./data` or another `PRKS_STORAGE`. Browser `localStorage` (theme, force-mobile layout, open workspace tabs/split layout, and other device-only settings) is not part of the server backup.
 
-## Restore
+There is no cloud backup, schedule, or encryption in this release. If you copy a `.prks-backup` off a trusted disk, use filesystem or container encryption, or wait for a later encrypted-backup feature.
 
-Restore is intentionally stricter than extracting a ZIP over the storage directory.
+### Emergency cold copy
 
-The application stages and verifies the archive, checks structure/hashes/SQLite/schema compatibility, and only then replaces live data. The UI requires an explicit destructive confirmation.
+If you cannot use Settings backup, stop PRKS first, copy the entire storage root, then start it again. Do not copy a live SQLite directory as the primary backup method.
 
-If replacement is interrupted before commit completes, restore logic is designed to preserve/put back the prior library rather than leave a partially replaced state.
+Docker:
+
+```bash
+docker compose stop prks
+# copy the host storage directory (normally ./data) to a backup location
+# outside the live storage tree
+docker compose start prks
+```
+
+The copy destination must be outside the live storage tree. Do not copy into `./data` or into `/data`.
+
+## Schema compatibility
+
+PRKS performs supported schema migrations at startup and refuses databases created by an unsupported newer schema rather than attempting a downgrade. See [Configuration and Operations](Configuration-and-Operations.md#database-migrations).
 
 ## What backup does not preserve
 
 Machine-specific deployment configuration is not research data. Bind address, Docker UID/GID, `PRKS_STORAGE`, processing-directory location, and other deployment settings are not portable library state.
 
 Browser-local workspace state—theme, open tabs, split layout, and similar localStorage state—is also not part of the server backup.
-
-## Cold copy
-
-If the application-level backup cannot be used, stop PRKS before copying the complete storage root. A blind live copy of SQLite/WAL-managed storage should not be the normal backup method.
-
-## Schema migrations
-
-PRKS performs supported schema migrations at startup and refuses databases created by an unsupported newer schema rather than attempting a downgrade.
-
-Before installing a release/revision that announces a schema change, keep a verified backup.

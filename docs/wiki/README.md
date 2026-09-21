@@ -8,7 +8,7 @@ Edit these Markdown files through normal repository pull requests. Do not treat 
 
 The wiki explains stable product concepts, workflows, architecture, and contributor practices. Fast-moving implementation details remain in their authoritative repository documents:
 
-- `README.md` — installation, configuration, current user-facing behavior, and command reference.
+- `README.md` — installation, configuration, and safety contracts (host/port, Docker publish, env vars, schema version, auth warning). Detailed current feature/user behavior lives in this wiki.
 - `AGENTS.md` — implementation constraints and contributor/agent rules.
 - `DESIGN.md` — detailed design language and UI/interaction rules.
 - `docs/local-first-sync.md` — local-first protocol design and implementation notes.

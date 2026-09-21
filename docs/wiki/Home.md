@@ -20,8 +20,10 @@ The wiki is the orientation layer for users and contributors. It explains how th
 - [Domain Model](Domain-Model.md) — the main entities and relationships.
 - [Testing](Testing.md) — unit/API/structural tests, browser E2E, and UX tours.
 - [Development Workflow](Development-Workflow.md) — where changes belong and how to keep guidance current.
+- [Developer Reference](Developer-Reference.md) — detailed contributor commands, tooling, and repository layout.
 - [Dependencies and Vendoring](Dependencies-and-Vendoring.md) — dependency policy and the dependency gate.
 - [Security and Operations](Security-and-Operations.md) — binding, authentication boundary, logging, and security-sensitive behavior.
+- [Configuration and Operations](Configuration-and-Operations.md) — environment variables, migrations, logging, and diagnostics.
 - [Troubleshooting](Troubleshooting.md) — common startup, data, PDF, offline, and test problems.
 - [Glossary](Glossary.md) — PRKS-specific terms.
 
