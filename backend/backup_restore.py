@@ -1923,27 +1923,44 @@ def _safe_extract_dest(extract_root: str, arcname: str) -> str:
     return dest
 
 
+def _sweep_entries(
+    config: StorageConfig, subroot: tuple[str, ...], *, event: str
+) -> list[tuple[str, str]]:
+    """Direct children of a verified maintenance subroot, ready to sweep.
+
+    Shared by the startup sweeps. A subroot that is not a real directory yields
+    nothing and is logged rather than deleted through: startup must not be
+    blocked, and must not delete through whatever is standing there. A link
+    among the entries is removed rather than returned -- neither sweep has any
+    use for one, and following it is what this boundary exists to prevent.
+    """
+    try:
+        root = _verified_maintenance_subroot(config, *subroot)
+    except ValueError:
+        LOGGER.error("%s reason=unsafe_root", event)
+        return []
+    if root is None:
+        return []
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    entries: list[tuple[str, str]] = []
+    for name in names:
+        child = os.path.join(root, name)
+        if os.path.islink(child):
+            _discard_maintenance_child(config, subroot, child)
+            continue
+        entries.append((name, child))
+    return entries
+
+
 def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None) -> None:
     _assert_testing_safe(config)
-    try:
-        staging_root = _verified_maintenance_subroot(config, *_STAGING_SUBROOT)
-    except ValueError:
-        # Something is at restore-staging that is not a real directory. Skip
-        # cleanup rather than delete through it; startup must not be blocked.
-        LOGGER.error("restore_staging_cleanup_skipped reason=unsafe_staging_root")
-        return
-    if staging_root is None:
-        return
-    try:
-        names = os.listdir(staging_root)
-    except OSError:
-        return
     current = time.time() if now is None else now
-    for name in names:
-        child = os.path.join(staging_root, name)
-        if os.path.islink(child):
-            _discard_maintenance_child(config, _STAGING_SUBROOT, child)
-            continue
+    for name, child in _sweep_entries(
+        config, _STAGING_SUBROOT, event="restore_staging_cleanup_skipped"
+    ):
         if os.path.isfile(child):
             if not name.startswith(".upload-"):
                 continue
@@ -1993,23 +2010,10 @@ def cleanup_orphan_rollback(config: StorageConfig, *, now: Optional[float] = Non
     the journal, and a tree that young is never touched here.
     """
     _assert_testing_safe(config)
-    try:
-        rollback_root = _verified_maintenance_subroot(config, *_ROLLBACK_SUBROOT)
-    except ValueError:
-        LOGGER.error("restore_rollback_cleanup_skipped reason=unsafe_rollback_root")
-        return
-    if rollback_root is None:
-        return
-    try:
-        names = os.listdir(rollback_root)
-    except OSError:
-        return
     current = time.time() if now is None else now
-    for name in names:
-        child = os.path.join(rollback_root, name)
-        if os.path.islink(child):
-            _discard_maintenance_child(config, _ROLLBACK_SUBROOT, child)
-            continue
+    for name, child in _sweep_entries(
+        config, _ROLLBACK_SUBROOT, event="restore_rollback_cleanup_skipped"
+    ):
         if not _TOKEN_RE.fullmatch(name):
             continue
         try:
