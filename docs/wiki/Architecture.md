@@ -2,6 +2,20 @@
 
 PRKS is a local-first research application with a Python backend, SQLite persistence, managed files on disk, and a vanilla-JavaScript single-page frontend.
 
+```mermaid
+flowchart LR
+    U[Browser / PWA] -->|HTTP / API| S[PRKS threaded HTTP server]
+    S --> G[LibraryAccessGate]
+    G --> DB[(SQLite library)]
+    G --> F[Managed files]
+    G --> I[Derived indexes / caches]
+    U --> LS[(Browser local store)]
+    LS <-->|durable ops + reconciliation| S
+```
+
+The diagram separates canonical server storage from browser-local durable intent and from rebuildable derived indexes.
+
+
 ## Runtime shape
 
 At a high level:

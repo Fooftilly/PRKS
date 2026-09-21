@@ -4,6 +4,15 @@ PRKS (Personal Research Knowledge System) is a local research library for organi
 
 The wiki is the orientation layer for users and contributors. It explains how the major parts fit together without replacing the repository's detailed implementation documents.
 
+## PRKS at a glance
+
+| Library | Work / PDF | People |
+| --- | --- | --- |
+| ![PRKS folder showing public-domain research works](https://raw.githubusercontent.com/Fooftilly/PRKS/master/docs/screenshots/folders.png) | ![PRKS Work view with Origin of Species open in the PDF reader](https://raw.githubusercontent.com/Fooftilly/PRKS/master/docs/screenshots/work.png) | ![PRKS People library](https://raw.githubusercontent.com/Fooftilly/PRKS/master/docs/screenshots/people.png) |
+
+These screenshots are generated from the repository's synthetic/public-domain demo library rather than a real personal research collection.
+
+
 ## Start here
 
 - [Getting Started](Getting-Started.md) — install, run, Docker, testing mode, and storage basics.

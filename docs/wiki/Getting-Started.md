@@ -2,6 +2,9 @@
 
 PRKS is designed to run locally. The normal installation uses Python and SQLite directly; Docker is optional.
 
+![PRKS public-domain demo library](https://raw.githubusercontent.com/Fooftilly/PRKS/master/docs/screenshots/folders.png)
+
+
 ## Requirements
 
 PRKS currently requires Python 3.12 or newer and the exact Python package versions pinned in `requirements.txt`. The application validates the Python environment before it performs database recovery, migrations, storage binding, or server startup.

@@ -2,6 +2,23 @@
 
 PRKS includes structured research entities in addition to ordinary library metadata.
 
+```mermaid
+flowchart LR
+    W[Works / sources] -->|research-note mentions| A[Arguments / Stances]
+    A -->|evidence / source| W
+    W -->|research-note mentions| C[Concepts]
+    C -->|parent of| C2[Child Concepts]
+    A -->|supports / opposes / qualifies / holds| P[Positions]
+    A -->|responds to| A2[Other Arguments]
+    P --> G[Research Graph]
+    A --> G
+    C --> G
+    W --> G
+```
+
+The graph is a projection of canonical research relationships; it is not a separate graph database.
+
+
 ## Concepts
 
 Concepts represent research ideas/categories and can participate in hierarchical/related structures. Concept list/detail pages can be used alongside Works in the workspace.

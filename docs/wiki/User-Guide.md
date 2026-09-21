@@ -2,6 +2,11 @@
 
 PRKS organizes research around Works and the entities connected to them. The interface is deliberately closer to a research workspace than to a file manager: a PDF or video can carry bibliographic metadata, research notes, people/roles, tags, progress, annotations, and links into the research network.
 
+![PRKS Work detail with managed PDF](https://raw.githubusercontent.com/Fooftilly/PRKS/master/docs/screenshots/work.png)
+
+The screenshots in this guide use the public-domain demo library maintained by the repository.
+
+
 ## Works
 
 A Work is the central research item. A Work may represent a managed PDF, an online/video source, or another supported research item.

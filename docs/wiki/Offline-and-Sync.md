@@ -2,6 +2,28 @@
 
 PRKS is progressively becoming local-first. The core rule is that durable user intent and offline read caching are separate systems.
 
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as PRKS UI
+    participant L as Durable local store
+    participant S as PRKS server
+    participant DB as Canonical SQLite state
+
+    U->>UI: Edit supported data
+    UI->>L: Persist operation first
+    L-->>UI: Project pending intent
+    UI-->>U: Show saved/pending state
+    L->>S: Sync when reachable
+    S->>DB: Validate + apply
+    DB-->>S: Canonical revision
+    S-->>L: Acknowledge / reconcile
+    L-->>UI: Project canonical result
+```
+
+A disposable offline read projection is separate from this durable mutation path.
+
+
 ## Three different mechanisms
 
 ### Disposable read cache/projection
