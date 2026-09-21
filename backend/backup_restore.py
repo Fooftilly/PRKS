@@ -454,6 +454,24 @@ def journal_path(config: StorageConfig) -> str:
     return os.path.join(maintenance_root(config), JOURNAL_FILENAME)
 
 
+# The three destructive scopes restore cleanup is allowed to touch. Each is a
+# fixed name under the maintenance root, never a caller-supplied string.
+_STAGING_SUBROOT: tuple[str, ...] = ("restore-staging",)
+_ROLLBACK_SUBROOT: tuple[str, ...] = ("rollback",)
+_JOURNAL_SUBROOT: tuple[str, ...] = ()
+
+
+def _maintenance_subroot(config: StorageConfig, *names: str) -> str:
+    """Expected path of a maintenance subroot, anchored to the storage root.
+
+    ``config.root`` is operator-supplied and may legitimately be a symlink, so
+    it is resolved once and everything below it is expected to be real. The
+    result is what a maintenance path *must* resolve to; it is not evidence
+    that the directory on disk actually is that.
+    """
+    return os.path.join(os.path.realpath(config.root), MAINTENANCE_DIRNAME, *names)
+
+
 def _assert_testing_safe(config: StorageConfig) -> None:
     testing = config.mode == "testing"
     paths.assert_safe_testing_path(config.root, testing=testing, what="PRKS_STORAGE")
@@ -494,12 +512,12 @@ def _mkdir_owner(path: str) -> None:
 
 
 def _ensure_maintenance_dirs(config: StorageConfig) -> str:
-    root = maintenance_root(config)
     _mkdir_owner(config.root)
+    root = _maintenance_subroot(config)
     _mkdir_owner(root)
     _mkdir_owner(os.path.join(root, "backup"))
-    _mkdir_owner(os.path.join(root, "restore-staging"))
-    _mkdir_owner(os.path.join(root, "rollback"))
+    _mkdir_owner(os.path.join(root, *_STAGING_SUBROOT))
+    _mkdir_owner(os.path.join(root, *_ROLLBACK_SUBROOT))
     return root
 
 
@@ -553,42 +571,119 @@ def _backup_filename(dt: datetime) -> str:
 
 
 def _safe_remove(path: str) -> None:
-    """Remove one already-authorized path without following directory symlinks."""
+    """Remove one already-authorized path without following any symlink.
+
+    A link is unlinked, never traversed. Directory trees go through
+    ``shutil.rmtree``, whose fd-based implementation is symlink-attack
+    resistant where the platform supports it: the hand-rolled ``os.walk``
+    teardown this replaces re-opened every component by path, so a directory
+    swapped for a symlink mid-walk was followed.
+    """
     if not os.path.lexists(path):
         return
-    if os.path.islink(path) or os.path.isfile(path):
+    if os.path.islink(path) or not os.path.isdir(path):
         os.unlink(path)
         return
-    for dirpath, dirnames, filenames in os.walk(path, topdown=False, followlinks=False):
-        for name in filenames:
-            os.unlink(os.path.join(dirpath, name))
-        for name in dirnames:
-            child = os.path.join(dirpath, name)
-            if os.path.islink(child):
-                os.unlink(child)
-            elif os.path.isdir(child):
-                os.rmdir(child)
-            else:
-                os.unlink(child)
-    os.rmdir(path)
+    shutil.rmtree(path)
 
 
-def _safe_remove_under(root: str, path: str) -> None:
-    """Remove path only when its resolved parent remains beneath root.
+_SUPPORTS_DIR_FD = (
+    os.unlink in os.supports_dir_fd
+    and os.stat in os.supports_dir_fd
+    and hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and shutil.rmtree.avoids_symlink_attacks
+)
 
-    Resolving the parent blocks traversal and intermediate-symlink escapes while
-    deliberately leaving the final component unresolved so a symlink leaf can
-    be unlinked without following its target.
+
+def _remove_entry_at(dir_fd: int, name: str) -> None:
+    """Remove one entry relative to an open directory, never following a link."""
+    try:
+        st = os.lstat(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        shutil.rmtree(name, dir_fd=dir_fd)
+        return
+    os.unlink(name, dir_fd=dir_fd)
+
+
+def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[int]:
+    """Open a maintenance subroot by descending from the storage root.
+
+    Every component below ``config.root`` is opened relative to the previous
+    descriptor with ``O_NOFOLLOW``, so the descriptor returned is the directory
+    that really sits at ``<storage>/.prks-maintenance/<names...>`` -- not
+    whatever a symlink planted at any level points at, and not whatever
+    replaces a component after a path-based check has passed. Returns None when
+    the subroot does not exist; raises ValueError when it exists but is not a
+    real directory.
     """
+    try:
+        fd = os.open(config.root, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("storage root is not a directory") from exc
+    try:
+        for name in (MAINTENANCE_DIRNAME, *names):
+            try:
+                nxt = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=fd,
+                )
+            except FileNotFoundError:
+                return None
+            except OSError as exc:
+                raise ValueError("maintenance subroot is not a real directory") from exc
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _remove_maintenance_child(
+    config: StorageConfig, subroot: tuple[str, ...], path: str
+) -> None:
+    """Remove exactly one direct child of a maintenance subroot.
+
+    Every restore cleanup removes a single direct child of its own subroot -- a
+    staging token directory, a rollback transaction directory, or the restore
+    journal -- so the contract is stated that way rather than as the weaker
+    "somewhere beneath a root". Naming the subroot by ``config`` plus its fixed
+    name, instead of accepting a root string, keeps the authorization rule
+    structural: a caller cannot widen its own scope, and a symlink planted at
+    the subroot cannot redefine it (a path-based containment check resolves
+    both operands, so such a link would otherwise pass).
+
+    The removal is then performed relative to the subroot's descriptor, so
+    nothing swapped in after the check can redirect it, and the child itself is
+    never resolved: a symlink leaf is unlinked, not followed to its target.
+    """
+    expected_root = _maintenance_subroot(config, *subroot)
     normalized = os.path.abspath(path)
     leaf = os.path.basename(normalized)
     if not leaf or leaf in (".", ".."):
         raise ValueError("refusing ambiguous removal path")
-    parent = os.path.dirname(normalized)
-    if not _path_is_under(parent, root):
-        raise ValueError("removal path escapes allowed root")
-    parent_real = os.path.realpath(parent)
-    _safe_remove(os.path.join(parent_real, leaf))
+    try:
+        parent_real = os.path.realpath(os.path.dirname(normalized))
+    except OSError as exc:
+        raise ValueError("removal path could not be resolved") from exc
+    if parent_real != expected_root:
+        raise ValueError("removal path is not a direct child of its maintenance root")
+    fd = _open_maintenance_subroot(config, *subroot)
+    if fd is None:
+        return
+    try:
+        if not _SUPPORTS_DIR_FD:
+            _safe_remove(os.path.join(expected_root, leaf))
+            return
+        _remove_entry_at(fd, leaf)
+    finally:
+        os.close(fd)
 
 
 def _dir_size_bytes(path: str) -> int:
@@ -1529,18 +1624,27 @@ def _safe_extract_dest(extract_root: str, arcname: str) -> str:
 
 def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None) -> None:
     _assert_testing_safe(config)
-    staging_root = os.path.join(maintenance_root(config), "restore-staging")
-    if not os.path.isdir(staging_root):
-        return
-    current = time.time() if now is None else now
+    staging_root = _maintenance_subroot(config, *_STAGING_SUBROOT)
     try:
-        names = os.listdir(staging_root)
+        fd = _open_maintenance_subroot(config, *_STAGING_SUBROOT)
+    except ValueError:
+        # Something is at restore-staging that is not a real directory. Skip
+        # cleanup rather than delete through it; startup must not be blocked.
+        LOGGER.error("restore_staging_cleanup_skipped reason=unsafe_staging_root")
+        return
+    if fd is None:
+        return
+    try:
+        names = os.listdir(fd)
     except OSError:
         return
+    finally:
+        os.close(fd)
+    current = time.time() if now is None else now
     for name in names:
         child = os.path.join(staging_root, name)
         if os.path.islink(child):
-            _safe_remove_under(staging_root, child)
+            _remove_maintenance_child(config, _STAGING_SUBROOT, child)
             continue
         if os.path.isfile(child):
             if not name.startswith(".upload-"):
@@ -1550,7 +1654,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except OSError:
                 age = STAGING_TTL_SECONDS + 1
             if age >= STAGING_TTL_SECONDS:
-                _safe_remove_under(staging_root, child)
+                _remove_maintenance_child(config, _STAGING_SUBROOT, child)
             continue
         if not _TOKEN_RE.fullmatch(name):
             continue
@@ -1566,7 +1670,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 expired = True
         if expired:
-            _safe_remove_under(staging_root, child)
+            _remove_maintenance_child(config, _STAGING_SUBROOT, child)
 
 
 def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
@@ -1576,7 +1680,7 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
     if not os.path.isfile(upload_path):
         raise RestoreError("missing_archive", "Backup archive could not be read.")
     token = secrets.token_urlsafe(24)
-    staging_dir = os.path.join(maintenance_root(config), "restore-staging", token)
+    staging_dir = _staging_dir(config, token)
     tree_dir = os.path.join(staging_dir, "tree")
     archive_dest = os.path.join(staging_dir, "archive" + BACKUP_EXTENSION)
     _mkdir_owner(staging_dir)
@@ -1628,11 +1732,11 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
         )
     except RestoreError as exc:
         LOGGER.error("restore_staged reason=%s error_type=%s", exc.reason, safe_error_type(exc))
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_staged reason=internal error_type=%s", safe_error_type(exc))
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "internal",
             "Backup could not be verified. Current PRKS data was not changed.",
@@ -1643,8 +1747,13 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
 def _staging_dir(config: StorageConfig, token: str) -> str:
     if not _TOKEN_RE.fullmatch(token or ""):
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
-    root = os.path.join(maintenance_root(config), "restore-staging")
+    root = _maintenance_subroot(config, *_STAGING_SUBROOT)
     candidate = os.path.join(root, token)
+    # Two separate escapes: the subroot itself being a symlink (a containment
+    # check resolves both operands, so it would otherwise pass), and the token
+    # directory being one.
+    if os.path.realpath(os.path.dirname(candidate)) != root:
+        raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     if not _path_is_under(candidate, root):
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     return candidate
@@ -1662,10 +1771,10 @@ def _load_staging_meta(config: StorageConfig, token: str) -> dict[str, Any]:
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404) from exc
     created = float(meta.get("created_unix") or 0)
     if created <= 0 or (time.time() - created) > STAGING_TTL_SECONDS:
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     if not meta.get("verified"):
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     return meta
 
@@ -1685,8 +1794,10 @@ def _component_live_path(config: StorageConfig, name: str) -> str:
 def _rollback_dir(config: StorageConfig, transaction_id: str) -> str:
     if not _TOKEN_RE.fullmatch(transaction_id or ""):
         raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
-    root = os.path.join(maintenance_root(config), "rollback")
+    root = _maintenance_subroot(config, *_ROLLBACK_SUBROOT)
     candidate = os.path.join(root, transaction_id)
+    if os.path.realpath(os.path.dirname(candidate)) != root:
+        raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
     if not _path_is_under(candidate, root):
         raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
     return candidate
@@ -1965,12 +2076,12 @@ def apply_restore(
     tree_dir = os.path.join(staging_dir, "tree")
     staged_db = _component_staged_path(tree_dir, "database")
     if not os.path.isfile(staged_db):
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
 
     db_schema = read_schema_version(staged_db)
     if db_schema > supported_schema_ceiling(config):
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "schema_newer",
             "This backup was created by a newer PRKS database version. Update PRKS before restoring it.",
@@ -2033,8 +2144,8 @@ def apply_restore(
                     "restore_rolled_back reason=rebind_previous_failed error_type=%s",
                     safe_error_type(rebind_exc),
                 )
-        _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
-        _safe_remove_under(maintenance_root(config), journal_path(config))
+        _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+        _remove_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
 
     t_commit = clock_ns()
     try:
@@ -2121,9 +2232,9 @@ def apply_restore(
             summary["persons"],
         )
         try:
-            _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
-            _safe_remove_under(maintenance_root(config), journal_path(config))
-            _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+            _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+            _remove_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+            _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         except Exception as exc:
             LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
         return {
@@ -2145,7 +2256,7 @@ def apply_restore(
                 _rollback_once(rebind_after=True)
             except Exception as exc:
                 LOGGER.error("restore_rolled_back reason=rollback_failed error_type=%s", safe_error_type(exc))
-            _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+            _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_rolled_back reason=internal error_type=%s", safe_error_type(exc))
@@ -2162,7 +2273,7 @@ def apply_restore(
                 "restore_rolled_back reason=rollback_failed error_type=%s",
                 safe_error_type(rollback_exc),
             )
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "restore_failed",
             "Restore failed. Current PRKS data was not changed.",
@@ -2203,19 +2314,19 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
     staging_dir = _staging_dir(config, token) if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else None
 
     if phase == "committed":
-        _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
+        _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
         if staging_dir:
-            _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
-        _safe_remove_under(maintenance_root(config), path)
+            _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
         cleanup_stale_staging(config)
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
         return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
     _rollback_from_journal(config, journal)
-    _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
+    _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
     if staging_dir:
-        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
-    _safe_remove_under(maintenance_root(config), path)
+        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+    _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
     cleanup_stale_staging(config)
     LOGGER.info("restore_recovery_completed outcome=restored_previous")
     return {"performed": True, "outcome": "restored_previous", "needs_reindex": False}
@@ -2224,7 +2335,7 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
 def new_staging_upload_path(config: StorageConfig) -> str:
     _assert_testing_safe(config)
     root = _ensure_maintenance_dirs(config)
-    return os.path.join(root, "restore-staging", ".upload-" + secrets.token_urlsafe(8))
+    return os.path.join(root, *_STAGING_SUBROOT, ".upload-" + secrets.token_urlsafe(8))
 
 
 def discard_temp_path(path: str) -> None:

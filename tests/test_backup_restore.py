@@ -236,46 +236,170 @@ class BackupRestoreTestCase(unittest.TestCase):
 
 
 class TestBackupPathSafety(BackupRestoreTestCase):
+    """The destructive boundary: validated state -> proven subroot -> removal."""
+
     def _symlink_or_skip(self, target, link, *, directory=False):
         try:
             os.symlink(target, link, target_is_directory=directory)
         except (NotImplementedError, OSError) as exc:
             self.skipTest(f"symlink creation unavailable: {exc}")
 
-    def test_scoped_remove_rejects_intermediate_symlink_escape(self):
-        root = self._tmpdir("prks-remove-root-")
-        outside = self._tmpdir("prks-remove-outside-")
+    def _staging_root(self, cfg):
+        root = backup_module._maintenance_subroot(
+            cfg, *backup_module._STAGING_SUBROOT
+        )
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    def _maintenance_dir(self, cfg):
+        root = backup_module._maintenance_subroot(cfg)
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    def _outside_victim(self):
+        outside = self._tmpdir("prks-outside-")
         victim = os.path.join(outside, "victim.txt")
         with open(victim, "w", encoding="utf-8") as handle:
             handle.write("keep")
-        link = os.path.join(root, "escape")
+        return outside, victim
+
+    def test_scoped_remove_accepts_a_real_child_tree(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(os.path.join(child, "tree", "files"))
+        with open(os.path.join(child, "tree", "files", "a.bin"), "wb") as handle:
+            handle.write(b"x")
+
+        backup_module._remove_maintenance_child(
+            cfg, backup_module._STAGING_SUBROOT, child
+        )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertTrue(os.path.isdir(staging_root))
+
+    def test_scoped_remove_rejects_intermediate_symlink_escape(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        outside, victim = self._outside_victim()
+        link = os.path.join(staging_root, "escape")
         self._symlink_or_skip(outside, link, directory=True)
 
         with self.assertRaises(ValueError):
-            backup_module._safe_remove_under(root, os.path.join(link, "victim.txt"))
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, os.path.join(link, "victim.txt")
+            )
 
         self.assertTrue(os.path.isfile(victim))
 
     def test_scoped_remove_unlinks_leaf_symlink_without_following_target(self):
-        root = self._tmpdir("prks-remove-root-")
-        outside = self._tmpdir("prks-remove-outside-")
-        victim = os.path.join(outside, "victim.txt")
-        with open(victim, "w", encoding="utf-8") as handle:
-            handle.write("keep")
-        link = os.path.join(root, "leaf")
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        link = os.path.join(staging_root, "leaf")
         self._symlink_or_skip(victim, link)
 
-        backup_module._safe_remove_under(root, link)
+        backup_module._remove_maintenance_child(
+            cfg, backup_module._STAGING_SUBROOT, link
+        )
 
         self.assertFalse(os.path.lexists(link))
         self.assertTrue(os.path.isfile(victim))
 
+    def test_scoped_remove_rejects_a_symlinked_subroot(self):
+        """The allowed root must be proven, not merely resolved.
+
+        A containment check resolves both operands, so a symlink planted at
+        restore-staging would make every "scoped" removal pass while operating
+        on an arbitrary directory.
+        """
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside, victim = self._outside_victim()
+        staging_root = backup_module._maintenance_subroot(
+            cfg, *backup_module._STAGING_SUBROOT
+        )
+        self._symlink_or_skip(outside, staging_root, directory=True)
+
+        with self.assertRaises(ValueError):
+            backup_module._remove_maintenance_child(
+                cfg,
+                backup_module._STAGING_SUBROOT,
+                os.path.join(outside, "victim.txt"),
+            )
+        with self.assertRaises(ValueError):
+            backup_module._remove_maintenance_child(
+                cfg,
+                backup_module._STAGING_SUBROOT,
+                os.path.join(staging_root, "victim.txt"),
+            )
+
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_scoped_remove_cannot_reach_another_subroot(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        maintenance = self._maintenance_dir(cfg)
+        rollback_root = os.path.join(maintenance, "rollback")
+        os.makedirs(rollback_root, exist_ok=True)
+        staged = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(staged)
+        journal = os.path.join(maintenance, "restore-journal.json")
+        with open(journal, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+
+        for subroot, target in (
+            (backup_module._ROLLBACK_SUBROOT, staged),
+            (backup_module._JOURNAL_SUBROOT, staged),
+            (backup_module._STAGING_SUBROOT, journal),
+            (backup_module._STAGING_SUBROOT, rollback_root),
+        ):
+            with self.subTest(subroot=subroot, target=target):
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(cfg, subroot, target)
+
+        self.assertTrue(os.path.isdir(staged))
+        self.assertTrue(os.path.isfile(journal))
+        self.assertTrue(os.path.isdir(rollback_root))
+
+    def test_scoped_remove_rejects_ambiguous_and_nested_paths(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        nested = os.path.join(staging_root, "fixture-stage-aaaaaaaa", "tree")
+        os.makedirs(nested)
+
+        for unsafe in (
+            nested,
+            os.path.join(staging_root, ".."),
+            os.path.join(staging_root, "."),
+            os.path.join(staging_root, "fixture-stage-aaaaaaaa", "..", "..", "x"),
+        ):
+            with self.subTest(unsafe=unsafe):
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg, backup_module._STAGING_SUBROOT, unsafe
+                    )
+
+        self.assertTrue(os.path.isdir(nested))
+
+    def test_safe_remove_unlinks_symlinks_inside_a_tree(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(os.path.join(child, "tree"))
+        self._symlink_or_skip(victim, os.path.join(child, "tree", "link"))
+
+        backup_module._remove_maintenance_child(
+            cfg, backup_module._STAGING_SUBROOT, child
+        )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertTrue(os.path.isfile(victim))
+
     def test_staging_token_cannot_follow_a_symlink_outside_maintenance(self):
         cfg = self._cfg()
-        staging_root = os.path.join(
-            backup_module.maintenance_root(cfg), "restore-staging"
-        )
-        os.makedirs(staging_root, exist_ok=True)
+        staging_root = self._staging_root(cfg)
         outside = self._tmpdir("prks-stage-outside-")
         token = "fixture-stage-aaaaaaaa"
         self._symlink_or_skip(
@@ -286,6 +410,70 @@ class TestBackupPathSafety(BackupRestoreTestCase):
             backup_module._staging_dir(cfg, token)
 
         self.assertEqual(ctx.exception.reason, "unknown_token")
+
+    def test_staging_dir_rejects_a_symlinked_staging_root(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside = self._tmpdir("prks-stage-outside-")
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT),
+            directory=True,
+        )
+
+        with self.assertRaises(RestoreError) as ctx:
+            backup_module._staging_dir(cfg, "fixture-stage-aaaaaaaa")
+
+        self.assertEqual(ctx.exception.reason, "unknown_token")
+
+    def test_rollback_dir_rejects_a_symlinked_rollback_root(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside = self._tmpdir("prks-rollback-outside-")
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._ROLLBACK_SUBROOT),
+            directory=True,
+        )
+
+        with self.assertRaises(RestoreError) as ctx:
+            backup_module._rollback_dir(cfg, _JOURNAL_TXN_A)
+
+        self.assertEqual(ctx.exception.reason, "journal_invalid")
+
+    def test_stale_staging_cleanup_skips_a_symlinked_staging_root(self):
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)
+        outside, victim = self._outside_victim()
+        stale = os.path.join(outside, "fixture-stage-aaaaaaaa")
+        os.makedirs(stale)
+        self._symlink_or_skip(
+            outside,
+            backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT),
+            directory=True,
+        )
+
+        backup_module.cleanup_stale_staging(cfg)
+
+        self.assertTrue(os.path.isdir(stale))
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_stale_staging_cleanup_removes_expired_entries(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        expired = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(expired)
+        upload = os.path.join(staging_root, ".upload-old")
+        with open(upload, "wb") as handle:
+            handle.write(b"x")
+        old = time.time() - (backup_module.STAGING_TTL_SECONDS * 2)
+        os.utime(upload, (old, old))
+
+        backup_module.cleanup_stale_staging(cfg)
+
+        self.assertFalse(os.path.lexists(expired))
+        self.assertFalse(os.path.lexists(upload))
+        self.assertTrue(os.path.isdir(staging_root))
 
 
 class TestBackupInventory(BackupRestoreTestCase):
