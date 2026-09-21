@@ -1029,6 +1029,7 @@ class TestDBManager(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    @unittest.skipIf(os.name == "nt", "asserts POSIX filesystem name semantics")
     def test_safe_processing_path_keeps_posix_names_that_look_like_windows_paths(self):
         root = tempfile.mkdtemp()
         try:

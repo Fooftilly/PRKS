@@ -426,6 +426,22 @@ def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
     return safe_pdf_path_under_dir(pdfs_dir, url_last_segment)
 
 
+_PDF_ROUTE_PREFIX = '/api/pdfs/'
+
+
+def _safe_pdf_path_for_route(path: str) -> str | None:
+    """Resolve a ``/api/pdfs/<filename>`` route to one managed PDF.
+
+    The whole suffix is validated, not just its last ``/``-separated piece.
+    Reducing the route with ``split('/')[-1]`` first made
+    ``/api/pdfs/nested/victim.pdf`` serve ``victim.pdf``, so the validator's
+    rejection of path-shaped names was unreachable from the route it protects.
+    """
+    if not path.startswith(_PDF_ROUTE_PREFIX):
+        return None
+    return _safe_pdf_path_in_pdfs_dir(path[len(_PDF_ROUTE_PREFIX):])
+
+
 def _prks_pixmap_to_pil(pix):
     """PyMuPDF pixmap → Pillow Image (RGB/RGBA). None if Pillow missing or conversion fails."""
     try:
@@ -1637,8 +1653,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         try:
             if path.startswith('/api/pdfs/'):
-                filename = path.split('/')[-1]
-                pdf_path = _safe_pdf_path_in_pdfs_dir(filename)
+                pdf_path = _safe_pdf_path_for_route(path)
                 if pdf_path and os.path.exists(pdf_path):
                     self._send_pdf_bytes(pdf_path, head_only=True)
                 else:
@@ -1831,11 +1846,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if not row:
                     self.send_error(404, "Work not found")
                     return
-                file_path = (row[0].get('file_path') or '').strip()
-                if not file_path or not file_path.startswith('/api/pdfs/'):
+                # Ownership identity, not the last '/'-separated piece: a
+                # stored path that is not exactly /api/pdfs/<filename> does not
+                # own a managed PDF and must not resolve to some other one.
+                pdf_filename = managed_pdf_filename(str(row[0].get('file_path') or ''))
+                if not pdf_filename:
                     self.send_error(404, "PDF not found")
                     return
-                pdf_filename = file_path.split("/")[-1]
                 pdf_path = _safe_pdf_path_in_pdfs_dir(pdf_filename)
                 if not pdf_path or not os.path.exists(pdf_path):
                     self.send_error(404, "PDF not found")
@@ -2462,8 +2479,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_json(200, [])
             elif path.startswith('/api/pdfs/'):
-                filename = path.split('/')[-1]
-                pdf_path = _safe_pdf_path_in_pdfs_dir(filename)
+                pdf_path = _safe_pdf_path_for_route(path)
                 if pdf_path and os.path.exists(pdf_path):
                     self._send_pdf_bytes(pdf_path)
                 else:
@@ -2614,10 +2630,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 rows = db.execute_query("SELECT id, file_path FROM works WHERE file_path LIKE '/api/pdfs/%'")
                 unique_paths = {}
                 for row in rows:
-                    fp = str(row.get("file_path") or "").strip()
-                    if not fp.startswith("/api/pdfs/"):
+                    filename = managed_pdf_filename(str(row.get("file_path") or ""))
+                    if not filename:
                         continue
-                    filename = fp.split("/")[-1]
                     abs_path = _safe_pdf_path_in_pdfs_dir(filename)
                     if not abs_path:
                         continue

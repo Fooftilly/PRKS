@@ -920,12 +920,14 @@ def finish_work_summary_rows(rows: Optional[List[dict]], pdfs_dir: str) -> None:
             if not row or not isinstance(row, dict):
                 continue
             examined += 1
-            fp = (row.get("file_path") or "").strip()
-            if not fp.startswith("/api/pdfs/"):
+            # Ownership identity, not the last '/'-separated piece: reporting
+            # the size of some other managed PDF for a malformed stored path is
+            # the same silent redirect the serving route now refuses.
+            filename = managed_pdf_filename(str(row.get("file_path") or ""))
+            if not filename:
                 row["file_size_bytes"] = None
                 continue
-            seg = fp.split("/")[-1]
-            path = safe_pdf_path_under_dir(pdfs_dir, seg)
+            path = safe_pdf_path_under_dir(pdfs_dir, filename)
             if not path or not os.path.isfile(path):
                 row["file_size_bytes"] = None
                 continue
