@@ -735,7 +735,7 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
     if not file_path.startswith(prefix):
         return None
     remainder = file_path[len(prefix):]
-    if not remainder:
+    if not remainder or remainder != remainder.strip():
         return None
     if "/" in remainder or "\\" in remainder:
         return None
@@ -752,8 +752,8 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
 
 def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
     """Managed filename a stored file_path can resolve to, matching current serving identity."""
-    fp = str(file_path or "").strip()
-    if not fp.startswith("/api/pdfs/"):
+    fp = str(file_path or "")
+    if not fp or fp != fp.strip() or not fp.startswith("/api/pdfs/"):
         return None
     segment = fp.split("/")[-1]
     name = os.path.basename(unquote(segment))
@@ -768,9 +768,12 @@ def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> O
     Absolute paths, drive-qualified paths, traversal, and ambiguous empty/dot
     segments are rejected instead of being rewritten into a different path.
     """
-    if not relative_path or not str(relative_path).strip():
+    if relative_path is None:
         return None
-    rel = str(relative_path).strip().replace("\\", "/")
+    raw_rel = str(relative_path)
+    if not raw_rel or not raw_rel.strip():
+        return None
+    rel = raw_rel.replace("\\", "/")
     if not rel or rel.startswith("/") or "\x00" in rel or re.match(r"^[A-Za-z]:/", rel):
         return None
     parts = rel.split("/")
