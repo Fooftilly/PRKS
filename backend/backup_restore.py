@@ -1687,7 +1687,7 @@ def _rollback_dir(config: StorageConfig, transaction_id: str) -> str:
         raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
     root = os.path.join(maintenance_root(config), "rollback")
     candidate = os.path.join(root, transaction_id)
-    if not _path_is_under(candidate, root) or Path(candidate).resolve(strict=False) == Path(root).resolve(strict=False):
+    if not _path_is_under(candidate, root):
         raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
     return candidate
 
