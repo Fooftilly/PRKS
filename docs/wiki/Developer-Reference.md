@@ -133,13 +133,13 @@ Rebuild vendored assets after changing a pin:
 
 ```bash
 # Ordinary UI vendor (DOMPurify, EasyMDE, CodeMirror, Lucide)
-cd tools/frontend-vendor && npm ci && npm run build
+(cd tools/frontend-vendor && npm ci && npm run build)
 
 # Research Graph Cytoscape
-cd tools/research-graph && npm ci && npm run build
+(cd tools/research-graph && npm ci && npm run build)
 
 # PDF viewer (EmbedPDF + React)
-cd tools/pdf-viewer && npm ci && npm run build
+(cd tools/pdf-viewer && npm ci && npm run build)
 ```
 
 Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes change. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
