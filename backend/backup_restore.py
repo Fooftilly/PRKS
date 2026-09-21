@@ -679,7 +679,19 @@ def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[in
     return _open_maintenance_subroot_from(_resolved_storage_root(config), *names)
 
 
-def _open_maintenance_subroot_from(root_real: str, *names: str) -> Optional[int]:
+def _storage_root_identity(root_real: str) -> Optional[os.stat_result]:
+    """Identity of the canonical storage root at snapshot time, if it exists."""
+    try:
+        return os.stat(root_real)
+    except OSError:
+        return None
+
+
+def _open_maintenance_subroot_from(
+    root_real: str,
+    *names: str,
+    expect_identity: Optional[os.stat_result] = None,
+) -> Optional[int]:
     """``_open_maintenance_subroot()`` anchored to a caller's root snapshot.
 
     Every component below the root is opened relative to the previous descriptor
@@ -693,6 +705,15 @@ def _open_maintenance_subroot_from(root_real: str, *names: str) -> Optional[int]
     of the snapshot the caller authorized against, so a retarget between the two
     could bind this descriptor to a different maintenance tree.
 
+    The root open itself is anchored twice over, because a pathname is not an
+    identity. ``root_real`` is already fully resolved and so must not be a
+    symlink: ``O_NOFOLLOW`` makes a link swapped in after resolution fail closed
+    rather than be followed. And ``expect_identity``, captured by the caller
+    before it authorized, is compared against the opened descriptor, which
+    catches the swap ``O_NOFOLLOW`` cannot see -- a different *real* directory
+    renamed into place. Either way the descent runs in the directory the caller
+    authorized, or not at all.
+
     Returns None when the subroot does not exist or when the platform has no
     descriptor-relative removal; raises ValueError when a component exists but
     is not a real directory.
@@ -700,11 +721,18 @@ def _open_maintenance_subroot_from(root_real: str, *names: str) -> Optional[int]
     if not _SUPPORTS_DIR_FD:
         return None
     try:
-        fd = os.open(root_real, os.O_RDONLY | os.O_DIRECTORY)
+        fd = os.open(
+            root_real, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise ValueError("storage root is not a directory") from exc
+        raise ValueError("storage root is not a real directory") from exc
+    if expect_identity is not None and not os.path.samestat(
+        os.fstat(fd), expect_identity
+    ):
+        os.close(fd)
+        raise ValueError("storage root changed identity during removal")
     handed_over = False
     try:
         for name in (MAINTENANCE_DIRNAME, *names):
@@ -841,6 +869,10 @@ def _remove_maintenance_child(
     # again between authorization and removal is what let a symlink or junction
     # retargeted at that moment point the two at different trees.
     root_real = _resolved_storage_root(config)
+    # Captured before authorization: the descriptor descent is checked against
+    # this, so a directory renamed into root_real's place afterwards cannot make
+    # authorization refer to one directory and removal to another.
+    root_identity = _storage_root_identity(root_real)
     expected_root = _maintenance_subroot_from(root_real, *subroot)
     normalized = os.path.abspath(path)
     leaf = os.path.basename(normalized)
@@ -852,7 +884,9 @@ def _remove_maintenance_child(
         raise ValueError("removal path could not be resolved") from exc
     if parent_real != expected_root:
         raise ValueError("removal path is not a direct child of its maintenance root")
-    fd = _open_maintenance_subroot_from(root_real, *subroot)
+    fd = _open_maintenance_subroot_from(
+        root_real, *subroot, expect_identity=root_identity
+    )
     if fd is not None:
         # Bound to the descriptor the O_NOFOLLOW descent produced, and that
         # descent starts from the same root_real the authorization check above

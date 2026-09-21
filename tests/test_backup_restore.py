@@ -62,6 +62,18 @@ _JOURNAL_TXN_B = "fixture-txn-bbbbbbbbbb"
 _JOURNAL_TXN_C = "fixture-txn-canonical0"
 
 
+def _fspath_or_none(path):
+    try:
+        return os.fspath(path)
+    except TypeError:
+        return None
+
+
+def _unlink_if_link(path):
+    if os.path.islink(path):
+        os.unlink(path)
+
+
 def _capture_bind():
     try:
         previous_index = get_text_index()
@@ -671,10 +683,7 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         real_open = os.open
 
         def spy_open(path, *args, **kwargs):
-            try:
-                opened.append(os.fspath(path))
-            except TypeError:
-                pass
+            opened.append(_fspath_or_none(path))
             return real_open(path, *args, **kwargs)
 
         with patch.object(backup_module.os, "open", spy_open):
@@ -689,6 +698,85 @@ class TestBackupPathSafety(BackupRestoreTestCase):
             "descriptor descent re-resolved config.root instead of the snapshot",
         )
         self.assertIn(os.path.realpath(link_root), opened)
+
+    def _swapped_root_refuses_removal(self, install_replacement):
+        """Replace the canonical root after authorization and demand a refusal.
+
+        ``_remove_maintenance_child()`` authorizes against a pathname, then
+        opens that pathname. Whoever can rename the root's target can make the
+        two refer to different directories. The replacement stands in for the
+        root during the descent, holding a maintenance tree with a same-named
+        child, so a descent that still runs has an obvious victim to destroy.
+
+        Returns the refusal message; asserts the decoy child survived.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        leaf = "fixture-stage-aaaaaaaa"
+        child = os.path.join(staging_root, leaf)
+        os.makedirs(child)
+        root_real = backup_module._resolved_storage_root(cfg)
+        decoy = os.path.realpath(self._tmpdir("prks-decoy-"))
+        os.makedirs(
+            os.path.join(
+                decoy, backup_module.MAINTENANCE_DIRNAME,
+                backup_module._STAGING_SUBROOT[0], leaf,
+            )
+        )
+        moved = root_real + "-moved-away"
+        self.addCleanup(shutil.rmtree, moved, ignore_errors=True)
+        self.addCleanup(_unlink_if_link, root_real)
+
+        swapped = {"done": False}
+        real_open = os.open
+
+        def spy_open(path, *args, **kwargs):
+            if not swapped["done"] and _fspath_or_none(path) == root_real:
+                swapped["done"] = True
+                os.rename(root_real, moved)
+                install_replacement(root_real, decoy)
+            return real_open(path, *args, **kwargs)
+
+        refusal = None
+        with patch.object(backup_module.os, "open", spy_open):
+            try:
+                backup_module._remove_maintenance_child(
+                    cfg, backup_module._STAGING_SUBROOT, child
+                )
+            except ValueError as exc:
+                refusal = exc
+
+        self.assertTrue(swapped["done"], "the canonical root was never opened")
+        # Reached through root_real, which is now the replacement itself or a
+        # link to it, so one assertion covers both swap shapes. Checked before
+        # the refusal so a regression reports the data loss, not the symptom.
+        self.assertTrue(
+            os.path.isdir(
+                os.path.join(
+                    root_real, backup_module.MAINTENANCE_DIRNAME,
+                    backup_module._STAGING_SUBROOT[0], leaf,
+                )
+            ),
+            "removal ran inside the directory swapped in after authorization",
+        )
+        self.assertIsNotNone(refusal, "removal accepted a swapped storage root")
+        return str(refusal)
+
+    def test_descriptor_removal_refuses_a_root_link_swapped_in_after_authorization(self):
+        """A resolved root is never a symlink, so the descent must not follow one."""
+        def install(vacated, decoy):
+            self._symlink_or_skip(decoy, vacated, directory=True)
+
+        self.assertIn("real directory", self._swapped_root_refuses_removal(install))
+
+    def test_descriptor_removal_refuses_a_root_directory_swapped_in_after_authorization(self):
+        """No-follow cannot see a real directory renamed into place; identity can."""
+        self.assertIn(
+            "changed identity",
+            self._swapped_root_refuses_removal(lambda vacated, decoy: os.rename(decoy, vacated)),
+        )
 
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
