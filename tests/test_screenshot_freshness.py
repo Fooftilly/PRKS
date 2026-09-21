@@ -132,6 +132,28 @@ class ScreenshotDirtyTreeTests(unittest.TestCase):
         self.assertFalse(check._is_capture_output("frontend/js/app.js"))
 
 
+class ScreenshotLoopbackGuardTests(unittest.TestCase):
+    def test_rejects_remote_base_url(self):
+        capture = _load_capture()
+        with self.assertRaises(RuntimeError):
+            capture._assert_loopback_base("http://example.com:8070")
+        with self.assertRaises(RuntimeError):
+            capture._assert_loopback_base("https://127.0.0.1:8070")
+        with self.assertRaises(RuntimeError):
+            capture._assert_loopback_base("http://127.0.0.1:8070/api")
+
+    def test_accepts_loopback_base_url(self):
+        capture = _load_capture()
+        self.assertEqual(
+            capture._assert_loopback_base("http://127.0.0.1:8070"),
+            "http://127.0.0.1:8070",
+        )
+        self.assertEqual(
+            capture._assert_loopback_base("http://localhost:9000/"),
+            "http://localhost:9000",
+        )
+
+
 class ScreenshotUpdateServerGuardTests(unittest.TestCase):
     def test_wait_for_child_fails_when_process_exits(self):
         # Stub seed_demo_library so this unit test does not need pymupdf.
