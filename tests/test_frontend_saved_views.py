@@ -12,7 +12,7 @@ _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _SV = os.path.join(_FRONTEND, "js", "saved-views.js")
 _SEARCH = os.path.join(_FRONTEND, "js", "components", "search.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
-_README = os.path.join(_PROJECT_DIR, "README.md")
+_WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_saved_views_selftest.js")
 
@@ -54,11 +54,11 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertNotIn(":id/results", src)
 
     def test_docs(self):
-        readme = _read(_README)
+        wiki = _read(_WIKI_USER)
         agents = _read(_AGENTS)
-        self.assertIn("## Saved Views", readme)
-        self.assertIn("Save View", readme)
-        self.assertIn("search definition", readme.lower())
+        self.assertIn("## Saved Views", wiki)
+        self.assertIn("Save View", wiki)
+        self.assertIn("search definition", wiki.lower())
         self.assertIn("Saved Views store search definitions", agents)
         self.assertIn("never cached work membership", agents)
 

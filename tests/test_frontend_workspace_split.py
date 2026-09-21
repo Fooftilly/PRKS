@@ -13,7 +13,9 @@ _SPLIT = os.path.join(_FRONTEND, "js", "workspace-split.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
-_README = os.path.join(_PROJECT_DIR, "README.md")
+_WIKI_WORKSPACE = os.path.join(
+    _PROJECT_DIR, "docs", "wiki", "Workspace-Tabs-and-Split-View.md"
+)
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_split_selftest.js")
 
 
@@ -152,9 +154,9 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertIn("workspace-owned", agents.lower())
         self.assertIn("mainSplitRatio", agents)
         self.assertIn("prks-splitter", agents)
-        readme = _read(_README)
-        self.assertIn("Resize split view", readme)
-        self.assertIn("double-click", readme.lower())
+        wiki = _read(_WIKI_WORKSPACE)
+        self.assertIn("Resize split view", wiki)
+        self.assertIn("double-click", wiki.lower())
 
     def test_node_selftest(self):
         node = shutil.which("node")

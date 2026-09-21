@@ -12,7 +12,7 @@ _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _PALETTE = os.path.join(_FRONTEND, "js", "command-palette.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_command_palette_selftest.js")
-_README = os.path.join(_PROJECT_DIR, "README.md")
+_WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
 _SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 
@@ -123,10 +123,10 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn("LATEST_SCHEMA_VERSION = 15", schema)
 
     def test_docs(self):
-        readme = _read(_README)
+        wiki = _read(_WIKI_USER)
         agents = _read(_AGENTS)
-        self.assertIn("## Command palette", readme)
-        self.assertIn("Ctrl+K", readme)
+        self.assertIn("## Command palette", wiki)
+        self.assertIn("Ctrl+K", wiki)
         self.assertIn("command palette", agents.lower())
         self.assertIn("prksNavigate()", agents)
         self.assertIn("ephemeral", agents.lower())

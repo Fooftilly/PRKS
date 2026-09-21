@@ -1,8 +1,8 @@
 # PRKS
 
-PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. Full run, Docker, and config live in README.md.
+PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. Exact startup, configuration, and safety contracts live in README.md.
 
-Documentation map: `docs/wiki/` is the reviewed source for the GitHub Wiki and stable cross-cutting orientation. Keep exact run/config/current user behavior in `README.md`, implementation rules in this file, UI/interaction authority in `DESIGN.md`, and fast-moving local-first status in `docs/local-first-rollout-status.md`. Do not update the rendered GitHub Wiki as the only source; repository Markdown is canonical and is published by `.github/workflows/publish-wiki.yml`.
+Documentation map: `docs/wiki/` is the reviewed source for the GitHub Wiki and for detailed current feature/user behavior (workspace, research network, Saved Views, command palette, and similar product surfaces). Keep exact run/config/safety contracts (host/port, Docker publish, env vars, schema version, auth warning) in `README.md`, implementation rules in this file, UI/interaction authority in `DESIGN.md`, and fast-moving local-first status in `docs/local-first-rollout-status.md`. Do not update the rendered GitHub Wiki as the only source; repository Markdown is canonical and is published by `.github/workflows/publish-wiki.yml`.
 
 ## Commands
 

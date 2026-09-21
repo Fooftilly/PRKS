@@ -4,10 +4,10 @@ PRKS has repository-level guidance for both human and agent contributors. Read i
 
 ## Read the right authority
 
-- `README.md` — run/config/user-facing current behavior.
+- `README.md` — exact run/config/safety contracts (host/port, Docker publish, env vars, schema version, auth warning).
 - `AGENTS.md` — implementation constraints, testing policy, architecture rules, and contributor guidance.
 - `DESIGN.md` — UI/UX design and interaction rules.
-- `docs/wiki/` — orientation and stable cross-cutting documentation.
+- `docs/wiki/` — detailed current feature/user behavior and stable cross-cutting orientation.
 - `docs/local-first-*.md` — local-first design/current rollout.
 - `SECURITY.md` — security reporting and security-specific rules.
 
