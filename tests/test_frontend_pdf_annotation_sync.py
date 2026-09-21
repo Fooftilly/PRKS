@@ -409,6 +409,40 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         mount_fn = works_pdf[mount_at : works_pdf.index("\nexport function initPdfViewerForWork", mount_at)]
         self.assertIn("runtime.viewerFilePath", mount_fn)
 
+    def test_inplace_materialization_refreshes_whole_file_pdf_cache(self):
+        """Successful in-place POST /pdf must refresh prks-pdf-v1.
+
+        COW seeds Cache Storage only when file_path changes. Exclusive
+        materialization returns no file_path. Range loads never replace the
+        whole-file entry, so the uploaded buffer has to be written under the
+        current path. A failed POST must not, and a COW remount failure must
+        still skip the coherence hooks that follow a successful replace.
+        """
+        works_pdf = (ROOT / "frontend" / "js" / "components" / "works-pdf.js").read_text(
+            encoding="utf-8"
+        )
+        export_at = works_pdf.index("async function exportAndPersistPdfCopy(")
+        export_end = works_pdf.index(
+            "\n    async function restoreEffectiveViewerAnnotations(", export_at
+        )
+        export_fn = works_pdf[export_at:export_end]
+        refresh = "await cacheManagedPdfBytes(runtime && runtime.filePath, buffer);"
+        self.assertIn(refresh, export_fn)
+        refresh_at = export_fn.index(refresh)
+        self.assertLess(export_fn.index("throw new Error(`PDF save failed"), refresh_at)
+        retarget_at = export_fn.index("if (retarget)")
+        guard_at = export_fn.index("if (!sawRetarget)")
+        self.assertLess(retarget_at, guard_at)
+        self.assertLess(guard_at, refresh_at)
+        self.assertLess(refresh_at, export_fn.index("prksOfflineMarkEntityChanged"))
+        # The retarget arm seeds via applyCowPdfRetarget, not this call.
+        retarget_arm = export_fn[retarget_at:export_fn.index("} catch (eCow)", retarget_at)]
+        self.assertIn("applyCowPdfRetarget(retarget, buffer)", retarget_arm)
+        self.assertNotIn("cacheManagedPdfBytes", retarget_arm)
+        rethrow = export_fn.index("throw cowRemountFailed")
+        self.assertLess(refresh_at, rethrow)
+        self.assertLess(rethrow, export_fn.index("prksOfflineMarkEntityChanged"))
+
 
 if __name__ == "__main__":
     unittest.main()

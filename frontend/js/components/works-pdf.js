@@ -2118,19 +2118,33 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         // to runtime + offline cache key + live viewer before any capability
         // re-resolve, so sibling overwrites of the old shared path cannot
         // affect this mounted Work.
+        let sawRetarget = false;
+        let cowRemountFailed = null;
         try {
             const okBody = await pdfRes.json();
             const retarget = okBody && typeof okBody.file_path === 'string'
                 ? managedPdfApiPath(okBody.file_path)
                 : '';
             if (retarget) {
+                sawRetarget = true;
                 await applyCowPdfRetarget(retarget, buffer);
             }
         } catch (eCow) {
             if (eCow && String(eCow.message || '') === 'PDF_COW_REMOUNT_FAILED') {
-                throw eCow;
+                cowRemountFailed = eCow;
             }
             // Missing/malformed body: keep previous path (no COW).
+        }
+        // Exclusive in-place materialization keeps the same /api/pdfs/ path.
+        // cacheManagedPdfBytes runs inside COW only when that path changes, and
+        // the viewer loads by Range, which never replaces the prks-pdf-v1
+        // whole-file entry. Write the bytes the server just accepted so an
+        // offline reopen does not keep the pre-edit file.
+        if (!sawRetarget) {
+            await cacheManagedPdfBytes(runtime && runtime.filePath, buffer);
+        }
+        if (cowRemountFailed) {
+            throw cowRemountFailed;
         }
         if (typeof prksOfflineMarkEntityChanged === 'function') {
             prksOfflineMarkEntityChanged('work', workId);
