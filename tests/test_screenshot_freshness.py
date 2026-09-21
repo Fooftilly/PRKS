@@ -374,7 +374,6 @@ class ScreenshotPromotionRollbackTests(unittest.TestCase):
             )
             real_replace = os.replace
             real_write = Path.write_text
-            preserved: list[Path] = []
 
             def write_text_fail(self, data, encoding="utf-8", errors=None, newline=None):
                 if Path(self).resolve() == manifest.resolve():
@@ -398,23 +397,22 @@ class ScreenshotPromotionRollbackTests(unittest.TestCase):
                 capture, "MANIFEST", manifest
             ), mock.patch.object(Path, "write_text", write_text_fail), mock.patch.object(
                 capture.os, "replace", replace_fail_on_restore
-            ):
-                with self.assertRaises(RuntimeError) as ctx:
+            ), mock.patch("sys.stderr", new_callable=lambda: __import__("io").StringIO()) as err:
+                with self.assertRaises(OSError) as ctx:
                     capture._promote_capture(
                         stage,
                         "readme",
                         [{"file": "folders.png", "scenario": "public-domain-folder"}],
                         "newhead",
                     )
-            msg = str(ctx.exception)
-            self.assertIn("backups retained at", msg)
+            self.assertIn("manifest write failed", str(ctx.exception))
+            stderr = err.getvalue()
+            self.assertIn("backups retained at", stderr)
             marker = "backups retained at "
-            start = msg.index(marker) + len(marker)
-            # Path ends before the parenthetical error list.
-            path_text = msg[start:].split(" (", 1)[0].strip()
+            start = stderr.index(marker) + len(marker)
+            path_text = stderr[start:].split(" (", 1)[0].strip()
             backup_dir = Path(path_text)
-            preserved.append(backup_dir)
-            self.assertTrue(backup_dir.is_dir(), msg)
+            self.assertTrue(backup_dir.is_dir(), stderr)
             self.assertTrue((backup_dir / "folders.png").is_file())
             shutil.rmtree(backup_dir, ignore_errors=True)
 

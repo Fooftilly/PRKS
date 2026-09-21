@@ -272,7 +272,7 @@ def _promote_capture(
 
         MANIFEST.write_text(manifest_text, encoding="utf-8")
         print("wrote", MANIFEST)
-    except Exception as exc:
+    except Exception:
         # Restore originals for every path we may have mutated.
         restore_errors: list[str] = []
         for dest, prior in backed_up:
@@ -289,12 +289,15 @@ def _promote_capture(
             except OSError as restore_exc:
                 restore_errors.append(f"manifest.json: {restore_exc}")
         if restore_errors:
-            # Keep backup_dir so the operator can recover manually.
-            raise RuntimeError(
+            # Keep backup_dir so the operator can recover manually, and re-raise
+            # the original promotion failure (wrapper prints str(exc) only).
+            print(
                 "Screenshot promotion failed and rollback could not restore "
                 f"all artifacts; backups retained at {backup_dir} "
-                f"({'; '.join(restore_errors)})"
-            ) from exc
+                f"({'; '.join(restore_errors)})",
+                file=sys.stderr,
+            )
+            raise
         shutil.rmtree(backup_dir, ignore_errors=True)
         raise
     else:
