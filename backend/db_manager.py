@@ -703,11 +703,21 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
     return removed
 
 
-def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[str]:
+def safe_pdf_path_under_dir(
+    pdfs_dir: str,
+    url_last_segment: str,
+    *,
+    windows_semantics: Optional[bool] = None,
+) -> Optional[str]:
     """Resolve exactly one decoded PDF filename beneath pdfs_dir.
 
     Path-shaped input is rejected rather than normalized to a different
-    filename. The containment check remains the final filesystem boundary.
+    filename. ``resolved_child_path()`` remains the final filesystem boundary
+    and also refuses a drive-qualified name, which on Windows would otherwise
+    re-anchor onto a different managed PDF.
+
+    ``windows_semantics`` defaults to this platform and exists so the Windows
+    branch is exercised by the suite on any host; callers must not set it.
     """
     if url_last_segment is None:
         return None
@@ -727,7 +737,9 @@ def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[st
         or "\x00" in name
     ):
         return None
-    return paths.resolved_child_path(pdfs_dir, name)
+    return paths.resolved_child_path(
+        pdfs_dir, name, windows_semantics=windows_semantics
+    )
 
 
 def managed_pdf_filename(file_path: str) -> Optional[str]:
@@ -773,15 +785,11 @@ def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
     return name
 
 
-_WINDOWS_PATH_SEMANTICS = os.name == "nt"
-_DRIVE_QUALIFIED_RE = re.compile(r"^[A-Za-z]:")
-
-
 def safe_processing_path_under_dir(
     processing_dir: str,
     relative_path: str,
     *,
-    windows_semantics: bool = _WINDOWS_PATH_SEMANTICS,
+    windows_semantics: Optional[bool] = None,
 ) -> Optional[str]:
     """Resolve the exact stored relative processing path beneath processing_dir.
 
@@ -793,9 +801,14 @@ def safe_processing_path_under_dir(
 
     Rejected: absolute and UNC-like spellings, traversal, empty/dot segments,
     NUL, and -- where the platform gives them drive semantics -- backslash
-    separators and drive-qualified paths. On POSIX a backslash or a ``C:``
+    separators and drive-qualified segments. On POSIX a backslash or a ``C:``
     prefix is an ordinary filename character, so such names stay importable
     instead of being dropped as unresolvable.
+
+    The drive-qualified rule is applied per segment by
+    ``resolved_child_path()``, because a qualifier anchors to a *segment*, not
+    to the start of the whole string: ``batch/C:sample.pdf`` is drive-relative
+    in its second component.
 
     ``windows_semantics`` defaults to this platform and exists so the Windows
     branch is exercised by the suite on any host; callers must not set it.
@@ -807,12 +820,14 @@ def safe_processing_path_under_dir(
         return None
     if rel.startswith("/") or rel.startswith("\\"):
         return None
-    if windows_semantics and ("\\" in rel or _DRIVE_QUALIFIED_RE.match(rel)):
+    if paths.windows_path_semantics(windows_semantics) and "\\" in rel:
         return None
     parts = rel.split("/")
     if any(part in ("", ".", "..") for part in parts):
         return None
-    return paths.resolved_child_path(processing_dir, *parts)
+    return paths.resolved_child_path(
+        processing_dir, *parts, windows_semantics=windows_semantics
+    )
 
 
 def prune_empty_processing_parent_dirs(processing_root: str, removed_inbox_file_abs: str) -> None:

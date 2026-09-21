@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -13,12 +14,41 @@ def repo_root() -> str:
     return _REPO_ROOT
 
 
-def resolved_child_path(root: str, *parts: str) -> Optional[str]:
+_WINDOWS_PATH_SEMANTICS = os.name == "nt"
+_DRIVE_QUALIFIED_RE = re.compile(r"^[A-Za-z]:")
+
+
+def windows_path_semantics(override: Optional[bool] = None) -> bool:
+    """Whether Windows path semantics apply. ``override`` is for tests only."""
+    return _WINDOWS_PATH_SEMANTICS if override is None else bool(override)
+
+
+def resolved_child_path(
+    root: str,
+    *parts: str,
+    windows_semantics: Optional[bool] = None,
+) -> Optional[str]:
     """Resolve a filesystem child and prove that it remains beneath root.
 
-    This is a containment primitive, not an input validator: callers should
-    still enforce the shape of their own relative names before calling it.
+    Every part must be a plain path segment. A drive-qualified segment is
+    rejected here, at any depth, wherever the platform gives it drive
+    semantics -- because ``joinpath()`` re-anchors on one. On Windows,
+    ``joinpath("batch", "C:sample.pdf")`` yields ``<root>/batch/sample.pdf``:
+    the segment is dropped and different bytes are targeted, and the
+    containment check below cannot catch it because the rewritten target is
+    still beneath root. A different drive (``"D:x.pdf"``) leaves root
+    altogether. On POSIX such a name is an ordinary filename and is kept, so
+    the stored spelling stays resolvable.
+
+    The rule lives with the join rather than in each caller: it is the join
+    that creates the hazard, so every present and future caller is covered.
+    This is otherwise a containment primitive, not an input validator: callers
+    should still enforce the shape of their own relative names before calling it.
     """
+    if windows_path_semantics(windows_semantics) and any(
+        _DRIVE_QUALIFIED_RE.match(str(part)) for part in parts
+    ):
+        return None
     try:
         base = Path(root).resolve(strict=False)
         candidate = base.joinpath(*parts).resolve(strict=False)

@@ -27,6 +27,7 @@ from backend.db_manager import (
     prune_orphan_pdf_thumbnails,
     prune_empty_processing_parent_dirs,
 )
+from backend.storage import paths as storage_paths
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex
 from backend.work_deletion import delete_work
@@ -1036,7 +1037,14 @@ class TestDBManager(unittest.TestCase):
             # On POSIX these are ordinary filename characters. Rejecting them
             # would make discovery advertise files that preview cannot serve and
             # that import deletes as "no longer present".
-            for name in ("C:sample.pdf", r"C:\sample.pdf", r"batch\sample.pdf"):
+            for name in (
+                "C:sample.pdf",
+                r"C:\sample.pdf",
+                r"batch\sample.pdf",
+                "batch/C:sample.pdf",
+                "batch/D:other.pdf",
+                "batch/sub/C:deep.pdf",
+            ):
                 with self.subTest(name=name):
                     self.assertEqual(
                         safe_processing_path_under_dir(
@@ -1057,6 +1065,15 @@ class TestDBManager(unittest.TestCase):
                 r"C:\sample.pdf",
                 r"batch\sample.pdf",
                 r"batch\..\..\sample.pdf",
+                # A drive qualifier anchors to a SEGMENT, not to the start of
+                # the string. joinpath() re-anchors on a later one: on Windows
+                # ("batch", "C:sample.pdf") resolves to <root>/batch/sample.pdf,
+                # silently targeting different bytes that containment cannot
+                # catch because the result stays beneath the root.
+                "batch/C:sample.pdf",
+                "batch/D:other.pdf",
+                "batch/sub/C:deep.pdf",
+                "batch/c:lower.pdf",
                 "../sample.pdf",
                 "/sample.pdf",
                 "batch//sample.pdf",
@@ -1069,6 +1086,69 @@ class TestDBManager(unittest.TestCase):
                     )
         finally:
             shutil.rmtree(root)
+
+    def test_resolved_child_path_rejects_a_drive_qualified_segment_at_any_depth(self):
+        """The rule belongs to the join, so it is tested on the primitive.
+
+        ``joinpath()`` re-anchors on a drive-qualified component wherever it
+        appears. Same drive silently rewrites the target and stays beneath the
+        root, so containment cannot catch it; a different drive leaves the root
+        altogether.
+        """
+        root = tempfile.mkdtemp()
+        try:
+            for parts in (
+                ("C:sample.pdf",),
+                ("batch", "C:sample.pdf"),
+                ("batch", "D:other.pdf"),
+                ("batch", "sub", "c:deep.pdf"),
+            ):
+                with self.subTest(parts=parts):
+                    self.assertIsNone(
+                        storage_paths.resolved_child_path(
+                            root, *parts, windows_semantics=True
+                        )
+                    )
+                    # POSIX keeps them: ordinary filename characters there.
+                    self.assertEqual(
+                        storage_paths.resolved_child_path(
+                            root, *parts, windows_semantics=False
+                        ),
+                        os.path.realpath(os.path.join(root, *parts)),
+                    )
+            self.assertEqual(
+                storage_paths.resolved_child_path(
+                    root, "batch", "plain.pdf", windows_semantics=True
+                ),
+                os.path.realpath(os.path.join(root, "batch", "plain.pdf")),
+            )
+        finally:
+            shutil.rmtree(root)
+
+    def test_safe_pdf_path_rejects_a_drive_qualified_filename(self):
+        """The managed-PDF validator shares the hazard.
+
+        ``managed_pdf_filename("/api/pdfs/C:foo.pdf")`` returns ``C:foo.pdf``,
+        and on Windows joining that onto pdfs/ resolves to ``pdfs/foo.pdf`` --
+        a different managed PDF, silently, and still inside the root.
+        """
+        pdfs = tempfile.mkdtemp()
+        try:
+            for name in ("C:foo.pdf", "D:foo.pdf", "c:foo.pdf"):
+                with self.subTest(name=name):
+                    self.assertIsNone(
+                        safe_pdf_path_under_dir(pdfs, name, windows_semantics=True)
+                    )
+                    self.assertEqual(
+                        safe_pdf_path_under_dir(pdfs, name, windows_semantics=False),
+                        os.path.realpath(os.path.join(pdfs, name)),
+                    )
+            self.assertEqual(
+                safe_pdf_path_under_dir(pdfs, "keep.pdf", windows_semantics=True),
+                os.path.realpath(os.path.join(pdfs, "keep.pdf")),
+            )
+        finally:
+            shutil.rmtree(pdfs)
 
     @unittest.skipIf(os.name == "nt", "POSIX filename semantics")
     def test_processing_backslash_name_survives_rescan_preview_and_import(self):
