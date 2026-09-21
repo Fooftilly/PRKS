@@ -671,11 +671,13 @@ def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
     caller's string only selects which enumerated entry to remove. Nothing
     outside the enumerated subroot can therefore be named, and the entry is
     never resolved, so a symlink is unlinked instead of followed.
+
+    An enumeration failure propagates and is never swallowed: "the directory
+    could not be listed" must not be indistinguishable from "the child is
+    already gone", because callers read a quiet return as proof of removal.
+    A leaf that is genuinely absent from the listing is still a no-op.
     """
-    try:
-        listing = os.listdir(root if dir_fd is None else dir_fd)
-    except OSError:
-        return
+    listing = os.listdir(root if dir_fd is None else dir_fd)
     for entry in listing:
         if entry != leaf:
             continue
@@ -731,6 +733,52 @@ def _remove_maintenance_child(
     finally:
         if fd is not None:
             os.close(fd)
+
+
+def _discard_maintenance_child(
+    config: StorageConfig, subroot: tuple[str, ...], path: str
+) -> None:
+    """Best-effort cleanup of maintenance garbage: log and carry on.
+
+    For entries whose survival is untidy but harmless. Anything a later startup
+    would act on -- the restore journal -- must use ``_remove_journal_or_fail()``
+    instead. A refused removal has deleted nothing, so logging one is safe.
+    """
+    try:
+        _remove_maintenance_child(config, subroot, path)
+    except Exception as exc:
+        LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
+
+
+def _remove_journal_or_fail(config: StorageConfig) -> None:
+    """Remove the restore journal and prove it is gone.
+
+    The journal is what a later startup replays, so its removal is the commit
+    point of recovery: nothing that makes replay unsafe may happen until the
+    file is confirmed absent. A silently-failed removal that left the journal
+    behind while rollback state was cleaned would make the next startup roll
+    back a library whose rollback material no longer exists.
+    """
+    path = journal_path(config)
+    try:
+        _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
+    except Exception as exc:
+        LOGGER.error(
+            "restore_recovery_failed reason=journal_not_removed error_type=%s",
+            safe_error_type(exc),
+        )
+        raise RestoreError(
+            "journal_not_removed",
+            "Incomplete restore could not be recovered.",
+            http_status=500,
+        ) from exc
+    if os.path.lexists(path):
+        LOGGER.error("restore_recovery_failed reason=journal_not_removed")
+        raise RestoreError(
+            "journal_not_removed",
+            "Incomplete restore could not be recovered.",
+            http_status=500,
+        )
 
 
 def _dir_size_bytes(path: str) -> int:
@@ -1688,7 +1736,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
     for name in names:
         child = os.path.join(staging_root, name)
         if os.path.islink(child):
-            _remove_maintenance_child(config, _STAGING_SUBROOT, child)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, child)
             continue
         if os.path.isfile(child):
             if not name.startswith(".upload-"):
@@ -1698,7 +1746,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except OSError:
                 age = STAGING_TTL_SECONDS + 1
             if age >= STAGING_TTL_SECONDS:
-                _remove_maintenance_child(config, _STAGING_SUBROOT, child)
+                _discard_maintenance_child(config, _STAGING_SUBROOT, child)
             continue
         if not _TOKEN_RE.fullmatch(name):
             continue
@@ -1714,7 +1762,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 expired = True
         if expired:
-            _remove_maintenance_child(config, _STAGING_SUBROOT, child)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, child)
 
 
 def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
@@ -1776,11 +1824,11 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
         )
     except RestoreError as exc:
         LOGGER.error("restore_staged reason=%s error_type=%s", exc.reason, safe_error_type(exc))
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_staged reason=internal error_type=%s", safe_error_type(exc))
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "internal",
             "Backup could not be verified. Current PRKS data was not changed.",
@@ -1815,10 +1863,10 @@ def _load_staging_meta(config: StorageConfig, token: str) -> dict[str, Any]:
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404) from exc
     created = float(meta.get("created_unix") or 0)
     if created <= 0 or (time.time() - created) > STAGING_TTL_SECONDS:
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     if not meta.get("verified"):
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     return meta
 
@@ -2007,6 +2055,17 @@ def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> No
         if not isinstance(state, dict):
             continue
         flags = _component_flags(state)
+        # Never remove a live component this journal cannot put back. A first
+        # pass consumes the rollback copy (os.replace moves it onto the live
+        # path), so a replayed journal would delete the live component and then
+        # find nothing to restore -- destroying canonical data. Skipping keeps
+        # replay non-destructive and recovery re-runnable after a failure.
+        # A component that did not exist before has nothing to put back, and
+        # removing the newly installed one is the correct rollback for it.
+        if flags["old_existed"] and not os.path.lexists(
+            _rollback_component_path(config, rollback_root, name)
+        ):
+            continue
         if flags["new_install_started"]:
             _remove_live_component(config, name)
         if flags["old_existed"]:
@@ -2120,12 +2179,12 @@ def apply_restore(
     tree_dir = os.path.join(staging_dir, "tree")
     staged_db = _component_staged_path(tree_dir, "database")
     if not os.path.isfile(staged_db):
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
 
     db_schema = read_schema_version(staged_db)
     if db_schema > supported_schema_ceiling(config):
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "schema_newer",
             "This backup was created by a newer PRKS database version. Update PRKS before restoring it.",
@@ -2188,8 +2247,10 @@ def apply_restore(
                     "restore_rolled_back reason=rebind_previous_failed error_type=%s",
                     safe_error_type(rebind_exc),
                 )
-        _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
-        _remove_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+        # Journal first, for the same reason recovery does: a surviving journal
+        # whose rollback tree was already removed is the dangerous combination.
+        _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
 
     t_commit = clock_ns()
     try:
@@ -2275,12 +2336,9 @@ def apply_restore(
             summary["works"],
             summary["persons"],
         )
-        try:
-            _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
-            _remove_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
-            _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
-        except Exception as exc:
-            LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
+        _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         return {
             "restored": True,
             "works": summary["works"],
@@ -2300,7 +2358,7 @@ def apply_restore(
                 _rollback_once(rebind_after=True)
             except Exception as exc:
                 LOGGER.error("restore_rolled_back reason=rollback_failed error_type=%s", safe_error_type(exc))
-            _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_rolled_back reason=internal error_type=%s", safe_error_type(exc))
@@ -2317,7 +2375,7 @@ def apply_restore(
                 "restore_rolled_back reason=rollback_failed error_type=%s",
                 safe_error_type(rollback_exc),
             )
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         raise RestoreError(
             "restore_failed",
             "Restore failed. Current PRKS data was not changed.",
@@ -2357,20 +2415,24 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
     token = journal.get("staging_token")
     staging_dir = _staging_dir(config, token) if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else None
 
+    # The journal goes first in both branches and its removal must be confirmed.
+    # Rollback and staging state outlive it, so a failure here leaves a
+    # recoverable library instead of a journal that replays against material
+    # that has already been cleaned away.
     if phase == "committed":
-        _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+        _remove_journal_or_fail(config)
+        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
         if staging_dir:
-            _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
-        _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
         cleanup_stale_staging(config)
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
         return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
     _rollback_from_journal(config, journal)
-    _remove_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+    _remove_journal_or_fail(config)
+    _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
     if staging_dir:
-        _remove_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
-    _remove_maintenance_child(config, _JOURNAL_SUBROOT, path)
+        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
     cleanup_stale_staging(config)
     LOGGER.info("restore_recovery_completed outcome=restored_previous")
     return {"performed": True, "outcome": "restored_previous", "needs_reindex": False}

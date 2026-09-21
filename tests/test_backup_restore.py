@@ -1313,6 +1313,124 @@ class TestRestoreRollback(BackupRestoreTestCase):
 
 
 class TestCrashJournalRecovery(BackupRestoreTestCase):
+    def _incomplete_journal_state(self):
+        """A pre-committed journal with its rollback material still intact."""
+        lib = self._bind_library(title="Original", pdf_name="orig.pdf")
+        cfg = lib["cfg"]
+        maint = os.path.join(cfg.root, ".prks-maintenance", "rollback", _JOURNAL_TXN_A)
+        os.makedirs(os.path.join(maint, "database"), exist_ok=True)
+        os.makedirs(os.path.join(maint, "pdfs"), exist_ok=True)
+        os.makedirs(os.path.join(maint, "people"), exist_ok=True)
+        db_name = os.path.basename(cfg.db_path)
+        os.replace(cfg.db_path, os.path.join(maint, "database", db_name))
+        os.replace(cfg.pdfs_dir, os.path.join(maint, "pdfs"))
+        os.replace(cfg.people_dir, os.path.join(maint, "people"))
+        os.makedirs(cfg.pdfs_dir, exist_ok=True)
+        with open(os.path.join(cfg.pdfs_dir, "partial.pdf"), "wb") as handle:
+            handle.write(b"PARTIAL")
+        journal = {
+            "format": "prks-restore-journal",
+            "format_version": 1,
+            "transaction_id": _JOURNAL_TXN_A,
+            "phase": "installing_new",
+            "components": {
+                "database": {"old_moved": True, "new_installed": False},
+                "pdfs": {"old_moved": True, "new_installed": True},
+                "people": {"old_moved": True, "new_installed": False},
+            },
+        }
+        os.makedirs(os.path.join(cfg.root, ".prks-maintenance"), exist_ok=True)
+        journal_file = backup_module.journal_path(cfg)
+        with open(journal_file, "w", encoding="utf-8") as handle:
+            json.dump(journal, handle)
+        return cfg, journal_file, maint, journal
+
+    def _unenumerable_journal_dir(self):
+        """Patch os.listdir so the directory holding the journal cannot be read.
+
+        Models a transient failure, or a Windows ACL that permits access to a
+        known file but not enumeration of its directory.
+        """
+        real_listdir = os.listdir
+
+        def failing_listdir(target):
+            entries = real_listdir(target)
+            if backup_module.JOURNAL_FILENAME in entries:
+                raise OSError(13, "Permission denied")
+            return entries
+
+        return patch.object(backup_module.os, "listdir", failing_listdir)
+
+    def test_journal_removal_surfaces_an_enumeration_failure(self):
+        """A directory that cannot be listed is not proof the child is gone."""
+        cfg, journal_file, _maint, _journal = self._incomplete_journal_state()
+
+        with self._unenumerable_journal_dir():
+            with self.assertRaises(OSError):
+                backup_module._remove_maintenance_child(
+                    cfg, backup_module._JOURNAL_SUBROOT, journal_file
+                )
+
+        self.assertTrue(os.path.isfile(journal_file))
+
+    def test_recovery_keeps_rollback_material_when_journal_removal_fails(self):
+        """Rollback state must outlive the journal.
+
+        If recovery reported success while leaving the journal behind, the next
+        startup would replay it: _rollback_from_journal() removes the live
+        components it believes are half-installed, then finds nothing to restore
+        because the rollback tree was already cleaned -- losing canonical data.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+
+        with self._unenumerable_journal_dir():
+            with self.assertRaises(RestoreError) as ctx:
+                recover_incomplete_restore(cfg)
+        self.assertEqual(ctx.exception.reason, "journal_not_removed")
+
+        # Failure is explicit, and nothing that replay depends on was discarded.
+        self.assertTrue(os.path.isfile(journal_file))
+        self.assertTrue(os.path.isdir(maint))
+
+        # Recovery stays possible once enumeration works again, and the library
+        # is the previous one rather than the half-installed state.
+        out = recover_incomplete_restore(cfg)
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertFalse(os.path.lexists(journal_file))
+        bind_storage(cfg)
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Original"])
+        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
+        self.assertFalse(os.path.isfile(os.path.join(cfg.pdfs_dir, "partial.pdf")))
+
+    def test_replaying_a_journal_without_rollback_material_keeps_live_data(self):
+        """Replay must not delete what it cannot put back.
+
+        This is the state a silently-failed journal removal used to leave
+        behind: journal present, rollback copies gone.
+        """
+        cfg, journal_file, maint, _journal = self._incomplete_journal_state()
+        recover_incomplete_restore(cfg)
+        self.assertFalse(os.path.lexists(journal_file))
+
+        # Restore the dangerous combination by hand: the journal is back, but
+        # the rollback material has been consumed by the first recovery.
+        with open(journal_file, "w", encoding="utf-8") as handle:
+            json.dump(_journal, handle)
+        for name in ("database", "pdfs", "people"):
+            self.assertFalse(
+                os.path.lexists(
+                    backup_module._rollback_component_path(cfg, maint, name)
+                )
+            )
+
+        out = recover_incomplete_restore(cfg)
+        self.assertEqual(out["outcome"], "restored_previous")
+        bind_storage(cfg)
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Original"])
+        self.assertTrue(os.path.isfile(os.path.join(cfg.pdfs_dir, "orig.pdf")))
+
     def test_incomplete_journal_restores_previous(self):
         lib = self._bind_library(title="Original", pdf_name="orig.pdf")
         cfg = lib["cfg"]
