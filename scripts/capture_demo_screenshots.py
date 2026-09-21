@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -22,6 +25,12 @@ from tests.e2e.install_browser import (  # noqa: E402
     apply_playwright_browser_env,
     ensure_chromium_installed,
 )
+
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from check_screenshot_freshness import require_clean_capture_sources  # noqa: E402
 
 
 def _get(base: str, path: str):
@@ -73,24 +82,94 @@ def _git_head() -> str | None:
         return None
 
 
-def _write_manifest(set_name: str, captured: list[dict]) -> None:
+def _load_manifest() -> dict:
+    if not MANIFEST.is_file():
+        return {}
+    try:
+        data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _existing_screenshot_map(manifest: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for row in manifest.get("screenshots") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("file") or "").strip()
+        if name:
+            out[name] = dict(row)
+    return out
+
+
+def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> None:
+    """Merge captured entries into the manifest without blessing untouched PNGs.
+
+    Partial sets keep prior entries (and their per-file source_commit). The
+    directory-wide source_commit advances only after an ``all`` capture.
+    """
+    previous = _load_manifest()
+    by_file = _existing_screenshot_map(previous)
+    for entry in captured:
+        row = {
+            "file": entry["file"],
+            "scenario": entry["scenario"],
+        }
+        if head:
+            row["source_commit"] = head
+        by_file[entry["file"]] = row
+
+    # Prefer a stable, documented order: prior order first, then new files.
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    for row in previous.get("screenshots") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("file") or "").strip()
+        if name in by_file and name not in seen:
+            ordered.append(by_file[name])
+            seen.add(name)
+    for name, row in by_file.items():
+        if name not in seen:
+            ordered.append(row)
+            seen.add(name)
+
+    if set_name == "all" and head:
+        source_commit = head
+    else:
+        # Do not advance the global baseline after a partial run.
+        source_commit = previous.get("source_commit")
+        if source_commit is not None:
+            source_commit = str(source_commit).strip() or None
+
     payload = {
         "schema_version": 1,
-        "source_commit": _git_head(),
+        "source_commit": source_commit,
         "capture_set": set_name,
         "viewport": VIEWPORT,
         "device_scale_factor": 1,
         "theme": THEME,
         "generator": "scripts/capture_demo_screenshots.py",
         "seed": "scripts/seed_demo_library.py",
-        "screenshots": captured,
+        "screenshots": ordered,
     }
+    if set_name != "all":
+        payload["note"] = (
+            "Partial capture: only listed files with a matching source_commit "
+            "were regenerated in this run; other entries keep prior provenance."
+        )
     MANIFEST.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print("wrote", MANIFEST)
 
 
 def capture(base_url: str, set_name: str = "all") -> list[dict]:
     """Capture a named screenshot set and update its reproducibility manifest."""
+    require_clean_capture_sources()
+    head = _git_head()
+    if not head:
+        raise RuntimeError("Could not resolve git HEAD for screenshot provenance.")
+
     base = base_url.rstrip("/")
 
     folders = _get(base, "/api/folders")
@@ -118,124 +197,140 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
     from playwright.sync_api import sync_playwright
 
     captured: list[dict] = []
+    stage_dir = Path(tempfile.mkdtemp(prefix="prks-shot-stage-", dir=str(OUT_DIR.parent)))
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            viewport=VIEWPORT,
-            device_scale_factor=1,
-        )
-        context.add_init_script(
-            f"localStorage.setItem('prks-theme', {THEME!r});"
-        )
-        page = context.new_page()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport=VIEWPORT,
+                device_scale_factor=1,
+            )
+            context.add_init_script(
+                f"localStorage.setItem('prks-theme', {THEME!r});"
+            )
+            page = context.new_page()
 
-        def shot(
-            hash_path: str,
-            dest: Path,
-            wait_selector: str,
-            *,
-            scenario: str,
-            wait_pdf: bool = False,
-        ):
-            page.goto(base + "/" + hash_path, wait_until="domcontentloaded")
-            page.wait_for_selector(wait_selector, timeout=20000)
-            page.evaluate(
-                """() => {
-                  document.querySelectorAll('img[data-prks-thumb-src]').forEach((img) => {
-                    const u = img.getAttribute('data-prks-thumb-src');
-                    if (u) img.src = u;
-                  });
-                }"""
-            )
-            if wait_pdf:
-                page.wait_for_selector(".prks-pdf-viewer", timeout=20000)
-                page.wait_for_timeout(6000)
-            else:
-                page.wait_for_timeout(2500)
-            page.screenshot(path=str(dest), full_page=False)
-            captured.append({"file": dest.name, "scenario": scenario})
-            print("wrote", dest)
-
-        if set_name in ("readme", "all"):
-            shot(
-                folder_hash,
-                OUT_DIR / "folders.png",
-                ".project-card--work-card",
-                scenario="public-domain-folder",
-            )
-            shot(
-                work_hash,
-                OUT_DIR / "work.png",
-                ".document-view",
-                scenario="origin-of-species-work-pdf",
-                wait_pdf=True,
-            )
-            shot(
-                people_hash,
-                OUT_DIR / "people.png",
-                ".prks-people-list__row",
-                scenario="people-library",
-            )
-
-        if set_name in ("extra", "all"):
-            shot(
-                "#/folders",
-                OUT_DIR / "all-folders.png",
-                ".prks-folder-library",
-                scenario="folder-library",
-            )
-            shot(
-                "#/tags",
-                OUT_DIR / "tags.png",
-                ".tag--page",
-                scenario="tags",
-            )
-            shot(
-                "#/search?q=Darwin",
-                OUT_DIR / "search.png",
-                ".page-header--search",
-                scenario="search-darwin",
-            )
-            shot(
-                "#/progress?status=In%20Progress",
-                OUT_DIR / "progress.png",
-                ".project-card--work-card",
-                scenario="progress-in-progress",
-            )
-            shot(
-                "#/types",
-                OUT_DIR / "types.png",
-                ".types-page",
-                scenario="file-types",
-            )
-            if darwin:
-                shot(
-                    f"#/people/{darwin['id']}",
-                    OUT_DIR / "person.png",
-                    ".document-view--person",
-                    scenario="darwin-person",
+            def shot(
+                hash_path: str,
+                dest_name: str,
+                wait_selector: str,
+                *,
+                scenario: str,
+                wait_pdf: bool = False,
+            ):
+                dest = stage_dir / dest_name
+                page.goto(base + "/" + hash_path, wait_until="domcontentloaded")
+                page.wait_for_selector(wait_selector, timeout=20000)
+                page.evaluate(
+                    """() => {
+                      document.querySelectorAll('img[data-prks-thumb-src]').forEach((img) => {
+                        const u = img.getAttribute('data-prks-thumb-src');
+                        if (u) img.src = u;
+                      });
+                    }"""
                 )
-            if note:
+                if wait_pdf:
+                    page.wait_for_selector(".prks-pdf-viewer", timeout=20000)
+                    page.wait_for_timeout(6000)
+                else:
+                    page.wait_for_timeout(2500)
+                page.screenshot(path=str(dest), full_page=False)
+                captured.append({"file": dest_name, "scenario": scenario})
+                print("staged", dest_name)
+
+            if set_name in ("readme", "all"):
                 shot(
-                    f"#/works/{note['id']}",
-                    OUT_DIR / "note.png",
+                    folder_hash,
+                    "folders.png",
+                    ".project-card--work-card",
+                    scenario="public-domain-folder",
+                )
+                shot(
+                    work_hash,
+                    "work.png",
                     ".document-view",
-                    scenario="commonplace-note",
+                    scenario="origin-of-species-work-pdf",
                     wait_pdf=True,
                 )
-            if group:
                 shot(
-                    f"#/people/groups/{group['id']}",
-                    OUT_DIR / "group.png",
-                    ".document-view--group-detail",
-                    scenario="nineteenth-century-group",
+                    people_hash,
+                    "people.png",
+                    ".prks-people-list__row",
+                    scenario="people-library",
                 )
 
-        browser.close()
+            if set_name in ("extra", "all"):
+                shot(
+                    "#/folders",
+                    "all-folders.png",
+                    ".prks-folder-library",
+                    scenario="folder-library",
+                )
+                shot(
+                    "#/tags",
+                    "tags.png",
+                    ".tag--page",
+                    scenario="tags",
+                )
+                shot(
+                    "#/search?q=Darwin",
+                    "search.png",
+                    ".page-header--search",
+                    scenario="search-darwin",
+                )
+                shot(
+                    "#/progress?status=In%20Progress",
+                    "progress.png",
+                    ".project-card--work-card",
+                    scenario="progress-in-progress",
+                )
+                shot(
+                    "#/types",
+                    "types.png",
+                    ".types-page",
+                    scenario="file-types",
+                )
+                if darwin:
+                    shot(
+                        f"#/people/{darwin['id']}",
+                        "person.png",
+                        ".document-view--person",
+                        scenario="darwin-person",
+                    )
+                if note:
+                    shot(
+                        f"#/works/{note['id']}",
+                        "note.png",
+                        ".document-view",
+                        scenario="commonplace-note",
+                        wait_pdf=True,
+                    )
+                if group:
+                    shot(
+                        f"#/people/groups/{group['id']}",
+                        "group.png",
+                        ".document-view--group-detail",
+                        scenario="nineteenth-century-group",
+                    )
 
-    _write_manifest(set_name, captured)
-    return captured
+            browser.close()
+
+        if not captured:
+            raise RuntimeError(f"No screenshots were captured for set {set_name!r}.")
+
+        # Promote the complete staged set only after every capture succeeded.
+        for entry in captured:
+            src = stage_dir / entry["file"]
+            if not src.is_file():
+                raise RuntimeError(f"Staged screenshot missing: {entry['file']}")
+            os.replace(src, OUT_DIR / entry["file"])
+            print("wrote", OUT_DIR / entry["file"])
+
+        _write_manifest(set_name, captured, head)
+        return captured
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def main() -> int:
