@@ -21,6 +21,7 @@ from backend.db_manager import (
     BulkWorkError,
     SavedViewError,
     safe_pdf_path_under_dir,
+    safe_processing_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
     prune_orphan_pdf_thumbnails,
@@ -957,19 +958,55 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual(ids[0], w_new)
         self.assertIn(w_old, ids)
 
-    def test_safe_pdf_path_rejects_traversal(self):
+    def test_safe_pdf_path_rejects_path_shaped_input(self):
         pdfs = tempfile.mkdtemp()
         try:
-            self.assertIsNone(safe_pdf_path_under_dir(pdfs, ".."))
-            self.assertIsNone(safe_pdf_path_under_dir(pdfs, "%2e%2e"))
+            for unsafe in (
+                "..",
+                "%2e%2e",
+                "../keep.pdf",
+                "%2e%2e%2fkeep.pdf",
+                "nested/keep.pdf",
+                "nested%2Fkeep.pdf",
+                r"nested\\keep.pdf",
+                "bad\x00name.pdf",
+            ):
+                with self.subTest(unsafe=unsafe):
+                    self.assertIsNone(safe_pdf_path_under_dir(pdfs, unsafe))
             safe = os.path.join(pdfs, "keep.pdf")
             with open(safe, "w", encoding="utf-8") as f:
                 f.write("x")
             resolved = safe_pdf_path_under_dir(pdfs, "keep.pdf")
-            self.assertIsNotNone(resolved)
-            self.assertTrue(os.path.isfile(resolved))
+            self.assertEqual(resolved, os.path.realpath(safe))
         finally:
             shutil.rmtree(pdfs)
+
+    def test_safe_processing_path_requires_a_genuine_relative_path(self):
+        root = tempfile.mkdtemp()
+        try:
+            for unsafe in (
+                "../sample.pdf",
+                "batch/../sample.pdf",
+                "/sample.pdf",
+                r"\\server\\share\\sample.pdf",
+                r"C:\\sample.pdf",
+                "batch//sample.pdf",
+                "batch/./sample.pdf",
+                "bad\x00name.pdf",
+            ):
+                with self.subTest(unsafe=unsafe):
+                    self.assertIsNone(safe_processing_path_under_dir(root, unsafe))
+            expected = os.path.realpath(os.path.join(root, "batch", "sample.pdf"))
+            self.assertEqual(
+                safe_processing_path_under_dir(root, "batch/sample.pdf"),
+                expected,
+            )
+            self.assertEqual(
+                safe_processing_path_under_dir(root, r"batch\\sample.pdf"),
+                expected,
+            )
+        finally:
+            shutil.rmtree(root)
 
     def test_delete_work_with_unsafe_pdf_path_still_removes_row(self):
         w_id = self.db.add_work(title="Unsafe fp", file_path="/api/pdfs/..")
