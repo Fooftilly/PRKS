@@ -1011,6 +1011,10 @@ class TestDBManager(unittest.TestCase):
                 safe_processing_path_under_dir(root, "C:sample.pdf"),
                 os.path.realpath(os.path.join(root, "C:sample.pdf")),
             )
+            self.assertEqual(
+                safe_processing_path_under_dir(root, " batch/sample.pdf"),
+                os.path.realpath(os.path.join(root, " batch", "sample.pdf")),
+            )
         finally:
             shutil.rmtree(root)
 
