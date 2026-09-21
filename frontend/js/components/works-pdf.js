@@ -22,6 +22,65 @@ function prksViewerBoundToManagedPath(runtime, path) {
     return !!(want && bound && want === bound);
 }
 
+// The worker replies only after cache.put settles. A large PDF can take
+// longer than a couple of seconds to clone and store, so this is a
+// communication-loss bound, not a limit on put latency. 'unacknowledged'
+// means the worker never answered; 'rejected' means it answered {ok:false}
+// or the post never left the page.
+/* prks-pdf-cache-install-page-begin */
+const PDF_CACHE_INSTALL_ACK_TIMEOUT_MS = 120000;
+
+function prksPostPdfCacheInstall(controller, pathname, body, options) {
+    const opts = options || {};
+    const Channel = opts.MessageChannel
+        || (typeof MessageChannel !== 'undefined' ? MessageChannel : null);
+    const timeoutMs = typeof opts.timeoutMs === 'number' && opts.timeoutMs >= 0
+        ? opts.timeoutMs
+        : PDF_CACHE_INSTALL_ACK_TIMEOUT_MS;
+    if (!controller || typeof controller.postMessage !== 'function' || typeof Channel !== 'function') {
+        return Promise.resolve('rejected');
+    }
+    if (!(body instanceof ArrayBuffer) || body.byteLength < 1) {
+        return Promise.resolve('rejected');
+    }
+    return new Promise(function (resolve) {
+        let settled = false;
+        function finish(outcome) {
+            if (settled) return;
+            settled = true;
+            resolve(outcome);
+        }
+        const channel = new Channel();
+        const timer = setTimeout(function () {
+            finish('unacknowledged');
+        }, timeoutMs);
+        channel.port1.onmessage = function (event) {
+            clearTimeout(timer);
+            const data = event && event.data;
+            finish(data && data.ok ? 'ok' : 'rejected');
+        };
+        try {
+            controller.postMessage({
+                type: 'prks-pdf-cache-install',
+                pathname: pathname,
+                buffer: body,
+            }, [channel.port2, body]);
+        } catch (_ePost) {
+            clearTimeout(timer);
+            finish('rejected');
+        }
+    });
+}
+
+function prksPdfCacheInstallOutcome(outcome) {
+    if (outcome === 'ok') return true;
+    if (outcome === 'unacknowledged') {
+        throw new Error('PDF cache install unacknowledged');
+    }
+    return false;
+}
+/* prks-pdf-cache-install-page-end */
+
 function prksResolvePdfCtx(element) {
     if (typeof prksOwnerTabContext === 'function' && element) {
         const fromEl = prksOwnerTabContext(element);
@@ -1817,39 +1876,28 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // Whole-file puts go through the controlling worker so they share its
     // per-path generation with an in-flight prime GET. No controller means
     // that GET is not being cached by sw.js, so a direct put cannot race it.
+    // `body` is an ArrayBuffer this page already copied; it is transferred.
     function installPdfBytesThroughController(pathname, body) {
         const controller = pdfCacheController();
         if (!controller || typeof MessageChannel === 'undefined') return null;
-        return new Promise(function (resolve) {
-            let settled = false;
-            function finish(ok) {
-                if (settled) return;
-                settled = true;
-                resolve(!!ok);
-            }
-            const channel = new MessageChannel();
-            const timer = setTimeout(function () { finish(false); }, 2000);
-            channel.port1.onmessage = function (event) {
-                clearTimeout(timer);
-                finish(!!(event.data && event.data.ok));
-            };
-            try {
-                controller.postMessage({
-                    type: 'prks-pdf-cache-install',
-                    pathname: pathname,
-                    buffer: body,
-                }, [channel.port2]);
-            } catch (_ePost) {
-                clearTimeout(timer);
-                finish(false);
-            }
-        });
+        if (!(body instanceof ArrayBuffer)) return null;
+        return prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome);
+    }
+
+    function pdfCacheInstallBody(buffer) {
+        if (!buffer || typeof buffer.byteLength !== 'number' || buffer.byteLength < 1) return null;
+        if (buffer instanceof ArrayBuffer) return buffer.slice(0);
+        if (buffer.buffer instanceof ArrayBuffer && typeof buffer.byteOffset === 'number') {
+            return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        }
+        return null;
     }
 
     async function cacheManagedPdfBytes(filePath, buffer) {
         const path = managedPdfApiPath(filePath);
         if (!path || !buffer || !buffer.byteLength) return false;
-        const body = buffer instanceof ArrayBuffer ? buffer.slice(0) : buffer;
+        const body = pdfCacheInstallBody(buffer);
+        if (!body) return false;
         const viaController = installPdfBytesThroughController(path, body);
         if (viaController) return viaController;
         if (typeof caches === 'undefined' || !caches || typeof caches.open !== 'function') {

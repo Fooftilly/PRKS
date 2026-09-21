@@ -456,6 +456,19 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         )
         self.assertLess(pass_at, clear_at)
         self.assertIn("type: 'prks-pdf-cache-install'", works_pdf)
+        install_at = works_pdf.index("function prksPostPdfCacheInstall(")
+        install_fn = works_pdf[install_at:works_pdf.index("function prksPdfCacheInstallOutcome(", install_at)]
+        self.assertIn("PDF_CACHE_INSTALL_ACK_TIMEOUT_MS", install_fn)
+        self.assertIn("[channel.port2, body]", install_fn)
+        self.assertIn("finish('unacknowledged')", install_fn)
+        self.assertNotIn("finish(false)", install_fn)
+        self.assertNotIn("}, 2000)", install_fn)
+        self.assertIn("const PDF_CACHE_INSTALL_ACK_TIMEOUT_MS = 120000;", works_pdf)
+        self.assertIn("throw new Error('PDF cache install unacknowledged')", works_pdf)
+        self.assertIn(
+            "prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome)",
+            works_pdf,
+        )
         self.assertIn("PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install'", sw)
         self.assertIn("advanceWholeFilePdfGeneration(path)", sw)
         self.assertIn("wholeFilePdfGeneration(path) !== snapshot", sw)

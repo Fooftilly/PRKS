@@ -508,6 +508,124 @@ async function run() {
         }, cacheStorage);
         assert('pdf cache install message rejects a non-pdf path', rejected === false);
     }
+    {
+        // The page used to treat a 2s acknowledgement timeout as a failed
+        // cache write. A put that finishes after that must still be 'ok',
+        // and that 'ok' must not become "PDF cache update failed".
+        const fs = require('fs');
+        const { MessageChannel } = require('worker_threads');
+        const worksPdfSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/components/works-pdf.js'), 'utf8');
+        const beginMark = '/* prks-pdf-cache-install-page-begin */';
+        const endMark = '/* prks-pdf-cache-install-page-end */';
+        const begin = worksPdfSrc.indexOf(beginMark);
+        const end = worksPdfSrc.indexOf(endMark);
+        assert('page install helper is marked for extraction', begin !== -1 && end > begin);
+        const slice = worksPdfSrc.slice(begin + beginMark.length, end);
+        // Same realm as this script: a vm context has its own ArrayBuffer,
+        // and `instanceof ArrayBuffer` on the copied PDF body would fail.
+        const pageApi = new Function(
+            'MessageChannel',
+            'setTimeout',
+            'clearTimeout',
+            slice + '\nreturn { prksPostPdfCacheInstall: prksPostPdfCacheInstall, prksPdfCacheInstallOutcome: prksPdfCacheInstallOutcome, PDF_CACHE_INSTALL_ACK_TIMEOUT_MS: PDF_CACHE_INSTALL_ACK_TIMEOUT_MS };'
+        )(MessageChannel, setTimeout, clearTimeout);
+        assertEq('install ack timeout is the communication-loss bound', pageApi.PDF_CACHE_INSTALL_ACK_TIMEOUT_MS, 120000);
+
+        function delayPut(cacheStorage, ms) {
+            const realOpen = cacheStorage.open.bind(cacheStorage);
+            cacheStorage.open = async function (name) {
+                const cache = await realOpen(name);
+                if (!cache._delayWrapped) {
+                    const orig = cache.put.bind(cache);
+                    cache.put = function (key, response) {
+                        return new Promise(function (resolve, reject) {
+                            setTimeout(function () {
+                                Promise.resolve(orig(key, response)).then(resolve, reject);
+                            }, ms);
+                        });
+                    };
+                    cache._delayWrapped = true;
+                }
+                return cache;
+            };
+            return cacheStorage;
+        }
+
+        function controllerDeliveringTo(cachesApi, reply) {
+            const seen = { transferIncludesBuffer: false, detached: false };
+            const controller = {
+                postMessage: function (data, transfer) {
+                    const pagePort = (transfer || []).filter(function (item) {
+                        return item && typeof item.postMessage === 'function';
+                    })[0];
+                    seen.transferIncludesBuffer = (transfer || []).indexOf(data.buffer) !== -1;
+                    const bridge = new MessageChannel();
+                    bridge.port1.onmessage = function (event) {
+                        if (!reply) return;
+                        Promise.resolve(sw.handlePdfCacheMessage(event.data, cachesApi)).then(function (ok) {
+                            pagePort.postMessage({ ok: !!ok });
+                        }, function () {
+                            pagePort.postMessage({ ok: false });
+                        });
+                    };
+                    bridge.port2.postMessage({
+                        type: data.type,
+                        pathname: data.pathname,
+                        buffer: data.buffer,
+                    }, [data.buffer]);
+                    seen.detached = data.buffer.byteLength === 0;
+                },
+            };
+            return { controller: controller, seen: seen };
+        }
+
+        const slowStorage = delayPut(makeFakeCacheStorage(), 2500);
+        const pathname = '/api/pdfs/slow-install.pdf';
+        const payload = Buffer.from('SLOW-BUT-STORED');
+        const body = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+        const slow = controllerDeliveringTo(slowStorage, true);
+        const started = Date.now();
+        const outcome = await pageApi.prksPostPdfCacheInstall(slow.controller, pathname, body);
+        const elapsed = Date.now() - started;
+        assert('slow install transfers the already-copied buffer', slow.seen.transferIncludesBuffer && slow.seen.detached);
+        assert('slow install past the old 2s timeout is acknowledged', outcome === 'ok' && elapsed >= 2000, 'outcome=' + outcome + ' elapsed=' + elapsed);
+        let materializationFailure = '';
+        try {
+            const cached = pageApi.prksPdfCacheInstallOutcome(outcome);
+            if (!cached) materializationFailure = 'PDF cache update failed';
+        } catch (err) {
+            materializationFailure = err && err.message ? err.message : 'threw';
+        }
+        assert('slow successful install is not a materialization failure', materializationFailure === '');
+        const pdfCache = await slowStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const cachedBytes = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert('slow install stores the transferred bytes', cachedBytes.equals(payload));
+
+        const silent = controllerDeliveringTo(makeFakeCacheStorage(), false);
+        const lostBody = new ArrayBuffer(8);
+        const lost = await pageApi.prksPostPdfCacheInstall(silent.controller, pathname, lostBody, { timeoutMs: 40 });
+        assert('communication loss is unacknowledged, not a put rejection', lost === 'unacknowledged');
+        let lostMessage = '';
+        try {
+            pageApi.prksPdfCacheInstallOutcome(lost);
+        } catch (err) {
+            lostMessage = err && err.message ? err.message : '';
+        }
+        assert(
+            'unacknowledged install is distinct from PDF cache update failed',
+            lostMessage === 'PDF cache install unacknowledged'
+        );
+
+        const rejectedBody = new ArrayBuffer(4);
+        const rejecting = controllerDeliveringTo(makeFakeCacheStorage(), true);
+        const rejectedOutcome = await pageApi.prksPostPdfCacheInstall(
+            rejecting.controller,
+            '/api/works/not-a-pdf',
+            rejectedBody
+        );
+        assert('worker put rejection stays rejected', rejectedOutcome === 'rejected');
+        assert('worker put rejection maps to a failed cache write', pageApi.prksPdfCacheInstallOutcome(rejectedOutcome) === false);
+    }
 
     /* ---- performInstall(): required-asset failure fails the whole install,
      * decorative optional-asset failure never blocks it (AGENTS.md "Make
