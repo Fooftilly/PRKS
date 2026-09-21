@@ -29,6 +29,35 @@ AFFECTING_PATHS = {
 }
 AFFECTING_PREFIXES = ("frontend/",)
 
+# Keep in sync with scripts/capture_demo_screenshots.py scenario names.
+EXPECTED_README_FILES = frozenset({"folders.png", "work.png", "people.png"})
+EXPECTED_EXTRA_FILES = frozenset(
+    {
+        "all-folders.png",
+        "tags.png",
+        "search.png",
+        "progress.png",
+        "types.png",
+        "person.png",
+        "note.png",
+        "group.png",
+    }
+)
+EXPECTED_ALL_FILES = EXPECTED_README_FILES | EXPECTED_EXTRA_FILES
+SCENARIO_BY_FILE = {
+    "folders.png": "public-domain-folder",
+    "work.png": "origin-of-species-work-pdf",
+    "people.png": "people-library",
+    "all-folders.png": "folder-library",
+    "tags.png": "tags",
+    "search.png": "search-darwin",
+    "progress.png": "progress-in-progress",
+    "types.png": "file-types",
+    "person.png": "darwin-person",
+    "note.png": "commonplace-note",
+    "group.png": "nineteenth-century-group",
+}
+
 # Generated capture outputs may be dirty while regenerating; everything else that
 # can change pixels must be committed so HEAD matches the rendered tree.
 CAPTURE_OUTPUT_PREFIXES = ("docs/screenshots/",)
@@ -128,16 +157,46 @@ def main() -> int:
     if not isinstance(screenshots, list):
         screenshots = []
 
+    by_file = {
+        str(entry.get("file") or "").strip(): entry
+        for entry in screenshots
+        if isinstance(entry, dict) and str(entry.get("file") or "").strip()
+    }
+
+    # PNGs that exist on disk or are expected but lack a capture revision stay
+    # visible to freshness (legacy / never-regenerated extras).
+    screenshot_dir = MANIFEST.parent
+    on_disk = {
+        path.name
+        for path in screenshot_dir.glob("*.png")
+        if path.is_file()
+    }
+    untracked = sorted(
+        name
+        for name in (EXPECTED_ALL_FILES | on_disk)
+        if name.endswith(".png")
+        and (
+            name not in by_file
+            or not _entry_revision(by_file.get(name) or {}, global_source)
+        )
+    )
+
     checked: list[tuple[str, str]] = []
-    for entry in screenshots:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get("file") or "").strip()
+    for name, entry in by_file.items():
         rev = _entry_revision(entry, global_source)
         if name and rev:
             checked.append((name, rev))
 
-    if not checked:
+    stale_notes: list[str] = []
+    if untracked:
+        preview = ", ".join(untracked[:8])
+        if len(untracked) > 8:
+            preview += f", +{len(untracked) - 8} more"
+        stale_notes.append(
+            f"untracked or revisionless screenshots ({preview})"
+        )
+
+    if not checked and not untracked:
         if not global_source:
             _warn(
                 "Existing screenshots predate the freshness manifest. Run "
@@ -146,15 +205,19 @@ def main() -> int:
             return 0
         checked.append(("*", global_source))
 
-    stale_notes: list[str] = []
     affecting_by_rev: dict[str, list[str]] = {}
+    compare_failed = False
     for label, source in checked:
         if source not in affecting_by_rev:
             try:
                 affecting_by_rev[source] = _affecting_after(source)
             except (OSError, subprocess.CalledProcessError) as exc:
                 _warn(f"Could not compare screenshot capture revision {source}: {exc}")
-                return 0
+                # Keep going so revisionless/untracked notes collected above are
+                # still reported; do not treat a bad/missing SHA as "all fresh".
+                compare_failed = True
+                affecting_by_rev[source] = []
+                continue
         affecting = affecting_by_rev[source]
         if not affecting:
             continue
@@ -173,6 +236,8 @@ def main() -> int:
     )
 
     if not stale_notes:
+        if compare_failed:
+            return 0
         revs = sorted({rev for _, rev in checked})
         shown = ", ".join(r[:12] for r in revs[:3])
         if len(revs) > 3:
@@ -185,7 +250,7 @@ def main() -> int:
         joined += f"; +{len(stale_notes) - 6} more"
     _warn(
         "Documentation screenshots may be stale: screenshot-affecting files changed "
-        f"after capture ({joined}). "
+        f"after capture, or some screenshots lack a capture revision ({joined}). "
         "Regenerate with: python scripts/update_demo_screenshots.py"
     )
     # Default remains advisory (exit 0) for PR CI; opt into failing locally/CI

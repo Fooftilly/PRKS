@@ -88,6 +88,61 @@ class ScreenshotManifestMergeTests(unittest.TestCase):
             by_file = {row["file"]: row for row in data["screenshots"]}
             self.assertEqual(by_file["folders.png"]["source_commit"], "bbb222")
             self.assertEqual(by_file["tags.png"]["source_commit"], "aaa111")
+            # Expected extras stay listed even when the prior manifest omitted them.
+            self.assertIn("person.png", by_file)
+            self.assertNotIn("source_commit", by_file["person.png"])
+
+    def test_legacy_readme_partial_keeps_extras_visible_to_freshness(self):
+        capture = _load_capture()
+        check = _load_check()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "screenshots"
+            out.mkdir()
+            # Legacy-shaped manifest: only readme trio, but extras exist on disk.
+            for name in capture.EXPECTED_ALL_FILES:
+                (out / name).write_bytes(b"png")
+            manifest = out / "manifest.json"
+            manifest.write_text(
+                """{
+  "schema_version": 1,
+  "source_commit": null,
+  "capture_set": "legacy-existing",
+  "screenshots": [
+    {"file": "folders.png", "scenario": "public-domain-folder"},
+    {"file": "work.png", "scenario": "origin-of-species-work-pdf"},
+    {"file": "people.png", "scenario": "people-library"}
+  ]
+}
+""",
+                encoding="utf-8",
+            )
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ):
+                capture._write_manifest(
+                    "readme",
+                    [
+                        {"file": "folders.png", "scenario": "public-domain-folder"},
+                        {"file": "work.png", "scenario": "origin-of-species-work-pdf"},
+                        {"file": "people.png", "scenario": "people-library"},
+                    ],
+                    "bbb222",
+                )
+            data = __import__("json").loads(manifest.read_text(encoding="utf-8"))
+            by_file = {row["file"]: row for row in data["screenshots"]}
+            for name in capture.EXPECTED_EXTRA_FILES:
+                self.assertIn(name, by_file)
+                self.assertFalse(str(by_file[name].get("source_commit") or "").strip())
+
+            with mock.patch.object(check, "MANIFEST", manifest):
+                with mock.patch.object(check, "_warn") as warn:
+                    with mock.patch.dict(os.environ, {}, clear=False):
+                        code = check.main()
+            self.assertEqual(code, 0)
+            self.assertTrue(warn.called)
+            joined = " ".join(str(c.args[0]) for c in warn.call_args_list)
+            self.assertIn("untracked or revisionless", joined)
+            self.assertIn("tags.png", joined)
 
     def test_all_capture_advances_global_revision(self):
         capture = _load_capture()
@@ -144,6 +199,98 @@ class ScreenshotManifestMergeTests(unittest.TestCase):
             by_file = {row["file"]: row for row in data["screenshots"]}
             self.assertEqual(by_file["folders.png"]["source_commit"], "bbb222")
             self.assertEqual(by_file["person.png"]["source_commit"], "aaa111")
+
+
+class ScreenshotPromotionRollbackTests(unittest.TestCase):
+    def test_manifest_write_failure_restores_pngs_and_manifest(self):
+        capture = _load_capture()
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            out = parent / "screenshots"
+            out.mkdir()
+            stage = parent / "stage"
+            stage.mkdir()
+            manifest = out / "manifest.json"
+            original = b"old-png"
+            new = b"new-png"
+            (out / "folders.png").write_bytes(original)
+            (stage / "folders.png").write_bytes(new)
+            manifest.write_text(
+                '{"schema_version":1,"source_commit":"old","screenshots":[]}\n',
+                encoding="utf-8",
+            )
+            before = manifest.read_text(encoding="utf-8")
+            real_write = Path.write_text
+
+            def write_text_fail(self, data, encoding="utf-8", errors=None, newline=None):
+                if Path(self).resolve() == manifest.resolve():
+                    raise OSError("manifest write failed")
+                return real_write(
+                    self, data, encoding=encoding, errors=errors, newline=newline
+                )
+
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ), mock.patch.object(Path, "write_text", write_text_fail):
+                with self.assertRaises(OSError):
+                    capture._promote_capture(
+                        stage,
+                        "readme",
+                        [{"file": "folders.png", "scenario": "public-domain-folder"}],
+                        "newhead",
+                    )
+            self.assertEqual((out / "folders.png").read_bytes(), original)
+            self.assertEqual(manifest.read_text(encoding="utf-8"), before)
+
+    def test_replace_failure_restores_already_promoted_pngs(self):
+        capture = _load_capture()
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            out = parent / "screenshots"
+            out.mkdir()
+            stage = parent / "stage"
+            stage.mkdir()
+            manifest = out / "manifest.json"
+            (out / "folders.png").write_bytes(b"old-folders")
+            (out / "work.png").write_bytes(b"old-work")
+            (stage / "folders.png").write_bytes(b"new-folders")
+            (stage / "work.png").write_bytes(b"new-work")
+            manifest.write_text(
+                '{"schema_version":1,"source_commit":"old","screenshots":[]}\n',
+                encoding="utf-8",
+            )
+            before = manifest.read_text(encoding="utf-8")
+            real_replace = os.replace
+
+            def flaky_replace(src, dst):
+                src_path = Path(src)
+                dst_path = Path(dst)
+                if src_path.parent == stage and dst_path.name == "work.png":
+                    raise OSError("replace failed")
+                return real_replace(src, dst)
+
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ), mock.patch.object(capture.os, "replace", flaky_replace):
+                with self.assertRaises(OSError):
+                    capture._promote_capture(
+                        stage,
+                        "readme",
+                        [
+                            {
+                                "file": "folders.png",
+                                "scenario": "public-domain-folder",
+                            },
+                            {
+                                "file": "work.png",
+                                "scenario": "origin-of-species-work-pdf",
+                            },
+                        ],
+                        "newhead",
+                    )
+            self.assertEqual((out / "folders.png").read_bytes(), b"old-folders")
+            self.assertEqual((out / "work.png").read_bytes(), b"old-work")
+            self.assertEqual(manifest.read_text(encoding="utf-8"), before)
 
 
 class ScreenshotDirtyTreeTests(unittest.TestCase):

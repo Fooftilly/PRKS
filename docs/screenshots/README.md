@@ -24,8 +24,8 @@ Use `--set readme`, `--set extra`, or `--set all` to select a capture group. Onl
 
 ## Freshness
 
-`manifest.json` records viewport/theme metadata, logical screenshot scenarios, and capture revisions. After a full capture it also stores a directory-wide `source_commit`; each screenshot entry may carry its own `source_commit` so partial regenerations do not bless older images.
+`manifest.json` records viewport/theme metadata, logical screenshot scenarios, and capture revisions. The initial seed lists every expected screenshot file without a capture revision. After a full capture it also stores a directory-wide `source_commit`; each screenshot entry may carry its own `source_commit` so partial regenerations do not bless older images.
 
-`scripts/check_screenshot_freshness.py` compares those revisions with the current tree. It emits a warning when frontend or other screenshot-affecting sources changed after a captured revision. The check is intentionally advisory: rendering differences are not treated as brittle pixel-golden tests.
+`scripts/check_screenshot_freshness.py` compares those revisions with the current tree and warns when any expected or on-disk screenshot lacks a capture revision. It emits a warning when frontend or other screenshot-affecting sources changed after a captured revision. The check is intentionally advisory: rendering differences are not treated as brittle pixel-golden tests.
 
-The existing screenshots predate manifest tracking, so the initial manifest has no `source_commit`. The first full regeneration establishes it.
+The existing screenshots predate revision tracking; regenerate with `python scripts/update_demo_screenshots.py` to establish per-file revisions.

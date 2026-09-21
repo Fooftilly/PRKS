@@ -19,27 +19,6 @@ MANIFEST = OUT_DIR / "manifest.json"
 VIEWPORT = {"width": 1440, "height": 900}
 THEME = "light"
 
-EXPECTED_README_FILES = frozenset(
-    {
-        "folders.png",
-        "work.png",
-        "people.png",
-    }
-)
-EXPECTED_EXTRA_FILES = frozenset(
-    {
-        "all-folders.png",
-        "tags.png",
-        "search.png",
-        "progress.png",
-        "types.png",
-        "person.png",
-        "note.png",
-        "group.png",
-    }
-)
-EXPECTED_ALL_FILES = EXPECTED_README_FILES | EXPECTED_EXTRA_FILES
-
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -52,7 +31,13 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from check_screenshot_freshness import require_clean_capture_sources  # noqa: E402
+from check_screenshot_freshness import (  # noqa: E402
+    EXPECTED_ALL_FILES,
+    EXPECTED_EXTRA_FILES,
+    EXPECTED_README_FILES,
+    SCENARIO_BY_FILE,
+    require_clean_capture_sources,
+)
 
 
 def _assert_loopback_base(base_url: str) -> str:
@@ -152,12 +137,10 @@ def _existing_screenshot_map(manifest: dict) -> dict[str, dict]:
     return out
 
 
-def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> None:
-    """Merge captured entries into the manifest without blessing untouched PNGs.
-
-    Partial sets keep prior entries (and their per-file source_commit). The
-    directory-wide source_commit advances only after an ``all`` capture.
-    """
+def _build_manifest_payload(
+    set_name: str, captured: list[dict], head: str | None
+) -> dict:
+    """Build the merged manifest payload without writing it."""
     previous = _load_manifest()
     by_file = _existing_screenshot_map(previous)
     for entry in captured:
@@ -169,10 +152,22 @@ def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> No
             row["source_commit"] = head
         by_file[entry["file"]] = row
 
-    # Prefer a stable, documented order: prior order first, then new files.
+    # Keep every expected screenshot visible to freshness, even when a partial
+    # run has never regenerated it (legacy extras with no revision yet).
+    for name in sorted(EXPECTED_ALL_FILES):
+        if name not in by_file:
+            by_file[name] = {
+                "file": name,
+                "scenario": SCENARIO_BY_FILE[name],
+            }
+
     ordered: list[dict] = []
     seen: set[str] = set()
-    for row in previous.get("screenshots") or []:
+    preferred = (
+        list(previous.get("screenshots") or [])
+        + [{"file": name} for name in sorted(EXPECTED_ALL_FILES)]
+    )
+    for row in preferred:
         if not isinstance(row, dict):
             continue
         name = str(row.get("file") or "").strip()
@@ -190,8 +185,6 @@ def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> No
         if captured_names == EXPECTED_ALL_FILES:
             source_commit = head
         else:
-            # Incomplete "all" must not bless skipped/untouched PNGs via a new
-            # global revision (e.g. person/note/group shots missing).
             source_commit = previous.get("source_commit")
             if source_commit is not None:
                 source_commit = str(source_commit).strip() or None
@@ -200,7 +193,6 @@ def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> No
                 "only regenerated files carry the new per-file revision."
             )
     else:
-        # Do not advance the global baseline after a partial run.
         source_commit = previous.get("source_commit")
         if source_commit is not None:
             source_commit = str(source_commit).strip() or None
@@ -219,12 +211,83 @@ def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> No
     if set_name != "all":
         payload["note"] = (
             "Partial capture: only listed files with a matching source_commit "
-            "were regenerated in this run; other entries keep prior provenance."
+            "were regenerated in this run; other entries keep prior provenance "
+            "or remain revisionless until regenerated."
         )
     elif payload_note:
         payload["note"] = payload_note
+    elif previous.get("note") and not source_commit:
+        payload["note"] = previous.get("note")
+    return payload
+
+
+def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> None:
+    """Merge captured entries into the manifest without blessing untouched PNGs."""
+    payload = _build_manifest_payload(set_name, captured, head)
     MANIFEST.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print("wrote", MANIFEST)
+
+
+def _promote_capture(
+    stage_dir: Path, set_name: str, captured: list[dict], head: str
+) -> None:
+    """Replace committed PNGs and manifest rollback-safely.
+
+    Prepare the new manifest first, back up every target that will change,
+    promote staged PNGs, write the manifest, and restore every backup if any
+    step fails after mutation begins.
+    """
+    payload = _build_manifest_payload(set_name, captured, head)
+    manifest_text = json.dumps(payload, indent=2) + "\n"
+    backup_dir = Path(
+        tempfile.mkdtemp(prefix="prks-shot-backup-", dir=str(OUT_DIR.parent))
+    )
+    backed_up: list[tuple[Path, Path | None]] = []
+    promoted: list[Path] = []
+    manifest_backup: Path | None = None
+    try:
+        if MANIFEST.is_file():
+            manifest_backup = backup_dir / "manifest.json"
+            shutil.copy2(MANIFEST, manifest_backup)
+
+        for entry in captured:
+            name = entry["file"]
+            src = stage_dir / name
+            dest = OUT_DIR / name
+            if not src.is_file():
+                raise RuntimeError(f"Staged screenshot missing: {name}")
+            prior: Path | None = None
+            if dest.is_file():
+                prior = backup_dir / name
+                shutil.copy2(dest, prior)
+            backed_up.append((dest, prior))
+
+        for entry in captured:
+            name = entry["file"]
+            os.replace(stage_dir / name, OUT_DIR / name)
+            promoted.append(OUT_DIR / name)
+            print("wrote", OUT_DIR / name)
+
+        MANIFEST.write_text(manifest_text, encoding="utf-8")
+        print("wrote", MANIFEST)
+    except Exception:
+        # Restore originals for every path we may have mutated.
+        for dest, prior in backed_up:
+            try:
+                if prior is not None and prior.is_file():
+                    os.replace(prior, dest)
+                elif dest.is_file() and dest in promoted:
+                    dest.unlink()
+            except OSError:
+                pass
+        if manifest_backup is not None and manifest_backup.is_file():
+            try:
+                os.replace(manifest_backup, MANIFEST)
+            except OSError:
+                pass
+        raise
+    finally:
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def capture(base_url: str, set_name: str = "all") -> list[dict]:
@@ -406,15 +469,8 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
                 f"Capture set {set_name!r} incomplete: missing {missing}; unexpected {extra}."
             )
 
-        # Promote the complete staged set only after every capture succeeded.
-        for entry in captured:
-            src = stage_dir / entry["file"]
-            if not src.is_file():
-                raise RuntimeError(f"Staged screenshot missing: {entry['file']}")
-            os.replace(src, OUT_DIR / entry["file"])
-            print("wrote", OUT_DIR / entry["file"])
-
-        _write_manifest(set_name, captured, head)
+        # Promote the complete staged set + manifest rollback-safely.
+        _promote_capture(stage_dir, set_name, captured, head)
         return captured
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
