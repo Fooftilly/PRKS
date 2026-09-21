@@ -393,6 +393,121 @@ async function run() {
         const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
         assert('range-only first response never seeds the whole-file pdf cache', !(await pdfCache.match(pathname)));
     }
+    {
+        // A whole-file GET that started before the post-save install must not
+        // commit its pre-edit body after that install.
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/race-inflight.pdf';
+        let releaseFetch;
+        const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
+        const handlers = sw.createHandlers({
+            caches: cacheStorage,
+            fetchImpl: function () {
+                return fetchGate.then(function () {
+                    return new Response(Buffer.from('OLD-BYTES'), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/pdf' },
+                    });
+                });
+            },
+        });
+        const pending = handlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + pathname }),
+            pathname
+        );
+        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const installed = await sw.installAuthoritativeWholeFilePdf(
+            pdfCache,
+            pathname,
+            Buffer.from('NEW-BYTES')
+        );
+        assert('authoritative install during in-flight GET commits', installed === true);
+        releaseFetch();
+        await pending;
+        await sw.settleWholeFilePdfWrites(pathname);
+        const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert(
+            'stale in-flight whole-file GET does not overwrite post-save bytes',
+            cached.equals(Buffer.from('NEW-BYTES'))
+        );
+        assertEq(
+            'post-save install advanced the per-path generation',
+            sw.wholeFilePdfGeneration(pathname) > 0,
+            true
+        );
+    }
+    {
+        // A network put already queued on the path still loses to a later
+        // authoritative install: the chain runs the install after it and
+        // advances the generation first.
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/race-queued.pdf';
+        let releasePut;
+        const putGate = new Promise(function (resolve) { releasePut = resolve; });
+        let puts = 0;
+        const realOpen = cacheStorage.open.bind(cacheStorage);
+        cacheStorage.open = async function (name) {
+            const cache = await realOpen(name);
+            if (!cache._raceWrapped) {
+                const orig = cache.put.bind(cache);
+                cache.put = async function (key, response) {
+                    puts += 1;
+                    if (puts === 1) await putGate;
+                    return orig(key, response);
+                };
+                cache._raceWrapped = true;
+            }
+            return cache;
+        };
+        const handlers = sw.createHandlers({
+            caches: cacheStorage,
+            fetchImpl: function () {
+                return Promise.resolve(new Response(Buffer.from('OLD-QUEUED'), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/pdf' },
+                }));
+            },
+        });
+        const pending = handlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + pathname }),
+            pathname
+        );
+        await pending;
+        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const installPromise = sw.installAuthoritativeWholeFilePdf(
+            pdfCache,
+            pathname,
+            Buffer.from('NEW-QUEUED')
+        );
+        releasePut();
+        assert('queued network put then install still commits', (await installPromise) === true);
+        await sw.settleWholeFilePdfWrites(pathname);
+        const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert(
+            'authoritative install replaces a whole-file put that was already queued',
+            cached.equals(Buffer.from('NEW-QUEUED'))
+        );
+    }
+    {
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/message-install.pdf';
+        const ok = await sw.handlePdfCacheMessage({
+            type: sw.PDF_CACHE_INSTALL_MESSAGE,
+            pathname: pathname,
+            buffer: Buffer.from('FROM-MESSAGE'),
+        }, cacheStorage);
+        assert('pdf cache install message stores the posted bytes', ok === true);
+        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert('pdf cache install message body matches', cached.equals(Buffer.from('FROM-MESSAGE')));
+        assert('unrelated worker message is ignored', sw.handlePdfCacheMessage({ type: 'other' }, cacheStorage) === null);
+        const rejected = await sw.handlePdfCacheMessage({
+            type: sw.PDF_CACHE_INSTALL_MESSAGE,
+            pathname: '/api/works/not-a-pdf',
+            buffer: Buffer.from('NOPE'),
+        }, cacheStorage);
+        assert('pdf cache install message rejects a non-pdf path', rejected === false);
+    }
 
     /* ---- performInstall(): required-asset failure fails the whole install,
      * decorative optional-asset failure never blocks it (AGENTS.md "Make

@@ -241,6 +241,113 @@
         return true;
     }
 
+    // Per-path generation for prks-pdf-v1 whole-file writes. The page and the
+    // network GET do not share a heap, so every whole-file put goes through
+    // this worker: a post-save install advances the generation before its
+    // put, and a network GET that snapshotted an older generation skips its
+    // put. A per-path chain keeps those puts from interleaving.
+    const PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install';
+    const pdfWholeFileGeneration = Object.create(null);
+    const pdfWholeFileWriteChain = Object.create(null);
+
+    function wholeFilePdfGeneration(pathname) {
+        const n = pdfWholeFileGeneration[pathname];
+        return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+    }
+
+    function advanceWholeFilePdfGeneration(pathname) {
+        const next = wholeFilePdfGeneration(pathname) + 1;
+        pdfWholeFileGeneration[pathname] = next;
+        return next;
+    }
+
+    function enqueueWholeFilePdfWrite(pathname, task) {
+        const key = String(pathname || '');
+        const prev = pdfWholeFileWriteChain[key] || Promise.resolve();
+        const run = prev.then(task, task);
+        pdfWholeFileWriteChain[key] = run.then(function () {
+            return undefined;
+        }, function () {
+            return undefined;
+        });
+        return run;
+    }
+
+    function settleWholeFilePdfWrites(pathname) {
+        return pdfWholeFileWriteChain[String(pathname || '')] || Promise.resolve();
+    }
+
+    function copyPdfBytes(buffer) {
+        if (!buffer || typeof buffer.byteLength !== 'number' || buffer.byteLength < 1) {
+            return null;
+        }
+        if (typeof ArrayBuffer !== 'undefined' && buffer instanceof ArrayBuffer) {
+            return buffer.slice(0);
+        }
+        if (buffer.buffer && typeof buffer.byteOffset === 'number') {
+            return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        }
+        return null;
+    }
+
+    function wholeFilePdfResponse(bytes) {
+        return new Response(bytes, {
+            status: 200,
+            headers: {
+                'Content-Type': 'application/pdf',
+                'Content-Length': String(bytes.byteLength || 0),
+            },
+        });
+    }
+
+    /** Post-save bytes. Generation advances before the put, on the path's chain. */
+    function installAuthoritativeWholeFilePdf(cache, pathname, bytes) {
+        const path = String(pathname || '');
+        const body = copyPdfBytes(bytes);
+        if (!cache || !isManagedPdfPath(path) || !body) return Promise.resolve(false);
+        return enqueueWholeFilePdfWrite(path, function () {
+            advanceWholeFilePdfGeneration(path);
+            return cache.put(path, wholeFilePdfResponse(body)).then(function () {
+                return true;
+            });
+        });
+    }
+
+    /**
+     * Network whole-file GET. `generationAtStart` is the value observed before
+     * the fetch. A newer post-save install skips this put.
+     */
+    function commitNetworkWholeFilePdf(cache, pathname, response, generationAtStart) {
+        const path = String(pathname || '');
+        const snapshot = generationAtStart;
+        return enqueueWholeFilePdfWrite(path, function () {
+            if (wholeFilePdfGeneration(path) !== snapshot) return false;
+            return cache.put(path, response).then(function () {
+                return true;
+            });
+        });
+    }
+
+    /**
+     * Page → worker install. Returns null for any other message so the
+     * listener can ignore it. Resolves false when the bytes were not stored.
+     */
+    function handlePdfCacheMessage(data, cachesApi) {
+        if (!data || data.type !== PDF_CACHE_INSTALL_MESSAGE) return null;
+        if (!cachesApi || typeof cachesApi.open !== 'function') return Promise.resolve(false);
+        const pathname = typeof data.pathname === 'string' ? data.pathname : '';
+        if (!isManagedPdfPath(pathname)) return Promise.resolve(false);
+        const bytes = copyPdfBytes(data.buffer);
+        if (!bytes) return Promise.resolve(false);
+        return cachesApi.open(PDF_CACHE).then(function (cache) {
+            return installAuthoritativeWholeFilePdf(cache, pathname, bytes);
+        }).then(function (ok) {
+            return !!ok;
+        }, function () {
+            return false;
+        });
+    }
+
     /** Only a complete (non-Range) 200 PDF response may enter the whole-file PDF cache. */
     function isWholeFilePdfResponse(request, response) {
         if (!response || response.status !== 200) return false;
@@ -324,6 +431,9 @@
         }
 
         async function handlePdfRequest(request, pathname) {
+            // Snapshot before any await so an install that lands while this
+            // GET is still draining is visible at put time.
+            const generationAtStart = wholeFilePdfGeneration(pathname);
             const cache = await cachesApi.open(PDF_CACHE);
             if (hasRangeHeader(request)) {
                 // Range requests never write to the whole-file cache entry -- only a complete
@@ -347,7 +457,17 @@
             try {
                 const res = await fetchImpl(request);
                 if (isWholeFilePdfResponse(request, res)) {
-                    cache.put(pathname, res.clone()).catch(function () {});
+                    let cloned = null;
+                    try {
+                        cloned = res.clone();
+                    } catch (_eClone) {
+                        cloned = null;
+                    }
+                    if (cloned) {
+                        commitNetworkWholeFilePdf(
+                            cache, pathname, cloned, generationAtStart
+                        ).catch(function () {});
+                    }
                 }
                 return res;
             } catch (_e) {
@@ -540,6 +660,23 @@
             }
             // Everything else -- notably /api/... JSON -- passes straight through.
         });
+
+        scope.addEventListener('message', function (event) {
+            if (!scope.caches) return;
+            const done = handlePdfCacheMessage(event.data, scope.caches);
+            if (!done) return;
+            const port = event.ports && event.ports[0];
+            const task = Promise.resolve(done).then(function (ok) {
+                if (port && typeof port.postMessage === 'function') {
+                    port.postMessage({ ok: !!ok });
+                }
+            }, function () {
+                if (port && typeof port.postMessage === 'function') {
+                    port.postMessage({ ok: false });
+                }
+            });
+            if (typeof event.waitUntil === 'function') event.waitUntil(task);
+        });
     }
 
     const api = {
@@ -559,6 +696,12 @@
         isCacheableStaticResponse: isCacheableStaticResponse,
         isWholeFilePdfResponse: isWholeFilePdfResponse,
         shouldRetireCache: shouldRetireCache,
+        installAuthoritativeWholeFilePdf: installAuthoritativeWholeFilePdf,
+        commitNetworkWholeFilePdf: commitNetworkWholeFilePdf,
+        settleWholeFilePdfWrites: settleWholeFilePdfWrites,
+        handlePdfCacheMessage: handlePdfCacheMessage,
+        wholeFilePdfGeneration: wholeFilePdfGeneration,
+        PDF_CACHE_INSTALL_MESSAGE: PDF_CACHE_INSTALL_MESSAGE,
         PRKS_SW_SHELL_CACHE: SHELL_CACHE,
         PRKS_SW_STATIC_CACHE: STATIC_CACHE,
         PRKS_SW_PDF_CACHE: PDF_CACHE,

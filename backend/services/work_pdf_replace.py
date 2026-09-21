@@ -618,9 +618,15 @@ def replace_managed_work_pdf(
                     safe_error_type(e),
                 )
 
-            body: dict[str, Any] = {"status": "success"}
-            if cow_retarget:
-                body["file_path"] = target_fp
+            # Always name the path this request wrote. A success body with no
+            # file_path is not proof the client's cached path is still current:
+            # another tab may already have copy-on-write retargeted this Work,
+            # and caching the upload under that stale key would replace a
+            # sibling's bytes.
+            body: dict[str, Any] = {
+                "status": "success",
+                "file_path": target_fp,
+            }
             if materialized_rev is not None:
                 body["materialized_pdf_annotation_revision"] = materialized_rev
                 mat = db.get_work_pdf_materialization(work_id)

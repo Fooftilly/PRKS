@@ -374,7 +374,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         # P1 failure path: apply file_path from non-OK bodies before throw.
         export_fn = works_pdf[export_at:export_end]
         err_path = export_fn.index("if (!pdfRes.ok)")
-        err_block = export_fn[err_path : export_fn.index("Shared-PDF COW may retarget", err_path)]
+        err_block = export_fn[err_path : export_fn.index("Every successful replacement", err_path)]
         self.assertIn("errBody.file_path", err_block)
         self.assertIn("applyCowPdfRetarget(errRetarget, buffer)", err_block)
         self.assertLess(
@@ -410,38 +410,56 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("runtime.viewerFilePath", mount_fn)
 
     def test_inplace_materialization_refreshes_whole_file_pdf_cache(self):
-        """Successful in-place POST /pdf must refresh prks-pdf-v1.
+        """Successful POST /pdf refreshes prks-pdf-v1 only on the canonical path.
 
-        COW seeds Cache Storage only when file_path changes. Exclusive
-        materialization returns no file_path. Range loads never replace the
-        whole-file entry, so the uploaded buffer has to be written under the
-        current path. A failed POST must not, and a COW remount failure must
-        still skip the coherence hooks that follow a successful replace.
+        The success body always includes file_path. A path that differs from
+        this tab retargets; an equal path is the only in-place cache write.
+        A missing path must not fall through to runtime.filePath. A failed
+        cache put throws before coherence hooks and before the caller clears
+        pendingMaterializationRevision. A COW remount failure still skips
+        those hooks. Whole-file puts that can race a service-worker GET go
+        through prks-pdf-cache-install.
         """
         works_pdf = (ROOT / "frontend" / "js" / "components" / "works-pdf.js").read_text(
             encoding="utf-8"
         )
+        sw = (ROOT / "frontend" / "sw.js").read_text(encoding="utf-8")
         export_at = works_pdf.index("async function exportAndPersistPdfCopy(")
         export_end = works_pdf.index(
             "\n    async function restoreEffectiveViewerAnnotations(", export_at
         )
         export_fn = works_pdf[export_at:export_end]
-        refresh = "await cacheManagedPdfBytes(runtime && runtime.filePath, buffer);"
+        self.assertIn("okBody.file_path", export_fn)
+        self.assertIn("throw new Error('PDF save missing file path')", export_fn)
+        self.assertNotIn("runtime.filePath, buffer", export_fn)
+        self.assertNotIn("if (!sawRetarget)", export_fn)
+        refresh = "const cached = await cacheManagedPdfBytes(canonical, buffer);"
         self.assertIn(refresh, export_fn)
         refresh_at = export_fn.index(refresh)
+        fail_at = export_fn.index("if (!cached) throw new Error('PDF cache update failed')")
         self.assertLess(export_fn.index("throw new Error(`PDF save failed"), refresh_at)
-        retarget_at = export_fn.index("if (retarget)")
-        guard_at = export_fn.index("if (!sawRetarget)")
-        self.assertLess(retarget_at, guard_at)
-        self.assertLess(guard_at, refresh_at)
-        self.assertLess(refresh_at, export_fn.index("prksOfflineMarkEntityChanged"))
-        # The retarget arm seeds via applyCowPdfRetarget, not this call.
-        retarget_arm = export_fn[retarget_at:export_fn.index("} catch (eCow)", retarget_at)]
-        self.assertIn("applyCowPdfRetarget(retarget, buffer)", retarget_arm)
+        retarget_at = export_fn.index("if (needsRetarget)")
+        self.assertLess(retarget_at, refresh_at)
+        self.assertLess(refresh_at, fail_at)
+        self.assertLess(fail_at, export_fn.index("prksOfflineMarkEntityChanged"))
+        retarget_arm = export_fn[retarget_at:export_fn.index("} else {", retarget_at)]
+        self.assertIn("applyCowPdfRetarget(canonical, buffer)", retarget_arm)
         self.assertNotIn("cacheManagedPdfBytes", retarget_arm)
         rethrow = export_fn.index("throw cowRemountFailed")
-        self.assertLess(refresh_at, rethrow)
+        self.assertLess(fail_at, rethrow)
         self.assertLess(rethrow, export_fn.index("prksOfflineMarkEntityChanged"))
+        # Cache failure must escape export so the durable success path never
+        # clears the pending revision. Only STALE does that, and it does not retry.
+        pass_at = works_pdf.index("await exportAndPersistPdfCopy(saveToken, claimed)")
+        clear_at = works_pdf.index(
+            "runtime.pendingMaterializationRevision = null", pass_at
+        )
+        self.assertLess(pass_at, clear_at)
+        self.assertIn("type: 'prks-pdf-cache-install'", works_pdf)
+        self.assertIn("PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install'", sw)
+        self.assertIn("advanceWholeFilePdfGeneration(path)", sw)
+        self.assertIn("wholeFilePdfGeneration(path) !== snapshot", sw)
+        self.assertIn("generationAtStart = wholeFilePdfGeneration(pathname)", sw)
 
 
 if __name__ == "__main__":

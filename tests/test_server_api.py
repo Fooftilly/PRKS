@@ -723,6 +723,11 @@ class TestServerAPI(unittest.TestCase):
         overwrite_req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(overwrite_req) as orr:
             self.assertEqual(orr.status, 200)
+            replaced = json.loads(orr.read().decode())
+        # Exclusive in-place success still names the path that was written.
+        # Omitting it is not a same-path signal for a client whose runtime
+        # path may already be stale.
+        self.assertEqual(replaced.get("file_path"), file_path)
 
         fetch_req = urllib.request.Request(f"{self._base_url}{file_path}")
         with urllib.request.urlopen(fetch_req) as fres:
