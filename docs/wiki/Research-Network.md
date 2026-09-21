@@ -7,7 +7,7 @@ flowchart LR
     W[Works / sources] -->|research-note mentions| A[Arguments / Stances]
     A -->|evidence / source| W
     W -->|research-note mentions| C[Concepts]
-    C -->|parent hierarchy| C
+    C -->|parent of| C2[Child Concepts]
     A -->|supports / opposes / qualifies| P[Positions]
     A -->|responds to| A2[Other Arguments]
     P --> G[Research Graph]
