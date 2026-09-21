@@ -34,7 +34,9 @@ See [Testing](Testing.md) and `AGENTS.md` for the exact current policy.
 
 ## Documentation updates
 
-When a code change modifies a user-visible command/configuration, update the README.
+When a code change modifies exact startup, configuration, or safety contracts (host/port, Docker publish, env vars, schema version, auth warning), update the README.
+
+When it changes detailed current feature or user-visible command behavior, update the relevant wiki source page (for example [User Guide](User-Guide.md), [Workspace Tabs and Split View](Workspace-Tabs-and-Split-View.md), or [Research Network](Research-Network.md)) rather than expanding the README into a second manual.
 
 When it changes stable architecture/user concepts, update the relevant wiki source page.
 
