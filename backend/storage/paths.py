@@ -13,6 +13,21 @@ def repo_root() -> str:
     return _REPO_ROOT
 
 
+def resolved_child_path(root: str, *parts: str) -> Optional[str]:
+    """Resolve a filesystem child and prove that it remains beneath root.
+
+    This is a containment primitive, not an input validator: callers should
+    still enforce the shape of their own relative names before calling it.
+    """
+    try:
+        base = Path(root).resolve(strict=False)
+        candidate = base.joinpath(*parts).resolve(strict=False)
+        candidate.relative_to(base)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return str(candidate)
+
+
 def testing_from_value(v: str) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes")
 
