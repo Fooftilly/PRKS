@@ -646,6 +646,50 @@ class TestBackupPathSafety(BackupRestoreTestCase):
             f"storage root resolved {len(resolutions)} times, expected once",
         )
 
+    def test_descriptor_removal_anchors_to_the_root_snapshot(self):
+        """The descriptor descent must start from the authorized snapshot.
+
+        Opening config.root re-resolves the operator symlink independently of
+        the snapshot the authorization check used, so a retarget between the two
+        could bind the descriptor to a different maintenance tree. The portable
+        test cannot catch this: it patches _SUPPORTS_DIR_FD off.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        real_root = self._tmpdir("prks-real-root-")
+        link_root = os.path.join(self._tmpdir("prks-link-"), "storage")
+        self._symlink_or_skip(real_root, link_root, directory=True)
+        cfg = self._cfg(link_root)
+        staging_root = backup_module._maintenance_subroot(
+            cfg, *backup_module._STAGING_SUBROOT
+        )
+        os.makedirs(staging_root, exist_ok=True)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+
+        opened = []
+        real_open = os.open
+
+        def spy_open(path, *args, **kwargs):
+            try:
+                opened.append(os.fspath(path))
+            except TypeError:
+                pass
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(backup_module.os, "open", spy_open):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertNotIn(
+            link_root,
+            opened,
+            "descriptor descent re-resolved config.root instead of the snapshot",
+        )
+        self.assertIn(os.path.realpath(link_root), opened)
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)

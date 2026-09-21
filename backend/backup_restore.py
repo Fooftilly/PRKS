@@ -675,20 +675,32 @@ def _verified_maintenance_subroot_from(
 
 
 def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[int]:
-    """Descriptor for a maintenance subroot, reached from the storage root.
+    """Descriptor for a maintenance subroot, reached from the storage root."""
+    return _open_maintenance_subroot_from(_resolved_storage_root(config), *names)
 
-    Every component below ``config.root`` is opened relative to the previous
-    descriptor with ``O_NOFOLLOW``, so the descriptor really is the directory at
+
+def _open_maintenance_subroot_from(root_real: str, *names: str) -> Optional[int]:
+    """``_open_maintenance_subroot()`` anchored to a caller's root snapshot.
+
+    Every component below the root is opened relative to the previous descriptor
+    with ``O_NOFOLLOW``, so the descriptor really is the directory at
     ``<storage>/.prks-maintenance/<names...>`` -- not whatever a symlink planted
     at any level points at, and not whatever replaces a component after a
-    path-based check has passed. Returns None when the subroot does not exist or
-    when the platform has no descriptor-relative removal; raises ValueError when
-    a component exists but is not a real directory.
+    path-based check has passed.
+
+    The descent starts from ``root_real``, never from ``config.root``. Opening
+    the operator-supplied path here would re-resolve that symlink independently
+    of the snapshot the caller authorized against, so a retarget between the two
+    could bind this descriptor to a different maintenance tree.
+
+    Returns None when the subroot does not exist or when the platform has no
+    descriptor-relative removal; raises ValueError when a component exists but
+    is not a real directory.
     """
     if not _SUPPORTS_DIR_FD:
         return None
     try:
-        fd = os.open(config.root, os.O_RDONLY | os.O_DIRECTORY)
+        fd = os.open(root_real, os.O_RDONLY | os.O_DIRECTORY)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -840,13 +852,14 @@ def _remove_maintenance_child(
         raise ValueError("removal path could not be resolved") from exc
     if parent_real != expected_root:
         raise ValueError("removal path is not a direct child of its maintenance root")
-    fd = _open_maintenance_subroot(config, *subroot)
+    fd = _open_maintenance_subroot_from(root_real, *subroot)
     if fd is not None:
-        # Bound to the descriptor the O_NOFOLLOW descent produced. expected_root
-        # is inert here: _remove_proven_child() consults it only without a
-        # descriptor. Verifying by a second path resolution and then reopening
-        # config.root would let an ancestor retargeted in between name a
-        # different tree than the one that was verified.
+        # Bound to the descriptor the O_NOFOLLOW descent produced, and that
+        # descent starts from the same root_real the authorization check above
+        # used. expected_root is inert here: _remove_proven_child() consults it
+        # only without a descriptor. Re-resolving config.root for the open would
+        # let a retarget between the check and the open bind this descriptor to
+        # a different maintenance tree.
         try:
             _remove_proven_child(expected_root, leaf, fd)
         finally:
