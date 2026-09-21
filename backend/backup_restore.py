@@ -33,7 +33,7 @@ import time
 import zipfile
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Optional
 
 from backend.db_manager import PRKS_SCHEMA_VERSION
@@ -504,12 +504,14 @@ def _ensure_maintenance_dirs(config: StorageConfig) -> str:
 
 
 def _path_is_under(child: str, parent: str) -> bool:
-    parent_real = os.path.realpath(parent)
-    child_real = os.path.realpath(child)
-    if child_real == parent_real:
+    """Return whether the resolved child is the parent or lies beneath it."""
+    try:
+        parent_real = Path(parent).resolve(strict=False)
+        child_real = Path(child).resolve(strict=False)
+        child_real.relative_to(parent_real)
         return True
-    prefix = parent_real + os.sep
-    return child_real.startswith(prefix)
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def processing_is_under_storage(config: StorageConfig) -> bool:
@@ -552,6 +554,7 @@ def _backup_filename(dt: datetime) -> str:
 
 
 def _safe_remove(path: str) -> None:
+    """Remove one already-authorized path without following directory symlinks."""
     if not os.path.lexists(path):
         return
     if os.path.islink(path) or os.path.isfile(path):
@@ -569,6 +572,26 @@ def _safe_remove(path: str) -> None:
             else:
                 os.unlink(child)
     os.rmdir(path)
+
+
+def _safe_remove_under(root: str, path: str) -> None:
+    """Remove path only when its resolved parent remains beneath root.
+
+    Resolving the parent blocks traversal and intermediate-symlink escapes while
+    deliberately leaving the final component unresolved so a symlink leaf can
+    be unlinked without following its target.
+    """
+    root_real = Path(root).resolve(strict=False)
+    normalized = os.path.abspath(path)
+    leaf = os.path.basename(normalized)
+    if not leaf or leaf in (".", ".."):
+        raise ValueError("refusing ambiguous removal path")
+    parent_real = Path(os.path.dirname(normalized)).resolve(strict=False)
+    try:
+        parent_real.relative_to(root_real)
+    except ValueError as exc:
+        raise ValueError("removal path escapes allowed root") from exc
+    _safe_remove(str(parent_real / leaf))
 
 
 def _dir_size_bytes(path: str) -> int:
@@ -1520,7 +1543,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
     for name in names:
         child = os.path.join(staging_root, name)
         if os.path.islink(child):
-            _safe_remove(child)
+            _safe_remove_under(staging_root, child)
             continue
         if os.path.isfile(child):
             if not name.startswith(".upload-"):
@@ -1530,7 +1553,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except OSError:
                 age = STAGING_TTL_SECONDS + 1
             if age >= STAGING_TTL_SECONDS:
-                _safe_remove(child)
+                _safe_remove_under(staging_root, child)
             continue
         if not _TOKEN_RE.fullmatch(name):
             continue
@@ -1546,7 +1569,7 @@ def cleanup_stale_staging(config: StorageConfig, *, now: Optional[float] = None)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 expired = True
         if expired:
-            _safe_remove(child)
+            _safe_remove_under(staging_root, child)
 
 
 def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
@@ -1608,11 +1631,11 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
         )
     except RestoreError as exc:
         LOGGER.error("restore_staged reason=%s error_type=%s", exc.reason, safe_error_type(exc))
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_staged reason=internal error_type=%s", safe_error_type(exc))
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise RestoreError(
             "internal",
             "Backup could not be verified. Current PRKS data was not changed.",
@@ -1623,7 +1646,11 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
 def _staging_dir(config: StorageConfig, token: str) -> str:
     if not _TOKEN_RE.fullmatch(token or ""):
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
-    return os.path.join(maintenance_root(config), "restore-staging", token)
+    root = os.path.join(maintenance_root(config), "restore-staging")
+    candidate = os.path.join(root, token)
+    if not _path_is_under(candidate, root) or Path(candidate).resolve(strict=False) == Path(root).resolve(strict=False):
+        raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
+    return candidate
 
 
 def _load_staging_meta(config: StorageConfig, token: str) -> dict[str, Any]:
@@ -1638,10 +1665,10 @@ def _load_staging_meta(config: StorageConfig, token: str) -> dict[str, Any]:
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404) from exc
     created = float(meta.get("created_unix") or 0)
     if created <= 0 or (time.time() - created) > STAGING_TTL_SECONDS:
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     if not meta.get("verified"):
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
     return meta
 
@@ -1656,6 +1683,16 @@ def _component_live_path(config: StorageConfig, name: str) -> str:
     if name == "processing":
         return config.processing_dir
     raise RestoreError("internal", "Restore could not complete.", http_status=500)
+
+
+def _rollback_dir(config: StorageConfig, transaction_id: str) -> str:
+    if not _TOKEN_RE.fullmatch(transaction_id or ""):
+        raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
+    root = os.path.join(maintenance_root(config), "rollback")
+    candidate = os.path.join(root, transaction_id)
+    if not _path_is_under(candidate, root) or Path(candidate).resolve(strict=False) == Path(root).resolve(strict=False):
+        raise RestoreError("journal_invalid", "Incomplete restore could not be recovered.", http_status=500)
+    return candidate
 
 
 def _component_staged_path(tree_dir: str, name: str) -> str:
@@ -1812,7 +1849,7 @@ def _restore_rollback_component(config: StorageConfig, rollback_root: str, name:
 
 def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> None:
     txn = journal["transaction_id"]
-    rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
+    rollback_root = _rollback_dir(config, txn)
     components = journal.get("components") or {}
     for name, state in components.items():
         if not isinstance(state, dict):
@@ -1931,12 +1968,12 @@ def apply_restore(
     tree_dir = os.path.join(staging_dir, "tree")
     staged_db = _component_staged_path(tree_dir, "database")
     if not os.path.isfile(staged_db):
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise RestoreError("unknown_token", "Backup is not available for restore.", http_status=404)
 
     db_schema = read_schema_version(staged_db)
     if db_schema > supported_schema_ceiling(config):
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise RestoreError(
             "schema_newer",
             "This backup was created by a newer PRKS database version. Update PRKS before restoring it.",
@@ -1957,7 +1994,7 @@ def apply_restore(
         )
 
     txn = secrets.token_urlsafe(16)
-    rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
+    rollback_root = _rollback_dir(config, txn)
     _mkdir_owner(rollback_root)
     components: dict[str, dict[str, bool]] = {
         "database": _empty_component_state(),
@@ -1999,8 +2036,8 @@ def apply_restore(
                     "restore_rolled_back reason=rebind_previous_failed error_type=%s",
                     safe_error_type(rebind_exc),
                 )
-        _safe_remove(rollback_root)
-        _safe_remove(journal_path(config))
+        _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
+        _safe_remove_under(maintenance_root(config), journal_path(config))
 
     t_commit = clock_ns()
     try:
@@ -2087,9 +2124,9 @@ def apply_restore(
             summary["persons"],
         )
         try:
-            _safe_remove(rollback_root)
-            _safe_remove(journal_path(config))
-            _safe_remove(staging_dir)
+            _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
+            _safe_remove_under(maintenance_root(config), journal_path(config))
+            _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         except Exception as exc:
             LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
         return {
@@ -2111,7 +2148,7 @@ def apply_restore(
                 _rollback_once(rebind_after=True)
             except Exception as exc:
                 LOGGER.error("restore_rolled_back reason=rollback_failed error_type=%s", safe_error_type(exc))
-            _safe_remove(staging_dir)
+            _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise
     except Exception as exc:
         LOGGER.error("restore_rolled_back reason=internal error_type=%s", safe_error_type(exc))
@@ -2128,7 +2165,7 @@ def apply_restore(
                 "restore_rolled_back reason=rollback_failed error_type=%s",
                 safe_error_type(rollback_exc),
             )
-        _safe_remove(staging_dir)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
         raise RestoreError(
             "restore_failed",
             "Restore failed. Current PRKS data was not changed.",
@@ -2164,24 +2201,24 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
 
     phase = journal.get("phase")
     txn = journal["transaction_id"]
-    rollback_root = os.path.join(maintenance_root(config), "rollback", txn)
+    rollback_root = _rollback_dir(config, txn)
     token = journal.get("staging_token")
     staging_dir = _staging_dir(config, token) if isinstance(token, str) and _TOKEN_RE.fullmatch(token) else None
 
     if phase == "committed":
-        _safe_remove(rollback_root)
+        _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
         if staging_dir:
-            _safe_remove(staging_dir)
-        _safe_remove(path)
+            _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+        _safe_remove_under(maintenance_root(config), path)
         cleanup_stale_staging(config)
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
         return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
     _rollback_from_journal(config, journal)
-    _safe_remove(rollback_root)
+    _safe_remove_under(os.path.join(maintenance_root(config), "rollback"), rollback_root)
     if staging_dir:
-        _safe_remove(staging_dir)
-    _safe_remove(path)
+        _safe_remove_under(os.path.join(maintenance_root(config), "restore-staging"), staging_dir)
+    _safe_remove_under(maintenance_root(config), path)
     cleanup_stale_staging(config)
     LOGGER.info("restore_recovery_completed outcome=restored_previous")
     return {"performed": True, "outcome": "restored_previous", "needs_reindex": False}
