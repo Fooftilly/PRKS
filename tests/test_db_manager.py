@@ -1087,6 +1087,18 @@ class TestDBManager(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def _assert_posix_child(self, actual, root, *parts):
+        """Assert a POSIX acceptance result, skipping the check on Windows.
+
+        ``windows_semantics=False`` disables drive-prefix *validation* only; the
+        join still uses native ``Path`` semantics. On Windows a drive-looking
+        segment re-anchors regardless, so the helper returns None (or another
+        path) and there is no POSIX expectation to assert.
+        """
+        if os.name == "nt":
+            return
+        self.assertEqual(actual, os.path.realpath(os.path.join(root, *parts)))
+
     def test_resolved_child_path_rejects_a_drive_qualified_segment_at_any_depth(self):
         """The rule belongs to the join, so it is tested on the primitive.
 
@@ -1110,11 +1122,12 @@ class TestDBManager(unittest.TestCase):
                         )
                     )
                     # POSIX keeps them: ordinary filename characters there.
-                    self.assertEqual(
+                    self._assert_posix_child(
                         storage_paths.resolved_child_path(
                             root, *parts, windows_semantics=False
                         ),
-                        os.path.realpath(os.path.join(root, *parts)),
+                        root,
+                        *parts,
                     )
             self.assertEqual(
                 storage_paths.resolved_child_path(
@@ -1139,9 +1152,10 @@ class TestDBManager(unittest.TestCase):
                     self.assertIsNone(
                         safe_pdf_path_under_dir(pdfs, name, windows_semantics=True)
                     )
-                    self.assertEqual(
+                    self._assert_posix_child(
                         safe_pdf_path_under_dir(pdfs, name, windows_semantics=False),
-                        os.path.realpath(os.path.join(pdfs, name)),
+                        pdfs,
+                        name,
                     )
             self.assertEqual(
                 safe_pdf_path_under_dir(pdfs, "keep.pdf", windows_semantics=True),
