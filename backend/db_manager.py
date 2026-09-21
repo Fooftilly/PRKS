@@ -703,20 +703,26 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
 
 
 def safe_pdf_path_under_dir(pdfs_dir: str, url_last_segment: str) -> Optional[str]:
-    """Resolve a single PDF basename under pdfs_dir; reject traversal and empty names."""
+    """Resolve exactly one decoded PDF filename beneath pdfs_dir.
+
+    Path-shaped input is rejected rather than normalized to a different
+    filename. The containment check remains the final filesystem boundary.
+    """
     if not url_last_segment or not str(url_last_segment).strip():
         return None
-    name = os.path.basename(unquote(url_last_segment))
-    if not name or name in (".", ".."):
-        return None
-    base = os.path.realpath(pdfs_dir)
     try:
-        candidate = os.path.realpath(os.path.join(base, name))
-    except (OSError, ValueError):
+        name = unquote(str(url_last_segment).strip())
+    except (TypeError, ValueError):
         return None
-    if candidate != base and not candidate.startswith(base + os.sep):
+    if (
+        not name
+        or name in (".", "..")
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+    ):
         return None
-    return candidate
+    return paths.resolved_child_path(pdfs_dir, name)
 
 
 def managed_pdf_filename(file_path: str) -> Optional[str]:
@@ -753,20 +759,20 @@ def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
 
 
 def safe_processing_path_under_dir(processing_dir: str, relative_path: str) -> Optional[str]:
-    """Resolve a relative path under processing_dir; reject traversal and empty segments."""
+    """Resolve an explicitly relative processing path beneath processing_dir.
+
+    Absolute paths, drive-qualified paths, traversal, and ambiguous empty/dot
+    segments are rejected instead of being rewritten into a different path.
+    """
     if not relative_path or not str(relative_path).strip():
         return None
-    rel = str(relative_path).replace("\\", "/").strip().lstrip("/")
-    if not rel:
+    rel = str(relative_path).strip().replace("\\", "/")
+    if not rel or rel.startswith("/") or "\x00" in rel or re.match(r"^[A-Za-z]:", rel):
         return None
-    base = os.path.realpath(processing_dir)
-    try:
-        candidate = os.path.realpath(os.path.join(base, rel))
-    except OSError:
+    parts = rel.split("/")
+    if any(part in ("", ".", "..") for part in parts):
         return None
-    if candidate != base and not candidate.startswith(base + os.sep):
-        return None
-    return candidate
+    return paths.resolved_child_path(processing_dir, *parts)
 
 
 def prune_empty_processing_parent_dirs(processing_root: str, removed_inbox_file_abs: str) -> None:
