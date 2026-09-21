@@ -560,6 +560,68 @@ class ScreenshotLoopbackGuardTests(unittest.TestCase):
         )
 
 
+class ScreenshotPngOptimizeTests(unittest.TestCase):
+    def test_optimize_replaces_when_smaller_and_pixels_match(self):
+        capture = _load_capture()
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            # Inflated PNG (no compression) so lossless optimize can shrink it.
+            Image.new("RGB", (64, 48), color=(12, 34, 56)).save(
+                path, format="PNG", compress_level=0, optimize=False
+            )
+            before = path.read_bytes()
+            before_img = Image.open(path)
+            before_img.load()
+            before_size = path.stat().st_size
+
+            replaced = capture._optimize_staged_png(path)
+            self.assertTrue(replaced)
+            after = path.read_bytes()
+            self.assertNotEqual(before, after)
+            self.assertLess(path.stat().st_size, before_size)
+            after_img = Image.open(path)
+            after_img.load()
+            self.assertTrue(capture._pixels_match(before_img, after_img))
+
+    def test_optimize_failure_preserves_original(self):
+        capture = _load_capture()
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            Image.new("RGB", (32, 24), color=(1, 2, 3)).save(path, format="PNG")
+            original = path.read_bytes()
+
+            with mock.patch("PIL.Image.Image.save", side_effect=OSError("save failed")):
+                replaced = capture._optimize_staged_png(path)
+            self.assertFalse(replaced)
+            self.assertEqual(path.read_bytes(), original)
+            leftovers = list(Path(tmp).glob("*-opt-*.png"))
+            self.assertEqual(leftovers, [])
+
+    def test_manifest_records_lossless_optimizer_metadata(self):
+        capture = _load_capture()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "screenshots"
+            out.mkdir()
+            manifest = out / "manifest.json"
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ):
+                capture._write_manifest(
+                    "readme",
+                    [{"file": "folders.png", "scenario": "public-domain-folder"}],
+                    "abc123",
+                )
+            data = __import__("json").loads(manifest.read_text(encoding="utf-8"))
+            meta = data["png_optimize"]
+            self.assertEqual(meta["library"], "Pillow")
+            self.assertEqual(meta["mode"], "lossless")
+            self.assertTrue(str(meta["version"]).strip())
+
+
 class ScreenshotUpdateServerGuardTests(unittest.TestCase):
     def test_wait_for_child_fails_when_process_exits(self):
         # Stub seed_demo_library so this unit test does not need pymupdf.

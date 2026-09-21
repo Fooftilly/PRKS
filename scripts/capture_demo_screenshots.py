@@ -18,6 +18,7 @@ OUT_DIR = ROOT / "docs" / "screenshots"
 MANIFEST = OUT_DIR / "manifest.json"
 VIEWPORT = {"width": 1440, "height": 900}
 THEME = "light"
+PNG_OPTIMIZE_MODE = "lossless"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -38,6 +39,83 @@ from check_screenshot_freshness import (  # noqa: E402
     SCENARIO_BY_FILE,
     require_clean_capture_sources,
 )
+
+
+def _png_optimize_meta() -> dict:
+    """Record which lossless optimizer produced committed documentation PNGs."""
+    from PIL import Image
+
+    return {
+        "library": "Pillow",
+        "version": Image.__version__,
+        "mode": PNG_OPTIMIZE_MODE,
+    }
+
+
+def _pixels_match(a, b) -> bool:
+    """True when two PIL images have identical dimensions and pixel values."""
+    if a.size != b.size:
+        return False
+    left = a.convert("RGBA")
+    right = b.convert("RGBA")
+    return left.tobytes() == right.tobytes()
+
+
+def _optimize_staged_png(path: Path) -> bool:
+    """Losslessly recompress a staged PNG in place.
+
+    Writes through a temporary sibling, verifies dimensions/pixels, and replaces
+    only when the optimized file is strictly smaller. Any optimizer failure or
+    rejected output leaves the original staged PNG untouched. Returns True when
+    the staged file was replaced.
+    """
+    if not path.is_file():
+        return False
+    tmp: Path | None = None
+    try:
+        from PIL import Image
+
+        original_size = path.stat().st_size
+        with Image.open(path) as original:
+            original.load()
+            # Snapshot pixels before writing so we can verify the rewrite.
+            baseline = original.copy()
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f"{path.stem}-opt-",
+                suffix=".png",
+                dir=str(path.parent),
+            )
+            os.close(fd)
+            tmp = Path(tmp_name)
+            baseline.save(
+                tmp,
+                format="PNG",
+                optimize=True,
+                compress_level=9,
+            )
+
+        with Image.open(path) as before, Image.open(tmp) as after:
+            before.load()
+            after.load()
+            if not _pixels_match(before, after):
+                tmp.unlink(missing_ok=True)
+                return False
+
+        optimized_size = tmp.stat().st_size
+        if optimized_size >= original_size:
+            tmp.unlink(missing_ok=True)
+            return False
+
+        os.replace(tmp, path)
+        tmp = None
+        return True
+    except Exception:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return False
 
 
 def _assert_loopback_base(base_url: str) -> str:
@@ -208,6 +286,7 @@ def _build_manifest_payload(
         "theme": THEME,
         "generator": "scripts/capture_demo_screenshots.py",
         "seed": "scripts/seed_demo_library.py",
+        "png_optimize": _png_optimize_meta(),
         "screenshots": ordered,
     }
     if set_name != "all":
@@ -390,6 +469,8 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
                 else:
                     page.wait_for_timeout(2500)
                 page.screenshot(path=str(dest), full_page=False)
+                if _optimize_staged_png(dest):
+                    print("optimized", dest_name)
                 captured.append({"file": dest_name, "scenario": scenario})
                 print("staged", dest_name)
 
