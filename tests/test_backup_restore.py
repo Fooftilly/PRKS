@@ -235,6 +235,59 @@ class BackupRestoreTestCase(unittest.TestCase):
         return stage_restore(cfg, copied)
 
 
+class TestBackupPathSafety(BackupRestoreTestCase):
+    def _symlink_or_skip(self, target, link, *, directory=False):
+        try:
+            os.symlink(target, link, target_is_directory=directory)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
+    def test_scoped_remove_rejects_intermediate_symlink_escape(self):
+        root = self._tmpdir("prks-remove-root-")
+        outside = self._tmpdir("prks-remove-outside-")
+        victim = os.path.join(outside, "victim.txt")
+        with open(victim, "w", encoding="utf-8") as handle:
+            handle.write("keep")
+        link = os.path.join(root, "escape")
+        self._symlink_or_skip(outside, link, directory=True)
+
+        with self.assertRaises(ValueError):
+            backup_module._safe_remove_under(root, os.path.join(link, "victim.txt"))
+
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_scoped_remove_unlinks_leaf_symlink_without_following_target(self):
+        root = self._tmpdir("prks-remove-root-")
+        outside = self._tmpdir("prks-remove-outside-")
+        victim = os.path.join(outside, "victim.txt")
+        with open(victim, "w", encoding="utf-8") as handle:
+            handle.write("keep")
+        link = os.path.join(root, "leaf")
+        self._symlink_or_skip(victim, link)
+
+        backup_module._safe_remove_under(root, link)
+
+        self.assertFalse(os.path.lexists(link))
+        self.assertTrue(os.path.isfile(victim))
+
+    def test_staging_token_cannot_follow_a_symlink_outside_maintenance(self):
+        cfg = self._cfg()
+        staging_root = os.path.join(
+            backup_module.maintenance_root(cfg), "restore-staging"
+        )
+        os.makedirs(staging_root, exist_ok=True)
+        outside = self._tmpdir("prks-stage-outside-")
+        token = "fixture-stage-aaaaaaaa"
+        self._symlink_or_skip(
+            outside, os.path.join(staging_root, token), directory=True
+        )
+
+        with self.assertRaises(RestoreError) as ctx:
+            backup_module._staging_dir(cfg, token)
+
+        self.assertEqual(ctx.exception.reason, "unknown_token")
+
+
 class TestBackupInventory(BackupRestoreTestCase):
     def test_every_storage_config_path_is_classified(self):
         self.assertEqual(storage_config_path_field_names(), classified_storage_field_names())
