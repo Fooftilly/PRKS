@@ -667,6 +667,7 @@ def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[in
         return None
     except OSError as exc:
         raise ValueError("storage root is not a directory") from exc
+    handed_over = False
     try:
         for name in (MAINTENANCE_DIRNAME, *names):
             try:
@@ -681,10 +682,16 @@ def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[in
                 raise ValueError("maintenance subroot is not a real directory") from exc
             os.close(fd)
             fd = nxt
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+        handed_over = True
+        return fd
+    finally:
+        # Every exit but a successful hand-off closes the descriptor. A bare
+        # `except` is not enough: the early return for a missing component is
+        # not an exception, so it leaked one descriptor per call -- and a
+        # missing subroot is a normal path, e.g. discarding rollback state that
+        # is already gone.
+        if not handed_over:
+            os.close(fd)
 
 
 def _remove_link_entry(path: str) -> None:
@@ -833,9 +840,16 @@ def _discard_maintenance_child(
 ) -> None:
     """Best-effort cleanup of maintenance garbage: log and carry on.
 
-    For entries whose survival is untidy but harmless. Anything a later startup
-    would act on -- the restore journal -- must use ``_remove_journal_or_fail()``
-    instead. A refused removal has deleted nothing, so logging one is safe.
+    For entries whose survival is untidy but harmless. *Recovery's* journal
+    removal must use ``_remove_journal_or_fail()`` instead: that is the point
+    where a surviving journal would later be replayed against rollback state
+    this pass has already cleaned.
+
+    ``apply_restore()`` removes the journal through this helper deliberately. On
+    its rollback path raising here would mask the failure that triggered the
+    rollback, and after commit a surviving journal only ever replays as
+    ``keep_restored``. Either way a refused removal has deleted nothing, so
+    logging one is safe.
     """
     try:
         _remove_maintenance_child(config, subroot, path)

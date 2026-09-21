@@ -585,6 +585,32 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         self.assertFalse(os.path.lexists(child))
         self.assertTrue(os.path.isfile(victim))
 
+    def test_opening_an_absent_subroot_does_not_leak_a_descriptor(self):
+        """A missing component is a normal path, not an exceptional one.
+
+        The early return for it does not reach an `except` clause, so relying on
+        one leaked a descriptor per call -- and discarding rollback state that is
+        already gone hits this on every restore.
+        """
+        if not backup_module._SUPPORTS_DIR_FD:
+            self.skipTest("descriptor-relative removal unavailable")
+        fd_dir = "/proc/self/fd"
+        if not os.path.isdir(fd_dir):
+            self.skipTest("no /proc/self/fd to count open descriptors")
+        cfg = self._cfg()
+        self._maintenance_dir(cfg)  # 'rollback' deliberately absent
+
+        # Counting is necessary: a lowest-free-descriptor probe is blind here,
+        # because the leak accumulates above the descriptor the probe reclaims.
+        before = len(os.listdir(fd_dir))
+        for _ in range(20):
+            self.assertIsNone(
+                backup_module._open_maintenance_subroot(
+                    cfg, *backup_module._ROLLBACK_SUBROOT
+                )
+            )
+        self.assertEqual(len(os.listdir(fd_dir)), before)
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)
