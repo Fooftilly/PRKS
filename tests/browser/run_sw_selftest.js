@@ -513,6 +513,7 @@ async function run() {
         // cache write. A put that finishes after that must still be 'ok',
         // and that 'ok' must not become "PDF cache update failed".
         const fs = require('fs');
+        const vm = require('vm');
         const { MessageChannel } = require('worker_threads');
         const worksPdfSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/components/works-pdf.js'), 'utf8');
         const beginMark = '/* prks-pdf-cache-install-page-begin */';
@@ -521,14 +522,19 @@ async function run() {
         const end = worksPdfSrc.indexOf(endMark);
         assert('page install helper is marked for extraction', begin !== -1 && end > begin);
         const slice = worksPdfSrc.slice(begin + beginMark.length, end);
-        // Same realm as this script: a vm context has its own ArrayBuffer,
-        // and `instanceof ArrayBuffer` on the copied PDF body would fail.
-        const pageApi = new Function(
-            'MessageChannel',
-            'setTimeout',
-            'clearTimeout',
-            slice + '\nreturn { prksPostPdfCacheInstall: prksPostPdfCacheInstall, prksPdfCacheInstallOutcome: prksPdfCacheInstallOutcome, PDF_CACHE_INSTALL_ACK_TIMEOUT_MS: PDF_CACHE_INSTALL_ACK_TIMEOUT_MS };'
-        )(MessageChannel, setTimeout, clearTimeout);
+        // The vm context's own ArrayBuffer would fail `instanceof` on a body
+        // created in this script. Use this realm's constructor.
+        const context = vm.createContext({
+            MessageChannel: MessageChannel,
+            setTimeout: setTimeout,
+            clearTimeout: clearTimeout,
+        });
+        context.ArrayBuffer = ArrayBuffer;
+        vm.runInContext(
+            slice + '\nthis.api = { prksPostPdfCacheInstall: prksPostPdfCacheInstall, prksPdfCacheInstallOutcome: prksPdfCacheInstallOutcome, PDF_CACHE_INSTALL_ACK_TIMEOUT_MS: PDF_CACHE_INSTALL_ACK_TIMEOUT_MS };',
+            context
+        );
+        const pageApi = context.api;
         assertEq('install ack timeout is the communication-loss bound', pageApi.PDF_CACHE_INSTALL_ACK_TIMEOUT_MS, 120000);
 
         function delayPut(cacheStorage, ms) {
