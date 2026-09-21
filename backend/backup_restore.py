@@ -469,7 +469,26 @@ def _maintenance_subroot(config: StorageConfig, *names: str) -> str:
     result is what a maintenance path *must* resolve to; it is not evidence
     that the directory on disk actually is that.
     """
-    return os.path.join(os.path.realpath(config.root), MAINTENANCE_DIRNAME, *names)
+    return _maintenance_subroot_from(_resolved_storage_root(config), *names)
+
+
+def _resolved_storage_root(config: StorageConfig) -> str:
+    """One canonical snapshot of the storage root.
+
+    ``config.root`` is operator-supplied and may legitimately be a symlink. Each
+    destructive operation resolves it exactly once and reuses the result, so a
+    link or junction retargeted mid-operation cannot make authorization and
+    removal refer to different trees.
+    """
+    try:
+        return os.path.realpath(config.root)
+    except OSError as exc:
+        raise ValueError("storage root could not be resolved") from exc
+
+
+def _maintenance_subroot_from(root_real: str, *names: str) -> str:
+    """Expected maintenance path beneath an already-resolved storage root."""
+    return os.path.join(root_real, MAINTENANCE_DIRNAME, *names)
 
 
 def _assert_testing_safe(config: StorageConfig) -> None:
@@ -634,7 +653,14 @@ def _verified_maintenance_subroot(config: StorageConfig, *names: str) -> Optiona
     scope outside the library. Directory reparse points are rejected too; see
     ``_is_directory_reparse_point()``.
     """
-    current = os.path.realpath(config.root)
+    return _verified_maintenance_subroot_from(_resolved_storage_root(config), *names)
+
+
+def _verified_maintenance_subroot_from(
+    root_real: str, *names: str
+) -> Optional[str]:
+    """``_verified_maintenance_subroot()`` against a caller's root snapshot."""
+    current = root_real
     for name in (MAINTENANCE_DIRNAME, *names):
         current = os.path.join(current, name)
         if not os.path.lexists(current):
@@ -799,7 +825,11 @@ def _remove_maintenance_child(
     disagree with what is acted on. The portable fallback cannot bind that way
     -- see the comment on its branch.
     """
-    expected_root = _maintenance_subroot(config, *subroot)
+    # One canonical snapshot for the whole operation. Resolving config.root
+    # again between authorization and removal is what let a symlink or junction
+    # retargeted at that moment point the two at different trees.
+    root_real = _resolved_storage_root(config)
+    expected_root = _maintenance_subroot_from(root_real, *subroot)
     normalized = os.path.abspath(path)
     leaf = os.path.basename(normalized)
     if not leaf or leaf in (".", ".."):
@@ -822,14 +852,14 @@ def _remove_maintenance_child(
         finally:
             os.close(fd)
         return
-    # No descriptor support (native Windows): verification and removal are both
-    # path-based, so they cannot be bound to one directory. An ancestor of
-    # config.root retargeted between them is a residual limitation of the
-    # fallback, not something this helper can close; failing closed instead
-    # would leave that platform with no maintenance cleanup at all. Reparse
-    # points are handled though, at the root and at any depth, by
-    # _verified_maintenance_subroot() and _remove_reparse_aware().
-    verified_root = _verified_maintenance_subroot(config, *subroot)
+    # No descriptor support (native Windows). Verification and removal are both
+    # path-based here, so they cannot be bound to one descriptor -- but they do
+    # share the single root snapshot above, so retargeting config.root cannot
+    # redirect the cleanup. What remains is the narrower case of an actor
+    # replacing directories *inside* the already-authorized tree between the
+    # check and the unlink; _remove_reparse_aware() shrinks that further by
+    # never traversing a link or reparse point at any depth.
+    verified_root = _verified_maintenance_subroot_from(root_real, *subroot)
     if verified_root is None:
         return
     _remove_proven_child(verified_root, leaf, None)

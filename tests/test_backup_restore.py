@@ -611,6 +611,41 @@ class TestBackupPathSafety(BackupRestoreTestCase):
             )
         self.assertEqual(len(os.listdir(fd_dir)), before)
 
+    def test_portable_removal_resolves_the_storage_root_only_once(self):
+        """Authorization and removal must share one canonical root snapshot.
+
+        Resolving config.root twice let a symlink or junction retargeted between
+        the two point verification and deletion at different trees. Counting the
+        resolutions is the direct way to pin that, since after the fix there is
+        no second resolution for a race to land in.
+        """
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(child)
+
+        real_realpath = os.path.realpath
+        resolutions = []
+
+        def spy_realpath(target, *args, **kwargs):
+            if os.fspath(target) == cfg.root:
+                resolutions.append(target)
+            return real_realpath(target, *args, **kwargs)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False), patch.object(
+            backup_module.os.path, "realpath", spy_realpath
+        ):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertEqual(
+            len(resolutions),
+            1,
+            f"storage root resolved {len(resolutions)} times, expected once",
+        )
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)
