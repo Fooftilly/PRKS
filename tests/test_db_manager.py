@@ -970,6 +970,8 @@ class TestDBManager(unittest.TestCase):
                 "nested%2Fkeep.pdf",
                 r"nested\\keep.pdf",
                 "bad\x00name.pdf",
+                " victim.pdf",
+                "victim.pdf ",
             ):
                 with self.subTest(unsafe=unsafe):
                     self.assertIsNone(safe_pdf_path_under_dir(pdfs, unsafe))
@@ -989,7 +991,7 @@ class TestDBManager(unittest.TestCase):
                 "batch/../sample.pdf",
                 "/sample.pdf",
                 r"\\server\\share\\sample.pdf",
-                r"C:\\sample.pdf",
+                r"C:\sample.pdf",
                 "batch//sample.pdf",
                 "batch/./sample.pdf",
                 "bad\x00name.pdf",
@@ -1002,8 +1004,12 @@ class TestDBManager(unittest.TestCase):
                 expected,
             )
             self.assertEqual(
-                safe_processing_path_under_dir(root, r"batch\\sample.pdf"),
+                safe_processing_path_under_dir(root, r"batch\sample.pdf"),
                 expected,
+            )
+            self.assertEqual(
+                safe_processing_path_under_dir(root, "C:sample.pdf"),
+                os.path.realpath(os.path.join(root, "C:sample.pdf")),
             )
         finally:
             shutil.rmtree(root)
