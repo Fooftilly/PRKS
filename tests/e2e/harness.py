@@ -29,29 +29,31 @@ from tests.e2e.install_browser import (
     installed_chromium_revisions,
     playwright_chromium_revision,
 )
+from tests.e2e.policy import (
+    PROFILE_ENV,
+    SEED_CACHE_ENV,
+    env_flag_enabled,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
 READY_TIMEOUT_S = 25.0
 STOP_TIMEOUT_S = 8.0
 
-_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 _ACTIVE_PROFILE = None
 _SEED_CACHE_TMP = None
 _SEED_SNAPSHOTS = {}
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in _FALSE_ENV_VALUES
+    """Shared with the runner's benchmark-mode decision (tests.e2e.policy)."""
+    return env_flag_enabled(name, default)
 
 
 def start_test_profile(test_id: str) -> None:
     """Begin opt-in per-test infrastructure profiling for the runner."""
     global _ACTIVE_PROFILE
-    if not _env_enabled("PRKS_E2E_PROFILE"):
+    if not _env_enabled(PROFILE_ENV):
         _ACTIVE_PROFILE = None
         return
     _ACTIVE_PROFILE = {"test_id": test_id, "phases": {}}
@@ -81,7 +83,7 @@ def finish_test_profile(test_id: str) -> dict:
 
 def seed_cache_enabled() -> bool:
     """Worker-local immutable seed snapshots are on unless explicitly disabled."""
-    return _env_enabled("PRKS_E2E_SEED_CACHE", default=True)
+    return _env_enabled(SEED_CACHE_ENV, default=True)
 
 
 def diagnostic_enabled() -> bool:

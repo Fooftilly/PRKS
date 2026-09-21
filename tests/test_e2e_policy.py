@@ -1,8 +1,10 @@
 """Unit coverage for tests.e2e.policy — no Chromium."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -246,6 +248,89 @@ class LastFailedPersistenceTests(unittest.TestCase):
             self.assertEqual(data["test_ids"], ["a.b.C.test_x"])
             self.assertEqual(data["meta"]["tier"], "feature")
 
+    def test_save_commits_atomically_and_leaves_no_temp_file(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "nested" / "e2e-last-failed.json"
+            self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_x"]))
+            self.assertEqual(policy.load_last_failed(path)["test_ids"], ["a.b.C.test_x"])
+            self.assertEqual(
+                sorted(q.name for q in path.parent.iterdir()),
+                ["e2e-last-failed.json"],
+            )
+
+    def test_failed_commit_preserves_previous_valid_state(self):
+        """An interrupted write must never destroy usable last-failed state."""
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-last-failed.json"
+            policy.save_last_failed(path, ["a.b.C.test_keep"], meta={"tier": "full"})
+            before = path.read_bytes()
+
+            with mock.patch("os.replace", side_effect=OSError("boom")):
+                self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(
+                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+            )
+            # The uncommitted temp file must not linger next to the real state.
+            self.assertEqual(
+                sorted(q.name for q in path.parent.iterdir()),
+                ["e2e-last-failed.json"],
+            )
+
+    def test_failed_temp_write_preserves_previous_valid_state(self):
+        def _fail_after_opening(fd, *args, **kwargs):
+            os.close(fd)
+            raise OSError("no space left on device")
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-last-failed.json"
+            policy.save_last_failed(path, ["a.b.C.test_keep"])
+            before = path.read_bytes()
+
+            with mock.patch("os.fdopen", side_effect=_fail_after_opening):
+                self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(
+                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+            )
+            self.assertEqual(
+                sorted(q.name for q in path.parent.iterdir()),
+                ["e2e-last-failed.json"],
+            )
+
+    def test_unavailable_temp_file_preserves_previous_valid_state(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-last-failed.json"
+            policy.save_last_failed(path, ["a.b.C.test_keep"])
+            before = path.read_bytes()
+
+            with mock.patch("tempfile.mkstemp", side_effect=OSError("read-only")):
+                self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_concurrent_writers_do_not_share_a_temp_file(self):
+        """Two runners in one checkout must never write the same uncommitted file."""
+        seen = []
+        real_mkstemp = tempfile.mkstemp
+
+        def _record(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            seen.append(name)
+            return fd, name
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-last-failed.json"
+            with mock.patch("tempfile.mkstemp", side_effect=_record):
+                self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_one"]))
+                self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_two"]))
+            self.assertEqual(len(seen), 2)
+            self.assertNotEqual(seen[0], seen[1])
+            for name in seen:
+                self.assertEqual(Path(name).parent, path.parent)
+            self.assertEqual(
+                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_two"]
+            )
+
     def test_corrupt_or_missing_returns_none(self):
         self.assertIsNone(policy.load_last_failed(Path("/no/such/file.json")))
         with tempfile.TemporaryDirectory() as raw:
@@ -312,13 +397,22 @@ class PathMatchTests(unittest.TestCase):
         self.assertFalse(policy._path_matches("backend/server.py", "backend/work_tag_sync.py"))
 
 
+def _git_ok(stdout: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=["git"], returncode=0, stdout=stdout, stderr="")
+
+
+def _git_fail(stderr: str, code: int = 128) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=["git"], returncode=code, stdout="", stderr=stderr)
+
+
 class ListChangedPathsTests(unittest.TestCase):
     def test_invokes_git_diff_against_base_including_deletes(self):
-        with mock.patch("subprocess.check_output") as check:
-            check.side_effect = [
-                "frontend/js/app.js\nfrontend/js/gone.js\n",  # diff vs base (incl D)
-                "frontend/js/app.js\nbackend/x.py\n",  # local vs HEAD when base != HEAD
-                "scripts/e2e\nfrontend/js/new.js\n",  # untracked
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [
+                _git_ok("deadbeef\n"),  # rev-parse: base resolves to one commit
+                _git_ok("frontend/js/app.js\nfrontend/js/gone.js\n"),  # diff vs base (incl D)
+                _git_ok("frontend/js/app.js\nbackend/x.py\n"),  # local vs HEAD when base != HEAD
+                _git_ok("scripts/e2e\nfrontend/js/new.js\n"),  # untracked
             ]
             paths = policy.list_changed_paths(
                 Path("/tmp/repo"), base="origin/master", include_untracked=True
@@ -329,14 +423,15 @@ class ListChangedPathsTests(unittest.TestCase):
             self.assertIn("frontend/js/new.js", paths)
             self.assertIn("scripts/e2e", paths)
             # Diff filter must include Deleted (D).
-            first_cmd = check.call_args_list[0][0][0]
-            self.assertIn("--diff-filter=ACMRD", first_cmd)
+            diff_cmd = run.call_args_list[1][0][0]
+            self.assertIn("--diff-filter=ACMRD", diff_cmd)
+            self.assertIn("rev-parse", run.call_args_list[0][0][0])
 
     def test_untracked_scripts_and_e2e_policy_are_discoverable(self):
-        with mock.patch("subprocess.check_output") as check:
-            check.side_effect = [
-                "",  # diff vs HEAD
-                "scripts/e2e\ntests/e2e/policy.py\ntmp/scratch.txt\n",
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [
+                _git_ok(""),  # diff vs HEAD
+                _git_ok("scripts/e2e\ntests/e2e/policy.py\ntmp/scratch.txt\n"),
             ]
             paths = policy.list_changed_paths(
                 Path("/tmp/repo"), base=None, include_untracked=True
@@ -344,6 +439,201 @@ class ListChangedPathsTests(unittest.TestCase):
             self.assertIn("scripts/e2e", paths)
             self.assertIn("tests/e2e/policy.py", paths)
             self.assertNotIn("tmp/scratch.txt", paths)
+
+    def test_genuine_empty_diff_is_not_an_error(self):
+        """No changes must stay an ordinary empty result — not a discovery failure."""
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_ok(""), _git_ok("")]
+            self.assertEqual(
+                policy.list_changed_paths(Path("/tmp/repo"), include_untracked=True), []
+            )
+
+    def test_invalid_base_ref_fails_closed(self):
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_fail("fatal: bad revision 'origin/nope'")]
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(Path("/tmp/repo"), base="origin/nope")
+            message = str(ctx.exception)
+            self.assertIn("origin/nope", message)
+            self.assertIn("bad revision", message)
+
+    def test_option_like_base_fails_closed_without_running_git(self):
+        """A leading '-' would be parsed as a git option and report no changes."""
+        with mock.patch("subprocess.run") as run:
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(
+                    Path("/tmp/repo"), base="--relative=definitely-no-such-prefix"
+                )
+            self.assertIn("cannot start with", str(ctx.exception))
+            run.assert_not_called()
+
+    def test_diff_commands_terminate_revision_parsing(self):
+        """`--` stops git reading a base that is also a path as a pathspec."""
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_ok("deadbeef\n"), _git_ok(""), _git_ok(""), _git_ok("")]
+            policy.list_changed_paths(Path("/tmp/repo"), base="origin/master")
+            diff_calls = [
+                call[0][0] for call in run.call_args_list if "diff" in call[0][0]
+            ]
+            self.assertEqual(len(diff_calls), 2)
+            for cmd in diff_calls:
+                self.assertEqual(cmd[-1], "--")
+
+    def test_missing_git_executable_fails_closed(self):
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError("git")):
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(Path("/tmp/repo"))
+            self.assertIn("FileNotFoundError", str(ctx.exception))
+
+    def test_local_diff_failure_against_explicit_base_fails_closed(self):
+        """The secondary working-tree diff is required too — never silently skipped."""
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [
+                _git_ok("deadbeef\n"),
+                _git_ok("frontend/js/app.js\n"),
+                _git_fail("fatal: not a git repository"),
+            ]
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(Path("/tmp/repo"), base="origin/master")
+            self.assertIn("local change discovery", str(ctx.exception))
+
+    def test_untracked_discovery_failure_fails_closed(self):
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_ok(""), _git_fail("fatal: unable to read index")]
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(Path("/tmp/repo"), include_untracked=True)
+            self.assertIn("untracked change discovery", str(ctx.exception))
+
+    def test_revision_range_base_fails_closed(self):
+        """A range switches git diff to commit-vs-commit and drops the working tree."""
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_fail("fatal: Needed a single revision")]
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(Path("/tmp/repo"), base="release..main")
+            message = str(ctx.exception)
+            self.assertIn("release..main", message)
+            self.assertIn("not a single revision", message)
+            # Rejected before any diff runs.
+            self.assertEqual(run.call_count, 1)
+            self.assertIn("rev-parse", run.call_args_list[0][0][0])
+
+    def test_untracked_failure_is_irrelevant_when_discovery_is_disabled(self):
+        with mock.patch("subprocess.run") as run:
+            run.side_effect = [_git_ok("backend/server.py\n")]
+            self.assertEqual(
+                policy.list_changed_paths(Path("/tmp/repo"), include_untracked=False),
+                ["backend/server.py"],
+            )
+
+
+@unittest.skipUnless(shutil.which("git"), "git executable not available")
+class ListChangedPathsRealGitTests(unittest.TestCase):
+    """The fail-closed contract against a real git process, not just mocks."""
+
+    def _git(self, repo, *args):
+        subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _seeded_repo(self, repo: Path) -> Path:
+        """A repo with one commit touching backend/server.py."""
+        self._git(repo, "init", "--quiet")
+        (repo / "backend").mkdir()
+        (repo / "backend" / "server.py").write_text("x = 1\n", encoding="utf-8")
+        self._git(repo, "add", "backend/server.py")
+        self._git(
+            repo,
+            "-c",
+            "user.email=e2e@example.invalid",
+            "-c",
+            "user.name=E2E",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "-m",
+            "seed",
+        )
+        return repo
+
+    def test_unusable_head_fails_closed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            self._git(repo, "init", "--quiet")
+            # No commit yet: HEAD cannot be resolved, so discovery must not
+            # report "nothing changed".
+            with self.assertRaises(policy.ChangeDiscoveryError):
+                policy.list_changed_paths(repo)
+
+    def test_clean_checkout_reports_no_changes(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = self._seeded_repo(Path(raw))
+            self.assertEqual(policy.list_changed_paths(repo), [])
+            (repo / "backend" / "server.py").write_text("x = 2\n", encoding="utf-8")
+            self.assertEqual(policy.list_changed_paths(repo), ["backend/server.py"])
+
+    def test_invalid_base_ref_fails_closed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            self._git(repo, "init", "--quiet")
+            with self.assertRaises(policy.ChangeDiscoveryError):
+                policy.list_changed_paths(repo, base="origin/definitely-missing")
+
+    def test_revision_range_base_fails_closed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            repo = self._seeded_repo(Path(raw))
+            self._git(repo, "branch", "other", "HEAD")
+            # A range resolves for git, but answers a different question: the
+            # working tree is left out entirely.
+            (repo / "frontend").mkdir()
+            (repo / "frontend" / "app.js").write_text("// x\n", encoding="utf-8")
+            self._git(repo, "add", "frontend/app.js")
+            self.assertIn("frontend/app.js", policy.list_changed_paths(repo, base="other"))
+            with self.assertRaises(policy.ChangeDiscoveryError) as ctx:
+                policy.list_changed_paths(repo, base="other..HEAD")
+            self.assertIn("not a single revision", str(ctx.exception))
+
+    def test_base_that_is_a_path_fails_closed(self):
+        """`--base backend` is a pathspec to git, and would diff nothing at all."""
+        with tempfile.TemporaryDirectory() as raw:
+            repo = self._seeded_repo(Path(raw))
+            with self.assertRaises(policy.ChangeDiscoveryError):
+                policy.list_changed_paths(repo, base="backend")
+
+
+class BenchmarkModeTests(unittest.TestCase):
+    """Effective benchmark configuration — CLI flags are exported into env first."""
+
+    def test_default_environment_is_representative(self):
+        self.assertEqual(policy.benchmark_modes({}), ())
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "1"}), ())
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_PROFILE": "0"}), ())
+
+    def test_profile_and_disabled_seed_cache_are_benchmark_modes(self):
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_PROFILE": "1"}), ("profile",))
+        self.assertEqual(
+            policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "off"}), ("no-seed-cache",)
+        )
+        self.assertEqual(
+            policy.benchmark_modes(
+                {"PRKS_E2E_PROFILE": "yes", "PRKS_E2E_SEED_CACHE": "false"}
+            ),
+            ("profile", "no-seed-cache"),
+        )
+
+    def test_env_truthiness_is_shared_with_the_harness(self):
+        """One definition decides how the harness reads a switch and how the
+        runner judges the same switch."""
+        from tests.e2e import harness
+
+        for raw, enabled in (("1", True), ("true", True), ("0", False), ("off", False)):
+            self.assertEqual(policy.env_flag_enabled("X", environ={"X": raw}), enabled)
+            with mock.patch.dict(os.environ, {"X": raw}, clear=False):
+                self.assertEqual(harness._env_enabled("X"), enabled)
+        self.assertTrue(policy.env_flag_enabled("X", default=True, environ={}))
+        self.assertFalse(policy.env_flag_enabled("X", environ={}))
 
 
 class ReportBannerTests(unittest.TestCase):
@@ -434,6 +724,43 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("success no-op", buf.getvalue())
             ensure.assert_not_called()
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_affected_discovery_failure_fails_closed(self):
+        """A failed Git query must never look like a clean "nothing affected" run."""
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+            import io
+            from contextlib import redirect_stderr, redirect_stdout
+
+            out = io.StringIO()
+            err = io.StringIO()
+            failure = policy.ChangeDiscoveryError(
+                "change discovery vs origin/nope failed: "
+                "`git diff --name-only --diff-filter=ACMRD origin/nope` exited 128 "
+                "— fatal: bad revision 'origin/nope'"
+            )
+            with mock.patch.object(runner, "ensure_chromium_installed") as ensure:
+                with mock.patch.object(runner, "run_serial") as serial:
+                    with mock.patch.object(
+                        runner, "list_changed_paths", side_effect=failure
+                    ):
+                        with redirect_stdout(out), redirect_stderr(err):
+                            code = runner.main(["--affected", "--base", "origin/nope"])
+            self.assertEqual(code, 2)
+            diagnostic = err.getvalue()
+            self.assertIn("origin/nope", diagnostic)
+            self.assertIn("bad revision", diagnostic)
+            self.assertIn("refusing to report zero affected tests", diagnostic)
+            self.assertNotIn("success no-op", out.getvalue())
+            ensure.assert_not_called()
+            serial.assert_not_called()
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)
@@ -877,6 +1204,225 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             else:
                 os.environ["PRKS_E2E"] = previous_env
 
+    def _invoke_runner_history_case(
+        self,
+        repo,
+        last_path,
+        test_id,
+        known_extra=(),
+        observed=None,
+        argv_extra=(),
+        serial_result=None,
+    ):
+        """runner.main() over a temp repo with Chromium and the browser run stubbed.
+
+        Returns (exit_code, _print_slowest mock).
+        """
+        from tests.e2e import run as runner
+
+        if observed is None:
+            observed = {test_id: 99.0}
+        if serial_result is None:
+            serial_result = (True, observed, [], {test_id: {"seed_build": 0.01}})
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(mock.patch.object(runner, "REPO", repo))
+            enter(mock.patch.object(runner, "LAST_FAILED_PATH", last_path))
+            enter(mock.patch.object(runner, "ensure_chromium_installed"))
+            enter(
+                mock.patch.object(
+                    runner, "discover_test_ids", return_value=[test_id, *known_extra]
+                )
+            )
+            enter(mock.patch.object(runner, "run_serial", return_value=serial_result))
+            print_slow = enter(mock.patch.object(runner, "_print_slowest"))
+            enter(mock.patch.object(runner, "_run_pointer_capture", return_value=0))
+            code = runner.main(
+                [test_id, "--jobs", "1", "--no-pointer-capture", *argv_extra]
+            )
+        return code, print_slow
+
+    def test_env_only_benchmark_modes_do_not_persist_history(self):
+        """PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE=0 are benchmark runs without a flag."""
+        from tests.e2e.sharding import load_timings, save_timings
+
+        test_id = "tests.e2e.fake.BenchTests.test_x"
+        prior_failed = ["tests.e2e.fake.Other.test_keep"]
+        prior_timings = {test_id: 1.25, prior_failed[0]: 2.0}
+        observed = {test_id: 99.0}
+
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            (repo / ".tests").mkdir()
+            timings_path = repo / ".tests" / "e2e-timings.json"
+            last_path = repo / ".tests" / "e2e-last-failed.json"
+            save_timings(timings_path, prior_timings)
+            policy.save_last_failed(last_path, prior_failed, meta={"tier": "full"})
+            prior_timings_bytes = timings_path.read_bytes()
+            prior_last_bytes = last_path.read_bytes()
+
+            def _run(env):
+                timings_path.write_bytes(prior_timings_bytes)
+                last_path.write_bytes(prior_last_bytes)
+                with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                    os.environ.pop("PRKS_E2E_PROFILE", None)
+                    os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                    os.environ.update(env)
+                    return self._invoke_runner_history_case(
+                        repo,
+                        last_path,
+                        test_id,
+                        known_extra=prior_failed,
+                        observed=observed,
+                    )
+
+            for env in (
+                {"PRKS_E2E_PROFILE": "1"},
+                {"PRKS_E2E_SEED_CACHE": "0"},
+                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_SEED_CACHE": "0"},
+            ):
+                code, print_slow = _run(env)
+                self.assertEqual(code, 0)
+                print_slow.assert_called_once()
+                self.assertEqual(
+                    timings_path.read_bytes(),
+                    prior_timings_bytes,
+                    "env=%s must leave timing history untouched" % env,
+                )
+                self.assertEqual(
+                    last_path.read_bytes(),
+                    prior_last_bytes,
+                    "env=%s must leave last-failed untouched" % env,
+                )
+
+            # An explicitly-default seed cache is a representative run: it persists.
+            code, _ = _run({"PRKS_E2E_SEED_CACHE": "1"})
+            self.assertEqual(code, 0)
+            self.assertEqual(load_timings(timings_path)[test_id], 99.0)
+
+    def test_benchmark_flags_do_not_leak_into_a_later_in_process_run(self):
+        """CLI mode exports are scoped to one main(); the next run persists again."""
+        from tests.e2e.sharding import load_timings, save_timings
+
+        test_id = "tests.e2e.fake.BenchTests.test_x"
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            (repo / ".tests").mkdir()
+            timings_path = repo / ".tests" / "e2e-timings.json"
+            last_path = repo / ".tests" / "e2e-last-failed.json"
+            save_timings(timings_path, {test_id: 1.25})
+
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_PROFILE", None)
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+
+                code, _ = self._invoke_runner_history_case(
+                    repo, last_path, test_id, argv_extra=["--profile"]
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(load_timings(timings_path)[test_id], 1.25)
+                # The benchmark run must not leave the process in benchmark mode.
+                self.assertEqual(policy.benchmark_modes(os.environ), ())
+
+                code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
+                self.assertEqual(code, 0)
+                self.assertEqual(load_timings(timings_path)[test_id], 99.0)
+
+    def test_env_only_profiling_still_prints_the_infrastructure_profile(self):
+        """PRKS_E2E_PROFILE=1 pays the profiling cost, so it must show the report."""
+        import io
+        from contextlib import redirect_stdout
+
+        test_id = "tests.e2e.fake.BenchTests.test_x"
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            (repo / ".tests").mkdir()
+            last_path = repo / ".tests" / "e2e-last-failed.json"
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                os.environ["PRKS_E2E_PROFILE"] = "1"
+                with redirect_stdout(out):
+                    code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
+            self.assertEqual(code, 0)
+            printed = out.getvalue()
+            self.assertIn("E2E infrastructure profile", printed)
+            self.assertIn("seed_build", printed)
+            self.assertIn("benchmark mode (profile)", printed)
+
+    def test_benchmark_mode_does_not_clear_stale_last_failed_state(self):
+        """Pruning the stale file is a history mutation; benchmark runs skip it."""
+        import io
+        from contextlib import redirect_stdout
+        from tests.e2e import run as runner
+
+        known = ["tests.e2e.live.T.test_ok"]
+        stale = ["tests.e2e.gone.Old.test_a"]
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            last_path = repo / "e2e-last-failed.json"
+            policy.save_last_failed(last_path, stale, meta={"tier": "full"})
+            before = last_path.read_bytes()
+
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_PROFILE", None)
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                with contextlib.ExitStack() as stack:
+                    enter = stack.enter_context
+                    enter(mock.patch.object(runner, "REPO", repo))
+                    enter(mock.patch.object(runner, "LAST_FAILED_PATH", last_path))
+                    enter(
+                        mock.patch.object(
+                            runner, "discover_test_ids", return_value=known
+                        )
+                    )
+                    ensure = enter(
+                        mock.patch.object(runner, "ensure_chromium_installed")
+                    )
+                    with redirect_stdout(out):
+                        code = runner.main(["--last-failed", "--profile"])
+            self.assertEqual(code, 0)
+            ensure.assert_not_called()
+            self.assertTrue(last_path.is_file())
+            self.assertEqual(last_path.read_bytes(), before)
+            self.assertIn("leaves the state untouched", out.getvalue())
+
+    def test_failed_last_failed_write_warns_and_keeps_previous_state(self):
+        """A last-failed write that never commits is reported, not silently lost."""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from tests.e2e import run as runner
+
+        test_id = "tests.e2e.fake.BenchTests.test_x"
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            (repo / ".tests").mkdir()
+            last_path = repo / ".tests" / "e2e-last-failed.json"
+            policy.save_last_failed(last_path, ["tests.e2e.fake.Other.test_keep"])
+            prior_last_bytes = last_path.read_bytes()
+
+            out = io.StringIO()
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
+                os.environ.pop("PRKS_E2E_PROFILE", None)
+                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
+                with mock.patch.object(
+                    runner, "save_last_failed", return_value=False
+                ) as save:
+                    with redirect_stdout(out), redirect_stderr(err):
+                        code, _ = self._invoke_runner_history_case(
+                            repo,
+                            last_path,
+                            test_id,
+                            serial_result=(False, {test_id: 12.0}, [test_id], {}),
+                        )
+            self.assertNotEqual(code, 0)
+            save.assert_called_once()
+            self.assertIn("could not write last-failed state", err.getvalue())
+            self.assertNotIn("Wrote last-failed", out.getvalue())
+            self.assertEqual(last_path.read_bytes(), prior_last_bytes)
+
     def test_benchmark_modes_do_not_persist_timing_or_last_failed_history(self):
         """--profile / --no-seed-cache must not train LPT timings or last-failed."""
         from tests.e2e import run as runner
@@ -909,44 +1455,14 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 prior_last_bytes = last_path.read_bytes()
 
                 def _invoke(extra_flags):
-                    with mock.patch.object(runner, "REPO", repo):
-                        with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
-                            with mock.patch.object(
-                                runner, "ensure_chromium_installed"
-                            ):
-                                with mock.patch.object(
-                                    runner,
-                                    "discover_test_ids",
-                                    return_value=[test_id] + prior_failed,
-                                ):
-                                    with mock.patch.object(
-                                        runner,
-                                        "run_serial",
-                                        return_value=(
-                                            True,
-                                            observed,
-                                            [],
-                                            {test_id: {"seed_build": 0.01}},
-                                        ),
-                                    ):
-                                        with mock.patch.object(
-                                            runner, "_print_slowest"
-                                        ) as print_slow:
-                                            with mock.patch.object(
-                                                runner,
-                                                "_run_pointer_capture",
-                                                return_value=0,
-                                            ):
-                                                code = runner.main(
-                                                    [
-                                                        test_id,
-                                                        "--jobs",
-                                                        "1",
-                                                        "--no-pointer-capture",
-                                                        *extra_flags,
-                                                    ]
-                                                )
-                    return code, print_slow
+                    return self._invoke_runner_history_case(
+                        repo,
+                        last_path,
+                        test_id,
+                        known_extra=prior_failed,
+                        observed=observed,
+                        argv_extra=extra_flags,
+                    )
 
                 for flags in (
                     ["--profile"],
