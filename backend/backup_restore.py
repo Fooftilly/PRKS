@@ -581,15 +581,15 @@ def _safe_remove_under(root: str, path: str) -> None:
     deliberately leaving the final component unresolved so a symlink leaf can
     be unlinked without following its target.
     """
-    root_real = Path(root).resolve(strict=False)
     normalized = os.path.abspath(path)
     leaf = os.path.basename(normalized)
     if not leaf or leaf in (".", ".."):
         raise ValueError("refusing ambiguous removal path")
-    parent_real = Path(os.path.dirname(normalized)).resolve(strict=False)
     try:
+        root_real = Path(root).resolve(strict=False)
+        parent_real = Path(os.path.dirname(normalized)).resolve(strict=False)
         parent_real.relative_to(root_real)
-    except ValueError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         raise ValueError("removal path escapes allowed root") from exc
     _safe_remove(str(parent_real / leaf))
 
