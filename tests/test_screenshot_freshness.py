@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -94,6 +95,38 @@ class ScreenshotManifestMergeTests(unittest.TestCase):
             out = Path(tmp) / "screenshots"
             out.mkdir()
             manifest = out / "manifest.json"
+            full = [
+                {"file": name, "scenario": name}
+                for name in sorted(capture.EXPECTED_ALL_FILES)
+            ]
+            with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
+                capture, "MANIFEST", manifest
+            ):
+                capture._write_manifest("all", full, "ccc333")
+            data = __import__("json").loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(data["source_commit"], "ccc333")
+            self.assertEqual(data["capture_set"], "all")
+            for row in data["screenshots"]:
+                self.assertEqual(row["source_commit"], "ccc333")
+
+    def test_incomplete_all_does_not_advance_global_revision(self):
+        capture = _load_capture()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "screenshots"
+            out.mkdir()
+            manifest = out / "manifest.json"
+            manifest.write_text(
+                """{
+  "schema_version": 1,
+  "source_commit": "aaa111",
+  "capture_set": "all",
+  "screenshots": [
+    {"file": "person.png", "scenario": "darwin-person", "source_commit": "aaa111"}
+  ]
+}
+""",
+                encoding="utf-8",
+            )
             with mock.patch.object(capture, "OUT_DIR", out), mock.patch.object(
                 capture, "MANIFEST", manifest
             ):
@@ -101,15 +134,16 @@ class ScreenshotManifestMergeTests(unittest.TestCase):
                     "all",
                     [
                         {"file": "folders.png", "scenario": "public-domain-folder"},
-                        {"file": "tags.png", "scenario": "tags"},
+                        {"file": "work.png", "scenario": "origin-of-species-work-pdf"},
+                        {"file": "people.png", "scenario": "people-library"},
                     ],
-                    "ccc333",
+                    "bbb222",
                 )
             data = __import__("json").loads(manifest.read_text(encoding="utf-8"))
-            self.assertEqual(data["source_commit"], "ccc333")
-            self.assertEqual(data["capture_set"], "all")
-            for row in data["screenshots"]:
-                self.assertEqual(row["source_commit"], "ccc333")
+            self.assertEqual(data["source_commit"], "aaa111")
+            by_file = {row["file"]: row for row in data["screenshots"]}
+            self.assertEqual(by_file["folders.png"]["source_commit"], "bbb222")
+            self.assertEqual(by_file["person.png"]["source_commit"], "aaa111")
 
 
 class ScreenshotDirtyTreeTests(unittest.TestCase):
@@ -130,6 +164,17 @@ class ScreenshotDirtyTreeTests(unittest.TestCase):
         self.assertTrue(check._is_capture_output("docs/screenshots/folders.png"))
         self.assertTrue(check._is_capture_output("docs/screenshots/manifest.json"))
         self.assertFalse(check._is_capture_output("frontend/js/app.js"))
+
+    def test_dirty_sources_fail_closed_when_git_status_fails(self):
+        check = _load_check()
+        with mock.patch.object(
+            check,
+            "_git",
+            side_effect=subprocess.CalledProcessError(128, ["git", "status"]),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                check.dirty_screenshot_sources()
+        self.assertIn("Could not inspect", str(ctx.exception))
 
 
 class ScreenshotLoopbackGuardTests(unittest.TestCase):

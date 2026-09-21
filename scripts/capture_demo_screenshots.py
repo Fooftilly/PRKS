@@ -19,6 +19,27 @@ MANIFEST = OUT_DIR / "manifest.json"
 VIEWPORT = {"width": 1440, "height": 900}
 THEME = "light"
 
+EXPECTED_README_FILES = frozenset(
+    {
+        "folders.png",
+        "work.png",
+        "people.png",
+    }
+)
+EXPECTED_EXTRA_FILES = frozenset(
+    {
+        "all-folders.png",
+        "tags.png",
+        "search.png",
+        "progress.png",
+        "types.png",
+        "person.png",
+        "note.png",
+        "group.png",
+    }
+)
+EXPECTED_ALL_FILES = EXPECTED_README_FILES | EXPECTED_EXTRA_FILES
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -163,8 +184,21 @@ def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> No
             ordered.append(row)
             seen.add(name)
 
+    payload_note = None
     if set_name == "all" and head:
-        source_commit = head
+        captured_names = {entry["file"] for entry in captured}
+        if captured_names == EXPECTED_ALL_FILES:
+            source_commit = head
+        else:
+            # Incomplete "all" must not bless skipped/untouched PNGs via a new
+            # global revision (e.g. person/note/group shots missing).
+            source_commit = previous.get("source_commit")
+            if source_commit is not None:
+                source_commit = str(source_commit).strip() or None
+            payload_note = (
+                "Incomplete all capture: global source_commit was not advanced; "
+                "only regenerated files carry the new per-file revision."
+            )
     else:
         # Do not advance the global baseline after a partial run.
         source_commit = previous.get("source_commit")
@@ -187,6 +221,8 @@ def _write_manifest(set_name: str, captured: list[dict], head: str | None) -> No
             "Partial capture: only listed files with a matching source_commit "
             "were regenerated in this run; other entries keep prior provenance."
         )
+    elif payload_note:
+        payload["note"] = payload_note
     MANIFEST.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print("wrote", MANIFEST)
 
@@ -212,6 +248,19 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
     if not seminar or not work:
         raise RuntimeError(
             "Demo library missing. Run scripts/seed_demo_library.py first."
+        )
+    if set_name in ("extra", "all") and (not darwin or not note or not group):
+        missing = []
+        if not darwin:
+            missing.append("person Darwin")
+        if not note:
+            missing.append("work 'Commonplace: Darwin on variation'")
+        if not group:
+            missing.append("group 'Nineteenth century'")
+        raise RuntimeError(
+            "Demo library incomplete for the "
+            f"{set_name!r} capture set (missing {', '.join(missing)}). "
+            "Re-run scripts/seed_demo_library.py."
         )
 
     folder_hash = f"#/folders/{seminar['id']}"
@@ -319,33 +368,43 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
                     ".types-page",
                     scenario="file-types",
                 )
-                if darwin:
-                    shot(
-                        f"#/people/{darwin['id']}",
-                        "person.png",
-                        ".document-view--person",
-                        scenario="darwin-person",
-                    )
-                if note:
-                    shot(
-                        f"#/works/{note['id']}",
-                        "note.png",
-                        ".document-view",
-                        scenario="commonplace-note",
-                        wait_pdf=True,
-                    )
-                if group:
-                    shot(
-                        f"#/people/groups/{group['id']}",
-                        "group.png",
-                        ".document-view--group-detail",
-                        scenario="nineteenth-century-group",
-                    )
+                shot(
+                    f"#/people/{darwin['id']}",
+                    "person.png",
+                    ".document-view--person",
+                    scenario="darwin-person",
+                )
+                shot(
+                    f"#/works/{note['id']}",
+                    "note.png",
+                    ".document-view",
+                    scenario="commonplace-note",
+                    wait_pdf=True,
+                )
+                shot(
+                    f"#/people/groups/{group['id']}",
+                    "group.png",
+                    ".document-view--group-detail",
+                    scenario="nineteenth-century-group",
+                )
 
             browser.close()
 
         if not captured:
             raise RuntimeError(f"No screenshots were captured for set {set_name!r}.")
+
+        captured_names = {entry["file"] for entry in captured}
+        expected = {
+            "readme": EXPECTED_README_FILES,
+            "extra": EXPECTED_EXTRA_FILES,
+            "all": EXPECTED_ALL_FILES,
+        }[set_name]
+        if captured_names != expected:
+            missing = ", ".join(sorted(expected - captured_names)) or "(none)"
+            extra = ", ".join(sorted(captured_names - expected)) or "(none)"
+            raise RuntimeError(
+                f"Capture set {set_name!r} incomplete: missing {missing}; unexpected {extra}."
+            )
 
         # Promote the complete staged set only after every capture succeeded.
         for entry in captured:

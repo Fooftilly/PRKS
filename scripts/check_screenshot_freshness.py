@@ -64,8 +64,10 @@ def dirty_screenshot_sources() -> list[str]:
     """Return screenshot-affecting paths with uncommitted changes (excl. outputs)."""
     try:
         status = _git("status", "--porcelain", "-uall")
-    except (OSError, subprocess.CalledProcessError):
-        return []
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            "Could not inspect screenshot-affecting working-tree changes."
+        ) from exc
     dirty: list[str] = []
     for line in status.splitlines():
         if not line or len(line) < 4:
