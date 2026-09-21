@@ -989,6 +989,45 @@ class TestServerAPI(unittest.TestCase):
             urllib.request.urlopen(evil)
         self.assertEqual(cm.exception.code, 404)
 
+    def test_12b_pdf_route_validates_the_whole_suffix(self):
+        """The route must validate everything after /api/pdfs/, not its last piece.
+
+        Both the GET and HEAD handlers reduced the path with ``split('/')[-1]``
+        before validating, so ``/api/pdfs/nested/victim.pdf`` served
+        ``victim.pdf`` and the validator's rejection of path-shaped names never
+        ran for the route it protects.
+        """
+        name = "route_suffix_guard.pdf"
+        target = os.path.join(server_module.pdfs_dir, name)
+        with open(target, "wb") as handle:
+            handle.write(b"%PDF-1.4 route\n%%EOF\n")
+        self.addCleanup(lambda: os.path.isfile(target) and os.remove(target))
+
+        for method in ("GET", "HEAD"):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/pdfs/{name}", method=method
+            )
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+
+        for suffix in (
+            f"nested/{name}",
+            f"nested%2F{name}",
+            f"..%2F{name}",
+            f"nested%5C{name}",
+            f"%20{name}",
+        ):
+            for method in ("GET", "HEAD"):
+                with self.subTest(suffix=suffix, method=method):
+                    req = urllib.request.Request(
+                        f"{self._base_url}/api/pdfs/{suffix}", method=method
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as cm:
+                        urllib.request.urlopen(req)
+                    self.assertEqual(cm.exception.code, 404)
+
+        self.assertTrue(os.path.isfile(target))
+
     def test_13_get_work_not_found_404(self):
         req = urllib.request.Request(f"{self._base_url}/api/works/W-00000000-NOTFOUND")
         with self.assertRaises(urllib.error.HTTPError) as cm:
