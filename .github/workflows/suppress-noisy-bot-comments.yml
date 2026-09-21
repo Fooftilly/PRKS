@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   remove-noise-comment:
+    # No `on:` filter can match comment text, so every comment in the repository
+    # starts a run that this condition then skips. Skipped jobs are not billed.
     if: >-
       (
         (
@@ -44,6 +46,9 @@ jobs:
     timeout-minutes: 2
 
     steps:
+      # The comment body reaches this job only through the `contains()` checks
+      # above, never the shell: the step interpolates no event text, and the one
+      # comment it can delete is the comment that triggered the run.
       - name: Delete matched bot-noise comment
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,7 +59,9 @@ jobs:
           set -euo pipefail
 
           if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
-            gh api --method DELETE               "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}"
+            endpoint="repos/${REPOSITORY}/issues/comments/${COMMENT_ID}"
           else
-            gh api --method DELETE               "repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}"
+            endpoint="repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}"
           fi
+
+          gh api --method DELETE "${endpoint}"
