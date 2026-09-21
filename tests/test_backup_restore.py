@@ -536,6 +536,55 @@ class TestBackupPathSafety(BackupRestoreTestCase):
                         os.path.join(staging_root, "fixture-stage-aaaaaaaa"),
                     )
 
+    def test_portable_removal_never_traverses_a_nested_reparse_point(self):
+        """A junction inside the tree must be removed, not descended into.
+
+        os.path.islink() is False for an NTFS junction and
+        os.walk(followlinks=False) does not treat one as a link, so the portable
+        path needs its own reparse-aware teardown. Patched, since junctions
+        cannot be created on POSIX; the assertion is that the walk never scans
+        the entry.
+        """
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        junction = os.path.join(child, "junction")
+        os.makedirs(junction)
+
+        scanned = []
+        real_scandir = os.scandir
+
+        def spy_scandir(target):
+            scanned.append(os.fspath(target))
+            return real_scandir(target)
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False), patch.object(
+            backup_module.os.path, "isjunction", lambda p: p == junction
+        ), patch.object(backup_module.os, "scandir", spy_scandir):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertIn(child, scanned)
+        self.assertNotIn(junction, scanned)
+
+    def test_portable_removal_unlinks_a_nested_symlink_without_following(self):
+        cfg = self._cfg()
+        staging_root = self._staging_root(cfg)
+        _outside, victim = self._outside_victim()
+        child = os.path.join(staging_root, "fixture-stage-aaaaaaaa")
+        os.makedirs(os.path.join(child, "tree"))
+        self._symlink_or_skip(victim, os.path.join(child, "tree", "link"))
+
+        with patch.object(backup_module, "_SUPPORTS_DIR_FD", False):
+            backup_module._remove_maintenance_child(
+                cfg, backup_module._STAGING_SUBROOT, child
+            )
+
+        self.assertFalse(os.path.lexists(child))
+        self.assertTrue(os.path.isfile(victim))
+
     def test_stale_staging_cleanup_removes_expired_entries(self):
         cfg = self._cfg()
         staging_root = self._staging_root(cfg)

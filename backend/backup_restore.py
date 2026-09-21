@@ -687,6 +687,56 @@ def _open_maintenance_subroot(config: StorageConfig, *names: str) -> Optional[in
     return fd
 
 
+def _remove_link_entry(path: str) -> None:
+    """Remove a link-like entry itself, never its target.
+
+    A Windows directory symlink or junction is removed with ``rmdir``, not
+    ``unlink``, so both are attempted.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        os.rmdir(path)
+
+
+def _remove_reparse_aware(path: str) -> None:
+    """Remove one already-authorized path, treating reparse points as links.
+
+    The maintenance boundary's own teardown for the platform that has no
+    descriptors. ``_safe_remove()`` is shared by a dozen callers outside this
+    boundary and treats only ``os.path.islink()`` as link-like, which misses an
+    NTFS junction: ``os.walk(followlinks=False)`` descends into one and would
+    delete its target. Here a junction is removed as the reparse entry it is and
+    never traversed, at the root or at any depth.
+
+    The walk is iterative so a deep staging tree cannot exhaust the stack.
+    """
+    if not os.path.lexists(path):
+        return
+    if os.path.islink(path) or _is_directory_reparse_point(path):
+        _remove_link_entry(path)
+        return
+    if not os.path.isdir(path):
+        os.unlink(path)
+        return
+    pending = [path]
+    directories: list[str] = []
+    while pending:
+        current = pending.pop()
+        directories.append(current)
+        with os.scandir(current) as entries:
+            for entry in entries:
+                child = entry.path
+                if entry.is_symlink() or _is_directory_reparse_point(child):
+                    _remove_link_entry(child)
+                elif entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+                else:
+                    os.unlink(child)
+    for directory in reversed(directories):
+        os.rmdir(directory)
+
+
 def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
     """Remove the entry of an already-proven subroot whose name equals ``leaf``.
 
@@ -705,7 +755,7 @@ def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
         if entry != leaf:
             continue
         if dir_fd is None:
-            _safe_remove(os.path.join(root, entry))
+            _remove_reparse_aware(os.path.join(root, entry))
             return
         try:
             st = os.lstat(entry, dir_fd=dir_fd)
@@ -769,7 +819,9 @@ def _remove_maintenance_child(
     # path-based, so they cannot be bound to one directory. An ancestor of
     # config.root retargeted between them is a residual limitation of the
     # fallback, not something this helper can close; failing closed instead
-    # would leave that platform with no maintenance cleanup at all.
+    # would leave that platform with no maintenance cleanup at all. Reparse
+    # points are handled though, at the root and at any depth, by
+    # _verified_maintenance_subroot() and _remove_reparse_aware().
     verified_root = _verified_maintenance_subroot(config, *subroot)
     if verified_root is None:
         return
