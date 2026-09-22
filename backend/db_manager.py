@@ -3740,33 +3740,16 @@ class PRKSDatabase:
                 person_metadata_sync.set_field_on_conn(conn, person_id, field, _person_wire(value))
 
     def append_person_alias_if_new(self, person_id: str, alias: str) -> bool:
-        """Append alias to persons.aliases when not already present (case-insensitive)."""
-        a = (alias or "").strip()
-        if not a:
-            return False
-        rows = self.execute_query("SELECT aliases FROM persons WHERE id = ?", (person_id,))
-        if not rows:
-            return False
-        existing = (rows[0].get("aliases") or "").strip()
-        parts = [x.strip() for x in existing.split(",") if x.strip()]
-        if any(p.lower() == a.lower() for p in parts):
-            return False
-        canonical_rows = self.execute_query(
-            "SELECT first_name, last_name FROM persons WHERE id = ?", (person_id,)
-        )
-        if canonical_rows:
-            fn = (canonical_rows[0].get("first_name") or "").strip()
-            ln = (canonical_rows[0].get("last_name") or "").strip()
-            canonical = f"{fn} {ln}".strip() if fn or ln else ""
-            if canonical and canonical.lower() == a.lower():
-                return False
-        parts.append(a)
-        self.execute_query(
-            "UPDATE persons SET aliases = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (", ".join(parts), person_id),
-        )
-        return True
-    
+        """Append a promotable alias via the role/Person revision boundary.
+
+        Comma-bearing values are refused (legacy encoding cannot represent
+        them as one alias). Actual writes advance ``person-field`` aliases
+        revision through ``work_role_sync._append_person_alias``.
+        """
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return work_role_sync._append_person_alias(conn, person_id, alias)
+
     def get_all_persons(self) -> List[dict]:
         """Complete person catalog.
 

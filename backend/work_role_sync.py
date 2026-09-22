@@ -132,32 +132,72 @@ def next_order_index(conn, work_id):
     return int(row[0]) + 1
 
 
+def parse_person_aliases(aliases_text):
+    """Legacy `persons.aliases` reader: comma-delimited, stripped empties.
+
+    Existing rows may already contain commas that were either delimiters or
+    parts of a printed name. This never invents a new interpretation; it is
+    the same split every profile/search consumer already uses.
+    """
+    return [x.strip() for x in (aliases_text or "").split(",") if x.strip()]
+
+
+def credit_promotable_as_alias(credit_name):
+    """Whether a role credit can be stored as ONE Person alias losslessly.
+
+    `persons.aliases` is still a comma-delimited text field. A credit that
+    itself contains a comma (`Smith, John`) cannot round-trip through that
+    encoding as a single alias: every reader would split it. Commas stay legal
+    on the role's `credit_name`; only auto-promotion into aliases is refused.
+    """
+    alias = canonical_credit_name(credit_name)
+    if not alias:
+        return False
+    parts = parse_person_aliases(alias)
+    return len(parts) == 1 and parts[0] == alias
+
+
 def _append_person_alias(conn, person_id, alias):
     """"Mark Twain" typed on a link becomes one of Samuel Clemens's aliases.
 
     A long-standing side effect of linking with a credit override, and People
     search depends on it. It lives at this boundary now so it happens for every
     canonical write rather than only the one HTTP handler that remembered it.
+
+    Promotion is one decision here:
+
+      1. preserve the role credit exactly (callers already stored it);
+      2. promote only when the credit is representable as one legacy alias;
+      3. if already represented, no-op (no Person-aliases revision bump);
+      4. otherwise write through `person_metadata_sync.set_field_on_conn` so
+         the `[person_id, "aliases"]` revision advances with the value.
+
+    Comma-bearing credits stay on the role and never corrupt `persons.aliases`.
     """
+    from backend import person_metadata_sync
+
     alias = canonical_credit_name(alias)
     if not alias:
+        return False
+    if not credit_promotable_as_alias(alias):
+        # Role credit is already stored. Refusing promotion is containment:
+        # writing the comma into the legacy field would invent false aliases.
         return False
     row = conn.execute(
         "SELECT aliases, first_name, last_name FROM persons WHERE id = ?",
         (person_id,)).fetchone()
     if row is None:
         return False
-    parts = [x.strip() for x in (row[0] or "").split(",") if x.strip()]
+    parts = parse_person_aliases(row[0])
     if any(p.lower() == alias.lower() for p in parts):
         return False
     canonical = ("%s %s" % ((row[1] or "").strip(), (row[2] or "").strip())).strip()
     if canonical and canonical.lower() == alias.lower():
         return False
     parts.append(alias)
-    conn.execute(
-        "UPDATE persons SET aliases = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (", ".join(parts), person_id))
-    return True
+    changed, _revision = person_metadata_sync.set_field_on_conn(
+        conn, person_id, "aliases", ", ".join(parts))
+    return changed
 
 
 def insert_initial_role(conn, work_id, person_id, role_type, order_index=0,
