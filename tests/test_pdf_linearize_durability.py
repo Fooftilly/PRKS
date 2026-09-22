@@ -338,10 +338,22 @@ class TestNoCallerCompensatesForLinearization(unittest.TestCase):
 
 
 class TestFsDurabilityPrimitives(unittest.TestCase):
+    """The platforms where `os.fsync()` is itself the barrier.
+
+    These drive behaviour by patching `os.fsync`, so they must pin
+    `_FULLFSYNC` off: on macOS `_sync_descriptor()` returns after the full
+    barrier and never reaches `os.fsync`, which would leave the injected
+    errors unreached and the assertions failing there while staying green on
+    Linux. `TestTheStrongestBarrierIsUsed` owns the other platform.
+    """
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="prks-fs-durability-")
         self.addCleanup(self._tmp.cleanup)
         self.dir_path = self._tmp.name
+        no_barrier = patch.object(fs_durability, "_FULLFSYNC", None)
+        no_barrier.start()
+        self.addCleanup(no_barrier.stop)
 
     def test_fsync_file_path_syncs_a_file_written_by_another_process(self):
         path = os.path.join(self.dir_path, "written.bin")
