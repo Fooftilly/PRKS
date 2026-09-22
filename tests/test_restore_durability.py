@@ -48,10 +48,12 @@ _TXN = "durability-txn-0123456789ab"
 class _SyncSpy:
     """Records restore's durability calls in order and can refuse a sync.
 
-    ``fsync_directory`` is patched in both namespaces that reach it -- the one
-    ``backup_restore`` imported and the one ``fsync_directories`` calls through
-    -- so every directory sync is recorded exactly once and the real batching
-    and de-duplication stay under test.
+    Only ``fs_durability.fsync_directory`` is patched: every directory sync
+    restore makes goes through ``_fsync_dirs_under()`` and the real
+    ``fsync_directories()``, so the containment check, the batching and the
+    de-duplication all stay under test and each sync is recorded once.
+    Directories are recorded as ``realpath`` because that is what restore
+    resolves them to before opening them.
     """
 
     def __init__(self):
@@ -69,7 +71,7 @@ class _SyncSpy:
         fs_durability.fsync_open_file(fd)
 
     def fsync_directory(self, path):
-        norm = os.path.normpath(path)
+        norm = os.path.realpath(path)
         self.events.append(("fsync-dir", norm))
         if norm in self.refuse:
             return False
@@ -84,7 +86,7 @@ class _SyncSpy:
         return self._real_fsync_directory(path)
 
     def replace(self, src, dest):
-        self.events.append(("replace", os.path.normpath(src), os.path.normpath(dest)))
+        self.events.append(("replace", os.path.realpath(src), os.path.realpath(dest)))
         return self._real_replace(src, dest)
 
     def persist(self, state):
@@ -123,7 +125,6 @@ class _DurabilityCase(unittest.TestCase):
         """Patch every durability call restore can make."""
         return [
             patch.object(backup_module, "fsync_open_file", self.spy.fsync_open_file),
-            patch.object(backup_module, "fsync_directory", self.spy.fsync_directory),
             patch.object(fs_durability, "fsync_directory", self.spy.fsync_directory),
             patch.object(backup_module.os, "replace", self.spy.replace),
         ]
@@ -180,7 +181,7 @@ class TestJournalWriteOrdering(_DurabilityCase):
             "at them, and the directory entry after it does",
         )
         journal = backup_module.journal_path(self.cfg)
-        self.assertEqual(spy.synced_dirs, [os.path.dirname(journal)])
+        self.assertEqual(spy.synced_dirs, [os.path.realpath(os.path.dirname(journal))])
         self.assertEqual(json.loads(self.read(journal))["phase"], "moving_old")
 
     def test_a_same_directory_replace_costs_exactly_one_directory_sync(self):
@@ -195,7 +196,7 @@ class TestJournalWriteOrdering(_DurabilityCase):
     def test_the_phase_is_refused_when_the_journal_directory_cannot_be_synced(self):
         journal = backup_module.journal_path(self.cfg)
         backup_module._write_journal(self.cfg, self._journal("prepared"))
-        self.spy.refuse = frozenset({os.path.normpath(os.path.dirname(journal))})
+        self.spy.refuse = frozenset({os.path.realpath(os.path.dirname(journal))})
 
         with self.spied():
             with self.assertRaises(RestoreError) as caught:
@@ -242,10 +243,12 @@ class TestJournalWriteOrdering(_DurabilityCase):
     def test_staging_metadata_reports_the_weaker_guarantee_without_raising(self):
         """Only the journal treats this write as a boundary; staging does not."""
         meta = os.path.join(self.root, "staging", "meta.json")
-        self.spy.refuse = frozenset({os.path.normpath(os.path.dirname(meta))})
+        self.spy.refuse = frozenset({os.path.realpath(os.path.dirname(meta))})
 
         with self.spied():
-            durable = backup_module._atomic_write_json(meta, {"token": "abc"})
+            durable = backup_module._atomic_write_json(
+                meta, {"token": "abc"}, root=self.root
+            )
 
         self.assertFalse(durable)
         self.assertEqual(json.loads(self.read(meta)), {"token": "abc"})
@@ -297,7 +300,7 @@ class TestComponentMoveOrdering(_DurabilityCase):
 
         self.assertEqual(
             sorted(spy.synced_dirs),
-            sorted({os.path.normpath(self.cfg.root), os.path.normpath(self.rollback_root)}),
+            sorted({os.path.realpath(self.cfg.root), os.path.realpath(self.rollback_root)}),
             "the name leaves one directory and appears in another; both entries "
             "have to survive the crash",
         )
@@ -332,7 +335,7 @@ class TestComponentMoveOrdering(_DurabilityCase):
     def test_a_refused_sync_stops_before_the_journal_claims_the_move_completed(self):
         os.makedirs(self.cfg.pdfs_dir, exist_ok=True)
         self.write(os.path.join(self.cfg.pdfs_dir, "old.pdf"), b"OLD")
-        self.spy.refuse = frozenset({os.path.normpath(self.rollback_root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.rollback_root)})
 
         with self.spied() as spy:
             with self.assertRaises(RestoreError) as caught:
@@ -349,7 +352,7 @@ class TestComponentMoveOrdering(_DurabilityCase):
     def test_the_rollback_directory_is_durable_before_anything_moves_into_it(self):
         self.write(self.cfg.db_path, b"DB")
         rolled_dir = os.path.join(self.rollback_root, "database")
-        self.spy.refuse = frozenset({os.path.normpath(self.rollback_root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.rollback_root)})
 
         with self.spied() as spy:
             with self.assertRaises(RestoreError) as caught:
@@ -361,7 +364,7 @@ class TestComponentMoveOrdering(_DurabilityCase):
             "a destination a crash could take away is refused before the move",
         )
         self.assertNotIn("replace", spy.steps)
-        self.assertEqual(spy.synced_dirs, [os.path.normpath(self.rollback_root)])
+        self.assertEqual(spy.synced_dirs, [os.path.realpath(self.rollback_root)])
         self.assertEqual(self.read(self.cfg.db_path), b"DB")
         self.assertTrue(os.path.isdir(rolled_dir))
 
@@ -405,14 +408,14 @@ class TestComponentInstallOrdering(_DurabilityCase):
         self.assertEqual(spy.persisted("new_installed"), [False, True])
         self.assertEqual(
             sorted(spy.synced_dirs),
-            sorted({os.path.normpath(os.path.dirname(staged)), os.path.normpath(self.cfg.root)}),
+            sorted({os.path.realpath(os.path.dirname(staged)), os.path.realpath(self.cfg.root)}),
             "the staging tree and live storage are different parents",
         )
         self.assertEqual(self.read(os.path.join(self.cfg.pdfs_dir, "new.pdf")), b"NEW")
 
     def test_a_refused_sync_stops_before_the_journal_claims_the_install(self):
         self._stage_pdfs()
-        self.spy.refuse = frozenset({os.path.normpath(self.cfg.root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.cfg.root)})
 
         with self.spied():
             with self.assertRaises(RestoreError) as caught:
@@ -434,7 +437,7 @@ class TestComponentInstallOrdering(_DurabilityCase):
         self.assertTrue(os.path.isdir(self.cfg.pdfs_dir))
 
     def test_a_refused_sync_leaves_an_empty_directory_unrecorded(self):
-        self.spy.refuse = frozenset({os.path.normpath(self.cfg.root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.cfg.root)})
 
         with self.spied():
             with self.assertRaises(RestoreError) as caught:
@@ -490,8 +493,8 @@ class TestRecoveryDurability(_DurabilityCase):
         self.assertEqual(outcome["outcome"], "restored_previous")
         self._assert_previous_library()
         self.assertFalse(os.path.exists(journal))
-        self.assertIn(os.path.normpath(self.cfg.root), spy.synced_dirs)
-        self.assertIn(os.path.normpath(rollback_root), spy.synced_dirs)
+        self.assertIn(os.path.realpath(self.cfg.root), spy.synced_dirs)
+        self.assertIn(os.path.realpath(rollback_root), spy.synced_dirs)
         last_replace = len(spy.steps) - 1 - spy.steps[::-1].index("replace")
         self.assertGreater(
             len(spy.steps) - 1 - spy.steps[::-1].index("fsync-dir"),
@@ -501,7 +504,7 @@ class TestRecoveryDurability(_DurabilityCase):
 
     def test_a_refused_sync_keeps_the_journal_and_the_rollback_tree(self):
         rollback_root, journal = self._crashed_restore()
-        self.spy.refuse = frozenset({os.path.normpath(self.cfg.root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.cfg.root)})
 
         with self.spied():
             with self.assertRaises(RestoreError) as caught:
@@ -516,7 +519,7 @@ class TestRecoveryDurability(_DurabilityCase):
 
     def test_a_later_pass_finishes_recovery_once_the_sync_succeeds(self):
         _rollback_root, journal = self._crashed_restore()
-        self.spy.refuse = frozenset({os.path.normpath(self.cfg.root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.cfg.root)})
         with self.spied():
             with self.assertRaises(RestoreError):
                 backup_module.recover_incomplete_restore(self.cfg)
@@ -527,10 +530,37 @@ class TestRecoveryDurability(_DurabilityCase):
         self._assert_previous_library()
         self.assertFalse(os.path.exists(journal))
 
+    def test_the_replay_confirms_the_entry_the_refused_pass_left_unsynced(self):
+        """The pass that cleans up is the last chance to confirm the move.
+
+        An earlier pass consumed the rollback copy and had its syncs refused,
+        so the live entry it created is unconfirmed while the journal and the
+        rollback tree -- the only way to redo it -- are about to be removed.
+        """
+        _rollback_root, journal = self._crashed_restore()
+        self.spy.refuse = frozenset({os.path.realpath(self.cfg.root)})
+        with self.spied():
+            with self.assertRaises(RestoreError):
+                backup_module.recover_incomplete_restore(self.cfg)
+
+        self.spy.refuse = frozenset()
+        self.spy.events.clear()
+        with self.spied() as spy:
+            outcome = backup_module.recover_incomplete_restore(self.cfg)
+
+        self.assertEqual(outcome["outcome"], "restored_previous")
+        self.assertIn(
+            os.path.realpath(self.cfg.root),
+            spy.synced_dirs,
+            "the live entry the refused pass created is confirmed before cleanup",
+        )
+        self.assertFalse(os.path.exists(journal))
+        self._assert_previous_library()
+
     def test_replaying_a_consumed_rollback_tree_still_keeps_the_live_library(self):
         """The refused pass must not have made the replay destructive."""
         _rollback_root, journal = self._crashed_restore()
-        self.spy.refuse = frozenset({os.path.normpath(self.cfg.root)})
+        self.spy.refuse = frozenset({os.path.realpath(self.cfg.root)})
         with self.spied():
             with self.assertRaises(RestoreError):
                 backup_module.recover_incomplete_restore(self.cfg)
@@ -540,6 +570,50 @@ class TestRecoveryDurability(_DurabilityCase):
         backup_module.recover_incomplete_restore(self.cfg)
 
         self._assert_previous_library()
+
+
+class TestSyncContainment(_DurabilityCase):
+    """A restore fsync never reaches outside the tree it belongs to.
+
+    The directories restore syncs are built from a request's staging token and
+    from a journal's transaction id, so containment is checked on the value
+    that is opened, not on the inputs it came from.
+    """
+
+    def test_a_directory_inside_the_root_is_synced(self):
+        os.makedirs(self.cfg.pdfs_dir, exist_ok=True)
+
+        with self.spied() as spy:
+            self.assertTrue(
+                backup_module._fsync_dirs_under(self.root, [self.cfg.pdfs_dir])
+            )
+
+        self.assertEqual(spy.synced_dirs, [os.path.realpath(self.cfg.pdfs_dir)])
+
+    def test_the_root_itself_is_synced(self):
+        with self.spied() as spy:
+            self.assertTrue(backup_module._fsync_dirs_under(self.root, [self.root]))
+
+        self.assertEqual(spy.synced_dirs, [os.path.realpath(self.root)])
+
+    def test_a_directory_outside_the_root_is_refused_and_never_opened(self):
+        outside = tempfile.mkdtemp(prefix="prks-restore-durability-outside-")
+        self.addCleanup(lambda: os.rmdir(outside))
+
+        with self.spied() as spy:
+            self.assertFalse(backup_module._fsync_dirs_under(self.root, [outside]))
+
+        self.assertEqual(spy.synced_dirs, [], "nothing outside the root is opened")
+
+    def test_a_sibling_whose_name_merely_extends_the_root_is_refused(self):
+        sibling = self.root + "-elsewhere"
+        os.makedirs(sibling)
+        self.addCleanup(lambda: os.rmdir(sibling))
+
+        with self.spied() as spy:
+            self.assertFalse(backup_module._fsync_dirs_under(self.root, [sibling]))
+
+        self.assertEqual(spy.synced_dirs, [])
 
 
 class TestDurabilityPrimitives(unittest.TestCase):

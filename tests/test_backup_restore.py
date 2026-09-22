@@ -2129,19 +2129,20 @@ class TestRestoreDurabilityBoundary(BackupRestoreTestCase):
     """
 
     def _refusing_directory_sync(self, directory):
-        """Answer False for one directory and sync every other one for real."""
-        refused = os.path.normpath(directory)
+        """Answer False for one directory and sync every other one for real.
+
+        Restore resolves a directory before opening it, so the refusal matches
+        on `realpath` too.
+        """
+        refused = os.path.realpath(directory)
         real = fs_durability.fsync_directory
 
         def refuse(path):
-            if os.path.normpath(path) == refused:
+            if os.path.realpath(path) == refused:
                 return False
             return real(path)
 
-        return (
-            patch.object(backup_module, "fsync_directory", refuse),
-            patch.object(fs_durability, "fsync_directory", refuse),
-        )
+        return patch.object(fs_durability, "fsync_directory", refuse)
 
     def test_a_refused_directory_sync_keeps_the_previous_library_recoverable(self):
         lib = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
@@ -2151,8 +2152,7 @@ class TestRestoreDurabilityBoundary(BackupRestoreTestCase):
         staged = self._stage_copy(lib["cfg"], backup.archive_path)
         journal = backup_module.journal_path(lib["cfg"])
 
-        module_patch, helper_patch = self._refusing_directory_sync(lib["cfg"].root)
-        with module_patch, helper_patch:
+        with self._refusing_directory_sync(lib["cfg"].root):
             with self.assertRaises(RestoreError) as caught:
                 apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
 
@@ -2171,6 +2171,103 @@ class TestRestoreDurabilityBoundary(BackupRestoreTestCase):
         self.assertEqual(titles, ["Keep Me"])
         self.assertTrue(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "keep.pdf")))
         self.assertFalse(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "new.pdf")))
+
+    def test_an_unconfirmed_commit_record_does_not_roll_back_a_finished_restore(self):
+        """The one transition where refusing must not start a rollback.
+
+        Everything is installed and bound by the commit write, and its replace
+        has already happened when only the directory sync is refused. Rolling
+        back then is the unsafe move: a crash during that rollback could leave
+        a surviving "committed" journal describing a half-rolled-back library.
+        """
+        lib = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
+        other = self._bind_library(title="Incoming", pdf_name="new.pdf", pdf_text="incoming")
+        backup = create_backup(other["cfg"])
+        bind_storage(lib["cfg"])
+        staged = self._stage_copy(lib["cfg"], backup.archive_path)
+        journal = backup_module.journal_path(lib["cfg"])
+        real_write = backup_module._journal_written_durably
+
+        def refuse_the_commit_record(config, payload):
+            durable = real_write(config, payload)
+            return False if payload.get("phase") == "committed" else durable
+
+        with patch.object(
+            backup_module, "_journal_written_durably", refuse_the_commit_record
+        ):
+            out = apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
+
+        self.assertTrue(out["restored"])
+        self.assertTrue(
+            any("commit record" in w for w in out["warnings"]),
+            f"the weaker guarantee must be reported, got {out['warnings']}",
+        )
+        # Kept, not cleaned: the next startup resolves whichever phase survived.
+        self.assertTrue(os.path.isfile(journal))
+        with open(journal, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["phase"], "committed")
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming"], "no rollback may have started")
+
+        out = recover_incomplete_restore(lib["cfg"])
+
+        self.assertEqual(out["outcome"], "keep_restored")
+        self.assertFalse(os.path.exists(journal))
+        bind_storage(lib["cfg"])
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming"])
+
+    def test_every_staged_payload_file_is_flushed_before_it_can_be_installed(self):
+        """A staged file becomes canonical by rename, so it owes the same sync."""
+        lib = self._bind_library(title="Incoming", pdf_name="new.pdf", pdf_text="incoming")
+        backup = create_backup(lib["cfg"])
+        target = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
+        bind_storage(target["cfg"])
+        synced_inodes = set()
+        real_sync = backup_module.fsync_open_file
+
+        def record(fd):
+            synced_inodes.add(os.fstat(fd).st_ino)
+            return real_sync(fd)
+
+        with patch.object(backup_module, "fsync_open_file", record):
+            staged = self._stage_copy(target["cfg"], backup.archive_path)
+
+        tree = os.path.join(
+            backup_module._staging_dir(target["cfg"], staged.token), "tree"
+        )
+        payload = [
+            os.path.join(parent, name)
+            for parent, _dirs, files in os.walk(tree)
+            for name in files
+        ]
+        self.assertTrue(payload, "the staged tree must hold the extracted payload")
+        for path in payload:
+            self.assertIn(
+                os.stat(path).st_ino,
+                synced_inodes,
+                "every extracted payload file must reach stable storage",
+            )
+
+    def test_staging_refuses_a_tree_whose_directory_entries_cannot_be_synced(self):
+        lib = self._bind_library(title="Incoming", pdf_name="new.pdf", pdf_text="incoming")
+        backup = create_backup(lib["cfg"])
+        target = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
+        bind_storage(target["cfg"])
+        real = fs_durability.fsync_directory
+
+        def refuse_the_staged_tree(path):
+            if os.path.basename(os.path.realpath(path)) == "tree":
+                return False
+            return real(path)
+
+        with patch.object(fs_durability, "fsync_directory", refuse_the_staged_tree):
+            with self.assertRaises(RestoreError) as caught:
+                self._stage_copy(target["cfg"], backup.archive_path)
+
+        self.assertEqual(caught.exception.reason, "staging_not_durable")
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Keep Me"], "staging never touches the live library")
 
 
 class TestDiskAccounting(BackupRestoreTestCase):
