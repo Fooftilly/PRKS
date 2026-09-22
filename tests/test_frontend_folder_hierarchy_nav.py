@@ -56,6 +56,12 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         app = _read(os.path.join(_ROOT, "frontend", "js", "app.js"))
         self.assertIn("sameFolderWorkspace", app)
         self.assertIn("skipPageEnter: sameFolderWorkspace", app)
+        # Preserved shells must replace route-scoped banners, not stack them.
+        self.assertIn("prksClearRouteScopedApiWarningBanners", app)
+        prepend_at = app.index("function prksOfflinePrependBanner")
+        prepend_body = app[prepend_at : app.index("function prksOfflineRenderUnavailable")]
+        self.assertIn('offline-provenance-banner', prepend_body)
+        self.assertIn(".forEach(function (el) {\n            el.remove();", prepend_body)
         nav_js = _read(os.path.join(_ROOT, "frontend", "js", "navigation.js"))
         self.assertIn("skipPageEnter", nav_js)
 

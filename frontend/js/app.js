@@ -2909,13 +2909,32 @@ function prksOfflineProvenanceBannerHtml(offlineResult) {
     );
 }
 
-/** Prepends the cached-provenance banner into an already-rendered detail page. Online/not-found renders are untouched. */
+/** Prepends the cached-provenance banner into an already-rendered detail page.
+ *  Always clears any prior provenance banner first so preserved containers
+ *  (Folder→Folder in-place) cannot stack or leave a stale Offline banner when
+ *  the destination is served online. Online/not-found renders are untouched
+ *  beyond that clear. */
 function prksOfflinePrependBanner(container, offlineResult) {
+    if (container && typeof container.querySelectorAll === 'function') {
+        container.querySelectorAll('[data-prks-role="offline-provenance-banner"]').forEach(function (el) {
+            el.remove();
+        });
+    }
     if (!container || !offlineResult || offlineResult.source !== 'cache') return;
     const html = prksOfflineProvenanceBannerHtml(offlineResult);
     if (!html) return;
     container.insertAdjacentHTML('afterbegin', html);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+}
+
+/** Route-scoped warning banners that used to vanish when contentDiv was wiped.
+ *  Folder→Folder keeps the shell mounted, so clear them explicitly before a
+ *  new route finish can prepend a fresh one (or none). */
+function prksClearRouteScopedApiWarningBanners(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    container.querySelectorAll('.api-warning-banner').forEach(function (el) {
+        el.remove();
+    });
 }
 
 function prksOfflineRenderUnavailable(container, label) {
@@ -4560,6 +4579,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         typeof window.prksConsumeApiError === 'function'
             ? window.prksConsumeApiError(routeSignal)
             : null;
+    // Preserved Folder (and any future in-place) shells keep prior DOM: drop
+    // stale route warnings before optionally prepending a fresh one.
+    prksClearRouteScopedApiWarningBanners(contentDiv);
     if (apiErr && contentDiv && !contentDiv.querySelector('#prks-route-retry')) {
         const bar = document.createElement('div');
         bar.className = 'api-warning-banner';

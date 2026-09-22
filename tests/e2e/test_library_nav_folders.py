@@ -682,6 +682,89 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_folder_to_folder_replaces_offline_provenance_banner(self):
+        """In-place Folder→Folder must not stack or leave stale Offline banners."""
+        server, page, ids = self.start()
+        context = page.context
+        research = ids["research"]
+        philosophy = ids["philosophy"]
+
+        # Warm both Folder details online so offline can serve them from cache.
+        self.open_folder(page, research)
+        wait_for_async(
+            page,
+            """async (id) => {
+                const row = await window.createPrksOfflineStore().getEntity('folder', id);
+                return !!(row && row.value && row.value.id === id);
+            }""",
+            arg=research,
+            timeout=15000,
+        )
+        self.open_folder(page, philosophy)
+        wait_for_async(
+            page,
+            """async (id) => {
+                const row = await window.createPrksOfflineStore().getEntity('folder', id);
+                return !!(row && row.value && row.value.id === id);
+            }""",
+            arg=philosophy,
+            timeout=15000,
+        )
+
+        context.set_offline(True)
+        page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'", timeout=20000)
+
+        # cached A
+        page.locator(
+            f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+            f'.prks-folder-tree__link[href="#/folders/{research}"]'
+        ).click()
+        self.wait_folder_title(page, LIBRARY_NAV_RESEARCH, research)
+        page.locator(
+            '.prks-tile--main [data-prks-role="offline-provenance-banner"]',
+            has_text="Offline",
+        ).wait_for(timeout=10000)
+        self.assertEqual(
+            page.locator('.prks-tile--main [data-prks-role="offline-provenance-banner"]').count(),
+            1,
+        )
+
+        # cached A → cached B: exactly one banner (no stack)
+        page.locator(
+            f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+            f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+        ).click()
+        self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, philosophy)
+        page.locator(
+            '.prks-tile--main [data-prks-role="offline-provenance-banner"]',
+            has_text="Offline",
+        ).wait_for(timeout=10000)
+        self.assertEqual(
+            page.locator('.prks-tile--main [data-prks-role="offline-provenance-banner"]').count(),
+            1,
+        )
+
+        # cached B → online B/A: banner must clear
+        context.set_offline(False)
+        page.evaluate("async () => { await prksRequest('/api/settings'); }")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'online'", timeout=20000)
+        page.locator(
+            f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+            f'.prks-folder-tree__link[href="#/folders/{research}"]'
+        ).click()
+        self.wait_folder_title(page, LIBRARY_NAV_RESEARCH, research)
+        page.wait_for_function(
+            """() => document.querySelectorAll(
+                '.prks-tile--main [data-prks-role="offline-provenance-banner"]'
+            ).length === 0""",
+            timeout=20000,
+        )
+        self.assertEqual(
+            page.locator('.prks-tile--main [data-prks-role="offline-provenance-banner"]').count(),
+            0,
+        )
+
     def test_tiled_folder_switch_stays_in_own_pane(self):
         """Tiled Folder TabContexts: in-place switch must not cross-pane wipe."""
         from urllib.parse import urlparse
