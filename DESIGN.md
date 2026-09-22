@@ -859,6 +859,8 @@ They share scrim, panel, header, body, actions, focus behavior, and spacing.
 
 Do not maintain visually separate systems for normal modal, confirmation, unsaved confirmation, or feature-specific modal unless behavior truly differs.
 
+Escape uses that same lifecycle, not a per-modal key handler. The topmost layer wins: an open confirmation or unsaved-change prompt consumes Escape and leaves the underlying modal open. A pristine modal closes. A dirty modal that already participates in the unsaved policy confirms before anything is discarded. Backdrop and the header close control use the same `requestModalClose` policy. After the modal closes, focus returns to the control that opened it when that control is still in the document. Opening New Person for a create starts from a blank form; editing an existing person still loads that person's profile in the right panel.
+
 Destructive action uses the danger visual treatment, not ordinary accent primary.
 
 Close controls are `.prks-icon-btn`.

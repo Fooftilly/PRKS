@@ -245,6 +245,10 @@ FEATURES = {
         "description": "Settings category navigation and persistence",
         "selectors": ("tests.e2e.test_app.SettingsCategoryWorkflowTests",),
     },
+    "modals": {
+        "description": "Shared modal lifecycle: Escape, unsaved confirm, focus restore",
+        "selectors": ("tests.e2e.test_modal_lifecycle",),
+    },
     "folders": {
         "description": "Folders/Home offline + durable Folder ops",
         "selectors": (
