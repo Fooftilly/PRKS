@@ -1209,6 +1209,7 @@
         'position-detail': true,
         'argument-detail': true,
         'playlist-detail': true,
+        'folder-detail': true,
     };
 
     function prksRouteSupportsTile(hashOrRoute) {

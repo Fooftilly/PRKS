@@ -35,6 +35,19 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("prksMountFolderHierarchyNav", folders)
         self.assertIn("prks-folder-detail__header", folders)
         self.assertIn("data-prks-role=\"folder-hierarchy-nav\"", folders)
+        self.assertIn("tabId: ctx && ctx.tabId", folders)
+
+    def test_switcher_aria_uses_dialog_and_listbox(self):
+        nav = _read(_NAV)
+        self.assertIn("role', 'dialog'", nav)
+        self.assertIn("role', 'listbox'", nav)
+        self.assertIn("LISTBOX_ID", nav)
+        self.assertIn("aria-haspopup=\"dialog\"", nav)
+        self.assertIn("data-prks-folder-nav-tab-id", nav)
+        # Filter must not be a descendant of the listbox role host.
+        self.assertIn("Filter stays outside the listbox", nav)
+        self.assertIn("folder-detail", _read(os.path.join(_ROOT, "frontend", "js", "navigation.js")))
+        self.assertIn("'folder-detail': true", _read(os.path.join(_ROOT, "frontend", "js", "navigation.js")))
 
     def test_css_exposes_compact_switcher(self):
         css = _read(_CSS)

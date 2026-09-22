@@ -902,7 +902,7 @@
     }
 
     /** User-facing examples of tile-capable detail pages (eligibility lives in navigation.js). */
-    const SPLIT_DETAIL_EXAMPLES = 'Work, Person, Playlist, Concept, Position, or Argument';
+    const SPLIT_DETAIL_EXAMPLES = 'Work, Person, Playlist, Concept, Position, Argument, or Folder';
     const SPLIT_SEARCH_HINT = 'Search for a ' + SPLIT_DETAIL_EXAMPLES + '.';
 
     function routeSupportsTile(hash) {

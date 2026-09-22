@@ -4,21 +4,29 @@
  * Reuses the complete folders:index hierarchy (one set-based fetch). Selection
  * goes through prksNavigate with the owning TabContext id so Main / parked /
  * Secondary panes navigate their own route, not another workspace context.
+ *
+ * Ownership is instance-local: each Folder detail mounts its own trigger with
+ * per-tab IDs and data attributes. Open/select derive tabId + folderId from
+ * the clicked trigger — never from a module-level "last mount wins" slot.
  */
 (function (root) {
     'use strict';
 
     const PANEL_ID = 'prks-folder-nav-panel';
+    const LISTBOX_ID = 'prks-folder-nav-listbox';
+    const FILTER_ID = 'prks-folder-nav-filter';
     const FILTER_LIMIT = 40;
     const NEARBY_CHILD_LIMIT = 60;
     const NEARBY_SIBLING_LIMIT = 80;
 
     let panelEl = null;
+    let listboxEl = null;
     let optionEls = [];
     let activeIndex = 0;
     let restoreTarget = null;
-    let ownerTabId = null;
-    let currentFolderId = null;
+    /** Session state for the currently open panel only (derived from trigger). */
+    let openOwnerTabId = null;
+    let openFolderId = null;
     let hierarchyRows = null;
     let loadPromise = null;
     let boundGlobal = false;
@@ -36,6 +44,15 @@
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    function safeDomId(value) {
+        return String(value == null ? '' : value).replace(/[^A-Za-z0-9_-]/g, '_');
+    }
+
+    function triggerIdForTab(tabId) {
+        const safe = safeDomId(tabId);
+        return safe ? 'prks-folder-nav-trigger-' + safe : 'prks-folder-nav-trigger';
     }
 
     function titleSort(a, b) {
@@ -152,9 +169,12 @@
         return out;
     }
 
-    function crumbHtml(folder, rows) {
+    function crumbHtml(folder, rows, options) {
         const id = folder && folder.id != null ? String(folder.id) : '';
         if (!id) return '';
+        const opts = options || {};
+        const tabId = opts.tabId != null ? String(opts.tabId) : '';
+        const triggerId = triggerIdForTab(tabId);
         let parts = [];
         if (Array.isArray(rows) && rows.length) {
             const ctx = prksFolderHierarchyContext(id, rows);
@@ -170,15 +190,19 @@
                 ? full
                 : '… › ' + parts.slice(-2).join(' › ');
         return (
-            '<button type="button" class="prks-folder-nav__trigger" id="prks-folder-nav-trigger" ' +
-            'aria-haspopup="listbox" aria-expanded="false" aria-controls="' +
+            '<button type="button" class="prks-folder-nav__trigger" id="' +
+            esc(triggerId) +
+            '" ' +
+            'aria-haspopup="dialog" aria-expanded="false" aria-controls="' +
             PANEL_ID +
             '" ' +
             'title="' +
             esc(full) +
             '" data-prks-folder-nav-current="' +
             esc(id) +
-            '">' +
+            '"' +
+            (tabId ? ' data-prks-folder-nav-tab-id="' + esc(tabId) + '"' : '') +
+            '>' +
             '<span class="prks-folder-nav__path">' +
             esc(shown) +
             '</span>' +
@@ -197,17 +221,21 @@
         panelEl = d.createElement('div');
         panelEl.id = PANEL_ID;
         panelEl.className = 'prks-folder-nav__panel';
-        panelEl.setAttribute('role', 'listbox');
+        panelEl.setAttribute('role', 'dialog');
         panelEl.setAttribute('aria-label', 'Folder hierarchy');
         panelEl.hidden = true;
         d.body.appendChild(panelEl);
         return panelEl;
     }
 
-    function setTriggerExpanded(expanded) {
-        const d = doc();
-        const trigger = d && d.getElementById('prks-folder-nav-trigger');
-        if (trigger) trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    function setTriggerExpanded(trigger, expanded) {
+        if (trigger) {
+            trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            return;
+        }
+        if (restoreTarget) {
+            restoreTarget.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        }
     }
 
     function closePanel(opts) {
@@ -215,15 +243,19 @@
         const panel = ensurePanel();
         if (!panel || panel.hidden) {
             if (!options.keepRestore) restoreTarget = null;
-            setTriggerExpanded(false);
+            openOwnerTabId = null;
+            openFolderId = null;
             return;
         }
         panel.hidden = true;
         panel.replaceChildren();
+        listboxEl = null;
         optionEls = [];
         activeIndex = 0;
         filterQuery = '';
-        setTriggerExpanded(false);
+        openOwnerTabId = null;
+        openFolderId = null;
+        setTriggerExpanded(restoreTarget, false);
         const target = restoreTarget;
         restoreTarget = null;
         const d = doc();
@@ -251,20 +283,20 @@
             el.tabIndex = on ? 0 : -1;
             if (on) el.focus({ preventScroll: true });
         });
-        const panel = panelEl;
-        if (panel) {
+        if (listboxEl) {
             const active = optionEls[i];
             if (active && typeof active.id === 'string' && active.id) {
-                panel.setAttribute('aria-activedescendant', active.id);
+                listboxEl.setAttribute('aria-activedescendant', active.id);
             }
         }
     }
 
     function navigateToFolder(folderId) {
         const hash = '#/folders/' + encodeURIComponent(String(folderId || ''));
+        const tabId = openOwnerTabId;
         closePanel({ skipFocus: true });
         const opts = {};
-        if (ownerTabId) opts.tabId = ownerTabId;
+        if (tabId) opts.tabId = tabId;
         if (typeof root.prksNavigate === 'function') {
             root.prksNavigate(hash, opts);
             return;
@@ -272,16 +304,16 @@
         if (typeof root.location !== 'undefined') root.location.hash = hash;
     }
 
-    function addSectionLabel(panel, text) {
+    function addSectionLabel(host, text) {
         const d = doc();
         const lab = d.createElement('div');
         lab.className = 'prks-folder-nav__section';
         lab.setAttribute('role', 'presentation');
         lab.textContent = text;
-        panel.appendChild(lab);
+        host.appendChild(lab);
     }
 
-    function addOption(panel, spec) {
+    function addOption(host, spec) {
         const d = doc();
         const btn = d.createElement('button');
         btn.type = 'button';
@@ -324,17 +356,17 @@
             }
             navigateToFolder(spec.id);
         });
-        panel.appendChild(btn);
+        host.appendChild(btn);
         optionEls.push(btn);
         return btn;
     }
 
-    function addEmpty(panel, text) {
+    function addEmpty(host, text) {
         const d = doc();
         const p = d.createElement('p');
         p.className = 'prks-folder-nav__empty meta-row';
         p.textContent = text;
-        panel.appendChild(p);
+        host.appendChild(p);
     }
 
     function truncateList(list, limit) {
@@ -343,9 +375,9 @@
         return list.slice(0, limit);
     }
 
-    function fillNearby(panel, ctx) {
+    function fillNearby(host, ctx) {
         if (!ctx.found) {
-            addEmpty(panel, 'This folder is not in the cached hierarchy.');
+            addEmpty(host, 'This folder is not in the cached hierarchy.');
             const d = doc();
             const btn = d.createElement('button');
             btn.type = 'button';
@@ -361,20 +393,21 @@
             btn.addEventListener('click', function (e) {
                 e.preventDefault();
                 e.stopPropagation();
+                const tabId = openOwnerTabId;
                 closePanel({ skipFocus: true });
                 if (typeof root.prksNavigate === 'function') {
-                    root.prksNavigate('#/folders', ownerTabId ? { tabId: ownerTabId } : {});
+                    root.prksNavigate('#/folders', tabId ? { tabId: tabId } : {});
                 }
             });
-            panel.appendChild(btn);
+            host.appendChild(btn);
             optionEls.push(btn);
             return;
         }
 
         if (ctx.ancestors.length) {
-            addSectionLabel(panel, 'Path');
+            addSectionLabel(host, 'Path');
             ctx.ancestors.forEach(function (row, i) {
-                addOption(panel, {
+                addOption(host, {
                     id: String(row.id),
                     title: String(row.title || 'Folder'),
                     meta: i === ctx.ancestors.length - 1 ? 'Parent' : 'Ancestor',
@@ -383,18 +416,18 @@
                 });
             });
         } else {
-            addSectionLabel(panel, 'Path');
-            addEmpty(panel, 'Top-level folder');
+            addSectionLabel(host, 'Path');
+            addEmpty(host, 'Top-level folder');
         }
 
-        addSectionLabel(panel, 'This level');
+        addSectionLabel(host, 'This level');
         const siblings = truncateList(ctx.siblings, NEARBY_SIBLING_LIMIT);
         if (!siblings.length) {
-            addEmpty(panel, 'No folders at this level.');
+            addEmpty(host, 'No folders at this level.');
         } else {
             siblings.forEach(function (row) {
                 const isCurrent = String(row.id) === String(ctx.current.id);
-                addOption(panel, {
+                addOption(host, {
                     id: String(row.id),
                     title: String(row.title || 'Folder'),
                     meta: isCurrent ? null : 'Sibling',
@@ -403,20 +436,20 @@
             });
             if (ctx.siblings.length > siblings.length) {
                 addEmpty(
-                    panel,
+                    host,
                     '+' + (ctx.siblings.length - siblings.length) + ' more — use filter to find them'
                 );
             }
         }
 
-        addSectionLabel(panel, 'Inside');
+        addSectionLabel(host, 'Inside');
         const children = truncateList(ctx.children, NEARBY_CHILD_LIMIT);
         if (!children.length) {
-            addEmpty(panel, 'No subfolders.');
+            addEmpty(host, 'No subfolders.');
         } else {
             children.forEach(function (row) {
                 const childCount = Number(row.child_count || 0);
-                addOption(panel, {
+                addOption(host, {
                     id: String(row.id),
                     title: String(row.title || 'Folder'),
                     meta: childCount > 0 ? childCount + (childCount === 1 ? ' subfolder' : ' subfolders') : 'Child',
@@ -425,23 +458,23 @@
             });
             if (ctx.children.length > children.length) {
                 addEmpty(
-                    panel,
+                    host,
                     '+' + (ctx.children.length - children.length) + ' more — use filter to find them'
                 );
             }
         }
     }
 
-    function fillFilter(panel, rows, query) {
+    function fillFilter(host, rows, query) {
         const matches = prksFolderHierarchyFilter(rows, query, FILTER_LIMIT);
-        addSectionLabel(panel, 'Matching folders');
+        addSectionLabel(host, 'Matching folders');
         if (!matches.length) {
-            addEmpty(panel, 'No folders match.');
+            addEmpty(host, 'No folders match.');
             return;
         }
         matches.forEach(function (row) {
-            const isCurrent = currentFolderId && String(row.id) === String(currentFolderId);
-            addOption(panel, {
+            const isCurrent = openFolderId && String(row.id) === String(openFolderId);
+            addOption(host, {
                 id: row.id,
                 title: row.title,
                 meta: row.path === row.title ? null : row.path,
@@ -478,21 +511,23 @@
         panel.replaceChildren();
         optionEls = [];
         activeIndex = 0;
+        listboxEl = null;
 
         const filterWrap = d.createElement('div');
         filterWrap.className = 'prks-folder-nav__filter';
         const filterInput = d.createElement('input');
         filterInput.type = 'search';
-        filterInput.id = 'prks-folder-nav-filter';
+        filterInput.id = FILTER_ID;
         filterInput.className = 'prks-input prks-folder-nav__filter-input';
         filterInput.setAttribute('aria-label', 'Filter folders');
+        filterInput.setAttribute('aria-controls', LISTBOX_ID);
         filterInput.placeholder = 'Filter folders…';
         filterInput.autocomplete = 'off';
         filterInput.value = filterQuery;
         filterInput.addEventListener('input', function () {
             filterQuery = String(filterInput.value || '');
             renderPanelBody(hierarchyRows || []);
-            const again = d.getElementById('prks-folder-nav-filter');
+            const again = d.getElementById(FILTER_ID);
             if (again) {
                 again.focus();
                 try {
@@ -522,15 +557,21 @@
         filterWrap.appendChild(filterInput);
         panel.appendChild(filterWrap);
 
+        // Filter stays outside the listbox (valid dialog + listbox structure).
         const listHost = d.createElement('div');
+        listHost.id = LISTBOX_ID;
         listHost.className = 'prks-folder-nav__list';
+        listHost.setAttribute('role', 'listbox');
+        listHost.setAttribute('aria-label', 'Folders');
+        listHost.tabIndex = -1;
         panel.appendChild(listHost);
+        listboxEl = listHost;
 
         const q = String(filterQuery || '').trim();
         if (q) {
             fillFilter(listHost, rows, q);
         } else {
-            fillNearby(listHost, prksFolderHierarchyContext(currentFolderId, rows));
+            fillNearby(listHost, prksFolderHierarchyContext(openFolderId, rows));
         }
 
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(panel);
@@ -595,13 +636,14 @@
         }
     }
 
-    function updateTriggerPath(folder, rows) {
-        const d = doc();
-        const trigger = d && d.getElementById('prks-folder-nav-trigger');
+    function updateTriggerPath(trigger, folder, rows) {
         if (!trigger) return;
         const pathEl = trigger.querySelector('.prks-folder-nav__path');
         if (!pathEl) return;
-        const id = folder && folder.id != null ? String(folder.id) : currentFolderId;
+        const id =
+            (folder && folder.id != null ? String(folder.id) : null) ||
+            trigger.getAttribute('data-prks-folder-nav-current') ||
+            openFolderId;
         const ctx = prksFolderHierarchyContext(id, rows);
         const parts = ctx.pathParts.length
             ? ctx.pathParts
@@ -615,6 +657,11 @@
         trigger.setAttribute('title', full);
     }
 
+    function triggerStillLive(trigger) {
+        const d = doc();
+        return !!(trigger && d && d.contains(trigger));
+    }
+
     async function openPanel(trigger) {
         const panel = ensurePanel();
         if (!panel || !trigger) return;
@@ -622,11 +669,17 @@
             closePanel();
             return;
         }
+        // Close any other open session before adopting this trigger's context.
+        if (!panel.hidden && restoreTarget && restoreTarget !== trigger) {
+            closePanel({ skipFocus: true });
+        }
         restoreTarget = trigger;
-        currentFolderId = trigger.getAttribute('data-prks-folder-nav-current') || currentFolderId;
-        setTriggerExpanded(true);
+        openFolderId = trigger.getAttribute('data-prks-folder-nav-current') || null;
+        openOwnerTabId = trigger.getAttribute('data-prks-folder-nav-tab-id') || null;
+        setTriggerExpanded(trigger, true);
         filterQuery = '';
         panel.replaceChildren();
+        listboxEl = null;
         const loading = doc().createElement('p');
         loading.className = 'prks-folder-nav__empty meta-row';
         loading.textContent = 'Loading folders…';
@@ -635,17 +688,19 @@
 
         const rows = await loadHierarchy();
         if (!panelEl || panelEl.hidden) return;
-        // Owner/trigger may have unmounted during the await (tab switch).
-        const d = doc();
-        const liveTrigger = d && d.getElementById('prks-folder-nav-trigger');
-        if (!liveTrigger || liveTrigger !== trigger) {
+        // Trigger may have unmounted during the await (tab switch / remount).
+        if (!triggerStillLive(trigger) || restoreTarget !== trigger) {
             closePanel({ skipFocus: true });
             return;
         }
-        updateTriggerPath({ id: currentFolderId }, rows);
+        // Re-read ownership from the live trigger in case the instance remounted.
+        openFolderId = trigger.getAttribute('data-prks-folder-nav-current') || openFolderId;
+        openOwnerTabId = trigger.getAttribute('data-prks-folder-nav-tab-id') || openOwnerTabId;
+        updateTriggerPath(trigger, { id: openFolderId }, rows);
         renderPanelBody(rows);
         positionPanel(trigger);
-        const filterInput = d.getElementById('prks-folder-nav-filter');
+        const d = doc();
+        const filterInput = d && d.getElementById(FILTER_ID);
         if (filterInput) filterInput.focus();
         else if (optionEls.length) setActiveOption(activeIndex);
     }
@@ -654,15 +709,16 @@
         if (!panelEl || panelEl.hidden) return;
         const t = ev.target;
         if (panelEl.contains(t)) return;
-        const trigger = doc().getElementById('prks-folder-nav-trigger');
-        if (trigger && (trigger === t || (trigger.contains && trigger.contains(t)))) return;
+        if (restoreTarget && (restoreTarget === t || (restoreTarget.contains && restoreTarget.contains(t)))) {
+            return;
+        }
         closePanel({ skipFocus: true });
     }
 
     function onDocKey(ev) {
         if (!panelEl || panelEl.hidden) return;
         const t = ev.target;
-        const filterFocused = t && t.id === 'prks-folder-nav-filter';
+        const filterFocused = t && t.id === FILTER_ID;
         if (ev.key === 'Escape') {
             ev.preventDefault();
             closePanel();
@@ -697,8 +753,13 @@
         }
     }
 
+    function findTrigger(container) {
+        if (!container || typeof container.querySelector !== 'function') return null;
+        return container.querySelector('.prks-folder-nav__trigger');
+    }
+
     function bindTrigger(container) {
-        const trigger = container && container.querySelector('#prks-folder-nav-trigger');
+        const trigger = findTrigger(container);
         if (!trigger || trigger.dataset.prksFolderNavBound === '1') return;
         trigger.dataset.prksFolderNavBound = '1';
         trigger.addEventListener('click', function (ev) {
@@ -708,7 +769,7 @@
         });
         trigger.addEventListener('keydown', function (ev) {
             if (ev.key === 'ArrowDown' || ev.key === 'Enter' || ev.key === ' ') {
-                if (panelEl && !panelEl.hidden) return;
+                if (panelEl && !panelEl.hidden && restoreTarget === trigger) return;
                 ev.preventDefault();
                 void openPanel(trigger);
             }
@@ -728,44 +789,45 @@
     /**
      * Mount the switcher on a Folder detail root. Loads the hierarchy once to
      * paint the full path crumb (still a single catalog request, not per-row).
+     * Does not overwrite another pane's open session ownership.
      */
     function prksMountFolderHierarchyNav(ctx, folder, container) {
         if (!container || !folder || folder.id == null) return;
         ensureGlobalListeners();
-        ownerTabId = ctx && ctx.tabId ? String(ctx.tabId) : null;
-        currentFolderId = String(folder.id);
-        hierarchyRows = null;
-        closePanel({ skipFocus: true, keepRestore: false });
+        const trigger = findTrigger(container);
+        if (trigger) {
+            trigger.setAttribute('data-prks-folder-nav-current', String(folder.id));
+            if (ctx && ctx.tabId != null) {
+                trigger.setAttribute('data-prks-folder-nav-tab-id', String(ctx.tabId));
+            }
+        }
         bindTrigger(container);
 
         void (async function () {
             const rows = await loadHierarchy();
-            const d = doc();
-            const trigger = d && d.getElementById('prks-folder-nav-trigger');
-            if (!trigger) return;
-            if (String(trigger.getAttribute('data-prks-folder-nav-current') || '') !== String(folder.id)) {
+            const live = findTrigger(container);
+            if (!live) return;
+            if (String(live.getAttribute('data-prks-folder-nav-current') || '') !== String(folder.id)) {
                 return;
             }
-            if (ctx && typeof ctx.isCurrent === 'function' && ctx.routeGeneration != null) {
-                /* TabContext may have moved on; still safe to update path text if trigger matches. */
-            }
-            updateTriggerPath(folder, rows);
+            updateTriggerPath(live, folder, rows);
         })();
     }
 
-    function prksFolderNavTriggerHtml(folder, rows) {
-        return crumbHtml(folder, rows);
+    function prksFolderNavTriggerHtml(folder, rows, options) {
+        return crumbHtml(folder, rows, options);
     }
 
     function resetForTests() {
         closePanel({ skipFocus: true });
         hierarchyRows = null;
         loadPromise = null;
-        ownerTabId = null;
-        currentFolderId = null;
+        openOwnerTabId = null;
+        openFolderId = null;
         filterQuery = '';
         if (panelEl && panelEl.parentNode) panelEl.parentNode.removeChild(panelEl);
         panelEl = null;
+        listboxEl = null;
         optionEls = [];
         boundGlobal = false;
     }

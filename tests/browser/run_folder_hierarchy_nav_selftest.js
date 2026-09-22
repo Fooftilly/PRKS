@@ -123,14 +123,23 @@ const api = loadApi();
 })();
 
 (function testTriggerHtml() {
-    const html = api.prksFolderNavTriggerHtml({
-        id: 'ethics',
-        title: 'Ethics',
-        parent: { id: 'philosophy', title: 'Philosophy' },
-    });
+    const html = api.prksFolderNavTriggerHtml(
+        {
+            id: 'ethics',
+            title: 'Ethics',
+            parent: { id: 'philosophy', title: 'Philosophy' },
+        },
+        null,
+        { tabId: 'tab-42' }
+    );
     assert('trigger has button', html.indexOf('prks-folder-nav__trigger') !== -1);
-    assert('trigger has listbox popup', html.indexOf('aria-haspopup="listbox"') !== -1);
+    assert('trigger has dialog popup', html.indexOf('aria-haspopup="dialog"') !== -1);
     assert('trigger has current id', html.indexOf('data-prks-folder-nav-current="ethics"') !== -1);
+    assert('trigger has tab id', html.indexOf('data-prks-folder-nav-tab-id="tab-42"') !== -1);
+    assert(
+        'trigger id is instance-local',
+        html.indexOf('id="prks-folder-nav-trigger-tab-42"') !== -1
+    );
     assert('trigger has sr label', html.indexOf('Open folder navigation') !== -1);
     assert('trigger shows Ethics', html.indexOf('Ethics') !== -1);
 })();

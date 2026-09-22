@@ -1169,7 +1169,9 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
               })
             : '';
     const folderNavHtml =
-        typeof prksFolderNavTriggerHtml === 'function' ? prksFolderNavTriggerHtml(folder) : '';
+        typeof prksFolderNavTriggerHtml === 'function'
+            ? prksFolderNavTriggerHtml(folder, null, { tabId: ctx && ctx.tabId })
+            : '';
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
             <div class="page-header__title-row">

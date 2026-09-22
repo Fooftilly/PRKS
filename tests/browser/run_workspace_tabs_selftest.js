@@ -556,6 +556,7 @@ async function run() {
     assert('tile allows position detail', nav.prksRouteSupportsTile('#/positions/P1') === true);
     assert('tile allows argument detail', nav.prksRouteSupportsTile('#/arguments/A1') === true);
     assert('tile allows playlist detail', nav.prksRouteSupportsTile('#/playlists/L1') === true);
+    assert('tile allows folder detail', nav.prksRouteSupportsTile('#/folders/F1') === true);
     assert('tile rejects folders', nav.prksRouteSupportsTile('#/folders') === false);
     assert('tile rejects search', nav.prksRouteSupportsTile('#/search?q=x') === false);
     assert('tile rejects people list', nav.prksRouteSupportsTile('#/people') === false);
