@@ -57,6 +57,13 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         # Failed folders:index must not leave the Nearby band on Loading forever.
         self.assertIn("Could not load nearby folders", nav)
         self.assertIn("hierarchyLoadError", nav)
+        # Unavailable offline reads must not collapse via fetchFolders() → [].
+        self.assertIn("offlineUnavailable", nav)
+        self.assertIn("Do NOT fall through to fetchFolders()", nav)
+        # Folder create/rename/delete must invalidate the cached hierarchy base.
+        self.assertIn("folderStructureOpsFingerprint", nav)
+        self.assertIn("ensureHierarchySyncBound", nav)
+        self.assertIn("CREATE_FOLDER", nav)
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
         # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not

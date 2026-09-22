@@ -27,13 +27,93 @@
     /** Session state for the currently open panel only (derived from trigger). */
     let openOwnerTabId = null;
     let openFolderId = null;
-    let hierarchyRows = null;
+    let hierarchyRows = null; // raw folders:index base (before pending overlay)
     let hierarchyLoadError = false;
     /** Path labels memoized for the current hierarchyRows snapshot (cleared on reload). */
     let hierarchyPathCache = null;
+    /** Fingerprint of unsettled folder-structure durable ops; changes invalidate the base. */
+    let hierarchyOpsFingerprint = undefined;
+    let hierarchySyncBound = false;
     let boundGlobal = false;
     let boundViewport = false;
     let filterQuery = '';
+
+    const FOLDER_STRUCTURE_OPS = {
+        CREATE_FOLDER: true,
+        SET_FOLDER_FIELD: true,
+        DELETE_FOLDER: true,
+    };
+
+    function folderStructureOpsFingerprint(ops) {
+        return (Array.isArray(ops) ? ops : [])
+            .filter(function (op) {
+                return (
+                    op &&
+                    op.entity_type === 'folder' &&
+                    FOLDER_STRUCTURE_OPS[op.operation] &&
+                    op.status !== 'acknowledged'
+                );
+            })
+            .map(function (op) {
+                return String(op.op_id || '') + ':' + String(op.status || '') + ':' + String(op.sequence || 0);
+            })
+            .sort()
+            .join('|');
+    }
+
+    function invalidateHierarchyBase() {
+        hierarchyRows = null;
+        clearHierarchyPathCache();
+    }
+
+    async function projectHierarchyRows(base) {
+        if (!Array.isArray(base)) return base;
+        if (typeof root.prksEffectiveFolderRows === 'function') {
+            try {
+                return await root.prksEffectiveFolderRows(base);
+            } catch (_e) {
+                return base;
+            }
+        }
+        return base;
+    }
+
+    function ensureHierarchySyncBound() {
+        if (hierarchySyncBound) return;
+        hierarchySyncBound = true;
+        if (!root.prksSync || typeof root.prksSync.subscribe !== 'function') return;
+        root.prksSync.subscribe(function () {
+            void (async function () {
+                let ops = [];
+                try {
+                    if (root.prksSync.store && typeof root.prksSync.store.listOperations === 'function') {
+                        ops = (await root.prksSync.store.listOperations()) || [];
+                    }
+                } catch (_e) {
+                    return;
+                }
+                const fp = folderStructureOpsFingerprint(ops);
+                if (hierarchyOpsFingerprint === undefined) {
+                    hierarchyOpsFingerprint = fp;
+                    return;
+                }
+                if (fp === hierarchyOpsFingerprint) return;
+                hierarchyOpsFingerprint = fp;
+                invalidateHierarchyBase();
+                // Open panel: reload so crumbs/list match the new structure.
+                if (panelEl && !panelEl.hidden && restoreTarget) {
+                    const trigger = restoreTarget;
+                    const rows = await loadHierarchy(true, signalForOwner(trigger));
+                    if (!panelEl || panelEl.hidden || restoreTarget !== trigger) return;
+                    renderPanelBody(rows);
+                    if (Array.isArray(rows)) {
+                        updateTriggerPath(trigger, { id: openFolderId }, rows);
+                        positionPanel(trigger);
+                    }
+                }
+            })();
+        });
+    }
 
     function doc() {
         return typeof document !== 'undefined' ? document : null;
@@ -766,17 +846,21 @@
         filterInput.value = filterQuery;
         filterInput.addEventListener('input', function () {
             filterQuery = String(filterInput.value || '');
-            renderPanelBody(hierarchyRows || []);
-            const again = d.getElementById(FILTER_ID);
-            if (again) {
-                again.focus();
-                try {
-                    const len = again.value.length;
-                    again.setSelectionRange(len, len);
-                } catch (_e) {
-                    /* ignore */
+            void (async function () {
+                const rows = await loadHierarchy(false, signalForOwner(restoreTarget));
+                if (!panelEl || panelEl.hidden) return;
+                renderPanelBody(rows);
+                const again = d.getElementById(FILTER_ID);
+                if (again) {
+                    again.focus();
+                    try {
+                        const len = again.value.length;
+                        again.setSelectionRange(len, len);
+                    } catch (_e) {
+                        /* ignore */
+                    }
                 }
-            }
+            })();
         });
         filterInput.addEventListener('keydown', function (ev) {
             if (ev.key === 'ArrowDown') {
@@ -888,15 +972,24 @@
      * AbortSignal so cold-park / beginRoute aborts the request. Concurrent
      * panes each pass their own signal; prksRequest dedupes the underlying GET
      * and only cancels the network flight when every subscriber has aborted.
+     *
+     * The module caches the raw catalogue base. Pending CREATE/SET/DELETE
+     * folder ops are projected on every read via prksEffectiveFolderRows, and
+     * the base is invalidated when that unsettled structure fingerprint moves
+     * (enqueue or ACK) so renamed/deleted folders cannot stick after sync.
      */
     async function loadHierarchy(force, signal) {
-        if (!force && Array.isArray(hierarchyRows)) return hierarchyRows;
+        ensureHierarchySyncBound();
+        if (!force && Array.isArray(hierarchyRows)) {
+            return await projectHierarchyRows(hierarchyRows);
+        }
         if (!force && hierarchyLoadError && hierarchyRows === null) {
             return null;
         }
         if (signal && signal.aborted) return null;
 
         let rows = null;
+        let offlineUnavailable = false;
         try {
             if (typeof root.prksOfflineListFetch === 'function') {
                 const result = await root.prksOfflineListFetch(
@@ -912,7 +1005,13 @@
                     }
                 );
                 if (signal && signal.aborted) return null;
-                if (typeof root.prksResolveOfflineFoldersIndex === 'function') {
+                if (result && result.source === 'unavailable') {
+                    // Do NOT fall through to fetchFolders(): that path collapses
+                    // unavailable into [] via prksEffectiveFolderCatalogue and
+                    // would clear hierarchyLoadError with a fake empty tree.
+                    offlineUnavailable = true;
+                    rows = null;
+                } else if (typeof root.prksResolveOfflineFoldersIndex === 'function') {
                     rows = root.prksResolveOfflineFoldersIndex(result);
                 } else if (result && Array.isArray(result.value)) {
                     rows = result.value;
@@ -920,9 +1019,16 @@
             }
         } catch (e) {
             if (isAbortError(e) || (signal && signal.aborted)) return null;
+            offlineUnavailable = true;
             rows = null;
         }
-        if (!Array.isArray(rows) && typeof root.fetchFolders === 'function') {
+        // Legacy/test path only when the source-aware offline reader is absent.
+        if (
+            !Array.isArray(rows) &&
+            !offlineUnavailable &&
+            typeof root.prksOfflineListFetch !== 'function' &&
+            typeof root.fetchFolders === 'function'
+        ) {
             try {
                 rows = await root.fetchFolders(signal ? { signal: signal } : {});
                 if (signal && signal.aborted) return null;
@@ -938,18 +1044,20 @@
             clearHierarchyPathCache();
             return null;
         }
-        if (typeof root.prksEffectiveFolderRows === 'function') {
-            try {
-                rows = await root.prksEffectiveFolderRows(rows);
-            } catch (_e3) {
-                /* keep raw catalogue */
-            }
-        }
         if (signal && signal.aborted) return null;
-        hierarchyRows = Array.isArray(rows) ? rows : [];
+        hierarchyRows = rows;
         hierarchyLoadError = false;
         clearHierarchyPathCache();
-        return hierarchyRows;
+        try {
+            if (root.prksSync && root.prksSync.store && typeof root.prksSync.store.listOperations === 'function') {
+                hierarchyOpsFingerprint = folderStructureOpsFingerprint(
+                    (await root.prksSync.store.listOperations()) || []
+                );
+            }
+        } catch (_fp) {
+            /* fingerprint stays; next sync subscribe will set it */
+        }
+        return await projectHierarchyRows(hierarchyRows);
     }
 
     function updateTriggerPath(trigger, folder, rows) {
@@ -1224,6 +1332,7 @@
         closePanel({ skipFocus: true });
         hierarchyRows = null;
         hierarchyLoadError = false;
+        hierarchyOpsFingerprint = undefined;
         clearHierarchyPathCache();
         openOwnerTabId = null;
         openFolderId = null;
