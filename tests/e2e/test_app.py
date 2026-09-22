@@ -6998,10 +6998,92 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertIn("unavailable", (btn.get_attribute("aria-label") or "").lower())
         btn.click()
         page.wait_for_function(
-            """() => (document.getElementById('prks-workspace-live') || {}).textContent.indexOf('wider window') !== -1"""
+            """() => (document.getElementById('prks-workspace-live') || {}).textContent.indexOf('wider workspace') !== -1"""
         )
+        status = page.locator("#prks-workspace-status")
+        self.assertTrue(status.is_visible())
+        self.assertIn("wider workspace", (status.inner_text() or "").lower())
         self.assertFalse(page.evaluate("() => window.prksWorkspaceVisualTiled()"))
         self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().mode"), "tiled")
+        # Repeated Show-split while already narrow must not spawn extra status nodes.
+        btn.click()
+        self.assertEqual(page.locator("#prks-workspace-status").count(), 1)
+        self.assertTrue(status.is_visible())
+        self.assertIn("wider workspace", (status.inner_text() or "").lower())
+
+    def test_narrow_split_visible_status_on_explicit_tile(self):
+        """Canvas under the narrow threshold: Open in split view parks the tab and shows
+        visible + SR feedback; no side-by-side tiles."""
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1280, "height": 800})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        # Keep Details open so the workspace canvas matches the reported ~706px case.
+        page.evaluate(
+            """() => {
+                const app = document.getElementById('app-container');
+                if (app) app.classList.remove('app-container--hide-right-panel');
+            }"""
+        )
+        page.wait_for_function(
+            """() => {
+                const c = document.querySelector('.prks-workspace-canvas');
+                return !!(c && c.clientWidth > 0 && c.clientWidth < 720);
+            }"""
+        )
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === false")
+        page.wait_for_function(
+            """() => {
+                const live = document.getElementById('prks-workspace-live');
+                const status = document.getElementById('prks-workspace-status');
+                return !!(live && live.textContent.indexOf('wider workspace') !== -1
+                    && status && !status.hidden
+                    && status.textContent.indexOf('wider workspace') !== -1);
+            }"""
+        )
+        snap = page.evaluate(
+            """() => {
+                const s = window.prksWorkspaceSnapshot();
+                const debug = window.prksTabContextDebugSnapshot && window.prksTabContextDebugSnapshot();
+                return {
+                    mode: s.mode,
+                    visual: window.prksWorkspaceVisualTiled(),
+                    secondary: !!(s.secondaryTree),
+                    mounted: debug ? debug.mountedCount : null,
+                    canvasWidth: (document.querySelector('.prks-workspace-canvas') || {}).clientWidth || 0,
+                };
+            }"""
+        )
+        self.assertEqual(snap["mode"], "tiled")
+        self.assertFalse(snap["visual"])
+        self.assertTrue(snap["secondary"])
+        self.assertEqual(snap["mounted"], 1)
+        self.assertLess(snap["canvasWidth"], 720)
+
+    def test_wide_split_tiles_without_narrow_warning(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1600, "height": 900})
+        work_b = server.ids["work_b"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        page.evaluate(
+            """(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })""",
+            arg=work_b,
+        )
+        page.wait_for_function("() => window.prksWorkspaceVisualTiled() === true")
+        status = page.locator("#prks-workspace-status")
+        self.assertEqual(status.count(), 1)
+        self.assertFalse(status.is_visible())
+        live = (page.locator("#prks-workspace-live").inner_text() or "").lower()
+        self.assertNotIn("wider workspace", live)
+        self.assertGreaterEqual(
+            page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"),
+            2,
+        )
 
     def test_many_tabs_overflow_reveals_main(self):
         server, page, _collector = self._start_app()

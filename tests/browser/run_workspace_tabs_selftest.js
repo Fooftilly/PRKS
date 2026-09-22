@@ -137,6 +137,7 @@ function makeHarness(opts) {
     const hist = makeHistory(opts.hash || '#/folders');
     const renders = [];
     const published = [];
+    const announcements = [];
     const life = { mount: [], park: [], destroy: [], warmPark: [], warmResume: [] };
     const mounted = Object.create(null);
     const warm = Object.create(null);
@@ -169,7 +170,9 @@ function makeHarness(opts) {
         renderRoute: function (options) {
             renders.push(options || {});
         },
-        announce: function () {},
+        announce: function (title, kind) {
+            announcements.push({ title: title == null ? '' : String(title), kind: kind || '' });
+        },
         publishMainShell: function (tabId, title) {
             published.push({ tabId: tabId, title: title || '' });
         },
@@ -211,6 +214,7 @@ function makeHarness(opts) {
         hist: hist,
         renders: renders,
         published: published,
+        announcements: announcements,
         life: life,
         mountedCount: function () {
             return Object.keys(mounted).length;
@@ -1149,8 +1153,12 @@ async function run() {
     assertEq('narrow tile mounted 1', nTile.mountedCount(), 1);
     assertEq('narrow tile no render B', nTile.renders.length, nRenders0);
     assert('narrow B not mounted', !nTile.isMounted(nSnap.secondaryTree.tabId));
+    assertEq('narrow tile announce count', nTile.announcements.length, 1);
+    assertEq('narrow tile announce kind', nTile.announcements[0].kind, 'narrow');
     const nB = nSnap.secondaryTree.tabId;
+    const nAnnounceBeforeWiden = nTile.announcements.length;
     await nTile.ws.setNarrowFallback(false);
+    assertEq('widen does not re-announce', nTile.announcements.length, nAnnounceBeforeWiden);
     assertEq('widen mode tiled', nTile.ws.snapshot().mode, 'tiled');
     assertEq('widen visual', nTile.ws.visualTiled(), true);
     assertEq('widen mounted 2', nTile.mountedCount(), 2);
@@ -1162,12 +1170,31 @@ async function run() {
     await nParked.ws.navigate('#/works/WZ', { target: 'new-tab', activate: false });
     const nZ = nParked.ws.snapshot().tabs[1].id;
     await nParked.ws.setNarrowFallback(true);
+    const nParkedBeforeTile = nParked.announcements.length;
     await nParked.ws.tileTab(nZ);
     assertEq('narrow tileTab mode', nParked.ws.snapshot().mode, 'tiled');
     assertEq('narrow tileTab secondary', nParked.ws.snapshot().secondaryTree.tabId, nZ);
     assertEq('narrow tileTab visual', nParked.ws.visualTiled(), false);
     assertEq('narrow tileTab mounted', nParked.mountedCount(), 1);
     assertEq('narrow tileTab focus main', nParked.ws.snapshot().focusedTabId, nParked.ws.snapshot().mainTabId);
+    assertEq('narrow tileTab announce once', nParked.announcements.length, nParkedBeforeTile + 1);
+    assertEq('narrow tileTab announce kind', nParked.announcements[nParkedBeforeTile].kind, 'narrow');
+
+    /* Passive-fallback layout reconciliation must stay silent: only an explicit split/Show-split
+     * attempt announces (and shows visible status in the production announce path). */
+    const nQuiet = makeHarness({ hash: '#/works/WA' });
+    await nQuiet.ws.navigate('#/works/WB', { target: 'tile' });
+    assert('wide tile announced split', nQuiet.announcements.some(function (a) { return a.kind === 'split' || a.kind === 'tile'; }));
+    const quietBefore = nQuiet.announcements.length;
+    await nQuiet.ws.setNarrowFallback(true);
+    assertEq('setNarrowFallback does not announce', nQuiet.announcements.length, quietBefore);
+    await nQuiet.ws.setNarrowFallback(true);
+    assertEq('repeat setNarrowFallback still quiet', nQuiet.announcements.length, quietBefore);
+    await nQuiet.ws.tileTab(nQuiet.ws.snapshot().secondaryTree.tabId);
+    assertEq('re-tile under narrow announces once', nQuiet.announcements.length, quietBefore + 1);
+    assertEq('re-tile under narrow kind', nQuiet.announcements[quietBefore].kind, 'narrow');
+    await nQuiet.ws.tileTab(nQuiet.ws.snapshot().secondaryTree.tabId);
+    assertEq('second explicit re-tile announces again', nQuiet.announcements.length, quietBefore + 2);
 
     const nLeave = makeHarness({ hash: '#/works/WA' });
     await nLeave.ws.navigate('#/works/WB', { target: 'tile' });
