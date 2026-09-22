@@ -393,6 +393,224 @@ async function run() {
         const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
         assert('range-only first response never seeds the whole-file pdf cache', !(await pdfCache.match(pathname)));
     }
+    {
+        // A whole-file GET that started before the post-save install must not
+        // commit its pre-edit body after that install.
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/race-inflight.pdf';
+        let releaseFetch;
+        const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
+        const handlers = sw.createHandlers({
+            caches: cacheStorage,
+            fetchImpl: function () {
+                return fetchGate.then(function () {
+                    return new Response(Buffer.from('OLD-BYTES'), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/pdf' },
+                    });
+                });
+            },
+        });
+        const pending = handlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + pathname }),
+            pathname
+        );
+        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const installed = await sw.installAuthoritativeWholeFilePdf(
+            pdfCache,
+            pathname,
+            Buffer.from('NEW-BYTES')
+        );
+        assert('authoritative install during in-flight GET commits', installed === true);
+        releaseFetch();
+        await pending;
+        await sw.settleWholeFilePdfWrites(pathname);
+        const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert(
+            'stale in-flight whole-file GET does not overwrite post-save bytes',
+            cached.equals(Buffer.from('NEW-BYTES'))
+        );
+        assertEq(
+            'post-save install advanced the per-path generation',
+            sw.wholeFilePdfGeneration(pathname) > 0,
+            true
+        );
+    }
+    {
+        // A network put already queued on the path still loses to a later
+        // authoritative install: the chain runs the install after it and
+        // advances the generation first.
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/race-queued.pdf';
+        let releasePut;
+        const putGate = new Promise(function (resolve) { releasePut = resolve; });
+        let puts = 0;
+        const realOpen = cacheStorage.open.bind(cacheStorage);
+        cacheStorage.open = async function (name) {
+            const cache = await realOpen(name);
+            if (!cache._raceWrapped) {
+                const orig = cache.put.bind(cache);
+                cache.put = async function (key, response) {
+                    puts += 1;
+                    if (puts === 1) await putGate;
+                    return orig(key, response);
+                };
+                cache._raceWrapped = true;
+            }
+            return cache;
+        };
+        const handlers = sw.createHandlers({
+            caches: cacheStorage,
+            fetchImpl: function () {
+                return Promise.resolve(new Response(Buffer.from('OLD-QUEUED'), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/pdf' },
+                }));
+            },
+        });
+        const pending = handlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + pathname }),
+            pathname
+        );
+        await pending;
+        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const installPromise = sw.installAuthoritativeWholeFilePdf(
+            pdfCache,
+            pathname,
+            Buffer.from('NEW-QUEUED')
+        );
+        releasePut();
+        assert('queued network put then install still commits', (await installPromise) === true);
+        await sw.settleWholeFilePdfWrites(pathname);
+        const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert(
+            'authoritative install replaces a whole-file put that was already queued',
+            cached.equals(Buffer.from('NEW-QUEUED'))
+        );
+    }
+    {
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/message-install.pdf';
+        const ok = await sw.handlePdfCacheMessage({
+            type: sw.PDF_CACHE_INSTALL_MESSAGE,
+            pathname: pathname,
+            buffer: Buffer.from('FROM-MESSAGE'),
+        }, cacheStorage);
+        assert('pdf cache install message stores the posted bytes', ok === true);
+        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert('pdf cache install message body matches', cached.equals(Buffer.from('FROM-MESSAGE')));
+        assert('unrelated worker message is ignored', sw.handlePdfCacheMessage({ type: 'other' }, cacheStorage) === null);
+        const rejected = await sw.handlePdfCacheMessage({
+            type: sw.PDF_CACHE_INSTALL_MESSAGE,
+            pathname: '/api/works/not-a-pdf',
+            buffer: Buffer.from('NOPE'),
+        }, cacheStorage);
+        assert('pdf cache install message rejects a non-pdf path', rejected === false);
+    }
+    {
+        // The page used to treat a 2s acknowledgement timeout as a failed
+        // cache write. A put that finishes after that must still be 'ok',
+        // and that 'ok' must not become "PDF cache update failed".
+        const pageApi = require(path.join(rootDir, 'frontend/js/pdf-cache-install.js'));
+        assert('page install helper loads as a module', typeof pageApi.prksPostPdfCacheInstall === 'function');
+        assertEq('install ack timeout is the communication-loss bound', pageApi.PDF_CACHE_INSTALL_ACK_TIMEOUT_MS, 120000);
+
+        function delayPut(cacheStorage, ms) {
+            const realOpen = cacheStorage.open.bind(cacheStorage);
+            cacheStorage.open = async function (name) {
+                const cache = await realOpen(name);
+                if (!cache._delayWrapped) {
+                    const orig = cache.put.bind(cache);
+                    cache.put = function (key, response) {
+                        return new Promise(function (resolve, reject) {
+                            setTimeout(function () {
+                                Promise.resolve(orig(key, response)).then(resolve, reject);
+                            }, ms);
+                        });
+                    };
+                    cache._delayWrapped = true;
+                }
+                return cache;
+            };
+            return cacheStorage;
+        }
+
+        function controllerDeliveringTo(cachesApi, reply) {
+            const seen = { transferIncludesBuffer: false, detached: false };
+            const controller = {
+                postMessage: function (data, transfer) {
+                    const pagePort = (transfer || []).filter(function (item) {
+                        return item && typeof item.postMessage === 'function';
+                    })[0];
+                    seen.transferIncludesBuffer = (transfer || []).indexOf(data.buffer) !== -1;
+                    const bridge = new MessageChannel();
+                    bridge.port1.onmessage = function (event) {
+                        if (!reply) return;
+                        Promise.resolve(sw.handlePdfCacheMessage(event.data, cachesApi)).then(function (ok) {
+                            pagePort.postMessage({ ok: !!ok });
+                        }, function () {
+                            pagePort.postMessage({ ok: false });
+                        });
+                    };
+                    bridge.port2.postMessage({
+                        type: data.type,
+                        pathname: data.pathname,
+                        buffer: data.buffer,
+                    }, [data.buffer]);
+                    seen.detached = data.buffer.byteLength === 0;
+                },
+            };
+            return { controller: controller, seen: seen };
+        }
+
+        const slowStorage = delayPut(makeFakeCacheStorage(), 2500);
+        const pathname = '/api/pdfs/slow-install.pdf';
+        const payload = Buffer.from('SLOW-BUT-STORED');
+        const body = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+        const slow = controllerDeliveringTo(slowStorage, true);
+        const started = Date.now();
+        const outcome = await pageApi.prksPostPdfCacheInstall(slow.controller, pathname, body);
+        const elapsed = Date.now() - started;
+        assert('slow install transfers the already-copied buffer', slow.seen.transferIncludesBuffer && slow.seen.detached);
+        assert('slow install past the old 2s timeout is acknowledged', outcome === 'ok' && elapsed >= 2000, 'outcome=' + outcome + ' elapsed=' + elapsed);
+        let materializationFailure = '';
+        try {
+            const cached = pageApi.prksPdfCacheInstallOutcome(outcome);
+            if (!cached) materializationFailure = 'PDF cache update failed';
+        } catch (err) {
+            materializationFailure = err && err.message ? err.message : 'threw';
+        }
+        assert('slow successful install is not a materialization failure', materializationFailure === '');
+        const pdfCache = await slowStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const cachedBytes = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
+        assert('slow install stores the transferred bytes', cachedBytes.equals(payload));
+
+        const silent = controllerDeliveringTo(makeFakeCacheStorage(), false);
+        const lostBody = new ArrayBuffer(8);
+        const lost = await pageApi.prksPostPdfCacheInstall(silent.controller, pathname, lostBody, { timeoutMs: 40 });
+        assert('communication loss is unacknowledged, not a put rejection', lost === 'unacknowledged');
+        let lostMessage = '';
+        try {
+            pageApi.prksPdfCacheInstallOutcome(lost);
+        } catch (err) {
+            lostMessage = err && err.message ? err.message : '';
+        }
+        assert(
+            'unacknowledged install is distinct from PDF cache update failed',
+            lostMessage === 'PDF cache install unacknowledged'
+        );
+
+        const rejectedBody = new ArrayBuffer(4);
+        const rejecting = controllerDeliveringTo(makeFakeCacheStorage(), true);
+        const rejectedOutcome = await pageApi.prksPostPdfCacheInstall(
+            rejecting.controller,
+            '/api/works/not-a-pdf',
+            rejectedBody
+        );
+        assert('worker put rejection stays rejected', rejectedOutcome === 'rejected');
+        assert('worker put rejection maps to a failed cache write', pageApi.prksPdfCacheInstallOutcome(rejectedOutcome) === false);
+    }
 
     /* ---- performInstall(): required-asset failure fails the whole install,
      * decorative optional-asset failure never blocks it (AGENTS.md "Make

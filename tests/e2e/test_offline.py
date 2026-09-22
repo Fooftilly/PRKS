@@ -55,6 +55,7 @@ from tests.e2e.test_app import (
     _FOCUSED_WORK_NOTES,
     _commit_pdf_highlight,
     _continue_held_routes,
+    _sync_success_at,
     _open_details_drawer_if_tiled,
     _open_work_from_home,
     _pdf_selection_geometry,
@@ -403,6 +404,54 @@ def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
         }""",
         arg=pdf_path,
         timeout=timeout,
+    )
+
+
+def _pdf_cache_fingerprint(page, pdf_path):
+    """Length and FNV-1a of the prks-pdf-v1 whole-file entry, or None."""
+    return page.evaluate(
+        """async (path) => {
+            if (typeof caches === 'undefined' || !path) return null;
+            const cache = await caches.open('prks-pdf-v1');
+            const match = await cache.match(path);
+            if (!match) return null;
+            const bytes = new Uint8Array(await match.arrayBuffer());
+            let hash = 2166136261;
+            for (let i = 0; i < bytes.length; i++) {
+                hash ^= bytes[i];
+                hash = Math.imul(hash, 16777619);
+            }
+            return { length: bytes.length, hash: hash >>> 0 };
+        }""",
+        pdf_path,
+    )
+
+
+def _wait_pdf_cache_replaced(page, pdf_path, previous, timeout=30000):
+    """Wait until the whole-file cache entry is no longer `previous`."""
+    wait_for_async(
+        page,
+        """async (arg) => {
+            if (typeof caches === 'undefined') return false;
+            const cache = await caches.open('prks-pdf-v1');
+            const match = await cache.match(arg.path);
+            if (!match) return false;
+            const bytes = new Uint8Array(await match.arrayBuffer());
+            let hash = 2166136261;
+            for (let i = 0; i < bytes.length; i++) {
+                hash ^= bytes[i];
+                hash = Math.imul(hash, 16777619);
+            }
+            hash = hash >>> 0;
+            return bytes.length !== arg.length || hash !== arg.hash;
+        }""",
+        arg={
+            "path": pdf_path,
+            "length": previous["length"],
+            "hash": previous["hash"],
+        },
+        timeout=timeout,
+        message="in-place PDF materialization did not replace prks-pdf-v1",
     )
 
 
@@ -1295,6 +1344,104 @@ class OfflineFoundationTests(unittest.TestCase):
                 }"""
             ),
             "offline_durable",
+        )
+
+    def test_inplace_pdf_materialization_refreshes_whole_file_cache(self):
+        """In-place annotation materialization replaces prks-pdf-v1.
+
+        Opening a PDF primes the whole-file cache. A later exclusive POST /pdf
+        keeps the same /api/pdfs/ path (no COW). Range loads never rewrite that
+        entry, so the cache must take the bytes just accepted by the server.
+        Offline reopen then serves that generation, not the pre-edit file.
+        """
+        server, page, context, collector = self._start()
+        work_a = server.ids["work_a"]
+        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+
+        _wait_sw_active(page)
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_whole_file_cached(page, pdf_path)
+        page.wait_for_function(
+            """() => {
+                const pdf = (window.prksGetFocusedTabContext &&
+                    window.prksGetFocusedTabContext().getResource('pdf'));
+                return !!(pdf && pdf.annotationBaseReady && pdf.annotationMutationDurable);
+            }""",
+            timeout=20000,
+        )
+        before = _pdf_cache_fingerprint(page, pdf_path)
+        self.assertIsNotNone(before)
+        self.assertGreater(before["length"], 0)
+
+        collector.reset_handshake()
+        since = _sync_success_at(page)
+        _commit_pdf_highlight(page)
+        collector.wait_pdf_handshake(page, since_ms=since)
+        _wait_pdf_cache_replaced(page, pdf_path, before)
+        after = _pdf_cache_fingerprint(page, pdf_path)
+        self.assertIsNotNone(after)
+        self.assertNotEqual(
+            (after["length"], after["hash"]),
+            (before["length"], before["hash"]),
+        )
+        # Exclusive file: materialization must not retarget the managed path.
+        self.assertEqual(
+            page.evaluate(
+                "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
+                % _FOCUSED_PDF
+            ),
+            pdf_path,
+        )
+        # The PDF save drops the disposable Work snapshot. Re-read that JSON
+        # while still online so an offline reload can mount the page. This
+        # must not be a PDF GET: a whole-file network response would rewrite
+        # prks-pdf-v1 on its own and hide a missing cache seed.
+        warmed = page.evaluate(
+            """async (id) => {
+                const result = await prksOfflineReadEntity(
+                    'work', id, '/api/works/' + encodeURIComponent(id));
+                return !!(result && result.value && result.value.id === id);
+            }""",
+            work_a,
+        )
+        self.assertTrue(warmed)
+        _wait_entity_cached(page, "work", work_a)
+        self.assertEqual(_pdf_cache_fingerprint(page, pdf_path), after)
+
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        self.assertIn(work_a, page.evaluate("() => location.hash"))
+        _wait_pdf_viewer(page)
+        offline_cache = _pdf_cache_fingerprint(page, pdf_path)
+        self.assertEqual(offline_cache, after)
+        served = page.evaluate(
+            """async (path) => {
+                const res = await fetch(path);
+                if (!res.ok) return { status: res.status, length: 0, hash: 0 };
+                const bytes = new Uint8Array(await res.arrayBuffer());
+                let hash = 2166136261;
+                for (let i = 0; i < bytes.length; i++) {
+                    hash ^= bytes[i];
+                    hash = Math.imul(hash, 16777619);
+                }
+                return { status: res.status, length: bytes.length, hash: hash >>> 0 };
+            }""",
+            pdf_path,
+        )
+        self.assertEqual(served["status"], 200)
+        self.assertEqual(
+            (served["length"], served["hash"]),
+            (after["length"], after["hash"]),
+        )
+        page.wait_for_function(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                const pdf = ctx && ctx.getResource ? ctx.getResource('pdf') : null;
+                const v = pdf && pdf.viewer;
+                return !!(v && v.getAnnotations && v.getAnnotations().length >= 1);
+            }""",
+            timeout=20000,
         )
 
     def test_offline_research_notes_toolbar_and_pickers_stay_live(self):

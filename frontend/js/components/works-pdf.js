@@ -2,6 +2,7 @@
  * PDF viewer and annotation integration — loaded on demand when opening a work with a PDF.
  */
 
+import { prksPdfCacheInstallOutcome, prksPostPdfCacheInstall } from '/js/pdf-cache-install.js';
 import { createPrksPdfViewer } from '/js/pdf-viewer-runtime.js';
 
 function prksManagedPdfApiPath(filePath) {
@@ -1803,16 +1804,51 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return prksViewerBoundToManagedPath(runtime, path);
     }
 
+    function pdfCacheController() {
+        try {
+            const sw = navigator.serviceWorker;
+            return sw && sw.controller && typeof sw.controller.postMessage === 'function'
+                ? sw.controller
+                : null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    // Whole-file puts go through the controlling worker so they share its
+    // per-path generation with an in-flight prime GET. No controller means
+    // that GET is not being cached by sw.js, so a direct put cannot race it.
+    // `body` is an ArrayBuffer this page already copied; it is transferred.
+    function installPdfBytesThroughController(pathname, body) {
+        const controller = pdfCacheController();
+        if (!controller || typeof MessageChannel === 'undefined') return null;
+        if (!(body instanceof ArrayBuffer)) return null;
+        return prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome);
+    }
+
+    function pdfCacheInstallBody(buffer) {
+        if (!buffer || typeof buffer.byteLength !== 'number' || buffer.byteLength < 1) return null;
+        if (buffer instanceof ArrayBuffer) return buffer.slice(0);
+        if (buffer.buffer instanceof ArrayBuffer && typeof buffer.byteOffset === 'number') {
+            return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        }
+        return null;
+    }
+
     async function cacheManagedPdfBytes(filePath, buffer) {
         const path = managedPdfApiPath(filePath);
         if (!path || !buffer || !buffer.byteLength) return false;
+        const body = pdfCacheInstallBody(buffer);
+        if (!body) return false;
+        const viaController = installPdfBytesThroughController(path, body);
+        if (viaController) return viaController;
         if (typeof caches === 'undefined' || !caches || typeof caches.open !== 'function') {
-            return false;
+            // Nothing can be serving a previous whole-file entry.
+            return true;
         }
         try {
             const cacheName = window.PRKS_OFFLINE_PDF_CACHE_NAME || 'prks-pdf-v1';
             const cache = await caches.open(cacheName);
-            const body = buffer instanceof ArrayBuffer ? buffer.slice(0) : buffer;
             const response = new Response(body, {
                 status: 200,
                 headers: {
@@ -2053,10 +2089,13 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             if (runtime.work && typeof runtime.work === 'object') {
                 runtime.work.file_path = path;
             }
-            // Seed Cache Storage under the exclusive key before offline capability
-            // may re-resolve — do not leave capability pointing at the shared key.
-            await cacheManagedPdfBytes(path, buffer);
         }
+        // Seed Cache Storage under the canonical key before offline capability
+        // may re-resolve. A failed put must stay retryable: do not remount
+        // over a cache that still holds the previous generation.
+        lockViewerPendingCowRemount(path);
+        const seeded = await cacheManagedPdfBytes(path, buffer);
+        if (!seeded) throw new Error('PDF cache update failed');
         const remounted = await remountPdfViewerAfterCowRetarget(path);
         if (!remounted) {
             scheduleCowViewerRemount(path);
@@ -2114,23 +2153,40 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             throw new Error(`PDF save failed (${pdfRes.status})`);
         }
-        // Shared-PDF COW may retarget works.file_path. Apply the returned path
-        // to runtime + offline cache key + live viewer before any capability
-        // re-resolve, so sibling overwrites of the old shared path cannot
-        // affect this mounted Work.
+        // Every successful replacement names the canonical managed path.
+        // Retarget when it differs from this tab (another tab may already
+        // have moved the Work off a shared key). Refresh prks-pdf-v1 in
+        // place only when it matches — never under a stale runtime.filePath.
+        // Range loads do not replace that whole-file entry. A failed cache
+        // write throws before pendingMaterializationRevision is cleared.
+        let cowRemountFailed = null;
         try {
             const okBody = await pdfRes.json();
-            const retarget = okBody && typeof okBody.file_path === 'string'
+            const canonical = okBody && typeof okBody.file_path === 'string'
                 ? managedPdfApiPath(okBody.file_path)
                 : '';
-            if (retarget) {
-                await applyCowPdfRetarget(retarget, buffer);
+            const current = managedPdfApiPath(runtime && runtime.filePath);
+            if (!canonical) {
+                throw new Error('PDF save missing file path');
+            }
+            const pendingCow = runtime && managedPdfApiPath(runtime._cowRemountPendingPath);
+            const needsRetarget = canonical !== current
+                || (pendingCow === canonical && !viewerBoundToManagedPath(canonical));
+            if (needsRetarget) {
+                await applyCowPdfRetarget(canonical, buffer);
+            } else {
+                const cached = await cacheManagedPdfBytes(canonical, buffer);
+                if (!cached) throw new Error('PDF cache update failed');
             }
         } catch (eCow) {
             if (eCow && String(eCow.message || '') === 'PDF_COW_REMOUNT_FAILED') {
+                cowRemountFailed = eCow;
+            } else {
                 throw eCow;
             }
-            // Missing/malformed body: keep previous path (no COW).
+        }
+        if (cowRemountFailed) {
+            throw cowRemountFailed;
         }
         if (typeof prksOfflineMarkEntityChanged === 'function') {
             prksOfflineMarkEntityChanged('work', workId);

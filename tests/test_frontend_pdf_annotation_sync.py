@@ -374,7 +374,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         # P1 failure path: apply file_path from non-OK bodies before throw.
         export_fn = works_pdf[export_at:export_end]
         err_path = export_fn.index("if (!pdfRes.ok)")
-        err_block = export_fn[err_path : export_fn.index("Shared-PDF COW may retarget", err_path)]
+        err_block = export_fn[err_path : export_fn.index("Every successful replacement", err_path)]
         self.assertIn("errBody.file_path", err_block)
         self.assertIn("applyCowPdfRetarget(errRetarget, buffer)", err_block)
         self.assertLess(
@@ -408,6 +408,77 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         mount_at = works_pdf.index("async function prksMountPdfViewer")
         mount_fn = works_pdf[mount_at : works_pdf.index("\nexport function initPdfViewerForWork", mount_at)]
         self.assertIn("runtime.viewerFilePath", mount_fn)
+
+    def test_inplace_materialization_refreshes_whole_file_pdf_cache(self):
+        """Successful POST /pdf refreshes prks-pdf-v1 only on the canonical path.
+
+        The success body always includes file_path. A path that differs from
+        this tab retargets; an equal path is the only in-place cache write.
+        A missing path must not fall through to runtime.filePath. A failed
+        cache put throws before coherence hooks and before the caller clears
+        pendingMaterializationRevision. A COW remount failure still skips
+        those hooks. Whole-file puts that can race a service-worker GET go
+        through prks-pdf-cache-install.
+        """
+        works_pdf = (ROOT / "frontend" / "js" / "components" / "works-pdf.js").read_text(
+            encoding="utf-8"
+        )
+        sw = (ROOT / "frontend" / "sw.js").read_text(encoding="utf-8")
+        export_at = works_pdf.index("async function exportAndPersistPdfCopy(")
+        export_end = works_pdf.index(
+            "\n    async function restoreEffectiveViewerAnnotations(", export_at
+        )
+        export_fn = works_pdf[export_at:export_end]
+        self.assertIn("okBody.file_path", export_fn)
+        self.assertIn("throw new Error('PDF save missing file path')", export_fn)
+        self.assertNotIn("runtime.filePath, buffer", export_fn)
+        self.assertNotIn("if (!sawRetarget)", export_fn)
+        refresh = "const cached = await cacheManagedPdfBytes(canonical, buffer);"
+        self.assertIn(refresh, export_fn)
+        refresh_at = export_fn.index(refresh)
+        fail_at = export_fn.index("if (!cached) throw new Error('PDF cache update failed')")
+        self.assertLess(export_fn.index("throw new Error(`PDF save failed"), refresh_at)
+        retarget_at = export_fn.index("if (needsRetarget)")
+        self.assertLess(retarget_at, refresh_at)
+        self.assertLess(refresh_at, fail_at)
+        self.assertLess(fail_at, export_fn.index("prksOfflineMarkEntityChanged"))
+        retarget_arm = export_fn[retarget_at:export_fn.index("} else {", retarget_at)]
+        self.assertIn("applyCowPdfRetarget(canonical, buffer)", retarget_arm)
+        self.assertNotIn("cacheManagedPdfBytes", retarget_arm)
+        rethrow = export_fn.index("throw cowRemountFailed")
+        self.assertLess(fail_at, rethrow)
+        self.assertLess(rethrow, export_fn.index("prksOfflineMarkEntityChanged"))
+        # Cache failure must escape export so the durable success path never
+        # clears the pending revision. Only STALE does that, and it does not retry.
+        pass_at = works_pdf.index("await exportAndPersistPdfCopy(saveToken, claimed)")
+        clear_at = works_pdf.index(
+            "runtime.pendingMaterializationRevision = null", pass_at
+        )
+        self.assertLess(pass_at, clear_at)
+        install_src = (ROOT / "frontend" / "js" / "pdf-cache-install.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("type: 'prks-pdf-cache-install'", install_src)
+        install_at = install_src.index("export function prksPostPdfCacheInstall(")
+        install_fn = install_src[
+            install_at:install_src.index("export function prksPdfCacheInstallOutcome(", install_at)
+        ]
+        self.assertIn("PDF_CACHE_INSTALL_ACK_TIMEOUT_MS", install_fn)
+        self.assertIn("[channel.port2, body]", install_fn)
+        self.assertIn("finish('unacknowledged')", install_fn)
+        self.assertNotIn("finish(false)", install_fn)
+        self.assertNotIn("}, 2000)", install_fn)
+        self.assertIn("export const PDF_CACHE_INSTALL_ACK_TIMEOUT_MS = 120000;", install_src)
+        self.assertIn("throw new Error('PDF cache install unacknowledged')", install_src)
+        self.assertIn(
+            "prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome)",
+            works_pdf,
+        )
+        self.assertIn("from '/js/pdf-cache-install.js'", works_pdf)
+        self.assertIn("PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install'", sw)
+        self.assertIn("advanceWholeFilePdfGeneration(path)", sw)
+        self.assertIn("wholeFilePdfGeneration(path) !== snapshot", sw)
+        self.assertIn("generationAtStart = wholeFilePdfGeneration(pathname)", sw)
 
 
 if __name__ == "__main__":

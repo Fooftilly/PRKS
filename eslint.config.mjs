@@ -66,6 +66,7 @@ export default [
   {
     files: [
       "frontend/js/components/works-pdf.js",
+      "frontend/js/pdf-cache-install.js",
       "frontend/js/pdf-viewer-runtime.js",
     ],
     languageOptions: {
