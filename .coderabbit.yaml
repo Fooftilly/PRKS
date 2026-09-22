@@ -27,8 +27,11 @@ reviews:
     drafts: false
 
   path_filters:
-    - "!frontend/vendor/**"
-    - "!docs/screenshots/**"
+    - "!frontend/vendor/**/*.js"
+    - "!frontend/vendor/**/*.css"
+    - "!frontend/vendor/**/*.woff2"
+    - "!frontend/vendor/**/*.wasm"
+    - "!docs/screenshots/**/*.png"
     - "!data/**"
     - "!data_testing/**"
     - "!artifacts/**"
@@ -47,21 +50,27 @@ reviews:
       instructions: |
         Treat service-worker changes as high risk. Check cache versioning,
         activation/update behavior, offline correctness, stale-resource
-        behavior, and recovery after upgrades. Cross-check
-        docs/local-first-sync.md and relevant offline tests.
+        behavior, and recovery after upgrades. Use
+        docs/local-first-rollout-status.md as the authority for what is
+        currently durable/offline-capable, and docs/local-first-sync.md for
+        sync design and invariants. Do not treat planned design as implemented
+        behavior. Cross-check relevant offline tests.
 
     - path: "backend/**/*sync*.py"
       instructions: |
         Review against the documented local-first and sync invariants.
         Check idempotency, revision/conflict semantics, atomicity, tombstones,
-        partial failure behavior, and online/offline convergence.
+        partial failure behavior, and online/offline convergence. Use
+        docs/local-first-rollout-status.md to distinguish current coverage from
+        planned behavior in docs/local-first-sync.md.
 
-    - path: "backend/db_*.py"
+    - path: "backend/db_*"
       instructions: |
-        Treat database and migration changes as data-integrity sensitive.
-        Verify migrations are transactional, version-ordered, safe for
-        supported older databases, reject unsupported newer schemas where
-        applicable, and are covered by migration/database tests.
+        Treat database, schema, and migration changes as data-integrity
+        sensitive. Verify the fresh-database schema and migrations remain in
+        parity, migrations are transactional and version-ordered, supported
+        older databases upgrade safely, unsupported newer schemas are rejected
+        where applicable, and changes are covered by migration/database tests.
 
     - path: "backend/**"
       instructions: |
@@ -81,7 +90,8 @@ reviews:
       instructions: |
         Verify documentation matches implemented behavior. Keep README.md as
         the authority for exact startup, configuration, and safety contracts,
-        and docs/wiki for detailed current user-facing behavior.
+        docs/local-first-rollout-status.md as the current local-first coverage
+        authority, and docs/wiki for detailed current user-facing behavior.
 
     - path: ".github/workflows/**"
       instructions: |
@@ -98,8 +108,9 @@ reviews:
         mode: warning
         instructions: |
           Pass if the changed behavior does not conflict with an applicable
-          explicit requirement in AGENTS.md. Fail only when a concrete changed
-          behavior violates a specific repository rule, and identify that rule.
+          explicit requirement in AGENTS.md, README.md, or SECURITY.md. Fail
+          only when a concrete changed behavior violates a specific repository
+          rule, and identify that rule.
 
       - name: "UI design contract"
         mode: warning
@@ -114,8 +125,11 @@ reviews:
         instructions: |
           For PRs that change offline, service-worker, persistence, or sync
           behavior, pass only if relevant online/offline transitions, recovery
-          semantics, and regression coverage remain coherent with
-          docs/local-first-sync.md and AGENTS.md. For unrelated PRs, pass.
+          semantics, and regression coverage remain coherent with the current
+          coverage in docs/local-first-rollout-status.md and the design
+          invariants in docs/local-first-sync.md and AGENTS.md. Do not require
+          planned design features that rollout status does not mark as current.
+          For unrelated PRs, pass.
 
   tools:
     github-checks:
@@ -133,9 +147,11 @@ knowledge_base:
     filePatterns:
       - "AGENTS.md"
       - "CLAUDE.md"
+      - "README.md"
       - "DESIGN.md"
       - "SECURITY.md"
       - "docs/local-first-sync.md"
+      - "docs/local-first-rollout-status.md"
 
   learnings:
     scope: local
