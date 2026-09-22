@@ -23,6 +23,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
+from backend import fs_durability
 from backend.backup_restore import (
     ARCHIVE_DB_PATH,
     DISK_MARGIN_BYTES,
@@ -2117,6 +2118,59 @@ class TestRestoreCrashWindows(BackupRestoreTestCase):
 
     def test_crash_after_new_renamed_before_new_installed_pdfs(self):
         self._crash_and_recover_old_library("new_renamed:pdfs")
+
+
+class TestRestoreDurabilityBoundary(BackupRestoreTestCase):
+    """EF-017 / #110: a persistence boundary restore cannot establish stops it.
+
+    Ordering and the refusal paths are pinned in `test_restore_durability.py`.
+    This is the whole transaction: a directory fsync that answers False must
+    leave the library the user already had, still recoverable.
+    """
+
+    def _refusing_directory_sync(self, directory):
+        """Answer False for one directory and sync every other one for real."""
+        refused = os.path.normpath(directory)
+        real = fs_durability.fsync_directory
+
+        def refuse(path):
+            if os.path.normpath(path) == refused:
+                return False
+            return real(path)
+
+        return (
+            patch.object(backup_module, "fsync_directory", refuse),
+            patch.object(fs_durability, "fsync_directory", refuse),
+        )
+
+    def test_a_refused_directory_sync_keeps_the_previous_library_recoverable(self):
+        lib = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
+        other = self._bind_library(title="Incoming", pdf_name="new.pdf", pdf_text="incoming")
+        backup = create_backup(other["cfg"])
+        bind_storage(lib["cfg"])
+        staged = self._stage_copy(lib["cfg"], backup.archive_path)
+        journal = backup_module.journal_path(lib["cfg"])
+
+        module_patch, helper_patch = self._refusing_directory_sync(lib["cfg"].root)
+        with module_patch, helper_patch:
+            with self.assertRaises(RestoreError) as caught:
+                apply_restore(lib["cfg"], staged.token, "RESTORE", rebind=bind_storage)
+
+        self.assertEqual(caught.exception.reason, "rename_not_durable")
+        # Rollback ran, but its own moves were not durable either, so the
+        # journal and the rollback tree stay for the next startup rather than
+        # being removed while a crash could still undo them.
+        self.assertTrue(os.path.isfile(journal))
+
+        out = recover_incomplete_restore(lib["cfg"])
+
+        self.assertEqual(out["outcome"], "restored_previous")
+        self.assertFalse(os.path.exists(journal))
+        bind_storage(lib["cfg"])
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Keep Me"])
+        self.assertTrue(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "keep.pdf")))
+        self.assertFalse(os.path.isfile(os.path.join(lib["cfg"].pdfs_dir, "new.pdf")))
 
 
 class TestDiskAccounting(BackupRestoreTestCase):

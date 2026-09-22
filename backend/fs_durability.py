@@ -12,6 +12,10 @@ Skipping (1) can leave the canonical name pointing at contents that were never
 flushed -- a replacement that is atomic but not durable. Skipping (2) can lose
 the rename entirely and resurrect the previous file.
 
+A rename whose source and destination sit in different parent directories
+changes an entry in each, so (2) means both of them; ``fsync_directories``
+takes the whole set a move touched and reports one answer for it.
+
 The two halves fail differently on purpose. File-content durability is a hard
 requirement: ``fsync_file_path`` raises, and a caller that has not yet replaced
 anything must abandon the replacement rather than present it as durable.
@@ -128,3 +132,42 @@ def fsync_directory(path: str) -> bool:
         except OSError:
             pass
     return True
+
+
+def fsync_open_file(fd: int) -> None:
+    """Flush an open file's contents to stable storage.
+
+    The ``fsync_file_path`` guarantee for a file this process is still holding:
+    same barrier, without reopening a descriptor that is already in hand. Use it
+    for a temporary this process wrote and is about to rename into place.
+
+    Raises ``OSError`` when the contents could not be made durable. Callers must
+    not treat the file as replaceable-from after that.
+    """
+    _sync_descriptor(fd)
+
+
+def fsync_directories(*paths: str) -> bool:
+    """Best-effort fsync of every directory a completed set of renames changed.
+
+    ``os.replace(src, dest)`` changes a directory entry at both ends: the name
+    leaves the source's parent and appears in the destination's. One fsync
+    covers both ends when the two parents are the same directory, but when they
+    differ, syncing only one can come back from a crash with the rename
+    half-visible -- the file under both names, or under neither. Repeated paths
+    collapse, so a batch of renames sharing two parents costs two syncs.
+
+    Returns True when every directory is as durable as this platform can make
+    it, False when a supported fsync was attempted and failed. Every directory
+    is attempted either way: a caller that has to report the weaker guarantee
+    still wants the syncs that can succeed to have happened.
+
+    Callers pass directories they already trust, exactly as ``fsync_directory``
+    requires, and it never raises for the same reason -- the renames it covers
+    have already happened.
+    """
+    durable = True
+    for path in dict.fromkeys(os.path.normpath(path) for path in paths):
+        if not fsync_directory(path):
+            durable = False
+    return durable

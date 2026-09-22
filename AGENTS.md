@@ -119,6 +119,15 @@ Restore validation must complete before live canonical state is modified.
 Crash before committed restores the previous library. Only committed keeps
 the restored library.
 
+Restore journal writes and component renames follow the
+`backend/fs_durability.py` convention, because recovery has to hold after a
+machine crash and not only a process crash. A journal phase counts as persisted
+only once its contents are synced, the journal is replaced and the journal
+directory is synced; a component rename counts as completed only once every
+directory it changed -- both parents when the move crosses directories -- is
+synced. Never record a phase, and never clean up rollback material, whose
+durability boundary was refused.
+
 Do not use `ZipFile.extractall()` on unvalidated backup input.
 
 Do not log archive paths, PDF names, manifest contents, or raw restore errors.
