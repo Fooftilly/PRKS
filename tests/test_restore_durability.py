@@ -21,6 +21,7 @@ directory sync answer False the way an unsupported or failing one would.
 import errno
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -604,6 +605,21 @@ class TestSyncContainment(_DurabilityCase):
             self.assertFalse(backup_module._fsync_dirs_under(self.root, [outside]))
 
         self.assertEqual(spy.synced_dirs, [], "nothing outside the root is opened")
+
+    def test_a_move_reaching_outside_the_root_is_refused_before_it_happens(self):
+        """The refusal comes first, so it is the "nothing moved" reason."""
+        outside = tempfile.mkdtemp(prefix="prks-restore-durability-outside-")
+        self.addCleanup(lambda: shutil.rmtree(outside, ignore_errors=True))
+        src = self.write(os.path.join(self.root, "pdfs", "old.pdf"), b"OLD")
+        escaping = os.path.join(outside, "old.pdf")
+
+        with self.spied() as spy:
+            with self.assertRaises(RestoreError) as caught:
+                backup_module._replace_durably(self.root, [(src, escaping)])
+
+        self.assertEqual(caught.exception.reason, "restore_dir_not_durable")
+        self.assertNotIn("replace", spy.steps, "nothing may be renamed")
+        self.assertEqual(self.read(src), b"OLD")
 
     def test_a_sibling_whose_name_merely_extends_the_root_is_refused(self):
         sibling = self.root + "-elsewhere"

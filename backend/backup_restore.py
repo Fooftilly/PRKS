@@ -2358,19 +2358,50 @@ def _replace_durably(root: str, moves: list[tuple[str, str]]) -> bool:
     both collected, so a move out of live storage into the rollback tree -- or
     out of the staging tree into live storage -- is durable at both ends.
 
+    Both ends of every move are rebuilt against ``root`` and proven to be
+    inside it before anything is renamed, and again immediately before the
+    rename itself, so what ``os.replace`` receives is the value that was
+    proven rather than a helper return -- the pattern, and the reason for it,
+    that ``services/work_pdf_replace.atomic_replace_managed_pdf_bytes()``
+    documents for the same sink. The staged side of an install is built from a
+    request's staging token, so this is the sink that needs it most.
+
+    ``abspath``, not ``realpath``: resolving the last component would rename
+    what a symlink points at instead of the symlink, and the module's symlink
+    containment is enforced by the verified-subroot helpers, not here.
+
     Returns whether the moves are as durable as the platform allows: False only
     when a supported directory fsync was attempted and failed, never merely
-    because the platform has no such operation. The renames themselves have
-    already happened by then, so callers report the weaker guarantee instead of
-    pretending to unwind them.
+    because the platform has no such operation. A rename that has already
+    happened cannot be unwound, so callers report the weaker guarantee instead
+    of pretending to. A move refused for falling outside ``root`` raises
+    instead, because that refusal comes before anything has been renamed --
+    the distinction the reasons exist to keep.
     """
     if not moves:
         return True
-    dirs: list[str] = []
+    base_path = os.path.abspath(root)
+    prefix = base_path + os.sep
+    checked: list[tuple[str, str]] = []
     for src, dest in moves:
-        os.replace(src, dest)
-        dirs.append(os.path.dirname(src) or ".")
-        dirs.append(os.path.dirname(dest) or ".")
+        # CodeQL py/path-injection documented sanitizer: join+normpath against
+        # the trusted root, then startswith the root before the sink.
+        src_path = os.path.normpath(os.path.join(base_path, os.path.relpath(src, base_path)))
+        dest_path = os.path.normpath(os.path.join(base_path, os.path.relpath(dest, base_path)))
+        if not src_path.startswith(prefix):
+            raise _durability_failed("restore_dir_not_durable", "move_containment")
+        if not dest_path.startswith(prefix):
+            raise _durability_failed("restore_dir_not_durable", "move_containment")
+        checked.append((src_path, dest_path))
+    dirs: list[str] = []
+    for src_path, dest_path in checked:
+        if not src_path.startswith(prefix):
+            return False
+        if not dest_path.startswith(prefix):
+            return False
+        os.replace(src_path, dest_path)
+        dirs.append(os.path.dirname(src_path) or ".")
+        dirs.append(os.path.dirname(dest_path) or ".")
     return _fsync_dirs_under(root, dirs)
 
 
