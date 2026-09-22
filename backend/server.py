@@ -423,6 +423,28 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     return config
 
 
+def _managed_adoption_lock(file_path_value) -> "threading.Lock | None":
+    """Lock for a managed basename a request would ASSIGN to a Work, or None.
+
+    Post-delete cleanup decides a basename is unreferenced and then unlinks it,
+    so every path that can point a Work at an EXISTING managed PDF has to hold
+    the same per-basename lock across the commit that claims ownership --
+    otherwise the row lands in the gap and the Work references bytes cleanup
+    has already removed.
+
+    Today that is `POST /api/works` with a caller-supplied `file_path` and
+    `PATCH /api/works/:id` (`update_work_metadata` allows `file_path`). Uploads
+    and the processing import mint their own unique names, and the COW replace
+    path takes this lock itself; `file_path` is deliberately not a synchronized
+    field, so the durable sync path cannot assign one. A new assignment path
+    belongs here too.
+    """
+    name = managed_pdf_filename(str(file_path_value or ""))
+    if not name:
+        return None
+    return work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
+
+
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
     return safe_pdf_path_under_dir(pdfs_dir, url_last_segment)
 
@@ -1086,8 +1108,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 safe_error_type(e),
                             )
                     if body:
+                        # PATCH can assign `file_path` (it is in
+                        # `update_work_metadata`'s allowed set), so it is an
+                        # ownership-claiming path and takes the same lock the
+                        # create and cleanup paths do.
+                        patch_lock = (
+                            _managed_adoption_lock(body.get("file_path"))
+                            if patched_file_path else None
+                        )
                         try:
-                            db.update_work_metadata(w_id, body)
+                            with (patch_lock if patch_lock is not None else nullcontext()):
+                                db.update_work_metadata(w_id, body)
                         except ValueError as e:
                             # A refused length is the caller's mistake, not a
                             # server fault: say so rather than 500.
@@ -2788,20 +2819,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # mistake, not a server fault: `add_work` refuses it at the
                 # creation boundary, and that refusal is a 400.
                 # A caller may point a new Work at an EXISTING managed PDF
-                # instead of uploading one. Post-delete cleanup decides a
-                # basename is unreferenced and then unlinks it, so without a
-                # shared guard that decision could be made moments before this
-                # row commits ownership and the new Work would reference bytes
-                # cleanup has already removed. Hold the same per-basename lock
-                # cleanup takes, across the commit. An upload needs no guard:
-                # `store_new_managed_pdf_bytes` mints its own unique name.
-                adopt_lock = None
-                if stored_name is None:
-                    adopted_name = managed_pdf_filename(str(file_path or ""))
-                    if adopted_name:
-                        adopt_lock = work_pdf_replace.managed_pdf_path_lock(
-                            pdfs_dir, adopted_name
-                        )
+                # instead of uploading one, so the commit that claims ownership
+                # is held under the same per-basename lock cleanup takes. An
+                # upload needs no guard: it minted its own unique name.
+                adopt_lock = None if stored_name else _managed_adoption_lock(file_path)
                 try:
                     with (adopt_lock if adopt_lock is not None else nullcontext()):
                         w_id = db.add_work(
