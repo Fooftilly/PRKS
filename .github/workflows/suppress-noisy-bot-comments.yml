@@ -1,0 +1,66 @@
+name: Suppress noisy review bot comments
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  remove-noise-comment:
+    # No `on:` filter can match comment text, so every comment in the repository
+    # starts a run that this condition then skips. Skipped jobs are not billed.
+    #
+    # Identity is the bot login alone. `performed_via_github_app` describes the
+    # app a comment was posted THROUGH, not who wrote it: comments authored by a
+    # human carry the connector's slug when they are relayed through it, and this
+    # repository has such comments. Matching on the slug would put those in scope.
+    if: >-
+      (
+        (
+          contains(github.event.comment.body, 'You have reached your Codex usage limits') &&
+          contains(github.event.comment.body, 'code reviews') &&
+          github.event.comment.user.login == 'chatgpt-codex-connector[bot]'
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          contains(github.event.comment.body, 'Great, no issues found!') &&
+          contains(
+            github.event.comment.body,
+            'Qodo reviewed your code and found no material issues that require review'
+          ) &&
+          github.event.comment.user.login == 'qodo-code-review[bot]'
+        )
+      ) &&
+      (
+        github.event_name == 'pull_request_review_comment' ||
+        github.event.issue.pull_request
+      )
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+
+    steps:
+      # The comment body reaches this job only through the `contains()` checks
+      # above, never the shell: the step interpolates no event text, and the one
+      # comment it can delete is the comment that triggered the run.
+      - name: Delete matched bot-noise comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
+            endpoint="repos/${REPOSITORY}/issues/comments/${COMMENT_ID}"
+          else
+            endpoint="repos/${REPOSITORY}/pulls/comments/${COMMENT_ID}"
+          fi
+
+          gh api --method DELETE "${endpoint}"
