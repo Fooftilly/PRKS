@@ -684,6 +684,44 @@
             return cacheEntityIfCurrent(kind, 'snapshot', next, entityToken);
         }
 
+        /**
+         * Patch `person-metadata-state.fields.aliases.revision` after a role
+         * credit promoted an alias (or Work construction did). Unknown /
+         * missing cache is a no-op -- there is no stale base to correct.
+         * Corrupt shape is invalidated rather than guessed at.
+         */
+        async function patchPersonAliasesRevision(personId, aliasesRevision) {
+            if (aliasesRevision == null) return true;
+            if (!Number.isSafeInteger(aliasesRevision) || aliasesRevision < 0) {
+                return false;
+            }
+            if (!store || !await store.isAvailable()) return false;
+            const token = currentEntityGeneration('person-metadata-state', personId) + 1;
+            entityCoherence.set(entityKey('person-metadata-state', personId), token);
+            const snapshot = await store.getEntity('person-metadata-state', personId)
+                .catch(function () { return undefined; });
+            if (snapshot === undefined) return false;
+            if (snapshot === null) return true;
+            const state = snapshot.value;
+            if (typeof root.prksIsPersonMetadataStateShape === 'function' &&
+                !root.prksIsPersonMetadataStateShape(state, personId)) {
+                await invalidateEntity('person-metadata-state', personId);
+                return true;
+            }
+            const entry = state && state.fields && state.fields.aliases;
+            if (!entry || !Number.isSafeInteger(entry.revision)) {
+                await invalidateEntity('person-metadata-state', personId);
+                return true;
+            }
+            if (entry.revision >= aliasesRevision) return true;
+            const next = Object.assign({}, state, {
+                fields: Object.assign({}, state.fields, {
+                    aliases: { revision: aliasesRevision },
+                }),
+            });
+            return cacheEntityIfCurrent('person-metadata-state', personId, next, token);
+        }
+
         async function reconcileWorkRole(result) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
@@ -781,6 +819,15 @@
              * would have to be invented), so the Person is marked changed and
              * re-read rather than guessed at. */
             markEntityChanged('person', result.person_id);
+            /* Credit promotion advances [person_id, "aliases"] on the server.
+             * That revision lives in person-metadata-state, not the Person
+             * entity -- patch it from the acknowledgement when present, else
+             * a later offline aliases edit would falsely conflict against the
+             * stale cached base. Missing cache is fine (nothing to patch). */
+            if (!await patchPersonAliasesRevision(
+                    result.person_id, result.aliases_revision)) {
+                return false;
+            }
             if (!await reconcileGraphAuthorEdge(result)) return false;
             /* The remaining dependencies, through the ONE helper that owns what
              * a role change stales -- Person Groups, and for an Author the
@@ -2401,6 +2448,14 @@
                 }
                 if (typeof prksOfflineMarkPersonGroupsChanged === 'function') {
                     prksOfflineMarkPersonGroupsChanged();
+                }
+            }
+            const revisions = result.aliases_revisions;
+            if (revisions && typeof revisions === 'object' && !Array.isArray(revisions)) {
+                for (const personId of Object.keys(revisions)) {
+                    if (!await patchPersonAliasesRevision(personId, revisions[personId])) {
+                        return false;
+                    }
                 }
             }
             return true;

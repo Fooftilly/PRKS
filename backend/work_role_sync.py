@@ -400,6 +400,9 @@ def apply(db, conn, op, received_at):
         result.update(code="REVISION_CONFLICT", current_revision=revision,
                       current=_reported(existing), requested=_reported(desired))
         return 409, result
+    from backend import person_metadata_sync
+
+    aliases_before = person_metadata_sync.get_revision(conn, person_id, "aliases")
     changed = set_role_state(conn, work_id, person_id, role_type,
                              desired is not None, credit_name=desired or "")
     result.update(code="ACKNOWLEDGED", changed=changed,
@@ -411,6 +414,13 @@ def apply(db, conn, op, received_at):
     # Two short strings, and the client already displays them everywhere.
     result["first_name"] = person[0] or ""
     result["last_name"] = person[1] or ""
+    # Credit promotion may have advanced [person_id, "aliases"]. The client's
+    # person-metadata-state projection holds that revision separately from the
+    # Person entity; without it here, reconcileWorkRole would leave a stale
+    # base and the next offline aliases edit would falsely conflict.
+    aliases_after = person_metadata_sync.get_revision(conn, person_id, "aliases")
+    if aliases_after != aliases_before:
+        result["aliases_revision"] = aliases_after
     return 200, result
 
 

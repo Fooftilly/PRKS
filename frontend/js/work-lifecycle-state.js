@@ -211,10 +211,22 @@
         isResult: function (data, op) {
             if (!data || data.work_id !== op.entity_id) return false;
             if (data.code === 'ACKNOWLEDGED') {
-                return typeof data.changed === 'boolean' &&
+                if (!(typeof data.changed === 'boolean' &&
                     typeof data.folder_id === 'string' &&
                     typeof data.playlist_id === 'string' &&
-                    Number.isSafeInteger(data.role_count) && data.role_count >= 0;
+                    Number.isSafeInteger(data.role_count) && data.role_count >= 0)) {
+                    return false;
+                }
+                const revisions = data.aliases_revisions;
+                if (revisions === undefined) return true;
+                if (!revisions || typeof revisions !== 'object' || Array.isArray(revisions)) {
+                    return false;
+                }
+                return Object.keys(revisions).every(function (personId) {
+                    return typeof personId === 'string' && personId &&
+                        Number.isSafeInteger(revisions[personId]) &&
+                        revisions[personId] >= 0;
+                });
             }
             return data.code === 'FOLDER_NOT_FOUND' || data.code === 'PLAYLIST_NOT_FOUND' ||
                 data.code === 'PERSON_NOT_FOUND';

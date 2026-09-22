@@ -869,6 +869,13 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         reconcile = reconcile[: reconcile.index("\n        async function ")]
         self.assertIn("prksMarkWorkRoleDependenciesChanged(result.role_type)", reconcile)
         self.assertNotIn("prksMarkWorkRoleChanged(", reconcile)
+        self.assertIn("patchPersonAliasesRevision", reconcile,
+                      "credit promotion must refresh person-metadata-state")
+
+        create = runtime[runtime.index("async function reconcileCreatedWork(") :]
+        create = create[: create.index("\n        /* ----")]
+        self.assertIn("aliases_revisions", create)
+        self.assertIn("patchPersonAliasesRevision", create)
 
         # ... and no role surface writes through the old direct-API path.
         ui = _read(os.path.join(_FRONTEND, "js", "ui.js"))

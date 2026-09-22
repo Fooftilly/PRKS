@@ -1245,7 +1245,10 @@ through `person_metadata_sync.set_field_on_conn` so the Person
 `[person_id, "aliases"]` revision advances with the value — never a direct
 `UPDATE persons SET aliases=…` that would leave offline alias edits believing
 themselves current. Role revision and Person-aliases revision remain separate
-conflict scopes.
+conflict scopes. Role and Work-create acknowledgements carry the resulting
+aliases revision(s) when promotion advanced them, and `reconcileWorkRole` /
+`reconcileCreatedWork` patch cached `person-metadata-state.fields.aliases`
+accordingly so the next offline aliases edit is measured against a current base.
 
 `ADD_WORK_PERSON_ROLE` therefore carries `credit_name` — linking with a custom
 credit must not need two operations, which would briefly display the wrong name

@@ -324,10 +324,25 @@ class WorkRoleSyncTests(unittest.TestCase):
     def test_promotable_credit_advances_person_aliases_revision_once(self):
         """#119: promoting a credit into aliases is a Person-field mutation."""
         self.assertEqual(self.aliases_revision(), 0)
-        self.send(True, credit="Mark Twain")
+        code, result = self.send(True, credit="Mark Twain")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
         self.assertEqual(self.db.get_person(self.jane)["aliases"], "Mark Twain")
         self.assertEqual(self.aliases_revision(), 1)
+        self.assertEqual(result["aliases_revision"], 1,
+                         "ACK must carry the Person aliases revision so the "
+                         "client can patch person-metadata-state")
         self.assertEqual(self.revision(), 1, "role revision is a separate scope")
+
+    def test_ack_omits_aliases_revision_when_promotion_is_a_no_op(self):
+        code, result = self.send(True, credit="")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertNotIn("aliases_revision", result)
+        code, result = self.send(True, base=1, credit="Smith, John",
+                                 operation="SET_WORK_PERSON_ROLE_CREDIT")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.state(), "Smith, John")
+        self.assertNotIn("aliases_revision", result,
+                         "comma-bearing credits stay on the role")
 
     def test_already_known_alias_does_not_bump_aliases_revision(self):
         self.db.update_person_profile(self.jane, {"aliases": "Mark Twain"})
