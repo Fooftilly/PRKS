@@ -1170,6 +1170,12 @@ Promise.resolve()
                 }
                 assert('split initial status present', !!guidanceText());
                 assertEq('split initial status role', statusEl.getAttribute('role'), 'status');
+                assertEq('split status stays exposed (no hidden)', !!statusEl.hidden, false);
+                assertEq(
+                    'split status has no hidden attribute',
+                    statusEl.getAttribute('hidden'),
+                    null
+                );
                 assert(
                     'split initial empty mentions detail pages',
                     /detail page that supports split/i.test(guidanceText())

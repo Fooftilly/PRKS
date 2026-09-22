@@ -116,6 +116,11 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn("q.length < 3", src)
         self.assertIn("'aria-live': 'polite'", src)
         self.assertIn("prks-command-palette-status", src)
+        # Live region must stay a11y-exposed; empty footprint is CSS :empty, not hidden.
+        self.assertNotIn("setHidden(parts.status", src)
+        css = _read(_CSS)
+        self.assertIn(".prks-command-palette__status:empty", css)
+        self.assertNotIn(".prks-command-palette__status[hidden]", css)
         # Loading must win over split empty guidance while catalog fetch is in flight.
         loading_idx = src.index("setStatus('Searching library…')")
         split_empty_idx = src.index(

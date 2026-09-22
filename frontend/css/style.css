@@ -3952,8 +3952,14 @@ a.tag {
     color: var(--text-secondary);
 }
 
-.prks-command-palette__status[hidden] {
-    display: none !important;
+/* Empty live region stays in the a11y tree (never [hidden]/display:none) but takes no space. */
+.prks-command-palette__status:empty {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    height: 0;
+    overflow: hidden;
+    line-height: 0;
 }
 
 .prks-command-palette__hints {

@@ -887,9 +887,9 @@
     function setStatus(text) {
         const parts = paletteEls();
         if (!parts.status) return;
-        const msg = text ? String(text) : '';
-        parts.status.textContent = msg;
-        setHidden(parts.status, !msg);
+        /* Keep the live region mounted and exposed (never hidden/display:none): AT must
+         * observe text mutations. Empty visual footprint is CSS :empty, not the hidden attr. */
+        parts.status.textContent = text ? String(text) : '';
     }
 
     function rowCanBeSecondary(row) {
@@ -1620,7 +1620,6 @@
             className: 'prks-command-palette__status',
             role: 'status',
             'aria-live': 'polite',
-            hidden: true,
         });
         const hints = el('p', {
             id: 'prks-command-palette-hints',
