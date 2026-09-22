@@ -559,19 +559,31 @@ def _fsync_dirs_under(root: str, paths: Iterable[str]) -> bool:
     crafted token or a damaged journal must not be able to point a restore
     fsync at a directory outside the tree it belongs to.
 
+    Each candidate is rebuilt from the trusted base and checked against it
+    with the same ``normpath(join(base, ...))`` + ``startswith(base)`` pattern
+    ``services/work_pdf_replace.atomic_replace_managed_pdf_bytes()`` uses, so
+    the value that reaches the sync is the one that was proven, not a helper
+    return.
+
     Returns whether every directory is as durable as the platform allows.
     A candidate outside ``root`` answers False rather than raising: callers
     already treat that as a boundary they could not establish.
     """
-    base = os.path.realpath(root)
-    prefix = base + os.sep
+    base_path = os.path.realpath(root)
     checked: list[str] = []
     for path in paths:
-        resolved = os.path.normpath(os.path.realpath(path))
-        if resolved != base and not resolved.startswith(prefix):
+        # CodeQL py/path-injection documented sanitizer: rebuild against the
+        # root with join+normpath, then startswith the root before the sink.
+        # The second check rejects a sibling whose name merely extends it.
+        relative = os.path.relpath(os.path.realpath(path), base_path)
+        fullpath = os.path.normpath(os.path.join(base_path, relative))
+        if not fullpath.startswith(base_path):
             LOGGER.error("restore_durability_failed reason=sync_dir_outside_root boundary=containment")
             return False
-        checked.append(resolved)
+        if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
+            LOGGER.error("restore_durability_failed reason=sync_dir_outside_root boundary=containment")
+            return False
+        checked.append(fullpath)
     return fsync_directories(*checked)
 
 
