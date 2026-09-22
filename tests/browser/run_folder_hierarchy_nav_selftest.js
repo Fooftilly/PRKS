@@ -122,6 +122,22 @@ const api = loadApi();
     assertEq('filter respects limit', matches.length, 10);
 })();
 
+(function testFilterRanksExactTitleFirst() {
+    const many = [];
+    for (let i = 0; i < 50; i++) {
+        many.push({
+            id: 'child-' + i,
+            title: 'Child ' + i,
+            parent_id: 'target',
+            child_count: 0,
+        });
+    }
+    many.push({ id: 'target', title: 'Research', parent_id: null, child_count: 50 });
+    const matches = api.prksFolderHierarchyFilter(many, 'Research', 40);
+    assert('exact title survives bound', matches.some((m) => m.id === 'target'));
+    assertEq('exact title ranked first', matches[0] && matches[0].id, 'target');
+})();
+
 (function testTriggerHtml() {
     const html = api.prksFolderNavTriggerHtml(
         {

@@ -46,8 +46,12 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("data-prks-folder-nav-tab-id", nav)
         # Filter must not be a descendant of the listbox role host.
         self.assertIn("Filter stays outside the listbox", nav)
-        self.assertIn("folder-detail", _read(os.path.join(_ROOT, "frontend", "js", "navigation.js")))
         self.assertIn("'folder-detail': true", _read(os.path.join(_ROOT, "frontend", "js", "navigation.js")))
+        # No feature-code hash writes; navigate only through prksNavigate.
+        self.assertNotIn("location.hash =", nav)
+        self.assertIn("registerCleanup", nav)
+        sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
+        self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
 
     def test_css_exposes_compact_switcher(self):
         css = _read(_CSS)

@@ -28,8 +28,10 @@
     let openOwnerTabId = null;
     let openFolderId = null;
     let hierarchyRows = null;
+    let hierarchyLoadError = false;
     let loadPromise = null;
     let boundGlobal = false;
+    let boundViewport = false;
     let filterQuery = '';
 
     function doc() {
@@ -122,51 +124,77 @@
         };
     }
 
-    function pathLabelFor(folderId, byId) {
+    function pathLabelFor(folderId, byId, pathCache) {
+        const key = String(folderId);
+        if (pathCache && pathCache.has(key)) return pathCache.get(key);
+        let label;
         if (typeof root.prksFolderPathLabel === 'function') {
-            return root.prksFolderPathLabel(folderId, byId);
+            label = root.prksFolderPathLabel(folderId, byId);
+        } else {
+            const parts = [];
+            const guard = new Set();
+            let cur = byId.get(folderId);
+            while (cur && !guard.has(String(cur.id))) {
+                guard.add(String(cur.id));
+                parts.unshift(String(cur.title || 'Folder'));
+                cur = cur.parent_id ? byId.get(String(cur.parent_id)) : null;
+            }
+            label = parts.join(' → ');
         }
-        const parts = [];
-        const guard = new Set();
-        let cur = byId.get(folderId);
-        while (cur && !guard.has(String(cur.id))) {
-            guard.add(String(cur.id));
-            parts.unshift(String(cur.title || 'Folder'));
-            cur = cur.parent_id ? byId.get(String(cur.parent_id)) : null;
-        }
-        return parts.join(' → ');
+        if (pathCache) pathCache.set(key, label);
+        return label;
     }
 
-    /** Pure: filter the complete hierarchy; bounded results with path labels. */
+    function filterMatchRank(titleLower, pathLower, q) {
+        if (titleLower === q) return 0;
+        if (titleLower.indexOf(q) === 0) return 1;
+        if (titleLower.indexOf(q) !== -1) return 2;
+        if (pathLower.indexOf(q) !== -1) return 3;
+        return 4;
+    }
+
+    /** Pure: filter the complete hierarchy; rank then bound (exact titles win). */
     function prksFolderHierarchyFilter(rows, query, limit) {
         const list = Array.isArray(rows) ? rows : [];
         const byId = buildById(list);
+        const pathCache = new Map();
         const q = String(query || '')
             .trim()
             .toLowerCase();
         const max = typeof limit === 'number' && limit > 0 ? limit : FILTER_LIMIT;
         if (!q) return [];
-        const out = [];
+        const scored = [];
         for (let i = 0; i < list.length; i++) {
             const row = list[i];
             if (!row || row.id == null) continue;
-            const title = String(row.title || '').toLowerCase();
-            const path = pathLabelFor(String(row.id), byId).toLowerCase();
-            if (title.indexOf(q) === -1 && path.indexOf(q) === -1) continue;
-            out.push({
+            const title = String(row.title || 'Folder');
+            const titleLower = title.toLowerCase();
+            const path = pathLabelFor(String(row.id), byId, pathCache);
+            const pathLower = path.toLowerCase();
+            const rank = filterMatchRank(titleLower, pathLower, q);
+            if (rank > 3) continue;
+            scored.push({
                 id: String(row.id),
-                title: String(row.title || 'Folder'),
-                path: pathLabelFor(String(row.id), byId),
+                title: title,
+                path: path,
                 parent_id: row.parent_id == null || row.parent_id === '' ? null : String(row.parent_id),
+                _rank: rank,
             });
-            if (out.length >= max) break;
         }
-        out.sort(function (a, b) {
+        scored.sort(function (a, b) {
+            if (a._rank !== b._rank) return a._rank - b._rank;
             return String(a.title || '').localeCompare(String(b.title || ''), undefined, {
                 sensitivity: 'base',
             });
         });
-        return out;
+        return scored.slice(0, max).map(function (row) {
+            return {
+                id: row.id,
+                title: row.title,
+                path: row.path,
+                parent_id: row.parent_id,
+            };
+        });
     }
 
     function crumbHtml(folder, rows, options) {
@@ -295,13 +323,10 @@
         const hash = '#/folders/' + encodeURIComponent(String(folderId || ''));
         const tabId = openOwnerTabId;
         closePanel({ skipFocus: true });
+        if (typeof root.prksNavigate !== 'function') return;
         const opts = {};
         if (tabId) opts.tabId = tabId;
-        if (typeof root.prksNavigate === 'function') {
-            root.prksNavigate(hash, opts);
-            return;
-        }
-        if (typeof root.location !== 'undefined') root.location.hash = hash;
+        root.prksNavigate(hash, opts);
     }
 
     function addSectionLabel(host, text) {
@@ -568,10 +593,37 @@
         listboxEl = listHost;
 
         const q = String(filterQuery || '').trim();
-        if (q) {
-            fillFilter(listHost, rows, q);
+        if (hierarchyLoadError && !Array.isArray(rows)) {
+            addEmpty(listHost, 'Could not load folders.');
+            const retry = d.createElement('button');
+            retry.type = 'button';
+            retry.className = 'prks-folder-nav__option';
+            retry.setAttribute('role', 'option');
+            retry.id = 'prks-folder-nav-opt-retry';
+            retry.setAttribute('aria-selected', 'false');
+            retry.tabIndex = -1;
+            const title = d.createElement('span');
+            title.className = 'prks-folder-nav__option-title';
+            title.textContent = 'Retry';
+            retry.appendChild(title);
+            retry.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                hierarchyRows = null;
+                hierarchyLoadError = false;
+                void (async function () {
+                    const rows = await loadHierarchy(true);
+                    if (!panelEl || panelEl.hidden) return;
+                    renderPanelBody(rows);
+                    if (restoreTarget) positionPanel(restoreTarget);
+                })();
+            });
+            listHost.appendChild(retry);
+            optionEls.push(retry);
+        } else if (q) {
+            fillFilter(listHost, rows || [], q);
         } else {
-            fillNearby(listHost, prksFolderHierarchyContext(openFolderId, rows));
+            fillNearby(listHost, prksFolderHierarchyContext(openFolderId, rows || []));
         }
 
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(panel);
@@ -583,16 +635,22 @@
         else if (optionEls.length) setActiveOption(0);
     }
 
-    async function loadHierarchy() {
-        if (Array.isArray(hierarchyRows)) return hierarchyRows;
+    async function loadHierarchy(force) {
+        if (!force && Array.isArray(hierarchyRows)) return hierarchyRows;
+        if (!force && hierarchyLoadError && hierarchyRows === null && !loadPromise) {
+            return null;
+        }
         if (loadPromise) return loadPromise;
         loadPromise = (async function () {
             let rows = null;
+            let sawFailure = false;
             try {
                 if (typeof root.prksOfflineListFetch === 'function') {
                     const result = await root.prksOfflineListFetch(
                         'folders:index',
                         '/api/folders',
+                        // Shared catalogue: not tied to one route AbortSignal so a
+                        // sibling Folder pane can still warm/reuse the same fetch.
                         null,
                         {
                             domain: 'folders',
@@ -606,27 +664,37 @@
                         rows = root.prksResolveOfflineFoldersIndex(result);
                     } else if (result && Array.isArray(result.value)) {
                         rows = result.value;
+                    } else if (result && result.error) {
+                        sawFailure = true;
                     }
                 }
             } catch (_e) {
                 rows = null;
+                sawFailure = true;
             }
             if (!Array.isArray(rows) && typeof root.fetchFolders === 'function') {
                 try {
                     rows = await root.fetchFolders();
+                    sawFailure = false;
                 } catch (_e2) {
-                    rows = [];
+                    rows = null;
+                    sawFailure = true;
                 }
             }
-            if (!Array.isArray(rows)) rows = [];
+            if (!Array.isArray(rows)) {
+                hierarchyRows = null;
+                hierarchyLoadError = true;
+                return null;
+            }
             if (typeof root.prksEffectiveFolderRows === 'function') {
                 try {
                     rows = await root.prksEffectiveFolderRows(rows);
                 } catch (_e3) {
-                    /* keep raw */
+                    /* keep raw catalogue */
                 }
             }
             hierarchyRows = Array.isArray(rows) ? rows : [];
+            hierarchyLoadError = false;
             return hierarchyRows;
         })();
         try {
@@ -696,7 +764,7 @@
         // Re-read ownership from the live trigger in case the instance remounted.
         openFolderId = trigger.getAttribute('data-prks-folder-nav-current') || openFolderId;
         openOwnerTabId = trigger.getAttribute('data-prks-folder-nav-tab-id') || openOwnerTabId;
-        updateTriggerPath(trigger, { id: openFolderId }, rows);
+        if (Array.isArray(rows)) updateTriggerPath(trigger, { id: openFolderId }, rows);
         renderPanelBody(rows);
         positionPanel(trigger);
         const d = doc();
@@ -713,6 +781,24 @@
             return;
         }
         closePanel({ skipFocus: true });
+    }
+
+    function onViewportChange() {
+        if (!panelEl || panelEl.hidden) return;
+        if (!triggerStillLive(restoreTarget)) {
+            closePanel({ skipFocus: true });
+            return;
+        }
+        // Scroll/resize: keep the dialog attached by closing rather than chasing
+        // a moving layout (fixed popover + workspace tiles).
+        closePanel({ skipFocus: true });
+    }
+
+    function onScroll(ev) {
+        if (!panelEl || panelEl.hidden) return;
+        // Scrolling the options list must not dismiss the dialog.
+        if (ev && ev.target && panelEl.contains(ev.target)) return;
+        onViewportChange();
     }
 
     function onDocKey(ev) {
@@ -787,6 +873,12 @@
         ensurePanel();
         d.addEventListener('pointerdown', onDocPointer, true);
         d.addEventListener('keydown', onDocKey, true);
+        if (!boundViewport && typeof root.addEventListener === 'function') {
+            boundViewport = true;
+            root.addEventListener('resize', onViewportChange);
+            // Capture so nested scroll containers (tiles, page) dismiss the panel.
+            root.addEventListener('scroll', onScroll, true);
+        }
     }
 
     /**
@@ -806,10 +898,18 @@
         }
         bindTrigger(container);
 
+        if (ctx && typeof ctx.registerCleanup === 'function') {
+            ctx.registerCleanup(function () {
+                if (restoreTarget && trigger && restoreTarget === trigger) {
+                    closePanel({ skipFocus: true });
+                }
+            });
+        }
+
         void (async function () {
             const rows = await loadHierarchy();
             const live = findTrigger(container);
-            if (!live) return;
+            if (!live || !Array.isArray(rows)) return;
             if (String(live.getAttribute('data-prks-folder-nav-current') || '') !== String(folder.id)) {
                 return;
             }
@@ -824,6 +924,7 @@
     function resetForTests() {
         closePanel({ skipFocus: true });
         hierarchyRows = null;
+        hierarchyLoadError = false;
         loadPromise = null;
         openOwnerTabId = null;
         openFolderId = null;
@@ -833,6 +934,7 @@
         listboxEl = null;
         optionEls = [];
         boundGlobal = false;
+        boundViewport = false;
     }
 
     const api = {
