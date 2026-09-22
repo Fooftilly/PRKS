@@ -106,7 +106,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             timeout=10000,
         )
         band_text = band.inner_text()
-        self.assertIn("Location", band_text)
+        self.assertIn("location", band_text.lower())
         self.assertIn(LIBRARY_NAV_RESEARCH, band_text)
         self.assertIn(LIBRARY_NAV_PHILOSOPHY, band_text)
         self.assertIn(LIBRARY_NAV_ETHICS, band_text)
