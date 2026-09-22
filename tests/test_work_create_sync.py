@@ -48,8 +48,32 @@ class WorkCreateSyncTests(unittest.TestCase):
             occurred_at="2026-09-16T10:00:00Z", created_at="2026-09-16T10:00:00Z",
             depends_on=[]))
 
-    def test_registered(self):
-        self.assertIn("CREATE_WORK", sync_protocol.supported_operations())
+    def test_promotable_credit_reports_aliases_revisions_on_create(self):
+        """Construction advances Person aliases revisions; the ACK must say so
+        so reconcileCreatedWork can patch person-metadata-state."""
+        from backend import person_metadata_sync
+        person = self.db.add_person("Jane", "Doe")
+        with self.db.connection() as conn:
+            self.assertEqual(person_metadata_sync.get_revision(conn, person, "aliases"), 0)
+        wid = self.work_id()
+        status, result = self.send(wid, _payload(roles=[{
+            "person_id": person, "role_type": "Author", "credit_name": "Mark Twain",
+        }]))
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(result["aliases_revisions"], {person: 1})
+        self.assertEqual(self.db.get_person(person)["aliases"], "Mark Twain")
+
+        # Comma-bearing credits stay on the role and must not appear here.
+        other = self.db.add_person("Ed", "Smith")
+        wid2 = self.work_id()
+        status, result = self.send(wid2, _payload(
+            source={"kind": "video", "url": "https://www.youtube.com/watch?v=oHg5SJYRHA0"},
+            roles=[{
+                "person_id": other, "role_type": "Author", "credit_name": "Smith, John",
+            }]))
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertNotIn("aliases_revisions", result)
+        self.assertEqual(self.db.get_person(other)["aliases"] or "", "")
 
     def test_creates_video_work_and_files_uncategorized(self):
         wid = self.work_id()

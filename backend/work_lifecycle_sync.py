@@ -241,6 +241,12 @@ def apply_create(db, conn, op, received_at):
                 "work_id": work_id,
                 "person_id": role["person_id"],
             }
+    from backend import person_metadata_sync
+    aliases_before = {
+        role["person_id"]: person_metadata_sync.get_revision(
+            conn, role["person_id"], "aliases")
+        for role in fields["roles"]
+    }
     if existing is None:
         try:
             insert_work_on_conn(conn, work_id, fields, identity)
@@ -274,7 +280,16 @@ def apply_create(db, conn, op, received_at):
                 work_role_sync.insert_initial_role(
                     conn, work_id, role["person_id"], role["role_type"],
                     order_index=index, credit_name=role["credit_name"])
-    return 200, {
+    # Construction may promote role credits into Person aliases. Report every
+    # Person whose aliases revision advanced so reconcileCreatedWork can patch
+    # person-metadata-state rather than leave a stale offline base.
+    aliases_revisions = {}
+    if existing is None:
+        for pid, before in aliases_before.items():
+            after = person_metadata_sync.get_revision(conn, pid, "aliases")
+            if after != before:
+                aliases_revisions[pid] = after
+    result = {
         "code": "ACKNOWLEDGED",
         "work_id": work_id,
         "changed": existing is None,
@@ -282,6 +297,9 @@ def apply_create(db, conn, op, received_at):
         "playlist_id": playlist_id,
         "role_count": len(fields["roles"]),
     }
+    if aliases_revisions:
+        result["aliases_revisions"] = aliases_revisions
+    return 200, result
 
 
 def validate_delete(op):

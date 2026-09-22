@@ -457,7 +457,10 @@
                 return typeof data.changed === 'boolean' &&
                     Number.isSafeInteger(data.server_revision) && data.server_revision >= 0 &&
                     typeof data.present === 'boolean' && typeof data.credit_name === 'string' &&
-                    typeof data.first_name === 'string' && typeof data.last_name === 'string';
+                    typeof data.first_name === 'string' && typeof data.last_name === 'string' &&
+                    (data.aliases_revision === undefined ||
+                        (Number.isSafeInteger(data.aliases_revision) &&
+                            data.aliases_revision >= 0));
             case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
                 return Number.isSafeInteger(data.current_revision) &&
                     reportedShape(data.current) && reportedShape(data.requested);
@@ -497,6 +500,7 @@
             first_name: data.first_name,
             last_name: data.last_name,
             server_revision: data.server_revision,
+            aliases_revision: data.aliases_revision,
         }),
     };
 

@@ -9,6 +9,7 @@ const { createPrksOfflineStore } = require('../../frontend/js/offline-store.js')
 const { createPrksOfflineRuntime } = require('../../frontend/js/offline-runtime.js');
 require('../../frontend/js/work-role-state.js');
 require('../../frontend/js/work-metadata-state.js');
+require('../../frontend/js/person-metadata-state.js');
 /* The REAL credit helper, loaded from the shipped card module. It is a browser
  * script that assigns to `window` at load, so the global is provided rather
  * than the precedence rule being restated here -- a test that reimplemented
@@ -463,6 +464,9 @@ function handlerContract() {
         present: true, credit_name: 'Mark Twain',
         first_name: 'Jane', last_name: 'Doe' };
     assert.equal(handler.isResult(ack, operation), true);
+    assert.equal(handler.isResult(Object.assign({}, ack, { aliases_revision: 1 }), operation), true,
+        'optional aliases_revision from credit promotion');
+    assert.equal(handler.isResult(Object.assign({}, ack, { aliases_revision: -1 }), operation), false);
     for (const wrong of [{ work_id: 'W-2' }, { person_id: 'P-X' }, { role_type: 'Editor' },
         { present: 'yes' }, { credit_name: null }, { server_revision: -1 },
         { first_name: null }, { last_name: 7 }]) {
@@ -546,6 +550,57 @@ async function reconciliation() {
         role_type: 'Reviewer', present: true, credit_name: '', server_revision: 3 }), false);
 }
 
+/* ---- credit promotion patches person-metadata-state aliases revision ---- */
+async function aliasesRevisionReconciliation() {
+    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const fields = {};
+    for (const name of globalThis.PRKS_PERSON_METADATA_FIELDS) {
+        fields[name] = { revision: 0 };
+    }
+    await cache.putEntity('person-metadata-state', JANE,
+        { person_id: JANE, fields: JSON.parse(JSON.stringify(fields)) });
+    await cache.putEntity('work', 'W-1', { id: 'W-1', linked_people: [] });
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async () => { throw new Error('no reads'); } });
+
+    assert.equal(await offline.reconcileWorkRole({
+        work_id: 'W-1', person_id: JANE, role_type: 'Author', present: true,
+        credit_name: 'Mark Twain', server_revision: 1, first_name: 'Jane',
+        last_name: 'Doe', aliases_revision: 1,
+    }), true);
+    const state = (await cache.getEntity('person-metadata-state', JANE)).value;
+    assert.equal(state.fields.aliases.revision, 1,
+        'ACK aliases_revision must become the offline aliases base');
+    assert.equal(state.fields.first_name.revision, 0, 'other fields untouched');
+
+    // Absent aliases_revision leaves the projection alone (no promotion).
+    assert.equal(await offline.reconcileWorkRole({
+        work_id: 'W-1', person_id: JANE, role_type: 'Author', present: true,
+        credit_name: 'Mark Twain', server_revision: 1, first_name: 'Jane',
+        last_name: 'Doe',
+    }), true);
+    assert.equal((await cache.getEntity('person-metadata-state', JANE))
+        .value.fields.aliases.revision, 1);
+
+    // CREATE_WORK construction with a promoted credit patches the same way.
+    assert.equal(await offline.reconcileCreatedWork({
+        work_id: 'W-2', changed: true, folder_id: 'F1', playlist_id: '',
+        role_count: 1, aliases_revisions: { [ED]: 2 },
+    }), true);
+    // No ED metadata-state cached -- missing is fine.
+    assert.equal(await cache.getEntity('person-metadata-state', ED), null);
+
+    fields.aliases = { revision: 0 };
+    await cache.putEntity('person-metadata-state', ED,
+        { person_id: ED, fields: JSON.parse(JSON.stringify(fields)) });
+    assert.equal(await offline.reconcileCreatedWork({
+        work_id: 'W-3', changed: true, folder_id: 'F1', playlist_id: '',
+        role_count: 1, aliases_revisions: { [ED]: 2 },
+    }), true);
+    assert.equal((await cache.getEntity('person-metadata-state', ED))
+        .value.fields.aliases.revision, 2);
+}
+
 /* ---- a GET that began before the acknowledgement must lose ---- */
 async function staleRead() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
@@ -582,6 +637,7 @@ async function main() {
     await creationDependency();
     handlerContract();
     await reconciliation();
+    await aliasesRevisionReconciliation();
     graphOverlay();
     await graphReconciliation();
     await staleRead();

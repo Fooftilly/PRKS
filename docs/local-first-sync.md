@@ -1229,11 +1229,26 @@ two rows for one revision scope.
 ### The element's state is not a boolean
 
 A link carries `credit_name` — the name as printed on *this* work — and that
-value reaches `linked_authors`, the card credit, BibTeX and the Person's
-aliases. So an element's canonical state is **absent**, or **present with a
-credit override**. Two devices that both link Jane as Author with the same
-credit have converged; two that choose different names have not, and a model
-comparing only presence would have called that agreement and silently kept one.
+value reaches `linked_authors`, the card credit, BibTeX and (when representable)
+the Person's aliases. So an element's canonical state is **absent**, or
+**present with a credit override**. Two devices that both link Jane as Author
+with the same credit have converged; two that choose different names have not,
+and a model comparing only presence would have called that agreement and
+silently kept one.
+
+Auto-promotion into `persons.aliases` is deliberate containment against the
+legacy comma-delimited encoding: a credit such as `Smith, John` is preserved
+exactly on the role and is **not** written into aliases (every reader would
+split it into two false aliases). A simple credit that is already represented
+is a no-op. When a promotable credit does append an alias, the write goes
+through `person_metadata_sync.set_field_on_conn` so the Person
+`[person_id, "aliases"]` revision advances with the value — never a direct
+`UPDATE persons SET aliases=…` that would leave offline alias edits believing
+themselves current. Role revision and Person-aliases revision remain separate
+conflict scopes. Role and Work-create acknowledgements carry the resulting
+aliases revision(s) when promotion advanced them, and `reconcileWorkRole` /
+`reconcileCreatedWork` patch cached `person-metadata-state.fields.aliases`
+accordingly so the next offline aliases edit is measured against a current base.
 
 `ADD_WORK_PERSON_ROLE` therefore carries `credit_name` — linking with a custom
 credit must not need two operations, which would briefly display the wrong name

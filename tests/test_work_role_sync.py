@@ -6,6 +6,7 @@ import unittest
 import uuid
 
 from backend import sync_protocol, work_role_sync as roles
+from backend import person_metadata_sync as person_meta
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 
@@ -315,6 +316,153 @@ class WorkRoleSyncTests(unittest.TestCase):
         path does it rather than the one handler that remembered."""
         self.send(True, credit="Mark Twain")
         self.assertIn("Mark Twain", self.db.get_person(self.jane)["aliases"])
+
+    def aliases_revision(self, person=None):
+        with self.db.connection() as conn:
+            return person_meta.get_revision(conn, person or self.jane, "aliases")
+
+    def test_promotable_credit_advances_person_aliases_revision_once(self):
+        """#119: promoting a credit into aliases is a Person-field mutation."""
+        self.assertEqual(self.aliases_revision(), 0)
+        code, result = self.send(True, credit="Mark Twain")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.db.get_person(self.jane)["aliases"], "Mark Twain")
+        self.assertEqual(self.aliases_revision(), 1)
+        self.assertEqual(result["aliases_revision"], 1,
+                         "ACK must carry the Person aliases revision so the "
+                         "client can patch person-metadata-state")
+        self.assertEqual(self.revision(), 1, "role revision is a separate scope")
+
+    def test_ack_omits_aliases_revision_when_promotion_is_a_no_op(self):
+        code, result = self.send(True, credit="")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertNotIn("aliases_revision", result)
+        code, result = self.send(True, base=1, credit="Smith, John",
+                                 operation="SET_WORK_PERSON_ROLE_CREDIT")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.state(), "Smith, John")
+        self.assertNotIn("aliases_revision", result,
+                         "comma-bearing credits stay on the role")
+
+    def test_already_known_alias_does_not_bump_aliases_revision(self):
+        self.db.update_person_profile(self.jane, {"aliases": "Mark Twain"})
+        self.assertEqual(self.aliases_revision(), 1)
+        self.send(True, credit="Mark Twain")
+        self.assertEqual(self.db.get_person(self.jane)["aliases"], "Mark Twain")
+        self.assertEqual(self.aliases_revision(), 1, "already represented is a no-op")
+        self.assertEqual(self.revision(), 1)
+
+    def test_comma_bearing_credit_is_preserved_on_role_not_split_into_aliases(self):
+        """#118: `Smith, John` is one printed name. Legacy aliases cannot hold
+        it losslessly, so auto-promotion is refused rather than inventing
+        `Smith` and `John` as separate Person aliases."""
+        self.assertTrue(roles.credit_promotable_as_alias("Mark Twain"))
+        self.assertFalse(roles.credit_promotable_as_alias("Smith, John"))
+
+        code, result = self.send(True, credit="Smith, John")
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.state(), "Smith, John")
+        row = next(w for w in self.db.get_all_works() if w["id"] == self.work)
+        self.assertEqual(row["linked_authors"], "Smith, John")
+
+        aliases = self.db.get_person(self.jane)["aliases"] or ""
+        self.assertEqual(aliases, "")
+        self.assertNotIn("Smith", roles.parse_person_aliases(aliases))
+        self.assertNotIn("John", roles.parse_person_aliases(aliases))
+        self.assertEqual(self.aliases_revision(), 0)
+
+        # Ordinary mutation path: same containment.
+        other = self.db.add_work("Credit patch")
+        self.db.add_role(self.ed, other, "Author")
+        self.assertTrue(self.db.update_role_credit_name(
+            other, self.ed, "Author", 0, "Smith, John"))
+        with self.db.connection() as conn:
+            self.assertEqual(
+                roles.current_state(conn, other, self.ed, "Author"), "Smith, John")
+        ed_aliases = self.db.get_person(self.ed)["aliases"] or ""
+        self.assertEqual(ed_aliases, "")
+        self.assertEqual(self.aliases_revision(self.ed), 0)
+
+    def test_existing_comma_delimited_aliases_remain_readable(self):
+        """Containment must not reinterpret stored alias text."""
+        self.db.update_person_profile(
+            self.jane, {"aliases": "Samuel Clemens, Mark Twain"})
+        self.assertEqual(
+            roles.parse_person_aliases(self.db.get_person(self.jane)["aliases"]),
+            ["Samuel Clemens", "Mark Twain"])
+        self.send(True, credit="S. L. Clemens")
+        self.assertEqual(
+            roles.parse_person_aliases(self.db.get_person(self.jane)["aliases"]),
+            ["Samuel Clemens", "Mark Twain", "S. L. Clemens"])
+
+    def test_construction_with_credit_advances_existing_person_aliases_revision(self):
+        """Construction is not a Work-role revision, but it still mutates an
+        existing Person field when it promotes a credit."""
+        self.assertEqual(self.aliases_revision(), 0)
+        born = self.db.add_work("Born with credit")
+        self.db.insert_initial_role(
+            born, self.jane, "Author", order_index=0, credit_name="Mark Twain")
+        with self.db.connection() as conn:
+            self.assertEqual(roles.get_revision(conn, born, self.jane, "Author"), 0)
+        self.assertEqual(self.db.get_person(self.jane)["aliases"], "Mark Twain")
+        self.assertEqual(self.aliases_revision(), 1)
+
+        # Comma-bearing construction keeps the role credit, skips aliases.
+        born2 = self.db.add_work("Born inverted")
+        self.db.insert_initial_role(
+            born2, self.ed, "Author", order_index=0, credit_name="Smith, John")
+        with self.db.connection() as conn:
+            self.assertEqual(
+                roles.current_state(conn, born2, self.ed, "Author"), "Smith, John")
+        self.assertEqual(self.db.get_person(self.ed)["aliases"] or "", "")
+        self.assertEqual(self.aliases_revision(self.ed), 0)
+
+    def test_ordinary_and_durable_role_writes_share_alias_side_effects(self):
+        online = self.db.add_work("Online credit")
+        self.db.add_role(self.jane, online, "Author", credit_name="Mark Twain")
+        self.assertEqual(self.db.get_person(self.jane)["aliases"], "Mark Twain")
+        self.assertEqual(self.aliases_revision(), 1)
+
+        durable = self.db.add_work("Durable credit")
+        env = self.op(True, person=self.ed, credit="E. Smith")
+        env["entity_id"] = durable
+        code, result = sync_protocol.process_operation(self.db, env)
+        self.assertEqual((code, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self.db.get_person(self.ed)["aliases"], "E. Smith")
+        self.assertEqual(self.aliases_revision(self.ed), 1)
+
+    def test_credit_derived_alias_makes_stale_offline_aliases_conflict(self):
+        """#119 conflict-loss sequence: after promotion advances aliases
+        revision, a stale base-0 aliases write must conflict rather than
+        silently overwrite the credit-derived alias."""
+        self.send(True, credit="Mark Twain")
+        self.assertEqual(self.aliases_revision(), 1)
+        status, result = sync_protocol.process_operation(self.db, dict(
+            op_id=str(uuid.uuid4()),
+            device_id=str(uuid.uuid4()),
+            operation="SET_PERSON_METADATA_FIELD", entity_type="person",
+            entity_id=self.jane,
+            payload={"field": "aliases", "value": "Samuel Clemens"},
+            base_revision=0, occurred_at="2026-09-13T10:00:00Z",
+            created_at="2026-09-13T10:00:00Z", depends_on=[]))
+        self.assertEqual(status, 409)
+        self.assertEqual(result["code"], "REVISION_CONFLICT")
+        self.assertEqual(result["current_revision"], 1)
+        self.assertEqual(result["current_value"], "Mark Twain")
+        self.assertEqual(self.db.get_person(self.jane)["aliases"], "Mark Twain")
+
+    def test_replaying_the_same_credit_does_not_keep_bumping_aliases(self):
+        self.send(True, credit="Mark Twain")
+        self.assertEqual(self.aliases_revision(), 1)
+        code, result = self.send(True, base=1, credit="Mark Twain")
+        self.assertEqual((code, result["code"], result["changed"]),
+                         (200, "ACKNOWLEDGED", False))
+        self.assertEqual(self.aliases_revision(), 1)
+        # A second append of the same credit is also a no-op.
+        with self.db.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self.assertFalse(roles._append_person_alias(conn, self.jane, "Mark Twain"))
+        self.assertEqual(self.aliases_revision(), 1)
 
     def test_two_devices_choosing_different_credits_have_not_converged(self):
         """Presence alone was not the state. A boolean model would have called
