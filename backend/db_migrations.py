@@ -630,6 +630,13 @@ CREATE TABLE arguments (
 
 # PKs/FKs enforced on the current (v12) schema. Pre-v10 reconcile uses _TABLE_PKS/_TABLE_FKS only.
 _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
+    # The basename primary key is load-bearing, not decoration: the Work-delete
+    # transaction records its claim with ON CONFLICT(filename) DO NOTHING, and
+    # "one row per managed PDF" is what keeps repeated deletions and replays
+    # from accumulating duplicate permanent rows. Validating the columns alone
+    # would let a table that lost that uniqueness pass startup and then break
+    # the canonical deletion.
+    "pending_pdf_cleanup": ("filename",),
     "sync_operations": ("op_id",),
     "sync_entity_revisions": ("scope_type", "scope_id"),
     "sync_tag_lifecycle": ("tag_id",),
@@ -645,6 +652,10 @@ _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
 }
 
 _CURRENT_TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
+    # A cleanup claim must outlive the Work row that created it -- that is the
+    # entire point -- so it deliberately carries no foreign key, and this
+    # pins that rather than leaving it to be "helpfully" added later.
+    "pending_pdf_cleanup": (),
     "sync_operations": (), "sync_entity_revisions": (), "sync_tag_lifecycle": (),
     "concept_aliases": (("concept_id", "concepts", "id", "CASCADE"),),
     "concept_parents": (

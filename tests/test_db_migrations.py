@@ -1568,6 +1568,52 @@ class TestPendingPdfCleanupMigration(MigrationTestCase):
             fresh_signature = application_schema_signature(conn)
         self.assertEqual(upgraded_signature, fresh_signature)
 
+    def test_a_claim_table_without_its_primary_key_is_schema_drift(self):
+        """PR #145 review (codex, P2): the basename primary key is what makes
+        `ON CONFLICT(filename)` work inside the Work-delete transaction, so a
+        table carrying the right columns without it must not pass startup."""
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP TABLE pending_pdf_cleanup")
+        conn.execute(
+            """
+            CREATE TABLE pending_pdf_cleanup (
+                filename TEXT,
+                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_attempt_at TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "pending_pdf_cleanup")
+
+    def test_a_claim_table_with_a_foreign_key_is_schema_drift(self):
+        """A claim has to outlive the Work row that created it, so an FK to
+        `works` would cascade away exactly the record recovery depends on."""
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP TABLE pending_pdf_cleanup")
+        conn.execute(
+            """
+            CREATE TABLE pending_pdf_cleanup (
+                filename TEXT PRIMARY KEY,
+                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_attempt_at TIMESTAMP,
+                work_id TEXT REFERENCES works(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "pending_pdf_cleanup")
+
     def test_a_missing_claim_table_is_loud_schema_drift(self):
         db = self._open()
         conn = _raw(db.db_path)
