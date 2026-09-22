@@ -30,6 +30,7 @@ from backend.db_manager import (
     referenced_managed_pdf_filename,
     safe_pdf_path_under_dir,
 )
+from backend.fs_durability import fsync_directory
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.pdf_materialization import STALE_CODE
@@ -58,34 +59,20 @@ def managed_pdf_path_lock(pdfs_dir: str, filename: str) -> Optional[threading.Lo
         return lock
 
 
-def fsync_managed_pdf_parent(pdfs_dir: str, filename: str) -> None:
-    """Best-effort directory fsync after rename (POSIX/Linux only).
+def fsync_managed_pdf_parent(pdfs_dir: str, filename: str) -> bool:
+    """Best-effort directory fsync after a rename into the managed pdfs dir.
 
-    Confirms ``filename`` is a managed path under ``pdfs_dir``, then fsyncs the
-    trusted storage root (``realpath(pdfs_dir)``) — never ``dirname`` of a
-    DB-derived path.
+    Confirms ``filename`` is a managed path under ``pdfs_dir``, then applies the
+    ``backend.fs_durability`` directory convention to the trusted storage root
+    (``realpath(pdfs_dir)``) — never ``dirname`` of a DB-derived path.
+
+    Returns whether the directory entry is as durable as the platform allows.
+    False also when ``filename`` is not a managed path, because nothing was
+    synced then either.
     """
     if not safe_pdf_path_under_dir(pdfs_dir, filename):
-        return
-    if os.name != "posix":
-        return
-    parent = os.path.realpath(pdfs_dir)
-    flags = getattr(os, "O_RDONLY", None)
-    if flags is None:
-        return
-    try:
-        dir_fd = os.open(parent, flags)
-    except OSError:
-        return
-    try:
-        os.fsync(dir_fd)
-    except OSError:
-        pass
-    finally:
-        try:
-            os.close(dir_fd)
-        except OSError:
-            pass
+        return False
+    return fsync_directory(os.path.realpath(pdfs_dir))
 
 
 def atomic_replace_managed_pdf_bytes(
@@ -557,11 +544,12 @@ def replace_managed_work_pdf(
                     "pdf_cow_retarget work_id=%s",
                     safe_log_id(work_id),
                 )
+            # Linearize may os.replace again, and it fsyncs its own output and
+            # this directory when it does. That boundary is the helper's
+            # contract, so no caller-side compensation belongs here.
             changed, reason = maybe_linearize_pdf_in_place(
                 target_path, context="work-pdf-overwrite"
             )
-            # Linearize may os.replace again — re-resolve via sanitizer then fsync.
-            fsync_managed_pdf_parent(pdfs_dir, target_filename)
             LOGGER.info(
                 "pdf_linearize_result context=work-pdf-overwrite changed=%s reason=%s",
                 "true" if changed else "false",

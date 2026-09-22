@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 
+from backend.fs_durability import fsync_directory, fsync_file_path
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.performance import span as perf_span
 
@@ -44,7 +45,28 @@ def is_pdf_linearized(pdf_path: str) -> bool:
 
 
 def maybe_linearize_pdf_in_place(pdf_path: str, *, context: str = "") -> tuple[bool, str]:
-    """Try qpdf --linearize in-place. Returns (changed, reason)."""
+    """Try qpdf --linearize in-place. Returns (changed, reason).
+
+    Linearization is an optimization that rewrites a canonical managed PDF, so it
+    owns the durability boundary its own ``os.replace()`` creates and must not
+    hand back a PDF less durable than the one it replaced. The rename-based
+    convention in ``backend.fs_durability`` applies: fsync qpdf's finished output
+    before the replace, fsync the containing directory after it. Every caller
+    gets that; none needs to compensate afterwards.
+
+    Reasons, with (changed) in front:
+
+    - (False) ``disabled`` / ``missing-qpdf`` / ``missing-file`` -- nothing ran.
+    - (False) ``qpdf-failed`` / ``error`` -- the canonical PDF is untouched.
+    - (False) ``sync-failed`` -- qpdf's output could not be made durable, so the
+      replace never happened and the canonical PDF is untouched. An optimization
+      is not worth trading durability for.
+    - (True) ``ok-unsynced-dir`` -- the replace happened and the linearized bytes
+      are durable, but the directory entry could not be confirmed durable. The
+      rename cannot be unwound, so this reports the weaker guarantee rather than
+      claiming ``ok``.
+    - (True) ``ok`` -- replaced, and durable to the extent the platform allows.
+    """
     with perf_span("pdf_linearize"):
         return _maybe_linearize_pdf_in_place_inner(pdf_path, context=context)
 
@@ -82,7 +104,25 @@ def _maybe_linearize_pdf_in_place_inner(pdf_path: str, *, context: str = "") -> 
                 proc.returncode,
             )
             return False, "qpdf-failed"
+        # qpdf wrote the temporary in another process, so nothing here has
+        # flushed it. Sync it before it becomes the canonical file: a crash
+        # after the rename must not find the managed name pointing at bytes
+        # that were never on stable storage.
+        try:
+            fsync_file_path(tmp_path)
+        except OSError as e:
+            LOGGER.warning(
+                "pdf_linearize_sync_failed context=%s error_type=%s",
+                ctx,
+                safe_error_type(e),
+            )
+            return False, "sync-failed"
         os.replace(tmp_path, pdf_path)
+        # ``src_dir`` is the directory the temporary was created in and the one
+        # the rename just changed -- not a fresh derivation from ``pdf_path``.
+        if not fsync_directory(src_dir):
+            LOGGER.warning("pdf_linearize_dir_sync_failed context=%s", ctx)
+            return True, "ok-unsynced-dir"
         return True, "ok"
     except Exception as e:
         LOGGER.warning(

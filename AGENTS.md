@@ -58,6 +58,7 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/pdf_annotations.py` canonical PDF annotation metadata
 - `backend/db_migrations.py` ordered schema migrations
 - `backend/backup_restore.py` verified backup/restore
+- `backend/fs_durability.py` fsync convention for rename-based file replacement
 - `backend/research_markup.py` research-note semantic markup parser
 - `backend/research_network.py` Concepts, Positions, Arguments/Stances
 - `backend/research_index.py` disposable derived note-reference index
