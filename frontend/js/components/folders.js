@@ -1136,7 +1136,10 @@ function renderDashboard(folders, container, options = {}) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
-const PRKS_FOLDER_DETAIL_NARROW_PX = 720;
+// Container width for compact Location+Nearby fallback. Kept below the common
+// stacked Main content width (~700px at 1280 with the app sidebar) so normal
+ // desktop stays on tree|contents; true narrow tiles still fall under this.
+const PRKS_FOLDER_DETAIL_NARROW_PX = 560;
 
 function prksFolderDetailExpandAncestors(folderId, rows) {
     const list = Array.isArray(rows) ? rows : [];

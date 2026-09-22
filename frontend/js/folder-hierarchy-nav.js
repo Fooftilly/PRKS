@@ -33,6 +33,11 @@
     let hierarchyPathCache = null;
     /** Fingerprint of unsettled folder-structure durable ops; changes invalidate the base. */
     let hierarchyOpsFingerprint = undefined;
+    /**
+     * Bumped by invalidateHierarchyBase so an in-flight loadHierarchy cannot
+     * re-cache a pre-invalidation catalogue after the await returns.
+     */
+    let hierarchyBaseGeneration = 0;
     let hierarchySyncBound = false;
     let boundGlobal = false;
     let boundViewport = false;
@@ -62,7 +67,9 @@
     }
 
     function invalidateHierarchyBase() {
+        hierarchyBaseGeneration += 1;
         hierarchyRows = null;
+        hierarchyLoadError = false;
         clearHierarchyPathCache();
     }
 
@@ -977,6 +984,12 @@
      * folder ops are projected on every read via prksEffectiveFolderRows, and
      * the base is invalidated when that unsettled structure fingerprint moves
      * (enqueue or ACK) so renamed/deleted folders cannot stick after sync.
+     *
+     * An in-flight fetch that started before invalidateHierarchyBase must not
+     * re-populate hierarchyRows: capture hierarchyBaseGeneration (and the
+     * ops fingerprint) before awaiting, and only cache when the generation
+     * is still current. A superseded flight still returns its projected rows
+     * to the caller without writing the module cache.
      */
     async function loadHierarchy(force, signal) {
         ensureHierarchySyncBound();
@@ -988,6 +1001,7 @@
         }
         if (signal && signal.aborted) return null;
 
+        const genAtStart = hierarchyBaseGeneration;
         let rows = null;
         let offlineUnavailable = false;
         try {
@@ -1038,13 +1052,21 @@
             }
         }
         if (signal && signal.aborted) return null;
+        const stillCurrent = genAtStart === hierarchyBaseGeneration;
         if (!Array.isArray(rows)) {
-            hierarchyRows = null;
-            hierarchyLoadError = true;
-            clearHierarchyPathCache();
+            if (stillCurrent) {
+                hierarchyRows = null;
+                hierarchyLoadError = true;
+                clearHierarchyPathCache();
+            }
             return null;
         }
         if (signal && signal.aborted) return null;
+        if (!stillCurrent) {
+            // Superseded by invalidateHierarchyBase during the await — hand the
+            // caller this response without poisoning the module cache.
+            return await projectHierarchyRows(rows);
+        }
         hierarchyRows = rows;
         hierarchyLoadError = false;
         clearHierarchyPathCache();
@@ -1053,11 +1075,18 @@
                 hierarchyOpsFingerprint = folderStructureOpsFingerprint(
                     (await root.prksSync.store.listOperations()) || []
                 );
+                // A concurrent invalidate during the fingerprint read must not
+                // leave the pre-invalidation rows cached under a newer fp.
+                if (genAtStart !== hierarchyBaseGeneration) {
+                    hierarchyRows = null;
+                    clearHierarchyPathCache();
+                    return await projectHierarchyRows(rows);
+                }
             }
         } catch (_fp) {
             /* fingerprint stays; next sync subscribe will set it */
         }
-        return await projectHierarchyRows(hierarchyRows);
+        return await projectHierarchyRows(hierarchyRows || rows);
     }
 
     function updateTriggerPath(trigger, folder, rows) {
@@ -1333,6 +1362,7 @@
         hierarchyRows = null;
         hierarchyLoadError = false;
         hierarchyOpsFingerprint = undefined;
+        hierarchyBaseGeneration = 0;
         clearHierarchyPathCache();
         openOwnerTabId = null;
         openFolderId = null;
@@ -1343,6 +1373,7 @@
         optionEls = [];
         boundGlobal = false;
         boundViewport = false;
+        hierarchySyncBound = false;
     }
 
     const api = {

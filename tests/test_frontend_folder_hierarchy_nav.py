@@ -43,6 +43,8 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("PRKS_FOLDER_DETAIL_NARROW_PX", folders)
         self.assertIn("data-prks-folder-layout-lock", folders)
         self.assertIn("prksLoadFolderHierarchyCatalogue", folders)
+        self.assertIn("hierarchyBaseGeneration", _read(_NAV))
+        self.assertIn("genAtStart", _read(_NAV))
 
     def test_switcher_aria_uses_dialog_and_listbox(self):
         nav = _read(_NAV)

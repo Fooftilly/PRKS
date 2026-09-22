@@ -369,6 +369,100 @@ async function testLoadHierarchyBehaviour() {
         });
         await loadApiSync.prksFolderHierarchyNavLoadForTests(false, null);
         assertEq('fingerprint change refetches base', fetchCount, 2);
+
+        // --- in-flight fetch must not re-cache after invalidate (generation) ---
+        // Warm the cache + fingerprint first, then hang a forced reload, invalidate
+        // mid-flight, and confirm the superseded response does not stick in cache.
+        loadApiSync.prksFolderHierarchyNavResetForTests();
+        fetchCount = 0;
+        ops = [];
+        let releaseFetch = null;
+        const staleBody = {
+            value: [{ id: 'stale', title: 'Stale', parent_id: null, child_count: 0 }],
+            source: 'server',
+            cachedAt: null,
+        };
+        const freshBody = {
+            value: [{ id: 'fresh', title: 'Fresh', parent_id: null, child_count: 0 }],
+            source: 'server',
+            cachedAt: null,
+        };
+        let nextBody = staleBody;
+        root.prksOfflineListFetch = async function () {
+            fetchCount += 1;
+            const body = nextBody;
+            if (releaseFetch === null && fetchCount >= 2) {
+                await new Promise(function (resolve) {
+                    releaseFetch = resolve;
+                });
+            }
+            return body;
+        };
+        let raceListener = null;
+        root.prksSync = {
+            subscribe: function (fn) {
+                raceListener = fn;
+                return function () {
+                    raceListener = null;
+                };
+            },
+            store: {
+                listOperations: async function () {
+                    return ops;
+                },
+            },
+        };
+        delete require.cache[require.resolve(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'))];
+        const loadApiRace = require(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'));
+        loadApiRace.prksFolderHierarchyNavResetForTests();
+        await loadApiRace.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('race warm fetch', fetchCount, 1);
+        assert('race sync listener bound', typeof raceListener === 'function');
+
+        nextBody = staleBody;
+        releaseFetch = null;
+        const inFlight = loadApiRace.prksFolderHierarchyNavLoadForTests(true, null);
+        for (let i = 0; i < 40 && releaseFetch === null; i += 1) {
+            await new Promise(function (resolve) {
+                setImmediate(resolve);
+            });
+        }
+        assert('race fetch gated', typeof releaseFetch === 'function');
+        ops = [
+            {
+                operation: 'CREATE_FOLDER',
+                entity_type: 'folder',
+                op_id: 'c-race',
+                status: 'pending',
+                sequence: 2,
+            },
+        ];
+        raceListener();
+        await new Promise(function (resolve) {
+            setImmediate(resolve);
+        });
+        nextBody = freshBody;
+        releaseFetch();
+        const superseded = await inFlight;
+        assert(
+            'superseded flight still returns its rows',
+            Array.isArray(superseded) &&
+                superseded.some(function (r) {
+                    return r && r.id === 'stale';
+                })
+        );
+        const after = await loadApiRace.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('invalidate mid-flight forces refetch', fetchCount, 3);
+        assert(
+            'cached base is the post-invalidate fetch',
+            Array.isArray(after) &&
+                after.some(function (r) {
+                    return r && r.id === 'fresh';
+                }) &&
+                !after.some(function (r) {
+                    return r && r.id === 'stale';
+                })
+        );
     } finally {
         restore();
     }
