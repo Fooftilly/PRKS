@@ -36,6 +36,13 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("prks-folder-detail__header", folders)
         self.assertIn("data-prks-role=\"folder-hierarchy-nav\"", folders)
         self.assertIn("tabId: ctx && ctx.tabId", folders)
+        # Desktop IA: persistent hierarchy tree | contents; compact band is fallback.
+        self.assertIn("data-prks-folder-detail-tree-host", folders)
+        self.assertIn("prksBindFolderDetailLayout", folders)
+        self.assertIn("prksFillFolderDetailTree", folders)
+        self.assertIn("PRKS_FOLDER_DETAIL_NARROW_PX", folders)
+        self.assertIn("data-prks-folder-layout-lock", folders)
+        self.assertIn("prksLoadFolderHierarchyCatalogue", folders)
 
     def test_switcher_aria_uses_dialog_and_listbox(self):
         nav = _read(_NAV)
@@ -64,6 +71,7 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("folderStructureOpsFingerprint", nav)
         self.assertIn("ensureHierarchySyncBound", nav)
         self.assertIn("CREATE_FOLDER", nav)
+        self.assertIn("prksLoadFolderHierarchyCatalogue", nav)
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
         # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not
@@ -76,6 +84,9 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
     def test_css_exposes_compact_switcher(self):
         css = _read(_CSS)
         for cls in (
+            ".prks-folder-detail",
+            ".prks-folder-detail__tree-pane",
+            ".prks-folder-detail__main",
             ".prks-folder-nav__band",
             ".prks-folder-nav__crumbs",
             ".prks-folder-nav__nearby",
@@ -86,12 +97,20 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
             ".prks-folder-nav__option.is-current",
         ):
             self.assertIn(cls, css)
-        # No permanent sidebar tree for this feature.
+        # Wide layout hides compact band; narrow hides persistent tree.
+        self.assertIn('.prks-folder-detail[data-prks-folder-layout="wide"] .prks-folder-nav', css)
+        self.assertIn(
+            '.prks-folder-detail[data-prks-folder-layout="narrow"] .prks-folder-detail__tree-pane',
+            css,
+        )
+        # No alternate permanent sidebar class for the compact nav itself.
         self.assertNotIn(".prks-folder-nav__sidebar", css)
 
     def test_user_guide_mentions_switcher(self):
         wiki = _read(_WIKI)
         self.assertIn("folder navigation", wiki.lower())
+        self.assertIn("hierarchy tree", wiki.lower())
+        self.assertIn("narrow", wiki.lower())
 
     def test_runtime_selftests(self):
         proc = subprocess.run(

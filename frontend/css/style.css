@@ -1454,6 +1454,7 @@ body.prks-workspace-dragging * {
 .prks-tile__body:has(.document-view),
 .prks-tile__body:has(.research-graph),
 .prks-tile__body:has(.prks-folder-library),
+.prks-tile__body:has(.prks-folder-detail),
 .prks-tile__body:has(.prks-group-library),
 .prks-tile__body:has(.prks-people-library) {
     overflow: hidden;
@@ -5481,7 +5482,134 @@ a.tag {
 }
 
 
-/* Library Navigation V1 — hierarchical Folder switcher (Folder detail) */
+/* Folder detail (#/folders/:id): stretch tree | contents to the tile bottom */
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) .top-ribbon {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) .prks-workspace-tabs-shell {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) #page-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#page-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+/* Library Navigation V1 — Folder detail workspace (tree | contents)
+ * Compact Location+Nearby nav is the narrow/tile fallback only. */
+.prks-folder-detail {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+    gap: 0;
+}
+
+.prks-tab-root:has(> .prks-folder-detail) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.prks-folder-detail__tree-pane {
+    flex: 0 0 clamp(180px, 28%, 280px);
+    max-width: 320px;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.prks-folder-detail__tree-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 36px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.prks-folder-detail__tree-all {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    min-width: 0;
+}
+
+.prks-folder-detail__tree-all:hover {
+    color: var(--accent);
+}
+
+.prks-folder-detail__tree-new {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.prks-folder-detail__tree-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.prks-folder-detail__main {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: auto;
+    padding-left: var(--space-md, 12px);
+}
+
+.prks-folder-detail[data-prks-folder-layout="narrow"] .prks-folder-detail__tree-pane {
+    display: none;
+}
+
+.prks-folder-detail[data-prks-folder-layout="wide"] .prks-folder-nav {
+    display: none;
+}
+
+.prks-folder-tree--detail-nav .prks-folder-tree__row {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.prks-folder-tree--detail-nav .prks-folder-tree__meta {
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-xs, 11px);
+}
+
+/* Compact hierarchical Folder switcher (narrow/tile fallback) */
 .prks-folder-nav {
     min-width: 0;
     max-width: 100%;

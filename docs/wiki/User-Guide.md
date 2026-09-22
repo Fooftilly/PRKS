@@ -27,7 +27,7 @@ PRKS keeps source identity separate from descriptive metadata. Video identity in
 
 Folders provide the main hierarchical organization for the library. Browse surfaces also include Progress, File types, Recently opened, Recently added, search results, and Saved Views.
 
-On a Folder detail page, the **folder navigation** band under the title shows your place in the hierarchy (Library path crumbs) and nearby Folders at this level or inside the current Folder. **Browse hierarchy** opens the full switcher with path/parent, siblings, subfolders, and an optional filter for larger trees. Choosing a Folder uses the same Folder routes as the Folder library (including the current workspace tab or split pane).
+On a Folder detail page at a normal desktop width, a persistent **hierarchy tree** sits beside the current Folder’s contents so you can jump elsewhere in the library without leaving the page. On a narrow pane, tile, or small viewport, that tree yields to a compact **folder navigation** band (Library path crumbs, nearby Folders, and **Browse hierarchy**). Choosing a Folder uses the same Folder routes as the Folder library (including the current workspace tab or split pane).
 
 Supported work-list pages provide bulk selection for operations such as progress changes, folder moves, and tag changes. Bulk mutations are transactional: an invalid target should not leave only part of the selection changed.
 

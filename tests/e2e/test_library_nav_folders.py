@@ -49,9 +49,28 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             "id => prksNavigate('#/folders/' + encodeURIComponent(id))",
             folder_id,
         )
-        page.wait_for_selector(f"{scope} .prks-folder-nav__trigger", timeout=15000)
+        page.wait_for_selector(f"{scope} [data-prks-role='folder-detail']", timeout=15000)
+
+    def force_narrow_folder_layout(self, page, *, scope=".prks-tile--main"):
+        """Compact Location+Nearby is the narrow/tile fallback only.
+
+        Locks layout so ResizeObserver cannot flip a wide pane back to tree|contents.
+        """
+        page.evaluate(
+            """(scope) => {
+                const root = document.querySelector(
+                    scope + ' [data-prks-role="folder-detail"]'
+                );
+                if (!root) return;
+                root.setAttribute('data-prks-folder-layout-lock', 'narrow');
+                root.setAttribute('data-prks-folder-layout', 'narrow');
+            }""",
+            scope,
+        )
+        page.wait_for_selector(f"{scope} .prks-folder-nav__trigger", timeout=10000)
 
     def open_switcher(self, page, *, scope=".prks-tile--main"):
+        self.force_narrow_folder_layout(page, scope=scope)
         trigger = self.trigger_in(page, scope)
         trigger.click()
         page.wait_for_selector("#prks-folder-nav-panel:not([hidden])", timeout=10000)
@@ -83,17 +102,92 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             )
         page.wait_for_function(
             """({ title, scope }) => {
-                const el = document.querySelector(scope + ' .prks-page-title');
+                const el = document.querySelector(scope + ' .prks-folder-detail__main .prks-page-title')
+                    || document.querySelector(scope + ' .prks-page-title');
                 return el && (el.textContent || '').includes(title);
             }""",
             arg={"title": title, "scope": scope},
             timeout=10000,
         )
-        page.wait_for_selector(f"{scope} .prks-folder-nav__trigger", timeout=10000)
+        page.wait_for_selector(f"{scope} [data-prks-role='folder-detail']", timeout=10000)
+
+    def test_desktop_tree_selects_and_indents(self):
+        """Normal-width Folder workspace: persistent tree | contents (not Location+Nearby)."""
+        _server, page, ids = self.start()
+        self.open_folder(page, ids["research"])
+        page.wait_for_function(
+            """() => {
+                const root = document.querySelector(
+                    '.prks-tile--main [data-prks-role="folder-detail"]'
+                );
+                return root && root.getAttribute('data-prks-folder-layout') === 'wide';
+            }""",
+            timeout=10000,
+        )
+        page.wait_for_selector(
+            '.prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__link[aria-current="page"]',
+            timeout=10000,
+        )
+        # Compact band must stay hidden on wide layout; tree pane stays visible.
+        self.assertTrue(
+            page.evaluate(
+                """() => {
+                    const nav = document.querySelector('.prks-tile--main .prks-folder-nav');
+                    const tree = document.querySelector(
+                        '.prks-tile--main .prks-folder-detail__tree-pane'
+                    );
+                    const navHidden = !nav || getComputedStyle(nav).display === 'none';
+                    const treeVisible = !!(tree && getComputedStyle(tree).display !== 'none');
+                    return navHidden && treeVisible;
+                }"""
+            )
+        )
+        # Expand Philosophy so Ethics is reachable, then select Ethics in-tree.
+        page.locator(
+            '.prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__row',
+            has_text=LIBRARY_NAV_PHILOSOPHY,
+        ).locator(".prks-folder-tree__toggle").first.click()
+        page.locator(
+            '.prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__link',
+            has_text=LIBRARY_NAV_ETHICS,
+        ).first.click()
+        self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ids["ethics"])
+        page.wait_for_function(
+            """() => {
+                const cur = document.querySelector(
+                    '.prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__link[aria-current="page"]'
+                );
+                return cur && (cur.textContent || '').includes('Ethics');
+            }""",
+            timeout=10000,
+        )
+        depth = page.evaluate(
+            """() => {
+                const row = document.querySelector(
+                    '.prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__row.is-selected'
+                );
+                return row ? row.style.getPropertyValue('--depth') : '';
+            }"""
+        )
+        self.assertNotEqual(depth, "")
+        self.assertGreaterEqual(int(depth or "0"), 2)
+        # Quiet selected-row clear (surface-selected, not a heavy chrome treatment).
+        self.assertTrue(
+            page.evaluate(
+                """() => {
+                    const row = document.querySelector(
+                        '.prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__row.is-selected'
+                    );
+                    if (!row) return false;
+                    return getComputedStyle(row).backgroundColor !== 'rgba(0, 0, 0, 0)';
+                }"""
+            )
+        )
 
     def test_nearby_parent_sibling_and_cross_branch_filter(self):
         _server, page, ids = self.start()
         self.open_folder(page, ids["ethics"])
+        self.force_narrow_folder_layout(page)
         trigger = self.trigger_in(page, ".prks-tile--main")
         band = page.locator(".prks-tile--main .prks-folder-nav").first
         page.wait_for_function(
@@ -158,6 +252,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         """Location crumbs and Nearby chips switch Folders without opening Browse hierarchy."""
         _server, page, ids = self.start()
         self.open_folder(page, ids["ethics"])
+        self.force_narrow_folder_layout(page)
         page.wait_for_function(
             """() => {
                 const nearby = document.querySelector(
@@ -174,6 +269,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             has_text=LIBRARY_NAV_EPISTEMOLOGY,
         ).first.click()
         self.wait_folder_title(page, LIBRARY_NAV_EPISTEMOLOGY, ids["epistemology"])
+        self.force_narrow_folder_layout(page)
         self.assertTrue(
             page.evaluate(
                 """() => {
@@ -188,6 +284,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             has_text=LIBRARY_NAV_PHILOSOPHY,
         ).first.click()
         self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, ids["philosophy"])
+        self.force_narrow_folder_layout(page)
         # Inside chip → Ethics
         page.wait_for_function(
             """() => {
@@ -207,6 +304,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
     def test_keyboard_open_nav_select_escape_restores_focus(self):
         _server, page, ids = self.start()
         self.open_folder(page, ids["ethics"])
+        self.force_narrow_folder_layout(page)
         trigger = self.trigger_in(page, ".prks-tile--main")
         trigger.focus()
         page.keyboard.press("Enter")
@@ -278,7 +376,8 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         )
         self.assertIsNotNone(ethics_tab)
         page.evaluate("id => prksWorkspaceActivateTab(id)", ethics_tab["id"])
-        page.wait_for_selector(".prks-folder-nav__trigger", timeout=10000)
+        page.wait_for_selector(".prks-tile--main [data-prks-role='folder-detail']", timeout=10000)
+        self.force_narrow_folder_layout(page)
 
         owner_before = page.evaluate(
             """() => {
@@ -315,8 +414,12 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             }""",
             timeout=10000,
         )
-        page.wait_for_selector(".prks-tile--main .prks-folder-nav__trigger", timeout=10000)
-        page.wait_for_selector(".prks-tile--secondary .prks-folder-nav__trigger", timeout=10000)
+        page.wait_for_selector(".prks-tile--main [data-prks-role='folder-detail']", timeout=10000)
+        page.wait_for_selector(".prks-tile--secondary [data-prks-role='folder-detail']", timeout=10000)
+        # Compact switcher is the narrow/tile fallback — lock both panes so
+        # a wide Main does not keep Location+Nearby display:none.
+        self.force_narrow_folder_layout(page, scope=".prks-tile--main")
+        self.force_narrow_folder_layout(page, scope=".prks-tile--secondary")
 
         # Distinct per-instance trigger IDs (not one shared #prks-folder-nav-trigger).
         trigger_ids = page.evaluate(
@@ -354,6 +457,8 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             LIBRARY_NAV_EPISTEMOLOGY,
             scope=".prks-tile--secondary",
         )
+        self.force_narrow_folder_layout(page, scope=".prks-tile--main")
+        self.force_narrow_folder_layout(page, scope=".prks-tile--secondary")
         main_still = page.evaluate(
             """(ethicsId) => {
                 const s = prksWorkspaceSnapshot();
@@ -383,6 +488,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         self.assertEqual(owner_from_main, tab_ids["main"])
         self.select_option_by_title(page, LIBRARY_NAV_PHILOSOPHY)
         self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, ids["philosophy"], scope=".prks-tile--main")
+        self.force_narrow_folder_layout(page, scope=".prks-tile--secondary")
         secondary_still = page.evaluate(
             """(epistemologyId) => {
                 const s = prksWorkspaceSnapshot();

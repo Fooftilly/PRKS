@@ -124,8 +124,25 @@ function prksUpdateFolderLibraryExpandToggleBtn() {
 
 function prksFolderTreeHost() {
     const st = window.__prksFolderDashboardState;
-    if (!st || !st.container) return null;
-    return st.container.querySelector('[data-prks-folder-tree-host]');
+    if (st && st.container) {
+        const host = st.container.querySelector('[data-prks-folder-tree-host]');
+        if (host) return host;
+    }
+    return document.querySelector('[data-prks-folder-detail-tree-host]');
+}
+
+function prksFolderTreeHosts() {
+    const hosts = [];
+    const seen = new Set();
+    function add(el) {
+        if (!el || seen.has(el)) return;
+        seen.add(el);
+        hosts.push(el);
+    }
+    const st = window.__prksFolderDashboardState;
+    if (st && st.container) add(st.container.querySelector('[data-prks-folder-tree-host]'));
+    document.querySelectorAll('[data-prks-folder-detail-tree-host]').forEach(add);
+    return hosts;
 }
 
 function prksFolderTreeIdCssEscape(folderId) {
@@ -164,9 +181,9 @@ function prksToggleAllFolderNodes() {
     if (!st || !Array.isArray(st.folders)) return;
     const allCollapsed = prksFolderTreeAllCollapsed(st.folders);
     prksSetAllFolderNodesCollapsed(st.folders, !allCollapsed);
-    const host = prksFolderTreeHost();
-    if (host) {
-        prksSyncAllFolderTreeBranchesUi(host, st.folders);
+    const hosts = prksFolderTreeHosts();
+    if (hosts.length) {
+        hosts.forEach((host) => prksSyncAllFolderTreeBranchesUi(host, st.folders));
         prksUpdateFolderLibraryExpandToggleBtn();
     } else {
         prksRerenderFolderTreeOnly();
@@ -179,9 +196,11 @@ function prksToggleFolderNode(folderId) {
     if (!id) return;
     prksSetFolderNodeCollapsed(id, !prksFolderNodeCollapsed(id));
     const collapsed = prksFolderNodeCollapsed(id);
-    const host = prksFolderTreeHost();
-    if (host) {
-        prksSyncFolderTreeBranchUi(host, id, collapsed);
+    const hosts = prksFolderTreeHosts();
+    if (hosts.length) {
+        hosts.forEach((host) => {
+            prksSyncFolderTreeBranchUi(host, id, collapsed);
+        });
         prksUpdateFolderLibraryExpandToggleBtn();
     } else {
         prksRerenderFolderTreeOnly();
@@ -233,6 +252,10 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
     const collapsed = !!opts.collapsed;
     const expanded = expandable && !collapsed;
     const matchClass = opts.matchClass || '';
+    const selected =
+        opts.selectedId != null && String(opts.selectedId) === String(node.id);
+    const selectedClass = selected ? ' is-selected' : '';
+    const currentAttr = selected ? ' aria-current="page"' : '';
     const role = opts.role === 'listitem' ? 'listitem' : 'treeitem';
     const fidEnc = encodeURIComponent(String(node.id || ''));
     const hash = `#/folders/${fidEnc}`;
@@ -255,9 +278,9 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
         : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
 
     return `
-            <div class="prks-folder-tree__row${matchClass}" data-folder-id="${nodeIdAttr}" role="${role}"${ariaExpandedAttr} style="--depth:${depth}">
+            <div class="prks-folder-tree__row${matchClass}${selectedClass}" data-folder-id="${nodeIdAttr}" role="${role}"${ariaExpandedAttr} style="--depth:${depth}">
                 ${toggleHtml}
-                <a class="prks-folder-tree__link" href="${hash}">
+                <a class="prks-folder-tree__link" href="${hash}"${currentAttr}>
                     <span class="prks-folder-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folder') : ''}</span>
                     <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
                 </a>
@@ -484,6 +507,7 @@ function renderFolderTreeRoots(folders, options = {}) {
             expandable: true,
             collapsed,
             matchClass,
+            selectedId: options.selectedId,
         });
 
         if (hasChildren) {
@@ -1112,6 +1136,108 @@ function renderDashboard(folders, container, options = {}) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
+const PRKS_FOLDER_DETAIL_NARROW_PX = 720;
+
+function prksFolderDetailExpandAncestors(folderId, rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const byId = new Map(list.map((f) => [String(f.id), f]));
+    let cur = byId.get(String(folderId));
+    const guard = new Set();
+    while (cur && cur.parent_id && !guard.has(String(cur.id))) {
+        guard.add(String(cur.id));
+        const parentId = String(cur.parent_id);
+        prksSetFolderNodeCollapsed(parentId, false);
+        cur = byId.get(parentId);
+    }
+    // Current folder with children: expand so Nearby context is visible in-tree.
+    const self = byId.get(String(folderId));
+    if (self && Number(self.child_count || 0) > 0) {
+        prksSetFolderNodeCollapsed(folderId, false);
+    }
+}
+
+function prksFolderDetailTreeHtml(rows, selectedId) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) {
+        return (
+            '<div class="prks-folder-tree__empty-state">' +
+            '<p class="prks-inline-message prks-folder-tree__empty">No folders yet.</p>' +
+            '</div>'
+        );
+    }
+    return (
+        '<div class="prks-folder-tree prks-folder-tree--detail-nav" role="tree" aria-label="Folder hierarchy">' +
+        renderFolderTreeRoots(list, { selectedId: selectedId }) +
+        '</div>'
+    );
+}
+
+function prksBindFolderDetailLayout(root, ctx) {
+    if (!root) return;
+    const apply = function () {
+        // Tests/screenshots may lock layout; otherwise width drives wide vs narrow.
+        const locked = root.getAttribute('data-prks-folder-layout-lock');
+        if (locked === 'narrow' || locked === 'wide') {
+            root.setAttribute('data-prks-folder-layout', locked);
+            return;
+        }
+        const w = root.clientWidth || 0;
+        // Unmeasured (0) defaults to wide so first paint matches desktop IA;
+        // ResizeObserver corrects once layout settles.
+        const narrow = w > 0 && w < PRKS_FOLDER_DETAIL_NARROW_PX;
+        root.setAttribute('data-prks-folder-layout', narrow ? 'narrow' : 'wide');
+    };
+    apply();
+    if (typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver(function () {
+        apply();
+    });
+    ro.observe(root);
+    if (ctx && typeof ctx.registerCleanup === 'function') {
+        ctx.registerCleanup(function () {
+            try {
+                ro.disconnect();
+            } catch (_e) {
+                /* ignore */
+            }
+        });
+    }
+}
+
+async function prksFillFolderDetailTree(ctx, folder, container) {
+    const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
+    if (!host || !folder) return;
+    const load =
+        typeof prksLoadFolderHierarchyCatalogue === 'function'
+            ? prksLoadFolderHierarchyCatalogue
+            : typeof prksFolderHierarchyNavLoadForTests === 'function'
+              ? prksFolderHierarchyNavLoadForTests
+              : null;
+    let rows = null;
+    if (load) {
+        try {
+            const signal =
+                ctx && ctx.abortController && ctx.abortController.signal
+                    ? ctx.abortController.signal
+                    : null;
+            rows = await load(false, signal);
+        } catch (_e) {
+            rows = null;
+        }
+    }
+    if (!container.isConnected) return;
+    const liveHost = container.querySelector('[data-prks-folder-detail-tree-host]');
+    if (!liveHost) return;
+    if (!Array.isArray(rows)) {
+        liveHost.innerHTML =
+            '<p class="prks-inline-message prks-folder-tree__empty">Could not load folders.</p>';
+        return;
+    }
+    prksFolderDetailExpandAncestors(folder.id, rows);
+    liveHost.innerHTML = prksFolderDetailTreeHtml(rows, folder.id);
+    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(liveHost);
+}
+
 function renderFolderDetails(ctx, folder, container, options = {}) {
     if (!container) return;
     const offlineCached = !!(options && options.offlineCached);
@@ -1172,19 +1298,34 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         typeof prksFolderNavTriggerHtml === 'function'
             ? prksFolderNavTriggerHtml(folder, null, { tabId: ctx && ctx.tabId })
             : '';
+    const newFolderIcon =
+        typeof prksIcon === 'function' ? prksIcon('plus', { size: 14 }) : '+';
     container.innerHTML = `
-        <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
-            <div class="page-header__title-row">
-                <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
-                ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+        <div class="prks-folder-detail" data-prks-role="folder-detail" data-prks-folder-layout="wide">
+            <aside class="prks-folder-detail__tree-pane" data-prks-role="folder-detail-tree" aria-label="Folder hierarchy">
+                <div class="prks-folder-detail__tree-head">
+                    <a class="prks-folder-detail__tree-all" href="#/folders">All Folders</a>
+                    <button type="button" class="prks-btn prks-btn--secondary prks-folder-detail__tree-new" data-prks-role="folder-detail-new-folder" title="New folder" aria-label="New folder">${newFolderIcon}</button>
+                </div>
+                <div class="prks-folder-detail__tree-scroll" data-prks-folder-tree-host data-prks-folder-detail-tree-host>
+                    <p class="prks-inline-message prks-folder-tree__empty">Loading folders…</p>
+                </div>
+            </aside>
+            <div class="prks-folder-detail__main">
+                <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
+                    <div class="page-header__title-row">
+                        <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+                        ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+                    </div>
+                    ${folderSummaryHtml}
+                </div>
+                ${folderNavHtml ? `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${folderNavHtml}</nav>` : ''}
+                <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
+                ${subfoldersHtml}
+                <div class="prks-page-header page-header"><h3>Files</h3></div>
+                ${worksHtml}
             </div>
-            ${folderSummaryHtml}
         </div>
-        ${folderNavHtml ? `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${folderNavHtml}</nav>` : ''}
-        <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
-        ${subfoldersHtml}
-        <div class="prks-page-header page-header"><h3>Files</h3></div>
-        ${worksHtml}
     `;
     if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
@@ -1196,14 +1337,23 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
             void deleteFolder(decodeURIComponent(encodedId));
         });
     }
+    const newBtn = container.querySelector('[data-prks-role="folder-detail-new-folder"]');
+    if (newBtn) {
+        newBtn.addEventListener('click', function () {
+            if (typeof openModal === 'function') openModal('folder-modal');
+        });
+    }
     setTimeout(() => {
         const select = document.getElementById('work-folder-id');
         if (select) select.value = folder.id;
     }, 100);
+    const detailRoot = container.querySelector('[data-prks-role="folder-detail"]');
+    prksBindFolderDetailLayout(detailRoot, ctx);
     prksBindFolderOfflineState(ctx, container);
     if (typeof prksMountFolderHierarchyNav === 'function') {
         prksMountFolderHierarchyNav(ctx, folder, container);
     }
+    void prksFillFolderDetailTree(ctx, folder, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
