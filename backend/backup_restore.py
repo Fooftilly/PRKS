@@ -2972,6 +2972,14 @@ def apply_restore(
                 "restore_research_index_failed error_type=%s",
                 safe_error_type(exc),
             )
+        # A restored library brings back both its pending managed-PDF claims
+        # and the orphaned files they describe, and the startup pass has long
+        # since run. Without this, those bytes would wait for an unrelated Work
+        # deletion or the next restart. Same bounded, failure-tolerant pass as
+        # startup: it reports a count and can never fail an installed restore.
+        from backend.work_deletion import retry_pending_pdf_cleanup_at_startup
+
+        retry_pending_pdf_cleanup_at_startup(db_obj)
 
         summary = library_summary_from_db(config.db_path)
         # The one journal write that must not raise. Everything is installed

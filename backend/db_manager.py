@@ -1882,12 +1882,22 @@ class PRKSDatabase:
                 except Exception:
                     can_remove_destination = False
             if can_remove_destination:
+                removed = False
                 try:
                     os.remove(destination_abs)
+                    removed = True
                 except FileNotFoundError:
-                    pass
+                    removed = True
                 except OSError:
                     pass
+                if removed and work_id:
+                    # Deleting the row claimed this basename for post-delete
+                    # cleanup; the rollback has now removed those bytes itself,
+                    # so the claim is settled here rather than left for a retry
+                    # pass to discover a file that is already gone.
+                    from backend.work_deletion import forget_pending_pdf_cleanup
+
+                    forget_pending_pdf_cleanup(self, local_filename)
             msg = f"Failed to insert imported file into works table: {e}"
             self.execute_query(
                 """

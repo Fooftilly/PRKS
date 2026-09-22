@@ -501,3 +501,18 @@ CREATE TABLE sync_tag_lifecycle (
     CHECK ((state = 'merged' AND target_tag_id IS NOT NULL) OR
            (state != 'merged' AND target_tag_id IS NULL))
 );
+
+-- Orphaned managed PDFs whose deletion is still owed after the canonical Work
+-- row was committed away. One row per managed basename (never a path), written
+-- inside the same transaction as the Work-row delete and removed only once the
+-- bytes are gone or another Work has claimed them. See "Post-delete cleanup
+-- recovery" in AGENTS.md.
+CREATE TABLE pending_pdf_cleanup (
+    filename TEXT PRIMARY KEY,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- NULL until a retry pass has tried this claim. Selection puts
+    -- never-attempted claims first and then the least recently attempted, so
+    -- a claim that can never settle rotates behind newer ones instead of
+    -- consuming the bounded pass forever.
+    last_attempt_at TIMESTAMP
+);

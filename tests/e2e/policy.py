@@ -515,6 +515,7 @@ AFFECTED_RULES = (
             "frontend/js/work-lifecycle-state.js",
             "frontend/js/work-lifecycle-*.js",
             "backend/work_lifecycle_sync.py",
+            "backend/work_deletion.py",
         ),
         "features": ("offline", "folders", "sync"),
         "note": "CREATE/DELETE_WORK lifecycle → offline + folders + sync",

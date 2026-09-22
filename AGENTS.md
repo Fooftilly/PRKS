@@ -158,6 +158,102 @@ Normal startup must not run a full FTS5 integrity-check on a healthy derived
 index. Strong FTS verification belongs to explicit rebuild/repair or when
 FTS is already marked suspect.
 
+## Post-delete cleanup recovery
+
+Deleting a Work commits the canonical row first and does filesystem/derived
+cleanup afterwards. Do not make that one transaction: SQLite cannot make
+external side effects atomic, and holding a write transaction open across
+`os.remove()` trades a recoverable leak for a locked database.
+
+The four post-commit categories have **different** recovery models, and that
+asymmetry is deliberate -- do not unify them:
+
+| Category | Recovery owner |
+| --- | --- |
+| text index | `text_index.reconcile_all()` (`removed_orphans`), at startup |
+| research index | `PRKSResearchIndex.reconcile_all()`, at startup |
+| thumbnails | `prune_orphan_pdf_thumbnails()`, at startup |
+| managed PDF | the durable claim below |
+
+The first three are derived and disposable: a stale row is a wrong search hit
+or a wasted cache file, and rebuilding from canonical state is both simpler and
+safer than per-artifact retry records. Do not give them retry rows.
+
+A managed PDF is different, and it is the only one that needs durable state:
+the bytes are private research material, and `works.file_path` -- the one thing
+that said which file belonged to that Work -- is destroyed by the very commit
+that precedes the cleanup. Nothing could reconstruct it afterwards.
+
+`pending_pdf_cleanup` (schema 16) is that record. Its lifecycle is bounded and
+has exactly one shape:
+
+- **Written** by `delete_work_record_on_conn()` **inside the Work-delete
+  transaction**, and only when no surviving row references the basename. That
+  placement is the point: a crash between the commit and `os.remove()` still
+  leaves a retryable claim. Only filesystem *work* stays outside the
+  transaction; the identity is recorded inside it.
+- **Stores a managed basename, never a path.** An absolute path would bind the
+  claim to one storage root and survive a restore into another. `filename` is
+  the primary key, so two Works sharing a PDF, a replay, or repeated retries
+  can never accumulate a second permanent row for the same bytes.
+- **Removed** only once the cleanup it owns is finished: the bytes are gone
+  (`os.remove()` succeeded, or `FileNotFoundError` -- already gone is the
+  successful terminal state), or a live Work now references the name so nothing
+  is owed. A failed removal, an unreadable catalogue and an uncontainable name
+  all keep the claim.
+- **Retried** by `retry_pending_pdf_cleanup()`: one bounded pass
+  (`PENDING_PDF_CLEANUP_RETRY_LIMIT`) at startup, after each Work deletion so
+  recovery does not require a restart, and after a restore rebinds a library
+  (which brings back both the claims and the bytes they describe, long after
+  startup ran). Never an unbounded startup scan, and never a general job queue.
+- **Selection rotates.** `last_attempt_at` is stamped on every claim a pass
+  tried and could not settle, and selection takes never-attempted claims first
+  and then the least recently attempted. Ordering by `recorded_at` alone let a
+  handful of permanently unsettleable claims fill every bounded pass and strand
+  every later orphan.
+
+Three safety rules are absolute:
+
+1. **Re-ask the live catalogue immediately before every retry deletion**, never
+   a deletion-time `managed_pdf_still_referenced` snapshot. A record only ever
+   says a file was orphaned once; the catalogue says whether it still is.
+2. **That check is three-valued.** `None` means the catalogue could not be
+   read, which is not `False` and not `True`: nothing is deleted and nothing is
+   settled, so the claim survives for a readable database later. A boolean that
+   failed closed would either strand orphans or discard a claim over a
+   transient error.
+3. **The check and the retirement are ONE transaction**
+   (`settle_claim_if_referenced()`). Retiring a claim by basename alone races
+   the deletion of the last referring Work: that deletion writes its claim
+   inside its own transaction, so a pass that observed the Work still alive
+   could erase the very claim the deletion depends on, and a failed unlink
+   would then have no durable record. Serialized, both orders are safe.
+
+Path containment is unchanged: `safe_pdf_path_under_dir()` remains the
+filesystem boundary, and a name it refuses is never resolved to a path.
+
+**The reference check and the unlink are not separable.** Both are held under
+the basename's shared `managed_pdf_path_lock()` -- the same lock the COW
+replace path takes -- because `POST /api/works` may point a new Work at an
+EXISTING managed PDF rather than uploading one. Without a shared guard, cleanup
+could decide a name is unreferenced and unlink it in the gap before that row
+commits ownership, leaving a live Work referencing bytes that are gone. The
+create path takes the same lock across its commit when it adopts a name it did
+not just mint; an upload needs no guard, because
+`store_new_managed_pdf_bytes()` mints a unique name and creates it exclusively.
+
+`pending_pdf_cleanup` lives in `prks_data.db` and is therefore canonical backup
+state, like the sync ledger -- it is operational rather than user-visible, but
+it must travel with the library it describes, because a restore brings back the
+same `pdfs/` tree. It is never a reason to delete bytes on its own: a restored
+claim is re-evaluated against the restored catalogue like any other.
+
+The HTTP and durable `DELETE_WORK` paths converge here. Both commit the row,
+both record the claim in that same transaction, and both run the same
+post-commit cleanup, so a replayed operation cannot create duplicate cleanup
+state -- the ledger replay carries no `file_path` at all, and the claim it
+would have written already exists.
+
 ## Database schema changes
 
 `backend/db_schema.sql` describes the complete latest schema for fresh databases.

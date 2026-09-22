@@ -310,7 +310,17 @@ def validate_delete(op):
 
 
 def delete_work_record_on_conn(conn, work_id):
-    """Remove the Work row on the caller's transaction. Cascades handle links."""
+    """Remove the Work row on the caller's transaction. Cascades handle links.
+
+    A managed PDF no surviving row references is claimed for cleanup in this
+    same transaction. `works.file_path` is the only thing that ties those bytes
+    to this Work, and it stops existing here -- so the claim has to be written
+    before the commit that destroys it, not after the `os.remove()` that may
+    never happen. Filesystem work stays outside the transaction; only the
+    identity is recorded inside it.
+    """
+    from backend.work_deletion import record_pending_pdf_cleanup_on_conn
+
     row = conn.execute(
         "SELECT file_path FROM works WHERE id = ?", (work_id,)).fetchone()
     if row is None:
@@ -327,6 +337,8 @@ def delete_work_record_on_conn(conn, work_id):
             referenced_managed_pdf_filename(r["file_path"]) == deleted_filename
             for r in survivors
         )
+        if not still_referenced:
+            record_pending_pdf_cleanup_on_conn(conn, deleted_filename)
     return DeletedWorkRecord(
         work_id=work_id,
         file_path=file_path,

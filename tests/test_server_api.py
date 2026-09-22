@@ -125,6 +125,120 @@ class TestServerAPI(unittest.TestCase):
         # Since these tests are isolated enough, we'll let them add data.
         pass
 
+    def test_adopting_an_existing_managed_pdf_holds_the_cleanup_lock(self):
+        """PR #145 review (qodo, High): a create may point at an EXISTING
+        managed PDF, so it must not commit ownership while post-delete cleanup
+        is deciding that same basename is unreferenced and unlinking it.
+
+        Both sides take the one shared per-basename lock; this pins the create
+        side holding it across the commit.
+        """
+        from backend.services import work_pdf_replace
+
+        name = "adopt-existing-lock.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ADOPT\n%%EOF\n")
+        lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
+        self.assertIsNotNone(lock)
+
+        observed = {}
+        real_add_work = server_module.db.add_work
+
+        def watching_add_work(**kwargs):
+            observed["held"] = lock.locked()
+            return real_add_work(**kwargs)
+
+        payload = json.dumps({
+            "title": "Adopts an existing managed PDF",
+            "file_path": f"/api/pdfs/{name}",
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with patch.object(server_module.db, "add_work", side_effect=watching_add_work):
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                created = json.loads(res.read().decode())
+        self.assertTrue(observed.get("held"), "commit ran without the basename lock")
+        self.assertFalse(lock.locked())
+        self.addCleanup(
+            server_module.db.delete_work_record, created.get("id") or created.get("work_id")
+        )
+
+    def test_patching_file_path_onto_a_work_holds_the_cleanup_lock(self):
+        """PR #145 review (@Fooftilly, P1): `POST /api/works` was guarded but
+        `PATCH /api/works/:id` was not, and `update_work_metadata()` allows
+        `file_path` — so a PATCH could commit ownership of a basename while
+        cleanup held the lock and was about to unlink it.
+
+        Races the two directly: cleanup's guard is held while the PATCH is
+        in flight, and the PATCH must not reach its commit until it is free.
+        """
+        from backend.services import work_pdf_replace
+
+        name = "patch-adopt-lock.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%PATCHADOPT\n%%EOF\n")
+        lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
+        self.assertIsNotNone(lock)
+
+        work_id = server_module.db.add_work("Patch adopts a managed PDF")
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+
+        observed = {}
+        real_update = server_module.db.update_work_metadata
+
+        def watching_update(wid, fields):
+            observed["held"] = lock.locked()
+            observed["released_first"] = not released.is_set()
+            return real_update(wid, fields)
+
+        released = threading.Event()
+        commit_seen = threading.Event()
+
+        def patch_request():
+            payload = json.dumps({"file_path": f"/api/pdfs/{name}"}).encode()
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works/{work_id}",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="PATCH",
+            )
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+            commit_seen.set()
+
+        with patch.object(
+            server_module.db, "update_work_metadata", side_effect=watching_update
+        ):
+            lock.acquire()
+            caller = threading.Thread(target=patch_request, daemon=True)
+            caller.start()
+            # While cleanup holds the basename, the PATCH must not commit.
+            self.assertFalse(commit_seen.wait(timeout=1.0))
+            self.assertNotIn("held", observed)
+            released.set()
+            lock.release()
+            caller.join(timeout=15)
+            self.assertFalse(caller.is_alive())
+
+        self.assertTrue(commit_seen.is_set())
+        # It committed under the lock, and only after the holder let go.
+        self.assertTrue(observed.get("held"))
+        self.assertFalse(observed.get("released_first"))
+        self.assertFalse(lock.locked())
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name}")
+
     def test_1_get_works_empty(self):
         req = urllib.request.Request(f"{self._base_url}/api/works")
         with urllib.request.urlopen(req) as res:

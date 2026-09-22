@@ -24,7 +24,7 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 15
+LATEST_SCHEMA_VERSION = 16
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
@@ -110,9 +110,14 @@ REQUIRED_TABLES = (
     "sync_operations",
     "sync_entity_revisions",
     "sync_tag_lifecycle",
+    "pending_pdf_cleanup",
 )
 
 REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
+    # Work deletion writes its post-delete PDF claim inside the same
+    # transaction as the row delete, so a missing table must be loud schema
+    # drift at startup rather than a surprise at the first deletion.
+    "pending_pdf_cleanup": ("filename", "recorded_at", "last_attempt_at"),
     "sync_operations": ("op_id", "device_id", "operation_type", "entity_type", "entity_id", "request_hash", "status", "http_status", "result_json", "applied_at"),
     "sync_entity_revisions": ("scope_type", "scope_id", "revision", "updated_at"),
     "sync_tag_lifecycle": ("tag_id", "state", "target_tag_id", "changed_at"),
@@ -625,6 +630,13 @@ CREATE TABLE arguments (
 
 # PKs/FKs enforced on the current (v12) schema. Pre-v10 reconcile uses _TABLE_PKS/_TABLE_FKS only.
 _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
+    # The basename primary key is load-bearing, not decoration: the Work-delete
+    # transaction records its claim with ON CONFLICT(filename) DO NOTHING, and
+    # "one row per managed PDF" is what keeps repeated deletions and replays
+    # from accumulating duplicate permanent rows. Validating the columns alone
+    # would let a table that lost that uniqueness pass startup and then break
+    # the canonical deletion.
+    "pending_pdf_cleanup": ("filename",),
     "sync_operations": ("op_id",),
     "sync_entity_revisions": ("scope_type", "scope_id"),
     "sync_tag_lifecycle": ("tag_id",),
@@ -640,6 +652,10 @@ _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
 }
 
 _CURRENT_TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
+    # A cleanup claim must outlive the Work row that created it -- that is the
+    # entire point -- so it deliberately carries no foreign key, and this
+    # pins that rather than leaving it to be "helpfully" added later.
+    "pending_pdf_cleanup": (),
     "sync_operations": (), "sync_entity_revisions": (), "sync_tag_lifecycle": (),
     "concept_aliases": (("concept_id", "concepts", "id", "CASCADE"),),
     "concept_parents": (
@@ -2054,6 +2070,30 @@ def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
     _ensure_roles_person_work_role_unique(conn)
 
 
+def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
+    """Durable claims for managed PDFs a committed Work deletion still owes.
+
+    The canonical Work row commits independently of filesystem cleanup, so the
+    ``file_path`` that identifies the orphan is gone before ``os.remove()`` is
+    attempted. One row per managed basename -- never an absolute path -- is
+    written in the same transaction as the Work delete and removed once the
+    bytes are gone or another Work references that name. Existing libraries
+    start with an empty table: PRKS cannot reconstruct deletions it never
+    recorded, and guessing from the pdfs directory could delete a file no Work
+    has claimed yet.
+    """
+    if not table_exists(conn, "pending_pdf_cleanup"):
+        conn.execute(
+            """
+            CREATE TABLE pending_pdf_cleanup (
+                filename TEXT PRIMARY KEY,
+                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_attempt_at TIMESTAMP
+            )
+            """
+        )
+
+
 def _ensure_roles_person_work_role_unique(conn: sqlite3.Connection) -> None:
     if not table_exists(conn, "roles"):
         return
@@ -2101,6 +2141,11 @@ MIGRATIONS: Tuple[Migration, ...] = (
         target_version=15,
         name="pdf_annotation_materialization",
         apply=migrate_v14_to_v15,
+    ),
+    Migration(
+        target_version=16,
+        name="pending_pdf_cleanup",
+        apply=migrate_v15_to_v16,
     ),
 )
 

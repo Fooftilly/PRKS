@@ -53,6 +53,7 @@ from backend.db_migrations import Migration
 from backend.server import bind_storage
 from backend.storage.config import StorageConfig
 from backend.text_index import get_text_index, reset_text_index
+from backend.work_deletion import delete_work
 import backend.backup_restore as backup_module
 import backend.server as server_module
 
@@ -982,6 +983,84 @@ class TestBackupInventory(BackupRestoreTestCase):
         self.assertEqual(leftover, {"mode", "processing_fallback_allowed"})
 
 
+class TestRestorePendingPdfCleanup(BackupRestoreTestCase):
+    """A restored library's owed managed-PDF cleanup is attempted immediately.
+
+    PR #145 review (qodo, Medium): restore installs both the pending claims and
+    the orphaned bytes they describe, long after the startup pass has run, so
+    without a post-rebind attempt those bytes would wait for an unrelated Work
+    deletion or the next restart.
+    """
+
+    def _library_with_owed_cleanup(self):
+        source = self._bind_library(pdf_name="owed.pdf")
+        db = server_module.db
+        pdf_abs = os.path.join(source["cfg"].pdfs_dir, source["pdf_name"])
+        real_remove = os.remove
+
+        def failing(path, *args, **kwargs):
+            if os.path.realpath(path) == os.path.realpath(pdf_abs):
+                raise OSError("forced pdf cleanup failure")
+            return real_remove(path, *args, **kwargs)
+
+        with patch("backend.work_deletion.os.remove", side_effect=failing):
+            result = delete_work(db, server_module.text_index, source["work_id"])
+        self.assertTrue(result.pending_pdf_cleanup)
+        self.assertTrue(os.path.isfile(pdf_abs))
+        self.assertEqual(
+            [r["filename"] for r in db.execute_query(
+                "SELECT filename FROM pending_pdf_cleanup")],
+            [source["pdf_name"]],
+        )
+        return source
+
+    def test_restore_settles_the_claims_it_brings_back(self):
+        source = self._library_with_owed_cleanup()
+        backup = create_backup(source["cfg"])
+        self.assertTrue(backup.verified)
+
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        self.assertTrue(staged.verified)
+        out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
+        self.assertTrue(out["restored"])
+
+        live = server_module.db
+        restored_pdf = os.path.join(dest.pdfs_dir, source["pdf_name"])
+        # The claim came back with the bytes, and the restore attempted it.
+        self.assertFalse(os.path.isfile(restored_pdf))
+        self.assertEqual(
+            live.execute_query("SELECT filename FROM pending_pdf_cleanup"), []
+        )
+
+    def test_a_restored_claim_never_outranks_the_restored_catalogue(self):
+        """The claim is re-evaluated against the library it arrives with."""
+        source = self._library_with_owed_cleanup()
+        db = server_module.db
+        # A Work in the SAME backup references those bytes again.
+        db.add_work("Adopter", file_path=f"/api/pdfs/{source['pdf_name']}",
+                    source_kind="pdf")
+        backup = create_backup(source["cfg"])
+
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        self.assertTrue(apply_restore(
+            dest, staged.token, "RESTORE", rebind=bind_storage)["restored"])
+
+        live = server_module.db
+        restored_pdf = os.path.join(dest.pdfs_dir, source["pdf_name"])
+        self.assertTrue(os.path.isfile(restored_pdf))
+        self.assertEqual(
+            [r["title"] for r in live.execute_query(
+                "SELECT title FROM works")],
+            ["Adopter"],
+        )
+        # Retired, not left dormant over bytes a live Work references.
+        self.assertEqual(
+            live.execute_query("SELECT filename FROM pending_pdf_cleanup"), []
+        )
+
+
 class TestBackupRoundTrip(BackupRestoreTestCase):
     def test_round_trip_to_empty_storage(self):
         source = self._bind_library(extra_pdf_name="orphan.pdf")
@@ -1321,7 +1400,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         live = server_module.db
         versions = live.execute_query("SELECT version FROM schema_version")
         self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
-        self.assertEqual(PRKS_SCHEMA_VERSION, 15)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 16)
         titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming V12"])
         canonical = live.execute_query(
