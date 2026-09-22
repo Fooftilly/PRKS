@@ -7,8 +7,6 @@
  */
 
 const path = require('path');
-const fs = require('fs');
-const vm = require('vm');
 
 let passed = 0;
 let failed = 0;
@@ -29,16 +27,11 @@ function assertEq(name, got, want) {
 }
 
 function loadApi() {
-    const src = fs.readFileSync(
-        path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'),
-        'utf8'
-    );
-    const sandbox = { console, module: { exports: {} }, exports: {} };
-    sandbox.globalThis = sandbox;
-    sandbox.window = sandbox;
-    vm.createContext(sandbox);
-    vm.runInContext(src, sandbox);
-    return sandbox.module.exports || sandbox;
+    // Prefer require over vm.runInContext: the module exports its pure helpers,
+    // and Sonar flags dynamic code execution (javascript:S1523) on new selftests.
+    const modPath = path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js');
+    delete require.cache[require.resolve(modPath)];
+    return require(modPath);
 }
 
 const fixture = [
