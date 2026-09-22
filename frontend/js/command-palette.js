@@ -932,7 +932,10 @@
         let best = null;
 
         function consider(label, hash, score) {
-            if (!(score > 0) || !hash || routeSupportsTile(hash)) return;
+            /* Require a meaningful match before naming a blocked destination: keyword-only
+             * hits (≤300) and very short queries produce misleading labels. */
+            if (!(score >= 600) || q.length < 3) return;
+            if (!hash || routeSupportsTile(hash)) return;
             const display = labelForRouteHash(hash, label);
             if (!display) return;
             if (!best || score > best.score || (score === best.score && display.length < best.label.length)) {
@@ -983,10 +986,6 @@
             return blocked.label + " can’t open in split view. " + SPLIT_SEARCH_HINT;
         }
         return 'No matching pages that can open in split view.';
-    }
-
-    function emptyGuidanceHtml(text) {
-        return '<p class="prks-command-palette__empty" role="status">' + text + '</p>';
     }
 
     function openTabRows(rawQuery) {
@@ -1230,11 +1229,7 @@
         if (state.activeIndex < 0) state.activeIndex = 0;
 
         let html = '';
-        if (state.emptyCreate) {
-            html = emptyGuidanceHtml('No create command matches.');
-        } else if (!rows.length && state.navigationTarget === 'tile') {
-            html = emptyGuidanceHtml(esc(splitPaletteEmptyMessage()));
-        } else {
+        if (!state.emptyCreate && rows.length) {
             let lastSection = '';
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
@@ -1276,7 +1271,11 @@
             else parts.input.removeAttribute('aria-activedescendant');
         }
 
+        /* Guidance uses the persistent status live region (sibling of the listbox), never a
+         * status node injected inside role=listbox — invalid owned children break AT. */
         if (state.fetchFailed) setStatus('Some quick-open results could not be loaded.');
+        else if (state.emptyCreate) setStatus('No create command matches.');
+        else if (!rows.length && state.navigationTarget === 'tile') setStatus(splitPaletteEmptyMessage());
         else if (state.worksLoading) setStatus('Searching library…');
         else setStatus('');
     }
