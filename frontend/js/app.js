@@ -3331,7 +3331,21 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
     }
 
-    prksRenderRouteLoading(contentDiv, route.hash);
+    /* Folder→Folder in the same mounted TabContext is an in-place workspace
+     * selection change: keep the existing Folder shell (tree + prior contents)
+     * visible while the destination resolves. Do not paint the generic
+     * Loading view... screen that blanks the center pane. */
+    const sameFolderWorkspace = !!(
+        prevRoute &&
+        prevRoute.name === 'folder-detail' &&
+        route.name === 'folder-detail' &&
+        contentDiv.querySelector('[data-prks-role="folder-detail"]')
+    );
+    if (!sameFolderWorkspace) {
+        prksRenderRouteLoading(contentDiv, route.hash);
+    } else {
+        contentDiv.setAttribute('aria-busy', 'true');
+    }
 
     let titleOpts = {};
 
@@ -3523,10 +3537,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 ctx.setEntity('folder', folder);
                 renderFolderDetails(ctx, folder, contentDiv, {
                     offlineCached: offlineFolder.source === 'cache',
+                    preserveFolderWorkspace: sameFolderWorkspace,
                 });
                 prksOfflinePrependBanner(contentDiv, offlineFolder);
                 titleOpts = folder
-                    ? { entityTitle: folder.title || 'Folder' }
+                    ? {
+                          entityTitle: folder.title || 'Folder',
+                          skipPageEnter: sameFolderWorkspace,
+                      }
                     : { notFound: true, notFoundTitle: 'Folder not found' };
                 break;
             }

@@ -45,6 +45,19 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("prksLoadFolderHierarchyCatalogue", folders)
         self.assertIn("hierarchyBaseGeneration", _read(_NAV))
         self.assertIn("genAtStart", _read(_NAV))
+        # First sync event (undefined fingerprint) must bump generation too.
+        self.assertIn("No baseline yet", _read(_NAV))
+        # Folder→Folder in-place workspace (no generic Loading wipe).
+        self.assertIn("preserveFolderWorkspace", folders)
+        self.assertIn("prksFolderDetailSelectInTree", folders)
+        self.assertIn("selectionOnly", folders)
+        # New folder on detail clears modal via shared helper + default parent.
+        self.assertIn("prksOpenFolderModalFromLibrarySearch('')", folders)
+        app = _read(os.path.join(_ROOT, "frontend", "js", "app.js"))
+        self.assertIn("sameFolderWorkspace", app)
+        self.assertIn("skipPageEnter: sameFolderWorkspace", app)
+        nav_js = _read(os.path.join(_ROOT, "frontend", "js", "navigation.js"))
+        self.assertIn("skipPageEnter", nav_js)
 
     def test_switcher_aria_uses_dialog_and_listbox(self):
         nav = _read(_NAV)

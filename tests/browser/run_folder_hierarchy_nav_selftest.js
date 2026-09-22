@@ -469,6 +469,89 @@ async function testLoadHierarchyBehaviour() {
                     return r && r.id === 'stale';
                 })
         );
+
+        // --- first sync event (fingerprint still undefined) must bump generation ---
+        // Sequence: hang the *first* loadHierarchy; ACK/pending lands; sync listener
+        // sees undefined fingerprint and must invalidate so the pre-op base cannot
+        // cache under the post-event fingerprint.
+        loadApiRace.prksFolderHierarchyNavResetForTests();
+        fetchCount = 0;
+        ops = [];
+        releaseFetch = null;
+        signalEntered = null;
+        nextBody = staleBody;
+        hangSecondFetch = false;
+        let hangFirstFetch = true;
+        root.prksOfflineListFetch = async function () {
+            fetchCount += 1;
+            const body = nextBody;
+            if (hangFirstFetch && fetchCount === 1) {
+                await new Promise(function (resolve) {
+                    releaseFetch = resolve;
+                    if (typeof signalEntered === 'function') signalEntered();
+                });
+            }
+            return body;
+        };
+        raceListener = null;
+        root.prksSync = {
+            subscribe: function (fn) {
+                raceListener = fn;
+                return function () {
+                    raceListener = null;
+                };
+            },
+            store: {
+                listOperations: async function () {
+                    return ops;
+                },
+            },
+        };
+        delete require.cache[require.resolve(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'))];
+        const loadApiFirst = require(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'));
+        loadApiFirst.prksFolderHierarchyNavResetForTests();
+        const firstEntered = new Promise(function (resolve) {
+            signalEntered = resolve;
+        });
+        const firstInFlight = loadApiFirst.prksFolderHierarchyNavLoadForTests(false, null);
+        await firstEntered;
+        assertEq('first-load gated', fetchCount, 1);
+        ops = [
+            {
+                operation: 'CREATE_FOLDER',
+                entity_type: 'folder',
+                op_id: 'c-first',
+                status: 'pending',
+                sequence: 1,
+            },
+        ];
+        raceListener();
+        await new Promise(function (resolve) {
+            setImmediate(resolve);
+        });
+        nextBody = freshBody;
+        hangFirstFetch = false;
+        releaseFetch();
+        const firstSuperseded = await firstInFlight;
+        assert(
+            'first-sync superseded flight still returns its rows',
+            Array.isArray(firstSuperseded) &&
+                firstSuperseded.some(function (r) {
+                    return r && r.id === 'stale';
+                })
+        );
+        const afterFirst = await loadApiFirst.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('first-sync invalidate forces refetch', fetchCount, 2);
+        assert(
+            'first-sync did not cache the pre-op base',
+            Array.isArray(afterFirst) &&
+                afterFirst.some(function (r) {
+                    return r && r.id === 'fresh';
+                }) &&
+                !afterFirst.some(function (r) {
+                    return r && r.id === 'stale';
+                })
+        );
     } finally {
         restore();
     }

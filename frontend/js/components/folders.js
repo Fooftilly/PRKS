@@ -1177,6 +1177,19 @@ function prksFolderDetailTreeHtml(rows, selectedId) {
 
 function prksBindFolderDetailLayout(root, ctx) {
     if (!root) return;
+    // Folder→Folder in-place updates must not stack ResizeObservers.
+    if (root.dataset.prksFolderLayoutBound === '1') {
+        const locked = root.getAttribute('data-prks-folder-layout-lock');
+        if (locked === 'narrow' || locked === 'wide') {
+            root.setAttribute('data-prks-folder-layout', locked);
+            return;
+        }
+        const w = root.clientWidth || 0;
+        const narrow = w > 0 && w < PRKS_FOLDER_DETAIL_NARROW_PX;
+        root.setAttribute('data-prks-folder-layout', narrow ? 'narrow' : 'wide');
+        return;
+    }
+    root.dataset.prksFolderLayoutBound = '1';
     const apply = function () {
         // Tests/screenshots may lock layout; otherwise width drives wide vs narrow.
         const locked = root.getAttribute('data-prks-folder-layout-lock');
@@ -1203,11 +1216,54 @@ function prksBindFolderDetailLayout(root, ctx) {
             } catch (_e) {
                 /* ignore */
             }
+            try {
+                delete root.dataset.prksFolderLayoutBound;
+            } catch (_e2) {
+                /* ignore */
+            }
         });
     }
 }
 
-async function prksFillFolderDetailTree(ctx, folder, container) {
+/**
+ * In-place tree selection for Folder→Folder: expand ancestors in the live DOM
+ * and move aria-current / is-selected without rebuilding the hierarchy pane.
+ * @returns {boolean} true when the destination row was found and selected
+ */
+function prksFolderDetailSelectInTree(host, folderId, rows) {
+    if (!host || folderId == null || folderId === '') return false;
+    const list = Array.isArray(rows) ? rows : null;
+    if (list) {
+        prksFolderDetailExpandAncestors(folderId, list);
+        const byId = new Map(list.map((f) => [String(f.id), f]));
+        let cur = byId.get(String(folderId));
+        const guard = new Set();
+        while (cur && cur.parent_id && !guard.has(String(cur.id))) {
+            guard.add(String(cur.id));
+            prksSyncFolderTreeBranchUi(host, cur.parent_id, false);
+            cur = byId.get(String(cur.parent_id));
+        }
+        const self = byId.get(String(folderId));
+        if (self && Number(self.child_count || 0) > 0) {
+            prksSyncFolderTreeBranchUi(host, folderId, false);
+        }
+    }
+    host.querySelectorAll('.prks-folder-tree__row.is-selected').forEach(function (row) {
+        row.classList.remove('is-selected');
+        const link = row.querySelector('.prks-folder-tree__link');
+        if (link) link.removeAttribute('aria-current');
+    });
+    const idEsc = prksFolderTreeIdCssEscape(folderId);
+    const target = host.querySelector(`.prks-folder-tree__row[data-folder-id="${idEsc}"]`);
+    if (!target) return false;
+    target.classList.add('is-selected');
+    const targetLink = target.querySelector('.prks-folder-tree__link');
+    if (targetLink) targetLink.setAttribute('aria-current', 'page');
+    return true;
+}
+
+async function prksFillFolderDetailTree(ctx, folder, container, options) {
+    const opts = options && typeof options === 'object' ? options : {};
     const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!host || !folder) return;
     const load =
@@ -1236,19 +1292,20 @@ async function prksFillFolderDetailTree(ctx, folder, container) {
             '<p class="prks-inline-message prks-folder-tree__empty">Could not load folders.</p>';
         return;
     }
+    // Same-workspace Folder→Folder: keep the hierarchy DOM; only move selection.
+    if (
+        opts.selectionOnly &&
+        liveHost.querySelector('.prks-folder-tree--detail-nav') &&
+        prksFolderDetailSelectInTree(liveHost, folder.id, rows)
+    ) {
+        return;
+    }
     prksFolderDetailExpandAncestors(folder.id, rows);
     liveHost.innerHTML = prksFolderDetailTreeHtml(rows, folder.id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(liveHost);
 }
 
-function renderFolderDetails(ctx, folder, container, options = {}) {
-    if (!container) return;
-    const offlineCached = !!(options && options.offlineCached);
-    if (!folder) {
-        container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">Folder not found.</p>';
-        return;
-    }
-    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('folder', folder);
+function prksFolderDetailMainInnerHtml(ctx, folder, offlineCached) {
     const hasChildren = Array.isArray(folder.children) && folder.children.length > 0;
     const canDelete = (!folder.works || folder.works.length === 0) && !hasChildren;
 
@@ -1301,6 +1358,90 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         typeof prksFolderNavTriggerHtml === 'function'
             ? prksFolderNavTriggerHtml(folder, null, { tabId: ctx && ctx.tabId })
             : '';
+    return `
+                <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
+                    <div class="page-header__title-row">
+                        <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+                        ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
+                    </div>
+                    ${folderSummaryHtml}
+                </div>
+                ${folderNavHtml ? `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${folderNavHtml}</nav>` : ''}
+                <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
+                ${subfoldersHtml}
+                <div class="prks-page-header page-header"><h3>Files</h3></div>
+                ${worksHtml}
+    `;
+}
+
+function prksBindFolderDetailChrome(ctx, folder, container) {
+    const delBtn = container.querySelector('[data-delete-folder-id]');
+    if (delBtn && delBtn.dataset.prksFolderDeleteBound !== '1') {
+        delBtn.dataset.prksFolderDeleteBound = '1';
+        delBtn.addEventListener('click', () => {
+            const encodedId = delBtn.getAttribute('data-delete-folder-id') || '';
+            void deleteFolder(decodeURIComponent(encodedId));
+        });
+    }
+    const newBtn = container.querySelector('[data-prks-role="folder-detail-new-folder"]');
+    if (newBtn) {
+        // Rebind every commit so the default parent tracks the current Folder.
+        const next = newBtn.cloneNode(true);
+        newBtn.parentNode.replaceChild(next, newBtn);
+        next.addEventListener('click', function () {
+            // Clear stale modal fields via the shared helper, then default the
+            // new folder's parent to the Folder this button lives on.
+            prksOpenFolderModalFromLibrarySearch('');
+            const parentHidden = document.getElementById('folder-parent-id');
+            const parentInput = document.getElementById('folder-parent-search');
+            if (parentHidden) parentHidden.value = String(folder.id || '');
+            if (parentInput) parentInput.value = String(folder.title || '');
+            if (typeof window.prksRefreshFolderModalValidation === 'function') {
+                void window.prksRefreshFolderModalValidation();
+            }
+        });
+    }
+    setTimeout(() => {
+        const select = document.getElementById('work-folder-id');
+        if (select) select.value = folder.id;
+    }, 100);
+}
+
+function renderFolderDetails(ctx, folder, container, options = {}) {
+    if (!container) return;
+    const offlineCached = !!(options && options.offlineCached);
+    if (!folder) {
+        container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">Folder not found.</p>';
+        return;
+    }
+    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('folder', folder);
+
+    const existing = container.querySelector('[data-prks-role="folder-detail"]');
+    const existingMain =
+        existing && existing.querySelector('.prks-folder-detail__main');
+    const existingTree =
+        existing && existing.querySelector('[data-prks-role="folder-detail-tree"]');
+    const preserve =
+        !!(options && options.preserveFolderWorkspace) &&
+        !!(existing && existingMain && existingTree);
+
+    if (preserve) {
+        // Atomic Folder→Folder commit: keep hierarchy shell; replace contents only.
+        existingMain.innerHTML = prksFolderDetailMainInnerHtml(ctx, folder, offlineCached);
+        if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
+            window.prksInitLazyWorkThumbs(existingMain);
+        }
+        prksBindFolderDetailChrome(ctx, folder, container);
+        prksBindFolderDetailLayout(existing, ctx);
+        prksBindFolderOfflineState(ctx, container);
+        if (typeof prksMountFolderHierarchyNav === 'function') {
+            prksMountFolderHierarchyNav(ctx, folder, container);
+        }
+        void prksFillFolderDetailTree(ctx, folder, container, { selectionOnly: true });
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+        return;
+    }
+
     const newFolderIcon =
         typeof prksIcon === 'function' ? prksIcon('plus', { size: 14 }) : '+';
     container.innerHTML = `
@@ -1315,41 +1456,14 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
                 </div>
             </aside>
             <div class="prks-folder-detail__main">
-                <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
-                    <div class="page-header__title-row">
-                        <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
-                        ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
-                    </div>
-                    ${folderSummaryHtml}
-                </div>
-                ${folderNavHtml ? `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${folderNavHtml}</nav>` : ''}
-                <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
-                ${subfoldersHtml}
-                <div class="prks-page-header page-header"><h3>Files</h3></div>
-                ${worksHtml}
+                ${prksFolderDetailMainInnerHtml(ctx, folder, offlineCached)}
             </div>
         </div>
     `;
     if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }
-    const delBtn = container.querySelector('[data-delete-folder-id]');
-    if (delBtn) {
-        delBtn.addEventListener('click', () => {
-            const encodedId = delBtn.getAttribute('data-delete-folder-id') || '';
-            void deleteFolder(decodeURIComponent(encodedId));
-        });
-    }
-    const newBtn = container.querySelector('[data-prks-role="folder-detail-new-folder"]');
-    if (newBtn) {
-        newBtn.addEventListener('click', function () {
-            if (typeof openModal === 'function') openModal('folder-modal');
-        });
-    }
-    setTimeout(() => {
-        const select = document.getElementById('work-folder-id');
-        if (select) select.value = folder.id;
-    }, 100);
+    prksBindFolderDetailChrome(ctx, folder, container);
     const detailRoot = container.querySelector('[data-prks-role="folder-detail"]');
     prksBindFolderDetailLayout(detailRoot, ctx);
     prksBindFolderOfflineState(ctx, container);

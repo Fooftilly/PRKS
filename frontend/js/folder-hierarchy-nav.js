@@ -102,6 +102,10 @@
                 const fp = folderStructureOpsFingerprint(ops);
                 if (hierarchyOpsFingerprint === undefined) {
                     hierarchyOpsFingerprint = fp;
+                    // No baseline yet: an in-flight first load may predate this
+                    // structure change (or an ACK that landed mid-fetch), so do
+                    // not let it cache its base under the post-event fingerprint.
+                    invalidateHierarchyBase();
                     return;
                 }
                 if (fp === hierarchyOpsFingerprint) return;

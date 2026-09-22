@@ -1344,7 +1344,9 @@
             if (typeof prksSyncNavDisclosures === 'function') prksSyncNavDisclosures(route);
         }
 
-        const skipAnim = restored && Number(restored.scrollTop) > 8;
+        const skipAnim =
+            !!(opts && opts.skipPageEnter) ||
+            (restored && Number(restored.scrollTop) > 8);
         if (!skipAnim && typeof root.prksPlayPageEnterAnimation === 'function' && cd) {
             root.prksPlayPageEnterAnimation(cd);
         }

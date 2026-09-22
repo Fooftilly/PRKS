@@ -537,4 +537,396 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         self.open_switcher(page)
         page.wait_for_timeout(400)
         self.assertLessEqual(counts["folder_detail"] - before_detail, 1)
+
+    def test_folder_to_folder_keeps_workspace_while_pending(self):
+        """Folder→Folder must not blank the center with generic Loading view..."""
+        from urllib.parse import urlparse
+
+        _server, page, ids = self.start()
+        research = ids["research"]
+        philosophy = ids["philosophy"]
+        ethics = ids["ethics"]
+        self.open_folder(page, research)
+        page.wait_for_selector(
+            ".prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__link",
+            timeout=10000,
+        )
+
+        held_b = []
+        held_c = []
+
+        def hold_destinations(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method != "GET":
+                route.fallback()
+                return
+            if path == "/api/folders/" + philosophy:
+                held_b.append(route)
+                return
+            if path == "/api/folders/" + ethics:
+                held_c.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders/**", hold_destinations)
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            # Wait until Philosophy detail GET is held.
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held_b:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_b, "destination Folder GET was not held")
+
+            mid = page.evaluate(
+                """({ researchTitle }) => {
+                    const scope = '.prks-tile--main';
+                    const detail = document.querySelector(scope + ' [data-prks-role="folder-detail"]');
+                    const tree = document.querySelector(
+                        scope + ' [data-prks-folder-detail-tree-host] .prks-folder-tree--detail-nav'
+                    );
+                    const loading = document.querySelector(scope + ' .prks-route-loading');
+                    const title = document.querySelector(
+                        scope + ' .prks-folder-detail__main .prks-page-title'
+                    );
+                    return {
+                        hasDetail: !!detail,
+                        hasTree: !!tree,
+                        hasRouteLoading: !!loading,
+                        stillResearch: !!(title && (title.textContent || '').includes(researchTitle)),
+                    };
+                }""",
+                {"researchTitle": LIBRARY_NAV_RESEARCH},
+            )
+            self.assertTrue(mid["hasDetail"], "Folder workspace must stay mounted")
+            self.assertTrue(mid["hasTree"], "hierarchy tree must stay mounted")
+            self.assertFalse(mid["hasRouteLoading"], "must not insert .prks-route-loading")
+            self.assertTrue(mid["stillResearch"], "prior Folder content must remain until commit")
+
+            held_b.pop(0).fallback()
+            self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, philosophy)
+
+            # Return to Research (also Folder→Folder; usually cache-served).
+            held_b.clear()
+            held_c.clear()
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{research}"]'
+            ).click()
+            self.wait_folder_title(page, LIBRARY_NAV_RESEARCH, research)
+
+            # A → B → C with out-of-order responses: release B after C is selected;
+            # only C may win.
+            held_b.clear()
+            held_c.clear()
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held_b:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_b, "B (Philosophy) GET not held")
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{ethics}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held_c:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_c, "C (Ethics) GET not held")
+            self.assertEqual(page.locator(".prks-tile--main .prks-route-loading").count(), 0)
+            self.assertEqual(
+                page.locator(".prks-tile--main [data-prks-role='folder-detail']").count(),
+                1,
+            )
+            # Release older B first — must not overwrite C's pending selection.
+            while held_b:
+                held_b.pop(0).fallback()
+            page.wait_for_timeout(200)
+            title_mid = page.locator(
+                ".prks-tile--main .prks-folder-detail__main .prks-page-title"
+            ).inner_text()
+            self.assertNotIn(LIBRARY_NAV_PHILOSOPHY, title_mid)
+            while held_c:
+                held_c.pop(0).fallback()
+            self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ethics)
+            title = page.locator(
+                ".prks-tile--main .prks-folder-detail__main .prks-page-title"
+            ).inner_text()
+            self.assertIn(LIBRARY_NAV_ETHICS, title)
+            self.assertNotIn(LIBRARY_NAV_PHILOSOPHY, title)
+        finally:
+            for bucket in (held_b, held_c):
+                while bucket:
+                    try:
+                        bucket.pop(0).fallback()
+                    except Exception:
+                        pass
+            try:
+                page.unroute("**/api/folders/**")
+            except Exception:
+                pass
+
+    def test_tiled_folder_switch_stays_in_own_pane(self):
+        """Tiled Folder TabContexts: in-place switch must not cross-pane wipe."""
+        from urllib.parse import urlparse
+
+        _server, page, ids = self.start()
+        self.open_folder(page, ids["ethics"])
+        page.evaluate(
+            """(id) => prksNavigate('#/folders/' + encodeURIComponent(id), { target: 'tile' })""",
+            ids["epistemology"],
+        )
+        page.wait_for_selector(".prks-tile--secondary [data-prks-role='folder-detail']", timeout=15000)
+        held = []
+
+        def hold_phil_main(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/folders/" + ids["philosophy"]:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders/**", hold_phil_main)
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{ids["philosophy"]}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held)
+            mid = page.evaluate(
+                """() => ({
+                    mainLoading: !!document.querySelector('.prks-tile--main .prks-route-loading'),
+                    secLoading: !!document.querySelector('.prks-tile--secondary .prks-route-loading'),
+                    secDetail: !!document.querySelector(
+                        '.prks-tile--secondary [data-prks-role="folder-detail"]'
+                    ),
+                    mainDetail: !!document.querySelector(
+                        '.prks-tile--main [data-prks-role="folder-detail"]'
+                    ),
+                })"""
+            )
+            self.assertFalse(mid["mainLoading"])
+            self.assertFalse(mid["secLoading"])
+            self.assertTrue(mid["secDetail"])
+            self.assertTrue(mid["mainDetail"])
+            held[0].fallback()
+            self.wait_folder_title(
+                page, LIBRARY_NAV_PHILOSOPHY, ids["philosophy"], scope=".prks-tile--main"
+            )
+            sec_title = page.locator(
+                ".prks-tile--secondary .prks-folder-detail__main .prks-page-title"
+            ).inner_text()
+            self.assertIn(LIBRARY_NAV_EPISTEMOLOGY, sec_title)
+        finally:
+            while held:
+                try:
+                    held.pop(0).fallback()
+                except Exception:
+                    pass
+            try:
+                page.unroute("**/api/folders/**")
+            except Exception:
+                pass
+
+    def test_folder_to_folder_keeps_workspace_while_pending(self):
+        """Folder→Folder must not blank the center with generic Loading view..."""
+        from urllib.parse import urlparse
+
+        _server, page, ids = self.start()
+        research = ids["research"]
+        philosophy = ids["philosophy"]
+        ethics = ids["ethics"]
+        self.open_folder(page, research)
+        page.wait_for_selector(
+            ".prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__link",
+            timeout=10000,
+        )
+        tree_before = page.evaluate(
+            """() => {
+                const host = document.querySelector(
+                    '.prks-tile--main [data-prks-folder-detail-tree-host]'
+                );
+                return host ? host.innerHTML.length : 0;
+            }"""
+        )
+        self.assertGreater(tree_before, 40)
+
+        held = []
+
+        def hold_philosophy(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/folders/" + philosophy:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders/**", hold_philosophy)
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held, "destination Folder GET was not held")
+
+            mid = page.evaluate(
+                """({ researchTitle }) => {
+                    const scope = '.prks-tile--main';
+                    const detail = document.querySelector(scope + ' [data-prks-role="folder-detail"]');
+                    const tree = document.querySelector(
+                        scope + ' [data-prks-folder-detail-tree-host] .prks-folder-tree--detail-nav'
+                    );
+                    const loading = document.querySelector(scope + ' .prks-route-loading');
+                    const title = document.querySelector(
+                        scope + ' .prks-folder-detail__main .prks-page-title'
+                    );
+                    return {
+                        hasDetail: !!detail,
+                        hasTree: !!tree,
+                        hasRouteLoading: !!loading,
+                        title: title ? (title.textContent || '') : '',
+                        stillResearch: !!(title && (title.textContent || '').includes(researchTitle)),
+                    };
+                }""",
+                {"researchTitle": LIBRARY_NAV_RESEARCH},
+            )
+            self.assertTrue(mid["hasDetail"], "Folder workspace must stay mounted")
+            self.assertTrue(mid["hasTree"], "hierarchy tree must stay mounted")
+            self.assertFalse(mid["hasRouteLoading"], "must not insert .prks-route-loading")
+            self.assertTrue(mid["stillResearch"], "prior Folder content must remain until commit")
+
+            held[0].fallback()
+            held.clear()
+            self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, philosophy)
+
+            # A → B → C with delayed C: only C may win (B must not flash after).
+            held_c = []
+
+            def hold_ethics(route):
+                req = route.request
+                path = urlparse(req.url).path
+                if req.method == "GET" and path == "/api/folders/" + ethics:
+                    held_c.append(route)
+                    return
+                route.fallback()
+
+            page.unroute("**/api/folders/**", hold_philosophy)
+            page.route("**/api/folders/**", hold_ethics)
+            # Navigate B then quickly C while C is held.
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{ethics}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held_c:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_c, "Ethics Folder GET was not held")
+            # While C pending, no route-loading wipe.
+            self.assertEqual(
+                page.locator(".prks-tile--main .prks-route-loading").count(),
+                0,
+            )
+            self.assertEqual(
+                page.locator(".prks-tile--main [data-prks-role='folder-detail']").count(),
+                1,
+            )
+            held_c[0].fallback()
+            self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ethics)
+            # Settle: title must be Ethics, not a late Philosophy flash.
+            page.wait_for_timeout(300)
+            title = page.locator(
+                ".prks-tile--main .prks-folder-detail__main .prks-page-title"
+            ).inner_text()
+            self.assertIn(LIBRARY_NAV_ETHICS, title)
+            self.assertNotIn(LIBRARY_NAV_PHILOSOPHY, title)
+        finally:
+            for r in list(held) + list(held_c if "held_c" in dir() else []):
+                try:
+                    r.fallback()
+                except Exception:
+                    pass
+            try:
+                page.unroute("**/api/folders/**")
+            except Exception:
+                pass
+
+    def test_tiled_folder_switch_stays_in_own_pane(self):
+        """Tiled Folder TabContexts: in-place switch must not cross-pane wipe."""
+        from urllib.parse import urlparse
+
+        _server, page, ids = self.start()
+        self.open_folder(page, ids["ethics"])
+        page.evaluate(
+            """(id) => prksNavigate('#/folders/' + encodeURIComponent(id), { target: 'tile' })""",
+            ids["epistemology"],
+        )
+        page.wait_for_selector(".prks-tile--secondary [data-prks-role='folder-detail']", timeout=15000)
+        held = []
+
+        def hold_phil_main(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/folders/" + ids["philosophy"]:
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders/**", hold_phil_main)
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{ids["philosophy"]}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held:
+                page.wait_for_timeout(50)
+            self.assertTrue(held)
+            mid = page.evaluate(
+                """() => ({
+                    mainLoading: !!document.querySelector('.prks-tile--main .prks-route-loading'),
+                    secLoading: !!document.querySelector('.prks-tile--secondary .prks-route-loading'),
+                    secDetail: !!document.querySelector(
+                        '.prks-tile--secondary [data-prks-role="folder-detail"]'
+                    ),
+                    mainDetail: !!document.querySelector(
+                        '.prks-tile--main [data-prks-role="folder-detail"]'
+                    ),
+                })"""
+            )
+            self.assertFalse(mid["mainLoading"])
+            self.assertFalse(mid["secLoading"])
+            self.assertTrue(mid["secDetail"])
+            self.assertTrue(mid["mainDetail"])
+            held[0].fallback()
+            self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, ids["philosophy"], scope=".prks-tile--main")
+            sec_title = page.locator(
+                ".prks-tile--secondary .prks-folder-detail__main .prks-page-title"
+            ).inner_text()
+            self.assertIn(LIBRARY_NAV_EPISTEMOLOGY, sec_title)
+        finally:
+            for r in held:
+                try:
+                    r.fallback()
+                except Exception:
+                    pass
+            try:
+                page.unroute("**/api/folders/**")
+            except Exception:
+                pass
         self.assertLessEqual(counts["folders_index"], 2)
