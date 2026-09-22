@@ -254,6 +254,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_folders_offline",
             "tests.e2e.test_folders_durable",
+            "tests.e2e.test_library_nav_folders",
         ),
     },
     "playlists": {
@@ -465,6 +466,7 @@ AFFECTED_RULES = (
         "name": "folders",
         "paths": (
             "frontend/js/components/folders.js",
+            "frontend/js/folder-hierarchy-nav.js",
             "frontend/js/folder-state.js",
             "frontend/js/folder-tag-state.js",
             "frontend/js/folder-*.js",

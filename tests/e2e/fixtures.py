@@ -499,3 +499,44 @@ def seed_folders_library(storage_root: str) -> dict:
         }
     )
     return ids
+
+
+LIBRARY_NAV_RESEARCH = "Research"
+LIBRARY_NAV_PHILOSOPHY = "Philosophy"
+LIBRARY_NAV_ETHICS = "Ethics"
+LIBRARY_NAV_EPISTEMOLOGY = "Epistemology"
+LIBRARY_NAV_COMPUTING = "Computing"
+LIBRARY_NAV_AI = "AI"
+LIBRARY_NAV_NETWORKING = "Networking"
+
+
+def seed_library_nav_folders(storage_root: str) -> dict:
+    """Multi-level Folder tree for Library Navigation V1 E2E.
+
+    Research
+    ├── Philosophy
+    │   ├── Ethics
+    │   └── Epistemology
+    └── Computing
+        ├── AI
+        └── Networking
+    """
+    cfg = StorageConfig.for_testing(storage_root)
+    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    research = db.add_folder(LIBRARY_NAV_RESEARCH, "Library nav root.", None)
+    philosophy = db.add_folder(LIBRARY_NAV_PHILOSOPHY, "Philosophy branch.", research)
+    ethics = db.add_folder(LIBRARY_NAV_ETHICS, "Ethics leaf.", philosophy)
+    epistemology = db.add_folder(LIBRARY_NAV_EPISTEMOLOGY, "Epistemology leaf.", philosophy)
+    computing = db.add_folder(LIBRARY_NAV_COMPUTING, "Computing branch.", research)
+    ai = db.add_folder(LIBRARY_NAV_AI, "AI leaf.", computing)
+    networking = db.add_folder(LIBRARY_NAV_NETWORKING, "Networking leaf.", computing)
+    return {
+        "research": research,
+        "philosophy": philosophy,
+        "ethics": ethics,
+        "epistemology": epistemology,
+        "computing": computing,
+        "ai": ai,
+        "networking": networking,
+    }
+

@@ -1168,10 +1168,15 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
                   ],
               })
             : '';
+    const folderNavHtml =
+        typeof prksFolderNavTriggerHtml === 'function' ? prksFolderNavTriggerHtml(folder) : '';
     container.innerHTML = `
-        <div class="prks-page-header page-header page-header--split">
+        <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
             <div class="page-header__title-row">
-                <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+                <div class="prks-folder-detail__title-block">
+                    <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
+                    ${folderNavHtml ? `<div class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">${folderNavHtml}</div>` : ''}
+                </div>
                 ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
             </div>
             ${folderSummaryHtml}
@@ -1196,6 +1201,9 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         if (select) select.value = folder.id;
     }, 100);
     prksBindFolderOfflineState(ctx, container);
+    if (typeof prksMountFolderHierarchyNav === 'function') {
+        prksMountFolderHierarchyNav(ctx, folder, container);
+    }
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
