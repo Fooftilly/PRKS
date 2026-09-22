@@ -121,7 +121,7 @@ class ModalLifecycleTests(unittest.TestCase):
         page.locator("#work-doc-type-trigger").click()
         page.locator("#work-modal .prks-doc-type-menu__panel:not(.hidden)").wait_for()
         page.keyboard.press("Escape")
-        page.locator("#work-doc-type-listbox.hidden").wait_for()
+        page.locator("#work-modal .prks-doc-type-menu__panel:not(.hidden)").wait_for(state="hidden")
         self.assertTrue(_modal_open(page, "work-modal"))
         page.keyboard.press("Escape")
         page.locator("#work-modal").wait_for(state="hidden")
