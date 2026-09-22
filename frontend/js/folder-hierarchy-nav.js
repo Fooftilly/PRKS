@@ -29,7 +29,6 @@
     let openFolderId = null;
     let hierarchyRows = null;
     let hierarchyLoadError = false;
-    let loadPromise = null;
     /** Path labels memoized for the current hierarchyRows snapshot (cleared on reload). */
     let hierarchyPathCache = null;
     let boundGlobal = false;
@@ -825,7 +824,7 @@
                 hierarchyLoadError = false;
                 clearHierarchyPathCache();
                 void (async function () {
-                    const rows = await loadHierarchy(true);
+                    const rows = await loadHierarchy(true, signalForOwner(restoreTarget));
                     if (!panelEl || panelEl.hidden) return;
                     renderPanelBody(rows);
                     if (restoreTarget) positionPanel(restoreTarget);
@@ -848,69 +847,96 @@
         else if (optionEls.length) setActiveOption(0);
     }
 
-    async function loadHierarchy(force) {
+    function isAbortError(err) {
+        if (typeof root.prksIsAbortError === 'function') return root.prksIsAbortError(err);
+        return !!(err && err.name === 'AbortError');
+    }
+
+    function signalForOwner(owner) {
+        if (!owner) return null;
+        if (owner.abortController && owner.abortController.signal) {
+            return owner.abortController.signal;
+        }
+        const tabId =
+            typeof owner.getAttribute === 'function'
+                ? owner.getAttribute('data-prks-folder-nav-tab-id')
+                : owner.tabId != null
+                  ? String(owner.tabId)
+                  : null;
+        if (!tabId || typeof root.prksGetTabContext !== 'function') return null;
+        const ctx = root.prksGetTabContext(tabId);
+        return ctx && ctx.abortController && ctx.abortController.signal
+            ? ctx.abortController.signal
+            : null;
+    }
+
+    /**
+     * Load folders:index for the switcher. Pass the owning TabContext route
+     * AbortSignal so cold-park / beginRoute aborts the request. Concurrent
+     * panes each pass their own signal; prksRequest dedupes the underlying GET
+     * and only cancels the network flight when every subscriber has aborted.
+     */
+    async function loadHierarchy(force, signal) {
         if (!force && Array.isArray(hierarchyRows)) return hierarchyRows;
-        if (!force && hierarchyLoadError && hierarchyRows === null && !loadPromise) {
+        if (!force && hierarchyLoadError && hierarchyRows === null) {
             return null;
         }
-        if (loadPromise) return loadPromise;
-        loadPromise = (async function () {
-            let rows = null;
-            try {
-                if (typeof root.prksOfflineListFetch === 'function') {
-                    const result = await root.prksOfflineListFetch(
-                        'folders:index',
-                        '/api/folders',
-                        // Shared catalogue: not tied to one route AbortSignal so a
-                        // sibling Folder pane can still warm/reuse the same fetch.
-                        null,
-                        {
-                            domain: 'folders',
-                            validate:
-                                typeof root.prksIsFoldersIndexShape === 'function'
-                                    ? root.prksIsFoldersIndexShape
-                                    : undefined,
-                        }
-                    );
-                    if (typeof root.prksResolveOfflineFoldersIndex === 'function') {
-                        rows = root.prksResolveOfflineFoldersIndex(result);
-                    } else if (result && Array.isArray(result.value)) {
-                        rows = result.value;
+        if (signal && signal.aborted) return null;
+
+        let rows = null;
+        try {
+            if (typeof root.prksOfflineListFetch === 'function') {
+                const result = await root.prksOfflineListFetch(
+                    'folders:index',
+                    '/api/folders',
+                    signal || null,
+                    {
+                        domain: 'folders',
+                        validate:
+                            typeof root.prksIsFoldersIndexShape === 'function'
+                                ? root.prksIsFoldersIndexShape
+                                : undefined,
                     }
+                );
+                if (signal && signal.aborted) return null;
+                if (typeof root.prksResolveOfflineFoldersIndex === 'function') {
+                    rows = root.prksResolveOfflineFoldersIndex(result);
+                } else if (result && Array.isArray(result.value)) {
+                    rows = result.value;
                 }
-            } catch (_e) {
+            }
+        } catch (e) {
+            if (isAbortError(e) || (signal && signal.aborted)) return null;
+            rows = null;
+        }
+        if (!Array.isArray(rows) && typeof root.fetchFolders === 'function') {
+            try {
+                rows = await root.fetchFolders(signal ? { signal: signal } : {});
+                if (signal && signal.aborted) return null;
+            } catch (e2) {
+                if (isAbortError(e2) || (signal && signal.aborted)) return null;
                 rows = null;
             }
-            if (!Array.isArray(rows) && typeof root.fetchFolders === 'function') {
-                try {
-                    rows = await root.fetchFolders();
-                } catch (_e2) {
-                    rows = null;
-                }
-            }
-            if (!Array.isArray(rows)) {
-                hierarchyRows = null;
-                hierarchyLoadError = true;
-                clearHierarchyPathCache();
-                return null;
-            }
-            if (typeof root.prksEffectiveFolderRows === 'function') {
-                try {
-                    rows = await root.prksEffectiveFolderRows(rows);
-                } catch (_e3) {
-                    /* keep raw catalogue */
-                }
-            }
-            hierarchyRows = Array.isArray(rows) ? rows : [];
-            hierarchyLoadError = false;
-            clearHierarchyPathCache();
-            return hierarchyRows;
-        })();
-        try {
-            return await loadPromise;
-        } finally {
-            loadPromise = null;
         }
+        if (signal && signal.aborted) return null;
+        if (!Array.isArray(rows)) {
+            hierarchyRows = null;
+            hierarchyLoadError = true;
+            clearHierarchyPathCache();
+            return null;
+        }
+        if (typeof root.prksEffectiveFolderRows === 'function') {
+            try {
+                rows = await root.prksEffectiveFolderRows(rows);
+            } catch (_e3) {
+                /* keep raw catalogue */
+            }
+        }
+        if (signal && signal.aborted) return null;
+        hierarchyRows = Array.isArray(rows) ? rows : [];
+        hierarchyLoadError = false;
+        clearHierarchyPathCache();
+        return hierarchyRows;
     }
 
     function updateTriggerPath(trigger, folder, rows) {
@@ -962,7 +988,7 @@
         panel.appendChild(loading);
         positionPanel(trigger);
 
-        const rows = await loadHierarchy();
+        const rows = await loadHierarchy(false, signalForOwner(trigger));
         if (!panelEl || panelEl.hidden) return;
         // Trigger may have unmounted during the await (tab switch / remount).
         if (!triggerStillLive(trigger) || restoreTarget !== trigger) {
@@ -1142,18 +1168,27 @@
         if (navRoot) paintBand(navRoot, folder, hierarchyRows);
 
         if (ctx && typeof ctx.registerCleanup === 'function') {
+            const ownerTabId = ctx.tabId != null ? String(ctx.tabId) : null;
             ctx.registerCleanup(function () {
-                if (restoreTarget && trigger && restoreTarget === trigger) {
+                // Body-level popover survives Folder root teardown (Back /
+                // beginRoute / cold-park). Close it whenever this TabContext
+                // owns the open session — by trigger identity or tab id.
+                const ownsTrigger = !!(restoreTarget && trigger && restoreTarget === trigger);
+                const ownsTab =
+                    !!(ownerTabId && openOwnerTabId && String(openOwnerTabId) === ownerTabId);
+                if (ownsTrigger || ownsTab) {
                     closePanel({ skipFocus: true });
                 }
             });
         }
 
         void (async function () {
-            const rows = await loadHierarchy();
+            const signal = signalForOwner(ctx) || signalForOwner(trigger);
+            const rows = await loadHierarchy(false, signal);
             const liveNav = findNavRoot(container);
             const live = findTrigger(container);
             if (!liveNav || !live || !Array.isArray(rows)) return;
+            if (signal && signal.aborted) return;
             if (String(live.getAttribute('data-prks-folder-nav-current') || '') !== String(folder.id)) {
                 return;
             }
@@ -1169,7 +1204,6 @@
         closePanel({ skipFocus: true });
         hierarchyRows = null;
         hierarchyLoadError = false;
-        loadPromise = null;
         clearHierarchyPathCache();
         openOwnerTabId = null;
         openFolderId = null;

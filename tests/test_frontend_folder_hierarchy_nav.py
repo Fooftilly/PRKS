@@ -50,8 +50,18 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         # No feature-code hash writes; navigate only through prksNavigate.
         self.assertNotIn("location.hash =", nav)
         self.assertIn("registerCleanup", nav)
+        # Hierarchy fetch follows the owning TabContext AbortSignal (cold-park).
+        self.assertIn("signalForOwner", nav)
+        self.assertIn("abortController.signal", nav)
+        self.assertNotIn("sibling Folder pane can still warm", nav)
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
+        # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not
+        # merely mentioned elsewhere in the service worker.
+        self.assertRegex(
+            sw,
+            r"STATIC_PRECACHE_PATHS\s*=\s*\[[^\]]*'/js/folder-hierarchy-nav\.js'",
+        )
 
     def test_css_exposes_compact_switcher(self):
         css = _read(_CSS)
