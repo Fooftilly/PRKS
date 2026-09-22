@@ -4731,6 +4731,238 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         snapshot("folder deleted")
 
+    def _catalog_row(self, body, row_id):
+        row = next((item for item in body if item.get("id") == row_id), None)
+        self.assertIsNotNone(row, row_id)
+        return row
+
+    def _restore_updated_at(self, table, row_id, stamp):
+        """Put the second-resolution stamp back so the next ETag cannot be
+        explained by CURRENT_TIMESTAMP having moved."""
+        if table not in ("persons", "person_groups", "playlists", "works"):
+            raise AssertionError(table)
+        server_module.db.execute_query(
+            f"UPDATE {table} SET updated_at = ? WHERE id = ?",
+            (stamp, row_id),
+        )
+
+    def _assert_catalog_etag_moved(self, path, previous_etag, row_id, predicate, label):
+        status, etag, body = self._conditional_get(path, etag=previous_etag)
+        self.assertNotEqual(status, 304, "%s served stale as Not Modified" % label)
+        self.assertEqual(status, 200, label)
+        self.assertNotEqual(etag, previous_etag, label)
+        self.assertIsNotNone(body, label)
+        predicate(self._catalog_row(body, row_id))
+        self.assertEqual(
+            self._conditional_get(path, etag=etag)[0],
+            304,
+            "%s changed again with no further edit" % label,
+        )
+        return etag, body
+
+    def test_default_works_etag_follows_managed_pdf_file_size(self):
+        """file_size_bytes is stated from the managed PDF at serialization
+        time. Growing the file must not 304 a catalog whose body now differs,
+        and it must not require a works row update to do so."""
+        import backend.server as _sm
+
+        pdfs_dir = _sm.db.storage.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        name = "works-etag-size.pdf"
+        path = os.path.join(pdfs_dir, name)
+        original = b"%PDF-1.4\n" + b"a" * 100
+        with open(path, "wb") as handle:
+            handle.write(original)
+        wid = self._make_browse_work("Works Size ETag", file_path=f"/api/pdfs/{name}")
+
+        status, etag1, body1 = self._conditional_get("/api/works")
+        self.assertEqual(status, 200)
+        self.assertEqual(self._catalog_row(body1, wid).get("file_size_bytes"), len(original))
+        self.assertEqual(self._conditional_get("/api/works", etag=etag1)[0], 304)
+
+        stamp = _sm.db.execute_query(
+            "SELECT updated_at FROM works WHERE id = ?", (wid,)
+        )[0]["updated_at"]
+        with open(path, "ab") as handle:
+            handle.write(b"b" * 5000)
+        self.assertEqual(
+            _sm.db.execute_query("SELECT updated_at FROM works WHERE id = ?", (wid,))[0]["updated_at"],
+            stamp,
+        )
+
+        status, etag2, body2 = self._conditional_get("/api/works", etag=etag1)
+        self.assertNotEqual(status, 304, "stale works catalog served after PDF byte change")
+        self.assertEqual(status, 200)
+        self.assertNotEqual(etag2, etag1)
+        self.assertEqual(
+            self._catalog_row(body2, wid).get("file_size_bytes"),
+            len(original) + 5000,
+        )
+        self.assertEqual(self._conditional_get("/api/works", etag=etag2)[0], 304)
+
+    def test_persons_etag_follows_same_second_body_and_membership(self):
+        status, person = self._sv_json(
+            "POST", "/api/persons", {"first_name": "Etag", "last_name": "Person"}
+        )
+        self.assertEqual(status, 200)
+        status, group = self._sv_json("POST", "/api/person-groups", {"name": "Etag Person Membership"})
+        self.assertEqual(status, 200)
+        pid = person["id"]
+
+        status, etag, body = self._conditional_get("/api/persons")
+        self.assertEqual(status, 200)
+        self.assertEqual(self._conditional_get("/api/persons", etag=etag)[0], 304)
+        count = len(body)
+        stamp = server_module.db.execute_query(
+            "SELECT updated_at FROM persons WHERE id = ?", (pid,)
+        )[0]["updated_at"]
+
+        status, _ = self._sv_json("PATCH", f"/api/persons/{pid}", {"about": "same-second biography"})
+        self.assertEqual(status, 200)
+        self._restore_updated_at("persons", pid, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/persons",
+            etag,
+            pid,
+            lambda row: self.assertEqual(row.get("about"), "same-second biography"),
+            "person biography",
+        )
+        self.assertEqual(len(body), count)
+
+        status, _ = self._sv_json(
+            "POST", f"/api/person-groups/{group['id']}/members", {"person_id": pid}
+        )
+        self.assertEqual(status, 200)
+        self._restore_updated_at("persons", pid, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/persons",
+            etag,
+            pid,
+            lambda row: self.assertIn(group["id"], [g.get("id") for g in (row.get("groups") or [])]),
+            "person group membership",
+        )
+        self.assertEqual(len(body), count)
+        self.assertEqual(self._conditional_get("/api/persons", etag=etag)[0], 304)
+
+    def test_person_groups_etag_follows_same_second_body_and_membership(self):
+        status, group = self._sv_json("POST", "/api/person-groups", {"name": "Etag Group Catalog"})
+        self.assertEqual(status, 200)
+        status, person = self._sv_json(
+            "POST", "/api/persons", {"first_name": "Group", "last_name": "Member"}
+        )
+        self.assertEqual(status, 200)
+        gid = group["id"]
+
+        status, etag, body = self._conditional_get("/api/person-groups")
+        self.assertEqual(status, 200)
+        self.assertEqual(self._conditional_get("/api/person-groups", etag=etag)[0], 304)
+        count = len(body)
+        self.assertEqual(self._catalog_row(body, gid).get("member_count"), 0)
+        stamp = server_module.db.execute_query(
+            "SELECT updated_at FROM person_groups WHERE id = ?", (gid,)
+        )[0]["updated_at"]
+
+        status, _ = self._sv_json(
+            "PATCH", f"/api/person-groups/{gid}", {"description": "same-second description"}
+        )
+        self.assertEqual(status, 200)
+        self._restore_updated_at("person_groups", gid, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/person-groups",
+            etag,
+            gid,
+            lambda row: self.assertEqual(row.get("description"), "same-second description"),
+            "group description",
+        )
+        self.assertEqual(len(body), count)
+
+        status, _ = self._sv_json(
+            "POST", f"/api/person-groups/{gid}/members", {"person_id": person["id"]}
+        )
+        self.assertEqual(status, 200)
+        self._restore_updated_at("person_groups", gid, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/person-groups",
+            etag,
+            gid,
+            lambda row: self.assertEqual(row.get("member_count"), 1),
+            "group membership",
+        )
+        self.assertEqual(len(body), count)
+        self.assertEqual(self._conditional_get("/api/person-groups", etag=etag)[0], 304)
+
+    def test_playlists_etag_follows_same_second_title_order_and_content(self):
+        status, playlist = self._sv_json(
+            "POST", "/api/playlists", {"title": "Etag Playlist", "description": ""}
+        )
+        self.assertEqual(status, 200)
+        pl_id = playlist["id"]
+        first = self._make_browse_work("Etag Playlist A")
+        second = self._make_browse_work("Etag Playlist B")
+        self.assertEqual(
+            self._sv_json("POST", f"/api/playlists/{pl_id}/items", {"work_id": first})[0], 200
+        )
+        self.assertEqual(
+            self._sv_json("POST", f"/api/playlists/{pl_id}/items", {"work_id": second})[0], 200
+        )
+
+        status, etag, body = self._conditional_get("/api/playlists")
+        self.assertEqual(status, 200)
+        self.assertEqual(self._conditional_get("/api/playlists", etag=etag)[0], 304)
+        count = len(body)
+        row = self._catalog_row(body, pl_id)
+        self.assertEqual(row.get("item_count"), 2)
+        self.assertEqual(row.get("item_ids"), [first, second])
+        stamp = server_module.db.execute_query(
+            "SELECT updated_at FROM playlists WHERE id = ?", (pl_id,)
+        )[0]["updated_at"]
+
+        status, _ = self._sv_json("PATCH", f"/api/playlists/{pl_id}", {"title": "Etag Playlist Renamed"})
+        self.assertEqual(status, 200)
+        self._restore_updated_at("playlists", pl_id, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/playlists",
+            etag,
+            pl_id,
+            lambda item: self.assertEqual(item.get("title"), "Etag Playlist Renamed"),
+            "playlist title",
+        )
+        self.assertEqual(len(body), count)
+
+        status, _ = self._sv_json(
+            "POST", f"/api/playlists/{pl_id}/reorder", {"work_ids": [second, first]}
+        )
+        self.assertEqual(status, 200)
+        self._restore_updated_at("playlists", pl_id, stamp)
+
+        def _reordered(item):
+            self.assertEqual(item.get("item_ids"), [second, first])
+            self.assertEqual(item.get("item_count"), 2)
+
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/playlists",
+            etag,
+            pl_id,
+            _reordered,
+            "playlist order",
+        )
+        self.assertEqual(len(body), count)
+
+        status, _ = self._sv_json(
+            "PATCH", f"/api/playlists/{pl_id}", {"description": "same-second notes"}
+        )
+        self.assertEqual(status, 200)
+        self._restore_updated_at("playlists", pl_id, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/playlists",
+            etag,
+            pl_id,
+            lambda item: self.assertEqual(item.get("description"), "same-second notes"),
+            "playlist content",
+        )
+        self.assertEqual(len(body), count)
+        self.assertEqual(self._conditional_get("/api/playlists", etag=etag)[0], 304)
+
     # -- Tag mutations report what they staled ----------------------------
 
     def test_tag_delete_reports_affected_works_and_folders(self):

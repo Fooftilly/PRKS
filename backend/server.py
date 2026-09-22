@@ -1809,18 +1809,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
                 else:
-                    etag = db.etag_works_catalog()
+                    # Build once. file_size_bytes is read from the managed PDF,
+                    # so the ETag has to come from these rows, not from a
+                    # works.updated_at probe evaluated before them.
+                    data = db.get_all_works()
+                    etag = db.etag_works_catalog(data)
                     if self._prks_if_none_match(etag):
                         self._send_json_not_modified(etag)
                         return
-                    data = db.get_all_works()
                     self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/playlists':
-                etag = db.etag_playlists_catalog()
+                data = db.get_all_playlists()
+                etag = db.etag_playlists_catalog(data)
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
                     return
-                data = db.get_all_playlists()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
                 pl_id = path.split('/')[-1]
@@ -2161,18 +2164,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = db.get_related_folders_for_work(w_id)
                 self.send_json(200, data)
             elif path == '/api/persons':
-                etag = db.etag_persons_catalog()
+                data = db.get_all_persons()
+                etag = db.etag_persons_catalog(data)
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
                     return
-                data = db.get_all_persons()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path == '/api/person-groups':
-                etag = db.etag_person_groups_catalog()
+                data = db.get_all_person_groups()
+                etag = db.etag_person_groups_catalog(data)
                 if self._prks_if_none_match(etag):
                     self._send_json_not_modified(etag)
                     return
-                data = db.get_all_person_groups()
                 self.send_json(200, data, etag=etag, precondition_checked=True)
             elif path.startswith('/api/person-groups/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
                 # REVISIONS ONLY. The catalogue already carries every group's

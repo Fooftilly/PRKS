@@ -1990,18 +1990,20 @@ class PRKSDatabase:
     def get_all_works(self) -> List[dict]:
         sel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(self.execute_query(f"SELECT {sel}, {pex} FROM works ORDER BY created_at DESC"))
+        rows = list(self.execute_query(
+            f"SELECT {sel}, {pex} FROM works ORDER BY works.created_at DESC, works.id ASC"
+        ))
         finish_work_summary_rows(rows, self.storage.pdfs_dir)
         return rows
 
-    def etag_works_catalog(self) -> str:
-        r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM works")
-        row = r[0] if r else {"c": 0, "m": ""}
-        ff = self.execute_query("SELECT COUNT(*) AS c FROM folder_files")
-        ffc = (ff[0] if ff else {"c": 0})["c"]
-        rr = self.execute_query("SELECT COUNT(*) AS c FROM roles")
-        rc = (rr[0] if rr else {"c": 0})["c"]
-        return f'W/"prks-works-{row["c"]}-{row["m"]}-ff{ffc}-r{rc}"'
+    def etag_works_catalog(self, rows: List[dict]) -> str:
+        """Weak ETag for a default Works catalog the caller already built.
+
+        The rows include filesystem-derived ``file_size_bytes`` and the
+        person-derived credit columns. Hash those rows; do not rebuild them
+        and do not substitute a count or ``MAX(updated_at)`` probe.
+        """
+        return self.etag_for_representation("works", rows)
 
     # ---- Browse projections ------------------------------------------------
     #
@@ -2113,30 +2115,32 @@ class PRKSDatabase:
         the rows they already built rather than running it twice.
         """
         data = self.get_all_folders() if rows is None else rows
-        blob = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
-        digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
-        return f'W/"prks-folders-{len(data)}-{digest}"'
+        return self.etag_for_representation("folders", data)
 
-    def etag_persons_catalog(self) -> str:
-        r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM persons")
-        gm = self.execute_query("SELECT COUNT(*) AS c FROM person_group_members")
-        row = r[0] if r else {"c": 0, "m": ""}
-        gr = gm[0] if gm else {"c": 0}
-        return f'W/"prks-persons-{row["c"]}-{row["m"]}-{gr["c"]}"'
+    def etag_persons_catalog(self, rows: List[dict]) -> str:
+        """Weak ETag for a Persons catalog the caller already built.
 
-    def etag_person_groups_catalog(self) -> str:
-        r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM person_groups")
-        mm = self.execute_query("SELECT COUNT(*) AS c FROM person_group_members")
-        row = r[0] if r else {"c": 0, "m": ""}
-        mr = mm[0] if mm else {"c": 0}
-        return f'W/"prks-pgroups-{row["c"]}-{row["m"]}-{mr["c"]}"'
+        Group membership is on each row (``groups``). Hash those rows; do not
+        rebuild them and do not substitute a count or ``MAX(updated_at)`` probe.
+        """
+        return self.etag_for_representation("persons", rows)
 
-    def etag_playlists_catalog(self) -> str:
-        r = self.execute_query("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at), '') AS m FROM playlists")
-        it = self.execute_query("SELECT COUNT(*) AS c FROM playlist_items")
-        row = r[0] if r else {"c": 0, "m": ""}
-        ir = it[0] if it else {"c": 0}
-        return f'W/"prks-playlists-{row["c"]}-{row["m"]}-{ir["c"]}"'
+    def etag_person_groups_catalog(self, rows: List[dict]) -> str:
+        """Weak ETag for a Person Groups catalog the caller already built.
+
+        Membership is ``member_count`` on each row. Hash those rows; do not
+        rebuild them and do not substitute a count or ``MAX(updated_at)`` probe.
+        """
+        return self.etag_for_representation("person-groups", rows)
+
+    def etag_playlists_catalog(self, rows: List[dict]) -> str:
+        """Weak ETag for a Playlists catalog the caller already built.
+
+        Membership and order are ``item_count`` and ``item_ids`` on each row.
+        Hash those rows; do not rebuild them and do not substitute a count or
+        ``MAX(updated_at)`` probe.
+        """
+        return self.etag_for_representation("playlists", rows)
 
     def etag_tags_all(self) -> str:
         return self.etag_for_representation("tags", self.get_all_tags())
@@ -2795,15 +2799,43 @@ class PRKSDatabase:
             playlist_sync.delete_playlist_on_conn(conn, playlist_id)
 
     def get_all_playlists(self) -> List[dict]:
-        rows = self.execute_query(
+        """Complete playlist catalog.
+
+        ``item_ids`` is the ordered membership. A reorder leaves ``item_count``
+        and, inside one ``CURRENT_TIMESTAMP`` second, ``updated_at`` unchanged,
+        so the catalog body has to carry the order for its ETag to describe it.
+        ``id`` breaks ties that the timestamps leave unspecified.
+        """
+        rows = list(self.execute_query(
             """
             SELECT p.*,
                 (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.id) AS item_count
             FROM playlists p
-            ORDER BY p.updated_at DESC, p.created_at DESC
+            ORDER BY p.updated_at DESC, p.created_at DESC, p.id ASC
             """
+        ))
+        self._attach_playlist_item_ids(rows)
+        return rows
+
+    def _attach_playlist_item_ids(self, rows: List[dict]) -> None:
+        if not rows:
+            return
+        ids = [r["id"] for r in rows]
+        ph = ",".join("?" * len(ids))
+        items = self.execute_query(
+            f"""
+            SELECT playlist_id, work_id
+            FROM playlist_items
+            WHERE playlist_id IN ({ph})
+            ORDER BY position ASC, work_id ASC
+            """,
+            tuple(ids),
         )
-        return list(rows)
+        by_pl: Dict[str, List[str]] = defaultdict(list)
+        for item in items:
+            by_pl[item["playlist_id"]].append(item["work_id"])
+        for row in rows:
+            row["item_ids"] = by_pl.get(row["id"], [])
 
     def get_playlist(self, playlist_id: str) -> Optional[dict]:
         rows = self.execute_query("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
@@ -3761,7 +3793,7 @@ class PRKSDatabase:
             SELECT GROUP_CONCAT(DISTINCT r.role_type)
             FROM roles r WHERE r.person_id = p.id
         ) AS _roles_concat
-        FROM persons p ORDER BY last_name ASC
+        FROM persons p ORDER BY p.last_name ASC, p.id ASC
         """
         rows = self.execute_query(query, ())
         for row in rows:
@@ -3820,6 +3852,7 @@ class PRKSDatabase:
         FROM person_group_members m
         JOIN person_groups g ON g.id = m.group_id
         WHERE m.person_id IN ({ph})
+        ORDER BY g.name COLLATE NOCASE, g.id ASC
         """
         memb = self.execute_query(q, tuple(ids))
         by_p: Dict[str, List[dict]] = defaultdict(list)
@@ -3941,7 +3974,7 @@ class PRKSDatabase:
             (SELECT COUNT(*) FROM person_group_members m WHERE m.group_id = g.id) AS member_count,
             (SELECT COUNT(*) FROM person_groups c WHERE c.parent_id = g.id) AS child_count
         FROM person_groups g
-        ORDER BY g.name COLLATE NOCASE
+        ORDER BY g.name COLLATE NOCASE, g.id ASC
         """
         return list(self.execute_query(q, ()))
 
