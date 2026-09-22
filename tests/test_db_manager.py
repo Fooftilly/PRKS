@@ -400,10 +400,10 @@ class TestDBManager(unittest.TestCase):
 
     def test_etag_works_catalog_updates_on_add_role(self):
         w_id = self.db.add_work(title="Etag Role Work")
-        e1 = self.db.etag_works_catalog()
+        e1 = self.db.etag_works_catalog(self.db.get_all_works())
         p = self.db.add_person(first_name="P", last_name="Q")
         self.db.add_role(p, w_id, "Author")
-        e2 = self.db.etag_works_catalog()
+        e2 = self.db.etag_works_catalog(self.db.get_all_works())
         self.assertNotEqual(e1, e2)
 
     def test_etag_works_catalog_updates_on_delete_work_role(self):
@@ -412,10 +412,36 @@ class TestDBManager(unittest.TestCase):
         p2 = self.db.add_person(first_name="B", last_name="Two")
         self.db.add_role(p1, w_id, "Author", order_index=0)
         self.db.add_role(p2, w_id, "Editor", order_index=1)
-        e1 = self.db.etag_works_catalog()
+        e1 = self.db.etag_works_catalog(self.db.get_all_works())
         self.assertTrue(self.db.delete_work_role(w_id, p2, "Editor", 1))
-        e2 = self.db.etag_works_catalog()
+        e2 = self.db.etag_works_catalog(self.db.get_all_works())
         self.assertNotEqual(e1, e2)
+
+    def test_etag_works_catalog_follows_pdf_size_without_row_change(self):
+        payload = b"%PDF-1.4\n" + b"a" * 40
+        fname = f"etag_size_{uuid.uuid4().hex}.pdf"
+        path = os.path.join(self.storage.pdfs_dir, fname)
+        with open(path, "wb") as handle:
+            handle.write(payload)
+        w_id = self.db.add_work(title="Etag Sized PDF", file_path=f"/api/pdfs/{fname}")
+        before_rows = self.db.get_all_works()
+        before = next(row for row in before_rows if row["id"] == w_id)
+        stamp = self.db.execute_query(
+            "SELECT updated_at FROM works WHERE id = ?", (w_id,)
+        )[0]["updated_at"]
+        e1 = self.db.etag_works_catalog(before_rows)
+        with open(path, "ab") as handle:
+            handle.write(b"b" * 25)
+        after_rows = self.db.get_all_works()
+        after = next(row for row in after_rows if row["id"] == w_id)
+        self.assertEqual(
+            self.db.execute_query("SELECT updated_at FROM works WHERE id = ?", (w_id,))[0]["updated_at"],
+            stamp,
+        )
+        self.assertEqual(before.get("file_size_bytes"), len(payload))
+        self.assertEqual(after.get("file_size_bytes"), len(payload) + 25)
+        self.assertNotEqual(self.db.etag_works_catalog(after_rows), e1)
+        self.assertEqual(self.db.etag_works_catalog(after_rows), self.db.etag_works_catalog(self.db.get_all_works()))
 
     def test_add_folder_rejects_duplicate_title(self):
         self.db.add_folder(title="Unique Name", description="")
@@ -577,6 +603,67 @@ class TestDBManager(unittest.TestCase):
         # And the ordinary path still works once the injected failure is gone.
         self.db.remove_work_from_playlist(pl_id, w_id)
         self.assertEqual(self.db.get_playlist(pl_id)["items"], [])
+
+    def _read_catalog_while_writing(self, read, marker, write):
+        """Run `read` and attempt `write` as the SELECT named by `marker` begins.
+
+        That SELECT is the second catalog read, so the attempt sits between
+        the two statements. ``locked`` means the first read still held the
+        database. ``committed`` means the write landed and the returned rows
+        are still the snapshot from before that write.
+        """
+        import sqlite3
+        state = {}
+        real_get = self.db.get_connection
+
+        def wrapped():
+            conn = real_get()
+
+            def trace(sql):
+                text = " ".join(str(sql).split()).upper()
+                if "outcome" not in state and text.startswith("SELECT") and marker in text:
+                    self.assertTrue(conn.in_transaction)
+                    other = sqlite3.connect(self.db.db_path, timeout=0)
+                    try:
+                        other.execute("BEGIN IMMEDIATE")
+                        write(other)
+                        other.commit()
+                        state["outcome"] = "committed"
+                    except sqlite3.OperationalError as exc:
+                        if "locked" not in str(exc).lower():
+                            raise
+                        state["outcome"] = "locked"
+                    finally:
+                        other.close()
+
+            conn.set_trace_callback(trace)
+            return conn
+
+        self.db.get_connection = wrapped
+        try:
+            return read(), state
+        finally:
+            self.db.get_connection = real_get
+
+    def test_persons_catalog_reads_are_one_snapshot(self):
+        person_id = self.db.add_person(first_name="Ada", last_name="Snapshot")
+        kept = self.db.add_person_group(name="Kept Group")
+        added = self.db.add_person_group(name="Added During Read")
+        self.db.add_person_to_group(person_id, kept)
+
+        def write(conn):
+            conn.execute(
+                "INSERT INTO person_group_members (person_id, group_id) VALUES (?, ?)",
+                (person_id, added),
+            )
+
+        rows, state = self._read_catalog_while_writing(
+            self.db.get_all_persons, "FROM PERSON_GROUP_MEMBERS", write
+        )
+        row = next(item for item in rows if item["id"] == person_id)
+        self.assertIn(state["outcome"], ("locked", "committed"))
+        self.assertEqual([group["id"] for group in row["groups"]], [kept])
+        self.assertEqual(row["assigned_roles"], [])
 
     def test_person_and_role_operations(self):
         p_id = self.db.add_person(first_name="Jane", last_name="Smith", aliases="J. Smith")
