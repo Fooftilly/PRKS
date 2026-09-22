@@ -132,6 +132,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn('id="prks-workspace-tile-layout"', html)
         self.assertIn('id="prks-workspace-live"', html)
         self.assertIn('id="prks-workspace-status"', html)
+        self.assertIn('id="prks-workspace-status" class="prks-workspace-status meta-row" hidden aria-hidden="true"', html)
         self.assertIn("prks-workspace-tabs-shell", html)
         src = _read(_WS)
         self.assertIn("prks-workspace-tab__activate", src)
