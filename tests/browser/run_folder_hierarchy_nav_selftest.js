@@ -422,12 +422,15 @@ async function testLoadHierarchyBehaviour() {
         nextBody = staleBody;
         releaseFetch = null;
         const inFlight = loadApiRace.prksFolderHierarchyNavLoadForTests(true, null);
-        for (let i = 0; i < 40 && releaseFetch === null; i += 1) {
+        // Poll fetchCount (mutated by the hung fetch) rather than releaseFetch so
+        // static analyzers do not treat the wait loop as invariant.
+        for (let i = 0; i < 40 && fetchCount < 2; i += 1) {
             await new Promise(function (resolve) {
                 setImmediate(resolve);
             });
         }
-        assert('race fetch gated', typeof releaseFetch === 'function');
+        assertEq('race fetch gated', fetchCount, 2);
+        assert('race release handle ready', typeof releaseFetch === 'function');
         ops = [
             {
                 operation: 'CREATE_FOLDER',
