@@ -373,10 +373,12 @@ async function testLoadHierarchyBehaviour() {
         // --- in-flight fetch must not re-cache after invalidate (generation) ---
         // Warm the cache + fingerprint first, then hang a forced reload, invalidate
         // mid-flight, and confirm the superseded response does not stick in cache.
+        // Gate with Promises (no polling loop) so Sonar Reliability stays clean.
         loadApiSync.prksFolderHierarchyNavResetForTests();
         fetchCount = 0;
         ops = [];
         let releaseFetch = null;
+        let signalEntered = null;
         const staleBody = {
             value: [{ id: 'stale', title: 'Stale', parent_id: null, child_count: 0 }],
             source: 'server',
@@ -388,12 +390,14 @@ async function testLoadHierarchyBehaviour() {
             cachedAt: null,
         };
         let nextBody = staleBody;
+        let hangSecondFetch = false;
         root.prksOfflineListFetch = async function () {
             fetchCount += 1;
             const body = nextBody;
-            if (releaseFetch === null && fetchCount >= 2) {
+            if (hangSecondFetch && fetchCount === 2) {
                 await new Promise(function (resolve) {
                     releaseFetch = resolve;
+                    if (typeof signalEntered === 'function') signalEntered();
                 });
             }
             return body;
@@ -420,15 +424,13 @@ async function testLoadHierarchyBehaviour() {
         assert('race sync listener bound', typeof raceListener === 'function');
 
         nextBody = staleBody;
+        hangSecondFetch = true;
         releaseFetch = null;
+        const enteredGate = new Promise(function (resolve) {
+            signalEntered = resolve;
+        });
         const inFlight = loadApiRace.prksFolderHierarchyNavLoadForTests(true, null);
-        // Poll fetchCount (mutated by the hung fetch) rather than releaseFetch so
-        // static analyzers do not treat the wait loop as invariant.
-        for (let i = 0; i < 40 && fetchCount < 2; i += 1) {
-            await new Promise(function (resolve) {
-                setImmediate(resolve);
-            });
-        }
+        await enteredGate;
         assertEq('race fetch gated', fetchCount, 2);
         assert('race release handle ready', typeof releaseFetch === 'function');
         ops = [
@@ -445,6 +447,7 @@ async function testLoadHierarchyBehaviour() {
             setImmediate(resolve);
         });
         nextBody = freshBody;
+        hangSecondFetch = false;
         releaseFetch();
         const superseded = await inFlight;
         assert(
