@@ -903,6 +903,110 @@
         return typeof root.prksRouteSupportsTile === 'function' && root.prksRouteSupportsTile(hash);
     }
 
+    /** User-facing examples of tile-capable detail pages (eligibility lives in navigation.js). */
+    const SPLIT_DETAIL_EXAMPLES = 'Work, Person, Playlist, Concept, Position, or Argument';
+
+    function routeSupportsTile(hash) {
+        if (!hash) return false;
+        return typeof root.prksRouteSupportsTile === 'function' && !!root.prksRouteSupportsTile(hash);
+    }
+
+    /** Prefer PRKS_ROUTE_META.title so Progress statuses and role indexes share one label. */
+    function labelForRouteHash(hash, fallback) {
+        const fb = fallback ? String(fallback) : '';
+        if (!hash || typeof root.prksParseRoute !== 'function') return fb;
+        const route = root.prksParseRoute(hash);
+        if (!route || !route.name) return fb;
+        const meta = root.PRKS_ROUTE_META && root.PRKS_ROUTE_META[route.name];
+        const title = meta && meta.title ? String(meta.title) : '';
+        return title || fb;
+    }
+
+    /**
+     * When split-mode search matches only non-tileable destinations, name the best match
+     * using route metadata + existing COMMANDS / entity caches — not a second allowlist.
+     */
+    function findMatchedNonTileableDestination(rawQuery) {
+        const q = normalizeQuery(rawQuery);
+        if (!q) return null;
+        let best = null;
+
+        function consider(label, hash, score) {
+            if (!(score > 0) || !hash || routeSupportsTile(hash)) return;
+            const display = labelForRouteHash(hash, label);
+            if (!display) return;
+            if (!best || score > best.score || (score === best.score && display.length < best.label.length)) {
+                best = { label: display, hash: String(hash), score: score };
+            }
+        }
+
+        for (let i = 0; i < COMMANDS.length; i++) {
+            const cmd = COMMANDS[i];
+            if (!cmd || (cmd.kind !== 'navigate' && cmd.kind !== 'open')) continue;
+            const hash = cmd.hash ? String(cmd.hash) : '';
+            if (!hash) continue;
+            consider(cmd.label, hash, scoreCommand(cmd, q));
+        }
+
+        if (q.length >= MIN_DYNAMIC_LEN) {
+            function considerEntityList(list, labelFn, hashFn) {
+                if (!list || !list.length) return;
+                for (let i = 0; i < list.length; i++) {
+                    const item = list[i];
+                    if (!item || !item.id) continue;
+                    const labels = labelFn(item);
+                    const score = bestScore(labels, q);
+                    if (score <= 0) continue;
+                    consider(labels[0] || String(item.title || item.name || item.id), hashFn(item), score);
+                }
+            }
+            if (state.folderCache) {
+                considerEntityList(
+                    state.folderCache,
+                    function (f) { return [String(f.title || '')]; },
+                    function (f) { return '#/folders/' + encodeURIComponent(f.id); }
+                );
+            }
+            if (state.groupCache) {
+                considerEntityList(
+                    state.groupCache,
+                    function (g) { return [String(g.title || g.name || '')]; },
+                    function (g) { return '#/people/groups/' + encodeURIComponent(g.id); }
+                );
+            }
+            if (state.savedViewCache) {
+                considerEntityList(
+                    state.savedViewCache,
+                    function (v) { return [String(v.name || '')]; },
+                    function (v) { return '#/views/' + encodeURIComponent(v.id); }
+                );
+            }
+        }
+
+        return best;
+    }
+
+    function splitPaletteEmptyMessage() {
+        const q = normalizeQuery(state.query);
+        if (!q) {
+            return (
+                'Search for a detail page that supports split — ' +
+                SPLIT_DETAIL_EXAMPLES +
+                '.'
+            );
+        }
+        const blocked = findMatchedNonTileableDestination(state.query);
+        if (blocked && blocked.label) {
+            return (
+                blocked.label +
+                " can’t open in split view. Search for a " +
+                SPLIT_DETAIL_EXAMPLES +
+                '.'
+            );
+        }
+        return 'No matching pages that can open in split view.';
+    }
+
     function openTabRows(rawQuery) {
         if (typeof root.prksWorkspaceSnapshot !== 'function') return [];
         const snap = root.prksWorkspaceSnapshot();
@@ -1145,9 +1249,13 @@
 
         let html = '';
         if (state.emptyCreate) {
-            html = '<p class="prks-command-palette__empty">No create command matches.</p>';
+            html =
+                '<p class="prks-command-palette__empty" role="status">No create command matches.</p>';
         } else if (!rows.length && state.navigationTarget === 'tile') {
-            html = '<p class="prks-command-palette__empty">Search for a page that can open in split view.</p>';
+            html =
+                '<p class="prks-command-palette__empty" role="status">' +
+                esc(splitPaletteEmptyMessage()) +
+                '</p>';
         } else {
             let lastSection = '';
             for (let i = 0; i < rows.length; i++) {
@@ -1533,6 +1641,8 @@
         const status = el('p', {
             id: 'prks-command-palette-status',
             className: 'prks-command-palette__status',
+            role: 'status',
+            'aria-live': 'polite',
             hidden: true,
         });
         const hints = el('p', {
@@ -1776,6 +1886,8 @@
         prksPaletteSearchCommands: searchCommands,
         prksPaletteShouldIgnoreShortcut: shouldIgnoreShortcut,
         prksPaletteIsBlockedByDialog: isBlockingDialogOpen,
+        prksPaletteSplitEmptyMessage: splitPaletteEmptyMessage,
+        prksPaletteFindNonTileableMatch: findMatchedNonTileableDestination,
         prksOpenCommandPalette: openPalette,
         prksCloseCommandPalette: function () {
             closePalette({ restoreFocus: true });

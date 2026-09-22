@@ -1139,10 +1139,177 @@ Promise.resolve()
                 assertEq('ordinary tile still uses tileTab', tileCalls[0], 'tab-2');
                 assertEq('ordinary tile does not call split-leaf', splitLeafCalls.length, 0);
 
+                /* #136: split-mode empty / no-match guidance (eligibility unchanged). */
+                root.prksCloseCommandPalette();
+                root.prksWorkspaceSnapshot = function () {
+                    return {
+                        mode: 'stacked',
+                        mainTabId: 'tab-1',
+                        focusedTabId: 'tab-1',
+                        secondaryTree: null,
+                        tabs: [{ id: 'tab-1', title: 'Work A', route: '#/works/WA', icon: 'file-text' }],
+                    };
+                };
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                const resultsEl = document.getElementById('prks-command-palette-results');
+                function emptyHtml() {
+                    return String((resultsEl && resultsEl.innerHTML) || '');
+                }
+                assert('split initial empty present', /prks-command-palette__empty/.test(emptyHtml()));
+                assert('split initial empty role', /role="status"/.test(emptyHtml()));
+                assert(
+                    'split initial empty mentions detail pages',
+                    /detail page that supports split/i.test(emptyHtml())
+                );
+                assert(
+                    'split initial empty lists examples',
+                    /Work, Person, Playlist, Concept, Position, or Argument/.test(emptyHtml())
+                );
+                assertEq(
+                    'split initial empty helper',
+                    root.prksPaletteSplitEmptyMessage(),
+                    'Search for a detail page that supports split — Work, Person, Playlist, Concept, Position, or Argument.'
+                );
+                assertEq('split initial empty not a result row', root.prksCommandPaletteGetResults().length, 0);
+                root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+                assertEq('guidance not selectable via ArrowDown', root.prksCommandPaletteGetActiveIndex(), 0);
+                assertEq('still no selectable results', root.prksCommandPaletteGetResults().length, 0);
+
+                function assertBlockedNav(query, labelNeedle) {
+                    root.prksCommandPaletteSetQuery(query);
+                    const html = emptyHtml();
+                    assert('blocked empty for ' + query, /prks-command-palette__empty/.test(html));
+                    assert('blocked role for ' + query, /role="status"/.test(html));
+                    assert(
+                        'blocked names destination for ' + query,
+                        html.indexOf(labelNeedle) !== -1
+                    );
+                    assert(
+                        'blocked says cannot open for ' + query,
+                        /can.t open in split view/i.test(html)
+                    );
+                    assert(
+                        'blocked does not look generic-broken for ' + query,
+                        html.indexOf('Search for a page that can open in split view.') === -1
+                    );
+                    assertEq('no tile results for ' + query, root.prksCommandPaletteGetResults().length, 0);
+                    const match = root.prksPaletteFindNonTileableMatch(query);
+                    assert('helper finds non-tileable for ' + query, !!(match && match.label === labelNeedle));
+                }
+                assertBlockedNav('Folders', 'Folders');
+                assertBlockedNav('Recent', 'Recent');
+                assertBlockedNav('Progress', 'Progress');
+
+                root.prksCommandPaletteSetQuery('zzzz-no-such-page-9qx');
+                assert(
+                    'nonsense no-results copy',
+                    /No matching pages that can open in split view/.test(emptyHtml())
+                );
+                assert(
+                    'nonsense does not claim a named destination',
+                    emptyHtml().indexOf("can’t open in split view") === -1
+                );
+                assertEq('nonsense helper finds nothing', root.prksPaletteFindNonTileableMatch('zzzz-no-such-page-9qx'), null);
+
+                root.prksCloseCommandPalette();
+                root.fetchSearch = function () {
+                    return Promise.resolve([
+                        { id: 'W-SPLIT', title: 'SplitCapable Work Title', author_text: 'Author', year: '2020' },
+                    ]);
+                };
+                root.fetchPersons = function () {
+                    return Promise.resolve([{ id: 'P-SPLIT', first_name: 'Split', last_name: 'Person' }]);
+                };
+                root.fetchPlaylists = function () {
+                    return Promise.resolve([{ id: 'PL-SPLIT', title: 'Split Playlist' }]);
+                };
+                root.fetchConcepts = function () {
+                    return Promise.resolve([{ id: 'C-SPLIT', name: 'Split Concept', aliases: [] }]);
+                };
+                root.fetchPositions = function () {
+                    return Promise.resolve([{ id: 'POS-SPLIT', name: 'Split Position' }]);
+                };
+                root.fetchArguments = function () {
+                    return Promise.resolve([{ id: 'A-SPLIT', name: 'Split Argument', kind: 'argument' }]);
+                };
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                root.prksCommandPaletteSetQuery('SplitCapable');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            })
+            .then(function () {
+                const workRows = root.prksCommandPaletteGetResults().filter(function (r) {
+                    return r.entity === 'work' && r.entityId === 'W-SPLIT';
+                });
+                assert('tile-capable work appears', workRows.length >= 1);
+                assert(
+                    'no empty while work matches',
+                    !/prks-command-palette__empty/.test(
+                        String((document.getElementById('prks-command-palette-results') || {}).innerHTML || '')
+                    )
+                );
+
+                navCalls.length = 0;
+                const workIdx = root.prksCommandPaletteGetResults().findIndex(function (r) {
+                    return r.entity === 'work' && r.entityId === 'W-SPLIT';
+                });
+                stateActiveTo(workIdx);
+                root.prksCommandPaletteHandleKey(keyEvent('Enter'));
+                assertEq('work open used tile navigate', navCalls[0] && navCalls[0].hash, '#/works/W-SPLIT');
+
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                root.prksCommandPaletteSetQuery('Split Person');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            })
+            .then(function () {
+                assert(
+                    'tile-capable person appears',
+                    root.prksCommandPaletteGetResults().some(function (r) {
+                        return r.entity === 'person' && r.entityId === 'P-SPLIT';
+                    })
+                );
+                root.prksCommandPaletteSetQuery('Split Playlist');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            })
+            .then(function () {
+                assert(
+                    'tile-capable playlist appears',
+                    root.prksCommandPaletteGetResults().some(function (r) {
+                        return r.entity === 'playlist' && r.entityId === 'PL-SPLIT';
+                    })
+                );
+                root.prksCommandPaletteSetQuery('Split Concept');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            })
+            .then(function () {
+                assert(
+                    'tile-capable concept appears',
+                    root.prksCommandPaletteGetResults().some(function (r) {
+                        return r.entity === 'concept' && r.entityId === 'C-SPLIT';
+                    })
+                );
+
+                /* Normal Ctrl+K palette still surfaces sidebar destinations. */
+                root.prksCloseCommandPalette();
+                root.prksOpenCommandPalette();
+                root.prksCommandPaletteSetQuery('Folders');
+                const normalFolders = root.prksCommandPaletteGetResults().filter(function (r) {
+                    return r.id === 'navigate-folders';
+                });
+                assert('normal palette lists Folders', normalFolders.length === 1);
+                root.prksCommandPaletteSetQuery('Recent');
+                assert(
+                    'normal palette lists Recent',
+                    root.prksCommandPaletteGetResults().some(function (r) {
+                        return r.id === 'navigate-recent';
+                    })
+                );
+
                 const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
                 assert('no eval', src.indexOf('eval(') < 0);
                 assert('no new Function', src.indexOf('new Function') < 0);
                 assert('no dynamic window call', src.indexOf('window[') < 0);
+                assert('uses prksRouteSupportsTile for eligibility', src.indexOf('prksRouteSupportsTile') >= 0);
+                assert('no second TILE_ROUTE allowlist in palette', src.indexOf('PRKS_TILE_ROUTE_NAMES') < 0);
 
                 console.log(passed + ' passed, ' + failed + ' failed');
                 if (failed) process.exit(1);
@@ -1152,3 +1319,13 @@ Promise.resolve()
         console.error(err);
         process.exit(1);
     });
+
+function stateActiveTo(idx) {
+    const cur = root.prksCommandPaletteGetActiveIndex();
+    if (idx < 0) return;
+    if (idx >= cur) {
+        for (let i = cur; i < idx; i++) root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+    } else {
+        for (let i = cur; i > idx; i--) root.prksCommandPaletteHandleKey(keyEvent('ArrowUp'));
+    }
+}
