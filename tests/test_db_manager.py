@@ -604,6 +604,87 @@ class TestDBManager(unittest.TestCase):
         self.db.remove_work_from_playlist(pl_id, w_id)
         self.assertEqual(self.db.get_playlist(pl_id)["items"], [])
 
+    def _read_catalog_while_writing(self, read, marker, write):
+        """Run `read` and attempt `write` as the SELECT named by `marker` begins.
+
+        That SELECT is the second catalog read, so the attempt sits between
+        the two statements. ``locked`` means the first read still held the
+        database. ``committed`` means the write landed and the returned rows
+        are still the snapshot from before that write.
+        """
+        import sqlite3
+        state = {}
+        real_get = self.db.get_connection
+
+        def wrapped():
+            conn = real_get()
+
+            def trace(sql):
+                text = " ".join(str(sql).split()).upper()
+                if "outcome" not in state and text.startswith("SELECT") and marker in text:
+                    self.assertTrue(conn.in_transaction)
+                    other = sqlite3.connect(self.db.db_path, timeout=0)
+                    try:
+                        other.execute("BEGIN IMMEDIATE")
+                        write(other)
+                        other.commit()
+                        state["outcome"] = "committed"
+                    except sqlite3.OperationalError as exc:
+                        if "locked" not in str(exc).lower():
+                            raise
+                        state["outcome"] = "locked"
+                    finally:
+                        other.close()
+
+            conn.set_trace_callback(trace)
+            return conn
+
+        self.db.get_connection = wrapped
+        try:
+            return read(), state
+        finally:
+            self.db.get_connection = real_get
+
+    def test_playlist_catalog_reads_are_one_snapshot(self):
+        pl_id = self.db.add_playlist("Snapshot Playlist")
+        first = self.db.add_work(title="Snapshot One")
+        second = self.db.add_work(title="Snapshot Two")
+        self.db.add_work_to_playlist(pl_id, first)
+
+        def write(conn):
+            conn.execute(
+                "INSERT INTO playlist_items (playlist_id, work_id, position) VALUES (?, ?, ?)",
+                (pl_id, second, 1),
+            )
+
+        rows, state = self._read_catalog_while_writing(
+            self.db.get_all_playlists, "FROM PLAYLIST_ITEMS", write
+        )
+        row = next(item for item in rows if item["id"] == pl_id)
+        self.assertIn(state["outcome"], ("locked", "committed"))
+        self.assertEqual(row["item_ids"], [first])
+        self.assertEqual(row["item_count"], 1)
+
+    def test_persons_catalog_reads_are_one_snapshot(self):
+        person_id = self.db.add_person(first_name="Ada", last_name="Snapshot")
+        kept = self.db.add_person_group(name="Kept Group")
+        added = self.db.add_person_group(name="Added During Read")
+        self.db.add_person_to_group(person_id, kept)
+
+        def write(conn):
+            conn.execute(
+                "INSERT INTO person_group_members (person_id, group_id) VALUES (?, ?)",
+                (person_id, added),
+            )
+
+        rows, state = self._read_catalog_while_writing(
+            self.db.get_all_persons, "FROM PERSON_GROUP_MEMBERS", write
+        )
+        row = next(item for item in rows if item["id"] == person_id)
+        self.assertIn(state["outcome"], ("locked", "committed"))
+        self.assertEqual([group["id"] for group in row["groups"]], [kept])
+        self.assertEqual(row["assigned_roles"], [])
+
     def test_person_and_role_operations(self):
         p_id = self.db.add_person(first_name="Jane", last_name="Smith", aliases="J. Smith")
         w_id = self.db.add_work(title="Jane's Book")

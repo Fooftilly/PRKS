@@ -2807,13 +2807,16 @@ class PRKSDatabase:
         body has to carry the order for its ETag to describe it. ``id`` breaks
         ties that the timestamps leave unspecified.
 
-        Playlist rows and memberships are read in one transaction. A second
-        query, or an ``IN`` list of every playlist id, would either tear under
-        a concurrent edit or hit SQLite's bound-parameter limit.
+        Playlist rows and memberships are read after ``BEGIN``. The default
+        sqlite3 isolation does not open a transaction for a bare SELECT, so
+        two reads on one connection are not one snapshot until that begins.
+        Scanning every membership avoids an ``IN`` list of playlist ids and
+        SQLite's bound-parameter limit.
         """
         t0 = clock_ns()
         try:
             with self.connection() as conn:
+                conn.execute("BEGIN")
                 playlist_rows = conn.execute(
                     """
                     SELECT p.*
@@ -3796,20 +3799,52 @@ class PRKSDatabase:
         return True
     
     def get_all_persons(self) -> List[dict]:
-        query = """
-        SELECT p.*, (
-            SELECT GROUP_CONCAT(DISTINCT r.role_type)
-            FROM roles r WHERE r.person_id = p.id
-        ) AS _roles_concat
-        FROM persons p ORDER BY p.last_name ASC, p.id ASC
+        """Complete person catalog.
+
+        Role labels and group memberships are separate statements. They are
+        read after ``BEGIN`` for the same reason as the playlist catalog: a
+        bare SELECT does not open a transaction, and the ETag hashes both.
         """
-        rows = self.execute_query(query, ())
-        for row in rows:
-            raw = row.pop("_roles_concat", None)
-            row["assigned_roles"] = (
-                [x.strip() for x in raw.split(",") if x.strip()] if raw else []
+        t0 = clock_ns()
+        try:
+            with self.connection() as conn:
+                conn.execute("BEGIN")
+                person_rows = conn.execute(
+                    """
+                    SELECT p.*, (
+                        SELECT GROUP_CONCAT(DISTINCT r.role_type)
+                        FROM roles r WHERE r.person_id = p.id
+                    ) AS _roles_concat
+                    FROM persons p ORDER BY p.last_name ASC, p.id ASC
+                    """
+                ).fetchall()
+                member_rows = conn.execute(
+                    """
+                    SELECT m.person_id, g.id AS group_id, g.name AS group_name
+                    FROM person_group_members m
+                    JOIN person_groups g ON g.id = m.group_id
+                    ORDER BY g.name COLLATE NOCASE, g.id ASC
+                    """
+                ).fetchall()
+        finally:
+            try:
+                record_db_call(clock_ns() - t0, write=False)
+            except Exception:
+                pass
+        by_p: Dict[str, List[dict]] = defaultdict(list)
+        for member in member_rows:
+            by_p[member["person_id"]].append(
+                {"id": member["group_id"], "name": member["group_name"]}
             )
-        self._attach_person_groups_batch(rows)
+        rows = []
+        for raw in person_rows:
+            row = dict(raw)
+            roles = row.pop("_roles_concat", None)
+            row["assigned_roles"] = (
+                [x.strip() for x in roles.split(",") if x.strip()] if roles else []
+            )
+            row["groups"] = by_p.get(row["id"], [])
+            rows.append(row)
         return rows
 
     def get_person(self, person_id: str) -> Optional[dict]:
