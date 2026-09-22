@@ -106,6 +106,29 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn("Open in split view", src)
         self.assertIn("prksWorkspaceTileTab", src)
         self.assertIn("prksWorkspaceFindTabByRoute", src)
+        self.assertIn("splitPaletteEmptyMessage", src)
+        self.assertIn("findMatchedNonTileableDestination", src)
+        self.assertIn("can’t open in split view", src)
+        self.assertIn("detail page that supports split", src)
+        self.assertIn("No matching pages that can open in split view", src)
+        # Greptile P2: weak/short queries must not name a blocked destination.
+        self.assertIn("score >= 600", src)
+        self.assertIn("q.length < 3", src)
+        self.assertIn("'aria-live': 'polite'", src)
+        self.assertIn("prks-command-palette-status", src)
+        # Live region must stay a11y-exposed; empty footprint is CSS :empty, not hidden.
+        self.assertNotIn("setHidden(parts.status", src)
+        css = _read(_CSS)
+        self.assertIn(".prks-command-palette__status:empty", css)
+        self.assertNotIn(".prks-command-palette__status[hidden]", css)
+        # Loading must win over split empty guidance while catalog fetch is in flight.
+        loading_idx = src.index("setStatus('Searching library…')")
+        split_empty_idx = src.index(
+            "setStatus(splitPaletteEmptyMessage())"
+        )
+        self.assertLess(loading_idx, split_empty_idx)
+        self.assertNotIn("emptyGuidanceHtml", src)
+        self.assertNotIn("PRKS_TILE_ROUTE_NAMES", src)
         self.assertNotIn("eval(", src)
         self.assertNotIn("new Function", src)
         self.assertNotIn("window[", src)

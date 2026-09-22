@@ -1139,10 +1139,205 @@ Promise.resolve()
                 assertEq('ordinary tile still uses tileTab', tileCalls[0], 'tab-2');
                 assertEq('ordinary tile does not call split-leaf', splitLeafCalls.length, 0);
 
+                /* #136: split-mode empty / no-match guidance (eligibility unchanged). */
+                root.prksCloseCommandPalette();
+                root.prksWorkspaceSnapshot = function () {
+                    return {
+                        mode: 'stacked',
+                        mainTabId: 'tab-1',
+                        focusedTabId: 'tab-1',
+                        secondaryTree: null,
+                        tabs: [{ id: 'tab-1', title: 'Work A', route: '#/works/WA', icon: 'file-text' }],
+                    };
+                };
+                root.fetchSearch = function () { return Promise.resolve([]); };
+                root.fetchFolders = function () { return Promise.resolve([]); };
+                root.fetchPersons = function () { return Promise.resolve([]); };
+                root.fetchPersonGroups = function () { return Promise.resolve([]); };
+                root.fetchPlaylists = function () { return Promise.resolve([]); };
+                root.fetchSavedViews = function () { return Promise.resolve([]); };
+                root.fetchConcepts = function () { return Promise.resolve([]); };
+                root.fetchPositions = function () { return Promise.resolve([]); };
+                root.fetchArguments = function () { return Promise.resolve([]); };
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                const resultsEl = document.getElementById('prks-command-palette-results');
+                const statusEl = document.getElementById('prks-command-palette-status');
+                function guidanceText() {
+                    return String((statusEl && statusEl.textContent) || '');
+                }
+                function listHtml() {
+                    return String((resultsEl && resultsEl.innerHTML) || '');
+                }
+                assert('split initial status present', !!guidanceText());
+                assertEq('split initial status role', statusEl.getAttribute('role'), 'status');
+                assertEq('split status stays exposed (no hidden)', !!statusEl.hidden, false);
+                assertEq(
+                    'split status has no hidden attribute',
+                    statusEl.getAttribute('hidden'),
+                    null
+                );
+                assert(
+                    'split initial empty mentions detail pages',
+                    /detail page that supports split/i.test(guidanceText())
+                );
+                assert(
+                    'split initial empty lists examples',
+                    /Work, Person, Playlist, Concept, Position, or Argument/.test(guidanceText())
+                );
+                assertEq(
+                    'split initial empty helper',
+                    root.prksPaletteSplitEmptyMessage(),
+                    'Search for a detail page that supports split — Work, Person, Playlist, Concept, Position, or Argument.'
+                );
+                assertEq('listbox empty while guiding', listHtml().indexOf('role="option"'), -1);
+                assertEq('split initial empty not a result row', root.prksCommandPaletteGetResults().length, 0);
+                root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+                assertEq('guidance not selectable via ArrowDown', root.prksCommandPaletteGetActiveIndex(), 0);
+                assertEq('still no selectable results', root.prksCommandPaletteGetResults().length, 0);
+
+                function assertBlockedNav(query, labelNeedle) {
+                    root.prksCommandPaletteSetQuery(query);
+                    return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                        const text = guidanceText();
+                        assert('blocked status for ' + query, !!text);
+                        assert(
+                            'blocked names destination for ' + query,
+                            text.indexOf(labelNeedle) !== -1
+                        );
+                        assert(
+                            'blocked says cannot open for ' + query,
+                            /can.t open in split view/i.test(text)
+                        );
+                        assert(
+                            'blocked does not look generic-broken for ' + query,
+                            text.indexOf('Search for a page that can open in split view.') === -1
+                        );
+                        assertEq('no tile results for ' + query, root.prksCommandPaletteGetResults().length, 0);
+                        assertEq('listbox has no options for ' + query, listHtml().indexOf('role="option"'), -1);
+                        const match = root.prksPaletteFindNonTileableMatch(query);
+                        assert('helper finds non-tileable for ' + query, !!(match && match.label === labelNeedle));
+                    });
+                }
+                return assertBlockedNav('Folders', 'Folders')
+                    .then(function () { return assertBlockedNav('Recent', 'Recent'); })
+                    .then(function () { return assertBlockedNav('Progress', 'Progress'); })
+                    .then(function () {
+                        root.prksCommandPaletteSetQuery('zzzz-no-such-page-9qx');
+                        return new Promise(function (r) { setTimeout(r, 0); });
+                    })
+                    .then(function () {
+                        assert(
+                            'nonsense no-results copy',
+                            /No matching pages that can open in split view/.test(guidanceText())
+                        );
+                        assert(
+                            'nonsense does not claim a named destination',
+                            guidanceText().indexOf("can’t open in split view") === -1
+                        );
+                        assertEq('nonsense helper finds nothing', root.prksPaletteFindNonTileableMatch('zzzz-no-such-page-9qx'), null);
+
+                        function assertWeakGenericNoResults(query, label) {
+                            root.prksCommandPaletteSetQuery(query);
+                            return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                                assertEq(label + ' helper finds nothing', root.prksPaletteFindNonTileableMatch(query), null);
+                                assert(
+                                    label + ' uses generic no-results',
+                                    /No matching pages that can open in split view/.test(guidanceText())
+                                );
+                                assert(
+                                    label + ' does not name a blocked destination',
+                                    guidanceText().indexOf("can’t open in split view") === -1
+                                );
+                                assertEq(label + ' listbox empty', listHtml().indexOf('role="option"'), -1);
+                                assertEq(label + ' no selectable rows', root.prksCommandPaletteGetResults().length, 0);
+                            });
+                        }
+                        return assertWeakGenericNoResults('s', 'short substring')
+                            .then(function () {
+                                return assertWeakGenericNoResults('the', 'keyword-only');
+                            });
+                    })
+                    .then(function () {
+                        root.prksCloseCommandPalette();
+                        function stubList(fnName, rows) {
+                            root[fnName] = function () {
+                                return Promise.resolve(rows);
+                            };
+                        }
+                        stubList('fetchSearch', [
+                            { id: 'W-SPLIT', title: 'SplitCapable Work Title', author_text: 'Author', year: '2020' },
+                        ]);
+                        stubList('fetchPersons', [{ id: 'P-SPLIT', first_name: 'Split', last_name: 'Person' }]);
+                        stubList('fetchPlaylists', [{ id: 'PL-SPLIT', title: 'Split Playlist' }]);
+                        stubList('fetchConcepts', [{ id: 'C-SPLIT', name: 'Split Concept', aliases: [] }]);
+                        stubList('fetchPositions', [{ id: 'POS-SPLIT', name: 'Split Position' }]);
+                        stubList('fetchArguments', [{ id: 'A-SPLIT', name: 'Split Argument', kind: 'argument' }]);
+                        root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                        root.prksCommandPaletteSetQuery('SplitCapable');
+                        return new Promise(function (r) { setTimeout(r, 0); });
+                    });
+            })
+            .then(function () {
+                const workRows = root.prksCommandPaletteGetResults().filter(function (r) {
+                    return r.entity === 'work' && r.entityId === 'W-SPLIT';
+                });
+                assert('tile-capable work appears', workRows.length >= 1);
+                assertEq(
+                    'no status guidance while work matches',
+                    String((document.getElementById('prks-command-palette-status') || {}).textContent || ''),
+                    ''
+                );
+
+                navCalls.length = 0;
+                const workIdx = root.prksCommandPaletteGetResults().findIndex(function (r) {
+                    return r.entity === 'work' && r.entityId === 'W-SPLIT';
+                });
+                stateActiveTo(workIdx);
+                root.prksCommandPaletteHandleKey(keyEvent('Enter'));
+                assertEq('work open used tile navigate', navCalls[0] && navCalls[0].hash, '#/works/W-SPLIT');
+
+                root.prksOpenCommandPalette({ navigationTarget: 'tile' });
+                const tileEntityChecks = [
+                    ['person', 'P-SPLIT', 'Split Person'],
+                    ['playlist', 'PL-SPLIT', 'Split Playlist'],
+                    ['concept', 'C-SPLIT', 'Split Concept'],
+                ];
+                function runTileEntityCheck(i) {
+                    if (i >= tileEntityChecks.length) return Promise.resolve();
+                    const spec = tileEntityChecks[i];
+                    root.prksCommandPaletteSetQuery(spec[2]);
+                    return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                        assert(
+                            'tile-capable ' + spec[0] + ' appears',
+                            root.prksCommandPaletteGetResults().some(function (row) {
+                                return row.entity === spec[0] && row.entityId === spec[1];
+                            })
+                        );
+                        return runTileEntityCheck(i + 1);
+                    });
+                }
+                return runTileEntityCheck(0);
+            })
+            .then(function () {
+                /* Normal Ctrl+K palette still surfaces sidebar destinations. */
+                root.prksCloseCommandPalette();
+                root.prksOpenCommandPalette();
+                [['Folders', 'navigate-folders'], ['Recent', 'navigate-recent']].forEach(function (pair) {
+                    root.prksCommandPaletteSetQuery(pair[0]);
+                    assert(
+                        'normal palette lists ' + pair[0],
+                        root.prksCommandPaletteGetResults().some(function (r) {
+                            return r.id === pair[1];
+                        })
+                    );
+                });
+
                 const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
                 assert('no eval', src.indexOf('eval(') < 0);
                 assert('no new Function', src.indexOf('new Function') < 0);
                 assert('no dynamic window call', src.indexOf('window[') < 0);
+                assert('uses prksRouteSupportsTile for eligibility', src.indexOf('prksRouteSupportsTile') >= 0);
+                assert('no second TILE_ROUTE allowlist in palette', src.indexOf('PRKS_TILE_ROUTE_NAMES') < 0);
 
                 console.log(passed + ' passed, ' + failed + ' failed');
                 if (failed) process.exit(1);
@@ -1152,3 +1347,13 @@ Promise.resolve()
         console.error(err);
         process.exit(1);
     });
+
+function stateActiveTo(idx) {
+    const cur = root.prksCommandPaletteGetActiveIndex();
+    if (idx < 0) return;
+    if (idx >= cur) {
+        for (let i = cur; i < idx; i++) root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
+    } else {
+        for (let i = cur; i > idx; i--) root.prksCommandPaletteHandleKey(keyEvent('ArrowUp'));
+    }
+}

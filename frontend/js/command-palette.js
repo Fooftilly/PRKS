@@ -887,9 +887,9 @@
     function setStatus(text) {
         const parts = paletteEls();
         if (!parts.status) return;
-        const msg = text ? String(text) : '';
-        parts.status.textContent = msg;
-        setHidden(parts.status, !msg);
+        /* Keep the live region mounted and exposed (never hidden/display:none): AT must
+         * observe text mutations. Empty visual footprint is CSS :empty, not the hidden attr. */
+        parts.status.textContent = text ? String(text) : '';
     }
 
     function rowCanBeSecondary(row) {
@@ -898,9 +898,94 @@
         if (row.kind === 'modal' || row.kind === 'context') return false;
         if (row.kind === 'search') return false;
         if (row.kind !== 'navigate' && row.kind !== 'open') return false;
-        const hash = String(row.hash || '');
-        if (!hash) return false;
-        return typeof root.prksRouteSupportsTile === 'function' && root.prksRouteSupportsTile(hash);
+        return routeSupportsTile(row.hash);
+    }
+
+    /** User-facing examples of tile-capable detail pages (eligibility lives in navigation.js). */
+    const SPLIT_DETAIL_EXAMPLES = 'Work, Person, Playlist, Concept, Position, or Argument';
+    const SPLIT_SEARCH_HINT = 'Search for a ' + SPLIT_DETAIL_EXAMPLES + '.';
+
+    function routeSupportsTile(hash) {
+        const h = hash ? String(hash) : '';
+        if (!h) return false;
+        return typeof root.prksRouteSupportsTile === 'function' && !!root.prksRouteSupportsTile(h);
+    }
+
+    /** Prefer PRKS_ROUTE_META.title so Progress statuses and role indexes share one label. */
+    function labelForRouteHash(hash, fallback) {
+        const fb = fallback ? String(fallback) : '';
+        if (!hash || typeof root.prksParseRoute !== 'function') return fb;
+        const route = root.prksParseRoute(hash);
+        if (!route || !route.name) return fb;
+        const meta = root.PRKS_ROUTE_META && root.PRKS_ROUTE_META[route.name];
+        const title = meta && meta.title ? String(meta.title) : '';
+        return title || fb;
+    }
+
+    /**
+     * When split-mode search matches only non-tileable destinations, name the best match
+     * using route metadata + existing COMMANDS / entity caches — not a second allowlist.
+     */
+    function findMatchedNonTileableDestination(rawQuery) {
+        const q = normalizeQuery(rawQuery);
+        if (!q) return null;
+        let best = null;
+
+        function consider(label, hash, score) {
+            /* Require a meaningful match before naming a blocked destination: keyword-only
+             * hits (≤300) and very short queries produce misleading labels. */
+            if (!(score >= 600) || q.length < 3) return;
+            if (!hash || routeSupportsTile(hash)) return;
+            const display = labelForRouteHash(hash, label);
+            if (!display) return;
+            if (!best || score > best.score || (score === best.score && display.length < best.label.length)) {
+                best = { label: display, hash: String(hash), score: score };
+            }
+        }
+
+        for (let i = 0; i < COMMANDS.length; i++) {
+            const cmd = COMMANDS[i];
+            if (!cmd || (cmd.kind !== 'navigate' && cmd.kind !== 'open')) continue;
+            const hash = cmd.hash ? String(cmd.hash) : '';
+            if (!hash) continue;
+            consider(cmd.label, hash, scoreCommand(cmd, q));
+        }
+
+        if (q.length >= MIN_DYNAMIC_LEN) {
+            const nonTileCaches = [
+                [state.folderCache, 'title', '#/folders/'],
+                [state.groupCache, 'title', '#/people/groups/'],
+                [state.savedViewCache, 'name', '#/views/'],
+            ];
+            for (let c = 0; c < nonTileCaches.length; c++) {
+                const list = nonTileCaches[c][0];
+                const field = nonTileCaches[c][1];
+                const prefix = nonTileCaches[c][2];
+                if (!list || !list.length) continue;
+                for (let i = 0; i < list.length; i++) {
+                    const item = list[i];
+                    if (!item || !item.id) continue;
+                    const label = String(item[field] || item.title || item.name || item.id);
+                    const score = bestScore([label], q);
+                    if (score <= 0) continue;
+                    consider(label, prefix + encodeURIComponent(item.id), score);
+                }
+            }
+        }
+
+        return best;
+    }
+
+    function splitPaletteEmptyMessage() {
+        const q = normalizeQuery(state.query);
+        if (!q) {
+            return 'Search for a detail page that supports split — ' + SPLIT_DETAIL_EXAMPLES + '.';
+        }
+        const blocked = findMatchedNonTileableDestination(state.query);
+        if (blocked && blocked.label) {
+            return blocked.label + " can’t open in split view. " + SPLIT_SEARCH_HINT;
+        }
+        return 'No matching pages that can open in split view.';
     }
 
     function openTabRows(rawQuery) {
@@ -916,7 +1001,7 @@
             const tab = snap.tabs[i];
             if (!tab || tab.id === snap.mainTabId) continue;
             if (visual && visibleSecondaryIds.indexOf(tab.id) !== -1) continue;
-            if (typeof root.prksRouteSupportsTile === 'function' && !root.prksRouteSupportsTile(tab.route)) continue;
+            if (!routeSupportsTile(tab.route)) continue;
             if (q && bestScore([String(tab.title || '')], q) <= 0) continue;
             out.push({
                 id: 'ws-tab-' + tab.id,
@@ -1144,11 +1229,7 @@
         if (state.activeIndex < 0) state.activeIndex = 0;
 
         let html = '';
-        if (state.emptyCreate) {
-            html = '<p class="prks-command-palette__empty">No create command matches.</p>';
-        } else if (!rows.length && state.navigationTarget === 'tile') {
-            html = '<p class="prks-command-palette__empty">Search for a page that can open in split view.</p>';
-        } else {
+        if (!state.emptyCreate && rows.length) {
             let lastSection = '';
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
@@ -1190,8 +1271,12 @@
             else parts.input.removeAttribute('aria-activedescendant');
         }
 
+        /* Guidance uses the persistent status live region (sibling of the listbox), never a
+         * status node injected inside role=listbox — invalid owned children break AT. */
         if (state.fetchFailed) setStatus('Some quick-open results could not be loaded.');
+        else if (state.emptyCreate) setStatus('No create command matches.');
         else if (state.worksLoading) setStatus('Searching library…');
+        else if (!rows.length && state.navigationTarget === 'tile') setStatus(splitPaletteEmptyMessage());
         else setStatus('');
     }
 
@@ -1533,7 +1618,8 @@
         const status = el('p', {
             id: 'prks-command-palette-status',
             className: 'prks-command-palette__status',
-            hidden: true,
+            role: 'status',
+            'aria-live': 'polite',
         });
         const hints = el('p', {
             id: 'prks-command-palette-hints',
@@ -1776,6 +1862,8 @@
         prksPaletteSearchCommands: searchCommands,
         prksPaletteShouldIgnoreShortcut: shouldIgnoreShortcut,
         prksPaletteIsBlockedByDialog: isBlockingDialogOpen,
+        prksPaletteSplitEmptyMessage: splitPaletteEmptyMessage,
+        prksPaletteFindNonTileableMatch: findMatchedNonTileableDestination,
         prksOpenCommandPalette: openPalette,
         prksCloseCommandPalette: function () {
             closePalette({ restoreFocus: true });

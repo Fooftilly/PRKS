@@ -49,6 +49,8 @@ Open the command palette with Ctrl+K (Cmd+K on macOS), or use **Search or jump**
 
 It can navigate to major entities and sections, search the library, create common records, and open Settings/actions. Alt+Enter can route supported destinations into split view.
 
+**Open in split view** (from the workspace Split control or pane menu) opens the same palette in a restricted mode: only tile-capable detail pages appear (Works, People, Playlists, Concepts, Positions, Arguments). Library index destinations such as Folders, Recent, Saved Views, and Progress stay main-only; the empty state explains that when a query matches one of them.
+
 ## Notes and research context
 
 Research Notes live with a Work and use durable local-first operations. PRKS also supports structured research entities—Concepts, Positions, Arguments and Stances—described in [Research Network](Research-Network.md).
