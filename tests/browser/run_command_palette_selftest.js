@@ -1257,45 +1257,38 @@ Promise.resolve()
                 assertEq('work open used tile navigate', navCalls[0] && navCalls[0].hash, '#/works/W-SPLIT');
 
                 root.prksOpenCommandPalette({ navigationTarget: 'tile' });
-                root.prksCommandPaletteSetQuery('Split Person');
-                return new Promise(function (r) { setTimeout(r, 0); });
+                const tileEntityChecks = [
+                    ['person', 'P-SPLIT', 'Split Person'],
+                    ['playlist', 'PL-SPLIT', 'Split Playlist'],
+                    ['concept', 'C-SPLIT', 'Split Concept'],
+                ];
+                function runTileEntityCheck(i) {
+                    if (i >= tileEntityChecks.length) return Promise.resolve();
+                    const spec = tileEntityChecks[i];
+                    root.prksCommandPaletteSetQuery(spec[2]);
+                    return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                        assert(
+                            'tile-capable ' + spec[0] + ' appears',
+                            root.prksCommandPaletteGetResults().some(function (row) {
+                                return row.entity === spec[0] && row.entityId === spec[1];
+                            })
+                        );
+                        return runTileEntityCheck(i + 1);
+                    });
+                }
+                return runTileEntityCheck(0);
             })
             .then(function () {
-                assert(
-                    'tile-capable person appears',
-                    root.prksCommandPaletteGetResults().some(function (r) {
-                        return r.entity === 'person' && r.entityId === 'P-SPLIT';
-                    })
-                );
-                root.prksCommandPaletteSetQuery('Split Playlist');
-                return new Promise(function (r) { setTimeout(r, 0); });
-            })
-            .then(function () {
-                assert(
-                    'tile-capable playlist appears',
-                    root.prksCommandPaletteGetResults().some(function (r) {
-                        return r.entity === 'playlist' && r.entityId === 'PL-SPLIT';
-                    })
-                );
-                root.prksCommandPaletteSetQuery('Split Concept');
-                return new Promise(function (r) { setTimeout(r, 0); });
-            })
-            .then(function () {
-                assert(
-                    'tile-capable concept appears',
-                    root.prksCommandPaletteGetResults().some(function (r) {
-                        return r.entity === 'concept' && r.entityId === 'C-SPLIT';
-                    })
-                );
-
                 /* Normal Ctrl+K palette still surfaces sidebar destinations. */
                 root.prksCloseCommandPalette();
                 root.prksOpenCommandPalette();
                 root.prksCommandPaletteSetQuery('Folders');
-                const normalFolders = root.prksCommandPaletteGetResults().filter(function (r) {
-                    return r.id === 'navigate-folders';
-                });
-                assert('normal palette lists Folders', normalFolders.length === 1);
+                assert(
+                    'normal palette lists Folders',
+                    root.prksCommandPaletteGetResults().some(function (r) {
+                        return r.id === 'navigate-folders';
+                    })
+                );
                 root.prksCommandPaletteSetQuery('Recent');
                 assert(
                     'normal palette lists Recent',

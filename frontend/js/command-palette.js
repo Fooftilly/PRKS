@@ -960,26 +960,25 @@
                     consider(labels[0] || String(item.title || item.name || item.id), hashFn(item), score);
                 }
             }
-            if (state.folderCache) {
-                considerEntityList(
-                    state.folderCache,
-                    function (f) { return [String(f.title || '')]; },
-                    function (f) { return '#/folders/' + encodeURIComponent(f.id); }
-                );
-            }
-            if (state.groupCache) {
-                considerEntityList(
-                    state.groupCache,
-                    function (g) { return [String(g.title || g.name || '')]; },
-                    function (g) { return '#/people/groups/' + encodeURIComponent(g.id); }
-                );
-            }
-            if (state.savedViewCache) {
-                considerEntityList(
-                    state.savedViewCache,
-                    function (v) { return [String(v.name || '')]; },
-                    function (v) { return '#/views/' + encodeURIComponent(v.id); }
-                );
+            const nonTileCaches = [
+                {
+                    list: state.folderCache,
+                    labels: function (f) { return [String(f.title || '')]; },
+                    hash: function (f) { return '#/folders/' + encodeURIComponent(f.id); },
+                },
+                {
+                    list: state.groupCache,
+                    labels: function (g) { return [String(g.title || g.name || '')]; },
+                    hash: function (g) { return '#/people/groups/' + encodeURIComponent(g.id); },
+                },
+                {
+                    list: state.savedViewCache,
+                    labels: function (v) { return [String(v.name || '')]; },
+                    hash: function (v) { return '#/views/' + encodeURIComponent(v.id); },
+                },
+            ];
+            for (let c = 0; c < nonTileCaches.length; c++) {
+                considerEntityList(nonTileCaches[c].list, nonTileCaches[c].labels, nonTileCaches[c].hash);
             }
         }
 
