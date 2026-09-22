@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import io
 import json
@@ -2216,6 +2217,91 @@ class TestRestoreDurabilityBoundary(BackupRestoreTestCase):
         bind_storage(lib["cfg"])
         titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming"])
+
+    def test_a_sidecar_rename_that_fails_leaves_the_previous_library_intact(self):
+        """The database and its sidecars move as one batch, and can fail mid-way.
+
+        The first rename is already on disk when the second raises. Rollback
+        has to put the whole component back -- database and sidecars -- and the
+        entries the completed rename created must have been synced on the way
+        out. `rebind` is a no-op here so nothing opens SQLite and rewrites the
+        WAL before the assertions can look at it.
+        """
+        lib = self._bind_library(title="Keep Me", pdf_name="keep.pdf")
+        other = self._bind_library(title="Incoming", pdf_name="new.pdf", pdf_text="incoming")
+        backup = create_backup(other["cfg"])
+        bind_storage(lib["cfg"])
+        wal_path = lib["cfg"].db_path + "-wal"
+        with open(wal_path, "wb") as handle:
+            handle.write(b"PREVIOUS-WAL")
+        with open(lib["cfg"].db_path, "rb") as handle:
+            db_bytes = handle.read()
+        staged = self._stage_copy(lib["cfg"], backup.archive_path)
+
+        real_replace = os.replace
+        synced = []
+        real_sync = fs_durability.fsync_directory
+
+        def record_sync(path):
+            synced.append(os.path.realpath(path))
+            return real_sync(path)
+
+        def fail_the_sidecar(src, dest):
+            if str(src).endswith("-wal"):
+                raise OSError(errno.EIO, "I/O error")
+            return real_replace(src, dest)
+
+        with patch.object(fs_durability, "fsync_directory", record_sync), \
+                patch.object(backup_module.os, "replace", fail_the_sidecar):
+            with self.assertRaises(RestoreError) as caught:
+                apply_restore(
+                    lib["cfg"], staged.token, "RESTORE", rebind=lambda cfg: cfg
+                )
+
+        self.assertEqual(caught.exception.reason, "restore_failed")
+        self.assertIn(
+            os.path.realpath(lib["cfg"].root),
+            synced,
+            "the completed database rename must have been synced on the way out",
+        )
+        with open(lib["cfg"].db_path, "rb") as handle:
+            self.assertEqual(handle.read(), db_bytes, "the previous database is back")
+        with open(wal_path, "rb") as handle:
+            self.assertEqual(handle.read(), b"PREVIOUS-WAL", "its sidecar came with it")
+
+    def test_a_restore_survives_a_symlinked_storage_root(self):
+        """`PRKS_STORAGE` may legitimately be a symlink.
+
+        Live paths keep the link in them while the maintenance tree anchors to
+        the resolved root, so a whole restore exercises both namespaces.
+        """
+        target = self._tmpdir(prefix="prks-backup-link-target-")
+        link = os.path.join(self._tmpdir(), "storage-link")
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+        source = self._bind_library(title="Incoming", pdf_name="new.pdf", pdf_text="incoming")
+        backup = create_backup(source["cfg"])
+
+        linked = bind_storage(StorageConfig.for_testing(link))
+        os.makedirs(linked.pdfs_dir, exist_ok=True)
+        os.makedirs(linked.people_dir, exist_ok=True)
+        server_module.db.add_work("Keep Me", file_path="/api/pdfs/keep.pdf", source_kind="pdf")
+        with open(os.path.join(linked.pdfs_dir, "keep.pdf"), "wb") as handle:
+            handle.write(b"%PDF-1.4 keep\n%%EOF\n")
+        staged = self._stage_copy(linked, backup.archive_path)
+
+        out = apply_restore(linked, staged.token, "RESTORE", rebind=bind_storage)
+
+        self.assertTrue(out["restored"])
+        titles = [r["title"] for r in server_module.db.execute_query("SELECT title FROM works")]
+        self.assertEqual(titles, ["Incoming"])
+        self.assertTrue(os.path.isfile(os.path.join(linked.pdfs_dir, "new.pdf")))
+        self.assertFalse(
+            os.path.exists(backup_module.journal_path(linked)),
+            "a committed restore cleans its journal up",
+        )
 
     def test_every_staged_payload_file_is_flushed_before_it_can_be_installed(self):
         """A staged file becomes canonical by rename, so it owes the same sync."""

@@ -2366,9 +2366,13 @@ def _replace_durably(root: str, moves: list[tuple[str, str]]) -> bool:
     documents for the same sink. The staged side of an install is built from a
     request's staging token, so this is the sink that needs it most.
 
-    ``abspath``, not ``realpath``: resolving the last component would rename
-    what a symlink points at instead of the symlink, and the module's symlink
-    containment is enforced by the verified-subroot helpers, not here.
+    Each side is canonicalized through its *parent*, never its last component:
+    resolving the leaf would rename what a symlink points at instead of the
+    symlink. The parent must be resolved, because ``PRKS_STORAGE`` may itself
+    be a symlink while the maintenance tree is anchored to the resolved root
+    (see ``_resolved_storage_root``) -- a live path under the link and a
+    rollback path under the target have to land in one comparable namespace,
+    or a legitimate move looks like an escape.
 
     Returns whether the moves are as durable as the platform allows: False only
     when a supported directory fsync was attempted and failed, never merely
@@ -2380,29 +2384,40 @@ def _replace_durably(root: str, moves: list[tuple[str, str]]) -> bool:
     """
     if not moves:
         return True
-    base_path = os.path.abspath(root)
-    prefix = base_path + os.sep
+    root_real = os.path.realpath(root)
+    prefix = root_real + os.sep
     checked: list[tuple[str, str]] = []
     for src, dest in moves:
         # CodeQL py/path-injection documented sanitizer: join+normpath against
         # the trusted root, then startswith the root before the sink.
-        src_path = os.path.normpath(os.path.join(base_path, os.path.relpath(src, base_path)))
-        dest_path = os.path.normpath(os.path.join(base_path, os.path.relpath(dest, base_path)))
+        src_leaf = os.path.join(os.path.realpath(os.path.dirname(src)), os.path.basename(src))
+        dest_leaf = os.path.join(os.path.realpath(os.path.dirname(dest)), os.path.basename(dest))
+        src_path = os.path.normpath(os.path.join(root_real, os.path.relpath(src_leaf, root_real)))
+        dest_path = os.path.normpath(os.path.join(root_real, os.path.relpath(dest_leaf, root_real)))
         if not src_path.startswith(prefix):
             raise _durability_failed("restore_dir_not_durable", "move_containment")
         if not dest_path.startswith(prefix):
             raise _durability_failed("restore_dir_not_durable", "move_containment")
         checked.append((src_path, dest_path))
+    # Whatever leaves this loop -- the last move, an early refusal, or a rename
+    # that raised partway through a database and its sidecars -- the entries
+    # already written have no barrier behind them yet, and the error is about
+    # to unwind past here. Syncing in `finally` puts the barrier behind every
+    # move that did complete before anything else happens, and costs one pass
+    # either way because the successful path returns that same result.
     dirs: list[str] = []
-    for src_path, dest_path in checked:
-        if not src_path.startswith(prefix):
-            return False
-        if not dest_path.startswith(prefix):
-            return False
-        os.replace(src_path, dest_path)
-        dirs.append(os.path.dirname(src_path) or ".")
-        dirs.append(os.path.dirname(dest_path) or ".")
-    return _fsync_dirs_under(root, dirs)
+    try:
+        for src_path, dest_path in checked:
+            if not src_path.startswith(prefix):
+                return False
+            if not dest_path.startswith(prefix):
+                return False
+            os.replace(src_path, dest_path)
+            dirs.append(os.path.dirname(src_path) or ".")
+            dirs.append(os.path.dirname(dest_path) or ".")
+    finally:
+        durable = _fsync_dirs_under(root_real, dirs) if dirs else True
+    return durable
 
 
 def _durability_failed(reason: str, boundary: str) -> RestoreError:

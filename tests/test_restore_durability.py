@@ -606,6 +606,32 @@ class TestSyncContainment(_DurabilityCase):
 
         self.assertEqual(spy.synced_dirs, [], "nothing outside the root is opened")
 
+    def test_a_symlinked_storage_root_is_not_mistaken_for_an_escape(self):
+        """`PRKS_STORAGE` may be a symlink; the maintenance tree is not.
+
+        Live paths keep the link in them while `_maintenance_subroot()` anchors
+        to the resolved root, so the two sides of a `live -> rollback` move
+        only compare if containment canonicalizes both.
+        """
+        target = tempfile.mkdtemp(prefix="prks-restore-durability-target-")
+        self.addCleanup(lambda: shutil.rmtree(target, ignore_errors=True))
+        link = os.path.join(self.root, "linked-root")
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+        src = self.write(os.path.join(link, "pdfs", "old.pdf"), b"OLD")
+        dest_dir = os.path.join(target, ".prks-maintenance", "rollback", _TXN)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, "old.pdf")
+
+        with self.spied():
+            durable = backup_module._replace_durably(link, [(src, dest)])
+
+        self.assertTrue(durable)
+        self.assertEqual(self.read(dest), b"OLD")
+        self.assertFalse(os.path.exists(src))
+
     def test_a_move_reaching_outside_the_root_is_refused_before_it_happens(self):
         """The refusal comes first, so it is the "nothing moved" reason."""
         outside = tempfile.mkdtemp(prefix="prks-restore-durability-outside-")
@@ -620,6 +646,47 @@ class TestSyncContainment(_DurabilityCase):
         self.assertEqual(caught.exception.reason, "restore_dir_not_durable")
         self.assertNotIn("replace", spy.steps, "nothing may be renamed")
         self.assertEqual(self.read(src), b"OLD")
+
+    def test_a_move_that_fails_partway_still_syncs_what_already_moved(self):
+        """A rename that completed has no barrier behind it until this runs.
+
+        A database moves with its WAL sidecars in one batch. If the second
+        rename raises, the first one is already on the filesystem and the
+        error is about to unwind past the helper -- the entries it created
+        must not be left with no barrier at all.
+        """
+        first_src = self.write(os.path.join(self.root, "prks_data.db"), b"DB")
+        second_src = self.write(os.path.join(self.root, "prks_data.db-wal"), b"WAL")
+        rolled = os.path.join(self.root, ".prks-maintenance", "rollback", _TXN, "database")
+        os.makedirs(rolled, exist_ok=True)
+        moves = [
+            (first_src, os.path.join(rolled, "prks_data.db")),
+            (second_src, os.path.join(rolled, "prks_data.db-wal")),
+        ]
+        boom = OSError(errno.EIO, "I/O error")
+        real_replace = self.spy.replace
+        calls = []
+
+        def fail_the_second(src, dest):
+            calls.append(src)
+            if len(calls) == 2:
+                raise boom
+            return real_replace(src, dest)
+
+        with self.spied() as spy:
+            with patch.object(backup_module.os, "replace", fail_the_second):
+                with self.assertRaises(OSError) as caught:
+                    backup_module._replace_durably(self.root, moves)
+
+        self.assertIs(caught.exception, boom, "the original error must propagate")
+        self.assertEqual(
+            sorted(spy.synced_dirs),
+            sorted({os.path.realpath(self.root), os.path.realpath(rolled)}),
+            "both parents of the move that did complete are synced",
+        )
+        # Fail-safe: the completed move is where rollback will look for it.
+        self.assertEqual(self.read(os.path.join(rolled, "prks_data.db")), b"DB")
+        self.assertEqual(self.read(second_src), b"WAL")
 
     def test_a_sibling_whose_name_merely_extends_the_root_is_refused(self):
         sibling = self.root + "-elsewhere"
