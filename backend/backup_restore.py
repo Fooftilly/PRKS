@@ -15,6 +15,21 @@ GET /api/backups/download requires a one-time token and never creates a backup.
 
 Do not copy the live SQLite file while it may be in use. Snapshots use
 sqlite3.Connection.backup. Never extract an unvalidated backup ZIP in bulk.
+
+Restore durability: the journal and the component renames follow the
+``backend.fs_durability`` convention, because the recovery state machine reads
+them back after a machine crash and not only after a process crash. A journal
+phase is persisted only once its bytes are flushed, its atomic replace has
+happened and the journal directory has been synced; a component rename is
+completed only once the directory entries it changed -- both parents when a
+move crosses directories -- have been synced; and a staged payload file is
+flushed while it is being extracted, because installing it is a rename onto a
+canonical name. Neither state is recorded before its boundary holds, and a
+boundary that cannot be established stops the transaction with the previous
+library still recoverable. The commit record is the one exception, and the
+reason is the same one: once it has been written, rolling back is what could
+leave an incoherent library behind. See ``_replace_durably``,
+``_fsync_dirs_under`` and ``_durability_failed``.
 """
 
 from __future__ import annotations
@@ -34,9 +49,10 @@ import zipfile
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 from backend.db_manager import PRKS_SCHEMA_VERSION
+from backend.fs_durability import fsync_directories, fsync_open_file
 from backend.log_safety import safe_error_type
 from backend.performance import clock_ns, record_span, span as perf_span
 from backend.storage import paths
@@ -529,6 +545,65 @@ def _chmod_file(path: str) -> None:
 def _mkdir_owner(path: str) -> None:
     os.makedirs(path, mode=0o700, exist_ok=True)
     _chmod_dir(path)
+
+
+def _fsync_dirs_under(root: str, paths: Iterable[str]) -> bool:
+    """Sync directories a rename or an extraction changed, each proven under ``root``.
+
+    The single place this module reaches the ``backend.fs_durability``
+    directory convention. Every directory it is asked to sync belongs to one
+    tree -- live storage under the storage root, or the staged tree under its
+    extraction root -- but the paths are built from a request's staging token
+    and from a journal's transaction id, so each candidate is resolved and
+    checked against that root here, inline, on the value that is opened. A
+    crafted token or a damaged journal must not be able to point a restore
+    fsync at a directory outside the tree it belongs to.
+
+    Each candidate is rebuilt from the trusted base and checked against it
+    with the same ``normpath(join(base, ...))`` + ``startswith(base)`` pattern
+    ``services/work_pdf_replace.atomic_replace_managed_pdf_bytes()`` uses, so
+    the value that reaches the sync is the one that was proven, not a helper
+    return.
+
+    Returns whether every directory is as durable as the platform allows.
+    A candidate outside ``root`` answers False rather than raising: callers
+    already treat that as a boundary they could not establish.
+    """
+    base_path = os.path.realpath(root)
+    checked: list[str] = []
+    for path in paths:
+        # CodeQL py/path-injection documented sanitizer: rebuild against the
+        # root with join+normpath, then startswith the root before the sink.
+        # The second check rejects a sibling whose name merely extends it.
+        relative = os.path.relpath(os.path.realpath(path), base_path)
+        fullpath = os.path.normpath(os.path.join(base_path, relative))
+        if not fullpath.startswith(base_path):
+            LOGGER.error("restore_durability_failed reason=sync_dir_outside_root boundary=containment")
+            return False
+        if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
+            LOGGER.error("restore_durability_failed reason=sync_dir_outside_root boundary=containment")
+            return False
+        checked.append(fullpath)
+    return fsync_directories(*checked)
+
+
+def _mkdir_owner_durable(root: str, path: str) -> bool:
+    """Create a directory and put its own entry on stable storage.
+
+    A rename into a directory whose entry was never synced can come back from a
+    machine crash with neither the directory nor anything moved into it -- the
+    rollback tree is exactly that shape. Syncing the parent after a fresh mkdir
+    establishes the destination before the move that depends on it. A directory
+    that already existed is somebody else's boundary and needs nothing here.
+
+    Returns whether the directory is as durable as the platform allows.
+    """
+    existed = os.path.isdir(path)
+    _mkdir_owner(path)
+    if existed:
+        return True
+    parent = os.path.dirname(path)
+    return _fsync_dirs_under(root, [parent]) if parent else True
 
 
 def _ensure_maintenance_dirs(config: StorageConfig) -> str:
@@ -1089,7 +1164,20 @@ def require_restore_upload_space(config: StorageConfig, content_length: int) -> 
         )
 
 
-def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
+def _atomic_write_json(path: str, payload: dict[str, Any], *, root: str) -> bool:
+    """Replace ``path`` with ``payload`` under the rename-durability convention.
+
+    The bytes are flushed before the replace and the parent directory after it,
+    so a crash finds either the previous file or the whole new one -- never a
+    name pointing at contents that never reached stable storage, and never a
+    replace that was lost with its directory entry.
+
+    Returns whether that directory entry is as durable as the platform allows.
+    A caller for which this write is a persistence boundary -- the restore
+    journal, whose next step assumes the phase is readable after a crash --
+    must refuse to advance on False. Staging metadata is not such a boundary:
+    losing it costs a re-upload, not a library.
+    """
     parent = os.path.dirname(path)
     _mkdir_owner(parent)
     tmp = path + ".tmp"
@@ -1097,9 +1185,10 @@ def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
         json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
         handle.write("\n")
         handle.flush()
-        os.fsync(handle.fileno())
+        fsync_open_file(handle.fileno())
     os.replace(tmp, path)
     _chmod_file(path)
+    return _fsync_dirs_under(root, [parent]) if parent else True
 
 
 def _open_sqlite_ro(db_path: str) -> sqlite3.Connection:
@@ -1756,6 +1845,7 @@ def _verify_backup_inner(
             extract_root = extract_dir
 
         total_written = 0
+        extracted_dirs: set[str] = set()
         for info in payload_infos:
             meta = entry_map[info.filename]
             dest_path = None
@@ -1763,6 +1853,7 @@ def _verify_backup_inner(
                 dest_path = _safe_extract_dest(extract_root, info.filename)
                 parent = os.path.dirname(dest_path)
                 _mkdir_owner(parent)
+                extracted_dirs.add(parent)
             digest = hashlib.sha256()
             actual = 0
             with zf.open(info, "r") as src:
@@ -1787,6 +1878,16 @@ def _verify_backup_inner(
                         digest.update(chunk)
                         if out is not None:
                             out.write(chunk)
+                    if out is not None:
+                        # A staged payload becomes canonical by being renamed
+                        # onto a live path, so it owes the first half of the
+                        # ``backend.fs_durability`` convention as much as any
+                        # temporary this process replaces a file with: the
+                        # bytes must be on stable storage before a durable
+                        # name can point at them. Raising here fails staging,
+                        # which has installed nothing.
+                        out.flush()
+                        fsync_open_file(out.fileno())
                 finally:
                     if out is not None:
                         out.close()
@@ -1801,6 +1902,26 @@ def _verify_backup_inner(
                 raise RestoreError(
                     "hash_mismatch",
                     "Backup archive failed integrity verification.",
+                )
+
+        if extract_root is not None and extracted_dirs:
+            # The entries the extraction created live in these directories,
+            # and a component is installed by renaming one of their ancestors.
+            # That rename syncs the ancestor's own entry, not the entries
+            # inside it, so sync each directory the extraction wrote to and
+            # every directory between it and the extraction root: the staged
+            # tree has to be whole before anything moves it.
+            root_real = os.path.realpath(extract_root)
+            pending_dirs = {root_real}
+            for directory in extracted_dirs:
+                current = os.path.realpath(directory)
+                while current.startswith(root_real + os.sep):
+                    pending_dirs.add(current)
+                    current = os.path.dirname(current)
+            if not _fsync_dirs_under(extract_root, sorted(pending_dirs)):
+                raise RestoreError(
+                    "staging_not_durable",
+                    "Backup could not be staged safely on this computer.",
                 )
 
         db_path = None
@@ -2106,7 +2227,13 @@ def stage_restore(config: StorageConfig, upload_path: str) -> StagingResult:
             "db_schema_version": summary.get("db_schema_version"),
             "processing_included": bool(manifest["components"].get("processing")),
         }
-        _atomic_write_json(os.path.join(staging_dir, "meta.json"), meta)
+        if not _atomic_write_json(
+            os.path.join(staging_dir, "meta.json"), meta, root=config.root
+        ):
+            # Staging metadata is not a recovery boundary -- a crash that loses
+            # it costs this upload, never library state -- so say so and carry
+            # on rather than refusing a verified backup.
+            LOGGER.warning("restore_staging_meta_dir_sync_failed")
         LOGGER.info(
             "restore_staged format_version=%s schema_version=%s works=%s",
             FORMAT_VERSION,
@@ -2222,6 +2349,103 @@ def _rename_replace(src: str, dest: str) -> None:
     os.replace(src, dest)
 
 
+def _replace_durably(root: str, moves: list[tuple[str, str]]) -> bool:
+    """Apply renames, then sync every directory entry they changed.
+
+    The moves go first and the syncs follow as one group: a database and its
+    WAL sidecars share the same two parents, and a single fsync per directory
+    covers every entry that changed in it. Source and destination parents are
+    both collected, so a move out of live storage into the rollback tree -- or
+    out of the staging tree into live storage -- is durable at both ends.
+
+    Both ends of every move are rebuilt against ``root`` and proven to be
+    inside it before anything is renamed, and again immediately before the
+    rename itself, so what ``os.replace`` receives is the value that was
+    proven rather than a helper return -- the pattern, and the reason for it,
+    that ``services/work_pdf_replace.atomic_replace_managed_pdf_bytes()``
+    documents for the same sink. The staged side of an install is built from a
+    request's staging token, so this is the sink that needs it most.
+
+    Each side is canonicalized through its *parent*, never its last component:
+    resolving the leaf would rename what a symlink points at instead of the
+    symlink. The parent must be resolved, because ``PRKS_STORAGE`` may itself
+    be a symlink while the maintenance tree is anchored to the resolved root
+    (see ``_resolved_storage_root``) -- a live path under the link and a
+    rollback path under the target have to land in one comparable namespace,
+    or a legitimate move looks like an escape.
+
+    Returns whether the moves are as durable as the platform allows: False only
+    when a supported directory fsync was attempted and failed, never merely
+    because the platform has no such operation. A rename that has already
+    happened cannot be unwound, so callers report the weaker guarantee instead
+    of pretending to. A move refused for falling outside ``root`` raises
+    instead, because that refusal comes before anything has been renamed --
+    the distinction the reasons exist to keep.
+    """
+    if not moves:
+        return True
+    root_real = os.path.realpath(root)
+    prefix = root_real + os.sep
+    checked: list[tuple[str, str]] = []
+    for src, dest in moves:
+        # CodeQL py/path-injection documented sanitizer: join+normpath against
+        # the trusted root, then startswith the root before the sink.
+        src_leaf = os.path.join(os.path.realpath(os.path.dirname(src)), os.path.basename(src))
+        dest_leaf = os.path.join(os.path.realpath(os.path.dirname(dest)), os.path.basename(dest))
+        src_path = os.path.normpath(os.path.join(root_real, os.path.relpath(src_leaf, root_real)))
+        dest_path = os.path.normpath(os.path.join(root_real, os.path.relpath(dest_leaf, root_real)))
+        if not src_path.startswith(prefix):
+            raise _durability_failed("restore_dir_not_durable", "move_containment")
+        if not dest_path.startswith(prefix):
+            raise _durability_failed("restore_dir_not_durable", "move_containment")
+        checked.append((src_path, dest_path))
+    # Whatever leaves this loop -- the last move, an early refusal, or a rename
+    # that raised partway through a database and its sidecars -- the entries
+    # already written have no barrier behind them yet, and the error is about
+    # to unwind past here. Syncing in `finally` puts the barrier behind every
+    # move that did complete before anything else happens, and costs one pass
+    # either way because the successful path returns that same result.
+    dirs: list[str] = []
+    try:
+        for src_path, dest_path in checked:
+            if not src_path.startswith(prefix):
+                return False
+            if not dest_path.startswith(prefix):
+                return False
+            os.replace(src_path, dest_path)
+            dirs.append(os.path.dirname(src_path) or ".")
+            dirs.append(os.path.dirname(dest_path) or ".")
+    finally:
+        durable = _fsync_dirs_under(root_real, dirs) if dirs else True
+    return durable
+
+
+def _durability_failed(reason: str, boundary: str) -> RestoreError:
+    """Build the error for a persistence boundary that was not established.
+
+    Three outcomes callers must not conflate, kept apart by ``reason``:
+
+    - ``restore_dir_not_durable`` -- a directory the next rename needs could not
+      be made durable. Nothing has been moved.
+    - ``rename_not_durable`` -- the rename happened, but the directory entries
+      it changed are not confirmed on stable storage. The journal must not go on
+      to claim the move completed.
+    - ``journal_not_durable`` -- the journal phase itself is not on stable
+      storage, so nothing may proceed as though recovery could read it.
+
+    A directory fsync the platform does not implement is none of these:
+    ``fsync_directory`` reports that as durable, because there is nothing
+    stronger to ask for. ``boundary`` names the step for the log and is always
+    a fixed literal, never a path.
+    """
+    LOGGER.error("restore_durability_failed reason=%s boundary=%s", reason, boundary)
+    return RestoreError(
+        reason,
+        "Restore was stopped because the change could not be made crash-safe.",
+        http_status=500,
+    )
+
+
 def clear_derived_storage(config: StorageConfig) -> None:
     thumbs = config.thumbs_dir
     if os.path.isdir(thumbs) and not os.path.islink(thumbs):
@@ -2270,7 +2494,27 @@ def _rewrite_processing_abs_paths(db_path: str, processing_dir: str) -> None:
 
 
 def _write_journal(config: StorageConfig, journal: dict[str, Any]) -> None:
-    _atomic_write_json(journal_path(config), journal)
+    """Persist a journal phase, or refuse to report it as persisted.
+
+    Recovery reads whatever journal survives a crash and acts on it, so a phase
+    that is not on stable storage must never be treated as recorded: the step
+    that follows is a rename whose correct recovery depends on this phase being
+    readable. The replace has already happened when the directory sync fails --
+    raising is what stops the transaction from building on a boundary it does
+    not have.
+    """
+    if not _journal_written_durably(config, journal):
+        raise _durability_failed("journal_not_durable", "journal")
+
+
+def _journal_written_durably(config: StorageConfig, journal: dict[str, Any]) -> bool:
+    """Write the journal and report, rather than raise, on a refused sync.
+
+    For the one transition where raising would be the unsafe answer: see the
+    commit in ``apply_restore()``. Everywhere else ``_write_journal()`` is the
+    boundary and a False must stop the transaction.
+    """
+    return _atomic_write_json(journal_path(config), journal, root=config.root)
 
 
 def _read_journal_file(path: str) -> dict[str, Any]:
@@ -2333,15 +2577,19 @@ def _remove_live_component(config: StorageConfig, name: str) -> None:
                 _safe_remove(side)
 
 
-def _restore_rollback_sidecars(config: StorageConfig, rollback_root: str, name: str) -> None:
+def _restore_rollback_sidecars(config: StorageConfig, rollback_root: str, name: str) -> bool:
     """Move a component's remaining rollback sidecars onto the live path.
 
     Only the database has any. Each moves independently, so a pass that crashed
     between the main file and its sidecars can be completed by a later one --
     a WAL can hold committed pages, and abandoning it loses them.
+
+    Returns whether the moves are durable; the caller decides what a False
+    means, because it is never safe to clean up rollback material a crash could
+    still need.
     """
     if name != "database":
-        return
+        return True
     live = _component_live_path(config, name)
     rolled_dir = os.path.dirname(_rollback_component_path(config, rollback_root, name))
     base = os.path.basename(config.db_path)
@@ -2351,30 +2599,44 @@ def _restore_rollback_sidecars(config: StorageConfig, rollback_root: str, name: 
     ]
     pending = [(src, dest) for src, dest in pending if os.path.lexists(src)]
     if not pending:
-        return
+        return True
     parent = os.path.dirname(live)
-    if parent:
-        _mkdir_owner(parent)
-    for src, dest in pending:
-        os.replace(src, dest)
+    parent_durable = _mkdir_owner_durable(config.root, parent) if parent else True
+    moved_durable = _replace_durably(config.root, pending)
+    return moved_durable and parent_durable
 
 
-def _restore_rollback_component(config: StorageConfig, rollback_root: str, name: str) -> None:
+def _restore_rollback_component(config: StorageConfig, rollback_root: str, name: str) -> bool:
+    """Move the saved copy of a component back onto its live path.
+
+    Returns whether the move is durable. Rollback runs the same rename in the
+    opposite direction as the restore did, so it owns the same boundary: the
+    rollback tree must not be cleaned away while a crash could still lose the
+    entry that put the previous library back.
+    """
     live = _component_live_path(config, name)
     rolled = _rollback_component_path(config, rollback_root, name)
     if not os.path.lexists(rolled):
-        return
+        return True
     parent = os.path.dirname(live)
-    if parent:
-        _mkdir_owner(parent)
-    os.replace(rolled, live)
-    _restore_rollback_sidecars(config, rollback_root, name)
+    parent_durable = _mkdir_owner_durable(config.root, parent) if parent else True
+    moved_durable = _replace_durably(config.root, [(rolled, live)])
+    sidecars_durable = _restore_rollback_sidecars(config, rollback_root, name)
+    return moved_durable and parent_durable and sidecars_durable
 
 
-def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> None:
+def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> bool:
+    """Put the previous library back from this journal's rollback tree.
+
+    Returns whether every move it made is durable. A False does not mean the
+    previous library is missing -- the renames happened -- only that a crash
+    could still lose one of them, which is precisely when the journal and the
+    rollback tree must be kept for the next pass instead of cleaned away.
+    """
     txn = journal["transaction_id"]
     rollback_root = _rollback_dir(config, txn)
     components = journal.get("components") or {}
+    durable = True
     for name, state in components.items():
         if not isinstance(state, dict):
             continue
@@ -2395,12 +2657,38 @@ def _rollback_from_journal(config: StorageConfig, journal: dict[str, Any]) -> No
             # instead of abandoning it -- for the database that is its
             # WAL/journal sidecars, which would otherwise be deleted along with
             # the rollback tree.
-            _restore_rollback_sidecars(config, rollback_root, name)
+            if not _restore_rollback_sidecars(config, rollback_root, name):
+                durable = False
+            # That earlier pass is why this replay exists: its directory syncs
+            # may be what was refused, leaving the entry it created unconfirmed.
+            # This pass is the last chance to confirm it, because cleanup
+            # follows -- so re-sync both ends of the move it already made. The
+            # rollback parent is gone when the tree was already reclaimed;
+            # there is nothing left to confirm there and nothing left to lose.
+            replayed = [os.path.dirname(_component_live_path(config, name))]
+            rolled_parent = os.path.dirname(
+                _rollback_component_path(config, rollback_root, name)
+            )
+            if os.path.isdir(rolled_parent):
+                replayed.append(rolled_parent)
+            if not _fsync_dirs_under(config.root, [d for d in replayed if d]):
+                durable = False
             continue
         if flags["new_install_started"]:
             _remove_live_component(config, name)
+            if not flags["old_existed"]:
+                # Removing what the restore installed is the whole rollback for
+                # a component that did not exist before, so no later rename
+                # syncs this directory and the removal has to sync it itself.
+                parent = os.path.dirname(_component_live_path(config, name))
+                if parent and not _fsync_dirs_under(config.root, [parent]):
+                    durable = False
         if flags["old_existed"]:
-            _restore_rollback_component(config, rollback_root, name)
+            # The removal above and this rename change the same live directory,
+            # so the sync inside the move covers both entries.
+            if not _restore_rollback_component(config, rollback_root, name):
+                durable = False
+    return durable
 
 
 def _raise_fail_after(fail_after: Optional[str], key: str) -> None:
@@ -2419,8 +2707,10 @@ def _move_old_component(
 ) -> None:
     live = _component_live_path(config, name)
     dest = _rollback_component_path(config, rollback_root, name)
-    if name == "database":
-        _mkdir_owner(os.path.dirname(dest))
+    if name == "database" and not _mkdir_owner_durable(config.root, os.path.dirname(dest)):
+        # Nothing has moved yet, so the safe answer is to not move anything
+        # into a directory a crash could take away from under it.
+        raise _durability_failed("restore_dir_not_durable", f"rollback_dir:{name}")
     existed = os.path.lexists(live)
     state["old_existed"] = existed
     persist()
@@ -2429,17 +2719,23 @@ def _move_old_component(
     state["old_move_started"] = True
     persist()
     _raise_fail_after(fail_after, f"old_move_started:{name}")
+    moves = [(live, dest)]
     if name == "database":
-        os.replace(live, dest)
         base = os.path.basename(live)
         dest_dir = os.path.dirname(dest)
-        for suffix in ("-wal", "-shm", "-journal"):
-            side = live + suffix
-            if os.path.lexists(side):
-                os.replace(side, os.path.join(dest_dir, base + suffix))
-    else:
-        os.replace(live, dest)
+        moves.extend(
+            (live + suffix, os.path.join(dest_dir, base + suffix))
+            for suffix in ("-wal", "-shm", "-journal")
+            if os.path.lexists(live + suffix)
+        )
+    # live storage -> the rollback tree: two different parents, both synced.
+    durable = _replace_durably(config.root, moves)
     _raise_fail_after(fail_after, f"old_renamed:{name}")
+    if not durable:
+        # The component is in the rollback tree and rollback will put it back,
+        # but the journal must not claim a move whose directory entries a crash
+        # could still lose.
+        raise _durability_failed("rename_not_durable", f"old_move:{name}")
     state["old_moved"] = True
     persist()
     if fail_after == "old_moved" and name == "database":
@@ -2463,7 +2759,8 @@ def _install_new_component(
     _raise_fail_after(fail_after, f"new_install_started:{name}")
 
     def _install_empty_dir() -> None:
-        _mkdir_owner(live)
+        if not _mkdir_owner_durable(config.root, live):
+            raise _durability_failed("rename_not_durable", f"new_install_dir:{name}")
         state["new_installed"] = True
         persist()
 
@@ -2479,10 +2776,16 @@ def _install_new_component(
             return
         raise RestoreError("missing_database", "Backup archive is not a valid PRKS backup.")
     parent = os.path.dirname(live)
-    if parent:
-        _mkdir_owner(parent)
-    os.replace(staged, live)
+    if parent and not _mkdir_owner_durable(config.root, parent):
+        raise _durability_failed("restore_dir_not_durable", f"live_parent:{name}")
+    # the staging tree -> live storage: again two parents, both synced.
+    durable = _replace_durably(config.root, [(staged, live)])
     _raise_fail_after(fail_after, f"new_renamed:{name}")
+    if not durable:
+        # The install happened; rollback removes it and puts the previous
+        # component back. Recording it as installed would tell recovery the
+        # entry is on stable storage when it is not.
+        raise _durability_failed("rename_not_durable", f"new_install:{name}")
     state["new_installed"] = True
     persist()
     if fail_after == "new_installed" and name == "pdfs":
@@ -2537,7 +2840,10 @@ def apply_restore(
 
     txn = secrets.token_urlsafe(16)
     rollback_root = _rollback_dir(config, txn)
-    _mkdir_owner(rollback_root)
+    if not _mkdir_owner_durable(config.root, rollback_root):
+        # The tree that holds the previous library has to outlive a crash
+        # before anything is moved into it. Nothing has changed yet.
+        raise _durability_failed("restore_dir_not_durable", "rollback_root")
     components: dict[str, dict[str, bool]] = {
         "database": _empty_component_state(),
         "pdfs": _empty_component_state(),
@@ -2568,7 +2874,7 @@ def apply_restore(
         if rolled_back:
             return
         rolled_back = True
-        _rollback_from_journal(config, journal)
+        durable = _rollback_from_journal(config, journal)
         if rebind_after:
             clear_derived_storage(config)
             try:
@@ -2578,6 +2884,15 @@ def apply_restore(
                     "restore_rolled_back reason=rebind_previous_failed error_type=%s",
                     safe_error_type(rebind_exc),
                 )
+        if not durable:
+            # The previous library is back in place, but a crash could still
+            # lose one of the entries that put it there. Keeping the journal
+            # and the rollback tree lets the next startup finish the job;
+            # removing them now is the one outcome that could lose it.
+            LOGGER.error(
+                "restore_durability_failed reason=rollback_not_durable boundary=rollback"
+            )
+            return
         # Journal first, for the same reason recovery does: a surviving journal
         # whose rollback tree was already removed is the dangerous combination.
         _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
@@ -2659,7 +2974,17 @@ def apply_restore(
             )
 
         summary = library_summary_from_db(config.db_path)
-        _mark("committed")
+        # The one journal write that must not raise. Everything is installed
+        # and bound by now, and the replace has already happened when only the
+        # directory sync is refused: rolling back would be the unsafe move,
+        # because a crash during that rollback could leave a surviving
+        # "committed" journal describing a half-rolled-back library. Keeping
+        # both journal and rollback tree instead leaves the next startup a
+        # coherent answer either way -- keep_restored if the entry survived,
+        # restored_previous if it did not.
+        journal["phase"] = "committed"
+        journal["components"] = components
+        commit_durable = _journal_written_durably(config, journal)
         committed = True
         LOGGER.info(
             "restore_committed schema_version=%s works=%s persons=%s",
@@ -2667,9 +2992,19 @@ def apply_restore(
             summary["works"],
             summary["persons"],
         )
-        _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
-        _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
-        _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        if commit_durable:
+            _discard_maintenance_child(config, _JOURNAL_SUBROOT, journal_path(config))
+            _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
+            _discard_maintenance_child(config, _STAGING_SUBROOT, staging_dir)
+        else:
+            LOGGER.error(
+                "restore_durability_failed reason=journal_not_durable boundary=committed"
+            )
+            warnings.append(
+                "The restore completed, but this computer could not confirm the commit record "
+                "reached stable storage. A power loss before it does could restore the previous "
+                "library on the next start."
+            )
         return {
             "restored": True,
             "works": summary["works"],
@@ -2759,7 +3094,17 @@ def recover_incomplete_restore(config: StorageConfig) -> dict[str, Any]:
         LOGGER.info("restore_recovery_completed outcome=keep_restored")
         return {"performed": True, "outcome": "keep_restored", "needs_reindex": False}
 
-    _rollback_from_journal(config, journal)
+    if not _rollback_from_journal(config, journal):
+        # Same rule as a refused journal removal: nothing that makes a replay
+        # impossible may happen while the previous library's directory entries
+        # are not confirmed on stable storage. The journal and rollback tree
+        # stay, and the next startup replays them -- replay is non-destructive.
+        LOGGER.error("restore_recovery_failed reason=rollback_not_durable")
+        raise RestoreError(
+            "rollback_not_durable",
+            "Incomplete restore could not be recovered.",
+            http_status=500,
+        )
     _remove_journal_or_fail(config)
     _discard_maintenance_child(config, _ROLLBACK_SUBROOT, rollback_root)
     if staging_dir:
@@ -2805,7 +3150,7 @@ def stream_upload_to_file(
                 written += len(chunk)
                 remaining -= len(chunk)
             handle.flush()
-            os.fsync(handle.fileno())
+            fsync_open_file(handle.fileno())
         _chmod_file(dest_path)
     except Exception:
         _safe_remove(dest_path)
