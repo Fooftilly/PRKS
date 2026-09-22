@@ -1891,6 +1891,7 @@
     const WORKSPACE_STATUS_MS = 5000;
     const NARROW_SPLIT_MESSAGE = 'Split view needs a wider workspace. The tab remains open.';
     let workspaceStatusTimer = null;
+    let workspaceLiveRestoreTimer = null;
 
     function showWorkspaceStatus(message) {
         const el = statusEl();
@@ -1972,8 +1973,15 @@
             text = 'Opened ' + label + ' in a new PRKS tab';
         }
         if (el) {
+            /* Clear then restore on a later task so repeated identical messages (e.g. a second
+             * Show-split while still narrow) are observed by aria-live engines that coalesce
+             * same-tick clear+write of the same string. */
             el.textContent = '';
-            el.textContent = text;
+            if (workspaceLiveRestoreTimer) clearTimeout(workspaceLiveRestoreTimer);
+            workspaceLiveRestoreTimer = setTimeout(function () {
+                workspaceLiveRestoreTimer = null;
+                el.textContent = text;
+            }, 0);
         }
         /* Visible feedback only for the narrow refusal: other announce kinds already have a
          * clear UI outcome (tile appears, tab opens, promotion happens) or remain SR guidance.
