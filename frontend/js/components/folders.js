@@ -1138,7 +1138,7 @@ function renderDashboard(folders, container, options = {}) {
 
 // Container width for compact Location+Nearby fallback. Kept below the common
 // stacked Main content width (~700px at 1280 with the app sidebar) so normal
- // desktop stays on tree|contents; true narrow tiles still fall under this.
+// desktop stays on tree|contents; true narrow tiles still fall under this.
 const PRKS_FOLDER_DETAIL_NARROW_PX = 560;
 
 function prksFolderDetailExpandAncestors(folderId, rows) {
