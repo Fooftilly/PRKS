@@ -3334,10 +3334,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
     /* Folder→Folder in the same mounted TabContext is an in-place workspace
      * selection change: keep the existing Folder shell (tree + prior contents)
      * visible while the destination resolves. Do not paint the generic
-     * Loading view... screen that blanks the center pane. */
+     * Loading view... screen that blanks the center pane.
+     *
+     * Detect via the live shell, not only prevRoute.name: beginRoute clears
+     * lastResolvedRoute, so a rapid A→B→C would otherwise treat B→C as a fresh
+     * entry and wipe the workspace mid-flight. */
     const sameFolderWorkspace = !!(
-        prevRoute &&
-        prevRoute.name === 'folder-detail' &&
         route.name === 'folder-detail' &&
         contentDiv.querySelector('[data-prks-role="folder-detail"]')
     );
