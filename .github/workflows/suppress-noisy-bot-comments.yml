@@ -14,15 +14,17 @@ jobs:
   remove-noise-comment:
     # No `on:` filter can match comment text, so every comment in the repository
     # starts a run that this condition then skips. Skipped jobs are not billed.
+    #
+    # Identity is the bot login alone. `performed_via_github_app` describes the
+    # app a comment was posted THROUGH, not who wrote it: comments authored by a
+    # human carry the connector's slug when they are relayed through it, and this
+    # repository has such comments. Matching on the slug would put those in scope.
     if: >-
       (
         (
           contains(github.event.comment.body, 'You have reached your Codex usage limits') &&
           contains(github.event.comment.body, 'code reviews') &&
-          (
-            github.event.comment.user.login == 'chatgpt-codex-connector[bot]' ||
-            github.event.comment.performed_via_github_app.slug == 'chatgpt-codex-connector'
-          )
+          github.event.comment.user.login == 'chatgpt-codex-connector[bot]'
         ) ||
         (
           github.event_name == 'issue_comment' &&
@@ -31,10 +33,7 @@ jobs:
             github.event.comment.body,
             'Qodo reviewed your code and found no material issues that require review'
           ) &&
-          (
-            github.event.comment.user.login == 'qodo-code-review[bot]' ||
-            github.event.comment.performed_via_github_app.slug == 'qodo-code-review'
-          )
+          github.event.comment.user.login == 'qodo-code-review[bot]'
         )
       ) &&
       (
