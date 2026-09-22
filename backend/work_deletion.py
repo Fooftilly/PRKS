@@ -124,6 +124,10 @@ def pending_pdf_cleanup_count(db: PRKSDatabase) -> int:
 def _note_attempt(db: PRKSDatabase, filename: str) -> None:
     """Stamp a claim this pass tried and could not settle.
 
+    Takes the STORED spelling, not a canonicalized one: a row PRKS would not
+    accept as a managed basename still has to rotate, and it can only be
+    addressed by the value actually in the column.
+
     Selection orders by this column, so a claim that never settles rotates
     behind claims that have not been tried yet. Without it the same oldest
     rows would fill every bounded pass and later orphans would never be
@@ -272,8 +276,13 @@ def retry_pending_pdf_cleanup(
             # A name this PRKS would not accept as a managed PDF is never
             # resolved to a path and never deleted. Keeping the row is the
             # conservative answer: refusing to act is not proof of completion.
+            # It is stamped like any other attempted-and-unsettled claim,
+            # under its stored spelling -- a row PRKS cannot act on must still
+            # rotate, or enough of them sorting first would re-fill every
+            # bounded pass and strand the valid claims behind them.
             summary["claimed"] += 1
             summary["unsafe"] += 1
+            _note_attempt(db, str(raw))
             continue
         if name in excluded:
             continue

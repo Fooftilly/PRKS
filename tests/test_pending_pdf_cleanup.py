@@ -490,6 +490,41 @@ class PendingPdfCleanupTests(unittest.TestCase):
         self.assertFalse(os.path.isfile(later_abs))
         self.assertEqual(sorted(self._claims()), sorted(stuck))
 
+    def test_claims_prks_cannot_act_on_rotate_like_any_other(self):
+        """PR #145 review (codex, P2): the unresolvable branch skipped the
+        attempt stamp, so enough invalid rows sorting first would re-fill every
+        bounded pass and strand the valid claims behind them.
+
+        Only a manually repaired or corrupted database has such rows -- PRKS
+        writes canonical basenames -- but that is exactly the case the rotation
+        exists for.
+        """
+        invalid = ("aaa-../escape.pdf", "aaa-sub/nested.pdf")
+        for bad in invalid:
+            self.db.execute_query(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)", (bad,)
+            )
+        valid = "zzz-real.pdf"
+        valid_abs = self._write_pdf(valid)
+        self.db.execute_query(
+            "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)", (valid,)
+        )
+
+        first = retry_pending_pdf_cleanup(self.db, limit=2)
+        self.assertEqual(first["unsafe"], 2)
+        self.assertEqual(first["removed"], 0)
+        self.assertTrue(os.path.isfile(valid_abs))
+        stamped = self.db.execute_query(
+            "SELECT filename FROM pending_pdf_cleanup WHERE last_attempt_at IS NOT NULL"
+        )
+        self.assertEqual(sorted(r["filename"] for r in stamped), sorted(invalid))
+
+        # The next bounded pass gets past them to the claim it can settle.
+        second = retry_pending_pdf_cleanup(self.db, limit=2)
+        self.assertEqual(second["removed"], 1)
+        self.assertFalse(os.path.isfile(valid_abs))
+        self.assertEqual(sorted(self._claims()), sorted(invalid))
+
     def test_an_attempted_claim_is_stamped_and_a_settled_one_is_gone(self):
         work_id, name, abs_path = self._managed_work("Stamped")
         with self._failing_remove(abs_path):
