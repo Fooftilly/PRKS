@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
+tone_instructions: >-
+  Be concise and evidence-based. Prioritize correctness, regressions, security,
+  architecture, data integrity, and missing tests. Skip style-only nits unless
+  they violate an explicit PRKS rule.
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+
+  high_level_summary: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  poem: false
+  enable_prompt_for_ai_agents: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+
+  path_filters:
+    - "!frontend/vendor/**/*.js"
+    - "!frontend/vendor/**/*.css"
+    - "!frontend/vendor/**/*.woff2"
+    - "!frontend/vendor/**/*.wasm"
+    - "!docs/screenshots/**/*.png"
+    - "!data/**"
+    - "!data_testing/**"
+    - "!artifacts/**"
+    - "!**/*.zip"
+
+  path_instructions:
+    - path: "frontend/**"
+      instructions: |
+        Review user-visible changes against DESIGN.md.
+        Check interaction consistency, accessibility, keyboard behavior,
+        responsive behavior, modal lifecycle, workspace/tab semantics, and
+        regressions in existing UI workflows. Do not invent new product
+        behavior that is absent from the documented design or roadmap.
+
+    - path: "frontend/sw.js"
+      instructions: |
+        Treat service-worker changes as high risk. Check cache versioning,
+        activation/update behavior, offline correctness, stale-resource
+        behavior, and recovery after upgrades. Use
+        docs/local-first-rollout-status.md as the authority for what is
+        currently durable/offline-capable, and docs/local-first-sync.md for
+        sync design and invariants. Do not treat planned design as implemented
+        behavior. Cross-check relevant offline tests.
+
+    - path: "backend/**/*sync*.py"
+      instructions: |
+        Review against the documented local-first and sync invariants.
+        Check idempotency, revision/conflict semantics, atomicity, tombstones,
+        partial failure behavior, and online/offline convergence. Use
+        docs/local-first-rollout-status.md to distinguish current coverage from
+        planned behavior in docs/local-first-sync.md.
+
+    - path: "backend/db_*"
+      instructions: |
+        Treat database, schema, and migration changes as data-integrity
+        sensitive. Verify the fresh-database schema and migrations remain in
+        parity, migrations are transactional and version-ordered, supported
+        older databases upgrade safely, unsupported newer schemas are rejected
+        where applicable, and changes are covered by migration/database tests.
+
+    - path: "backend/**"
+      instructions: |
+        Prioritize correctness, data integrity, filesystem safety, concurrency,
+        trust boundaries, SSRF/path handling, error handling, and durable
+        writes. Follow AGENTS.md and SECURITY.md.
+
+    - path: "tests/e2e/**"
+      instructions: |
+        Enforce the E2E policy in AGENTS.md. Flag arbitrary sleeps, shared
+        mutable state, fixed ports, production-storage access, unnecessary
+        full-suite iteration, vacuous assertions, weakened isolation, and
+        browser-level tests where a fast unit/API/static test would adequately
+        cover the behavior.
+
+    - path: "docs/wiki/**"
+      instructions: |
+        Verify documentation matches implemented behavior. Keep README.md as
+        the authority for exact startup, configuration, and safety contracts,
+        docs/local-first-rollout-status.md as the current local-first coverage
+        authority, and docs/wiki for detailed current user-facing behavior.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Check least-privilege permissions, pinned actions, event safety,
+        untrusted PR input handling, cache/artifact behavior, and whether a
+        failure can accidentally be reported as success.
+
+  pre_merge_checks:
+    issue_assessment:
+      mode: warning
+
+    custom_checks:
+      - name: "PRKS engineering invariants"
+        mode: warning
+        instructions: |
+          Pass if the changed behavior does not conflict with an applicable
+          explicit requirement in AGENTS.md, README.md, or SECURITY.md. Fail
+          only when a concrete changed behavior violates a specific repository
+          rule, and identify that rule.
+
+      - name: "UI design contract"
+        mode: warning
+        instructions: |
+          For PRs with user-visible frontend changes, pass only if the changed
+          interaction remains consistent with DESIGN.md and does not silently
+          introduce a conflicting interaction model. For PRs without
+          user-visible frontend changes, pass.
+
+      - name: "Offline and sync coherence"
+        mode: warning
+        instructions: |
+          For PRs that change offline, service-worker, persistence, or sync
+          behavior, pass only if relevant online/offline transitions, recovery
+          semantics, and regression coverage remain coherent with the current
+          coverage in docs/local-first-rollout-status.md and the design
+          invariants in docs/local-first-sync.md and AGENTS.md. Do not require
+          planned design features that rollout status does not mark as current.
+          For unrelated PRs, pass.
+
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+
+knowledge_base:
+  opt_out: false
+
+  web_search:
+    enabled: true
+
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "README.md"
+      - "DESIGN.md"
+      - "SECURITY.md"
+      - "docs/local-first-sync.md"
+      - "docs/local-first-rollout-status.md"
+
+  learnings:
+    scope: local
+
+  issues:
+    scope: local
+
+  pull_requests:
+    scope: local
