@@ -1212,26 +1212,19 @@ Promise.resolve()
                 assertEq('nonsense helper finds nothing', root.prksPaletteFindNonTileableMatch('zzzz-no-such-page-9qx'), null);
 
                 root.prksCloseCommandPalette();
-                root.fetchSearch = function () {
-                    return Promise.resolve([
-                        { id: 'W-SPLIT', title: 'SplitCapable Work Title', author_text: 'Author', year: '2020' },
-                    ]);
-                };
-                root.fetchPersons = function () {
-                    return Promise.resolve([{ id: 'P-SPLIT', first_name: 'Split', last_name: 'Person' }]);
-                };
-                root.fetchPlaylists = function () {
-                    return Promise.resolve([{ id: 'PL-SPLIT', title: 'Split Playlist' }]);
-                };
-                root.fetchConcepts = function () {
-                    return Promise.resolve([{ id: 'C-SPLIT', name: 'Split Concept', aliases: [] }]);
-                };
-                root.fetchPositions = function () {
-                    return Promise.resolve([{ id: 'POS-SPLIT', name: 'Split Position' }]);
-                };
-                root.fetchArguments = function () {
-                    return Promise.resolve([{ id: 'A-SPLIT', name: 'Split Argument', kind: 'argument' }]);
-                };
+                function stubList(fnName, rows) {
+                    root[fnName] = function () {
+                        return Promise.resolve(rows);
+                    };
+                }
+                stubList('fetchSearch', [
+                    { id: 'W-SPLIT', title: 'SplitCapable Work Title', author_text: 'Author', year: '2020' },
+                ]);
+                stubList('fetchPersons', [{ id: 'P-SPLIT', first_name: 'Split', last_name: 'Person' }]);
+                stubList('fetchPlaylists', [{ id: 'PL-SPLIT', title: 'Split Playlist' }]);
+                stubList('fetchConcepts', [{ id: 'C-SPLIT', name: 'Split Concept', aliases: [] }]);
+                stubList('fetchPositions', [{ id: 'POS-SPLIT', name: 'Split Position' }]);
+                stubList('fetchArguments', [{ id: 'A-SPLIT', name: 'Split Argument', kind: 'argument' }]);
                 root.prksOpenCommandPalette({ navigationTarget: 'tile' });
                 root.prksCommandPaletteSetQuery('SplitCapable');
                 return new Promise(function (r) { setTimeout(r, 0); });
@@ -1282,20 +1275,15 @@ Promise.resolve()
                 /* Normal Ctrl+K palette still surfaces sidebar destinations. */
                 root.prksCloseCommandPalette();
                 root.prksOpenCommandPalette();
-                root.prksCommandPaletteSetQuery('Folders');
-                assert(
-                    'normal palette lists Folders',
-                    root.prksCommandPaletteGetResults().some(function (r) {
-                        return r.id === 'navigate-folders';
-                    })
-                );
-                root.prksCommandPaletteSetQuery('Recent');
-                assert(
-                    'normal palette lists Recent',
-                    root.prksCommandPaletteGetResults().some(function (r) {
-                        return r.id === 'navigate-recent';
-                    })
-                );
+                [['Folders', 'navigate-folders'], ['Recent', 'navigate-recent']].forEach(function (pair) {
+                    root.prksCommandPaletteSetQuery(pair[0]);
+                    assert(
+                        'normal palette lists ' + pair[0],
+                        root.prksCommandPaletteGetResults().some(function (r) {
+                            return r.id === pair[1];
+                        })
+                    );
+                });
 
                 const src = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'command-palette.js'), 'utf8');
                 assert('no eval', src.indexOf('eval(') < 0);

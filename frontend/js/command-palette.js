@@ -898,17 +898,17 @@
         if (row.kind === 'modal' || row.kind === 'context') return false;
         if (row.kind === 'search') return false;
         if (row.kind !== 'navigate' && row.kind !== 'open') return false;
-        const hash = String(row.hash || '');
-        if (!hash) return false;
-        return typeof root.prksRouteSupportsTile === 'function' && root.prksRouteSupportsTile(hash);
+        return routeSupportsTile(row.hash);
     }
 
     /** User-facing examples of tile-capable detail pages (eligibility lives in navigation.js). */
     const SPLIT_DETAIL_EXAMPLES = 'Work, Person, Playlist, Concept, Position, or Argument';
+    const SPLIT_SEARCH_HINT = 'Search for a ' + SPLIT_DETAIL_EXAMPLES + '.';
 
     function routeSupportsTile(hash) {
-        if (!hash) return false;
-        return typeof root.prksRouteSupportsTile === 'function' && !!root.prksRouteSupportsTile(hash);
+        const h = hash ? String(hash) : '';
+        if (!h) return false;
+        return typeof root.prksRouteSupportsTile === 'function' && !!root.prksRouteSupportsTile(h);
     }
 
     /** Prefer PRKS_ROUTE_META.title so Progress statuses and role indexes share one label. */
@@ -949,36 +949,24 @@
         }
 
         if (q.length >= MIN_DYNAMIC_LEN) {
-            function considerEntityList(list, labelFn, hashFn) {
-                if (!list || !list.length) return;
+            const nonTileCaches = [
+                [state.folderCache, 'title', '#/folders/'],
+                [state.groupCache, 'title', '#/people/groups/'],
+                [state.savedViewCache, 'name', '#/views/'],
+            ];
+            for (let c = 0; c < nonTileCaches.length; c++) {
+                const list = nonTileCaches[c][0];
+                const field = nonTileCaches[c][1];
+                const prefix = nonTileCaches[c][2];
+                if (!list || !list.length) continue;
                 for (let i = 0; i < list.length; i++) {
                     const item = list[i];
                     if (!item || !item.id) continue;
-                    const labels = labelFn(item);
-                    const score = bestScore(labels, q);
+                    const label = String(item[field] || item.title || item.name || item.id);
+                    const score = bestScore([label], q);
                     if (score <= 0) continue;
-                    consider(labels[0] || String(item.title || item.name || item.id), hashFn(item), score);
+                    consider(label, prefix + encodeURIComponent(item.id), score);
                 }
-            }
-            const nonTileCaches = [
-                {
-                    list: state.folderCache,
-                    labels: function (f) { return [String(f.title || '')]; },
-                    hash: function (f) { return '#/folders/' + encodeURIComponent(f.id); },
-                },
-                {
-                    list: state.groupCache,
-                    labels: function (g) { return [String(g.title || g.name || '')]; },
-                    hash: function (g) { return '#/people/groups/' + encodeURIComponent(g.id); },
-                },
-                {
-                    list: state.savedViewCache,
-                    labels: function (v) { return [String(v.name || '')]; },
-                    hash: function (v) { return '#/views/' + encodeURIComponent(v.id); },
-                },
-            ];
-            for (let c = 0; c < nonTileCaches.length; c++) {
-                considerEntityList(nonTileCaches[c].list, nonTileCaches[c].labels, nonTileCaches[c].hash);
             }
         }
 
@@ -988,22 +976,17 @@
     function splitPaletteEmptyMessage() {
         const q = normalizeQuery(state.query);
         if (!q) {
-            return (
-                'Search for a detail page that supports split — ' +
-                SPLIT_DETAIL_EXAMPLES +
-                '.'
-            );
+            return 'Search for a detail page that supports split — ' + SPLIT_DETAIL_EXAMPLES + '.';
         }
         const blocked = findMatchedNonTileableDestination(state.query);
         if (blocked && blocked.label) {
-            return (
-                blocked.label +
-                " can’t open in split view. Search for a " +
-                SPLIT_DETAIL_EXAMPLES +
-                '.'
-            );
+            return blocked.label + " can’t open in split view. " + SPLIT_SEARCH_HINT;
         }
         return 'No matching pages that can open in split view.';
+    }
+
+    function emptyGuidanceHtml(text) {
+        return '<p class="prks-command-palette__empty" role="status">' + text + '</p>';
     }
 
     function openTabRows(rawQuery) {
@@ -1019,7 +1002,7 @@
             const tab = snap.tabs[i];
             if (!tab || tab.id === snap.mainTabId) continue;
             if (visual && visibleSecondaryIds.indexOf(tab.id) !== -1) continue;
-            if (typeof root.prksRouteSupportsTile === 'function' && !root.prksRouteSupportsTile(tab.route)) continue;
+            if (!routeSupportsTile(tab.route)) continue;
             if (q && bestScore([String(tab.title || '')], q) <= 0) continue;
             out.push({
                 id: 'ws-tab-' + tab.id,
@@ -1248,13 +1231,9 @@
 
         let html = '';
         if (state.emptyCreate) {
-            html =
-                '<p class="prks-command-palette__empty" role="status">No create command matches.</p>';
+            html = emptyGuidanceHtml('No create command matches.');
         } else if (!rows.length && state.navigationTarget === 'tile') {
-            html =
-                '<p class="prks-command-palette__empty" role="status">' +
-                esc(splitPaletteEmptyMessage()) +
-                '</p>';
+            html = emptyGuidanceHtml(esc(splitPaletteEmptyMessage()));
         } else {
             let lastSection = '';
             for (let i = 0; i < rows.length; i++) {
