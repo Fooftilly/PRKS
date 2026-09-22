@@ -278,7 +278,7 @@ class MigrationTestCase(unittest.TestCase):
 
 class TestRegistry(unittest.TestCase):
     def test_production_registry_is_contiguous(self):
-        self.assertEqual(LATEST_SCHEMA_VERSION, 15)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 16)
         self.assertEqual(PRKS_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
         self.assertEqual(LEGACY_BASELINE_VERSION, 9)
         validate_migration_registry()
@@ -868,7 +868,8 @@ class TestVersionRefusal(MigrationTestCase):
         conn = _raw(db.db_path)
         conn.execute("CREATE TABLE canary_keep (id INTEGER)")
         conn.execute("INSERT INTO canary_keep (id) VALUES (1)")
-        conn.execute("UPDATE schema_version SET version = 16")
+        future = LATEST_SCHEMA_VERSION + 1
+        conn.execute("UPDATE schema_version SET version = ?", (future,))
         conn.commit()
         conn.close()
         with self.assertRaises(MigrationError) as ctx:
@@ -879,7 +880,7 @@ class TestVersionRefusal(MigrationTestCase):
         try:
             self.assertEqual(
                 check.execute("SELECT version FROM schema_version").fetchone()[0],
-                16,
+                future,
             )
             self.assertEqual(check.execute("SELECT id FROM canary_keep").fetchone()[0], 1)
         finally:
@@ -1490,3 +1491,90 @@ class TestPdfMaterializationMigration(MigrationTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPendingPdfCleanupMigration(MigrationTestCase):
+    """Schema 16: durable claims for managed PDFs a Work deletion still owes."""
+
+    def _downgrade_to_v15(self, *, title="Keep V15"):
+        db = self._open()
+        work_id = db.add_work(title=title, file_path="/api/pdfs/keep-v15.pdf")
+        conn = _raw(self.storage.db_path)
+        conn.execute("DROP TABLE IF EXISTS pending_pdf_cleanup")
+        conn.execute("UPDATE schema_version SET version = 15")
+        conn.commit()
+        conn.close()
+        return work_id
+
+    def test_fresh_database_has_the_claim_table(self):
+        db = self._open()
+        self.assertEqual(_version(db.db_path), LATEST_SCHEMA_VERSION)
+        conn = db.get_connection()
+        try:
+            self.assertTrue(table_exists(conn, "pending_pdf_cleanup"))
+            self.assertTrue(column_exists(conn, "pending_pdf_cleanup", "filename"))
+            self.assertTrue(column_exists(conn, "pending_pdf_cleanup", "recorded_at"))
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM pending_pdf_cleanup").fetchone()[0],
+                0,
+            )
+        finally:
+            conn.close()
+
+    def test_v15_library_upgrades_and_keeps_its_works(self):
+        work_id = self._downgrade_to_v15()
+        probe = _raw(self.storage.db_path)
+        try:
+            self.assertEqual(read_schema_version(probe), 15)
+            self.assertFalse(table_exists(probe, "pending_pdf_cleanup"))
+        finally:
+            probe.close()
+
+        db = self._open()
+        self.assertEqual(_version(db.db_path), LATEST_SCHEMA_VERSION)
+        self.assertEqual(db.get_work(work_id)["title"], "Keep V15")
+        conn = db.get_connection()
+        try:
+            self.assertTrue(table_exists(conn, "pending_pdf_cleanup"))
+            # An existing library starts with nothing owed: PRKS cannot invent
+            # claims for deletions it never recorded.
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM pending_pdf_cleanup").fetchone()[0],
+                0,
+            )
+        finally:
+            conn.close()
+
+        # The upgraded library records claims like a fresh one.
+        db.delete_work_record(work_id)
+        self.assertEqual(
+            [row["filename"] for row in db.execute_query(
+                "SELECT filename FROM pending_pdf_cleanup")],
+            ["keep-v15.pdf"],
+        )
+
+    def test_upgraded_schema_matches_a_fresh_one(self):
+        self._downgrade_to_v15(title="Signature V15")
+        upgraded = self._open()
+        with upgraded.connection() as conn:
+            upgraded_signature = application_schema_signature(conn)
+
+        fresh_dir = tempfile.mkdtemp(prefix="prks-mig-fresh-")
+        self.addCleanup(shutil.rmtree, fresh_dir, ignore_errors=True)
+        fresh_storage = StorageConfig.for_testing(fresh_dir)
+        os.makedirs(os.path.dirname(fresh_storage.db_path) or fresh_dir, exist_ok=True)
+        fresh = PRKSDatabase(storage=fresh_storage, schema_path=_SCHEMA_PATH)
+        with fresh.connection() as conn:
+            fresh_signature = application_schema_signature(conn)
+        self.assertEqual(upgraded_signature, fresh_signature)
+
+    def test_a_missing_claim_table_is_loud_schema_drift(self):
+        db = self._open()
+        conn = _raw(db.db_path)
+        conn.execute("DROP TABLE pending_pdf_cleanup")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(MigrationError) as ctx:
+            self._open()
+        self.assertEqual(ctx.exception.code, "schema_drift")
+        self.assertEqual(ctx.exception.details.get("object"), "pending_pdf_cleanup")

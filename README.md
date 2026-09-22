@@ -108,7 +108,7 @@ Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `ima
 
 PRKS automatically upgrades supported older databases at startup.
 
-Current schema version: **15**.
+Current schema version: **16**.
 
 Schema migrations are transactional and version-ordered. A database marked version N has passed every migration through N.
 

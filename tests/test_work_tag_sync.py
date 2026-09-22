@@ -224,7 +224,7 @@ class SyncMigrationTests(MigrationTestCase):
                 conn.execute("DROP TABLE " + table)
             conn.execute("UPDATE schema_version SET version=13")
         db = self._open()
-        self.assertEqual(_version(db.db_path), 15)
+        self.assertEqual(_version(db.db_path), 16)
         self.assertEqual(db.get_work_tag_options(work)["assigned"], [{"tag_id": tag, "relation_revision": 0}])
         with db.connection() as conn:
             self.assertEqual(application_schema_signature(conn), signature)

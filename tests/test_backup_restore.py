@@ -1321,7 +1321,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         live = server_module.db
         versions = live.execute_query("SELECT version FROM schema_version")
         self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
-        self.assertEqual(PRKS_SCHEMA_VERSION, 15)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 16)
         titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming V12"])
         canonical = live.execute_query(

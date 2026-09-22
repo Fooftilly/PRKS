@@ -82,6 +82,7 @@ from backend.performance import (
     snapshot as performance_snapshot,
 )
 from backend.work_deletion import delete_work as delete_library_work
+from backend.work_deletion import retry_pending_pdf_cleanup_at_startup
 from backend.backup_restore import (
     BackupError,
     RestoreError,
@@ -3541,6 +3542,11 @@ def run_server(port=PORT, host=DEFAULT_HOST):
             LOGGER.info("thumbnail_prune_complete pruned=%s", n)
     except Exception as e:
         LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
+    # Bounded, and ordered with the other reconcilers: a managed PDF whose
+    # removal failed (or was interrupted) before this process started is the
+    # one post-delete side effect no rebuild can find on its own, because the
+    # Work row that named it is gone.
+    retry_pending_pdf_cleanup_at_startup(db)
     try:
         reconcile_at_startup(db, text_index)
     except Exception as e:

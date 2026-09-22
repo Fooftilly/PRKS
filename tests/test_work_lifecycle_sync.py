@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 from backend import sync_protocol
 from backend.db_manager import PRKSDatabase
@@ -130,6 +131,69 @@ class WorkLifecycleSyncTests(unittest.TestCase):
         )
         self.assertTrue(os.path.isfile(pdf_abs))
         self.assertIsNotNone(self.db.get_work(work_b))
+
+    def _claims(self):
+        return [row["filename"] for row in self.db.execute_query(
+            "SELECT filename FROM pending_pdf_cleanup ORDER BY filename")]
+
+    def test_replayed_delete_creates_no_second_cleanup_claim(self):
+        """A replay must converge on the existing claim, never add another.
+
+        The first ACK records the claim inside its own transaction; the exact
+        op_id replay is answered from the ledger, which carries no path. So
+        replaying can neither duplicate the claim nor resurrect a deletion
+        decision the live catalogue would now refuse.
+        """
+        pdf_abs, api_path = self._write_managed_pdf("replay-claim.pdf")
+        work = self.db.add_work(title="Replayed", file_path=api_path)
+        op_id = str(uuid.uuid4())
+
+        status, result = self.send(work, op_id=op_id)
+        self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+        self.assertEqual(self._claims(), ["replay-claim.pdf"])
+
+        with patch("backend.work_deletion.os.remove",
+                   side_effect=OSError("forced pdf cleanup failure")):
+            out = cleanup_after_work_delete(
+                self.db, self.text_index, work,
+                file_path=result.get("file_path") or "", existed=True)
+        self.assertEqual(out.cleanup_failures, ("pdf",))
+        self.assertTrue(out.pending_pdf_cleanup)
+        self.assertTrue(os.path.isfile(pdf_abs))
+        self.assertEqual(self._claims(), ["replay-claim.pdf"])
+
+        status2, result2 = self.send(work, op_id=op_id)
+        self.assertEqual(status2, 200)
+        self.assertNotIn("file_path", result2)
+        self.assertEqual(self._claims(), ["replay-claim.pdf"])
+
+        # The replayed ACK's cleanup carries no path, yet recovery still
+        # converges: the durable claim owns the orphan, not the envelope.
+        out2 = cleanup_after_work_delete(
+            self.db, self.text_index, work,
+            file_path=result2.get("file_path") or "", existed=True)
+        self.assertEqual(out2.cleanup_failures, ())
+        self.assertFalse(out2.pending_pdf_cleanup)
+        self.assertFalse(os.path.isfile(pdf_abs))
+        self.assertEqual(self._claims(), [])
+
+    def test_replay_after_adoption_retires_the_claim_without_deleting(self):
+        """Replay + a new owner: the file lives and no claim is left over it."""
+        pdf_abs, api_path = self._write_managed_pdf("replay-adopted.pdf")
+        work_a = self.db.add_work(title="First", file_path=api_path)
+        op_id = str(uuid.uuid4())
+        self.send(work_a, op_id=op_id)
+        self.assertEqual(self._claims(), ["replay-adopted.pdf"])
+
+        work_b = self.db.add_work(title="Second", file_path=api_path)
+        self.send(work_a, op_id=op_id)
+        cleanup_after_work_delete(
+            self.db, self.text_index, work_a, file_path=api_path,
+            managed_pdf_still_referenced=False, existed=True)
+
+        self.assertTrue(os.path.isfile(pdf_abs))
+        self.assertIsNotNone(self.db.get_work(work_b))
+        self.assertEqual(self._claims(), [])
 
     def test_delete_work_ledger_omits_file_path(self):
         """Immortal sync_operations must not retain managed filenames/paths."""
