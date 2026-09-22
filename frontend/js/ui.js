@@ -64,16 +64,34 @@ function prksCaptureModalBaseline(modalId) {
     store[modalId] = prksSerializeModalFormState(modalId);
 }
 
+function prksModalBaselineReadyStore() {
+    if (!window.__prksModalBaselineReady || typeof window.__prksModalBaselineReady !== 'object') {
+        window.__prksModalBaselineReady = {};
+    }
+    return window.__prksModalBaselineReady;
+}
+
 function prksScheduleModalBaselineCapture(modalId) {
     if (!modalId) return;
+    const ready = prksModalBaselineReadyStore();
+    const generationKey = modalId + '::gen';
+    const generation = (Number(ready[generationKey]) || 0) + 1;
+    ready[modalId] = false;
+    ready[generationKey] = generation;
+    const stillCurrent = () => ready[generationKey] === generation
+        && !document.getElementById(modalId)?.classList.contains('hidden');
+    // Capture before the next task. A later frame may adopt layout-only
+    // updates, but never a value the user has already changed.
+    if (stillCurrent()) prksCaptureModalBaseline(modalId);
     requestAnimationFrame(() => {
-        if (document.getElementById(modalId)?.classList.contains('hidden')) return;
-        prksCaptureModalBaseline(modalId);
+        if (!stillCurrent()) return;
+        const store = prksGetModalBaselineStore();
+        const baseline = Object.prototype.hasOwnProperty.call(store, modalId) ? store[modalId] : null;
+        if (baseline == null || prksSerializeModalFormState(modalId) === baseline) {
+            prksCaptureModalBaseline(modalId);
+        }
+        ready[modalId] = true;
     });
-    window.setTimeout(() => {
-        if (document.getElementById(modalId)?.classList.contains('hidden')) return;
-        prksCaptureModalBaseline(modalId);
-    }, 250);
 }
 
 function prksGetActiveModalId() {
@@ -96,6 +114,7 @@ function prksModalHasUnsavedChanges(modalId) {
 
 function prksResetModalBaselines() {
     window.__prksModalFormBaseline = {};
+    window.__prksModalBaselineReady = {};
 }
 
 function prksIsModalUnsavedConfirmOpen() {
@@ -103,17 +122,35 @@ function prksIsModalUnsavedConfirmOpen() {
     return !!(root && !root.classList.contains('hidden'));
 }
 
-function prksHideModalUnsavedConfirm() {
+function prksHideModalUnsavedConfirm(options) {
+    const restoreFocus = !options || options.restoreFocus !== false;
     const root = document.getElementById('prks-modal-unsaved-confirm');
+    const opener = window.__prksModalUnsavedConfirmOpener;
+    window.__prksModalUnsavedConfirmOpener = null;
     if (root) {
         root.classList.add('hidden');
         root.setAttribute('aria-hidden', 'true');
     }
     window.__prksModalUnsavedConfirmOnDiscard = null;
+    if (
+        restoreFocus &&
+        opener &&
+        opener !== document.body &&
+        typeof opener.focus === 'function' &&
+        document.contains(opener) &&
+        !(root && root.contains(opener))
+    ) {
+        try {
+            opener.focus({ preventScroll: true });
+        } catch (_e) {}
+    }
 }
 
 function prksOpenModalUnsavedConfirm(onDiscard) {
     window.__prksModalUnsavedConfirmOnDiscard = typeof onDiscard === 'function' ? onDiscard : null;
+    const active = document.activeElement;
+    window.__prksModalUnsavedConfirmOpener =
+        active && active !== document.body ? active : null;
     const root = document.getElementById('prks-modal-unsaved-confirm');
     if (!root) {
         const fn = window.__prksModalUnsavedConfirmOnDiscard;
@@ -131,7 +168,7 @@ function prksOpenModalUnsavedConfirm(onDiscard) {
 
 function prksDiscardConfirmedClose() {
     const fn = window.__prksModalUnsavedConfirmOnDiscard;
-    prksHideModalUnsavedConfirm();
+    prksHideModalUnsavedConfirm({ restoreFocus: false });
     if (fn) fn();
 }
 
@@ -471,20 +508,6 @@ function prksBindModalConfirmOnce() {
             prksFinishModalConfirm(prksModalConfirmAlertOnly)
         );
     }
-    if (!window.__prksModalConfirmKeyBound) {
-        window.__prksModalConfirmKeyBound = true;
-        document.addEventListener(
-            'keydown',
-            (e) => {
-                if (e.key !== 'Escape') return;
-                if (!prksIsModalConfirmOpen()) return;
-                e.preventDefault();
-                e.stopPropagation();
-                prksFinishModalConfirm(prksModalConfirmAlertOnly);
-            },
-            true
-        );
-    }
 }
 
 function prksBindModalUnsavedConfirmOnce() {
@@ -503,23 +526,74 @@ function prksBindModalUnsavedConfirmOnce() {
     if (scrim) {
         scrim.addEventListener('click', () => prksHideModalUnsavedConfirm());
     }
-    if (!window.__prksModalUnsavedConfirmKeyBound) {
-        window.__prksModalUnsavedConfirmKeyBound = true;
-        document.addEventListener(
-            'keydown',
-            (e) => {
-                if (e.key !== 'Escape') return;
-                if (!prksIsModalUnsavedConfirmOpen()) return;
-                e.preventDefault();
-                e.stopPropagation();
-                prksHideModalUnsavedConfirm();
-            },
-            true
-        );
+}
+
+function prksStopModalEscape(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+}
+
+/**
+ * One Escape stack for every `.modal`, the unsaved prompt, and the shared
+ * confirm/alert. The topmost layer wins. A prompt never dismisses the modal
+ * underneath it. An open doc-type menu inside the modal is its own layer.
+ * Drag-cancel keeps the pointer gesture's own Escape.
+ */
+function prksOnModalLifecycleKeydown(e) {
+    if (!e || e.key !== 'Escape' || e.isComposing) return;
+    if (document.body.classList.contains('prks-workspace-dragging')) return;
+    if (prksIsModalConfirmOpen()) {
+        prksStopModalEscape(e);
+        prksFinishModalConfirm(prksModalConfirmAlertOnly);
+        return;
     }
+    if (prksIsModalUnsavedConfirmOpen()) {
+        prksStopModalEscape(e);
+        prksHideModalUnsavedConfirm();
+        return;
+    }
+    if (prksDismissModalInnerEscapeLayer()) {
+        prksStopModalEscape(e);
+        return;
+    }
+    const activeModal = document.querySelector('.modal:not(.hidden)');
+    if (!activeModal) return;
+    prksStopModalEscape(e);
+    if (prksCloseStandalonePageModal(activeModal)) return;
+    requestModalClose('escape');
+}
+
+/** Tag and publisher dialogs own a private backdrop and close function. */
+const PRKS_STANDALONE_PAGE_MODAL_CLOSERS = {
+    'tags-page-alias-modal': 'prksCloseTagsAliasModal',
+    'tags-page-merge-modal': 'prksCloseTagsMergeModal',
+    'publishers-page-alias-modal': 'prksClosePublishersAliasModal',
+};
+
+function prksCloseStandalonePageModal(modal) {
+    const name = modal && PRKS_STANDALONE_PAGE_MODAL_CLOSERS[modal.id];
+    const closer = name && window[name];
+    if (typeof closer !== 'function') return false;
+    closer();
+    return true;
+}
+
+function prksDismissModalInnerEscapeLayer() {
+    const modal = document.querySelector('.modal:not(.hidden)');
+    if (!modal) return false;
+    const openPanel = modal.querySelector('.prks-doc-type-menu__panel:not(.hidden)');
+    if (!openPanel) return false;
+    if (typeof prksCloseAllDocTypeMenus === 'function') {
+        prksCloseAllDocTypeMenus(null);
+    } else {
+        openPanel.classList.add('hidden');
+    }
+    return true;
 }
 
 function requestModalClose(reason) {
+    if (prksIsModalConfirmOpen() || prksIsModalUnsavedConfirmOpen()) return false;
     const activeModalId = prksGetActiveModalId();
     if (activeModalId && prksModalHasUnsavedChanges(activeModalId)) {
         prksOpenModalUnsavedConfirm(() => {
@@ -576,7 +650,7 @@ function openModal(id) {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
-    prksHideModalUnsavedConfirm();
+    prksHideModalUnsavedConfirm({ restoreFocus: false });
     const backdrop = document.getElementById('modal-backdrop');
     if (backdrop && backdrop.classList.contains('hidden')) {
         const ae = document.activeElement;
@@ -587,11 +661,29 @@ function openModal(id) {
     const modalEl = document.getElementById(id);
     modalEl.classList.remove('hidden');
 
+    let deferBaseline = false;
+    // A close-and-reopen can settle an older init after the new one is visible.
+    // That callback must not drop inert or capture the newer form as pristine.
+    const openGeneration = (Number(modalEl.dataset.prksOpenGeneration) || 0) + 1;
+    modalEl.dataset.prksOpenGeneration = String(openGeneration);
+    const isCurrentOpening = () =>
+        modalEl.dataset.prksOpenGeneration === String(openGeneration)
+        && !modalEl.classList.contains('hidden');
     if (id === 'role-modal') {
-        prepareRoleModal();
+        deferBaseline = true;
+        modalEl.setAttribute('inert', '');
+        const finishRole = () => {
+            if (!isCurrentOpening()) return;
+            prksScheduleModalBaselineCapture('role-modal');
+            modalEl.removeAttribute('inert');
+        };
+        prepareRoleModal().then(finishRole, finishRole);
     } else if (id === 'work-modal') {
+        deferBaseline = true;
+        modalEl.setAttribute('inert', '');
         resetUploadModal();
         const after = () => {
+            if (!isCurrentOpening()) return;
             if (typeof window.prksSetWorkModalFolderFromId === 'function') {
                 window.prksSetWorkModalFolderFromId(
                     typeof window.prksFolderIdFromFocusedContext === 'function'
@@ -610,10 +702,11 @@ function openModal(id) {
             if (typeof window.prksSetWorkModalCreateBusy === 'function') {
                 window.prksSetWorkModalCreateBusy(false);
             }
+            prksScheduleModalBaselineCapture('work-modal');
+            modalEl.removeAttribute('inert');
             if (typeof window.prksFocusWorkModalInitial === 'function') {
                 window.prksFocusWorkModalInitial();
             }
-            prksScheduleModalBaselineCapture('work-modal');
         };
         // populateUploadComboboxes is async, so it always yields a promise.
         // Two-argument then, not .then(after).catch(after): the latter would run
@@ -621,8 +714,7 @@ function openModal(id) {
         // modal and re-capturing its baseline. `after` runs exactly once here.
         populateUploadComboboxes().then(after, after);
     } else if (id === 'person-modal') {
-        resetPersonAliasAutoSyncState();
-        syncPersonAliasesFromNames();
+        resetPersonCreateForm();
     } else if (id === 'folder-modal' && typeof window.prksRefreshFolderModalValidation === 'function') {
         const parentSearch = document.getElementById('folder-parent-search');
         const parentId = document.getElementById('folder-parent-id');
@@ -635,7 +727,7 @@ function openModal(id) {
         void window.prksInitNewGroupModal();
     }
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
-    prksScheduleModalBaselineCapture(id);
+    if (!deferBaseline) prksScheduleModalBaselineCapture(id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(modalEl);
 }
 
@@ -824,6 +916,10 @@ function prksAnyModalOpen() {
 function initModalCloseUi() {
     prksBindModalUnsavedConfirmOnce();
     prksBindModalConfirmOnce();
+    if (!window.__prksModalLifecycleKeyBound) {
+        window.__prksModalLifecycleKeyBound = true;
+        document.addEventListener('keydown', prksOnModalLifecycleKeydown, true);
+    }
     const backdrop = document.getElementById('modal-backdrop');
     if (!backdrop || backdrop.dataset.boundClose !== '1') {
         if (!backdrop) return;
@@ -1042,8 +1138,33 @@ function buildPersonAliasSuggestions(firstName, lastName) {
     return [...new Set(suggestions)].join(', ');
 }
 
+const PRKS_PERSON_CREATE_FIELD_IDS = [
+    'person-fname',
+    'person-lname',
+    'person-aliases',
+    'person-about',
+    'person-birth-date',
+    'person-death-date',
+    'person-image-url',
+    'person-link-wikipedia',
+    'person-link-stanford',
+    'person-link-iep',
+    'person-links-other',
+];
+
 function resetPersonAliasAutoSyncState() {
     window._personAliasesManual = false;
+}
+
+/** Blank create model only. Profile edit lives in the right panel (`pd-*`), not here. */
+function resetPersonCreateForm() {
+    resetPersonAliasAutoSyncState();
+    PRKS_PERSON_CREATE_FIELD_IDS.forEach((fieldId) => {
+        const el = document.getElementById(fieldId);
+        if (!el) return;
+        el.value = '';
+        el.removeAttribute('aria-invalid');
+    });
 }
 
 function syncPersonAliasesFromNames() {
@@ -1073,7 +1194,7 @@ async function populateFolderDropdown() {
 }
 
 function closeModals() {
-    prksHideModalUnsavedConfirm();
+    prksHideModalUnsavedConfirm({ restoreFocus: false });
     const playlistModal = document.getElementById('playlist-modal');
     const playlistWasOpen = playlistModal && !playlistModal.classList.contains('hidden');
     document.getElementById('modal-backdrop').classList.add('hidden');

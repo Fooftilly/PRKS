@@ -245,6 +245,10 @@ FEATURES = {
         "description": "Settings category navigation and persistence",
         "selectors": ("tests.e2e.test_app.SettingsCategoryWorkflowTests",),
     },
+    "modals": {
+        "description": "Shared modal lifecycle: Escape, unsaved confirm, focus restore",
+        "selectors": ("tests.e2e.test_modal_lifecycle",),
+    },
     "folders": {
         "description": "Folders/Home offline + durable Folder ops",
         "selectors": (
@@ -325,8 +329,8 @@ AFFECTED_RULES = (
             "backend/db_schema.sql",
             "prks_app.py",
         ),
-        "features": ("smoke", "shell", "tabs", "offline", "sync"),
-        "note": "Shared core → smoke + shell/tabs/offline/sync",
+        "features": ("smoke", "shell", "tabs", "offline", "sync", "modals"),
+        "note": "Shared core → smoke + shell/tabs/offline/sync/modals",
     },
     {
         "name": "graph",
