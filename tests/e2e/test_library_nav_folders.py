@@ -39,16 +39,18 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         return server, page, server.ids
 
     def trigger_in(self, page, scope: str):
+        # Scope must be a single ancestor selector (no commas): Playwright/CSS
+        # would otherwise treat ".tile, #page .trigger" as matching the tile itself.
         return page.locator(f"{scope} .prks-folder-nav__trigger").first
 
-    def open_folder(self, page, folder_id, *, scope=".prks-tile--main, #page-content"):
+    def open_folder(self, page, folder_id, *, scope=".prks-tile--main"):
         page.evaluate(
             "id => prksNavigate('#/folders/' + encodeURIComponent(id))",
             folder_id,
         )
         page.wait_for_selector(f"{scope} .prks-folder-nav__trigger", timeout=15000)
 
-    def open_switcher(self, page, *, scope=".prks-tile--main, #page-content"):
+    def open_switcher(self, page, *, scope=".prks-tile--main"):
         trigger = self.trigger_in(page, scope)
         trigger.click()
         page.wait_for_selector("#prks-folder-nav-panel:not([hidden])", timeout=10000)
@@ -71,8 +73,8 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         ).first
         opt.click()
 
-    def wait_folder_title(self, page, title, folder_id=None, *, scope=".prks-tile--main, #page-content"):
-        if folder_id is not None and scope.startswith(".prks-tile--main"):
+    def wait_folder_title(self, page, title, folder_id=None, *, scope=".prks-tile--main"):
+        if folder_id is not None and scope == ".prks-tile--main":
             page.wait_for_function(
                 "id => location.hash === '#/folders/' + encodeURIComponent(id)",
                 arg=folder_id,
@@ -91,7 +93,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
     def test_nearby_parent_sibling_and_cross_branch_filter(self):
         _server, page, ids = self.start()
         self.open_folder(page, ids["ethics"])
-        trigger = self.trigger_in(page, ".prks-tile--main, #page-content")
+        trigger = self.trigger_in(page, ".prks-tile--main")
         self.assertIn(LIBRARY_NAV_ETHICS, trigger.inner_text())
 
         self.open_switcher(page)
@@ -138,7 +140,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
     def test_keyboard_open_nav_select_escape_restores_focus(self):
         _server, page, ids = self.start()
         self.open_folder(page, ids["ethics"])
-        trigger = self.trigger_in(page, ".prks-tile--main, #page-content")
+        trigger = self.trigger_in(page, ".prks-tile--main")
         trigger.focus()
         page.keyboard.press("Enter")
         page.wait_for_selector("#prks-folder-nav-panel:not([hidden])", timeout=10000)

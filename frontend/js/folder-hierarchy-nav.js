@@ -767,8 +767,11 @@
             ev.stopPropagation();
             void openPanel(trigger);
         });
+        // Enter/Space on a <button> also synthesize a click. Open only from click
+        // for those keys so we do not open-then-immediately-close. ArrowDown alone
+        // does not click, so it still opens from keydown.
         trigger.addEventListener('keydown', function (ev) {
-            if (ev.key === 'ArrowDown' || ev.key === 'Enter' || ev.key === ' ') {
+            if (ev.key === 'ArrowDown') {
                 if (panelEl && !panelEl.hidden && restoreTarget === trigger) return;
                 ev.preventDefault();
                 void openPanel(trigger);
