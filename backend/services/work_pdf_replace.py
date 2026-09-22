@@ -10,6 +10,13 @@ managed filename so siblings keep their prior bytes and materialization marks.
 
 All on-disk paths are resolved through ``safe_pdf_path_under_dir`` immediately
 before use so DB/user-derived basenames cannot escape the managed pdfs dir.
+
+Every write that publishes canonical managed-PDF bytes follows the
+``backend.fs_durability`` convention through that module's primitives, never a
+bare ``os.fsync``: contents are flushed with the strongest barrier the platform
+offers before a durable name can point at them, and the containing directory is
+flushed afterwards. Linearization runs *after* that boundary and is optional, so
+it must never be what makes the first write durable.
 """
 
 from __future__ import annotations
@@ -30,7 +37,7 @@ from backend.db_manager import (
     referenced_managed_pdf_filename,
     safe_pdf_path_under_dir,
 )
-from backend.fs_durability import fsync_directory
+from backend.fs_durability import fsync_directory, fsync_open_file
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.pdf_materialization import STALE_CODE
@@ -85,6 +92,14 @@ def atomic_replace_managed_pdf_bytes(
     ``normpath(join(base, basename))`` + ``startswith(base)`` pattern so the
     sink does not carry a helper return CodeQL still treats as tainted. Temps
     live under ``realpath(pdfs_dir)`` only.
+
+    Durability is the ``backend.fs_durability`` convention: the temporary's
+    contents are made durable with ``fsync_open_file`` *before* ``os.replace``
+    publishes them, and the managed directory is synced after. A content sync
+    that raises removes the temporary and propagates, leaving the previous
+    canonical PDF untouched -- bytes that never reached stable storage must not
+    acquire a durable name.
+
     Returns the absolute managed path written.
     """
     if not safe_pdf_path_under_dir(pdfs_dir, filename):
@@ -104,7 +119,12 @@ def atomic_replace_managed_pdf_bytes(
         with os.fdopen(fd, "wb") as fp:
             fp.write(body)
             fp.flush()
-            os.fsync(fp.fileno())
+            # First half of the ``backend.fs_durability`` convention, through
+            # the shared primitive rather than a bare ``os.fsync``: on macOS
+            # that is the difference between waiting for the drive's own cache
+            # and only handing the bytes to it. Raising here abandons the
+            # replacement, which has published nothing.
+            fsync_open_file(fp.fileno())
     except Exception:
         if tmp.startswith(base_path + os.sep):
             try:
@@ -118,7 +138,12 @@ def atomic_replace_managed_pdf_bytes(
         if not fullpath.startswith(base_path):
             raise ValueError("Invalid or unsafe PDF storage path")
         os.replace(tmp, fullpath)
-        fsync_managed_pdf_parent(pdfs_dir, filename)
+        # Second half of the convention. Unlike the content sync above this is
+        # best-effort by design: the rename has already happened and cannot be
+        # unwound, so a directory the platform refuses to sync is reported, not
+        # raised. The bytes are durable either way; only the entry is weaker.
+        if not fsync_managed_pdf_parent(pdfs_dir, filename):
+            LOGGER.warning("pdf_replace_dir_sync_failed")
     except Exception:
         if tmp.startswith(base_path + os.sep):
             try:
@@ -230,6 +255,12 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     at runtime, then the sink path rebuilt with
     ``normpath(join(base, basename))`` + ``startswith(base)`` so the sink does
     not carry a helper return CodeQL still treats as tainted.
+
+    The created file is canonical as soon as this returns its name, so it owes
+    the same content barrier a replacement does: ``fsync_open_file`` before
+    success, and the managed directory synced after. A refused content sync is
+    not a stored PDF -- the partial file is removed and ``ManagedPdfStoreError``
+    is raised rather than handing back a name a Work would then reference.
     """
     os.makedirs(pdfs_dir, exist_ok=True)
     created = False
@@ -249,7 +280,11 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
             created = True
             fp.write(body)
             fp.flush()
-            os.fsync(fp.fileno())
+            # Same content barrier the replace path owes, for the same reason:
+            # this file is canonical the moment the store reports success, so
+            # it has to be durable before it does. A refused sync leaves the
+            # OSError handler below to remove it and fail the upload.
+            fsync_open_file(fp.fileno())
     except FileExistsError as exc:
         # The name was already taken, so the file on disk is not ours to remove.
         raise ManagedPdfStoreError(
@@ -266,7 +301,11 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
         raise ManagedPdfStoreError(
             "write_failed", "Could not store the uploaded PDF"
         ) from exc
-    fsync_managed_pdf_parent(pdfs_dir, name)
+    if not fsync_managed_pdf_parent(pdfs_dir, name):
+        # Best-effort, as above: the file exists and its contents are durable,
+        # so a directory sync the platform refused is worth recording and not
+        # worth discarding a good upload for.
+        LOGGER.warning("pdf_upload_dir_sync_failed")
 
     # Linearization is an optimization, and the bytes on disk are already the
     # PDF the caller sent. It swallows its own failures but can still raise
