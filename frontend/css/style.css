@@ -700,6 +700,20 @@ body {
     display: none !important;
 }
 
+/* Compact sighted feedback for split refusals (narrow fallback). Visual-only companion to
+ * `#prks-workspace-live`; no card, banner animation, or toast layer. */
+.prks-workspace-status {
+    margin: 0 0 var(--space-sm);
+    padding: 0;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.prks-workspace-status[hidden] {
+    display: none !important;
+}
+
 .prks-workspace-split-btn.is-active,
 .prks-workspace-split-btn[aria-pressed="true"] {
     background: var(--surface-selected);

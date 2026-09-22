@@ -1547,6 +1547,7 @@
                 });
             }
             narrowFallback = false;
+            showWorkspaceStatus('');
             if (state.mode === MODE_TILED && state.secondaryTree) {
                 state.focusedTabId = state.mainTabId;
                 paint();
@@ -1879,6 +1880,44 @@
         return document.getElementById('prks-workspace-live');
     }
 
+    function statusEl() {
+        if (typeof document === 'undefined') return null;
+        return document.getElementById('prks-workspace-status');
+    }
+
+    /* Temporary sighted feedback for explicit split/fallback refusals. SR users already hear
+     * `#prks-workspace-live`; this element is visual-only (no aria-live) so the message is not
+     * double-announced. Repeated identical calls only refresh the dismiss timer. */
+    const WORKSPACE_STATUS_MS = 5000;
+    const NARROW_SPLIT_MESSAGE = 'Split view needs a wider workspace. The tab remains open.';
+    let workspaceStatusTimer = null;
+    let workspaceLiveRestoreTimer = null;
+
+    function showWorkspaceStatus(message) {
+        const el = statusEl();
+        const text = String(message || '');
+        if (!el) return;
+        if (!text) {
+            if (workspaceStatusTimer) {
+                clearTimeout(workspaceStatusTimer);
+                workspaceStatusTimer = null;
+            }
+            el.textContent = '';
+            el.hidden = true;
+            return;
+        }
+        el.hidden = false;
+        el.textContent = text;
+        if (workspaceStatusTimer) clearTimeout(workspaceStatusTimer);
+        workspaceStatusTimer = setTimeout(function () {
+            workspaceStatusTimer = null;
+            if (el.textContent === text) {
+                el.textContent = '';
+                el.hidden = true;
+            }
+        }, WORKSPACE_STATUS_MS);
+    }
+
     function paintSplitControl() {
         if (typeof document === 'undefined' || !production) return;
         const btn = document.getElementById('prks-workspace-tile-layout');
@@ -1894,7 +1933,7 @@
         if (narrowBlocked) {
             if (labelEl) labelEl.textContent = 'Show split';
             btn.setAttribute('aria-label', 'Split unavailable at this width');
-            btn.setAttribute('title', 'Split unavailable at this width');
+            btn.setAttribute('title', NARROW_SPLIT_MESSAGE);
             return;
         }
         if (visual) {
@@ -1916,34 +1955,41 @@
 
     function announce(title, kind) {
         const el = liveEl();
-        if (!el) return;
         const label = String(title || 'page');
-        el.textContent = '';
+        let text = '';
         if (kind === 'promote') {
-            el.textContent = 'Opened as main because this view is not available in split view yet.';
-            return;
+            text = 'Opened as main because this view is not available in split view yet.';
+        } else if (kind === 'narrow') {
+            text = NARROW_SPLIT_MESSAGE;
+        } else if (kind === 'cap') {
+            text = 'Maximum of 4 visible panes. Close or hide a pane to split again.';
+        } else if (kind === 'ambiguous') {
+            text = 'Focus a split pane, then use Split right or Split down.';
+        } else if (kind === 'hide-pane') {
+            text = 'Hid ' + label + ' from split view. It remains open as a tab.';
+        } else if (kind === 'split' || kind === 'tile') {
+            text = 'Opened ' + label + ' in split view';
+        } else {
+            text = 'Opened ' + label + ' in a new PRKS tab';
         }
-        if (kind === 'narrow') {
-            el.textContent = 'Split view needs a wider window. The tab remains open.';
-            return;
+        if (el) {
+            /* Clear then restore on a later task so repeated identical messages (e.g. a second
+             * Show-split while still narrow) are observed by aria-live engines that coalesce
+             * same-tick clear+write of the same string. */
+            el.textContent = '';
+            if (workspaceLiveRestoreTimer) clearTimeout(workspaceLiveRestoreTimer);
+            workspaceLiveRestoreTimer = setTimeout(function () {
+                workspaceLiveRestoreTimer = null;
+                el.textContent = text;
+            }, 0);
         }
-        if (kind === 'cap') {
-            el.textContent = 'Maximum of 4 visible panes. Close or hide a pane to split again.';
-            return;
-        }
-        if (kind === 'ambiguous') {
-            el.textContent = 'Focus a split pane, then use Split right or Split down.';
-            return;
-        }
-        if (kind === 'hide-pane') {
-            el.textContent = 'Hid ' + label + ' from split view. It remains open as a tab.';
-            return;
-        }
-        if (kind === 'split' || kind === 'tile') {
-            el.textContent = 'Opened ' + label + ' in split view';
-            return;
-        }
-        el.textContent = 'Opened ' + label + ' in a new PRKS tab';
+        /* Visible feedback only for the narrow refusal: other announce kinds already have a
+         * clear UI outcome (tile appears, tab opens, promotion happens) or remain SR guidance.
+         * Layout reconciliation never calls announce('narrow') — only explicit split/Show-split.
+         * Successful/other announces clear any lingering narrow notice so it cannot outlive a
+         * later successful tile. */
+        if (kind === 'narrow') showWorkspaceStatus(text);
+        else showWorkspaceStatus('');
     }
 
     function tabStatusKind(tabId) {
@@ -2879,6 +2925,10 @@
         prksWorkspaceAdoptLocation: prksWorkspaceAdoptLocation,
         prksWorkspaceSnapshot: prksWorkspaceSnapshot,
         prksNavigate: prksNavigate,
+        /* Test seam for the production announce/status path (Node selftests stub document). */
+        prksWorkspaceAnnounceForTest: announce,
+        prksWorkspaceShowStatusForTest: showWorkspaceStatus,
+        prksWorkspaceNarrowSplitMessageForTest: NARROW_SPLIT_MESSAGE,
     };
 
     Object.keys(api).forEach(function (k) {

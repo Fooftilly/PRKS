@@ -137,6 +137,7 @@ function makeHarness(opts) {
     const hist = makeHistory(opts.hash || '#/folders');
     const renders = [];
     const published = [];
+    const announcements = [];
     const life = { mount: [], park: [], destroy: [], warmPark: [], warmResume: [] };
     const mounted = Object.create(null);
     const warm = Object.create(null);
@@ -169,7 +170,9 @@ function makeHarness(opts) {
         renderRoute: function (options) {
             renders.push(options || {});
         },
-        announce: function () {},
+        announce: function (title, kind) {
+            announcements.push({ title: title == null ? '' : String(title), kind: kind || '' });
+        },
         publishMainShell: function (tabId, title) {
             published.push({ tabId: tabId, title: title || '' });
         },
@@ -211,6 +214,7 @@ function makeHarness(opts) {
         hist: hist,
         renders: renders,
         published: published,
+        announcements: announcements,
         life: life,
         mountedCount: function () {
             return Object.keys(mounted).length;
@@ -1149,8 +1153,12 @@ async function run() {
     assertEq('narrow tile mounted 1', nTile.mountedCount(), 1);
     assertEq('narrow tile no render B', nTile.renders.length, nRenders0);
     assert('narrow B not mounted', !nTile.isMounted(nSnap.secondaryTree.tabId));
+    assertEq('narrow tile announce count', nTile.announcements.length, 1);
+    assertEq('narrow tile announce kind', nTile.announcements[0].kind, 'narrow');
     const nB = nSnap.secondaryTree.tabId;
+    const nAnnounceBeforeWiden = nTile.announcements.length;
     await nTile.ws.setNarrowFallback(false);
+    assertEq('widen does not re-announce', nTile.announcements.length, nAnnounceBeforeWiden);
     assertEq('widen mode tiled', nTile.ws.snapshot().mode, 'tiled');
     assertEq('widen visual', nTile.ws.visualTiled(), true);
     assertEq('widen mounted 2', nTile.mountedCount(), 2);
@@ -1162,12 +1170,31 @@ async function run() {
     await nParked.ws.navigate('#/works/WZ', { target: 'new-tab', activate: false });
     const nZ = nParked.ws.snapshot().tabs[1].id;
     await nParked.ws.setNarrowFallback(true);
+    const nParkedBeforeTile = nParked.announcements.length;
     await nParked.ws.tileTab(nZ);
     assertEq('narrow tileTab mode', nParked.ws.snapshot().mode, 'tiled');
     assertEq('narrow tileTab secondary', nParked.ws.snapshot().secondaryTree.tabId, nZ);
     assertEq('narrow tileTab visual', nParked.ws.visualTiled(), false);
     assertEq('narrow tileTab mounted', nParked.mountedCount(), 1);
     assertEq('narrow tileTab focus main', nParked.ws.snapshot().focusedTabId, nParked.ws.snapshot().mainTabId);
+    assertEq('narrow tileTab announce once', nParked.announcements.length, nParkedBeforeTile + 1);
+    assertEq('narrow tileTab announce kind', nParked.announcements[nParkedBeforeTile].kind, 'narrow');
+
+    /* Passive-fallback layout reconciliation must stay silent: only an explicit split/Show-split
+     * attempt announces (and shows visible status in the production announce path). */
+    const nQuiet = makeHarness({ hash: '#/works/WA' });
+    await nQuiet.ws.navigate('#/works/WB', { target: 'tile' });
+    assert('wide tile announced split', nQuiet.announcements.some(function (a) { return a.kind === 'split' || a.kind === 'tile'; }));
+    const quietBefore = nQuiet.announcements.length;
+    await nQuiet.ws.setNarrowFallback(true);
+    assertEq('setNarrowFallback does not announce', nQuiet.announcements.length, quietBefore);
+    await nQuiet.ws.setNarrowFallback(true);
+    assertEq('repeat setNarrowFallback still quiet', nQuiet.announcements.length, quietBefore);
+    await nQuiet.ws.tileTab(nQuiet.ws.snapshot().secondaryTree.tabId);
+    assertEq('re-tile under narrow announces once', nQuiet.announcements.length, quietBefore + 1);
+    assertEq('re-tile under narrow kind', nQuiet.announcements[quietBefore].kind, 'narrow');
+    await nQuiet.ws.tileTab(nQuiet.ws.snapshot().secondaryTree.tabId);
+    assertEq('second explicit re-tile announces again', nQuiet.announcements.length, quietBefore + 2);
 
     const nLeave = makeHarness({ hash: '#/works/WA' });
     await nLeave.ws.navigate('#/works/WB', { target: 'tile' });
@@ -1749,6 +1776,80 @@ async function run() {
         await mp.ws.setNarrowFallback(true);
         assert('movePane declines under narrow fallback', !mp.ws.movePane(mpD, mpC, 'left-right', 'second'));
         await mp.ws.setNarrowFallback(false);
+    }
+
+    /* Production announce() sighted status (issue #135): stub document + timers so we exercise
+     * the real module helpers without a browser. Helpers stay local to this block so they do
+     * not duplicate other selftests' record/assert boilerplate as new Sonar duplication.
+     * Live-region restore is deferred (setTimeout 0) so repeated identical messages re-fire. */
+    {
+        const live = { id: 'prks-workspace-live', textContent: '' };
+        const status = { id: 'prks-workspace-status', textContent: '', hidden: true };
+        const timers = [];
+        const prevDoc = globalThis.document;
+        const prevSet = globalThis.setTimeout;
+        const prevClear = globalThis.clearTimeout;
+        function flushLiveRestores() {
+            timers.filter(function (t) { return !t.cleared && t.delay === 0; }).forEach(function (t) {
+                t.cleared = true;
+                t.fn();
+            });
+        }
+        function activeStatusTimers() {
+            return timers.filter(function (t) { return !t.cleared && t.delay !== 0; }).length;
+        }
+        globalThis.document = {
+            getElementById: function (id) {
+                if (id === 'prks-workspace-live') return live;
+                if (id === 'prks-workspace-status') return status;
+                return null;
+            },
+        };
+        globalThis.setTimeout = function (fn, delay) {
+            const h = { fn: fn, delay: Number(delay) || 0, cleared: false };
+            timers.push(h);
+            return h;
+        };
+        globalThis.clearTimeout = function (h) {
+            if (h) h.cleared = true;
+        };
+        try {
+            const msg = wsApi.prksWorkspaceNarrowSplitMessageForTest;
+            assert('narrow message copy', typeof msg === 'string' && msg.indexOf('wider workspace') !== -1);
+            assert('announce test seam', typeof wsApi.prksWorkspaceAnnounceForTest === 'function');
+            wsApi.prksWorkspaceAnnounceForTest('', 'narrow');
+            assertEq('narrow live cleared pending restore', live.textContent, '');
+            flushLiveRestores();
+            assertEq('narrow live text', live.textContent, msg);
+            assertEq('narrow status text', status.textContent, msg);
+            assertEq('narrow status shown', status.hidden, false);
+            assertEq('narrow one status timer', activeStatusTimers(), 1);
+            wsApi.prksWorkspaceAnnounceForTest('', 'narrow');
+            flushLiveRestores();
+            assertEq('narrow dedup one status timer', activeStatusTimers(), 1);
+            assertEq('narrow repeated live text', live.textContent, msg);
+            wsApi.prksWorkspaceAnnounceForTest('Work A', 'split');
+            flushLiveRestores();
+            assertEq('split live text', live.textContent, 'Opened Work A in split view');
+            assertEq('split clears status', status.textContent, '');
+            assertEq('split hides status', status.hidden, true);
+            wsApi.prksWorkspaceAnnounceForTest('', 'narrow');
+            flushLiveRestores();
+            timers.filter(function (t) { return !t.cleared; }).forEach(function (t) {
+                t.cleared = true;
+                t.fn();
+            });
+            assertEq('timer clears status text', status.textContent, '');
+            assertEq('timer hides status', status.hidden, true);
+            wsApi.prksWorkspaceAnnounceForTest('', 'cap');
+            flushLiveRestores();
+            assert('cap live only', live.textContent.indexOf('Maximum of 4') !== -1);
+            assertEq('cap status empty', status.textContent, '');
+        } finally {
+            globalThis.document = prevDoc;
+            globalThis.setTimeout = prevSet;
+            globalThis.clearTimeout = prevClear;
+        }
     }
 
     console.log('\n' + passed + ' passed, ' + failed + ' failed');
