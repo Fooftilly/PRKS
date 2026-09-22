@@ -1333,7 +1333,12 @@
             cd && typeof cd.querySelector === 'function'
                 ? cd.querySelector('[data-prks-role="folder-detail"]')
                 : null;
-        if (folderShell) folderShell.inert = false;
+        if (folderShell) {
+            const main = folderShell.querySelector('.prks-folder-detail__main');
+            if (main) main.inert = false;
+            const newBtn = folderShell.querySelector('[data-prks-role="folder-detail-new-folder"]');
+            if (newBtn) newBtn.disabled = false;
+        }
 
         const resolvedTitle = prksResolvedRouteTitle(route, opts);
         const routeHash = route ? route.canonicalHash || route.hash : '';
