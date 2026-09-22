@@ -30,6 +30,8 @@
     let hierarchyRows = null;
     let hierarchyLoadError = false;
     let loadPromise = null;
+    /** Path labels memoized for the current hierarchyRows snapshot (cleared on reload). */
+    let hierarchyPathCache = null;
     let boundGlobal = false;
     let boundViewport = false;
     let filterQuery = '';
@@ -126,7 +128,8 @@
 
     function pathLabelFor(folderId, byId, pathCache) {
         const key = String(folderId);
-        if (pathCache && pathCache.has(key)) return pathCache.get(key);
+        const cache = pathCache || hierarchyPathCache;
+        if (cache && cache.has(key)) return cache.get(key);
         let label;
         if (typeof root.prksFolderPathLabel === 'function') {
             label = root.prksFolderPathLabel(folderId, byId);
@@ -141,8 +144,17 @@
             }
             label = parts.join(' → ');
         }
-        if (pathCache) pathCache.set(key, label);
+        if (cache) cache.set(key, label);
         return label;
+    }
+
+    function ensureHierarchyPathCache() {
+        if (!hierarchyPathCache) hierarchyPathCache = new Map();
+        return hierarchyPathCache;
+    }
+
+    function clearHierarchyPathCache() {
+        hierarchyPathCache = null;
     }
 
     function filterMatchRank(titleLower, pathLower, q) {
@@ -157,7 +169,12 @@
     function prksFolderHierarchyFilter(rows, query, limit) {
         const list = Array.isArray(rows) ? rows : [];
         const byId = buildById(list);
-        const pathCache = new Map();
+        // Prefer the hierarchy-load memo when filtering the live catalogue;
+        // fall back to a call-local map for pure selftests / alternate row sets.
+        const pathCache =
+            Array.isArray(hierarchyRows) && list === hierarchyRows
+                ? ensureHierarchyPathCache()
+                : new Map();
         const q = String(query || '')
             .trim()
             .toLowerCase();
@@ -806,6 +823,7 @@
                 e.stopPropagation();
                 hierarchyRows = null;
                 hierarchyLoadError = false;
+                clearHierarchyPathCache();
                 void (async function () {
                     const rows = await loadHierarchy(true);
                     if (!panelEl || panelEl.hidden) return;
@@ -873,6 +891,7 @@
             if (!Array.isArray(rows)) {
                 hierarchyRows = null;
                 hierarchyLoadError = true;
+                clearHierarchyPathCache();
                 return null;
             }
             if (typeof root.prksEffectiveFolderRows === 'function') {
@@ -884,6 +903,7 @@
             }
             hierarchyRows = Array.isArray(rows) ? rows : [];
             hierarchyLoadError = false;
+            clearHierarchyPathCache();
             return hierarchyRows;
         })();
         try {
@@ -1150,6 +1170,7 @@
         hierarchyRows = null;
         hierarchyLoadError = false;
         loadPromise = null;
+        clearHierarchyPathCache();
         openOwnerTabId = null;
         openFolderId = null;
         filterQuery = '';
