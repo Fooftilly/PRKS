@@ -13,10 +13,21 @@ before use so DB/user-derived basenames cannot escape the managed pdfs dir.
 
 Every write that publishes canonical managed-PDF bytes follows the
 ``backend.fs_durability`` convention through that module's primitives, never a
-bare ``os.fsync``: contents are flushed with the strongest barrier the platform
-offers before a durable name can point at them, and the containing directory is
-flushed afterwards. Linearization runs *after* that boundary and is optional, so
-it must never be what makes the first write durable.
+bare ``os.fsync``: the contents are flushed with the strongest barrier the
+platform offers before anything may treat them as stored, and the containing
+directory is flushed afterwards.
+
+Where that boundary falls depends on how the bytes become canonical. A
+replacement writes a sibling temporary and syncs it before ``os.replace()``
+publishes the canonical name, so the barrier precedes the name. An exclusive
+create already holds its final name -- reserving that name is the point of
+creating it exclusively -- so nothing can be sequenced before it; the barrier
+precedes the *report* instead, and the store returns that name for a Work to
+reference only once the contents have passed it. Neither shape lets a caller
+learn of a managed PDF whose bytes have not.
+
+Linearization runs *after* that boundary and is optional, so it must never be
+what makes the first write durable.
 """
 
 from __future__ import annotations
@@ -256,11 +267,13 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     ``normpath(join(base, basename))`` + ``startswith(base)`` so the sink does
     not carry a helper return CodeQL still treats as tainted.
 
-    The created file is canonical as soon as this returns its name, so it owes
-    the same content barrier a replacement does: ``fsync_open_file`` before
-    success, and the managed directory synced after. A refused content sync is
-    not a stored PDF -- the partial file is removed and ``ManagedPdfStoreError``
-    is raised rather than handing back a name a Work would then reference.
+    The exclusive create already holds the final name, so unlike a replacement
+    there is no rename for the content barrier to precede. What it precedes
+    here is the report: the file counts as a stored PDF only once this returns
+    its name for a Work to reference, so ``fsync_open_file`` runs before that,
+    and the managed directory is synced after. A refused content sync is not a
+    stored PDF -- the partial file is removed and ``ManagedPdfStoreError`` is
+    raised rather than handing back a name a Work would then reference.
     """
     os.makedirs(pdfs_dir, exist_ok=True)
     created = False
@@ -280,10 +293,10 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
             created = True
             fp.write(body)
             fp.flush()
-            # Same content barrier the replace path owes, for the same reason:
-            # this file is canonical the moment the store reports success, so
-            # it has to be durable before it does. A refused sync leaves the
-            # OSError handler below to remove it and fail the upload.
+            # Same content barrier the replace path owes, at the boundary this
+            # path has: the name already exists, so what must not happen before
+            # the sync is the store reporting success. A refused sync leaves the
+            # OSError handler below to remove the file and fail the upload.
             fsync_open_file(fp.fileno())
     except FileExistsError as exc:
         # The name was already taken, so the file on disk is not ours to remove.

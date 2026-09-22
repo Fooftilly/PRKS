@@ -12,8 +12,10 @@ step that applied the strong barrier, and an optimization must never be what
 makes the first write durable.
 
 These tests pin the *ordering* and the failure semantics of the content sync --
-synced strictly before the bytes acquire a durable name, fail-closed when the
-sync is refused -- and, with ``_FULLFSYNC`` forced the way
+synced strictly before ``os.replace()`` publishes a replacement's bytes under
+the canonical name, and strictly before an exclusive create is reported as a
+stored PDF; fail-closed when the sync is refused -- and, with ``_FULLFSYNC``
+forced the way
 ``tests/test_pdf_linearize_durability.py`` forces it, that the barrier these
 paths reach for really is the strong one on a host that has it.
 
