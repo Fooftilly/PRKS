@@ -31,6 +31,17 @@ class ModalLifecycleContractTests(unittest.TestCase):
         self.assertIn("requestModalClose('escape')", keydown)
         self.assertIn("prksFinishModalConfirm(prksModalConfirmAlertOnly)", keydown)
         self.assertIn("prksHideModalUnsavedConfirm()", keydown)
+        self.assertIn("prksCloseStandalonePageModal(activeModal)", keydown)
+        self.assertIn("prksCloseTagsAliasModal", self.ui)
+        self.assertIn("prksCloseTagsMergeModal", self.ui)
+        self.assertIn("prksClosePublishersAliasModal", self.ui)
+        schedule = _between(
+            self.ui,
+            "function prksScheduleModalBaselineCapture(modalId)",
+            "function prksGetActiveModalId()",
+        )
+        self.assertNotIn("setTimeout", schedule)
+        self.assertIn("prksSerializeModalFormState(modalId) === baseline", schedule)
 
     def test_confirm_overlays_do_not_bind_their_own_escape(self):
         confirm = _between(

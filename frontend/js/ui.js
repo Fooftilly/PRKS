@@ -80,15 +80,18 @@ function prksScheduleModalBaselineCapture(modalId) {
     ready[generationKey] = generation;
     const stillCurrent = () => ready[generationKey] === generation
         && !document.getElementById(modalId)?.classList.contains('hidden');
+    // Capture before the next task. A later frame may adopt layout-only
+    // updates, but never a value the user has already changed.
+    if (stillCurrent()) prksCaptureModalBaseline(modalId);
     requestAnimationFrame(() => {
         if (!stillCurrent()) return;
-        prksCaptureModalBaseline(modalId);
-    });
-    window.setTimeout(() => {
-        if (!stillCurrent()) return;
-        prksCaptureModalBaseline(modalId);
+        const store = prksGetModalBaselineStore();
+        const baseline = Object.prototype.hasOwnProperty.call(store, modalId) ? store[modalId] : null;
+        if (baseline == null || prksSerializeModalFormState(modalId) === baseline) {
+            prksCaptureModalBaseline(modalId);
+        }
         ready[modalId] = true;
-    }, 250);
+    });
 }
 
 function prksGetActiveModalId() {
@@ -554,9 +557,26 @@ function prksOnModalLifecycleKeydown(e) {
         prksStopModalEscape(e);
         return;
     }
-    if (!prksAnyModalOpen()) return;
+    const activeModal = document.querySelector('.modal:not(.hidden)');
+    if (!activeModal) return;
     prksStopModalEscape(e);
+    if (prksCloseStandalonePageModal(activeModal)) return;
     requestModalClose('escape');
+}
+
+/** Tag and publisher dialogs own a private backdrop and close function. */
+const PRKS_STANDALONE_PAGE_MODAL_CLOSERS = {
+    'tags-page-alias-modal': 'prksCloseTagsAliasModal',
+    'tags-page-merge-modal': 'prksCloseTagsMergeModal',
+    'publishers-page-alias-modal': 'prksClosePublishersAliasModal',
+};
+
+function prksCloseStandalonePageModal(modal) {
+    const name = modal && PRKS_STANDALONE_PAGE_MODAL_CLOSERS[modal.id];
+    const closer = name && window[name];
+    if (typeof closer !== 'function') return false;
+    closer();
+    return true;
 }
 
 function prksDismissModalInnerEscapeLayer() {
@@ -641,11 +661,22 @@ function openModal(id) {
     const modalEl = document.getElementById(id);
     modalEl.classList.remove('hidden');
 
+    let deferBaseline = false;
     if (id === 'role-modal') {
-        prepareRoleModal();
+        deferBaseline = true;
+        modalEl.setAttribute('inert', '');
+        const finishRole = () => {
+            if (modalEl.classList.contains('hidden')) return;
+            prksScheduleModalBaselineCapture('role-modal');
+            modalEl.removeAttribute('inert');
+        };
+        prepareRoleModal().then(finishRole, finishRole);
     } else if (id === 'work-modal') {
+        deferBaseline = true;
+        modalEl.setAttribute('inert', '');
         resetUploadModal();
         const after = () => {
+            if (modalEl.classList.contains('hidden')) return;
             if (typeof window.prksSetWorkModalFolderFromId === 'function') {
                 window.prksSetWorkModalFolderFromId(
                     typeof window.prksFolderIdFromFocusedContext === 'function'
@@ -664,10 +695,11 @@ function openModal(id) {
             if (typeof window.prksSetWorkModalCreateBusy === 'function') {
                 window.prksSetWorkModalCreateBusy(false);
             }
+            prksScheduleModalBaselineCapture('work-modal');
+            modalEl.removeAttribute('inert');
             if (typeof window.prksFocusWorkModalInitial === 'function') {
                 window.prksFocusWorkModalInitial();
             }
-            prksScheduleModalBaselineCapture('work-modal');
         };
         // populateUploadComboboxes is async, so it always yields a promise.
         // Two-argument then, not .then(after).catch(after): the latter would run
@@ -688,7 +720,7 @@ function openModal(id) {
         void window.prksInitNewGroupModal();
     }
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
-    prksScheduleModalBaselineCapture(id);
+    if (!deferBaseline) prksScheduleModalBaselineCapture(id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(modalEl);
 }
 

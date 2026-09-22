@@ -329,8 +329,8 @@ AFFECTED_RULES = (
             "backend/db_schema.sql",
             "prks_app.py",
         ),
-        "features": ("smoke", "shell", "tabs", "offline", "sync"),
-        "note": "Shared core → smoke + shell/tabs/offline/sync",
+        "features": ("smoke", "shell", "tabs", "offline", "sync", "modals"),
+        "note": "Shared core → smoke + shell/tabs/offline/sync/modals",
     },
     {
         "name": "graph",
