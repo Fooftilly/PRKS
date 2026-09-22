@@ -21,6 +21,9 @@ whether the entry is as durable as the platform can make it, so a caller can
 report the weaker guarantee instead of assuming the stronger one. It never
 raises: by the time it runs the rename has already happened and there is nothing
 to unwind.
+
+Both reach for the strongest barrier the platform offers, which on macOS is not
+``os.fsync()`` -- see ``_sync_descriptor``.
 """
 
 from __future__ import annotations
@@ -28,21 +31,54 @@ from __future__ import annotations
 import errno
 import os
 
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; _sync_descriptor falls back.
+    fcntl = None  # type: ignore[assignment]
+
+
+def _errnos(*names: str) -> frozenset[int]:
+    """The subset of ``names`` this platform defines."""
+    return frozenset(
+        code for code in (getattr(errno, name, None) for name in names) if code is not None
+    )
+
 
 # A directory fsync the platform or filesystem does not implement is not a
-# durability failure -- there is nothing stronger to ask for there. A genuine
-# I/O error is, and must never be reported as a synced directory.
-_DIR_FSYNC_UNSUPPORTED = frozenset(
-    code
-    for code in (
-        getattr(errno, "EINVAL", None),
-        getattr(errno, "ENOSYS", None),
-        getattr(errno, "ENOTSUP", None),
-        getattr(errno, "EOPNOTSUPP", None),
-        getattr(errno, "EPERM", None),
-    )
-    if code is not None
-)
+# durability failure -- there is nothing stronger to ask for there. Only codes
+# that unambiguously mean "this descriptor cannot be synchronized" belong here.
+# EPERM does not: a sync denied by a security policy did not happen, and saying
+# it did would be the silent weakening this module exists to prevent.
+_DIR_FSYNC_UNSUPPORTED = _errnos("EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP")
+
+# macOS's full barrier is missing on some filesystems -- network mounts and disk
+# images are the usual gaps -- and they report that like any other unimplemented
+# operation. Falling back to fsync there is the best the filesystem offers;
+# falling back on a genuine I/O error would be hiding one.
+_FULLFSYNC_UNIMPLEMENTED = _errnos("EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "ENOTTY")
+
+_FULLFSYNC = getattr(fcntl, "F_FULLFSYNC", None) if fcntl is not None else None
+
+
+def _sync_descriptor(fd: int) -> None:
+    """Flush ``fd`` with the strongest barrier this platform offers.
+
+    ``os.fsync()`` is not a durability barrier on macOS: it hands the write to
+    the drive and returns without waiting for the drive's own cache to reach the
+    platter, which is exactly the window a power loss falls into. ``F_FULLFSYNC``
+    is the call that waits, so it is preferred wherever it exists. Everywhere
+    else ``os.fsync()`` already is the barrier.
+
+    Raises ``OSError`` if the flush fails. Callers decide whether that is fatal.
+    """
+    if _FULLFSYNC is not None and fcntl is not None:
+        try:
+            fcntl.fcntl(fd, _FULLFSYNC)
+            return
+        except OSError as exc:
+            if exc.errno not in _FULLFSYNC_UNIMPLEMENTED:
+                raise
+    os.fsync(fd)
 
 
 def fsync_file_path(path: str) -> None:
@@ -58,7 +94,7 @@ def fsync_file_path(path: str) -> None:
     """
     fd = os.open(path, os.O_RDWR)
     try:
-        os.fsync(fd)
+        _sync_descriptor(fd)
     finally:
         os.close(fd)
 
@@ -83,7 +119,7 @@ def fsync_directory(path: str) -> bool:
     except OSError as exc:
         return exc.errno in _DIR_FSYNC_UNSUPPORTED
     try:
-        os.fsync(dir_fd)
+        _sync_descriptor(dir_fd)
     except OSError as exc:
         return exc.errno in _DIR_FSYNC_UNSUPPORTED
     finally:

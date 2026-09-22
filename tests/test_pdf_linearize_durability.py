@@ -241,13 +241,18 @@ class TestLinearizeWithoutQpdf(_LinearizeCase):
     """Disabled/missing qpdf must stay a silent no-op, not a durability path."""
 
     def test_disabled_linearization_touches_nothing(self):
+        # `backend.pdf_linearize` imports these by name, so the patch has to
+        # land on its module globals; patching `fs_durability` would leave the
+        # bound symbols in place and the assertions below unfalsifiable.
         with patch.object(pdf_linearize, "_linearize_enabled", return_value=False):
-            with patch.object(fs_durability, "fsync_directory") as dir_sync:
+            with patch.object(pdf_linearize, "fsync_directory") as dir_sync, \
+                    patch.object(pdf_linearize, "fsync_file_path") as file_sync:
                 changed, reason = maybe_linearize_pdf_in_place(
                     self.pdf_path, context="settings-bulk"
                 )
         self.assertEqual((changed, reason), (False, "disabled"))
         dir_sync.assert_not_called()
+        file_sync.assert_not_called()
         self.assertEqual(self.canonical_bytes(), ORIGINAL)
 
     def test_a_missing_file_is_reported_before_any_sync(self):
@@ -364,14 +369,24 @@ class TestFsDurabilityPrimitives(unittest.TestCase):
         self.assertTrue(fs_durability.fsync_directory(self.dir_path))
 
     def test_fsync_directory_treats_an_unsupported_fsync_as_durable(self):
-        """Some filesystems refuse a directory fsync. There is nothing stronger
-        to ask for there, so that is not a durability failure."""
-        for code in (errno.EINVAL, errno.ENOSYS, errno.EPERM, errno.EOPNOTSUPP):
+        """Some filesystems cannot synchronize a directory descriptor at all.
+        There is nothing stronger to ask for there, so that is not a failure."""
+        for code in (errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP):
             with self.subTest(errno=code):
                 with patch.object(
                     fs_durability.os, "fsync", side_effect=OSError(code, "nope")
                 ):
                     self.assertTrue(fs_durability.fsync_directory(self.dir_path))
+
+    def test_a_denied_directory_sync_is_a_failure_not_an_unsupported_platform(self):
+        """EPERM means the sync was refused, not that it does not exist. A
+        refusal that did not happen must never be reported as durable."""
+        for code in (errno.EPERM, errno.EACCES):
+            with self.subTest(errno=code):
+                with patch.object(
+                    fs_durability.os, "fsync", side_effect=OSError(code, "denied")
+                ):
+                    self.assertFalse(fs_durability.fsync_directory(self.dir_path))
 
     def test_fsync_directory_reports_a_genuine_io_failure(self):
         with patch.object(
@@ -409,6 +424,73 @@ class TestFsDurabilityPrimitives(unittest.TestCase):
             ):
                 fs_durability.fsync_directory(self.dir_path)
         self.assertEqual(opened, closed, "the directory descriptor leaked")
+
+
+class TestTheStrongestBarrierIsUsed(unittest.TestCase):
+    """`os.fsync()` is not a durability barrier on macOS -- it returns once the
+    write reaches the drive, without waiting for the drive's own cache. These
+    drive the `F_FULLFSYNC` branch on any host, the way the suite exercises the
+    Windows path everywhere, so a Linux-only CI still covers it."""
+
+    FAKE_FULLFSYNC = 51  # F_FULLFSYNC's value on Darwin.
+
+    def setUp(self):
+        if fs_durability.fcntl is None:  # pragma: no cover - Windows only
+            self.skipTest("platform has no fcntl")
+        self._tmp = tempfile.TemporaryDirectory(prefix="prks-full-barrier-")
+        self.addCleanup(self._tmp.cleanup)
+        self.path = os.path.join(self._tmp.name, "written.bin")
+        with open(self.path, "wb") as fh:
+            fh.write(b"bytes")
+
+    def test_the_full_barrier_is_preferred_where_the_platform_has_one(self):
+        calls = []
+        with patch.object(fs_durability, "_FULLFSYNC", self.FAKE_FULLFSYNC):
+            with patch.object(
+                fs_durability.fcntl, "fcntl",
+                side_effect=lambda fd, op, *a: calls.append((fd, op)) or 0,
+            ):
+                with patch.object(fs_durability.os, "fsync") as plain:
+                    fs_durability.fsync_file_path(self.path)
+        self.assertEqual([op for _fd, op in calls], [self.FAKE_FULLFSYNC])
+        plain.assert_not_called()
+
+    def test_a_filesystem_without_the_full_barrier_falls_back_to_fsync(self):
+        """Network mounts and disk images do not implement it. Falling back is
+        the best that filesystem offers, not a silent downgrade elsewhere."""
+        for code in (errno.ENOTSUP, errno.EINVAL, errno.ENOTTY):
+            with self.subTest(errno=code):
+                with patch.object(fs_durability, "_FULLFSYNC", self.FAKE_FULLFSYNC):
+                    with patch.object(
+                        fs_durability.fcntl, "fcntl",
+                        side_effect=OSError(code, "unimplemented"),
+                    ):
+                        with patch.object(fs_durability.os, "fsync") as plain:
+                            fs_durability.fsync_file_path(self.path)
+                plain.assert_called_once()
+
+    def test_a_failing_full_barrier_is_not_hidden_by_the_fallback(self):
+        """Falling back on a genuine I/O error would turn a lost write into a
+        durable-looking one, which is the bug this module exists to prevent."""
+        with patch.object(fs_durability, "_FULLFSYNC", self.FAKE_FULLFSYNC):
+            with patch.object(
+                fs_durability.fcntl, "fcntl",
+                side_effect=OSError(errno.EIO, "I/O error"),
+            ):
+                with patch.object(fs_durability.os, "fsync") as plain:
+                    with self.assertRaises(OSError):
+                        fs_durability.fsync_file_path(self.path)
+        plain.assert_not_called()
+
+    def test_the_directory_sync_reaches_for_it_too(self):
+        calls = []
+        with patch.object(fs_durability, "_FULLFSYNC", self.FAKE_FULLFSYNC):
+            with patch.object(
+                fs_durability.fcntl, "fcntl",
+                side_effect=lambda fd, op, *a: calls.append((fd, op)) or 0,
+            ):
+                self.assertTrue(fs_durability.fsync_directory(self._tmp.name))
+        self.assertEqual([op for _fd, op in calls], [self.FAKE_FULLFSYNC])
 
 
 class TestManagedPdfParentSyncUsesTheSharedConvention(unittest.TestCase):
