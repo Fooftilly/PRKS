@@ -1266,6 +1266,13 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
     const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!host || !folder) return;
+    // Capture before await: A→B→C can abort B while load() is in flight. The
+    // preserved shell stays connected for C, so an aborted B must not move
+    // aria-current / is-selected after it resolves.
+    const signal =
+        ctx && ctx.abortController && ctx.abortController.signal
+            ? ctx.abortController.signal
+            : null;
     const load =
         typeof prksLoadFolderHierarchyCatalogue === 'function'
             ? prksLoadFolderHierarchyCatalogue
@@ -1275,15 +1282,12 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     let rows = null;
     if (load) {
         try {
-            const signal =
-                ctx && ctx.abortController && ctx.abortController.signal
-                    ? ctx.abortController.signal
-                    : null;
             rows = await load(false, signal);
         } catch (_e) {
             rows = null;
         }
     }
+    if (signal && signal.aborted) return;
     if (!container.isConnected) return;
     const liveHost = container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!liveHost) return;
@@ -1427,6 +1431,12 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
 
     if (preserve) {
         // Atomic Folder→Folder commit: keep hierarchy shell; replace contents only.
+        // Provenance banners are siblings of the shell (not inside main), so an
+        // in-place main rewrite alone would leave Folder A's Offline banner
+        // mounted — clear them here before the destination paint/prepend.
+        container
+            .querySelectorAll('[data-prks-role="offline-provenance-banner"]')
+            .forEach((banner) => banner.remove());
         existingMain.innerHTML = prksFolderDetailMainInnerHtml(ctx, folder, offlineCached);
         if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(existingMain);

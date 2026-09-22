@@ -3366,6 +3366,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {
         contentDiv.setAttribute('aria-busy', 'true');
+        // aria-busy alone does not block activation. Retained New/Delete Folder
+        // controls must not act on the previous Folder while the destination
+        // resolves; prksFinishRouteRender clears inert when the route commits.
+        const shell = contentDiv.querySelector('[data-prks-role="folder-detail"]');
+        if (shell) shell.inert = true;
     }
 
     let titleOpts = {};
@@ -3560,6 +3565,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     offlineCached: offlineFolder.source === 'cache',
                     preserveFolderWorkspace: sameFolderWorkspace,
                 });
+                // In-place commit keeps the shell: drop prior route banners before
+                // destination provenance (or none) is applied.
+                if (sameFolderWorkspace) {
+                    prksClearRouteScopedApiWarningBanners(contentDiv);
+                }
                 prksOfflinePrependBanner(contentDiv, offlineFolder);
                 titleOpts = folder
                     ? {
@@ -4565,6 +4575,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
             prksFinishRouteRender(ctx, route, generation, contentDiv, titleOpts);
         } else {
             contentDiv.removeAttribute('aria-busy');
+            const errShell = contentDiv.querySelector('[data-prks-role="folder-detail"]');
+            if (errShell) errShell.inert = false;
         }
         return;
     }
@@ -4612,6 +4624,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
     } else {
         ctx.lastResolvedRoute = route;
         contentDiv.removeAttribute('aria-busy');
+        const okShell = contentDiv.querySelector('[data-prks-role="folder-detail"]');
+        if (okShell) okShell.inert = false;
         prksPlayPageEnterAnimation(contentDiv);
     }
 }

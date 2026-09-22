@@ -83,6 +83,7 @@ E2E_MODULES = (
     "tests.e2e.test_local_store_durability",
     "tests.e2e.test_folders_offline",
     "tests.e2e.test_folders_durable",
+    "tests.e2e.test_library_nav_folders",
     "tests.e2e.test_person_groups_offline",
     "tests.e2e.test_person_groups_durable",
     "tests.e2e.test_playlists_offline",

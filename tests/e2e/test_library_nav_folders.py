@@ -655,9 +655,17 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                 1,
             )
             # Release older B first — must not overwrite C's pending selection.
-            while held_b:
-                held_b.pop(0).fallback()
-            page.wait_for_timeout(200)
+            # Wait until B's response finishes (not a fixed delay) so a broken
+            # generation guard cannot false-pass when B renders later.
+            with page.expect_response(
+                lambda r: urlparse(r.url).path == "/api/folders/" + philosophy
+            ) as b_resp:
+                while held_b:
+                    held_b.pop(0).fallback()
+            b_resp.value.finished()
+            page.evaluate(
+                "() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)))"
+            )
             title_mid = page.locator(
                 ".prks-tile--main .prks-folder-detail__main .prks-page-title"
             ).inner_text()
