@@ -42,6 +42,9 @@ class ModalLifecycleContractTests(unittest.TestCase):
         )
         self.assertNotIn("setTimeout", schedule)
         self.assertIn("prksSerializeModalFormState(modalId) === baseline", schedule)
+        open_modal = _between(self.ui, "function openModal(id)", "const PRKS_LS_HINTS")
+        self.assertIn("prksOpenGeneration", open_modal)
+        self.assertEqual(open_modal.count("if (!isCurrentOpening()) return;"), 2)
 
     def test_confirm_overlays_do_not_bind_their_own_escape(self):
         confirm = _between(

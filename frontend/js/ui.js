@@ -662,11 +662,18 @@ function openModal(id) {
     modalEl.classList.remove('hidden');
 
     let deferBaseline = false;
+    // A close-and-reopen can settle an older init after the new one is visible.
+    // That callback must not drop inert or capture the newer form as pristine.
+    const openGeneration = (Number(modalEl.dataset.prksOpenGeneration) || 0) + 1;
+    modalEl.dataset.prksOpenGeneration = String(openGeneration);
+    const isCurrentOpening = () =>
+        modalEl.dataset.prksOpenGeneration === String(openGeneration)
+        && !modalEl.classList.contains('hidden');
     if (id === 'role-modal') {
         deferBaseline = true;
         modalEl.setAttribute('inert', '');
         const finishRole = () => {
-            if (modalEl.classList.contains('hidden')) return;
+            if (!isCurrentOpening()) return;
             prksScheduleModalBaselineCapture('role-modal');
             modalEl.removeAttribute('inert');
         };
@@ -676,7 +683,7 @@ function openModal(id) {
         modalEl.setAttribute('inert', '');
         resetUploadModal();
         const after = () => {
-            if (modalEl.classList.contains('hidden')) return;
+            if (!isCurrentOpening()) return;
             if (typeof window.prksSetWorkModalFolderFromId === 'function') {
                 window.prksSetWorkModalFolderFromId(
                     typeof window.prksFolderIdFromFocusedContext === 'function'
