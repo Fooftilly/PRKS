@@ -2787,36 +2787,52 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # A source identity that contradicts itself is the caller's
                 # mistake, not a server fault: `add_work` refuses it at the
                 # creation boundary, and that refusal is a 400.
+                # A caller may point a new Work at an EXISTING managed PDF
+                # instead of uploading one. Post-delete cleanup decides a
+                # basename is unreferenced and then unlinks it, so without a
+                # shared guard that decision could be made moments before this
+                # row commits ownership and the new Work would reference bytes
+                # cleanup has already removed. Hold the same per-basename lock
+                # cleanup takes, across the commit. An upload needs no guard:
+                # `store_new_managed_pdf_bytes` mints its own unique name.
+                adopt_lock = None
+                if stored_name is None:
+                    adopted_name = managed_pdf_filename(str(file_path or ""))
+                    if adopted_name:
+                        adopt_lock = work_pdf_replace.managed_pdf_path_lock(
+                            pdfs_dir, adopted_name
+                        )
                 try:
-                    w_id = db.add_work(
-                        title=data.get('title', 'Untitled'),
-                        status=data.get('status', 'Not Started'),
-                        abstract=data.get('abstract', ''),
-                        text_content=data.get('text_content', ''),
-                        published_date=data.get('published_date', ''),
-                        file_path=file_path,
-                        author_text=data.get('author_text', ''),
-                        year=data.get('year', ''),
-                        publisher=data.get('publisher', ''),
-                        location=data.get('location', ''),
-                        edition=data.get('edition', ''),
-                        journal=data.get('journal', ''),
-                        volume=data.get('volume', ''),
-                        issue=data.get('issue', ''),
-                        pages=data.get('pages', ''),
-                        isbn=data.get('isbn', ''),
-                        doi=data.get('doi', ''),
-                        doc_type=data.get('doc_type', 'article'),
-                        source_kind=source_kind,
-                        source_url=source_url,
-                        source_mime=source_mime,
-                        thumb_url=thumb_url,
-                        provider=provider,
-                        provider_id=provider_id,
-                        urldate=urldate,
-                        thumb_page=data.get('thumb_page'),
-                        private_notes=data.get('private_notes', ''),
-                    )
+                    with (adopt_lock if adopt_lock is not None else nullcontext()):
+                        w_id = db.add_work(
+                            title=data.get('title', 'Untitled'),
+                            status=data.get('status', 'Not Started'),
+                            abstract=data.get('abstract', ''),
+                            text_content=data.get('text_content', ''),
+                            published_date=data.get('published_date', ''),
+                            file_path=file_path,
+                            author_text=data.get('author_text', ''),
+                            year=data.get('year', ''),
+                            publisher=data.get('publisher', ''),
+                            location=data.get('location', ''),
+                            edition=data.get('edition', ''),
+                            journal=data.get('journal', ''),
+                            volume=data.get('volume', ''),
+                            issue=data.get('issue', ''),
+                            pages=data.get('pages', ''),
+                            isbn=data.get('isbn', ''),
+                            doi=data.get('doi', ''),
+                            doc_type=data.get('doc_type', 'article'),
+                            source_kind=source_kind,
+                            source_url=source_url,
+                            source_mime=source_mime,
+                            thumb_url=thumb_url,
+                            provider=provider,
+                            provider_id=provider_id,
+                            urldate=urldate,
+                            thumb_page=data.get('thumb_page'),
+                            private_notes=data.get('private_notes', ''),
+                        )
                 except ValueError as e:
                     # The upload is stored before the row exists, so a refused
                     # create would otherwise leave a PDF nothing references.

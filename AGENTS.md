@@ -196,30 +196,51 @@ has exactly one shape:
   claim to one storage root and survive a restore into another. `filename` is
   the primary key, so two Works sharing a PDF, a replay, or repeated retries
   can never accumulate a second permanent row for the same bytes.
-- **Removed** only by `forget_pending_pdf_cleanup()`, and only once the cleanup
-  it owns is finished: the bytes are gone (`os.remove()` succeeded, or
-  `FileNotFoundError` -- already gone is the successful terminal state), or a
-  live Work now references the name so nothing is owed. A failed removal, an
-  unreadable catalogue and an uncontainable name all keep the claim.
+- **Removed** only once the cleanup it owns is finished: the bytes are gone
+  (`os.remove()` succeeded, or `FileNotFoundError` -- already gone is the
+  successful terminal state), or a live Work now references the name so nothing
+  is owed. A failed removal, an unreadable catalogue and an uncontainable name
+  all keep the claim.
 - **Retried** by `retry_pending_pdf_cleanup()`: one bounded pass
-  (`PENDING_PDF_CLEANUP_RETRY_LIMIT`) at startup, and again after each Work
-  deletion so recovery does not require a restart. Never an unbounded startup
-  scan, and never a general job queue.
+  (`PENDING_PDF_CLEANUP_RETRY_LIMIT`) at startup, after each Work deletion so
+  recovery does not require a restart, and after a restore rebinds a library
+  (which brings back both the claims and the bytes they describe, long after
+  startup ran). Never an unbounded startup scan, and never a general job queue.
+- **Selection rotates.** `last_attempt_at` is stamped on every claim a pass
+  tried and could not settle, and selection takes never-attempted claims first
+  and then the least recently attempted. Ordering by `recorded_at` alone let a
+  handful of permanently unsettleable claims fill every bounded pass and strand
+  every later orphan.
 
-Two safety rules are absolute:
+Three safety rules are absolute:
 
-1. **Re-ask the live catalogue immediately before every retry deletion**
-   (`managed_filename_reference_state()`), never a deletion-time
-   `managed_pdf_still_referenced` snapshot. A record only ever says a file was
-   orphaned once; the catalogue says whether it still is.
+1. **Re-ask the live catalogue immediately before every retry deletion**, never
+   a deletion-time `managed_pdf_still_referenced` snapshot. A record only ever
+   says a file was orphaned once; the catalogue says whether it still is.
 2. **That check is three-valued.** `None` means the catalogue could not be
    read, which is not `False` and not `True`: nothing is deleted and nothing is
    settled, so the claim survives for a readable database later. A boolean that
    failed closed would either strand orphans or discard a claim over a
    transient error.
+3. **The check and the retirement are ONE transaction**
+   (`settle_claim_if_referenced()`). Retiring a claim by basename alone races
+   the deletion of the last referring Work: that deletion writes its claim
+   inside its own transaction, so a pass that observed the Work still alive
+   could erase the very claim the deletion depends on, and a failed unlink
+   would then have no durable record. Serialized, both orders are safe.
 
 Path containment is unchanged: `safe_pdf_path_under_dir()` remains the
 filesystem boundary, and a name it refuses is never resolved to a path.
+
+**The reference check and the unlink are not separable.** Both are held under
+the basename's shared `managed_pdf_path_lock()` -- the same lock the COW
+replace path takes -- because `POST /api/works` may point a new Work at an
+EXISTING managed PDF rather than uploading one. Without a shared guard, cleanup
+could decide a name is unreferenced and unlink it in the gap before that row
+commits ownership, leaving a live Work referencing bytes that are gone. The
+create path takes the same lock across its commit when it adopts a name it did
+not just mint; an upload needs no guard, because
+`store_new_managed_pdf_bytes()` mints a unique name and creates it exclusively.
 
 `pending_pdf_cleanup` lives in `prks_data.db` and is therefore canonical backup
 state, like the sync ledger -- it is operational rather than user-visible, but

@@ -5,8 +5,10 @@ The canonical Work row commits before any filesystem work, so a failed
 bytes was already gone. These tests pin the durable claim, its retry, and the
 safety rules that keep a stale claim from ever deleting live bytes.
 """
+import contextlib
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -24,6 +26,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 from backend.db_manager import PRKSDatabase, prks_thumb_cache_stem
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex
+from backend.services.work_pdf_replace import managed_pdf_path_lock
 from backend.work_deletion import (
     PENDING_PDF_CLEANUP_RETRY_LIMIT,
     cleanup_after_work_delete,
@@ -31,6 +34,7 @@ from backend.work_deletion import (
     pending_pdf_cleanup_count,
     retry_pending_pdf_cleanup,
     retry_pending_pdf_cleanup_at_startup,
+    settle_claim_if_referenced,
 )
 
 _SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
@@ -69,6 +73,36 @@ class PendingPdfCleanupTests(unittest.TestCase):
             "SELECT filename FROM pending_pdf_cleanup ORDER BY filename"
         )
         return [row["filename"] for row in rows]
+
+    def _unreadable_catalogue(self):
+        """Make the live-catalogue read fail where the code actually reads it.
+
+        The reference check runs inside its own write transaction, so the
+        failure is injected on the connection that transaction uses rather
+        than on a helper the code no longer calls. Everything else --
+        selecting claims, stamping an attempt -- still works, which is what a
+        partially unreadable database looks like.
+        """
+        real_connection = self.db.connection
+
+        class _Proxy:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, sql, params=()):
+                if "FROM works" in sql:
+                    raise sqlite3.OperationalError("catalogue unavailable")
+                return self._conn.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        @contextlib.contextmanager
+        def broken():
+            with real_connection() as conn:
+                yield _Proxy(conn)
+
+        return patch.object(self.db, "connection", side_effect=broken)
 
     def _failing_remove(self, target_abs: str, error=None):
         """Patch `os.remove` so exactly one path fails, as a locked file would."""
@@ -184,15 +218,8 @@ class PendingPdfCleanupTests(unittest.TestCase):
         claim stands and the result must say so rather than look successful.
         """
         work_id, name, abs_path = self._managed_work("Undecidable")
-        real_query = self.db.execute_query
-
-        def no_catalogue(query, params=()):
-            if "FROM works" in query:
-                raise RuntimeError("catalogue unavailable")
-            return real_query(query, params)
-
         record = self.db.delete_work_record(work_id)
-        with patch.object(self.db, "execute_query", side_effect=no_catalogue):
+        with self._unreadable_catalogue():
             result = cleanup_after_work_delete(
                 self.db, self.index, work_id,
                 file_path=record.file_path, existed=True)
@@ -205,14 +232,7 @@ class PendingPdfCleanupTests(unittest.TestCase):
         with self._failing_remove(abs_path):
             delete_work(self.db, self.index, work_id)
 
-        real_query = self.db.execute_query
-
-        def flaky(query, params=()):
-            if "FROM works" in query:
-                raise RuntimeError("catalogue unavailable")
-            return real_query(query, params)
-
-        with patch.object(self.db, "execute_query", side_effect=flaky):
+        with self._unreadable_catalogue():
             summary = retry_pending_pdf_cleanup(self.db)
         # Unknown is not "unreferenced": nothing is deleted and nothing is
         # settled, so the claim is still there for a readable database later.
@@ -377,6 +397,132 @@ class PendingPdfCleanupTests(unittest.TestCase):
     def test_the_default_limit_is_bounded(self):
         self.assertGreater(PENDING_PDF_CLEANUP_RETRY_LIMIT, 0)
         self.assertLessEqual(PENDING_PDF_CLEANUP_RETRY_LIMIT, 1000)
+
+    # --- review findings: concurrency, rotation, restore -----------------
+
+    def test_a_stale_pass_cannot_erase_a_concurrent_deletions_claim(self):
+        """End-to-end semantics behind the qodo (High) finding on PR #145.
+
+        The interleaving itself is pinned by
+        `test_settling_a_referenced_claim_is_one_transaction`, which is where
+        the atomicity lives; this walks the sequence that finding describes --
+        one of two referrers goes, then the last one's unlink fails -- and
+        asserts the claim that survives is honoured rather than retired.
+        """
+        first, name, abs_path = self._managed_work("Shared", filename="raced.pdf")
+        second = self.db.add_work(title="Other", file_path=f"/api/pdfs/{name}")
+
+        # Deleting one of two referrers owes nothing: no claim, file kept.
+        delete_work(self.db, self.index, first)
+        self.assertEqual(self._claims(), [])
+        self.assertTrue(os.path.isfile(abs_path))
+
+        # The last referrer goes and its unlink fails: the claim must stand.
+        with self._failing_remove(abs_path):
+            result = delete_work(self.db, self.index, second)
+        self.assertTrue(result.pending_pdf_cleanup)
+        self.assertEqual(self._claims(), [name])
+
+        # A pass that still believed the Work was alive would have retired it;
+        # the transactional check sees the committed deletion instead.
+        summary = retry_pending_pdf_cleanup(self.db)
+        self.assertEqual(summary["superseded"], 0)
+        self.assertEqual(summary["removed"], 1)
+        self.assertEqual(self._claims(), [])
+
+    def test_settling_a_referenced_claim_is_one_transaction(self):
+        work_id, name, abs_path = self._managed_work("Live")
+        self.db.execute_query(
+            "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)", (name,)
+        )
+        # Referenced: retire the claim, keep the bytes, report it settled.
+        self.assertIs(settle_claim_if_referenced(self.db, name), True)
+        self.assertEqual(self._claims(), [])
+        self.assertTrue(os.path.isfile(abs_path))
+
+        # Unreferenced: leave the claim standing for the caller to act on.
+        self.db.delete_work_record(work_id)
+        self.assertEqual(self._claims(), [name])
+        self.assertIs(settle_claim_if_referenced(self.db, name), False)
+        self.assertEqual(self._claims(), [name])
+
+        # Unreadable: neither answer, and the claim is untouched.
+        with self._unreadable_catalogue():
+            self.assertIsNone(settle_claim_if_referenced(self.db, name))
+        self.assertEqual(self._claims(), [name])
+
+    def test_unsettleable_claims_rotate_so_later_ones_are_reached(self):
+        """PR #145 review (qodo + greptile): a bounded pass that always takes
+        the oldest rows never reaches anything behind a stuck claim."""
+        # Names chosen so the stuck claims sort first: rows recorded in the
+        # same second tie on recorded_at, and the filename breaks the tie.
+        stuck = []
+        for index in range(3):
+            name = f"aaa-stuck-{index}.pdf"
+            self._write_pdf(name)
+            stuck.append(name)
+            self.db.execute_query(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)", (name,)
+            )
+        later = "zzz-later.pdf"
+        later_abs = self._write_pdf(later)
+        self.db.execute_query(
+            "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)", (later,)
+        )
+
+        real_remove = os.remove
+
+        def only_stuck_fails(path, *args, **kwargs):
+            if os.path.basename(path) in stuck:
+                raise OSError("forced pdf cleanup failure")
+            return real_remove(path, *args, **kwargs)
+
+        # A pass small enough to be filled entirely by the stuck claims.
+        with patch("backend.work_deletion.os.remove", side_effect=only_stuck_fails):
+            first = retry_pending_pdf_cleanup(self.db, limit=2)
+        self.assertEqual(first["failed"], 2)
+        self.assertTrue(os.path.isfile(later_abs))
+
+        # The next pass must move past them rather than take the same two.
+        with patch("backend.work_deletion.os.remove", side_effect=only_stuck_fails):
+            second = retry_pending_pdf_cleanup(self.db, limit=2)
+        self.assertEqual(second["removed"], 1)
+        self.assertFalse(os.path.isfile(later_abs))
+        self.assertEqual(sorted(self._claims()), sorted(stuck))
+
+    def test_an_attempted_claim_is_stamped_and_a_settled_one_is_gone(self):
+        work_id, name, abs_path = self._managed_work("Stamped")
+        with self._failing_remove(abs_path):
+            delete_work(self.db, self.index, work_id)
+            retry_pending_pdf_cleanup(self.db)
+        rows = self.db.execute_query(
+            "SELECT filename, last_attempt_at FROM pending_pdf_cleanup"
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["last_attempt_at"])
+        self.assertEqual(retry_pending_pdf_cleanup(self.db)["removed"], 1)
+        self.assertEqual(self._claims(), [])
+
+    def test_cleanup_holds_the_shared_managed_pdf_lock(self):
+        """PR #145 review (qodo, High): the reference check and the unlink must
+        not be separable, or a Work can adopt the name in between."""
+        work_id, name, abs_path = self._managed_work("Guarded")
+        self.db.delete_work_record(work_id)
+        lock = managed_pdf_path_lock(self.storage.pdfs_dir, name)
+        self.assertIsNotNone(lock)
+        observed = {}
+
+        real_remove = os.remove
+
+        def watch(path, *args, **kwargs):
+            observed["held"] = lock.locked()
+            return real_remove(path, *args, **kwargs)
+
+        with patch("backend.work_deletion.os.remove", side_effect=watch):
+            retry_pending_pdf_cleanup(self.db)
+        self.assertTrue(observed.get("held"))
+        self.assertFalse(os.path.isfile(abs_path))
+        self.assertFalse(lock.locked())
 
     def test_startup_reports_what_it_could_not_clean(self):
         work_id, name, abs_path = self._managed_work("StillOwed")

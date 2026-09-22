@@ -117,7 +117,7 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
     # Work deletion writes its post-delete PDF claim inside the same
     # transaction as the row delete, so a missing table must be loud schema
     # drift at startup rather than a surprise at the first deletion.
-    "pending_pdf_cleanup": ("filename", "recorded_at"),
+    "pending_pdf_cleanup": ("filename", "recorded_at", "last_attempt_at"),
     "sync_operations": ("op_id", "device_id", "operation_type", "entity_type", "entity_id", "request_hash", "status", "http_status", "result_json", "applied_at"),
     "sync_entity_revisions": ("scope_type", "scope_id", "revision", "updated_at"),
     "sync_tag_lifecycle": ("tag_id", "state", "target_tag_id", "changed_at"),
@@ -2076,7 +2076,8 @@ def migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
             """
             CREATE TABLE pending_pdf_cleanup (
                 filename TEXT PRIMARY KEY,
-                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_attempt_at TIMESTAMP
             )
             """
         )

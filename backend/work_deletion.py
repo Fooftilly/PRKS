@@ -32,6 +32,7 @@ from backend.db_manager import (
     safe_pdf_path_under_dir,
 )
 from backend.log_safety import safe_error_type, safe_log_id
+from backend.services.work_pdf_replace import managed_pdf_path_lock
 from backend.text_index import PRKSTextIndex
 
 LOGGER = logging.getLogger("prks.work_deletion")
@@ -120,36 +121,61 @@ def pending_pdf_cleanup_count(db: PRKSDatabase) -> int:
     return int(row["c"] if isinstance(row, dict) else row[0])
 
 
-def managed_filename_reference_state(
-    db: PRKSDatabase, filename: str
-) -> Optional[bool]:
-    """Does a current Work row resolve to this managed basename? None = unknown.
+def _note_attempt(db: PRKSDatabase, filename: str) -> None:
+    """Stamp a claim this pass tried and could not settle.
 
-    Cleanup must ask the live DB -- never trust a deletion-time snapshot. An
-    exact DELETE_WORK op_id replay can arrive after another Work has begun
-    referencing the same file; a stale
-    ``managed_pdf_still_referenced=False`` would then delete live bytes.
+    Selection orders by this column, so a claim that never settles rotates
+    behind claims that have not been tried yet. Without it the same oldest
+    rows would fill every bounded pass and later orphans would never be
+    reached.
+    """
+    try:
+        db.execute_query(
+            "UPDATE pending_pdf_cleanup SET last_attempt_at = CURRENT_TIMESTAMP "
+            "WHERE filename = ?",
+            (filename,),
+        )
+    except Exception as e:
+        LOGGER.warning(
+            "pdf_cleanup_attempt_stamp_failed error_type=%s", safe_error_type(e)
+        )
 
-    The third answer is what makes the durable claim safe. "Referenced" and
-    "could not read the catalogue" demand opposite responses -- retire the
-    claim, or keep it and try again later -- so a boolean that fails closed
-    would either strand orphans forever or discard a claim over a database
-    hiccup. Every caller must handle None before deleting anything.
+
+def settle_claim_if_referenced(db: PRKSDatabase, filename: str) -> Optional[bool]:
+    """Retire the claim on ``filename`` iff a live Work still references it.
+
+    Returns True when a referrer was found and the claim was retired, False
+    when the name is genuinely unreferenced (the claim is left standing for
+    the caller to act on), and None when the catalogue could not be read.
+
+    The read and the retirement are ONE write transaction, and that is the
+    point. Settling by basename alone races the deletion of the last
+    referring Work: that deletion records its claim inside its own
+    transaction, so an older pass that observed the Work still alive could
+    erase the claim the deletion is relying on, and a failed unlink would
+    then have no durable record. Serialized, the two orders are both safe --
+    the deletion commits first and this sees no referrer, or this commits
+    first and the deletion's own INSERT re-creates the claim.
     """
     name = str(filename or "")
     if not name:
         return True
     try:
-        rows = db.execute_query(
-            "SELECT file_path FROM works WHERE file_path IS NOT NULL"
-        )
+        with db.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT file_path FROM works WHERE file_path IS NOT NULL"
+            ).fetchall()
+            for row in rows or ():
+                if referenced_managed_pdf_filename(row["file_path"]) == name:
+                    conn.execute(
+                        "DELETE FROM pending_pdf_cleanup WHERE filename = ?",
+                        (name,),
+                    )
+                    return True
+            return False
     except Exception:
         return None
-    for row in rows or ():
-        fp = row["file_path"] if isinstance(row, dict) else row[0]
-        if referenced_managed_pdf_filename(fp) == name:
-            return True
-    return False
 
 
 def _remove_managed_pdf(db: PRKSDatabase, filename: Optional[str], pdfs_dir: str) -> bool:
@@ -160,30 +186,39 @@ def _remove_managed_pdf(db: PRKSDatabase, filename: Optional[str], pdfs_dir: str
     inventing retry state here. An unreadable catalogue or an uncontainable
     name returns False with the claim untouched -- declining to act is not
     completion, and the caller must not report the cleanup as done.
+
+    The final reference check and the unlink are held under this basename's
+    shared lock (`managed_pdf_path_lock`, the same one the COW replace path
+    takes), so a Work cannot commit ownership of the name in the gap between
+    deciding it is unreferenced and removing the bytes.
     """
     if filename is None:
         return True
-    referenced = managed_filename_reference_state(db, filename)
-    if referenced is None:
+    lock = managed_pdf_path_lock(pdfs_dir, filename)
+    if lock is None:
+        # Not a containable managed name: nothing is resolved and nothing is
+        # deleted. Declining to act is not completion.
         return False
-    if referenced:
-        # A live Work owns these bytes. Nothing is owed, so any claim on the
-        # name is retired here rather than left dormant over a file PRKS is
-        # now serving -- the same decision a retry pass makes.
+    with lock:
+        referenced = settle_claim_if_referenced(db, filename)
+        if referenced is None:
+            return False
+        if referenced:
+            # A live Work owns these bytes. Nothing is owed, and the claim was
+            # retired in that same transaction.
+            return True
+        abs_path = safe_pdf_path_under_dir(pdfs_dir, filename)
+        if not abs_path:
+            return False
+        try:
+            os.remove(abs_path)
+        except FileNotFoundError:
+            # Already gone is the successful terminal state, not a failure: the
+            # only thing this claim owed is that the bytes not be there.
+            forget_pending_pdf_cleanup(db, filename)
+            return True
         forget_pending_pdf_cleanup(db, filename)
         return True
-    abs_path = safe_pdf_path_under_dir(pdfs_dir, filename)
-    if not abs_path:
-        return False
-    try:
-        os.remove(abs_path)
-    except FileNotFoundError:
-        # Already gone is the successful terminal state, not a failure: the
-        # only thing this claim owed is that the bytes not be there.
-        forget_pending_pdf_cleanup(db, filename)
-        return True
-    forget_pending_pdf_cleanup(db, filename)
-    return True
 
 
 def retry_pending_pdf_cleanup(
@@ -215,7 +250,12 @@ def retry_pending_pdf_cleanup(
     try:
         rows = db.execute_query(
             "SELECT filename FROM pending_pdf_cleanup "
-            "ORDER BY recorded_at ASC, filename ASC LIMIT ?",
+            # Never-attempted claims first (NULL sorts as 0), then the least
+            # recently attempted. A claim that cannot settle therefore rotates
+            # out of the way instead of filling every bounded pass with the
+            # same rows and stranding every later orphan.
+            "ORDER BY (last_attempt_at IS NOT NULL) ASC, last_attempt_at ASC, "
+            "recorded_at ASC, filename ASC LIMIT ?",
             (int(limit),),
         )
     except Exception as e:
@@ -238,37 +278,45 @@ def retry_pending_pdf_cleanup(
         if name in excluded:
             continue
         summary["claimed"] += 1
-        # Re-asked per record, immediately before the removal it authorizes.
-        referenced = managed_filename_reference_state(db, name)
-        if referenced is None:
-            summary["deferred"] += 1
-            continue
-        if referenced:
-            # A live Work owns these bytes now. The old deletion's claim is
-            # retired rather than left dormant: while that Work exists the
-            # bytes are its, and when it is deleted that deletion records its
-            # own claim.
-            forget_pending_pdf_cleanup(db, name)
-            summary["superseded"] += 1
-            continue
-        abs_path = safe_pdf_path_under_dir(pdfs_dir, name)
-        if not abs_path:
+        lock = managed_pdf_path_lock(pdfs_dir, name)
+        if lock is None:
             summary["unsafe"] += 1
+            _note_attempt(db, name)
             continue
-        try:
-            os.remove(abs_path)
-        except FileNotFoundError:
+        with lock:
+            # Re-asked per record, immediately before the removal it
+            # authorizes, and atomically with retiring the claim.
+            referenced = settle_claim_if_referenced(db, name)
+            if referenced is None:
+                summary["deferred"] += 1
+                _note_attempt(db, name)
+                continue
+            if referenced:
+                # A live Work owns these bytes now, so nothing is owed: the
+                # claim was retired inside that same transaction rather than
+                # left dormant over a file PRKS is serving.
+                summary["superseded"] += 1
+                continue
+            abs_path = safe_pdf_path_under_dir(pdfs_dir, name)
+            if not abs_path:
+                summary["unsafe"] += 1
+                _note_attempt(db, name)
+                continue
+            try:
+                os.remove(abs_path)
+            except FileNotFoundError:
+                forget_pending_pdf_cleanup(db, name)
+                summary["missing"] += 1
+                continue
+            except OSError as e:
+                summary["failed"] += 1
+                _note_attempt(db, name)
+                LOGGER.warning(
+                    "pdf_cleanup_retry_failed error_type=%s", safe_error_type(e)
+                )
+                continue
             forget_pending_pdf_cleanup(db, name)
-            summary["missing"] += 1
-            continue
-        except OSError as e:
-            summary["failed"] += 1
-            LOGGER.warning(
-                "pdf_cleanup_retry_failed error_type=%s", safe_error_type(e)
-            )
-            continue
-        forget_pending_pdf_cleanup(db, name)
-        summary["removed"] += 1
+            summary["removed"] += 1
     if summary["claimed"]:
         LOGGER.info(
             "pdf_cleanup_retry claimed=%s removed=%s missing=%s superseded=%s "

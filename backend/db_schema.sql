@@ -509,5 +509,10 @@ CREATE TABLE sync_tag_lifecycle (
 -- recovery" in AGENTS.md.
 CREATE TABLE pending_pdf_cleanup (
     filename TEXT PRIMARY KEY,
-    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- NULL until a retry pass has tried this claim. Selection puts
+    -- never-attempted claims first and then the least recently attempted, so
+    -- a claim that can never settle rotates behind newer ones instead of
+    -- consuming the bounded pass forever.
+    last_attempt_at TIMESTAMP
 );

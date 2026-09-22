@@ -1,5 +1,6 @@
 import json
 import logging
+import contextlib
 import os
 import re
 import sys
@@ -411,8 +412,27 @@ class TestCleanupPrivacy(unittest.TestCase):
                 )
 
             def execute_query(self, sql, params=()):
-                # Live ref check must see no survivors so cleanup reaches os.remove.
                 return []
+
+            def connection(self):
+                # The live-reference check runs in its own transaction. No
+                # survivors, so cleanup reaches os.remove and fails there --
+                # which is the path this test is about.
+                @contextlib.contextmanager
+                def _open():
+                    yield _Conn()
+
+                return _open()
+
+        class _Cursor:
+            @staticmethod
+            def fetchall():
+                return []
+
+        class _Conn:
+            @staticmethod
+            def execute(sql, params=()):
+                return _Cursor()
 
         class _Index:
             def remove_work(self, work_id):

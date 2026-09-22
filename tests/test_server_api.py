@@ -125,6 +125,51 @@ class TestServerAPI(unittest.TestCase):
         # Since these tests are isolated enough, we'll let them add data.
         pass
 
+    def test_adopting_an_existing_managed_pdf_holds_the_cleanup_lock(self):
+        """PR #145 review (qodo, High): a create may point at an EXISTING
+        managed PDF, so it must not commit ownership while post-delete cleanup
+        is deciding that same basename is unreferenced and unlinking it.
+
+        Both sides take the one shared per-basename lock; this pins the create
+        side holding it across the commit.
+        """
+        from backend.services import work_pdf_replace
+
+        name = "adopt-existing-lock.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ADOPT\n%%EOF\n")
+        lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
+        self.assertIsNotNone(lock)
+
+        observed = {}
+        real_add_work = server_module.db.add_work
+
+        def watching_add_work(**kwargs):
+            observed["held"] = lock.locked()
+            return real_add_work(**kwargs)
+
+        payload = json.dumps({
+            "title": "Adopts an existing managed PDF",
+            "file_path": f"/api/pdfs/{name}",
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with patch.object(server_module.db, "add_work", side_effect=watching_add_work):
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                created = json.loads(res.read().decode())
+        self.assertTrue(observed.get("held"), "commit ran without the basename lock")
+        self.assertFalse(lock.locked())
+        self.addCleanup(
+            server_module.db.delete_work_record, created.get("id") or created.get("work_id")
+        )
+
     def test_1_get_works_empty(self):
         req = urllib.request.Request(f"{self._base_url}/api/works")
         with urllib.request.urlopen(req) as res:
