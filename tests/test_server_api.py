@@ -4891,7 +4891,7 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(len(body), count)
         self.assertEqual(self._conditional_get("/api/person-groups", etag=etag)[0], 304)
 
-    def test_playlists_etag_follows_same_second_title_order_and_content(self):
+    def test_playlists_etag_follows_same_second_title_membership_and_content(self):
         status, playlist = self._sv_json(
             "POST", "/api/playlists", {"title": "Etag Playlist", "description": ""}
         )
@@ -4902,17 +4902,14 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(
             self._sv_json("POST", f"/api/playlists/{pl_id}/items", {"work_id": first})[0], 200
         )
-        self.assertEqual(
-            self._sv_json("POST", f"/api/playlists/{pl_id}/items", {"work_id": second})[0], 200
-        )
 
         status, etag, body = self._conditional_get("/api/playlists")
         self.assertEqual(status, 200)
         self.assertEqual(self._conditional_get("/api/playlists", etag=etag)[0], 304)
         count = len(body)
         row = self._catalog_row(body, pl_id)
-        self.assertEqual(row.get("item_count"), 2)
-        self.assertEqual(row.get("item_ids"), [first, second])
+        self.assertEqual(row.get("item_count"), 1)
+        self.assertNotIn("item_ids", row)
         stamp = server_module.db.execute_query(
             "SELECT updated_at FROM playlists WHERE id = ?", (pl_id,)
         )[0]["updated_at"]
@@ -4929,24 +4926,29 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(len(body), count)
 
+        self.assertEqual(
+            self._sv_json("POST", f"/api/playlists/{pl_id}/items", {"work_id": second})[0], 200
+        )
+        self._restore_updated_at("playlists", pl_id, stamp)
+        etag, body = self._assert_catalog_etag_moved(
+            "/api/playlists",
+            etag,
+            pl_id,
+            lambda item: self.assertEqual(item.get("item_count"), 2),
+            "playlist membership",
+        )
+        self.assertEqual(len(body), count)
+
         status, _ = self._sv_json(
             "POST", f"/api/playlists/{pl_id}/reorder", {"work_ids": [second, first]}
         )
         self.assertEqual(status, 200)
         self._restore_updated_at("playlists", pl_id, stamp)
-
-        def _reordered(item):
-            self.assertEqual(item.get("item_ids"), [second, first])
-            self.assertEqual(item.get("item_count"), 2)
-
-        etag, body = self._assert_catalog_etag_moved(
-            "/api/playlists",
-            etag,
-            pl_id,
-            _reordered,
-            "playlist order",
-        )
-        self.assertEqual(len(body), count)
+        status, same_etag, same_body = self._conditional_get("/api/playlists")
+        self.assertEqual(status, 200)
+        self.assertEqual(same_etag, etag)
+        self.assertEqual(self._catalog_row(same_body, pl_id).get("item_count"), 2)
+        self.assertEqual(self._conditional_get("/api/playlists", etag=etag)[0], 304)
 
         status, _ = self._sv_json(
             "PATCH", f"/api/playlists/{pl_id}", {"description": "same-second notes"}

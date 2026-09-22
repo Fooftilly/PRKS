@@ -645,26 +645,6 @@ class TestDBManager(unittest.TestCase):
         finally:
             self.db.get_connection = real_get
 
-    def test_playlist_catalog_reads_are_one_snapshot(self):
-        pl_id = self.db.add_playlist("Snapshot Playlist")
-        first = self.db.add_work(title="Snapshot One")
-        second = self.db.add_work(title="Snapshot Two")
-        self.db.add_work_to_playlist(pl_id, first)
-
-        def write(conn):
-            conn.execute(
-                "INSERT INTO playlist_items (playlist_id, work_id, position) VALUES (?, ?, ?)",
-                (pl_id, second, 1),
-            )
-
-        rows, state = self._read_catalog_while_writing(
-            self.db.get_all_playlists, "FROM PLAYLIST_ITEMS", write
-        )
-        row = next(item for item in rows if item["id"] == pl_id)
-        self.assertIn(state["outcome"], ("locked", "committed"))
-        self.assertEqual(row["item_ids"], [first])
-        self.assertEqual(row["item_count"], 1)
-
     def test_persons_catalog_reads_are_one_snapshot(self):
         person_id = self.db.add_person(first_name="Ada", last_name="Snapshot")
         kept = self.db.add_person_group(name="Kept Group")

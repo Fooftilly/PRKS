@@ -2136,9 +2136,9 @@ class PRKSDatabase:
     def etag_playlists_catalog(self, rows: List[dict]) -> str:
         """Weak ETag for a Playlists catalog the caller already built.
 
-        Membership and order are ``item_count`` and ``item_ids`` on each row.
-        Hash those rows; do not rebuild them and do not substitute a count or
-        ``MAX(updated_at)`` probe.
+        The index representation carries ``item_count``, not ordered
+        membership. Hash those rows; do not rebuild them and do not
+        substitute a count or ``MAX(updated_at)`` probe.
         """
         return self.etag_for_representation("playlists", rows)
 
@@ -2801,52 +2801,21 @@ class PRKSDatabase:
     def get_all_playlists(self) -> List[dict]:
         """Complete playlist catalog.
 
-        ``item_ids`` is the ordered membership and ``item_count`` is its
-        length. A reorder leaves that count and, inside one
-        ``CURRENT_TIMESTAMP`` second, ``updated_at`` unchanged, so the catalog
-        body has to carry the order for its ETag to describe it. ``id`` breaks
-        ties that the timestamps leave unspecified.
-
-        Playlist rows and memberships are read after ``BEGIN``. The default
-        sqlite3 isolation does not open a transaction for a bare SELECT, so
-        two reads on one connection are not one snapshot until that begins.
-        Scanning every membership avoids an ``IN`` list of playlist ids and
-        SQLite's bound-parameter limit.
+        The index body is playlist columns plus ``item_count``. Ordered
+        membership belongs on playlist detail, not this list: a reorder that
+        does not change those fields does not need a new index ETag. ``id``
+        breaks ties that the timestamps leave unspecified.
         """
-        t0 = clock_ns()
-        try:
-            with self.connection() as conn:
-                conn.execute("BEGIN")
-                playlist_rows = conn.execute(
-                    """
-                    SELECT p.*
-                    FROM playlists p
-                    ORDER BY p.updated_at DESC, p.created_at DESC, p.id ASC
-                    """
-                ).fetchall()
-                item_rows = conn.execute(
-                    """
-                    SELECT playlist_id, work_id
-                    FROM playlist_items
-                    ORDER BY position ASC, work_id ASC
-                    """
-                ).fetchall()
-        finally:
-            try:
-                record_db_call(clock_ns() - t0, write=False)
-            except Exception:
-                pass
-        by_pl: Dict[str, List[str]] = defaultdict(list)
-        for item in item_rows:
-            by_pl[item["playlist_id"]].append(item["work_id"])
-        rows = []
-        for raw in playlist_rows:
-            row = dict(raw)
-            ordered = by_pl.get(row["id"], [])
-            row["item_ids"] = ordered
-            row["item_count"] = len(ordered)
-            rows.append(row)
-        return rows
+        return list(
+            self.execute_query(
+                """
+                SELECT p.*,
+                    (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.id) AS item_count
+                FROM playlists p
+                ORDER BY p.updated_at DESC, p.created_at DESC, p.id ASC
+                """
+            )
+        )
 
     def get_playlist(self, playlist_id: str) -> Optional[dict]:
         rows = self.execute_query("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
