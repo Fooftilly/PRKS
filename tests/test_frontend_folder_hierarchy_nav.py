@@ -54,6 +54,9 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("signalForOwner", nav)
         self.assertIn("abortController.signal", nav)
         self.assertNotIn("sibling Folder pane can still warm", nav)
+        # Failed folders:index must not leave the Nearby band on Loading forever.
+        self.assertIn("Could not load nearby folders", nav)
+        self.assertIn("hierarchyLoadError", nav)
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
         # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not

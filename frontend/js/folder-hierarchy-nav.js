@@ -426,6 +426,10 @@
                 chips.push(
                     '<span class="prks-folder-nav__nearby-empty">Hierarchy not cached yet — open Browse hierarchy</span>'
                 );
+            } else if (hierarchyLoadError) {
+                chips.push(
+                    '<span class="prks-folder-nav__nearby-empty">Could not load nearby folders — use Browse hierarchy to retry</span>'
+                );
             } else {
                 chips.push(
                     '<span class="prks-folder-nav__nearby-empty">Loading nearby folders…</span>'
@@ -827,7 +831,16 @@
                     const rows = await loadHierarchy(true, signalForOwner(restoreTarget));
                     if (!panelEl || panelEl.hidden) return;
                     renderPanelBody(rows);
-                    if (restoreTarget) positionPanel(restoreTarget);
+                    if (restoreTarget) {
+                        positionPanel(restoreTarget);
+                        const navRoot = navRootFrom(restoreTarget);
+                        const folderId =
+                            restoreTarget.getAttribute('data-prks-folder-nav-current') ||
+                            openFolderId;
+                        if (navRoot && folderId) {
+                            paintBand(navRoot, { id: folderId }, rows);
+                        }
+                    }
                 })();
             });
             listHost.appendChild(retry);
@@ -1187,9 +1200,16 @@
             const rows = await loadHierarchy(false, signal);
             const liveNav = findNavRoot(container);
             const live = findTrigger(container);
-            if (!liveNav || !live || !Array.isArray(rows)) return;
+            // Aborted / torn-down mounts leave the initial Loading state; a
+            // sticky hierarchyLoadError must paint an actionable failure so the
+            // band does not stay on "Loading nearby folders…" forever.
+            if (!liveNav || !live) return;
             if (signal && signal.aborted) return;
             if (String(live.getAttribute('data-prks-folder-nav-current') || '') !== String(folder.id)) {
+                return;
+            }
+            if (!Array.isArray(rows)) {
+                if (hierarchyLoadError) paintBand(liveNav, folder, null);
                 return;
             }
             paintBand(liveNav, folder, rows);
