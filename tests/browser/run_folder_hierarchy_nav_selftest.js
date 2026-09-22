@@ -172,6 +172,216 @@ const api = loadApi();
     assertEq('empty filter', matches.length, 0);
 })();
 
-console.log('');
-console.log(passed + ' passed, ' + failed + ' failed');
-process.exit(failed ? 1 : 0);
+(function testFolderStructureOpsFingerprint() {
+    const fp = api.prksFolderHierarchyOpsFingerprintForTests;
+    assertEq('empty ops fingerprint', fp([]), '');
+    assertEq(
+        'ignores non-folder ops',
+        fp([{ operation: 'CREATE_TAG', entity_type: 'tag', op_id: 't1', status: 'pending', sequence: 1 }]),
+        ''
+    );
+    assertEq(
+        'ignores acknowledged folder ops',
+        fp([
+            {
+                operation: 'CREATE_FOLDER',
+                entity_type: 'folder',
+                op_id: 'f1',
+                status: 'acknowledged',
+                sequence: 1,
+            },
+        ]),
+        ''
+    );
+    const pending = fp([
+        {
+            operation: 'SET_FOLDER_FIELD',
+            entity_type: 'folder',
+            op_id: 'f2',
+            status: 'pending',
+            sequence: 2,
+        },
+        {
+            operation: 'CREATE_FOLDER',
+            entity_type: 'folder',
+            op_id: 'f1',
+            status: 'syncing',
+            sequence: 1,
+        },
+    ]);
+    assert(
+        'pending CREATE+SET fingerprint stable/sorted',
+        pending === 'f1:syncing:1|f2:pending:2'
+    );
+})();
+
+async function testLoadHierarchyBehaviour() {
+    const root = globalThis;
+    const prev = {
+        prksOfflineListFetch: root.prksOfflineListFetch,
+        prksResolveOfflineFoldersIndex: root.prksResolveOfflineFoldersIndex,
+        prksEffectiveFolderRows: root.prksEffectiveFolderRows,
+        fetchFolders: root.fetchFolders,
+        prksSync: root.prksSync,
+    };
+
+    function restore() {
+        Object.keys(prev).forEach(function (k) {
+            if (prev[k] === undefined) delete root[k];
+            else root[k] = prev[k];
+        });
+    }
+
+    try {
+        // --- unavailable must not collapse via fetchFolders() → [] ---
+        let fetchFoldersCalls = 0;
+        root.prksOfflineListFetch = async function () {
+            return { value: null, source: 'unavailable', cachedAt: null };
+        };
+        root.prksResolveOfflineFoldersIndex = function (result) {
+            if (!result || result.source === 'unavailable') return null;
+            return Array.isArray(result.value) ? result.value : null;
+        };
+        root.fetchFolders = async function () {
+            fetchFoldersCalls += 1;
+            return [];
+        };
+        root.prksEffectiveFolderRows = async function (rows) {
+            return rows;
+        };
+        root.prksSync = {
+            subscribe: function () {
+                return function () {};
+            },
+            store: {
+                listOperations: async function () {
+                    return [];
+                },
+            },
+        };
+
+        delete require.cache[require.resolve(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'))];
+        const loadApiFresh = require(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'));
+        loadApiFresh.prksFolderHierarchyNavResetForTests();
+
+        const unavailable = await loadApiFresh.prksFolderHierarchyNavLoadForTests(false, null);
+        assert('unavailable load returns null', unavailable === null);
+        assertEq('unavailable does not call fetchFolders', fetchFoldersCalls, 0);
+
+        const sticky = await loadApiFresh.prksFolderHierarchyNavLoadForTests(false, null);
+        assert('sticky load-error stays null', sticky === null);
+        assertEq('sticky still skips fetchFolders', fetchFoldersCalls, 0);
+
+        // --- genuine empty catalogue is success, not load-error ---
+        loadApiFresh.prksFolderHierarchyNavResetForTests();
+        root.prksOfflineListFetch = async function () {
+            return { value: [], source: 'server', cachedAt: null };
+        };
+        const empty = await loadApiFresh.prksFolderHierarchyNavLoadForTests(false, null);
+        assert('empty catalogue is array', Array.isArray(empty));
+        assertEq('empty catalogue length 0', empty.length, 0);
+
+        // --- cached base re-projects pending CREATE on reuse (no refetch) ---
+        loadApiFresh.prksFolderHierarchyNavResetForTests();
+        let fetchCount = 0;
+        let pendingCreates = [];
+        root.prksOfflineListFetch = async function () {
+            fetchCount += 1;
+            return {
+                value: [{ id: 'a', title: 'A', parent_id: null, child_count: 0 }],
+                source: 'server',
+                cachedAt: null,
+            };
+        };
+        root.prksEffectiveFolderRows = async function (rows) {
+            const out = Array.isArray(rows) ? rows.slice() : [];
+            pendingCreates.forEach(function (row) {
+                out.push(row);
+            });
+            return out;
+        };
+        const first = await loadApiFresh.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('initial fetch once', fetchCount, 1);
+        assertEq('initial without pending create', first.length, 1);
+
+        pendingCreates = [{ id: 'new', title: 'New', parent_id: null, child_count: 0 }];
+        const second = await loadApiFresh.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('reuse does not refetch base', fetchCount, 1);
+        assert(
+            'reuse re-projects pending create',
+            second.some(function (r) {
+                return r && r.id === 'new';
+            })
+        );
+
+        // --- fingerprint change invalidates base (simulates sync subscribe) ---
+        // Force a reload path by resetting fingerprint via a fresh module load
+        // after mutating ops is covered by the export unit test above; here we
+        // force-reload and confirm a new fetch happens.
+        const forced = await loadApiFresh.prksFolderHierarchyNavLoadForTests(true, null);
+        assertEq('force reload refetches', fetchCount, 2);
+        assert(
+            'force reload still projects pending',
+            forced.some(function (r) {
+                return r && r.id === 'new';
+            })
+        );
+
+        // --- sync fingerprint change invalidates base and forces refetch ---
+        loadApiFresh.prksFolderHierarchyNavResetForTests();
+        fetchCount = 0;
+        pendingCreates = [];
+        let syncListener = null;
+        let ops = [];
+        root.prksSync = {
+            subscribe: function (fn) {
+                syncListener = fn;
+                return function () {
+                    syncListener = null;
+                };
+            },
+            store: {
+                listOperations: async function () {
+                    return ops;
+                },
+            },
+        };
+        delete require.cache[require.resolve(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'))];
+        const loadApiSync = require(path.join(__dirname, '../../frontend/js/folder-hierarchy-nav.js'));
+        loadApiSync.prksFolderHierarchyNavResetForTests();
+        await loadApiSync.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('sync-path initial fetch', fetchCount, 1);
+        assert('sync listener bound', typeof syncListener === 'function');
+
+        ops = [
+            {
+                operation: 'CREATE_FOLDER',
+                entity_type: 'folder',
+                op_id: 'c1',
+                status: 'pending',
+                sequence: 1,
+            },
+        ];
+        syncListener();
+        // Allow the async invalidate to settle.
+        await new Promise(function (resolve) {
+            setImmediate(resolve);
+        });
+        await loadApiSync.prksFolderHierarchyNavLoadForTests(false, null);
+        assertEq('fingerprint change refetches base', fetchCount, 2);
+    } finally {
+        restore();
+    }
+}
+
+testLoadHierarchyBehaviour()
+    .then(function () {
+        console.log('');
+        console.log(passed + ' passed, ' + failed + ' failed');
+        process.exit(failed ? 1 : 0);
+    })
+    .catch(function (err) {
+        console.error(err);
+        process.exit(1);
+    });
+

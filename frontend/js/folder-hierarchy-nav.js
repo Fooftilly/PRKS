@@ -1352,6 +1352,10 @@
         prksMountFolderHierarchyNav: prksMountFolderHierarchyNav,
         prksCloseFolderHierarchyNav: closePanel,
         prksFolderHierarchyNavResetForTests: resetForTests,
+        /** Test-only: load/project the hierarchy (same path as mount/open). */
+        prksFolderHierarchyNavLoadForTests: loadHierarchy,
+        /** Test-only: unsettled CREATE/SET/DELETE folder fingerprint. */
+        prksFolderHierarchyOpsFingerprintForTests: folderStructureOpsFingerprint,
     };
     Object.keys(api).forEach(function (k) {
         root[k] = api[k];
