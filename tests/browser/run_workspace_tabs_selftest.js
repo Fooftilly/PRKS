@@ -1778,6 +1778,60 @@ async function run() {
         await mp.ws.setNarrowFallback(false);
     }
 
+    /* Production announce() sighted status (issue #135): stub document + timers so we exercise
+     * the real module helpers without a browser. Helpers stay local to this block so they do
+     * not duplicate other selftests' record/assert boilerplate as new Sonar duplication. */
+    {
+        const live = { id: 'prks-workspace-live', textContent: '' };
+        const status = { id: 'prks-workspace-status', textContent: '', hidden: true };
+        const timers = [];
+        const prevDoc = globalThis.document;
+        const prevSet = globalThis.setTimeout;
+        const prevClear = globalThis.clearTimeout;
+        globalThis.document = {
+            getElementById: function (id) {
+                if (id === 'prks-workspace-live') return live;
+                if (id === 'prks-workspace-status') return status;
+                return null;
+            },
+        };
+        globalThis.setTimeout = function (fn) {
+            const h = { fn: fn, cleared: false };
+            timers.push(h);
+            return h;
+        };
+        globalThis.clearTimeout = function (h) {
+            if (h) h.cleared = true;
+        };
+        try {
+            const msg = wsApi.prksWorkspaceNarrowSplitMessageForTest;
+            assert('narrow message copy', typeof msg === 'string' && msg.indexOf('wider workspace') !== -1);
+            assert('announce test seam', typeof wsApi.prksWorkspaceAnnounceForTest === 'function');
+            wsApi.prksWorkspaceAnnounceForTest('', 'narrow');
+            assertEq('narrow live text', live.textContent, msg);
+            assertEq('narrow status text', status.textContent, msg);
+            assertEq('narrow status shown', status.hidden, false);
+            assertEq('narrow one timer', timers.filter(function (t) { return !t.cleared; }).length, 1);
+            wsApi.prksWorkspaceAnnounceForTest('', 'narrow');
+            assertEq('narrow dedup one timer', timers.filter(function (t) { return !t.cleared; }).length, 1);
+            wsApi.prksWorkspaceAnnounceForTest('Work A', 'split');
+            assertEq('split live text', live.textContent, 'Opened Work A in split view');
+            assertEq('split clears status', status.textContent, '');
+            assertEq('split hides status', status.hidden, true);
+            wsApi.prksWorkspaceAnnounceForTest('', 'narrow');
+            timers.filter(function (t) { return !t.cleared; }).forEach(function (t) { t.fn(); });
+            assertEq('timer clears status text', status.textContent, '');
+            assertEq('timer hides status', status.hidden, true);
+            wsApi.prksWorkspaceAnnounceForTest('', 'cap');
+            assert('cap live only', live.textContent.indexOf('Maximum of 4') !== -1);
+            assertEq('cap status empty', status.textContent, '');
+        } finally {
+            globalThis.document = prevDoc;
+            globalThis.setTimeout = prevSet;
+            globalThis.clearTimeout = prevClear;
+        }
+    }
+
     console.log('\n' + passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }

@@ -23,9 +23,6 @@ _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tabs_sel
 _TAB_STATUS_WARM_RUNNER = os.path.join(
     _PROJECT_DIR, "tests", "browser", "run_workspace_tab_status_warm_selftest.js"
 )
-_NARROW_STATUS_RUNNER = os.path.join(
-    _PROJECT_DIR, "tests", "browser", "run_workspace_narrow_status_selftest.js"
-)
 _TREE = os.path.join(_FRONTEND, "js", "workspace-tree.js")
 _TREE_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tree_selftest.js")
 _PERSIST = os.path.join(_FRONTEND, "js", "workspace-persistence.js")
@@ -481,24 +478,6 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(_TAB_STATUS_WARM_RUNNER))
         proc = subprocess.run(
             [node, _TAB_STATUS_WARM_RUNNER],
-            cwd=_PROJECT_DIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
-        self.assertIn("passed", proc.stdout)
-        self.assertIn(", 0 failed", proc.stdout)
-        self.assertNotIn("FAIL  ", proc.stdout)
-
-    def test_narrow_split_visible_status_selftest(self):
-        """Explicit narrow split announce updates SR + visible status; other kinds stay SR-only."""
-        node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tab tests")
-        self.assertTrue(os.path.isfile(_NARROW_STATUS_RUNNER))
-        proc = subprocess.run(
-            [node, _NARROW_STATUS_RUNNER],
             cwd=_PROJECT_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
