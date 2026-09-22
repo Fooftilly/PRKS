@@ -61,8 +61,28 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         return trigger
 
     def select_option_by_title(self, page, title):
-        opt = page.locator('#prks-folder-nav-panel [role="option"]').filter(has_text=title).first
+        opt = page.locator(
+            '#prks-folder-nav-panel [role="option"] .prks-folder-nav__option-title',
+            has_text=title,
+        ).first
         opt.click()
+
+    def wait_folder_title(self, page, title, folder_id=None):
+        if folder_id is not None:
+            page.wait_for_function(
+                "id => location.hash === '#/folders/' + encodeURIComponent(id)",
+                arg=folder_id,
+                timeout=10000,
+            )
+        page.wait_for_function(
+            """(title) => {
+                const el = document.querySelector('.prks-tile--main .prks-page-title, #page-content .prks-page-title');
+                return el && (el.textContent || '').includes(title);
+            }""",
+            arg=title,
+            timeout=10000,
+        )
+        page.wait_for_selector("#prks-folder-nav-trigger", timeout=10000)
 
     def test_nearby_parent_sibling_and_cross_branch_filter(self):
         _server, page, ids = self.start()
@@ -79,22 +99,12 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
 
         # Parent without visiting Folder index.
         self.select_option_by_title(page, LIBRARY_NAV_PHILOSOPHY)
-        page.wait_for_function(
-            "id => location.hash === '#/folders/' + encodeURIComponent(id)",
-            arg=ids["philosophy"],
-            timeout=10000,
-        )
-        page.wait_for_selector("#prks-folder-nav-trigger", timeout=10000)
-        self.assertIn(LIBRARY_NAV_PHILOSOPHY, page.locator(".prks-page-title").inner_text())
+        self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, ids["philosophy"])
 
         # Sibling of Ethics from Philosophy → Epistemology via children list.
         self.open_switcher(page)
         self.select_option_by_title(page, LIBRARY_NAV_EPISTEMOLOGY)
-        page.wait_for_function(
-            "id => location.hash === '#/folders/' + encodeURIComponent(id)",
-            arg=ids["epistemology"],
-            timeout=10000,
-        )
+        self.wait_folder_title(page, LIBRARY_NAV_EPISTEMOLOGY, ids["epistemology"])
 
         # Cross-branch: Epistemology → AI via filter (no Folder index).
         self.open_switcher(page)
@@ -107,12 +117,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             timeout=5000,
         )
         self.select_option_by_title(page, LIBRARY_NAV_AI)
-        page.wait_for_function(
-            "id => location.hash === '#/folders/' + encodeURIComponent(id)",
-            arg=ids["ai"],
-            timeout=10000,
-        )
-        self.assertIn(LIBRARY_NAV_AI, page.locator(".prks-page-title").inner_text())
+        self.wait_folder_title(page, LIBRARY_NAV_AI, ids["ai"])
 
     def test_keyboard_open_nav_select_escape_restores_focus(self):
         _server, page, ids = self.start()
@@ -125,7 +130,13 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         # Move into options and Escape restores the trigger.
         page.keyboard.press("ArrowDown")
         page.keyboard.press("Escape")
-        page.wait_for_selector("#prks-folder-nav-panel[hidden]", timeout=5000)
+        page.wait_for_function(
+            """() => {
+                const p = document.getElementById('prks-folder-nav-panel');
+                return !p || p.hidden === true;
+            }""",
+            timeout=5000,
+        )
         focused = page.evaluate("() => document.activeElement && document.activeElement.id")
         self.assertEqual(focused, "prks-folder-nav-trigger")
 
@@ -155,11 +166,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                 break
         self.assertTrue(found, "Epistemology option should become active")
         page.keyboard.press("Enter")
-        page.wait_for_function(
-            "id => location.hash === '#/folders/' + encodeURIComponent(id)",
-            arg=ids["epistemology"],
-            timeout=10000,
-        )
+        self.wait_folder_title(page, LIBRARY_NAV_EPISTEMOLOGY, ids["epistemology"])
 
     def test_switcher_targets_owning_workspace_tab(self):
         _server, page, ids = self.start()
@@ -196,11 +203,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         )
         self.open_switcher(page)
         self.select_option_by_title(page, LIBRARY_NAV_EPISTEMOLOGY)
-        page.wait_for_function(
-            "id => location.hash === '#/folders/' + encodeURIComponent(id)",
-            arg=ids["epistemology"],
-            timeout=10000,
-        )
+        self.wait_folder_title(page, LIBRARY_NAV_EPISTEMOLOGY, ids["epistemology"])
         owner_after = page.evaluate(
             """() => {
                 const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
