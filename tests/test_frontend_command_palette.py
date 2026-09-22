@@ -111,6 +111,9 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn("can’t open in split view", src)
         self.assertIn("detail page that supports split", src)
         self.assertIn("No matching pages that can open in split view", src)
+        # Greptile P2: weak/short queries must not name a blocked destination.
+        self.assertIn("score >= 600", src)
+        self.assertIn("q.length < 3", src)
         self.assertIn("'aria-live': 'polite'", src)
         self.assertIn("prks-command-palette-status", src)
         # Loading must win over split empty guidance while catalog fetch is in flight.

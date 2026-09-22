@@ -1229,9 +1229,29 @@ Promise.resolve()
                             guidanceText().indexOf("can’t open in split view") === -1
                         );
                         assertEq('nonsense helper finds nothing', root.prksPaletteFindNonTileableMatch('zzzz-no-such-page-9qx'), null);
-                        assertEq('weak query does not misname', root.prksPaletteFindNonTileableMatch('s'), null);
-                        assertEq('keyword-only does not misname', root.prksPaletteFindNonTileableMatch('the'), null);
 
+                        function assertWeakGenericNoResults(query, label) {
+                            root.prksCommandPaletteSetQuery(query);
+                            return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                                assertEq(label + ' helper finds nothing', root.prksPaletteFindNonTileableMatch(query), null);
+                                assert(
+                                    label + ' uses generic no-results',
+                                    /No matching pages that can open in split view/.test(guidanceText())
+                                );
+                                assert(
+                                    label + ' does not name a blocked destination',
+                                    guidanceText().indexOf("can’t open in split view") === -1
+                                );
+                                assertEq(label + ' listbox empty', listHtml().indexOf('role="option"'), -1);
+                                assertEq(label + ' no selectable rows', root.prksCommandPaletteGetResults().length, 0);
+                            });
+                        }
+                        return assertWeakGenericNoResults('s', 'short substring')
+                            .then(function () {
+                                return assertWeakGenericNoResults('the', 'keyword-only');
+                            });
+                    })
+                    .then(function () {
                         root.prksCloseCommandPalette();
                         function stubList(fnName, rows) {
                             root[fnName] = function () {
