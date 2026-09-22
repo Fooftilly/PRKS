@@ -655,14 +655,18 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                 1,
             )
             # Release older B first — must not overwrite C's pending selection.
-            # Wait until B's response finishes (not a fixed delay) so a broken
-            # generation guard cannot false-pass when B renders later.
-            with page.expect_response(
-                lambda r: urlparse(r.url).path == "/api/folders/" + philosophy
-            ) as b_resp:
-                while held_b:
-                    held_b.pop(0).fallback()
-            b_resp.value.finished()
+            # Fetch+fulfill waits for B's network body before asserting. A fixed
+            # delay can false-pass when B paints late; expect_response can hang
+            # when C already aborted B's client fetch (no page response event).
+            while held_b:
+                route_b = held_b.pop(0)
+                try:
+                    route_b.fulfill(response=route_b.fetch())
+                except Exception:
+                    try:
+                        route_b.fallback()
+                    except Exception:
+                        pass
             page.evaluate(
                 "() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)))"
             )
