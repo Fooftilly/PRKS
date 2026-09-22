@@ -1275,8 +1275,8 @@
          * status node injected inside role=listbox — invalid owned children break AT. */
         if (state.fetchFailed) setStatus('Some quick-open results could not be loaded.');
         else if (state.emptyCreate) setStatus('No create command matches.');
-        else if (!rows.length && state.navigationTarget === 'tile') setStatus(splitPaletteEmptyMessage());
         else if (state.worksLoading) setStatus('Searching library…');
+        else if (!rows.length && state.navigationTarget === 'tile') setStatus(splitPaletteEmptyMessage());
         else setStatus('');
     }
 

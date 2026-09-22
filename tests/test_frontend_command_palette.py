@@ -113,6 +113,12 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn("No matching pages that can open in split view", src)
         self.assertIn("'aria-live': 'polite'", src)
         self.assertIn("prks-command-palette-status", src)
+        # Loading must win over split empty guidance while catalog fetch is in flight.
+        loading_idx = src.index("setStatus('Searching library…')")
+        split_empty_idx = src.index(
+            "setStatus(splitPaletteEmptyMessage())"
+        )
+        self.assertLess(loading_idx, split_empty_idx)
         self.assertNotIn("emptyGuidanceHtml", src)
         self.assertNotIn("PRKS_TILE_ROUTE_NAMES", src)
         self.assertNotIn("eval(", src)
