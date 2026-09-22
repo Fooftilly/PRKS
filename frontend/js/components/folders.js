@@ -1175,14 +1175,12 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
     container.innerHTML = `
         <div class="prks-page-header page-header page-header--split prks-folder-detail__header">
             <div class="page-header__title-row">
-                <div class="prks-folder-detail__title-block">
-                    <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
-                    ${folderNavHtml ? `<div class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">${folderNavHtml}</div>` : ''}
-                </div>
+                <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('folder') : ''} ${prksFolderEsc(folder.title)}</h2>
                 ${canDelete ? `<button data-delete-folder-id="${encodeURIComponent(String(folder.id || ''))}" class="prks-btn prks-btn--danger">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete Folder</button>` : ''}
             </div>
             ${folderSummaryHtml}
         </div>
+        ${folderNavHtml ? `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${folderNavHtml}</nav>` : ''}
         <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
         ${subfoldersHtml}
         <div class="prks-page-header page-header"><h3>Files</h3></div>

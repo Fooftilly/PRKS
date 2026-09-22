@@ -9,6 +9,7 @@ from tests.e2e.fixtures import (
     LIBRARY_NAV_EPISTEMOLOGY,
     LIBRARY_NAV_ETHICS,
     LIBRARY_NAV_PHILOSOPHY,
+    LIBRARY_NAV_RESEARCH,
     seed_library_nav_folders,
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
@@ -94,7 +95,23 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         _server, page, ids = self.start()
         self.open_folder(page, ids["ethics"])
         trigger = self.trigger_in(page, ".prks-tile--main")
-        self.assertIn(LIBRARY_NAV_ETHICS, trigger.inner_text())
+        band = page.locator(".prks-tile--main .prks-folder-nav").first
+        page.wait_for_function(
+            """() => {
+                const crumbs = document.querySelector(
+                    '.prks-tile--main [data-prks-role="folder-nav-crumbs"]'
+                );
+                return crumbs && (crumbs.textContent || '').includes('Research');
+            }""",
+            timeout=10000,
+        )
+        band_text = band.inner_text()
+        self.assertIn("Location", band_text)
+        self.assertIn(LIBRARY_NAV_RESEARCH, band_text)
+        self.assertIn(LIBRARY_NAV_PHILOSOPHY, band_text)
+        self.assertIn(LIBRARY_NAV_ETHICS, band_text)
+        self.assertIn(LIBRARY_NAV_EPISTEMOLOGY, band_text)
+        self.assertIn("Browse hierarchy", trigger.inner_text())
 
         self.open_switcher(page)
         panel = page.locator("#prks-folder-nav-panel")
@@ -136,6 +153,56 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         )
         self.select_option_by_title(page, LIBRARY_NAV_AI)
         self.wait_folder_title(page, LIBRARY_NAV_AI, ids["ai"])
+
+    def test_band_crumb_and_nearby_chip_navigate_without_popover(self):
+        """Location crumbs and Nearby chips switch Folders without opening Browse hierarchy."""
+        _server, page, ids = self.start()
+        self.open_folder(page, ids["ethics"])
+        page.wait_for_function(
+            """() => {
+                const nearby = document.querySelector(
+                    '.prks-tile--main [data-prks-role="folder-nav-nearby"]'
+                );
+                return nearby && !nearby.hidden
+                    && (nearby.textContent || '').includes('Epistemology');
+            }""",
+            timeout=10000,
+        )
+        # Sibling chip → Epistemology
+        page.locator(
+            '.prks-tile--main .prks-folder-nav__chip[data-prks-folder-nav-goto]',
+            has_text=LIBRARY_NAV_EPISTEMOLOGY,
+        ).first.click()
+        self.wait_folder_title(page, LIBRARY_NAV_EPISTEMOLOGY, ids["epistemology"])
+        self.assertTrue(
+            page.evaluate(
+                """() => {
+                    const p = document.getElementById('prks-folder-nav-panel');
+                    return !p || p.hidden === true;
+                }"""
+            )
+        )
+        # Ancestor crumb → Philosophy
+        page.locator(
+            '.prks-tile--main .prks-folder-nav__crumb[data-prks-folder-nav-goto]',
+            has_text=LIBRARY_NAV_PHILOSOPHY,
+        ).first.click()
+        self.wait_folder_title(page, LIBRARY_NAV_PHILOSOPHY, ids["philosophy"])
+        # Inside chip → Ethics
+        page.wait_for_function(
+            """() => {
+                const nearby = document.querySelector(
+                    '.prks-tile--main [data-prks-role="folder-nav-nearby"]'
+                );
+                return nearby && (nearby.textContent || '').includes('Ethics');
+            }""",
+            timeout=10000,
+        )
+        page.locator(
+            '.prks-tile--main .prks-folder-nav__chip[data-prks-folder-nav-goto]',
+            has_text=LIBRARY_NAV_ETHICS,
+        ).first.click()
+        self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ids["ethics"])
 
     def test_keyboard_open_nav_select_escape_restores_focus(self):
         _server, page, ids = self.start()

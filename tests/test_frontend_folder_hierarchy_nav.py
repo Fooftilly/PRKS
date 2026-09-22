@@ -56,6 +56,10 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
     def test_css_exposes_compact_switcher(self):
         css = _read(_CSS)
         for cls in (
+            ".prks-folder-nav__band",
+            ".prks-folder-nav__crumbs",
+            ".prks-folder-nav__nearby",
+            ".prks-folder-nav__chip",
             ".prks-folder-nav__trigger",
             ".prks-folder-nav__panel",
             ".prks-folder-nav__option",

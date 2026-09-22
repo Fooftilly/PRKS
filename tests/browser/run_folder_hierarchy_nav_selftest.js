@@ -157,7 +157,12 @@ const api = loadApi();
         html.indexOf('id="prks-folder-nav-trigger-tab-42"') !== -1
     );
     assert('trigger has sr label', html.indexOf('Open folder navigation') !== -1);
-    assert('trigger shows Ethics', html.indexOf('Ethics') !== -1);
+    assert('trigger shows Browse hierarchy', html.indexOf('Browse hierarchy') !== -1);
+    assert('band has Location eyebrow', html.indexOf('>Location<') !== -1);
+    assert('band has nearby host', html.indexOf('folder-nav-nearby') !== -1);
+    assert('crumbs show Library', html.indexOf('>Library<') !== -1);
+    assert('crumbs show Philosophy', html.indexOf('>Philosophy<') !== -1);
+    assert('crumbs show Ethics', html.indexOf('>Ethics<') !== -1);
 })();
 
 (function testEmptyLibrary() {
