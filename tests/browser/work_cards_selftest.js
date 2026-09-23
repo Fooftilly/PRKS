@@ -207,6 +207,24 @@
                 'resolve does not require preview-src attr',
                 !thumb.getAttribute('data-prks-thumb-preview-src')
             );
+
+            const emptyThumb = document.createElement('div');
+            emptyThumb.className = 'work-card__thumb work-card__thumb--empty';
+            emptyThumb.setAttribute('data-prks-thumb-state', 'empty');
+            card.appendChild(emptyThumb);
+            assertEq(
+                'empty thumb slot resolves to no URL',
+                root.prksResolveWorkThumbSrc(emptyThumb),
+                ''
+            );
+            const bare = document.createElement('div');
+            bare.className = 'work-card__thumb';
+            card.appendChild(bare);
+            assertEq(
+                'thumb without kind/page resolves to no URL',
+                root.prksResolveWorkThumbSrc(bare),
+                ''
+            );
         }
 
         // Show → hide → show same URL must not leave a blank preview frame.

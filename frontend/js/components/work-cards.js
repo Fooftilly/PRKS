@@ -312,6 +312,7 @@ function prksRecallPreviewImgSrc(img) {
  */
 function prksResolveWorkThumbSrc(thumbEl) {
     if (!thumbEl || !thumbEl.getAttribute) return '';
+    if (thumbEl.classList && thumbEl.classList.contains('work-card__thumb--empty')) return '';
     const remembered = prksRecallWorkThumbSrc(thumbEl);
     if (remembered) return remembered;
 
@@ -324,13 +325,15 @@ function prksResolveWorkThumbSrc(thumbEl) {
     if (!workId) return '';
 
     const kind = String(thumbEl.getAttribute('data-prks-thumb-preview-kind') || '');
+    if (kind !== 'video' && kind !== 'pdf') return '';
     if (kind === 'video') {
         const registered = prksLookupRegisteredWorkThumbUrl(workId);
         if (registered) prksRememberWorkThumbSrc(thumbEl, registered);
         return registered;
     }
 
-    const pageRaw = String(thumbEl.getAttribute('data-prks-thumb-page') || '1').trim();
+    // PDF: page must be stated on the thumb; never invent page 1 from a bare slot.
+    const pageRaw = String(thumbEl.getAttribute('data-prks-thumb-page') || '').trim();
     if (!/^\d+$/.test(pageRaw)) return '';
     const page = parseInt(pageRaw, 10);
     if (!Number.isFinite(page) || page < 1) return '';
@@ -594,8 +597,8 @@ function prksWorkThumbPreviewEl() {
     el = document.createElement('div');
     el.id = 'prks-work-thumb-preview';
     el.className = 'work-card-preview';
-    el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', 'Work preview');
+    // Decorative enlarge of an existing thumb — not a dialog/AT landmark.
+    el.setAttribute('aria-hidden', 'true');
     el.hidden = true;
     const frame = document.createElement('div');
     frame.className = 'work-card-preview__frame work-card-preview__frame--pdf';

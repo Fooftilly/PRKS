@@ -202,9 +202,11 @@ class WorkBrowsingV1Tests(unittest.TestCase):
             ".prks-tile--main [data-prks-role='work-browse-mode']", timeout=10000
         )
         self.assertEqual(page.evaluate("() => prksGetWorkBrowseMode()"), "cards")
-        self.assertTrue(
-            page.locator(".prks-tile--main .work-browse-collection--cards").count() >= 1
-            or page.locator(".prks-tile--main .prks-inline-message").count() >= 1
+        # work_a was opened earlier — Recent must show its card in the shared collection.
+        page.wait_for_selector(
+            f".prks-tile--main .work-browse-collection--cards "
+            f"[data-work-id='{ids['work_a']}']",
+            timeout=10000,
         )
 
         # Mode switch does not issue a new Works catalog fetch.
@@ -212,23 +214,27 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         self.open_folder(page, parent)
         page.wait_for_selector(".prks-tile--main .work-browse-collection", timeout=10000)
 
-        def count_works_gets():
-            return page.evaluate(
-                """() => {
-                    const entries = performance.getEntriesByType('resource') || [];
-                    return entries.filter(e => {
-                      const n = String(e.name || '');
-                      return n.includes('/api/works') && !n.includes('/thumbnail')
-                        && !n.includes('/opened') && !n.includes('/metadata-state');
-                    }).length;
-                }"""
-            )
+        seen = []
 
-        before = count_works_gets()
+        def on_req(req):
+            url = req.url or ""
+            if (
+                "/api/works" in url
+                and "/thumbnail" not in url
+                and "/opened" not in url
+                and "/metadata-state" not in url
+            ):
+                seen.append(url)
+
+        page.on("request", on_req)
+        self.addCleanup(lambda: page.remove_listener("request", on_req))
         self.click_list_mode(page)
         self.click_cards_mode(page)
-        after = count_works_gets()
-        self.assertEqual(before, after)
+        # Let any async mode-change work settle before asserting silence.
+        page.evaluate(
+            "() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)))"
+        )
+        self.assertEqual(seen, [], "mode switch must not refetch Works")
 
         _ = (FOLDER_PARENT_TITLE, WORK_A_TITLE, WORK_B_TITLE)  # titles used via locators/ids
 

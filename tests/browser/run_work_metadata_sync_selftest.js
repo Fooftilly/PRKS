@@ -921,13 +921,17 @@ function thumbnailResourceIdentity() {
         // a digit-only page attr that rebuilds the same resource identity.
         const idM = /data-work-id="([^"]+)"/.exec(html);
         if (!idM) return '';
-        if (typeof globalThis.prksLookupRegisteredWorkThumbUrl === 'function') {
-            const registered = globalThis.prksLookupRegisteredWorkThumbUrl(idM[1]);
-            if (registered) return registered;
-        }
+        // PDF identity comes from the rendered page attr (runtime resolve path).
         const pageM = /data-prks-thumb-page="(\d+)"/.exec(html);
         if (pageM) {
             return '/api/works/' + encodeURIComponent(idM[1]) + '/thumbnail?page=' + pageM[1];
+        }
+        // Video: no page attr — allowlisted URL registered at card-build.
+        if (
+            /data-prks-thumb-preview-kind="video"/.test(html) &&
+            typeof globalThis.prksLookupRegisteredWorkThumbUrl === 'function'
+        ) {
+            return globalThis.prksLookupRegisteredWorkThumbUrl(idM[1]) || '';
         }
         return '';
     };

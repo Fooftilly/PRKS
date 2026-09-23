@@ -67,6 +67,9 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("function prksBindWorkBrowseMode", src)
         self.assertIn("function prksShowWorkThumbPreview", src)
         self.assertIn("prksForgetPreviewImgSrc", src)
+        self.assertIn('aria-hidden', src)
+        self.assertNotIn("role', 'dialog'", src)
+        self.assertNotIn('role", "dialog"', src)
         # Preference change must sync every mounted collection, not only the local host.
         self.assertIn("prksApplyWorkBrowseModeToDom(document, next)", src)
         # No URL-bearing thumb attrs that get read back into src/HTML sinks.

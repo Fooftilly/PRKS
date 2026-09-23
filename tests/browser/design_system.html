@@ -74,6 +74,7 @@
             <a href="#icon-buttons">Icon buttons</a>
             <a href="#fields">Fields</a>
             <a href="#segmented">Segmented</a>
+            <a href="#work-browse">Work browse</a>
             <a href="#tabs">Local tabs</a>
             <a href="#cards">Cards</a>
             <a href="#rows">List rows</a>
@@ -190,6 +191,66 @@
                 <button type="button" class="prks-segmented__btn is-active">List</button>
                 <button type="button" class="prks-segmented__btn">Grid</button>
                 <button type="button" class="prks-segmented__btn">Tree</button>
+            </div>
+        </section>
+
+        <section class="prks-gallery__section" id="work-browse" data-gallery-section="work-browse">
+            <h2>Work browse</h2>
+            <p class="prks-field__help">Shared Cards | List density, thumbnail lifecycle, and decorative quick preview (Escape dismisses; click/Enter still open the Work). Authority: <code>DESIGN.md</code> Work-card section.</p>
+            <div class="work-browse-mode" data-prks-role="work-browse-mode" style="margin-bottom:var(--space-md)">
+                <div class="prks-segmented-wrap prks-segmented-wrap--compact">
+                    <div class="prks-segmented prks-segmented--compact" role="radiogroup" aria-label="Work browse layout">
+                        <button type="button" class="prks-segmented__btn prks-segmented__btn--active" data-value="Cards" aria-pressed="true" role="radio">Cards</button>
+                        <button type="button" class="prks-segmented__btn" data-value="List" aria-pressed="false" role="radio">List</button>
+                    </div>
+                </div>
+            </div>
+            <div class="work-browse-collection work-browse-collection--cards card-grid" style="margin-bottom:var(--space-md)">
+                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen with ready thumb">
+                    <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--ready" data-prks-thumb-state="ready" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
+                    <div class="work-card__body">
+                        <div class="card-title" title="Ready thumb">Ready thumb</div>
+                        <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
+                    </div>
+                </div>
+                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen loading">
+                    <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--loading" data-prks-thumb-state="loading" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
+                    <div class="work-card__body">
+                        <div class="card-title" title="Loading thumb">Loading thumb</div>
+                        <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
+                    </div>
+                </div>
+                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen unavailable">
+                    <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--error" data-prks-thumb-state="error" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
+                    <div class="work-card__body">
+                        <div class="card-title" title="Unavailable thumb">Unavailable thumb</div>
+                        <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
+                    </div>
+                </div>
+                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="Specimen empty">
+                    <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--empty" data-prks-thumb-state="empty" title="No preview" aria-hidden="true"></div>
+                    <div class="work-card__body">
+                        <div class="card-title" title="Empty thumb">Empty thumb</div>
+                        <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
+                    </div>
+                </div>
+            </div>
+            <p class="meta-row" style="margin-bottom:var(--space-xs)">List density (same cards, collection class only — no refetch):</p>
+            <div class="work-browse-collection work-browse-collection--list">
+                <div class="project-card project-card--work-card" role="link" tabindex="0" aria-label="List-mode specimen">
+                    <div class="work-card__thumb work-card__thumb--pdf work-card__thumb--ready" data-prks-thumb-state="ready" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="1"></div>
+                    <div class="work-card__body">
+                        <div class="card-title" title="List density row">List density row</div>
+                        <div class="meta-row work-card__meta">Author: Specimen · 2024</div>
+                        <div class="work-card__context">Last opened: specimen</div>
+                    </div>
+                </div>
+            </div>
+            <p class="prks-field__help" style="margin-top:var(--space-md)">Quick preview is decorative (<code>aria-hidden</code>): hover a ready thumb or focus a card and press <kbd>P</kbd>; <kbd>Escape</kbd> dismisses. It never replaces open/navigation.</p>
+            <div id="prks-work-thumb-preview" class="work-card-preview" aria-hidden="true" hidden>
+                <div class="work-card-preview__frame work-card-preview__frame--pdf">
+                    <img class="work-card-preview__img" alt="" />
+                </div>
             </div>
         </section>
 
