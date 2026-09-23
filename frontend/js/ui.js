@@ -5484,7 +5484,14 @@ function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
     input.setAttribute('aria-expanded', 'false');
     results.setAttribute('role', 'listbox');
     let active = -1;
+    // Set when ArrowDown reopens a closed list: highlight once rows exist
+    // (some lists render asynchronously), so one press still lands on a match.
+    let highlightOnRender = false;
     const items = () => Array.from(results.querySelectorAll('.result-item:not(.no-results)'));
+    const firstRealIndex = (list) => {
+        const i = list.findIndex((el) => !el.classList.contains('result-item--create'));
+        return i >= 0 ? i : 0;
+    };
     const paint = () => {
         items().forEach((el, i) => {
             if (!el.id) el.id = `${resultsId}-opt-${i}`;
@@ -5503,14 +5510,20 @@ function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
         input.setAttribute('aria-expanded', prksIsComboboxPanelOpen(results) ? 'true' : 'false');
     }).observe(results, { attributes: true, attributeFilter: ['class'] });
     new MutationObserver(() => {
-        active = -1;
+        const list = items();
+        active = highlightOnRender && list.length ? firstRealIndex(list) : -1;
+        if (list.length) highlightOnRender = false;
         paint();
     }).observe(results, { childList: true });
+    input.addEventListener('input', () => {
+        highlightOnRender = false;
+    });
     input.addEventListener('keydown', (e) => {
         if (e.isComposing) return;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
             if (!prksIsComboboxPanelOpen(results)) {
+                highlightOnRender = e.key === 'ArrowDown';
                 if (typeof input.onfocus === 'function') input.onfocus();
                 return;
             }
@@ -5518,8 +5531,7 @@ function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
             if (!list.length) return;
             if (e.key === 'ArrowDown' && active < 0) {
                 // A "Quick-create …" row is listed first; land on a real match.
-                const firstReal = list.findIndex((el) => !el.classList.contains('result-item--create'));
-                active = firstReal >= 0 ? firstReal : 0;
+                active = firstRealIndex(list);
             } else if (e.key === 'ArrowDown') active = (active + 1) % list.length;
             else active = active <= 0 ? list.length - 1 : active - 1;
             paint();
@@ -5775,13 +5787,25 @@ async function populateUploadComboboxes() {
     initSearchableCombobox('work-folder-search', 'folder-results', 'work-folder-id', 'folder');
     initSearchableCombobox('upload-person-search', 'person-results', 'upload-person-id', 'person', {
         onQuickCreate: (typedName) => {
+            const search = document.getElementById('upload-person-search');
+            if (!search || search.readOnly) return;
+            // The search, its hidden id and the credit picker are shared: hold
+            // them until this person exists so a newer query cannot be
+            // overwritten (and then cleared) by the older create.
+            search.readOnly = true;
+            search.setAttribute('aria-busy', 'true');
             void (async () => {
-                await prksQuickCreatePersonForSearchField(
-                    typedName,
-                    'upload-person-search',
-                    'upload-person-id',
-                    'Quick-created from upload'
-                );
+                try {
+                    await prksQuickCreatePersonForSearchField(
+                        typedName,
+                        'upload-person-search',
+                        'upload-person-id',
+                        'Quick-created from upload'
+                    );
+                } finally {
+                    search.readOnly = false;
+                    search.removeAttribute('aria-busy');
+                }
                 // Quick-create may have set a credit (typed name differs from
                 // the stored profile name); addRoleToUploadList reads it.
                 const hidden = document.getElementById('upload-person-id');

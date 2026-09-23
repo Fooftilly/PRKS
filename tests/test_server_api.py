@@ -627,6 +627,12 @@ class TestServerAPI(unittest.TestCase):
             titles = [w.get("title") for w in json.loads(res.read().decode())]
         self.assertNotIn("Stale Folder Work", titles)
 
+    def test_5e_filing_into_a_missing_folder_is_a_refusal_not_a_500(self):
+        """A folder deleted between the request check and filing is refused by
+        the domain method, so the handler's existing compensation runs."""
+        with self.assertRaisesRegex(ValueError, "no longer exists"):
+            server_module.db.add_work_to_folder("F-does-not-exist", "W-any")
+
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}
         req = urllib.request.Request(f"{self._base_url}/api/persons", data=json.dumps(payload).encode(), method="POST")

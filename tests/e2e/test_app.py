@@ -10861,6 +10861,12 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.keyboard.press("Escape")
         page.wait_for_selector("#person-results.is-open", state="detached")
         self.assertTrue(page.locator("#work-modal").is_visible())
+        # One ArrowDown reopens the list AND highlights the first real match.
+        page.keyboard.press("ArrowDown")
+        page.wait_for_selector("#person-results.is-open .result-item--active")
+        self.assertTrue(page.locator("#upload-person-search").get_attribute("aria-activedescendant"))
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#person-results.is-open", state="detached")
 
         # Enter data in essentials and enrichment, then discard.
         page.fill("#work-title", "E2E Discarded")

@@ -155,6 +155,14 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("FOLDER_NOT_FOUND", app)
         self.assertIn("This folder no longer exists", app)
         self.assertIn("The file was created, but", app)
+        # A lost response or a server error does not prove nothing was saved.
+        self.assertIn("Could not confirm whether the file was saved", app)
+        self.assertIn("res.status >= 500", app)
+        self.assertNotIn("Nothing was saved; try again", app)
+        ui = _read(_UI)
+        quick = ui.split("onQuickCreate: (typedName) => {\n            const search", 1)[1][:900]
+        self.assertIn("search.readOnly = true", quick)
+        self.assertIn("finally", quick)
 
     def test_selected_source_markup(self):
         html = _read(_INDEX)

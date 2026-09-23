@@ -4638,7 +4638,7 @@ window.prksRenderTabRoute = prksRenderTabRoute;
 window.handleRoute = handleRoute;
 
 
-/** A refused create says plainly that no Work exists, so a retry is safe. */
+/** A refused (4xx) create says plainly that no Work exists, so a retry is safe. */
 function prksWorkCreateFailureText(errText) {
     const text = String(errText || '').trim() || 'Could not create the file.';
     return (/[.!?]$/.test(text) ? text : text + '.') + ' Nothing was saved.';
@@ -4935,7 +4935,9 @@ function initForms() {
             });
         } catch (e) {
             if (statusMsg) {
-                statusMsg.textContent = 'Could not reach PRKS. Nothing was saved; try again.';
+                // A dropped response does not prove the create failed: the
+                // Work may be committed. Never invite a blind retry.
+                statusMsg.textContent = 'Could not confirm whether the file was saved. Check your library before trying again.';
                 statusMsg.classList.remove('hidden');
             }
             return;
@@ -4973,7 +4975,11 @@ function initForms() {
         if (!res.ok) {
             const errText = data.error || 'Could not create the file.';
             if (statusMsg) {
-                statusMsg.textContent = prksWorkCreateFailureText(errText);
+                // Only a refusal (4xx) proves nothing was created; a server
+                // error may come after the row was committed.
+                statusMsg.textContent = res.status >= 500
+                    ? 'PRKS could not finish creating the file. Check your library before trying again.'
+                    : prksWorkCreateFailureText(errText);
                 statusMsg.classList.remove('hidden');
             }
             if (data.code === 'FOLDER_NOT_FOUND' && folderSearchEl) {

@@ -3470,6 +3470,9 @@ class PRKSDatabase:
                 raise ValueError("This file is already in another folder.")
         if any(row["folder_id"] == fid for row in existing):
             return
+        if not self.folder_exists(fid):
+            # A refusal the caller can compensate, never a foreign-key 500.
+            raise ValueError("The selected folder no longer exists.")
         self.execute_query(
             "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
             (fid, wid),

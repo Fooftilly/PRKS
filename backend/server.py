@@ -2,7 +2,6 @@ from backend import work_note_sync, work_role_sync, work_source_sync
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
-import sqlite3
 import json
 import gzip
 import os
@@ -2914,14 +2913,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except ValueError as e:
                         delete_library_work(db, text_index, w_id)
                         self.send_json(409, {'error': str(e)})
-                        return
-                    except sqlite3.IntegrityError:
-                        # The folder was deleted after the check above.
-                        delete_library_work(db, text_index, w_id)
-                        self.send_json(404, {
-                            'error': 'The selected folder no longer exists.',
-                            'code': 'FOLDER_NOT_FOUND',
-                        })
                         return
                 else:
                     try:
