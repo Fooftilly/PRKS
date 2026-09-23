@@ -608,6 +608,11 @@ function prksWorkThumbPreviewEl() {
     return el;
 }
 
+function prksForgetPreviewImgSrc(img) {
+    const map = prksPreviewImgSrcMap();
+    if (map && img) map.delete(img);
+}
+
 function prksHideWorkThumbPreview() {
     const el = document.getElementById('prks-work-thumb-preview');
     if (!el) return;
@@ -615,7 +620,11 @@ function prksHideWorkThumbPreview() {
     el.classList.remove('work-card-preview--visible');
     const img = el.querySelector('.work-card-preview__img');
     if (img) {
+        // Clear both the live src and the WeakMap recall so the next show of
+        // the same URL re-enters the assign/createElement path (otherwise
+        // recall === src skips assign and the frame stays blank).
         img.removeAttribute('src');
+        prksForgetPreviewImgSrc(img);
     }
     window.__prksWorkThumbPreviewSource = null;
 }
@@ -667,6 +676,9 @@ function prksShowWorkThumbPreview(thumbEl) {
     frame.classList.toggle('work-card-preview__frame--video', kind === 'video');
     // Fresh <img> each distinct src: createElement + property assign; never
     // setAttribute('src', …) with anything that touched the DOM as text.
+    // Same-URL reopen after hide: WeakMap was cleared, so recall !== src and
+    // we recreate; if an img is reused with matching recall but empty src,
+    // re-assign so the frame is never blank.
     if (!img || prksRecallPreviewImgSrc(img) !== src) {
         const fresh = document.createElement('img');
         fresh.className = 'work-card-preview__img';
@@ -676,6 +688,8 @@ function prksShowWorkThumbPreview(thumbEl) {
         if (img) frame.replaceChild(fresh, img);
         else frame.appendChild(fresh);
         img = fresh;
+    } else {
+        prksAssignImgSrc(img, src);
     }
     window.__prksWorkThumbPreviewSource = thumbEl;
     prksPositionWorkThumbPreview(el, thumbEl);

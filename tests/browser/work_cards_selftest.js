@@ -190,12 +190,14 @@
             typeof document !== 'undefined' &&
             document.createElement
         ) {
-            const wrap = document.createElement('div');
-            wrap.innerHTML =
-                '<div class="project-card project-card--work-card" data-work-id="W-resolve">' +
-                '<div class="work-card__thumb" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="3"></div>' +
-                '</div>';
-            const thumb = wrap.querySelector('.work-card__thumb');
+            const card = document.createElement('div');
+            card.className = 'project-card project-card--work-card';
+            card.setAttribute('data-work-id', 'W-resolve');
+            const thumb = document.createElement('div');
+            thumb.className = 'work-card__thumb';
+            thumb.setAttribute('data-prks-thumb-preview-kind', 'pdf');
+            thumb.setAttribute('data-prks-thumb-page', '3');
+            card.appendChild(thumb);
             assertEq(
                 'resolve rebuilds PDF thumb from id+page',
                 root.prksResolveWorkThumbSrc(thumb),
@@ -203,8 +205,53 @@
             );
             assert(
                 'resolve does not require preview-src attr',
-                !thumb.hasAttribute('data-prks-thumb-preview-src')
+                !thumb.getAttribute('data-prks-thumb-preview-src')
             );
+        }
+
+        // Show → hide → show same URL must not leave a blank preview frame.
+        if (
+            typeof root.prksShowWorkThumbPreview === 'function' &&
+            typeof root.prksHideWorkThumbPreview === 'function' &&
+            typeof document !== 'undefined' &&
+            document.body &&
+            document.createElement
+        ) {
+            const card = document.createElement('div');
+            card.className = 'project-card project-card--work-card';
+            card.setAttribute('data-work-id', 'W-preview');
+            const thumb = document.createElement('div');
+            thumb.className = 'work-card__thumb work-card__thumb--ready';
+            thumb.setAttribute('data-prks-thumb-preview-kind', 'pdf');
+            thumb.setAttribute('data-prks-thumb-page', '1');
+            thumb.setAttribute('data-prks-thumb-state', 'ready');
+            card.appendChild(thumb);
+            document.body.appendChild(card);
+
+            root.prksShowWorkThumbPreview(thumb);
+            let preview = document.getElementById('prks-work-thumb-preview');
+            let img = preview && preview.querySelector('.work-card-preview__img');
+            assert('first show creates preview', !!(preview && !preview.hidden));
+            assert(
+                'first show assigns img src',
+                !!(img && img.src && String(img.src).indexOf('/thumbnail?page=1') !== -1)
+            );
+
+            root.prksHideWorkThumbPreview();
+            preview = document.getElementById('prks-work-thumb-preview');
+            img = preview && preview.querySelector('.work-card-preview__img');
+            assert('hide marks preview hidden', !!(preview && preview.hidden));
+            assert('hide clears img src', !(img && img.src));
+
+            root.prksShowWorkThumbPreview(thumb);
+            preview = document.getElementById('prks-work-thumb-preview');
+            img = preview && preview.querySelector('.work-card-preview__img');
+            assert('second show reopens preview', !!(preview && !preview.hidden));
+            assert(
+                'second show reassigns img src (same URL)',
+                !!(img && img.src && String(img.src).indexOf('/thumbnail?page=1') !== -1)
+            );
+            root.prksHideWorkThumbPreview();
         }
 
         // Thumbnails stay decorative — no redundant screen-reader announcement of the title.

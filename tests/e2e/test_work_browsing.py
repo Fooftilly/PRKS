@@ -110,6 +110,42 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         self.assertFalse(preview.is_hidden())
         frame = preview.locator(".work-card-preview__frame--pdf")
         self.assertEqual(frame.count(), 1)
+        first_src = page.evaluate(
+            """() => {
+              const img = document.querySelector('#prks-work-thumb-preview .work-card-preview__img');
+              return img && img.getAttribute('src') ? img.getAttribute('src') : '';
+            }"""
+        )
+        self.assertTrue(first_src and "/thumbnail" in first_src)
+
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "() => {"
+            "  const el = document.getElementById('prks-work-thumb-preview');"
+            "  return !el || el.hidden;"
+            "}",
+            timeout=5000,
+        )
+
+        # Same thumb again: hide must not leave a blank frame (WeakMap/src contract).
+        card.focus()
+        page.keyboard.press("p")
+        page.wait_for_selector(
+            "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
+        )
+        second_src = page.evaluate(
+            """() => {
+              const el = document.getElementById('prks-work-thumb-preview');
+              if (!el || el.hidden) return '';
+              const img = el.querySelector('.work-card-preview__img');
+              return img && img.getAttribute('src') ? img.getAttribute('src') : '';
+            }"""
+        )
+        self.assertTrue(
+            second_src and "/thumbnail" in second_src,
+            "second preview of the same thumb must reassign img src",
+        )
+        self.assertEqual(second_src, first_src)
         page.keyboard.press("Escape")
         page.wait_for_function(
             "() => {"
