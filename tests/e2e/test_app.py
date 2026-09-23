@@ -11139,6 +11139,65 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         work = self._work_detail(page, self._created_work_id(page))
         self.assertEqual([t.get("name") for t in work.get("tags") or []], ["racetag"])
 
+    def test_submit_waiting_on_a_person_never_touches_the_reopened_form(self):
+        """Owner review on #151: Create waiting on a Person quick-create, then
+        discard and reopen: the old submit leaves the new form alone."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Old Submit")
+        page.evaluate(
+            """() => {
+                const real = window.prksCreatePersonDurably;
+                window.__e2eReleasePerson = null;
+                window.prksCreatePersonDurably = (fields) => new Promise((resolve, reject) => {
+                    window.__e2eReleasePerson = () => real(fields).then(resolve, reject);
+                });
+            }"""
+        )
+        page.fill("#upload-person-search", "Held Person")
+        page.locator("#person-results .result-item--create").click()
+        page.wait_for_function("() => typeof window.__e2eReleasePerson === 'function'")
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
+        page.locator("#work-modal-cancel").click()
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E New Form")
+        page.evaluate("() => window.__e2eReleasePerson()")
+        page.wait_for_function(
+            "() => (window.allPersons || []).some((p) => p.last_name === 'Person')"
+        )
+        state = page.evaluate(
+            """() => ({
+                peopleErr: document.getElementById('upload-people-error').textContent.trim(),
+                statusHidden: document.getElementById('upload-status-msg').classList.contains('hidden'),
+                btnDisabled: document.getElementById('save-work-btn').disabled,
+                btnText: document.getElementById('save-work-btn').textContent.trim(),
+                frozen: document.querySelector('#work-modal .modal-body--scroll').hasAttribute('inert'),
+                title: document.getElementById('work-title').value,
+            })"""
+        )
+        self.assertEqual(state, {
+            "peopleErr": "", "statusHidden": True, "btnDisabled": False,
+            "btnText": "Create File", "frozen": False, "title": "E2E New Form",
+        })
+        # And the new form creates normally: nothing is left holding Create.
+        page.locator("#save-work-btn").click()
+        work = self._work_detail(page, self._created_work_id(page))
+        self.assertEqual(work["title"], "E2E New Form")
+        self.assertEqual(work.get("roles") or [], [])
+        titles = page.evaluate(
+            """async () => (await (await prksRequest('/api/works')).json()).map((w) => w.title)"""
+        )
+        self.assertNotIn("E2E Old Submit", titles)
+
     def test_failed_quick_create_stops_create_instead_of_dropping_the_person(self):
         server, page, collector = self._start_app()
         # The simulated storage failure is logged by the quick-create on purpose.

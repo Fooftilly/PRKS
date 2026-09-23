@@ -4682,7 +4682,6 @@ function initForms() {
     }
 
     document.getElementById('save-work-btn').onclick = async () => {
-        if (window.__prksWorkCreateInFlight) return;
         // Waits before the create (People syncing, video details) can outlast
         // the form: once it is discarded or reopened, this submit is void.
         const createModalEl = document.getElementById('work-modal');
@@ -4690,6 +4689,20 @@ function initForms() {
         const createFormStillOpen = () => !!createModalEl &&
             !createModalEl.classList.contains('hidden') &&
             createModalEl.dataset.prksOpenGeneration === createGeneration;
+        // The in-flight mark names the opening that owns it: a submit left
+        // over from a closed form neither blocks this one nor, when it ends,
+        // releases this one's busy state.
+        if (window.__prksWorkCreateInFlight === createGeneration) return;
+        const beginBusy = () => {
+            window.__prksWorkCreateInFlight = createGeneration;
+            if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+        };
+        const endBusy = () => {
+            if (window.__prksWorkCreateInFlight === createGeneration) window.__prksWorkCreateInFlight = false;
+            if (createFormStillOpen() && typeof prksSetWorkModalCreateBusy === 'function') {
+                prksSetWorkModalCreateBusy(false);
+            }
+        };
         // A person quick-created a moment ago is still being written and
         // added: wait for it so the Work is created with them.
         // Only one started in this opening of the form: a create left over
@@ -4701,17 +4714,18 @@ function initForms() {
             ? window.__prksUploadPersonPending
             : null;
         if (pendingPerson) {
-            window.__prksWorkCreateInFlight = true;
-            if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+            beginBusy();
             let personAdded = false;
             try {
                 personAdded = (await pendingPerson) === true;
             } catch (_e) {
                 personAdded = false;
             } finally {
-                window.__prksWorkCreateInFlight = false;
-                if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(false);
+                endBusy();
             }
+            // Discarded or reopened meanwhile: nothing here belongs to the
+            // form now on screen.
+            if (!createFormStillOpen()) return;
             // The user asked for that person: never create the file silently
             // without them. Stop here; everything they entered is kept.
             if (!personAdded) {
@@ -4733,14 +4747,12 @@ function initForms() {
         const pendingEnrichment = typeof prksPendingWorkModalQuickCreates === 'function'
             ? prksPendingWorkModalQuickCreates() : [];
         if (pendingEnrichment.length) {
-            window.__prksWorkCreateInFlight = true;
-            if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+            beginBusy();
             let enrichmentAdded = false;
             try {
                 enrichmentAdded = (await Promise.all(pendingEnrichment)).every(Boolean);
             } finally {
-                window.__prksWorkCreateInFlight = false;
-                if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(false);
+                endBusy();
             }
             if (!createFormStillOpen()) return;
             if (!enrichmentAdded) {
@@ -4837,8 +4849,7 @@ function initForms() {
             return;
         }
 
-        window.__prksWorkCreateInFlight = true;
-        if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+        beginBusy();
 
         try {
         if (pdfFileForUpload) {
@@ -4998,6 +5009,7 @@ function initForms() {
                 if (!createFormStillOpen()) return;
                 const batch = await prksCreateWorkDurably(createFields, { tags: selectedTags });
                 const newId = batch && batch.create && batch.create.entity_id;
+                if (!createFormStillOpen()) return;
                 closeModals();
                 if (newId && typeof prksNavigate === 'function') {
                     prksNavigate('#/works/' + encodeURIComponent(newId));
@@ -5036,6 +5048,10 @@ function initForms() {
             return;
         }
 
+        // What this submit asked for, taken while the form is frozen: after a
+        // discard and reopen, the live list belongs to a different form.
+        const tagsToAttach = typeof uploadTagsSelected !== 'undefined' && Array.isArray(uploadTagsSelected)
+            ? uploadTagsSelected.slice() : [];
         let res;
         try {
             res = await prksRequest('/api/works', {
@@ -5044,7 +5060,7 @@ function initForms() {
                 body: JSON.stringify(payload),
             });
         } catch (e) {
-            if (statusMsg) {
+            if (statusMsg && createFormStillOpen()) {
                 // A dropped response does not prove the create failed: the
                 // Work may be committed. Never invite a blind retry.
                 statusMsg.textContent = 'Could not confirm whether the file was saved. Check your library before trying again.';
@@ -5053,6 +5069,8 @@ function initForms() {
             return;
         }
         const data = await res.json().catch(() => ({}));
+        // A refusal for a form that is gone has no one to tell.
+        if (!res.ok && !createFormStillOpen()) return;
         if (res.ok && String(payload.playlist_id || '').trim()) {
             // The create endpoint can attach the new video to a Playlist in the
             // same canonical request, bypassing addWorkToPlaylist(). The attach
@@ -5124,8 +5142,8 @@ function initForms() {
         }
         const newId = data.id;
         let tagsFailed = 0;
-        if (newId && typeof uploadTagsSelected !== 'undefined' && uploadTagsSelected.length) {
-            for (const t of uploadTagsSelected) {
+        if (newId && tagsToAttach.length) {
+            for (const t of tagsToAttach) {
                 try {
                     const tr = await prksRequest(`/api/works/${encodeURIComponent(newId)}/tags`, {
                         method: 'POST',
@@ -5138,6 +5156,9 @@ function initForms() {
                 }
             }
         }
+        // Sent before a discard: the Work exists with what was asked for, but
+        // the dialog on screen now (if any) is someone else's.
+        if (!createFormStillOpen()) return;
         // The Work exists now: close and open it either way, so a retry can
         // never create a second one. A partial enrichment is said out loud.
         closeModals();
@@ -5151,12 +5172,7 @@ function initForms() {
             );
         }
         } finally {
-            window.__prksWorkCreateInFlight = false;
-            const modal = document.getElementById('work-modal');
-            const stillOpen = modal && !modal.classList.contains('hidden');
-            if (stillOpen && typeof prksSetWorkModalCreateBusy === 'function') {
-                prksSetWorkModalCreateBusy(false);
-            }
+            endBusy();
         }
     };
 

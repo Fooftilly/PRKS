@@ -185,6 +185,10 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertEqual(ui.count("void prksTrackWorkModalQuickCreate("), 2)
         # A discarded form voids a submit still waiting before its create.
         app = _read(_APP)
+        person_wait = app.split("personAdded = (await pendingPerson) === true;", 1)[1][:400]
+        self.assertIn("if (!createFormStillOpen()) return;", person_wait)
+        self.assertIn("window.__prksWorkCreateInFlight === createGeneration", app)
+        self.assertIn("for (const t of tagsToAttach)", app)
         self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
         self.assertIn("if (!createFormStillOpen()) return;\n                const batch = await prksCreateWorkDurably", app)
         reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]
