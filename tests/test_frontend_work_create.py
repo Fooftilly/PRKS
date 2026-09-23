@@ -127,6 +127,9 @@ class FrontendWorkCreateTests(unittest.TestCase):
         app = _read(_APP)
         work_chunk = app.split("document.getElementById('save-work-btn')", 1)[1]
         self.assertIn("credit_name: r.credit_name || ''", work_chunk)
+        # YouTube Works store their accessed date (urldate) at creation.
+        self.assertIn("urldate: sourceKind === 'video' ? new Date().toISOString().slice(0, 10)", work_chunk)
+        self.assertIn("urldate: payload.urldate || ''", work_chunk)
 
     def test_keyboard_and_escape_layers(self):
         ui = _read(_UI)

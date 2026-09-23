@@ -10945,6 +10945,9 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertEqual(work["title"], "Stub Lecture")
         self.assertEqual(work["author_text"], "Stub Channel")
         self.assertEqual(work["source_kind"], "video")
+        # The accessed date is stored, not left empty (owner review on #151).
+        today_utc = page.evaluate("() => new Date().toISOString().slice(0, 10)")
+        self.assertEqual(work.get("urldate"), today_utc)
 
     def test_create_waits_for_an_in_flight_quick_create(self):
         server, page, _collector = self._start_app()

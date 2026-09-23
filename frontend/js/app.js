@@ -4893,7 +4893,10 @@ function initForms() {
             thumb_url: sourceKind === 'video' && meta && meta.thumbnail_url ? String(meta.thumbnail_url) : "",
             provider: sourceKind === 'video' ? "youtube" : "",
             published_date: sourceKind === 'video' ? (publishedIso || null) : (pdfPublished || null),
-            urldate: "",
+            // A YouTube Work is accessed now. The durable CREATE_WORK path
+            // stores what it is given, so supply the date the HTTP path and a
+            // source change (DATE('now'), UTC) would set, not an empty one.
+            urldate: sourceKind === 'video' ? new Date().toISOString().slice(0, 10) : "",
             playlist_id: sourceKind === 'video' ? playlistId : "",
             private_notes,
             thumb_page,
