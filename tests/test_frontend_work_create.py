@@ -179,6 +179,12 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("search.readOnly = true", quick)
         self.assertIn("finally", quick)
         self.assertIn("window.__prksUploadPersonPending = pending", ui)
+        # Scoped to one opening of the form: reset drops it and the lock.
+        self.assertIn("pending.prksOpenGeneration = openGeneration", ui)
+        reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("window.__prksUploadPersonPending = null", reset)
+        self.assertIn("personSearch.readOnly = false", reset)
+        self.assertIn("{ stillApplies }", ui)
         # Create waits for an in-flight quick-create before building the payload.
         save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]
         self.assertLess(save.index("__prksUploadPersonPending"), save.index("const payload"))

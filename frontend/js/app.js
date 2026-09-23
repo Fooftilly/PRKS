@@ -4685,7 +4685,14 @@ function initForms() {
         if (window.__prksWorkCreateInFlight) return;
         // A person quick-created a moment ago is still being written and
         // added: wait for it so the Work is created with them.
-        const pendingPerson = window.__prksUploadPersonPending;
+        // Only one started in this opening of the form: a create left over
+        // from a closed form must not block or refuse this one.
+        const workModalEl = document.getElementById('work-modal');
+        const pendingPerson = window.__prksUploadPersonPending &&
+            workModalEl &&
+            window.__prksUploadPersonPending.prksOpenGeneration === workModalEl.dataset.prksOpenGeneration
+            ? window.__prksUploadPersonPending
+            : null;
         if (pendingPerson) {
             window.__prksWorkCreateInFlight = true;
             if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);

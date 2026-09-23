@@ -1612,7 +1612,7 @@ function prksSplitTypedPersonName(raw) {
     };
 }
 
-async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText) {
+async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText, options) {
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
         await prksAlertMessage('Type a name in the Person field first.', 'Validation');
@@ -1646,6 +1646,10 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         window.allPersons = allPersons;
         window.__prksProcessingPeople = allPersons;
     }
+    // The form it was typed into may be gone (closed, or reopened fresh): the
+    // Person exists, but it must not be written into someone else's fields.
+    const stillApplies = options && options.stillApplies;
+    if (typeof stillApplies === 'function' && !stillApplies()) return;
     const personSearch =
         typeof searchInputRef === 'string' ? document.getElementById(searchInputRef) : searchInputRef;
     const personHidden =
@@ -5708,6 +5712,14 @@ window.prksExtractYoutubeVideoId = prksExtractYoutubeVideoId;
 window.prksIsValidYoutubeUrl = prksIsValidYoutubeUrl;
 
 function resetUploadModal() {
+    // A quick-create still running for the previous form no longer concerns
+    // this one: Create must not wait on it, and People search is usable.
+    window.__prksUploadPersonPending = null;
+    const personSearch = document.getElementById('upload-person-search');
+    if (personSearch) {
+        personSearch.readOnly = false;
+        personSearch.removeAttribute('aria-busy');
+    }
     uploadRoles = [];
     uploadTagsSelected = [];
     prksCloseUploadCreditPanel({ restoreFocus: false });
@@ -5818,28 +5830,36 @@ async function populateUploadComboboxes() {
             // quick submit cannot snapshot the People list without them.
             const modal = document.getElementById('work-modal');
             const openGeneration = modal ? modal.dataset.prksOpenGeneration : '';
+            // Closed or reopened meanwhile: this create belongs to a form that
+            // no longer exists, and must never touch or block the new one.
+            const stillApplies = () => !!modal && !modal.classList.contains('hidden') &&
+                modal.dataset.prksOpenGeneration === openGeneration;
             const pending = (async () => {
                 try {
                     await prksQuickCreatePersonForSearchField(
                         typedName,
                         'upload-person-search',
                         'upload-person-id',
-                        'Quick-created from upload'
+                        'Quick-created from upload',
+                        { stillApplies }
                     );
                 } finally {
-                    search.readOnly = false;
-                    search.removeAttribute('aria-busy');
+                    // A reopened form was already unlocked by its reset (and
+                    // may hold a newer create's lock): only release our own.
+                    if (stillApplies()) {
+                        search.readOnly = false;
+                        search.removeAttribute('aria-busy');
+                    }
                 }
                 // Quick-create may have set a credit (typed name differs from
                 // the stored profile name); addRoleToUploadList reads it.
-                // Closed or reopened meanwhile: never add to a different form.
-                if (!modal || modal.classList.contains('hidden') ||
-                    modal.dataset.prksOpenGeneration !== openGeneration) return false;
+                if (!stillApplies()) return false;
                 // The helper reports its own failure and resolves anyway; only
                 // a selected id means the Person exists. Resolve to "added".
                 const hidden = document.getElementById('upload-person-id');
                 return !!(hidden && hidden.value) && addRoleToUploadList() === true;
             })();
+            pending.prksOpenGeneration = openGeneration;
             window.__prksUploadPersonPending = pending;
             const clear = () => {
                 if (window.__prksUploadPersonPending === pending) window.__prksUploadPersonPending = null;

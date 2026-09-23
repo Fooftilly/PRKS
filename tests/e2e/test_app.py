@@ -11023,6 +11023,48 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         names = [(r.get("first_name"), r.get("last_name"), r["role_type"]) for r in work["roles"]]
         self.assertEqual(names, [("Zed", "Quickmade", "Author")])
 
+    def test_quick_create_from_a_discarded_form_never_blocks_the_next(self):
+        """Codex review on #151: a quick-create left over from a closed form
+        neither locks, fills nor refuses the freshly reopened one."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.evaluate(
+            """() => {
+                const real = window.prksCreatePersonDurably;
+                window.__e2eReleasePerson = null;
+                window.prksCreatePersonDurably = (fields) => new Promise((resolve, reject) => {
+                    window.__e2eReleasePerson = () => real(fields).then(resolve, reject);
+                });
+            }"""
+        )
+        page.fill("#upload-person-search", "Old Leftover")
+        page.locator("#person-results .result-item--create").click()
+        page.wait_for_function("() => typeof window.__e2eReleasePerson === 'function'")
+        page.locator("#work-modal-cancel").click()
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+
+        self._open_new_file_ready(page)
+        self.assertFalse(page.evaluate("() => document.getElementById('upload-person-search').readOnly"))
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Fresh After Discard")
+        page.fill("#upload-person-search", "Fresh Typing")
+        # The old create finishes now: the new form's People field is left alone.
+        page.evaluate("() => window.__e2eReleasePerson()")
+        page.wait_for_function(
+            "() => (window.allPersons || []).some((p) => p.last_name === 'Leftover')"
+        )
+        self.assertEqual(page.locator("#upload-person-search").input_value(), "Fresh Typing")
+        self.assertEqual(page.locator("#upload-person-id").input_value(), "")
+        self.assertEqual(page.locator("#upload-roles-list .prks-upload-person-row").count(), 0)
+        page.fill("#upload-person-search", "")
+        page.locator("#save-work-btn").click()
+        work = self._work_detail(page, self._created_work_id(page))
+        self.assertEqual(work["title"], "E2E Fresh After Discard")
+        self.assertEqual(work.get("roles") or [], [])
+
     def test_failed_quick_create_stops_create_instead_of_dropping_the_person(self):
         server, page, collector = self._start_app()
         # The simulated storage failure is logged by the quick-create on purpose.
