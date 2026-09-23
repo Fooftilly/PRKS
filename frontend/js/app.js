@@ -4683,6 +4683,13 @@ function initForms() {
 
     document.getElementById('save-work-btn').onclick = async () => {
         if (window.__prksWorkCreateInFlight) return;
+        // Waits before the create (People syncing, video details) can outlast
+        // the form: once it is discarded or reopened, this submit is void.
+        const createModalEl = document.getElementById('work-modal');
+        const createGeneration = createModalEl ? createModalEl.dataset.prksOpenGeneration : '';
+        const createFormStillOpen = () => !!createModalEl &&
+            !createModalEl.classList.contains('hidden') &&
+            createModalEl.dataset.prksOpenGeneration === createGeneration;
         // A person quick-created a moment ago is still being written and
         // added: wait for it so the Work is created with them.
         // Only one started in this opening of the form: a create left over
@@ -4963,6 +4970,7 @@ function initForms() {
                         return { id: t.id, name: t.name || '' };
                     }).filter(function (t) { return t.id; })
                     : [];
+                if (!createFormStillOpen()) return;
                 const batch = await prksCreateWorkDurably(createFields, { tags: selectedTags });
                 const newId = batch && batch.create && batch.create.entity_id;
                 closeModals();
@@ -4993,6 +5001,7 @@ function initForms() {
         const peopleReady = await prksWaitForPeopleOnServer(
             (payload.roles || []).map(r => r.person_id)
         );
+        if (!createFormStillOpen()) return;
         if (!peopleReady) {
             if (statusMsg) {
                 statusMsg.textContent =

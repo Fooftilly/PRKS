@@ -11065,6 +11065,44 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertEqual(work["title"], "E2E Fresh After Discard")
         self.assertEqual(work.get("roles") or [], [])
 
+    def test_discarding_while_people_sync_cancels_the_create(self):
+        """Codex review on #151: a create waiting for People to reach the server
+        is void once the form is discarded; nothing is posted afterwards."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Discarded While Syncing")
+        page.evaluate(
+            """() => {
+                window.__e2eReleasePeople = null;
+                window.prksWaitForPeopleOnServer = () => new Promise((resolve) => {
+                    window.__e2eReleasePeople = () => resolve(true);
+                });
+            }"""
+        )
+        posts = []
+        page.on(
+            "request",
+            lambda req: posts.append(req.url)
+            if req.method == "POST" and req.url.endswith("/api/works") else None,
+        )
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => typeof window.__e2eReleasePeople === 'function'")
+        page.locator("#work-modal-cancel").click()
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+        hash_before = page.evaluate("() => location.hash")
+        page.evaluate("() => window.__e2eReleasePeople()")
+        page.wait_for_function("() => !window.__prksWorkCreateInFlight")
+        self.assertEqual(posts, [])
+        self.assertEqual(page.evaluate("() => location.hash"), hash_before)
+        titles = page.evaluate(
+            """async () => (await (await prksRequest('/api/works')).json()).map((w) => w.title)"""
+        )
+        self.assertNotIn("E2E Discarded While Syncing", titles)
+
     def test_failed_quick_create_stops_create_instead_of_dropping_the_person(self):
         server, page, collector = self._start_app()
         # The simulated storage failure is logged by the quick-create on purpose.

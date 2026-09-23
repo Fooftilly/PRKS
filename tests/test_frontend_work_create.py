@@ -181,6 +181,10 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("window.__prksUploadPersonPending = pending", ui)
         # Scoped to one opening of the form: reset drops it and the lock.
         self.assertIn("pending.prksOpenGeneration = openGeneration", ui)
+        # A discarded form voids a submit still waiting before its create.
+        app = _read(_APP)
+        self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
+        self.assertIn("if (!createFormStillOpen()) return;\n                const batch = await prksCreateWorkDurably", app)
         reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("window.__prksUploadPersonPending = null", reset)
         self.assertIn("personSearch.readOnly = false", reset)
