@@ -79,7 +79,16 @@ class FrontendWorkCardTests(unittest.TestCase):
         # No URL-bearing thumb attrs that get read back into src/HTML sinks.
         self.assertNotIn("data-prks-thumb-preview-src", src)
         self.assertNotIn("data-prks-thumb-src=", src)
-        self.assertIn("data-prks-thumb-lazy", src)
+        # Preview release must run even on Folder→Folder preserve (sameFolderWorkspace).
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        self.assertIn("prksReleaseWorkThumbPreview(contentDiv)", app)
+        # Must not share the lazy-thumb `!sameFolderWorkspace` skip — preview has
+        # no prune-on-init fallback.
+        marker = "prksReleaseWorkThumbPreview(contentDiv)"
+        at = app.find(marker)
+        self.assertGreater(at, 0)
+        window = app[max(0, at - 280) : at]
+        self.assertNotIn("!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview", window)
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
         sv = _read(os.path.join(_FRONTEND, "js", "saved-views.js"))
