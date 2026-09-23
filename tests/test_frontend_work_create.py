@@ -172,6 +172,9 @@ class FrontendWorkCreateTests(unittest.TestCase):
         # Create waits for an in-flight quick-create before building the payload.
         save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]
         self.assertLess(save.index("__prksUploadPersonPending"), save.index("const payload"))
+        # A failed quick-create stops Create rather than dropping the person.
+        self.assertIn("(await pendingPerson) === true", save)
+        self.assertIn("addRoleToUploadList() === true", quick)
 
     def test_selected_source_markup(self):
         html = _read(_INDEX)

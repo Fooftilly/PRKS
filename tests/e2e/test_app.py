@@ -10974,6 +10974,40 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         names = [(r.get("first_name"), r.get("last_name"), r["role_type"]) for r in work["roles"]]
         self.assertEqual(names, [("Zed", "Quickmade", "Author")])
 
+    def test_failed_quick_create_stops_create_instead_of_dropping_the_person(self):
+        server, page, collector = self._start_app()
+        # The simulated storage failure is logged by the quick-create on purpose.
+        self.addCleanup(lambda: collector.console_errors.__setitem__(
+            slice(None), [e for e in collector.console_errors if "store unavailable" not in e]))
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Failed Quick Create")
+        page.evaluate(
+            """() => {
+                window.__e2eFailPerson = null;
+                window.prksCreatePersonDurably = () => new Promise((_resolve, reject) => {
+                    window.__e2eFailPerson = () => reject(new Error('store unavailable'));
+                });
+            }"""
+        )
+        page.fill("#upload-person-search", "Nora Neverstored")
+        page.locator("#person-results .result-item--create").click()
+        page.wait_for_function("() => typeof window.__e2eFailPerson === 'function'")
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
+        page.evaluate("() => window.__e2eFailPerson()")
+        page.locator("#prks-modal-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-confirm-ok").click()
+        page.locator("#upload-people-error", has_text="file was not created").wait_for()
+        page.locator("#upload-status-msg", has_text="Nothing was saved.").wait_for()
+        self.assertTrue(page.locator("#work-modal").is_visible())
+        self.assertEqual(page.locator("#work-title").input_value(), "E2E Failed Quick Create")
+        self.assertIn("#/folders", page.evaluate("() => location.hash"))
+        titles = page.evaluate("async () => (await fetchWorks()).map(w => w.title)")
+        self.assertNotIn("E2E Failed Quick Create", titles)
+        self.assertFalse(page.evaluate("() => document.getElementById('save-work-btn').disabled"))
+
     def test_short_viewport_scrolls_body_and_keeps_create_visible(self):
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 900, "height": 560})

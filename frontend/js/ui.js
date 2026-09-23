@@ -5814,9 +5814,11 @@ async function populateUploadComboboxes() {
                 // the stored profile name); addRoleToUploadList reads it.
                 // Closed or reopened meanwhile: never add to a different form.
                 if (!modal || modal.classList.contains('hidden') ||
-                    modal.dataset.prksOpenGeneration !== openGeneration) return;
+                    modal.dataset.prksOpenGeneration !== openGeneration) return false;
+                // The helper reports its own failure and resolves anyway; only
+                // a selected id means the Person exists. Resolve to "added".
                 const hidden = document.getElementById('upload-person-id');
-                if (hidden && hidden.value) addRoleToUploadList();
+                return !!(hidden && hidden.value) && addRoleToUploadList() === true;
             })();
             window.__prksUploadPersonPending = pending;
             const clear = () => {

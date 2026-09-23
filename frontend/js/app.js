@@ -4689,13 +4689,29 @@ function initForms() {
         if (pendingPerson) {
             window.__prksWorkCreateInFlight = true;
             if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+            let personAdded = false;
             try {
-                await pendingPerson;
+                personAdded = (await pendingPerson) === true;
             } catch (_e) {
-                /* the quick-create reported its own failure */
+                personAdded = false;
             } finally {
                 window.__prksWorkCreateInFlight = false;
                 if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(false);
+            }
+            // The user asked for that person: never create the file silently
+            // without them. Stop here; everything they entered is kept.
+            if (!personAdded) {
+                const peopleErr = document.getElementById('upload-people-error');
+                if (peopleErr) {
+                    peopleErr.textContent = 'That person could not be added, so the file was not created. Try adding them again, then create.';
+                    peopleErr.classList.remove('hidden');
+                }
+                const statusMsg = document.getElementById('upload-status-msg');
+                if (statusMsg) {
+                    statusMsg.textContent = 'Nothing was saved.';
+                    statusMsg.classList.remove('hidden');
+                }
+                return;
             }
         }
         const kindEl = document.getElementById('work-source-kind');
