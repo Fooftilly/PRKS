@@ -10995,6 +10995,104 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.keyboard.press("Enter")
         page.wait_for_function("() => uploadTagsSelected.map((t) => t.name).join() === 'beta'")
 
+    def _hold_youtube_oembed(self, page):
+        """Route the preview iframe; hold every oEmbed fetch until released."""
+        def _stub_youtube(route):
+            route.fulfill(status=200, content_type="text/html", body="<html></html>")
+
+        page.route("https://www.youtube.com/embed/**", _stub_youtube)
+        self.addCleanup(lambda: page.unroute("https://www.youtube.com/embed/**", _stub_youtube))
+        page.evaluate(
+            """() => {
+                const realFetch = window.fetch;
+                window.__e2eOembedWaiters = [];
+                window.__e2eReleaseOembed = () => {
+                    const body = JSON.stringify({ title: 'Late Title', author_name: 'Late Channel' });
+                    window.__e2eOembedWaiters.splice(0).forEach((resolve) =>
+                        resolve(new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } })));
+                };
+                window.fetch = (input, init) => {
+                    const url = typeof input === 'string' ? input : (input && input.url) || '';
+                    if (url.indexOf('youtube.com/oembed') >= 0) {
+                        return new Promise((resolve) => { window.__e2eOembedWaiters.push(resolve); });
+                    }
+                    return realFetch(input, init);
+                };
+            }"""
+        )
+
+    def _discard_and_reopen(self, page):
+        page.locator("#work-modal-cancel").click()
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+        self._open_new_file_ready(page)
+
+    def test_youtube_details_fetch_never_fills_a_reopened_form(self):
+        """Owner review on #151: Create on a cold YouTube URL, discard during the
+        details (oEmbed) wait, reopen: the late result leaves the new form blank."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        self._hold_youtube_oembed(page)
+        page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
+        page.locator("#work-video-url").wait_for(state="visible")
+        page.fill("#work-video-url", "https://youtu.be/dQw4w9WgXcQ")
+        page.fill("#work-title", "E2E Discarded Video")
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
+        page.wait_for_function("() => window.__e2eOembedWaiters.length > 0")
+        self._discard_and_reopen(page)
+        page.evaluate("() => window.__e2eReleaseOembed()")
+        page.wait_for_function("() => !window.__prksWorkCreateInFlight")
+        state = page.evaluate(
+            """() => ({
+                title: document.getElementById('work-title').value,
+                channel: (document.getElementById('work-video-channel') || {}).value || '',
+                meta: window.__prksUploadVideoMeta || null,
+                statusHidden: document.getElementById('upload-status-msg').classList.contains('hidden'),
+            })"""
+        )
+        self.assertEqual(state, {"title": "", "channel": "", "meta": None, "statusHidden": True})
+        titles = page.evaluate(
+            """async () => (await (await prksRequest('/api/works')).json()).map((w) => w.title)"""
+        )
+        self.assertNotIn("E2E Discarded Video", titles)
+
+    def test_failed_youtube_create_never_reports_into_a_reopened_form(self):
+        """Owner review on #151: a durable YouTube create that fails after a
+        discard and reopen writes no error into the new form."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        self._hold_youtube_oembed(page)
+        page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
+        page.locator("#work-video-url").wait_for(state="visible")
+        page.fill("#work-video-url", "https://youtu.be/dQw4w9WgXcQ")
+        page.locator("#work-title").click()  # blur: details fetch starts
+        page.wait_for_function("() => window.__e2eOembedWaiters.length > 0")
+        page.evaluate("() => window.__e2eReleaseOembed()")
+        page.wait_for_function("() => document.getElementById('work-title').value === 'Late Title'")
+        page.evaluate(
+            """() => {
+                window.__e2eRejectCreate = null;
+                window.prksCreateWorkDurably = () => new Promise((_resolve, reject) => {
+                    window.__e2eRejectCreate = () => reject(new Error('Enter a valid YouTube URL'));
+                });
+            }"""
+        )
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => typeof window.__e2eRejectCreate === 'function'")
+        self._discard_and_reopen(page)
+        page.evaluate("() => window.__e2eRejectCreate()")
+        page.wait_for_function("() => !window.__prksWorkCreateInFlight")
+        state = page.evaluate(
+            """() => ({
+                statusHidden: document.getElementById('upload-status-msg').classList.contains('hidden'),
+                urlErrHidden: document.getElementById('work-video-url-error').classList.contains('hidden'),
+                btnDisabled: document.getElementById('save-work-btn').disabled,
+            })"""
+        )
+        self.assertEqual(state, {"statusHidden": True, "urlErrHidden": True, "btnDisabled": False})
+
     def test_create_waits_for_an_in_flight_quick_create(self):
         server, page, _collector = self._start_app()
         self._open_new_file_ready(page)

@@ -4864,6 +4864,7 @@ function initForms() {
                     reader.readAsDataURL(file);
                 });
             } catch (_readErr) {
+                if (!createFormStillOpen()) return;
                 if (typeof prksSetWorkModalFieldError === 'function') {
                     prksSetWorkModalFieldError(
                         document.getElementById('upload-drop-zone'),
@@ -4886,6 +4887,8 @@ function initForms() {
             const last = String(window.__prksLastVideoPreviewUrl || '').trim();
             if (last !== sourceUrl || !window.__prksUploadVideoMeta) {
                 await window.prksHandleVideoUrlInput(sourceUrl);
+                // Discarded or reopened during the details fetch: void.
+                if (!createFormStillOpen()) return;
             }
         }
         const meta = window.__prksUploadVideoMeta && typeof window.__prksUploadVideoMeta === 'object'
@@ -5015,6 +5018,8 @@ function initForms() {
                     prksNavigate('#/works/' + encodeURIComponent(newId));
                 }
             } catch (e) {
+                // A failure for a form that is gone has no one to tell.
+                if (!createFormStillOpen()) return;
                 const errText = (e && e.message) || 'Could not create the file.';
                 if (statusMsg) {
                     statusMsg.textContent = prksWorkCreateFailureText(errText);

@@ -189,6 +189,15 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("if (!createFormStillOpen()) return;", person_wait)
         self.assertIn("window.__prksWorkCreateInFlight === createGeneration", app)
         self.assertIn("for (const t of tagsToAttach)", app)
+        # The details refresh and every error path stop once the opening is gone.
+        self.assertIn("await window.prksHandleVideoUrlInput(sourceUrl);\n"
+                      "                // Discarded or reopened during the details fetch: void.\n"
+                      "                if (!createFormStillOpen()) return;", app)
+        self.assertIn("} catch (_readErr) {\n                if (!createFormStillOpen()) return;", app)
+        self.assertIn("// A failure for a form that is gone has no one to tell.\n"
+                      "                if (!createFormStillOpen()) return;", app)
+        video = ui.split("window.prksHandleVideoUrlInput = async function", 1)[1].split("\n        };", 1)[0]
+        self.assertEqual(video.count("if (!stillThisOpening()) return;"), 3)
         self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
         self.assertIn("if (!createFormStillOpen()) return;\n                const batch = await prksCreateWorkDurably", app)
         reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]

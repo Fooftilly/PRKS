@@ -6735,6 +6735,12 @@ function initUploadDragAndDrop() {
             const pdfActions = document.getElementById('upload-pdf-preview-actions');
             const channelInput = document.getElementById('work-video-channel');
             if (!viewer) return;
+            // The oEmbed fetch can outlast the form (Cancel stays usable): its
+            // result belongs to this opening only, never to a reopened one.
+            const modal = document.getElementById('work-modal');
+            const openGeneration = modal ? modal.dataset.prksOpenGeneration : '';
+            const stillThisOpening = () => !!modal && !modal.classList.contains('hidden') &&
+                modal.dataset.prksOpenGeneration === openGeneration;
 
             if (
                 url &&
@@ -6779,8 +6785,10 @@ function initUploadDragAndDrop() {
                 if (!previewVideoId) throw new Error('not a recognized YouTube URL');
                 const oembed = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`;
                 const res = await fetch(oembed, { method: 'GET' });
+                if (!stillThisOpening()) return;
                 if (res.ok) {
                     const meta = await res.json().catch(() => null);
+                    if (!stillThisOpening()) return;
                     if (meta && typeof meta === 'object') {
                         window.__prksUploadVideoMeta = meta;
                         const titleInput = document.getElementById('work-title');
@@ -6796,6 +6804,7 @@ function initUploadDragAndDrop() {
                 }
             } catch (_e) {}
 
+            if (!stillThisOpening()) return;
             window.__prksLastVideoPreviewUrl = url;
         };
     }
