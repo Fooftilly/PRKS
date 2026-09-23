@@ -535,7 +535,8 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
         page.on("request", on_request)
         before_detail = counts["folder_detail"]
         self.open_switcher(page)
-        page.wait_for_timeout(400)
+        # open_switcher already waits until options/empty are painted — that is
+        # the observable settle that the hierarchy catalogue load finished.
         self.assertLessEqual(counts["folder_detail"] - before_detail, 1)
 
     def test_folder_to_folder_keeps_workspace_while_pending(self):

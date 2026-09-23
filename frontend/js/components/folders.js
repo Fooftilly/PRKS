@@ -1309,6 +1309,26 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(liveHost);
 }
 
+/**
+ * Full-refill every live Folder-detail hierarchy tree after structure sync.
+ * selectionOnly is intentionally not used: CREATE/rename/reparent/DELETE can
+ * change topology, not just which row is current.
+ */
+function prksRefreshLiveFolderDetailTrees() {
+    const hosts = document.querySelectorAll('[data-prks-folder-detail-tree-host]');
+    hosts.forEach(function (host) {
+        if (!host || !host.isConnected) return;
+        const ctx =
+            typeof prksContextFromElement === 'function' ? prksContextFromElement(host) : null;
+        if (!ctx || ctx.destroyed || !ctx.mounted) return;
+        const folder = ctx.getEntity && ctx.getEntity('folder');
+        if (!folder || folder.id == null || folder.id === '') return;
+        const container = ctx.root || host.closest('.prks-tab-root');
+        if (!container || !container.contains(host)) return;
+        void prksFillFolderDetailTree(ctx, folder, container, { selectionOnly: false });
+    });
+}
+
 function prksFolderDetailMainInnerHtml(ctx, folder, offlineCached) {
     const hasChildren = Array.isArray(folder.children) && folder.children.length > 0;
     const canDelete = (!folder.works || folder.works.length === 0) && !hasChildren;
@@ -1803,3 +1823,4 @@ window.prksToggleFolderNode = prksToggleFolderNode;
 window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
 window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
+window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;

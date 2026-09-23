@@ -106,11 +106,20 @@
                     // structure change (or an ACK that landed mid-fetch), so do
                     // not let it cache its base under the post-event fingerprint.
                     invalidateHierarchyBase();
+                    if (typeof root.prksRefreshLiveFolderDetailTrees === 'function') {
+                        root.prksRefreshLiveFolderDetailTrees();
+                    }
                     return;
                 }
                 if (fp === hierarchyOpsFingerprint) return;
                 hierarchyOpsFingerprint = fp;
                 invalidateHierarchyBase();
+                // Wide Folder-detail trees are filled once at mount / selection-only
+                // in-place commits — refresh them fully so CREATE/rename/reparent/
+                // DELETE do not leave a stale side tree until remount.
+                if (typeof root.prksRefreshLiveFolderDetailTrees === 'function') {
+                    root.prksRefreshLiveFolderDetailTrees();
+                }
                 // Open panel: reload so crumbs/list match the new structure.
                 if (panelEl && !panelEl.hidden && restoreTarget) {
                     const trigger = restoreTarget;

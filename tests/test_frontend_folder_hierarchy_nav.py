@@ -93,6 +93,11 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("ensureHierarchySyncBound", nav)
         self.assertIn("CREATE_FOLDER", nav)
         self.assertIn("prksLoadFolderHierarchyCatalogue", nav)
+        # Wide Folder-detail trees must full-refill on the same fingerprint path.
+        self.assertIn("prksRefreshLiveFolderDetailTrees", nav)
+        folders = _read(os.path.join(_ROOT, "frontend", "js", "components", "folders.js"))
+        self.assertIn("function prksRefreshLiveFolderDetailTrees", folders)
+        self.assertIn("selectionOnly: false", folders)
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
         # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not
