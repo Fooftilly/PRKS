@@ -165,7 +165,7 @@ function prksWorkBrowseModeToggleHtml(hiddenId) {
                 const on = l === selected;
                 return (
                     `<button type="button" class="prks-segmented__btn${on ? ' prks-segmented__btn--active' : ''}"` +
-                    ` data-value="${prksWorkCardsEscapeHtml(l)}" aria-pressed="${on ? 'true' : 'false'}" role="radio">${prksWorkCardsEscapeHtml(l)}</button>`
+                    ` data-value="${prksWorkCardsEscapeHtml(l)}" aria-checked="${on ? 'true' : 'false'}" role="radio">${prksWorkCardsEscapeHtml(l)}</button>`
                 );
             })
             .join('') +
@@ -193,7 +193,7 @@ function prksApplyWorkBrowseModeToDom(root, mode) {
         wrap.querySelectorAll('.prks-segmented__btn').forEach((btn) => {
             const on = (btn.getAttribute('data-value') || '') === label;
             btn.classList.toggle('prks-segmented__btn--active', on);
-            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            btn.setAttribute('aria-checked', on ? 'true' : 'false');
         });
     });
 }

@@ -154,6 +154,10 @@
                 : '';
             assert('mode toggle exposes radiogroup', toggle.indexOf('role="radiogroup"') !== -1);
             assert('mode toggle labels Cards and List', toggle.indexOf('Cards') !== -1 && toggle.indexOf('List') !== -1);
+            assert(
+                'mode toggle radios use aria-checked',
+                toggle.indexOf('aria-checked=') !== -1 && toggle.indexOf('aria-pressed=') === -1
+            );
         }
 
         if (typeof root.prksSafeWorkThumbSrc === 'function') {
