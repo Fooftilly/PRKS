@@ -608,13 +608,19 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
         true
     );
 
-    window.addEventListener('scroll', function () {
-        if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
-    }, true);
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener(
+            'scroll',
+            function () {
+                if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
+            },
+            true
+        );
 
-    window.addEventListener('resize', function () {
-        if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
-    });
+        window.addEventListener('resize', function () {
+            if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
+        });
+    }
 }
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
