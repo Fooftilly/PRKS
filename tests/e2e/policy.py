@@ -563,6 +563,16 @@ AFFECTED_RULES = (
         "note": "Presentation-only → smoke + shell",
     },
     {
+        "name": "pr-review-tooling",
+        "paths": (
+            "tools/pr_review/**",
+            ".github/workflows/pr-review.yml",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "PR review watcher → unit tests only, no browser E2E",
+    },
+    {
         "name": "docs-agents",
         "paths": (
             "AGENTS.md",

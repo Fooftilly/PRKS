@@ -32,6 +32,12 @@ Prefer unit/API/structural/Node tests while iterating. Run a relevant E2E featur
 
 See [Testing](Testing.md) and `AGENTS.md` for the exact current policy.
 
+## Automated pull request review
+
+`.github/workflows/pr-review.yml` reviews a pull request when it is opened, reopened, or marked ready for review, and again after a later push of reviewable changes. The review script and criteria live in `tools/pr_review/`. CodeRabbit, Ruff, Pyright, ESLint, and CodeQL keep their existing jobs; this watcher tracks PRKS findings across revisions and stays quiet when it has nothing new to report.
+
+Operational details — events, the review ledger, permissions, secrets, failure behavior, and a safe way to try it — are in `docs/pr-review.md`.
+
 ## Documentation updates
 
 When a code change modifies exact startup, configuration, or safety contracts (host/port, Docker publish, env vars, schema version, auth warning), update the README.

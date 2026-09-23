@@ -1,0 +1,69 @@
+# Trusted-script review. pull_request_target runs this file from the default
+# branch and never from the pull request. The job checks out that same branch
+# and reads the diff through the API. Do not check out the head SHA or run
+# pull request code in this workflow. See docs/pr-review.md.
+name: PRKS review
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: string
+      dry_run:
+        description: Review and print findings without posting
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: Review again even if this revision was already reviewed
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: prks-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review pull request
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.base.ref == github.event.repository.default_branch
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out trusted review tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Review the pull request diff
+        env:
+          PYTHONUNBUFFERED: "1"
+          GH_TOKEN: ${{ github.token }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PRKS_REVIEW_MODEL: ${{ vars.PRKS_REVIEW_MODEL || 'grok-4.6' }}
+          PRKS_REVIEW_ENABLED: ${{ vars.PRKS_REVIEW_ENABLED || 'true' }}
+          PRKS_REVIEW_FORKS: ${{ vars.PRKS_REVIEW_FORKS || 'true' }}
+          PRKS_REVIEW_REASONING: ${{ vars.PRKS_REVIEW_REASONING || 'medium' }}
+          PRKS_REVIEW_API_URL: ${{ vars.PRKS_REVIEW_API_URL || 'https://api.x.ai/v1/chat/completions' }}
+          PRKS_REVIEW_DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          PRKS_REVIEW_FORCE: ${{ inputs.force || 'false' }}
+        run: python3 tools/pr_review/main.py
