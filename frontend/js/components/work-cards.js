@@ -706,6 +706,26 @@ function prksHideWorkThumbPreview() {
     window.__prksWorkThumbPreviewSource = null;
 }
 
+/**
+ * Dismiss the quick preview when its owning browse subtree is about to be
+ * replaced or unmounted. Scoped to `root` so another mounted pane's preview
+ * is left alone. With no root, dismiss only if the source left the document.
+ * @param {ParentNode|null} [root]
+ */
+function prksReleaseWorkThumbPreview(root) {
+    const src = window.__prksWorkThumbPreviewSource;
+    if (!src) return;
+    if (root && typeof root.contains === 'function') {
+        if (root.contains(src)) prksHideWorkThumbPreview();
+        return;
+    }
+    const connected =
+        typeof src.isConnected === 'boolean'
+            ? src.isConnected
+            : !!(typeof document !== 'undefined' && document.contains && document.contains(src));
+    if (!connected) prksHideWorkThumbPreview();
+}
+
 function prksPositionWorkThumbPreview(el, anchor) {
     if (!el || !anchor || typeof anchor.getBoundingClientRect !== 'function') return;
     const rect = anchor.getBoundingClientRect();
@@ -899,3 +919,4 @@ window.prksBindWorkBrowseMode = prksBindWorkBrowseMode;
 window.prksApplyWorkBrowseModeToDom = prksApplyWorkBrowseModeToDom;
 window.prksShowWorkThumbPreview = prksShowWorkThumbPreview;
 window.prksHideWorkThumbPreview = prksHideWorkThumbPreview;
+window.prksReleaseWorkThumbPreview = prksReleaseWorkThumbPreview;

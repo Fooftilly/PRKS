@@ -3368,6 +3368,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (!sameFolderWorkspace && typeof window.prksReleaseLazyWorkThumbs === 'function') {
         window.prksReleaseLazyWorkThumbs(contentDiv);
     }
+    // Keyboard/hover quick preview is body-mounted but keyed to a thumb in this
+    // pane — dismiss it when the pane paint will replace that subtree, without
+    // touching a preview owned by another still-mounted tile.
+    if (!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview === 'function') {
+        window.prksReleaseWorkThumbPreview(contentDiv);
+    }
     if (!sameFolderWorkspace) {
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {

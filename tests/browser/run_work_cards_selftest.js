@@ -189,6 +189,15 @@ function makeDom() {
                 }
                 return null;
             },
+            contains(other) {
+                if (!other) return false;
+                let n = other;
+                while (n) {
+                    if (n === el) return true;
+                    n = n.parentNode;
+                }
+                return false;
+            },
             get isConnected() {
                 let n = el;
                 while (n) {

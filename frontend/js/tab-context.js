@@ -377,6 +377,12 @@
                     safeCall(() => root.prksReleaseLazyWorkThumbs(releaseHost), 'lazyThumbs');
                 }
             }
+            if (typeof root.prksReleaseWorkThumbPreview === 'function') {
+                const releaseHost = ctx.root || ctx.host;
+                if (releaseHost) {
+                    safeCall(() => root.prksReleaseWorkThumbPreview(releaseHost), 'thumbPreview');
+                }
+            }
             if (ctx.root && ctx.root.parentNode && typeof ctx.root.parentNode.removeChild === 'function') {
                 try {
                     ctx.root.parentNode.removeChild(ctx.root);

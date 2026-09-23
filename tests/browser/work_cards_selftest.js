@@ -286,7 +286,39 @@
                 'second show reassigns img src (same URL)',
                 !!(img && img.src && String(img.src).indexOf('/thumbnail?page=1') !== -1)
             );
-            root.prksHideWorkThumbPreview();
+
+            // Scoped release: only dismiss when the owning subtree is torn down.
+            if (typeof root.prksReleaseWorkThumbPreview === 'function') {
+                const other = document.createElement('div');
+                document.body.appendChild(other);
+                root.prksReleaseWorkThumbPreview(other);
+                preview = document.getElementById('prks-work-thumb-preview');
+                assert(
+                    'release other root leaves preview up',
+                    !!(preview && !preview.hidden && window.__prksWorkThumbPreviewSource === thumb)
+                );
+                other.parentNode && other.parentNode.removeChild(other);
+
+                root.prksReleaseWorkThumbPreview(card);
+                preview = document.getElementById('prks-work-thumb-preview');
+                assert('release owning root hides preview', !!(preview && preview.hidden));
+                assert('release owning root clears source', window.__prksWorkThumbPreviewSource == null);
+
+                // Detached source prune (unscoped): P then navigate-away analog.
+                root.prksShowWorkThumbPreview(thumb);
+                assert(
+                    'show before detach',
+                    !!(document.getElementById('prks-work-thumb-preview') &&
+                        !document.getElementById('prks-work-thumb-preview').hidden)
+                );
+                if (card.parentNode) card.parentNode.removeChild(card);
+                root.prksReleaseWorkThumbPreview();
+                preview = document.getElementById('prks-work-thumb-preview');
+                assert('detach+release hides preview', !!(preview && preview.hidden));
+                assert('detach+release clears source', window.__prksWorkThumbPreviewSource == null);
+            } else {
+                root.prksHideWorkThumbPreview();
+            }
         }
 
         // Lazy-thumb IntersectionObserver must not retain detached card trees.
