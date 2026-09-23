@@ -809,6 +809,62 @@ class TestServerAPI(unittest.TestCase):
         attach.assert_not_called()
         self.assertEqual(playlist_state(), before)
 
+    def test_5m_undoing_a_create_keeps_an_adopted_pdf(self):
+        """Codex review on #151 (P1): a refused create that ADOPTED an existing
+        managed PDF removes its Work row but never the bytes it did not upload,
+        whether the roles or the folder refuse it."""
+        db = server_module.db
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+
+        def adopted(name):
+            path = os.path.join(pdfs_dir, name)
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.4\n%ADOPTED\n%%EOF\n")
+            return path
+
+        def post(payload):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+            return cm.exception.code
+
+        def titles():
+            with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+                return [w.get("title") for w in json.loads(res.read().decode())]
+
+        role_pdf = adopted("adopt-then-role-race.pdf")
+        with patch.object(db, "missing_person_ids", return_value=[]):
+            code = post({
+                "title": "Adopt Role Race",
+                "file_path": "/api/pdfs/adopt-then-role-race.pdf",
+                "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}],
+            })
+        self.assertEqual(code, 409)
+        self.assertTrue(os.path.isfile(role_pdf))
+        self.assertNotIn("Adopt Role Race", titles())
+
+        folder_id = db.add_folder("Adopt Folder Race 5m")
+        folder_pdf = adopted("adopt-then-folder-race.pdf")
+        real_add = db.add_work_to_folder
+
+        def folder_gone(fid, wid):
+            db.delete_empty_folder(fid)
+            return real_add(fid, wid)
+
+        with patch.object(db, "add_work_to_folder", side_effect=folder_gone):
+            code = post({
+                "title": "Adopt Folder Race",
+                "file_path": "/api/pdfs/adopt-then-folder-race.pdf",
+                "folder_id": folder_id,
+            })
+        self.assertEqual(code, 409)
+        self.assertTrue(os.path.isfile(folder_pdf))
+        self.assertNotIn("Adopt Folder Race", titles())
+
     def test_5h_filing_a_missing_work_is_not_called_a_missing_folder(self):
         folder_id = server_module.db.add_folder("Filing Target 5h")
         with self.assertRaisesRegex(ValueError, "file no longer exists"):

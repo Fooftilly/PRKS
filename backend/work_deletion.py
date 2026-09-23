@@ -455,12 +455,28 @@ def cleanup_after_work_delete(
     )
 
 
-def delete_work(db: PRKSDatabase, text_index: PRKSTextIndex, work_id: str) -> WorkDeletionResult:
-    record = db.delete_work_record(work_id)
+def delete_work(
+    db: PRKSDatabase,
+    text_index: PRKSTextIndex,
+    work_id: str,
+    *,
+    keep_managed_pdf: bool = False,
+) -> WorkDeletionResult:
+    """Delete a Work and its derived state.
+
+    ``keep_managed_pdf`` undoes a create that adopted EXISTING managed bytes
+    (it did not upload them): the row goes, the bytes are neither claimed nor
+    removed, whoever else does or does not reference them.
+    """
+    record = (
+        db.delete_work_record(work_id, claim_pdf=False)
+        if keep_managed_pdf
+        else db.delete_work_record(work_id)
+    )
     return cleanup_after_work_delete(
         db,
         text_index,
         work_id,
-        file_path="" if record is None else record.file_path,
+        file_path="" if record is None or keep_managed_pdf else record.file_path,
         existed=record is not None,
     )

@@ -2904,13 +2904,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         safe_log_id(w_id),
                         safe_error_type(e),
                     )
+                # Undo this create: a PDF this request uploaded goes with it;
+                # existing bytes it only adopted were never its to remove.
+                def undo_create():
+                    delete_library_work(db, text_index, w_id, keep_managed_pdf=not stored_name)
+
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
                 if raw_folder:
                     try:
                         db.add_work_to_folder(raw_folder, w_id)
                     except ValueError as e:
-                        delete_library_work(db, text_index, w_id)
+                        undo_create()
                         self.send_json(409, {'error': str(e)})
                         return
                 else:
@@ -2918,7 +2923,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         unc_id = db.ensure_default_uncategorized_folder_id()
                         db.add_work_to_folder(unc_id, w_id)
                     except ValueError as e:
-                        delete_library_work(db, text_index, w_id)
+                        undo_create()
                         self.send_json(409, {'error': str(e)})
                         return
                 
@@ -2930,7 +2935,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except MissingPersonError:
                     # Deleted after the up-front check: same outcome as that
                     # check, through the existing compensation.
-                    delete_library_work(db, text_index, w_id)
+                    undo_create()
                     self.send_json(409, {
                         'error': 'A person on this file no longer exists.',
                         'code': 'PERSON_NOT_FOUND',

@@ -2175,11 +2175,11 @@ class PRKSDatabase:
         row = r[0] if r else {"c": 0, "m": ""}
         return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
 
-    def delete_work_record(self, work_id: str) -> Optional[DeletedWorkRecord]:
+    def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
         from backend.work_lifecycle_sync import delete_work_record_on_conn
 
         with self.connection() as conn:
-            return delete_work_record_on_conn(conn, work_id)
+            return delete_work_record_on_conn(conn, work_id, claim_pdf=claim_pdf)
 
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]
