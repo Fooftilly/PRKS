@@ -133,6 +133,34 @@
             assert('mode toggle labels Cards and List', toggle.indexOf('Cards') !== -1 && toggle.indexOf('List') !== -1);
         }
 
+        if (typeof root.prksSafeWorkThumbSrc === 'function') {
+            assertEq(
+                'safe pdf thumb rebuilt',
+                root.prksSafeWorkThumbSrc('/api/works/W-1/thumbnail?page=2'),
+                '/api/works/W-1/thumbnail?page=2'
+            );
+            assertEq(
+                'javascript thumb rejected',
+                root.prksSafeWorkThumbSrc('javascript:alert(1)'),
+                ''
+            );
+            assertEq(
+                'data thumb rejected',
+                root.prksSafeWorkThumbSrc('data:text/html,x'),
+                ''
+            );
+            assertEq(
+                'https video thumb allowed',
+                root.prksSafeWorkThumbSrc('https://img.example/thumb.jpg'),
+                'https://img.example/thumb.jpg'
+            );
+            assertEq(
+                'relative non-thumb path rejected',
+                root.prksSafeWorkThumbSrc('/api/pdfs/x.pdf'),
+                ''
+            );
+        }
+
         // Thumbnails stay decorative — no redundant screen-reader announcement of the title.
         assert('thumb image alt is empty', /alt=""/.test(pdfCard));
         assert('thumb image alt does not repeat title', pdfCard.indexOf('alt="PDF Work"') === -1);

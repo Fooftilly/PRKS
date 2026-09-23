@@ -34,6 +34,7 @@ const sandbox = {
     window: null,
     globalThis: null,
     localStorage: localStorageShim,
+    URL: URL,
     prksInferWorkSourceKind: prksInferWorkSourceKind,
     module: { exports: {} },
     require: require,

@@ -48,6 +48,48 @@ function prksWorkThumbUrl(workId, page) {
 const PRKS_WORK_THUMB_PLACEHOLDER =
     'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
+/** PDF managed thumbs: `/api/works/<id>/thumbnail?page=<n>` only. */
+
+/**
+ * Allowlist a Work thumb URL before assigning it to an <img src>.
+ * DOM attributes are untrusted once in the page; reject javascript:/data:/etc.
+ * Rebuilds a fresh string from validated parts so DOM text never flows into src.
+ * @param {string} raw
+ * @returns {string} safe URL or ''
+ */
+function prksSafeWorkThumbSrc(raw) {
+    const src = String(raw == null ? '' : raw).trim();
+    if (!src || src === PRKS_WORK_THUMB_PLACEHOLDER) return '';
+
+    const pdfMatch = src.match(/^\/api\/works\/([^/?#]+)\/thumbnail\?page=(\d+)$/);
+    if (pdfMatch) {
+        let workId = pdfMatch[1];
+        try {
+            workId = decodeURIComponent(workId);
+        } catch (_err) {
+            return '';
+        }
+        if (!workId || /[/?#]/.test(workId)) return '';
+        const page = String(parseInt(pdfMatch[2], 10));
+        if (!/^\d+$/.test(page) || page === '0') return '';
+        return '/api/works/' + encodeURIComponent(workId) + '/thumbnail?page=' + page;
+    }
+
+    // Relative non-PDF paths are never Work thumbs.
+    if (src.charAt(0) === '/' || src.charAt(0) === '.') return '';
+
+    try {
+        const u = new URL(src);
+        const proto = String(u.protocol || '').toLowerCase();
+        if (proto !== 'http:' && proto !== 'https:') return '';
+        if (u.username || u.password) return '';
+        // Reconstruct so the returned value is not the tainted DOM string.
+        return u.protocol + '//' + u.host + u.pathname + u.search + u.hash;
+    } catch (_err) {
+        return '';
+    }
+}
+
 const PRKS_WORK_BROWSE_MODE_KEY = 'prks.ui.workBrowseMode';
 const PRKS_WORK_BROWSE_MODES = ['cards', 'list'];
 
@@ -208,8 +250,14 @@ function prksSetWorkThumbState(thumb, state) {
 function prksHydrateLazyWorkThumb(img) {
     if (!img || !(img instanceof HTMLImageElement)) return;
     if (img.dataset.prksThumbLoaded === '1') return;
-    const src = String(img.getAttribute('data-prks-thumb-src') || '').trim();
-    if (!src) return;
+    const src = prksSafeWorkThumbSrc(img.getAttribute('data-prks-thumb-src') || '');
+    if (!src) {
+        const thumb = img.closest('.work-card__thumb');
+        if (thumb) prksSetWorkThumbState(thumb, 'error');
+        img.removeAttribute('data-prks-thumb-src');
+        img.remove();
+        return;
+    }
     const thumb = img.closest('.work-card__thumb');
     if (thumb) prksSetWorkThumbState(thumb, 'loading');
     const onLoad = () => {
@@ -370,9 +418,6 @@ function prksWorkCardHtml(w, options = {}) {
             )}" />` +
             `</div>`;
     } else {
-        const emptyLabel = suppressThumbnail
-            ? 'empty'
-            : 'empty';
         const emptyTitle = suppressThumbnail
             ? 'Preview not available offline'
             : isVideoKind
@@ -380,7 +425,7 @@ function prksWorkCardHtml(w, options = {}) {
               : 'No preview';
         thumbHtml =
             `<div class="work-card__thumb work-card__thumb--empty ${thumbKindClass}"` +
-            ` data-prks-thumb-state="${emptyLabel}" title="${prksWorkCardsEscapeHtml(emptyTitle)}"` +
+            ` data-prks-thumb-state="empty" title="${prksWorkCardsEscapeHtml(emptyTitle)}"` +
             ` aria-hidden="true"></div>`;
     }
 
@@ -485,7 +530,7 @@ function prksShowWorkThumbPreview(thumbEl) {
     if (!thumbEl || !thumbEl.getAttribute) return;
     if (thumbEl.classList.contains('work-card__thumb--empty')) return;
     if (thumbEl.classList.contains('work-card__thumb--error')) return;
-    const src =
+    const rawSrc =
         String(thumbEl.getAttribute('data-prks-thumb-preview-src') || '').trim() ||
         (() => {
             const img = thumbEl.querySelector('img');
@@ -495,8 +540,10 @@ function prksShowWorkThumbPreview(thumbEl) {
             const cur = String(img.getAttribute('src') || '').trim();
             return cur && cur !== PRKS_WORK_THUMB_PLACEHOLDER ? cur : '';
         })();
+    const src = prksSafeWorkThumbSrc(rawSrc);
     if (!src) return;
-    const kind = String(thumbEl.getAttribute('data-prks-thumb-preview-kind') || 'pdf');
+    const kindRaw = String(thumbEl.getAttribute('data-prks-thumb-preview-kind') || 'pdf');
+    const kind = kindRaw === 'video' ? 'video' : 'pdf';
     const el = prksWorkThumbPreviewEl();
     const frame = el.querySelector('.work-card-preview__frame');
     const img = el.querySelector('.work-card-preview__img');
@@ -626,6 +673,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
 window.prksWorkCardCreditText = prksWorkCardCreditText;
 window.prksWorkCardCreditLine = prksWorkCardCreditLine;
+window.prksSafeWorkThumbSrc = prksSafeWorkThumbSrc;
 window.prksGetWorkBrowseMode = prksGetWorkBrowseMode;
 window.prksSetWorkBrowseMode = prksSetWorkBrowseMode;
 window.prksWorkBrowseCollectionClass = prksWorkBrowseCollectionClass;
