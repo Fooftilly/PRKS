@@ -1264,6 +1264,23 @@ function prksFolderDetailSelectInTree(host, folderId, rows) {
     return true;
 }
 
+/**
+ * Whether a Folder-detail hierarchy refill may commit DOM after its await.
+ * Route AbortSignal covers A→B→C remounts; refreshGen covers same-route
+ * overlapping live refreshes (sync CREATE/rename/reparent/DELETE).
+ */
+function prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal) {
+    if (signal && signal.aborted) return false;
+    if (refreshGen != null) {
+        if (!ctx || typeof ctx.isFolderHierarchyRefreshCurrent !== 'function') return false;
+        if (!ctx.isFolderHierarchyRefreshCurrent(refreshGen)) return false;
+    } else if (ctx && (ctx.destroyed || (!ctx.mounted && !ctx.suspended))) {
+        return false;
+    }
+    if (!container || !container.isConnected) return false;
+    return !!container.querySelector('[data-prks-folder-detail-tree-host]');
+}
+
 async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
     const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
@@ -1275,6 +1292,13 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
         ctx && ctx.abortController && ctx.abortController.signal
             ? ctx.abortController.signal
             : null;
+    // Same-route overlap ownership: every live refill (full or selection-only)
+    // takes a token; only the newest still-live token may mutate the tree DOM.
+    const refreshGen =
+        ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
+            ? ctx.beginFolderHierarchyRefresh()
+            : null;
+    if (refreshGen === -1) return;
     const load =
         typeof prksLoadFolderHierarchyCatalogue === 'function'
             ? prksLoadFolderHierarchyCatalogue
@@ -1289,10 +1313,15 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
             rows = null;
         }
     }
-    if (signal && signal.aborted) return;
-    if (!container.isConnected) return;
+    if (!prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal)) return;
     const liveHost = container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!liveHost) return;
+    // Re-read the live Folder entity after the await (in-place Folder→Folder
+    // can advance selection while a sync-triggered full refill was in flight).
+    const liveFolder =
+        ctx && typeof ctx.getEntity === 'function' ? ctx.getEntity('folder') : null;
+    const commitFolder =
+        liveFolder && liveFolder.id != null && liveFolder.id !== '' ? liveFolder : folder;
     if (!Array.isArray(rows)) {
         liveHost.innerHTML =
             '<p class="prks-inline-message prks-folder-tree__empty">Could not load folders.</p>';
@@ -1302,12 +1331,12 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     if (
         opts.selectionOnly &&
         liveHost.querySelector('.prks-folder-tree--detail-nav') &&
-        prksFolderDetailSelectInTree(liveHost, folder.id, rows)
+        prksFolderDetailSelectInTree(liveHost, commitFolder.id, rows)
     ) {
         return;
     }
-    prksFolderDetailExpandAncestors(folder.id, rows);
-    liveHost.innerHTML = prksFolderDetailTreeHtml(rows, folder.id);
+    prksFolderDetailExpandAncestors(commitFolder.id, rows);
+    liveHost.innerHTML = prksFolderDetailTreeHtml(rows, commitFolder.id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(liveHost);
 }
 
@@ -1843,3 +1872,5 @@ window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
 window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
+window.prksFillFolderDetailTree = prksFillFolderDetailTree;
+window.prksFolderHierarchyTreeCommitAllowed = prksFolderHierarchyTreeCommitAllowed;

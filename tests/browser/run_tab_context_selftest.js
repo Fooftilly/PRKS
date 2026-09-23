@@ -155,6 +155,12 @@ assert('A isCurrent new', a.isCurrent(genA1) === false);
 a.mounted = true;
 assert('A isCurrent when mounted', a.isCurrent(genA1));
 assert('A not current old', a.isCurrent(genA0) === false);
+const foldA1 = a.beginFolderHierarchyRefresh();
+const foldA2 = a.beginFolderHierarchyRefresh();
+assert('folder hierarchy refresh older stale', a.isFolderHierarchyRefreshCurrent(foldA1) === false);
+assert('folder hierarchy refresh newest current', a.isFolderHierarchyRefreshCurrent(foldA2) === true);
+a.beginRoute({ name: 'folder-detail', hash: '#/folders/x' });
+assertEq('beginRoute resets folder hierarchy refresh gen', a.folderHierarchyRefreshGeneration, 0);
 a.mounted = false;
 
 const hostA = makeHost();

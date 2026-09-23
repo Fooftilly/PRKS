@@ -12,6 +12,9 @@ _NAV = os.path.join(_ROOT, "frontend", "js", "folder-hierarchy-nav.js")
 _CSS = os.path.join(_ROOT, "frontend", "css", "style.css")
 _WIKI = os.path.join(_ROOT, "docs", "wiki", "User-Guide.md")
 _RUNNER = os.path.join(_ROOT, "tests", "browser", "run_folder_hierarchy_nav_selftest.js")
+_REFRESH_RUNNER = os.path.join(
+    _ROOT, "tests", "browser", "run_folder_hierarchy_refresh_selftest.js"
+)
 
 
 def _read(path: str) -> str:
@@ -98,6 +101,15 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         folders = _read(os.path.join(_ROOT, "frontend", "js", "components", "folders.js"))
         self.assertIn("function prksRefreshLiveFolderDetailTrees", folders)
         self.assertIn("selectionOnly: false", folders)
+        # Same-route overlapping live refills (#161): refresh generation owns DOM commit.
+        self.assertIn("beginFolderHierarchyRefresh", folders)
+        self.assertIn("prksFolderHierarchyTreeCommitAllowed", folders)
+        self.assertIn("folderHierarchyRefreshGeneration", _read(
+            os.path.join(_ROOT, "frontend", "js", "tab-context.js")
+        ))
+        self.assertIn("isFolderHierarchyRefreshCurrent", _read(
+            os.path.join(_ROOT, "frontend", "js", "tab-context.js")
+        ))
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
         # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not
@@ -141,6 +153,19 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
     def test_runtime_selftests(self):
         proc = subprocess.run(
             ["node", _RUNNER],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stdout + "\n" + proc.stderr)
+
+    def test_hierarchy_refresh_generation_selftests(self):
+        """#161: overlapping same-route live refills must not commit stale topology."""
+        self.assertTrue(os.path.isfile(_REFRESH_RUNNER))
+        proc = subprocess.run(
+            ["node", _REFRESH_RUNNER],
             cwd=_ROOT,
             capture_output=True,
             text=True,

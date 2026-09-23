@@ -170,6 +170,12 @@
             route: null,
             lastResolvedRoute: null,
             generation: 0,
+            /**
+             * Same-route Folder hierarchy tree refill ownership. Independent of
+             * ctx.generation / AbortSignal: overlapping live refreshes after
+             * CREATE/rename/reparent/DELETE can share one route generation.
+             */
+            folderHierarchyRefreshGeneration: 0,
             abortController: null,
             entity: null,
             routeSidebar: {},
@@ -214,6 +220,27 @@
             if (ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return false;
             if (typeof generation !== 'number') return true;
             return generation === ctx.generation;
+        };
+
+        /**
+         * Start a Folder-detail hierarchy tree refresh for this TabContext.
+         * Only the newest token may commit DOM after an async catalogue load.
+         * @returns {number} refresh generation token, or -1 when destroyed
+         */
+        ctx.beginFolderHierarchyRefresh = function () {
+            if (ctx.destroyed) return -1;
+            ctx.folderHierarchyRefreshGeneration += 1;
+            return ctx.folderHierarchyRefreshGeneration;
+        };
+
+        /**
+         * True when this TabContext is still live and `gen` is the newest
+         * Folder hierarchy refresh token (same-route overlap ownership).
+         */
+        ctx.isFolderHierarchyRefreshCurrent = function (gen) {
+            if (ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return false;
+            if (typeof gen !== 'number' || gen < 0) return false;
+            return gen === ctx.folderHierarchyRefreshGeneration;
         };
 
         ctx.setEntity = function (type, value) {
@@ -322,6 +349,9 @@
             if (ctx.destroyed) return ctx.generation;
             teardownRuntime();
             ctx.generation += 1;
+            // Route change abandons in-flight hierarchy refills; reset so a
+            // later same-route refresh cannot be confused with a pre-route token.
+            ctx.folderHierarchyRefreshGeneration = 0;
             ctx.abortController = createAbort();
             ctx.route = route || null;
             ctx.lastResolvedRoute = null;
