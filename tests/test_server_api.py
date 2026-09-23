@@ -755,6 +755,60 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(roles[0]["credit_name"], "O. First")
         self.assertIn("O. First", (db.get_person(a) or {}).get("aliases") or "")
 
+    def test_5k_roles_creation_would_skip_do_not_block_the_work(self):
+        """The pre-create Person check counts only roles creation would insert:
+        an unknown Person on a role with no or an unknown type is ignored."""
+        payload = {
+            "title": "Skipped Roles Work",
+            "status": "Planned",
+            "roles": [
+                {"person_id": "P-unknown-untyped"},
+                {"person_id": "P-unknown-bad-type", "role_type": "not-a-role"},
+            ],
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            work_id = json.loads(res.read().decode())["id"]
+        self.assertEqual(server_module.db.get_work_roles(work_id), [])
+
+    def test_5l_refused_roles_leave_the_playlist_untouched(self):
+        """The playlist is attached only after the roles are in, so a Person
+        deleted after the check writes no playlist revision or timestamp."""
+        db = server_module.db
+        pl_id = db.add_playlist(title="Untouched 5l")
+
+        def playlist_state():
+            return (
+                db.execute_query("SELECT updated_at FROM playlists WHERE id = ?", (pl_id,)),
+                db.execute_query(
+                    "SELECT scope_id, revision FROM sync_entity_revisions WHERE scope_id LIKE ? "
+                    "ORDER BY scope_id",
+                    (f"%{pl_id}%",),
+                ),
+            )
+
+        before = playlist_state()
+        payload = {
+            "title": "Playlist Race Work",
+            "status": "Planned",
+            "playlist_id": pl_id,
+            "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}],
+        }
+        with patch.object(db, "missing_person_ids", return_value=[]), \
+                patch.object(db, "add_work_to_playlist", wraps=db.add_work_to_playlist) as attach:
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        attach.assert_not_called()
+        self.assertEqual(playlist_state(), before)
+
     def test_5h_filing_a_missing_work_is_not_called_a_missing_folder(self):
         folder_id = server_module.db.add_folder("Filing Target 5h")
         with self.assertRaisesRegex(ValueError, "file no longer exists"):

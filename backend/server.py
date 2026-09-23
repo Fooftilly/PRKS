@@ -2773,10 +2773,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # server has not heard of yet (e.g. still queued on the
                 # device that created it) would fail its foreign key only
                 # after the Work was committed.
-                requested_roles = data.get('roles') if isinstance(data.get('roles'), list) else []
-                if db.missing_person_ids(
-                    r.get('person_id') for r in requested_roles if isinstance(r, dict)
-                ):
+                # Only roles creation would insert count: one it skips (no
+                # role type, unknown type) must not block the Work.
+                if db.missing_initial_role_person_ids(data.get('roles')):
                     self.send_json(409, {
                         'error': 'A person on this file has not finished saving yet.',
                         'code': 'PERSON_NOT_FOUND',
@@ -2905,20 +2904,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         safe_log_id(w_id),
                         safe_error_type(e),
                     )
-                # Optionally attach to playlist
-                playlist_id = (data.get('playlist_id') or '').strip()
-                if playlist_id:
-                    try:
-                        db.add_work_to_playlist(playlist_id, w_id, None)
-                    except Exception as exc:
-                        # best-effort: do not fail work creation if playlist link fails
-                        LOGGER.warning(
-                            "work_playlist_attach_failed playlist_id=%s work_id=%s request_id=%s error_type=%s",
-                            safe_log_id(playlist_id),
-                            safe_log_id(w_id),
-                            safe_log_id(self._prks_request_id),
-                            safe_error_type(exc),
-                        )
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
                 if raw_folder:
@@ -2951,6 +2936,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         'code': 'PERSON_NOT_FOUND',
                     })
                     return
+
+                # Optionally attach to playlist. Last: it writes playlist
+                # revisions that the refusals above could not undo.
+                playlist_id = (data.get('playlist_id') or '').strip()
+                if playlist_id:
+                    try:
+                        db.add_work_to_playlist(playlist_id, w_id, None)
+                    except Exception as exc:
+                        # best-effort: do not fail work creation if playlist link fails
+                        LOGGER.warning(
+                            "work_playlist_attach_failed playlist_id=%s work_id=%s request_id=%s error_type=%s",
+                            safe_log_id(playlist_id),
+                            safe_log_id(w_id),
+                            safe_log_id(self._prks_request_id),
+                            safe_error_type(exc),
+                        )
 
                 self.send_json(200, {'id': w_id})
             elif path == '/api/playlists':

@@ -4266,6 +4266,30 @@ class PRKSDatabase:
                 raise MissingPersonError("A person on this file no longer exists.") from exc
             raise
 
+    @staticmethod
+    def _eligible_initial_roles(roles) -> list:
+        """The requested roles a new Work would actually be born with.
+
+        One definition for the pre-create check and the insert, so a role that
+        creation skips (no Person, no or unknown role type) cannot block it.
+        Returns (order_index, person_id, role_type, credit_name) tuples.
+        """
+        wanted = []
+        for idx, r in enumerate(roles if isinstance(roles, list) else []):
+            if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
+                continue
+            if r['role_type'] not in work_role_sync.ROLE_TYPE_SET:
+                continue
+            credit = r.get('credit_name', '')
+            if credit is not None and not isinstance(credit, str):
+                credit = ''
+            wanted.append((idx, str(r['person_id']), r['role_type'], credit or ''))
+        return wanted
+
+    def missing_initial_role_person_ids(self, roles) -> List[str]:
+        """Persons named by roles a new Work would be born with that have no row."""
+        return self.missing_person_ids(p for _i, p, _t, _c in self._eligible_initial_roles(roles))
+
     def insert_initial_roles(self, work_id: str, roles) -> int:
         """All the relationships a NEW Work is born with, in ONE transaction.
 
@@ -4276,14 +4300,7 @@ class PRKSDatabase:
         An individually invalid role (bad role type or credit) is skipped, as
         before, without undoing the others. Returns the number inserted.
         """
-        wanted = []
-        for idx, r in enumerate(roles if isinstance(roles, list) else []):
-            if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
-                continue
-            credit = r.get('credit_name', '')
-            if credit is not None and not isinstance(credit, str):
-                credit = ''
-            wanted.append((idx, str(r['person_id']), r['role_type'], credit or ''))
+        wanted = self._eligible_initial_roles(roles)
         if not wanted:
             return 0
         inserted = 0
