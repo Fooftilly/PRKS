@@ -369,9 +369,13 @@
             }
             teardownRuntime();
             // Release lazy-thumb observer targets while the subtree is still reachable.
-            if (typeof window.prksReleaseLazyWorkThumbs === 'function') {
-                if (ctx.root) window.prksReleaseLazyWorkThumbs(ctx.root);
-                else if (ctx.host) window.prksReleaseLazyWorkThumbs(ctx.host);
+            // Use module `root` (not bare `window`) so Node selftests without window
+            // do not throw ReferenceError before unmount cleanup finishes.
+            if (typeof root.prksReleaseLazyWorkThumbs === 'function') {
+                const releaseHost = ctx.root || ctx.host;
+                if (releaseHost) {
+                    safeCall(() => root.prksReleaseLazyWorkThumbs(releaseHost), 'lazyThumbs');
+                }
             }
             if (ctx.root && ctx.root.parentNode && typeof ctx.root.parentNode.removeChild === 'function') {
                 try {
