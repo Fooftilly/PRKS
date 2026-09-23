@@ -1087,6 +1087,7 @@ function renderDashboard(folders, container, options = {}) {
                     <button type="button" class="tag-add-shell__clear" id="prks-folder-library-files-search-clear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
                 </div>
             </div>
+            ${typeof prksWorkBrowseModeToggleHtml === 'function' ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-recently-added') : ''}
         </div>
         <div class="prks-folder-library__body">
             <div class="prks-folder-library__pane${foldersActive ? '' : ' is-hidden'}" data-pane="folders" role="tabpanel" aria-hidden="${foldersActive ? 'false' : 'true'}">
@@ -1094,7 +1095,7 @@ function renderDashboard(folders, container, options = {}) {
             </div>
             <div class="prks-folder-library__pane prks-folder-library__pane--added${foldersActive ? ' is-hidden' : ''}" data-pane="recently-added" role="tabpanel" aria-hidden="${foldersActive ? 'true' : 'false'}">
                 <div class="prks-folder-library__scroll prks-folder-library__scroll--added">
-                    <div id="prks-folder-library-recently-added" class="prks-folder-library__grid card-grid"></div>
+                    <div id="prks-folder-library-recently-added" class="${typeof prksWorkBrowseCollectionClass === 'function' ? prksWorkBrowseCollectionClass('prks-folder-library__grid') : 'prks-folder-library__grid card-grid'}"></div>
                 </div>
             </div>
         </div>
@@ -1116,6 +1117,7 @@ function renderDashboard(folders, container, options = {}) {
     prksBindFolderLibrarySearch(root);
     prksBindFolderLibraryFilesSearch(root);
     prksBindFolderLibraryCreateFromSearch(root);
+    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(root);
     const expandToggle = root.querySelector('#prks-folder-library-expand-toggle');
     if (expandToggle && expandToggle.dataset.bound !== '1') {
         expandToggle.dataset.bound = '1';
@@ -1333,7 +1335,11 @@ function prksFolderDetailMainInnerHtml(ctx, folder, offlineCached) {
     const hasChildren = Array.isArray(folder.children) && folder.children.length > 0;
     const canDelete = (!folder.works || folder.works.length === 0) && !hasChildren;
 
-    let worksHtml = `<div class="card-grid">`;
+    const browseClass =
+        typeof prksWorkBrowseCollectionClass === 'function'
+            ? prksWorkBrowseCollectionClass()
+            : 'card-grid';
+    let worksHtml = `<div class="${browseClass}">`;
     /* Acknowledged summaries + pending Work-field edits. The cached Folder is
      * never mutated; the overlay is applied where the rows are rendered, and
      * the rules for it live in work-metadata-state.js so this component never
@@ -1393,7 +1399,12 @@ function prksFolderDetailMainInnerHtml(ctx, folder, offlineCached) {
                 ${folderNavHtml ? `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${folderNavHtml}</nav>` : ''}
                 <p class="mb-md">${prksFolderEsc(folder.description || 'No description provided.')}</p>
                 ${subfoldersHtml}
-                <div class="prks-page-header page-header"><h3>Files</h3></div>
+                <div class="prks-page-header page-header page-header--split prks-folder-detail__files-header">
+                    <div class="page-header__title-row">
+                        <h3>Files</h3>
+                        ${typeof prksWorkBrowseModeToggleHtml === 'function' ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-folder-files') : ''}
+                    </div>
+                </div>
                 ${worksHtml}
     `;
 }
@@ -1457,10 +1468,17 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         container
             .querySelectorAll('[data-prks-role="offline-provenance-banner"]')
             .forEach((banner) => banner.remove());
+        // Body-mounted keyboard/hover preview is keyed to thumbs inside main —
+        // dismiss before this rewrite detaches them (app.js also releases on
+        // route entry; this covers the preserve path at the exact mutation).
+        if (typeof window.prksReleaseWorkThumbPreview === 'function') {
+            window.prksReleaseWorkThumbPreview(existingMain);
+        }
         existingMain.innerHTML = prksFolderDetailMainInnerHtml(ctx, folder, offlineCached);
         if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(existingMain);
         }
+        if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(existingMain);
         prksBindFolderDetailChrome(ctx, folder, container);
         prksBindFolderDetailLayout(existing, ctx);
         prksBindFolderOfflineState(ctx, container);
@@ -1493,6 +1511,7 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
     if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }
+    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
     prksBindFolderDetailChrome(ctx, folder, container);
     const detailRoot = container.querySelector('[data-prks-role="folder-detail"]');
     prksBindFolderDetailLayout(detailRoot, ctx);

@@ -144,7 +144,11 @@
          * results array itself is never mutated. */
         const rows = typeof root.prksEffectiveWorksSync === 'function'
             ? root.prksEffectiveWorksSync(results) : results;
-        let html = '<div class="card-grid">';
+        const browseClass =
+            typeof root.prksWorkBrowseCollectionClass === 'function'
+                ? root.prksWorkBrowseCollectionClass()
+                : 'card-grid';
+        let html = '<div class="' + browseClass + '">';
         if (rows && rows.length > 0) {
             rows.forEach(function (w) {
                 /* The server's own excerpt rule -- code points, not UTF-16
@@ -523,6 +527,10 @@
         const name = esc(view.name || 'Saved View');
         const idAttr = esc(view.id);
         const searchHash = prksSearchHashFromDefinition(view.search || {});
+        const modeToggle =
+            typeof root.prksWorkBrowseModeToggleHtml === 'function'
+                ? root.prksWorkBrowseModeToggleHtml('prks-work-browse-mode-saved-view')
+                : '';
         const cards =
             typeof root.prksSearchResultCardsHtml === 'function'
                 ? root.prksSearchResultCardsHtml(results, 'No results found matching your query.')
@@ -536,6 +544,7 @@
                             <h2 class="prks-page-title">${name}</h2>
                         </div>
                         <div class="page-header__actions">
+                            ${modeToggle}
                             <a class="prks-btn prks-btn--secondary" href="${esc(searchHash)}">Open as Search</a>
                             <button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-view-edit">Edit</button>
                             <button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-view-delete" data-sv-delete="${idAttr}">Delete</button>
@@ -546,6 +555,12 @@
             </div>
         `;
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
+        if (typeof root.prksBindWorkBrowseMode === 'function') {
+            root.prksBindWorkBrowseMode(container);
+        }
+        if (typeof root.prksInitLazyWorkThumbs === 'function') {
+            root.prksInitLazyWorkThumbs(container);
+        }
         const editBtn = container.querySelector('#prks-saved-view-edit');
         if (editBtn) {
             editBtn.addEventListener('click', function () {

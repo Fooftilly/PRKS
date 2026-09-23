@@ -136,6 +136,15 @@
                     if (sel && String(sel).indexOf('prks-tab-root') !== -1) return el;
                     return null;
                 },
+                contains: function (other) {
+                    if (!other) return false;
+                    let n = other;
+                    while (n) {
+                        if (n === el) return true;
+                        n = n.parentNode;
+                    }
+                    return false;
+                },
                 removeAttribute: function (k) {
                     delete attrs[k];
                 },
@@ -340,6 +349,12 @@
 
         ctx.suspend = function (host) {
             if (ctx.destroyed || !ctx.mounted || !ctx.root) return false;
+            // Body-mounted quick preview is keyed to thumbs in this pane. Warm
+            // parking keeps the source connected inside #prks-tab-warm-parking,
+            // so detached-source prune would not clear it — dismiss before move.
+            if (typeof root.prksReleaseWorkThumbPreview === 'function') {
+                safeCall(() => root.prksReleaseWorkThumbPreview(ctx.root), 'thumbPreview');
+            }
             if (!moveRoot(ctx.root, host)) return false;
             ctx.host = host;
             ctx.mounted = false;
@@ -368,6 +383,21 @@
                 return ctx;
             }
             teardownRuntime();
+            // Release lazy-thumb observer targets while the subtree is still reachable.
+            // Use module `root` (not bare `window`) so Node selftests without window
+            // do not throw ReferenceError before unmount cleanup finishes.
+            if (typeof root.prksReleaseLazyWorkThumbs === 'function') {
+                const releaseHost = ctx.root || ctx.host;
+                if (releaseHost) {
+                    safeCall(() => root.prksReleaseLazyWorkThumbs(releaseHost), 'lazyThumbs');
+                }
+            }
+            if (typeof root.prksReleaseWorkThumbPreview === 'function') {
+                const releaseHost = ctx.root || ctx.host;
+                if (releaseHost) {
+                    safeCall(() => root.prksReleaseWorkThumbPreview(releaseHost), 'thumbPreview');
+                }
+            }
             if (ctx.root && ctx.root.parentNode && typeof ctx.root.parentNode.removeChild === 'function') {
                 try {
                     ctx.root.parentNode.removeChild(ctx.root);

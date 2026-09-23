@@ -288,6 +288,64 @@ assertEq('parked B resources', prksGetTabContext('tile-b').resources.size, 0);
 assertEq('parked B timers', prksGetTabContext('tile-b').timers.size, 0);
 prksDestroyAllTabContexts();
 
+prksDestroyAllTabContexts();
+
+/* Warm suspend must dismiss a body-mounted quick preview keyed to this pane's
+ * thumbs before moveRoot — source stays connected in parking, so prune-on-detach
+ * would miss it. Scoped to ctx.root so another visible tile's preview is left alone. */
+{
+    const parkHost = makeHost();
+    const visible = makeHost();
+    const otherVisible = makeHost();
+    let released = [];
+    globalThis.prksReleaseWorkThumbPreview = function (rootEl) {
+        released.push(rootEl);
+        const src = globalThis.__prksWorkThumbPreviewSource;
+        if (!src || !rootEl) return;
+        let under = false;
+        let n = src;
+        while (n) {
+            if (n === rootEl) {
+                under = true;
+                break;
+            }
+            n = n.parentNode;
+        }
+        if (under) globalThis.__prksWorkThumbPreviewSource = null;
+    };
+
+    const warmCtx = prksEnsureTabContext('preview-warm');
+    warmCtx.mount(visible);
+    warmCtx.setResource('pdf', {}, function () {});
+    const thumb = { parentNode: null, isConnected: true };
+    warmCtx.root.appendChild(thumb);
+    globalThis.__prksWorkThumbPreviewSource = thumb;
+
+    const otherCtx = prksEnsureTabContext('preview-other');
+    otherCtx.mount(otherVisible);
+    const otherThumb = { parentNode: null, isConnected: true };
+    otherCtx.root.appendChild(otherThumb);
+
+    assert('warm park with preview open', prksWarmParkTabContext(warmCtx.tabId, parkHost));
+    assert('suspend released against warm root', released.indexOf(warmCtx.root) !== -1);
+    assertEq('warm park cleared this pane preview source', globalThis.__prksWorkThumbPreviewSource, null);
+    assert('warm root still alive after suspend', !!warmCtx.root && warmCtx.suspended);
+
+    released = [];
+    globalThis.__prksWorkThumbPreviewSource = otherThumb;
+    assert('warm park other pane untouched source before', globalThis.__prksWorkThumbPreviewSource === otherThumb);
+    /* Warm-parking the already-suspended context is a no-op; park a fresh PDF instead. */
+    const warm2 = prksEnsureTabContext('preview-warm-2');
+    warm2.mount(makeHost());
+    warm2.setResource('pdf', {}, function () {});
+    assert('warm park second PDF', prksWarmParkTabContext(warm2.tabId, parkHost));
+    assert('second park release did not clear other tile source', globalThis.__prksWorkThumbPreviewSource === otherThumb);
+
+    delete globalThis.prksReleaseWorkThumbPreview;
+    delete globalThis.__prksWorkThumbPreviewSource;
+    prksDestroyAllTabContexts();
+}
+
 let boom = 0;
 const c = createPrksTabContext('tab-boom');
 c.setResource('bad', {}, function () {

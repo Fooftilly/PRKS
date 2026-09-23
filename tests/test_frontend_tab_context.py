@@ -118,6 +118,13 @@ class TestTabContextResourceAPI(unittest.TestCase):
             "prksForEachLiveTabContext",
         ):
             self.assertIn(name, src, f"{name} not found in tab-context.js")
+        # Warm suspend must dismiss quick preview before moveRoot (source stays connected).
+        suspend = src.split("ctx.suspend = function (host)", 1)[1].split("ctx.resume = function", 1)[0]
+        self.assertIn("prksReleaseWorkThumbPreview", suspend)
+        self.assertLess(
+            suspend.find("prksReleaseWorkThumbPreview"),
+            suspend.find("moveRoot(ctx.root, host)"),
+        )
 
     def test_warm_pdf_parking_host_exists(self):
         index_path = os.path.join(ROOT, "frontend", "index.html")

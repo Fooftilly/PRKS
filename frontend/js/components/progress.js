@@ -38,14 +38,24 @@ function renderProgressByStatus(works, status, container, options = {}) {
         .filter((w) => w && w.status === status)
         .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
 
-    let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${title}</h2>`;
+    const modeToggle =
+        typeof prksWorkBrowseModeToggleHtml === 'function'
+            ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-progress')
+            : '';
+    const browseClass =
+        typeof prksWorkBrowseCollectionClass === 'function'
+            ? prksWorkBrowseCollectionClass()
+            : 'card-grid';
+    let html =
+        `<div class="prks-page-header page-header page-header--split"><div class="page-header__title-row">` +
+        `<h2 class="prks-page-title">${title}</h2>${modeToggle}</div>`;
     if (typeof prksScopeLineHtml === 'function') {
         html += prksScopeLineHtml({
             total: list.length,
             label: list.length === 1 ? 'file' : 'files',
         });
     }
-    html += `</div><div class="card-grid">`;
+    html += `</div><div class="${browseClass}">`;
     if (list.length > 0) {
         list.forEach((w) => {
             /* `abstract_excerpt` arrives ALREADY bounded to 100 Unicode code
@@ -68,6 +78,7 @@ function renderProgressByStatus(works, status, container, options = {}) {
     }
     html += `</div>`;
     container.innerHTML = html;
+    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
 }
 
 function syncProgressSidebarActive(statusOrNull) {

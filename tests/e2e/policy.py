@@ -265,8 +265,11 @@ FEATURES = {
         ),
     },
     "browse": {
-        "description": "Progress/Types/Recent browse offline catalogs",
-        "selectors": ("tests.e2e.test_browse_offline",),
+        "description": "Progress/Types/Recent browse + Work Browsing V1 density/preview",
+        "selectors": (
+            "tests.e2e.test_browse_offline",
+            "tests.e2e.test_work_browsing",
+        ),
     },
     "offline": {
         "description": "Offline foundation + broad offline coherence (Work cache)",
@@ -491,6 +494,7 @@ AFFECTED_RULES = (
             "frontend/js/components/types.js",
             "frontend/js/components/recent.js",
             "frontend/js/components/search.js",
+            "frontend/js/components/work-cards.js",
         ),
         "features": ("browse",),
     },

@@ -4178,7 +4178,8 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
     const buttons = labelsArr
         .map((l) => {
             const active = l === sel ? ' prks-segmented__btn--active' : '';
-            const pressed = l === sel ? 'true' : 'false';
+            // role=radio requires aria-checked (not aria-pressed).
+            const checked = l === sel ? 'true' : 'false';
             if (withRoleIcons) {
                 const iconFn = typeof prksRoleTypeIconHtml === 'function' ? prksRoleTypeIconHtml : null;
                 const shortFn = typeof prksRoleTypeShortLabel === 'function' ? prksRoleTypeShortLabel : null;
@@ -4186,7 +4187,7 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
                 const iconHtml = iconFn
                     ? `<span class="prks-segmented__btn-icon">${iconFn(l, { size: 'sm' })}</span>`
                     : '';
-                return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio" aria-label="${prksEscapeAttr(l)}">${iconHtml}<span class="prks-segmented__btn-label">${escapeHtml(label)}</span></button>`;
+                return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-checked="${checked}" role="radio" aria-label="${prksEscapeAttr(l)}">${iconHtml}<span class="prks-segmented__btn-label">${escapeHtml(label)}</span></button>`;
             }
             const titleAttr = variant === 'status' ? ` title="${prksEscapeAttr(l)}"` : '';
             if (variant === 'status') {
@@ -4197,9 +4198,9 @@ function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, va
                 const iconWrap = statusIcon
                     ? `<span class="prks-segmented__btn-icon">${statusIcon}</span>`
                     : '';
-                return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio" aria-label="${prksEscapeAttr(l)}"${titleAttr}>${iconWrap}<span class="prks-segmented__btn-label">${escapeHtml(l)}</span></button>`;
+                return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-checked="${checked}" role="radio" aria-label="${prksEscapeAttr(l)}"${titleAttr}>${iconWrap}<span class="prks-segmented__btn-label">${escapeHtml(l)}</span></button>`;
             }
-            return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-pressed="${pressed}" role="radio"${titleAttr}>${escapeHtml(l)}</button>`;
+            return `<button type="button" class="prks-segmented__btn${active}" data-value="${prksEscapeAttr(l)}" aria-checked="${checked}" role="radio"${titleAttr}>${escapeHtml(l)}</button>`;
         })
         .join('');
     let wrapMod = variant === 'status' ? ' prks-segmented-wrap--status-row' : '';
@@ -4232,7 +4233,7 @@ function prksBindSegmentedHidden(hiddenId) {
             seg.querySelectorAll('.prks-segmented__btn').forEach((b) => {
                 const on = b === btn;
                 b.classList.toggle('prks-segmented__btn--active', on);
-                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+                b.setAttribute('aria-checked', on ? 'true' : 'false');
             });
         });
     });

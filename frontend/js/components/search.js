@@ -6,7 +6,20 @@ function searchEscapeHtml(s) {
 
 function renderRecent(works, container, options = {}) {
     const offlineCached = !!(options && options.offlineCached);
-    let html = `<div class="prks-page-header page-header"><h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2></div><div class="card-grid">`;
+    const browseClass =
+        typeof prksWorkBrowseCollectionClass === 'function'
+            ? prksWorkBrowseCollectionClass()
+            : 'card-grid';
+    const modeToggle =
+        typeof prksWorkBrowseModeToggleHtml === 'function'
+            ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-recent')
+            : '';
+    let html =
+        `<div class="prks-page-header page-header page-header--split">` +
+        `<div class="page-header__title-row">` +
+        `<h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2>` +
+        `${modeToggle}</div></div>` +
+        `<div class="${browseClass}">`;
     if (works && works.length > 0) {
         works.forEach(w => {
             let dateStr = w.last_opened_at ? new Date(w.last_opened_at).toLocaleString() : 'Unknown';
@@ -20,6 +33,7 @@ function renderRecent(works, container, options = {}) {
     }
     html += `</div>`;
     container.innerHTML = html;
+    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -77,9 +91,14 @@ function renderSearch(results, query, container, options = {}) {
         : 'No results found matching your query.';
     let html = `<div class="prks-page-header page-header page-header--search"><div class="page-header__title-row"><h2 class="prks-page-title">${title}</h2>`;
     const canOfferSave = !!(query || tag || author || publisher);
-    if (canOfferSave) {
-        html += `<div class="page-header__actions"><button type="button" class="prks-btn prks-btn--secondary" id="prks-save-view-btn">Save View</button></div>`;
+    html += `<div class="page-header__actions">`;
+    if (typeof prksWorkBrowseModeToggleHtml === 'function') {
+        html += prksWorkBrowseModeToggleHtml('prks-work-browse-mode-search');
     }
+    if (canOfferSave) {
+        html += `<button type="button" class="prks-btn prks-btn--secondary" id="prks-save-view-btn">Save View</button>`;
+    }
+    html += `</div>`;
     html += `</div>`;
     const resultN = Array.isArray(results) ? results.length : null;
     if (resultN != null && typeof prksScopeLineHtml === 'function') {
@@ -144,7 +163,11 @@ function renderSearch(results, query, container, options = {}) {
     if (typeof window.prksSearchResultCardsHtml === 'function') {
         html += window.prksSearchResultCardsHtml(results, emptyMsg);
     } else {
-        html += `<div class="card-grid">`;
+        const browseClass =
+            typeof prksWorkBrowseCollectionClass === 'function'
+                ? prksWorkBrowseCollectionClass()
+                : 'card-grid';
+        html += `<div class="${browseClass}">`;
         if (results && results.length > 0) {
             results.forEach(w => {
                 const subtitle = w.abstract ? w.abstract.substring(0, 100) + '…' : '';
@@ -156,6 +179,7 @@ function renderSearch(results, query, container, options = {}) {
         html += `</div>`;
     }
     container.innerHTML = html;
+    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
     const saveBtn = document.getElementById('prks-save-view-btn');
     if (saveBtn) {

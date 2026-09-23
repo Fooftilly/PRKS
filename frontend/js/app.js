@@ -3362,6 +3362,21 @@ async function prksRenderTabRoute(ctx, hash, options) {
         route.name === 'folder-detail' &&
         contentDiv.querySelector('[data-prks-role="folder-detail"]')
     );
+    // Drop lazy-thumb observations for this pane before the route paint replaces
+    // its DOM — otherwise never-intersected cards stay retained by the singleton
+    // IntersectionObserver after the subtree is detached.
+    if (!sameFolderWorkspace && typeof window.prksReleaseLazyWorkThumbs === 'function') {
+        window.prksReleaseLazyWorkThumbs(contentDiv);
+    }
+    // Keyboard/hover quick preview is body-mounted but keyed to a thumb in this
+    // pane — dismiss whenever this pane's paint will replace those thumbs
+    // (including Folder→Folder preserve, which keeps contentDiv/shell but swaps
+    // the card subtree). Scoped release leaves another tile's preview alone.
+    // Unlike lazy thumbs, preview has no prune-on-init, so do not skip this on
+    // sameFolderWorkspace.
+    if (typeof window.prksReleaseWorkThumbPreview === 'function') {
+        window.prksReleaseWorkThumbPreview(contentDiv);
+    }
     if (!sameFolderWorkspace) {
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {
@@ -4588,6 +4603,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
 
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(contentDiv);
+    }
+    if (typeof window.prksBindWorkBrowseMode === 'function') {
+        window.prksBindWorkBrowseMode(contentDiv);
     }
 
     const apiErr =

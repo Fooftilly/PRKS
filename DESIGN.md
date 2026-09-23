@@ -544,7 +544,13 @@ Both share surface, border, selection, hover, focus, and metadata hierarchy. Wor
 
 ### Work-card metadata hierarchy
 
-`prksWorkCardHtml()` (`frontend/js/components/work-cards.js`) is the single shared Work-card renderer across Recent, Progress, Search, Person profiles, and the Folder Library. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`).
+`prksWorkCardHtml()` (`frontend/js/components/work-cards.js`) is the single shared Work-card renderer across Recent, Progress, Search, Person profiles, and the Folder Library. Do not fork it into per-context components; vary presentation through its `options` (`subtitle`, `thumbPage`, `hideDocTypeBadge`, `suppressThumbnail`).
+
+**Work browse density** is one global client preference (`localStorage` `prks.ui.workBrowseMode`: `cards` | `list`, default `cards`). Collection chrome hosts a compact Cards | List segmented control. Layout switches via a parent class on `.work-browse-collection` (`--cards` / `--list`) — never a per-route card fork, and never a refetch. Cards remain the default for visual ID; list mode is a dense research-library row (small thumb, fuller title/meta).
+
+**Thumbnail lifecycle** on the shared thumb slot: `loading` (skeleton) → `ready` | `error` (Unavailable) | `empty` (no applicable preview / offline suppress). Do not treat a white PDF page as unavailable. PDF thumbs stay `object-fit: contain`; video stays `cover`.
+
+**Quick preview:** hover (fine pointer) or keyboard `P` on a focused Work card shows a larger copy of the same thumb asset (viewport-safe, Escape dismisses). Preview never replaces open/navigation; click/Enter still opens the Work.
 
 Bibliographic identity precedes contextual metadata. The card reads, top to bottom:
 

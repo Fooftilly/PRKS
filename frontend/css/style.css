@@ -4268,11 +4268,31 @@ a.tag {
     gap: var(--space-md);
 }
 
+/* Work browse collections: cards (default grid) or compact list. Mode is a
+   parent class so switching density never re-fetches or rebuilds card HTML. */
+.work-browse-collection--list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.work-browse-mode {
+    flex-shrink: 0;
+}
+
 .project-card--work-card {
     display: flex;
     flex-direction: column;
     padding: var(--space-md);
     gap: var(--space-sm);
+}
+
+.work-browse-collection--list .project-card--work-card {
+    flex-direction: row;
+    align-items: stretch;
+    padding: var(--space-xs) var(--space-sm);
+    gap: var(--space-sm);
+    border-radius: var(--radius-sm);
 }
 
 .work-card__thumb {
@@ -4283,6 +4303,19 @@ a.tag {
     border: 1px solid var(--border);
     background: var(--surface-muted);
     position: relative;
+}
+
+.work-browse-collection--list .work-card__thumb {
+    width: 72px;
+    min-width: 72px;
+    max-width: 72px;
+    aspect-ratio: 1 / 1;
+    flex-shrink: 0;
+    align-self: center;
+}
+
+.work-browse-collection--list .work-card__thumb--pdf {
+    padding: 4px;
 }
 
 .work-card__thumb img {
@@ -4313,8 +4346,49 @@ a.tag {
     object-fit: cover;
 }
 
-.work-card__thumb--empty::before,
-.work-card__thumb--error::before {
+/* Loading: muted skeleton — distinct from empty white-page PDF and from error. */
+.work-card__thumb--loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--surface) 55%, transparent) 45%,
+        transparent 90%
+    );
+    background-size: 200% 100%;
+    animation: prks-work-thumb-shimmer 1.1s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.work-card__thumb--loading img {
+    opacity: 0;
+}
+
+.work-card__thumb--ready img {
+    opacity: 1;
+}
+
+@keyframes prks-work-thumb-shimmer {
+    0% {
+        background-position: 100% 0;
+    }
+    100% {
+        background-position: -100% 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .work-card__thumb--loading::after {
+        animation: none;
+        background: color-mix(in srgb, var(--border) 35%, transparent);
+    }
+}
+
+/* No applicable preview (no URL / offline suppress): kind label, dashed frame. */
+.work-card__thumb--empty::before {
     content: "PDF";
     position: absolute;
     inset: 0;
@@ -4331,9 +4405,83 @@ a.tag {
     background: transparent;
 }
 
-.work-card__thumb--empty.work-card__thumb--video::before,
-.work-card__thumb--error.work-card__thumb--video::before {
+.work-card__thumb--empty.work-card__thumb--video::before {
     content: "VIDEO";
+}
+
+/* Load failed: distinct from empty — solid muted panel + Unavailable. */
+.work-card__thumb--error::before {
+    content: "Unavailable";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin: var(--space-sm);
+    background: color-mix(in srgb, var(--surface-muted) 80%, var(--border));
+}
+
+.work-card__thumb--error.work-card__thumb--video::before {
+    content: "Unavailable";
+}
+
+.work-browse-collection--list .work-card__thumb--empty::before,
+.work-browse-collection--list .work-card__thumb--error::before {
+    margin: 2px;
+    font-size: var(--text-2xs);
+    letter-spacing: 0.04em;
+}
+
+/* Hover/focus quick preview — larger copy of the same thumb asset. */
+.work-card-preview {
+    position: fixed;
+    z-index: 1200;
+    width: min(360px, calc(100vw - 16px));
+    max-height: min(420px, calc(100vh - 16px));
+    pointer-events: none;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+}
+
+.work-card-preview[hidden] {
+    display: none !important;
+}
+
+.work-card-preview__frame {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    background: var(--surface-muted);
+    box-sizing: border-box;
+}
+
+.work-card-preview__frame--pdf {
+    padding: 12px;
+}
+
+.work-card-preview__frame--pdf .work-card-preview__img {
+    object-fit: contain;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    background: var(--surface);
+}
+
+.work-card-preview__frame--video .work-card-preview__img {
+    object-fit: cover;
+}
+
+.work-card-preview__img {
+    width: 100%;
+    height: 100%;
+    display: block;
 }
 
 .work-card__body {
@@ -4341,6 +4489,29 @@ a.tag {
     flex-direction: column;
     gap: var(--space-sm);
     min-width: 0;
+}
+
+.work-browse-collection--list .work-card__body {
+    flex: 1 1 auto;
+    gap: 2px;
+    justify-content: center;
+    min-width: 0;
+}
+
+.work-browse-collection--list .project-card--work-card .card-title {
+    -webkit-line-clamp: 1;
+    margin-bottom: 0;
+}
+
+.work-browse-collection--list .work-card__meta,
+.work-browse-collection--list .work-card__context {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.work-browse-collection--list .work-card__badges {
+    margin-top: 2px;
 }
 
 /* Stable bibliographic identity (Author/Editor · Year) — primary metadata. */
