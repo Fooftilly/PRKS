@@ -215,6 +215,69 @@ class WorkBrowsingV1Tests(unittest.TestCase):
             f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
         ).first
 
+        # P then switch main workspace tab: parked/suspended pane must clear preview.
+        folder_tab = page.evaluate("() => prksWorkspaceSnapshot().mainTabId")
+        page.evaluate(
+            "() => prksNavigate('#/folders', { target: 'new-tab', activate: true })"
+        )
+        page.wait_for_function(
+            "id => {"
+            "  const s = prksWorkspaceSnapshot();"
+            "  return s && s.mainTabId && s.mainTabId !== id;"
+            "}",
+            arg=folder_tab,
+            timeout=10000,
+        )
+        other_tab = page.evaluate("() => prksWorkspaceSnapshot().mainTabId")
+        page.locator(
+            f'.prks-workspace-tab[data-tab-id="{folder_tab}"] .prks-workspace-tab__activate'
+        ).click()
+        page.wait_for_function(
+            "id => prksWorkspaceSnapshot().mainTabId === id",
+            arg=folder_tab,
+            timeout=10000,
+        )
+        page.wait_for_selector(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']",
+            timeout=10000,
+        )
+        card = page.locator(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
+        ).first
+        card.focus()
+        page.keyboard.press("p")
+        page.wait_for_selector(
+            "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
+        )
+        page.locator(
+            f'.prks-workspace-tab[data-tab-id="{other_tab}"] .prks-workspace-tab__activate'
+        ).click()
+        page.wait_for_function(
+            "() => {"
+            "  const el = document.getElementById('prks-work-thumb-preview');"
+            "  const srcGone = !window.__prksWorkThumbPreviewSource;"
+            "  return srcGone && (!el || el.hidden);"
+            "}",
+            timeout=10000,
+        )
+
+        # Back to Folder A for Enter-to-open.
+        page.locator(
+            f'.prks-workspace-tab[data-tab-id="{folder_tab}"] .prks-workspace-tab__activate'
+        ).click()
+        page.wait_for_function(
+            "id => prksWorkspaceSnapshot().mainTabId === id",
+            arg=folder_tab,
+            timeout=10000,
+        )
+        page.wait_for_selector(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']",
+            timeout=10000,
+        )
+        card = page.locator(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
+        ).first
+
         # Open Work via Enter — preview must not replace navigation.
         card.focus()
         page.keyboard.press("Enter")

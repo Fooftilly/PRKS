@@ -715,8 +715,21 @@ function prksHideWorkThumbPreview() {
 function prksReleaseWorkThumbPreview(root) {
     const src = window.__prksWorkThumbPreviewSource;
     if (!src) return;
-    if (root && typeof root.contains === 'function') {
-        if (root.contains(src)) prksHideWorkThumbPreview();
+    if (root) {
+        let under = false;
+        if (typeof root.contains === 'function') {
+            under = !!root.contains(src);
+        } else {
+            let n = src;
+            while (n) {
+                if (n === root) {
+                    under = true;
+                    break;
+                }
+                n = n.parentNode;
+            }
+        }
+        if (under) prksHideWorkThumbPreview();
         return;
     }
     const connected =
