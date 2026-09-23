@@ -6739,8 +6739,13 @@ function initUploadDragAndDrop() {
             // result belongs to this opening only, never to a reopened one.
             const modal = document.getElementById('work-modal');
             const openGeneration = modal ? modal.dataset.prksOpenGeneration : '';
+            // ...and to this request only: URL A then URL B in one opening can
+            // resolve out of order, and A's details must never land under B.
+            // Taken before the early return, so a newer call voids older ones.
+            const requestSeq = (window.__prksVideoPreviewSeq = (window.__prksVideoPreviewSeq || 0) + 1);
             const stillThisOpening = () => !!modal && !modal.classList.contains('hidden') &&
-                modal.dataset.prksOpenGeneration === openGeneration;
+                modal.dataset.prksOpenGeneration === openGeneration &&
+                window.__prksVideoPreviewSeq === requestSeq;
 
             if (
                 url &&

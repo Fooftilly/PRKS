@@ -198,6 +198,8 @@ class FrontendWorkCreateTests(unittest.TestCase):
                       "                if (!createFormStillOpen()) return;", app)
         video = ui.split("window.prksHandleVideoUrlInput = async function", 1)[1].split("\n        };", 1)[0]
         self.assertEqual(video.count("if (!stillThisOpening()) return;"), 3)
+        # ...and to the latest request, so out-of-order details cannot win.
+        self.assertIn("window.__prksVideoPreviewSeq === requestSeq", video)
         self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
         self.assertIn("if (!createFormStillOpen()) return;\n                const batch = await prksCreateWorkDurably", app)
         reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]

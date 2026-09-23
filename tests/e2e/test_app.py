@@ -11093,6 +11093,61 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         self.assertEqual(state, {"statusHidden": True, "urlErrHidden": True, "btnDisabled": False})
 
+    def test_older_youtube_details_never_overwrite_a_newer_url(self):
+        """Owner review on #151: URL A then URL B in one opening; B's details
+        arrive first, A's last. Only B's details may survive."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+
+        def _stub_youtube(route):
+            route.fulfill(status=200, content_type="text/html", body="<html></html>")
+
+        page.route("https://www.youtube.com/embed/**", _stub_youtube)
+        self.addCleanup(lambda: page.unroute("https://www.youtube.com/embed/**", _stub_youtube))
+        page.evaluate(
+            """() => {
+                const realFetch = window.fetch;
+                window.__e2eOembed = [];
+                window.__e2eResolveOembed = (i, title, author) => {
+                    const body = JSON.stringify({ title, author_name: author });
+                    window.__e2eOembed[i].resolve(
+                        new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
+                };
+                window.fetch = (input, init) => {
+                    const url = typeof input === 'string' ? input : (input && input.url) || '';
+                    if (url.indexOf('youtube.com/oembed') >= 0) {
+                        return new Promise((resolve) => { window.__e2eOembed.push({ url, resolve }); });
+                    }
+                    return realFetch(input, init);
+                };
+            }"""
+        )
+        url_a = "https://youtu.be/dQw4w9WgXcQ"
+        url_b = "https://youtu.be/9bZkp7q19f0"
+        page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
+        page.locator("#work-video-url").wait_for(state="visible")
+        page.fill("#work-video-url", url_a)
+        page.locator("#work-title").click()  # blur: fetch A starts
+        page.wait_for_function("() => window.__e2eOembed.length === 1")
+        page.fill("#work-video-url", url_b)
+        page.locator("#work-title").click()  # blur: fetch B starts
+        page.wait_for_function("() => window.__e2eOembed.length === 2")
+        page.evaluate("() => window.__e2eResolveOembed(1, 'Title B', 'Channel B')")
+        page.wait_for_function("() => document.getElementById('work-title').value === 'Title B'")
+        page.evaluate("() => window.__e2eResolveOembed(0, 'Title A', 'Channel A')")
+        page.evaluate("() => new Promise((resolve) => { setTimeout(resolve, 300); })")
+        state = page.evaluate(
+            """() => ({
+                title: document.getElementById('work-title').value,
+                channel: document.getElementById('work-video-channel').value,
+                metaTitle: (window.__prksUploadVideoMeta || {}).title || '',
+                lastUrl: window.__prksLastVideoPreviewUrl || '',
+            })"""
+        )
+        self.assertEqual(state, {
+            "title": "Title B", "channel": "Channel B", "metaTitle": "Title B", "lastUrl": url_b,
+        })
+
     def test_create_waits_for_an_in_flight_quick_create(self):
         server, page, _collector = self._start_app()
         self._open_new_file_ready(page)
