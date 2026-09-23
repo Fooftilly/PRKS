@@ -4638,12 +4638,38 @@ window.prksRenderTabRoute = prksRenderTabRoute;
 window.handleRoute = handleRoute;
 
 
+/**
+ * PDF creation is a plain request, so every Person it links must already be on
+ * the server. A Person quick-created moment ago may still be queued locally:
+ * nudge sync and wait (bounded) until those CREATE_PERSON operations retire.
+ */
+async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
+    const ids = new Set(Array.from(personIds || []).filter(Boolean));
+    if (!ids.size || typeof prksPendingPersonCreates !== 'function') return true;
+    const deadline = Date.now() + (timeoutMs || 10000);
+    for (;;) {
+        const ops = await prksDurableOperationsOrNone();
+        const pending = prksPendingPersonCreates(ops).filter(op => ids.has(op.entity_id));
+        if (!pending.length) return true;
+        if (Date.now() >= deadline) return false;
+        if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.changed === 'function') {
+            prksSync.changed();
+        }
+        await new Promise(resolve => {
+            setTimeout(resolve, 200);
+        });
+    }
+}
+
+/** A refused (4xx) create says plainly that no Work exists, so a retry is safe. */
+function prksWorkCreateFailureText(errText) {
+    const text = String(errText || '').trim() || 'Could not create the file.';
+    return (/[.!?]$/.test(text) ? text : text + '.') + ' Nothing was saved.';
+}
+
 function initForms() {
     if (typeof initPrksDocTypeMenu === 'function') {
         initPrksDocTypeMenu('work-doc-type', { selectedValue: 'article' });
-    }
-    if (typeof prksMountUploadRoleSegmented === 'function') {
-        prksMountUploadRoleSegmented('Author');
     }
     if (typeof prksMountLinkRoleSegmented === 'function') {
         prksMountLinkRoleSegmented('Author');
@@ -4656,7 +4682,89 @@ function initForms() {
     }
 
     document.getElementById('save-work-btn').onclick = async () => {
-        if (window.__prksWorkCreateInFlight) return;
+        // Waits before the create (People syncing, video details) can outlast
+        // the form: once it is discarded or reopened, this submit is void.
+        const createModalEl = document.getElementById('work-modal');
+        const createGeneration = createModalEl ? createModalEl.dataset.prksOpenGeneration : '';
+        const createFormStillOpen = () => !!createModalEl &&
+            !createModalEl.classList.contains('hidden') &&
+            createModalEl.dataset.prksOpenGeneration === createGeneration;
+        // The in-flight mark names the opening that owns it: a submit left
+        // over from a closed form neither blocks this one nor, when it ends,
+        // releases this one's busy state.
+        if (window.__prksWorkCreateInFlight === createGeneration) return;
+        const beginBusy = () => {
+            window.__prksWorkCreateInFlight = createGeneration;
+            if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+        };
+        const endBusy = () => {
+            if (window.__prksWorkCreateInFlight === createGeneration) window.__prksWorkCreateInFlight = false;
+            if (createFormStillOpen() && typeof prksSetWorkModalCreateBusy === 'function') {
+                prksSetWorkModalCreateBusy(false);
+            }
+        };
+        // A person quick-created a moment ago is still being written and
+        // added: wait for it so the Work is created with them.
+        // Only one started in this opening of the form: a create left over
+        // from a closed form must not block or refuse this one.
+        const workModalEl = document.getElementById('work-modal');
+        const pendingPerson = window.__prksUploadPersonPending &&
+            workModalEl &&
+            window.__prksUploadPersonPending.prksOpenGeneration === workModalEl.dataset.prksOpenGeneration
+            ? window.__prksUploadPersonPending
+            : null;
+        if (pendingPerson) {
+            beginBusy();
+            let personAdded = false;
+            try {
+                personAdded = (await pendingPerson) === true;
+            } catch (_e) {
+                personAdded = false;
+            } finally {
+                endBusy();
+            }
+            // Discarded or reopened meanwhile: nothing here belongs to the
+            // form now on screen.
+            if (!createFormStillOpen()) return;
+            // The user asked for that person: never create the file silently
+            // without them. Stop here; everything they entered is kept.
+            if (!personAdded) {
+                const peopleErr = document.getElementById('upload-people-error');
+                if (peopleErr) {
+                    peopleErr.textContent = 'That person could not be added, so the file was not created. Try adding them again, then create.';
+                    peopleErr.classList.remove('hidden');
+                }
+                const statusMsg = document.getElementById('upload-status-msg');
+                if (statusMsg) {
+                    statusMsg.textContent = 'Nothing was saved.';
+                    statusMsg.classList.remove('hidden');
+                }
+                return;
+            }
+        }
+        // Same for a tag or playlist created from this form a moment ago: the
+        // Work is created with it, or not at all.
+        const pendingEnrichment = typeof prksPendingWorkModalQuickCreates === 'function'
+            ? prksPendingWorkModalQuickCreates() : [];
+        if (pendingEnrichment.length) {
+            beginBusy();
+            let enrichmentAdded = false;
+            try {
+                enrichmentAdded = (await Promise.all(pendingEnrichment)).every(Boolean);
+            } finally {
+                endBusy();
+            }
+            if (!createFormStillOpen()) return;
+            if (!enrichmentAdded) {
+                const statusMsg = document.getElementById('upload-status-msg');
+                if (statusMsg) {
+                    statusMsg.textContent =
+                        'A tag or playlist could not be created, so the file was not created. Nothing was saved.';
+                    statusMsg.classList.remove('hidden');
+                }
+                return;
+            }
+        }
         const kindEl = document.getElementById('work-source-kind');
         const sourceKind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
         const fileInput = document.getElementById('work-file');
@@ -4741,8 +4849,7 @@ function initForms() {
             return;
         }
 
-        window.__prksWorkCreateInFlight = true;
-        if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+        beginBusy();
 
         try {
         if (pdfFileForUpload) {
@@ -4757,6 +4864,7 @@ function initForms() {
                     reader.readAsDataURL(file);
                 });
             } catch (_readErr) {
+                if (!createFormStillOpen()) return;
                 if (typeof prksSetWorkModalFieldError === 'function') {
                     prksSetWorkModalFieldError(
                         document.getElementById('upload-drop-zone'),
@@ -4779,6 +4887,8 @@ function initForms() {
             const last = String(window.__prksLastVideoPreviewUrl || '').trim();
             if (last !== sourceUrl || !window.__prksUploadVideoMeta) {
                 await window.prksHandleVideoUrlInput(sourceUrl);
+                // Discarded or reopened during the details fetch: void.
+                if (!createFormStillOpen()) return;
             }
         }
         const meta = window.__prksUploadVideoMeta && typeof window.__prksUploadVideoMeta === 'object'
@@ -4824,13 +4934,22 @@ function initForms() {
             folder_id: folderId && folderId.trim() !== "" ? folderId : null,
             file_b64: fileBase64,
             file_name: fileName,
-            roles: uploadRoles,
+            roles: Array.isArray(uploadRoles) ? uploadRoles.map(function (r) {
+                return {
+                    person_id: r.person_id,
+                    role_type: r.role_type || 'Author',
+                    credit_name: r.credit_name || '',
+                };
+            }) : [],
             source_kind: sourceKind,
             source_url: sourceUrl,
             thumb_url: sourceKind === 'video' && meta && meta.thumbnail_url ? String(meta.thumbnail_url) : "",
             provider: sourceKind === 'video' ? "youtube" : "",
             published_date: sourceKind === 'video' ? (publishedIso || null) : (pdfPublished || null),
-            urldate: "",
+            // A YouTube Work is accessed now. The durable CREATE_WORK path
+            // stores what it is given, so supply the date the HTTP path and a
+            // source change (DATE('now'), UTC) would set, not an empty one.
+            urldate: sourceKind === 'video' ? new Date().toISOString().slice(0, 10) : "",
             playlist_id: sourceKind === 'video' ? playlistId : "",
             private_notes,
             thumb_page,
@@ -4890,16 +5009,20 @@ function initForms() {
                         return { id: t.id, name: t.name || '' };
                     }).filter(function (t) { return t.id; })
                     : [];
+                if (!createFormStillOpen()) return;
                 const batch = await prksCreateWorkDurably(createFields, { tags: selectedTags });
                 const newId = batch && batch.create && batch.create.entity_id;
+                if (!createFormStillOpen()) return;
                 closeModals();
                 if (newId && typeof prksNavigate === 'function') {
                     prksNavigate('#/works/' + encodeURIComponent(newId));
                 }
             } catch (e) {
+                // A failure for a form that is gone has no one to tell.
+                if (!createFormStillOpen()) return;
                 const errText = (e && e.message) || 'Could not create the file.';
                 if (statusMsg) {
-                    statusMsg.textContent = errText;
+                    statusMsg.textContent = prksWorkCreateFailureText(errText);
                     statusMsg.classList.remove('hidden');
                 }
                 if (videoUrlEl && /url|youtube/i.test(errText)) {
@@ -4917,6 +5040,23 @@ function initForms() {
             return;
         }
 
+        const peopleReady = await prksWaitForPeopleOnServer(
+            (payload.roles || []).map(r => r.person_id)
+        );
+        if (!createFormStillOpen()) return;
+        if (!peopleReady) {
+            if (statusMsg) {
+                statusMsg.textContent =
+                    'A person on this file is still being saved. Nothing was saved; try again in a moment.';
+                statusMsg.classList.remove('hidden');
+            }
+            return;
+        }
+
+        // What this submit asked for, taken while the form is frozen: after a
+        // discard and reopen, the live list belongs to a different form.
+        const tagsToAttach = typeof uploadTagsSelected !== 'undefined' && Array.isArray(uploadTagsSelected)
+            ? uploadTagsSelected.slice() : [];
         let res;
         try {
             res = await prksRequest('/api/works', {
@@ -4925,13 +5065,17 @@ function initForms() {
                 body: JSON.stringify(payload),
             });
         } catch (e) {
-            if (statusMsg) {
-                statusMsg.textContent = 'Could not create the file. Try again.';
+            if (statusMsg && createFormStillOpen()) {
+                // A dropped response does not prove the create failed: the
+                // Work may be committed. Never invite a blind retry.
+                statusMsg.textContent = 'Could not confirm whether the file was saved. Check your library before trying again.';
                 statusMsg.classList.remove('hidden');
             }
             return;
         }
         const data = await res.json().catch(() => ({}));
+        // A refusal for a form that is gone has no one to tell.
+        if (!res.ok && !createFormStillOpen()) return;
         if (res.ok && String(payload.playlist_id || '').trim()) {
             // The create endpoint can attach the new video to a Playlist in the
             // same canonical request, bypassing addWorkToPlaylist(). The attach
@@ -4964,8 +5108,33 @@ function initForms() {
         if (!res.ok) {
             const errText = data.error || 'Could not create the file.';
             if (statusMsg) {
-                statusMsg.textContent = errText;
+                // Only a refusal (4xx) proves nothing was created; a server
+                // error may come after the row was committed.
+                statusMsg.textContent = res.status >= 500
+                    ? 'PRKS could not finish creating the file. Check your library before trying again.'
+                    : prksWorkCreateFailureText(errText);
                 statusMsg.classList.remove('hidden');
+            }
+            if (data.code === 'PERSON_NOT_FOUND') {
+                const peopleErr = document.getElementById('upload-people-error');
+                if (peopleErr) {
+                    peopleErr.textContent = 'A person on this file has not reached PRKS yet. Try again in a moment.';
+                    peopleErr.classList.remove('hidden');
+                }
+                return;
+            }
+            if (data.code === 'FOLDER_NOT_FOUND' && folderSearchEl) {
+                // A stale destination (deleted elsewhere) is a Folder-field
+                // problem: say so there and keep everything else as typed.
+                if (typeof prksSetWorkModalFieldError === 'function') {
+                    prksSetWorkModalFieldError(
+                        folderSearchEl,
+                        'This folder no longer exists. Choose another folder.',
+                        'work-folder-error'
+                    );
+                }
+                if (typeof prksFocusWorkModalControl === 'function') prksFocusWorkModalControl(folderSearchEl);
+                return;
             }
             const lower = String(errText).toLowerCase();
             if (sourceKind === 'video' && videoUrlEl && lower.indexOf('url') !== -1) {
@@ -4977,8 +5146,9 @@ function initForms() {
             return;
         }
         const newId = data.id;
-        if (newId && typeof uploadTagsSelected !== 'undefined' && uploadTagsSelected.length) {
-            for (const t of uploadTagsSelected) {
+        let tagsFailed = 0;
+        if (newId && tagsToAttach.length) {
+            for (const t of tagsToAttach) {
                 try {
                     const tr = await prksRequest(`/api/works/${encodeURIComponent(newId)}/tags`, {
                         method: 'POST',
@@ -4987,25 +5157,27 @@ function initForms() {
                     });
                     if (!tr.ok) throw new Error('tag attach failed');
                 } catch (_e) {
-                    if (statusMsg) {
-                        statusMsg.textContent = 'File added, but one or more tags could not be attached.';
-                        statusMsg.classList.remove('hidden');
-                    }
-                    break;
+                    tagsFailed += 1;
                 }
             }
         }
+        // Sent before a discard: the Work exists with what was asked for, but
+        // the dialog on screen now (if any) is someone else's.
+        if (!createFormStillOpen()) return;
+        // The Work exists now: close and open it either way, so a retry can
+        // never create a second one. A partial enrichment is said out loud.
         closeModals();
         if (newId && typeof prksNavigate === 'function') {
             prksNavigate('#/works/' + encodeURIComponent(newId));
         }
+        if (tagsFailed && typeof prksAlertMessage === 'function') {
+            void prksAlertMessage(
+                `The file was created, but ${tagsFailed === 1 ? 'one tag' : tagsFailed + ' tags'} could not be attached. Add ${tagsFailed === 1 ? 'it' : 'them'} from the file's details.`,
+                'Tags not attached'
+            );
+        }
         } finally {
-            window.__prksWorkCreateInFlight = false;
-            const modal = document.getElementById('work-modal');
-            const stillOpen = modal && !modal.classList.contains('hidden');
-            if (stillOpen && typeof prksSetWorkModalCreateBusy === 'function') {
-                prksSetWorkModalCreateBusy(false);
-            }
+            endBusy();
         }
     };
 

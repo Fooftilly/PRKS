@@ -48,6 +48,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn('id="work-doc-type"', modal)
         self.assertIn('id="upload-person-search"', modal)
         self.assertIn('id="work-upload-biblio-details"', modal)
+        self.assertIn("Publication details", modal)
         self.assertIn('id="work-upload-more-details"', modal)
         self.assertIn('id="work-publisher"', modal)
         self.assertIn('id="work-doi"', modal)
@@ -64,6 +65,159 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertNotIn("prks-btn--danger", footer.split("work-modal-cancel", 1)[1][:200])
         body_before_footer = modal.split("modal-footer", 1)[0]
         self.assertNotIn("save-work-btn", body_before_footer)
+
+    def test_essentials_first_enrichment_in_disclosures(self):
+        """#85: essentials first; enrichment lives in collapsed Optional disclosures."""
+        html = _read(_INDEX)
+        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        body = modal.split("modal-footer", 1)[0]
+        first_details = body.index('id="work-upload-biblio-details"')
+        essentials = body[:first_details]
+        for control in ('id="work-title"', 'id="work-folder-search"', 'id="work-doc-type"',
+                        'id="work-year"', 'id="upload-person-search"', 'id="work-video-url"'):
+            self.assertIn(control, essentials, control)
+        enrichment = body[first_details:]
+        for control in ('id="work-date"', 'id="work-publisher"', 'id="work-doi"',
+                        'id="work-video-channel"', 'id="work-video-published-date"',
+                        'id="work-video-urldate"', 'id="work-video-playlist-search"',
+                        'id="upload-tag-search"', 'id="work-status"', 'id="work-abstract"'):
+            self.assertIn(control, enrichment, control)
+        self.assertEqual(body.count("work-upload-meta__summary-optional"), 2)
+        self.assertEqual(body.count("data-prks-count-for="), 2)
+        # Requiredness is text, and the controls say so to assistive tech.
+        self.assertIn('class="prks-field__required"', essentials)
+        folder = re.search(r'<input[^>]*id="work-folder-search"[^>]*>', modal).group(0)
+        self.assertIn('aria-required="true"', folder)
+        url = re.search(r'<input[^>]*id="work-video-url"[^>]*>', modal).group(0)
+        self.assertIn('aria-required="true"', url)
+
+    def test_people_have_no_role_surface_before_a_person(self):
+        html = _read(_INDEX)
+        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        # No always-visible role tiles and no separate Link step.
+        self.assertNotIn("upload-role-seg-mount", modal)
+        self.assertNotIn("prks-upload-role-seg", modal)
+        self.assertNotIn("addRoleToUploadList()", modal)
+        self.assertNotIn("Search, then Link", modal)
+        self.assertIn('id="upload-roles-list"', modal)
+        roles_list = re.search(r'<ul[^>]*id="upload-roles-list"[^>]*>', modal).group(0)
+        self.assertIn("hidden", roles_list)
+        # The shared credit picker is parked (hidden) until a row asks for it.
+        parking = modal.split('id="upload-role-credit-parking"', 1)[1][:40]
+        self.assertIn("hidden", parking)
+        self.assertIn('id="upload-role-credit-wrap"', modal)
+        css = _read(_CSS)
+        self.assertIn("#work-modal .prks-role-credit-picker[hidden]", css)
+
+    def test_people_rows_keep_role_and_credit_semantics(self):
+        ui = _read(_UI)
+        chunk = ui.split("function prksUploadRoleLabels()", 1)[1].split(
+            "function prksBindUploadPeopleUi", 1
+        )[0]
+        self.assertIn("prksWorkHasRoleLink", chunk)
+        self.assertIn("prksResolveRoleCreditNameForLink('upload-role'", chunk)
+        self.assertIn("prksRefreshRoleCreditPicker('upload-role', person)", chunk)
+        self.assertIn("prksSetRoleCreditPickerValue('upload-role'", chunk)
+        self.assertIn("prksReadRoleCreditName('upload-role')", chunk)
+        self.assertIn("PRKS_UPLOAD_ROLE_LABELS", chunk)
+        pick = ui.split("initSearchableCombobox('upload-person-search'", 1)[1].split("});", 2)
+        self.assertIn("onPersonPick", "".join(pick[:2]))
+        self.assertIn("addRoleToUploadList()", "".join(pick[:2]))
+        # Only the fields the canonical create reads are sent.
+        app = _read(_APP)
+        work_chunk = app.split("document.getElementById('save-work-btn')", 1)[1]
+        self.assertIn("credit_name: r.credit_name || ''", work_chunk)
+        # YouTube Works store their accessed date (urldate) at creation.
+        self.assertIn("urldate: sourceKind === 'video' ? new Date().toISOString().slice(0, 10)", work_chunk)
+        self.assertIn("urldate: payload.urldate || ''", work_chunk)
+
+    def test_keyboard_and_escape_layers(self):
+        ui = _read(_UI)
+        self.assertIn("function prksBindWorkModalComboboxKeys", ui)
+        for input_id in ("work-folder-search", "upload-person-search", "upload-tag-search",
+                         "work-video-playlist-search"):
+            self.assertIn("prksBindWorkModalComboboxKeys('%s'" % input_id, ui)
+        keys = ui.split("function prksBindWorkModalComboboxKeys", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("aria-activedescendant", keys)
+        self.assertIn("result-item--create", keys)
+        # Typing marks the open rows stale until the list re-renders, so a
+        # quick Enter cannot pick a row from the previous query.
+        self.assertIn("stale = true", keys)
+        self.assertIn("stale = false", keys)
+        self.assertIn("if (stale)", keys)
+        tags = ui.split("function initUploadTagCombobox", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("if (seq !== renderSeq) return;", tags)
+        escape = ui.split("function prksDismissModalInnerEscapeLayer", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("prksIsComboboxPanelOpen", escape)
+        form = ui.split("function prksBindWorkModalFormUi", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("e.ctrlKey || e.metaKey", form)
+        self.assertIn("work-title", form)
+
+    def test_stale_blur_does_not_close_a_refocused_list(self):
+        ui = _read(_UI)
+        blur = ui.split("// Hide results when focus moves away", 1)[1].split("function renderResults", 1)[0]
+        self.assertIn("document.activeElement === input", blur)
+
+    def test_errors_inside_disclosures_open_them_first(self):
+        ui = _read(_UI)
+        focus = ui.split("function prksFocusWorkModalControl", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("details.open = true", focus)
+        self.assertIn("prksSyncWorkModalDisclosureInert", focus)
+
+    def test_outcome_messages_say_whether_a_work_exists(self):
+        app = _read(_APP)
+        self.assertIn("Nothing was saved.", app)
+        self.assertIn("FOLDER_NOT_FOUND", app)
+        self.assertIn("This folder no longer exists", app)
+        self.assertIn("The file was created, but", app)
+        # A lost response or a server error does not prove nothing was saved.
+        self.assertIn("Could not confirm whether the file was saved", app)
+        self.assertIn("res.status >= 500", app)
+        self.assertNotIn("Could not reach PRKS. Nothing was saved", app)
+        ui = _read(_UI)
+        quick = ui.split("onQuickCreate: (typedName) => {\n            const search", 1)[1].split("onPersonPick", 1)[0]
+        self.assertIn("search.readOnly = true", quick)
+        self.assertIn("finally", quick)
+        self.assertIn("window.__prksUploadPersonPending = pending", ui)
+        # Scoped to one opening of the form: reset drops it and the lock.
+        self.assertIn("pending.prksOpenGeneration = openGeneration", ui)
+        # Tag and playlist quick-creates are awaited by Create, per opening.
+        self.assertEqual(ui.count("void prksTrackWorkModalQuickCreate("), 2)
+        # A discarded form voids a submit still waiting before its create.
+        app = _read(_APP)
+        person_wait = app.split("personAdded = (await pendingPerson) === true;", 1)[1][:400]
+        self.assertIn("if (!createFormStillOpen()) return;", person_wait)
+        self.assertIn("window.__prksWorkCreateInFlight === createGeneration", app)
+        self.assertIn("for (const t of tagsToAttach)", app)
+        # The details refresh and every error path stop once the opening is gone.
+        self.assertIn("await window.prksHandleVideoUrlInput(sourceUrl);\n"
+                      "                // Discarded or reopened during the details fetch: void.\n"
+                      "                if (!createFormStillOpen()) return;", app)
+        self.assertIn("} catch (_readErr) {\n                if (!createFormStillOpen()) return;", app)
+        self.assertIn("// A failure for a form that is gone has no one to tell.\n"
+                      "                if (!createFormStillOpen()) return;", app)
+        video = ui.split("window.prksHandleVideoUrlInput = async function", 1)[1].split("\n        };", 1)[0]
+        self.assertEqual(video.count("if (!stillThisOpening()) return;"), 3)
+        # ...and to the latest request, so out-of-order details cannot win.
+        self.assertIn("window.__prksVideoPreviewSeq === requestSeq", video)
+        self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
+        self.assertIn("if (!createFormStillOpen()) return;\n                const batch = await prksCreateWorkDurably", app)
+        reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("window.__prksUploadPersonPending = null", reset)
+        self.assertIn("personSearch.readOnly = false", reset)
+        self.assertIn("window.__prksWorkModalQuickCreates = [];", reset)
+        self.assertIn("prksThawWorkModalForm();", reset)
+        busy = ui.split("function prksSetWorkModalCreateBusy", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("body.setAttribute('inert', '')", busy)
+        focus = ui.split("function prksFocusWorkModalControl", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("prksThawWorkModalForm();", focus)
+        self.assertIn("{ stillApplies }", ui)
+        # Create waits for an in-flight quick-create before building the payload.
+        save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]
+        self.assertLess(save.index("__prksUploadPersonPending"), save.index("const payload"))
+        # A failed quick-create stops Create rather than dropping the person.
+        self.assertIn("(await pendingPerson) === true", save)
+        self.assertIn("addRoleToUploadList() === true", quick)
 
     def test_selected_source_markup(self):
         html = _read(_INDEX)
@@ -156,7 +310,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
         self.assertIn(">YouTube<", modal)
         self.assertIn("YouTube URL", modal)
-        self.assertIn('aria-describedby="work-video-url-error"', modal)
+        self.assertRegex(modal, r'id="work-video-url"[^>]*aria-describedby="[^"]*\bwork-video-url-error\b')
         self.assertIn('aria-describedby="work-folder-error"', modal)
         self.assertIn('aria-describedby="work-date-error"', modal)
 

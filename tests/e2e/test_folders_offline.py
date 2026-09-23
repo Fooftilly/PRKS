@@ -602,7 +602,7 @@ class FoldersOfflineTests(unittest.TestCase):
         page.route('**/youtube.com/oembed**', stub_oembed)
         self.addCleanup(lambda: o._safe_unroute(page, '**/youtube.com/oembed**', stub_oembed))
         page.locator('#prks-ribbon-new-file').click()
-        page.wait_for_selector('#work-modal:not(.hidden)')
+        page.wait_for_selector('#work-modal:not(.hidden):not([inert])')
         page.locator('.prks-kind-toggle__btn[data-kind="video"]').click()
         page.wait_for_selector('#work-video-url-row:not(.hidden)')
         page.locator('#work-video-url').fill('https://www.youtube.com/watch?v=e2e0000042')

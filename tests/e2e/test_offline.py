@@ -6706,7 +6706,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         invalidation hooks are what is under test -- not a helper called by the
         test itself."""
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.fill("#work-title", title)
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")
@@ -6716,12 +6716,11 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
                 """([pid, roleType]) => {
                     document.getElementById('upload-person-id').value = pid;
                     document.getElementById('upload-person-search').value = 'E2E linked person';
-                    document.getElementById('upload-role-type').value = roleType;
+                    window.addRoleToUploadList(roleType);
                 }""",
                 [person_id, role_type],
             )
-            page.evaluate("() => window.addRoleToUploadList()")
-            page.locator("#upload-roles-list .author-tag").first.wait_for()
+            page.locator("#upload-roles-list .prks-upload-person-row").first.wait_for()
         page.locator("#save-work-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
 

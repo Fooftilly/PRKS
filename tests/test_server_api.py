@@ -598,6 +598,278 @@ class TestServerAPI(unittest.TestCase):
         leftover_ids = server_module.text_index.search_work_ids(term)
         self.assertEqual(leftover_ids, [])
 
+    def test_5d_post_work_into_missing_folder_is_refused_before_creation(self):
+        """A stale destination is refused before any row or PDF exists (#85),
+        like the durable CREATE_WORK boundary, so a retry cannot duplicate."""
+        pdf_bytes = _pdf_with_text_bytes("Stale folder body")
+        payload = {
+            "title": "Stale Folder Work",
+            "status": "Planned",
+            "folder_id": "F-does-not-exist",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "stale_folder.pdf",
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 404)
+        body = json.loads(cm.exception.read().decode())
+        self.assertEqual(body.get("code"), "FOLDER_NOT_FOUND")
+        self.assertIn("folder", body.get("error", "").lower())
+        self.assertEqual(set(os.listdir(server_module.pdfs_dir)), pdfs_before)
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Stale Folder Work", titles)
+
+    def test_5e_filing_into_a_missing_folder_is_a_refusal_not_a_500(self):
+        """A folder deleted between the request check and filing is refused by
+        the domain method, so the handler's existing compensation runs."""
+        with self.assertRaisesRegex(ValueError, "no longer exists"):
+            server_module.db.add_work_to_folder("F-does-not-exist", "W-any")
+        # Deleted between the existence check and the insert: the foreign-key
+        # failure is the same refusal, not an IntegrityError.
+        work_id = server_module.db.add_work(title="Race Filing Work")
+        with patch.object(server_module.db, "folder_exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "no longer exists"):
+                server_module.db.add_work_to_folder("F-deleted-meanwhile", work_id)
+        delete_work = __import__("backend.work_deletion", fromlist=["delete_work"]).delete_work
+        delete_work(server_module.db, server_module.text_index, work_id)
+
+    def test_5f_post_work_with_unknown_person_is_refused_before_creation(self):
+        """A role naming a Person the server has not heard of (still queued on
+        the creating device) is refused before any Work or PDF exists."""
+        pdf_bytes = _pdf_with_text_bytes("Unknown person body")
+        payload = {
+            "title": "Unknown Person Work",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "unknown_person.pdf",
+            "roles": [{"person_id": "P-not-yet-synced", "role_type": "Author"}],
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(json.loads(cm.exception.read().decode()).get("code"), "PERSON_NOT_FOUND")
+        self.assertEqual(set(os.listdir(server_module.pdfs_dir)), pdfs_before)
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Unknown Person Work", titles)
+
+    def test_5g_person_deleted_after_the_check_leaves_no_work(self):
+        """A Person deleted between the up-front check and the role insert is
+        refused the same way, and the committed Work and PDF are removed."""
+        pdf_bytes = _pdf_with_text_bytes("Person race body")
+        payload = {
+            "title": "Person Race Work",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "person_race.pdf",
+            "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}],
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        with patch.object(server_module.db, "missing_person_ids", return_value=[]):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(json.loads(cm.exception.read().decode()).get("code"), "PERSON_NOT_FOUND")
+        self.assertEqual(set(os.listdir(server_module.pdfs_dir)), pdfs_before)
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Person Race Work", titles)
+
+    def test_5i_refused_roles_leave_no_alias_promotion_behind(self):
+        """Roles are one transaction: when a later Person is missing, an earlier
+        role's credit is not promoted into its Person's aliases either."""
+        db = server_module.db
+        person_id = db.add_person(first_name="Alias", last_name="Keeper")
+        before_aliases = (db.get_person(person_id) or {}).get("aliases") or ""
+        before_rev = db.execute_query(
+            "SELECT revision FROM sync_entity_revisions WHERE scope_id LIKE ?",
+            (f"%{person_id}%",),
+        )
+        pdf_bytes = _pdf_with_text_bytes("Alias rollback body")
+        payload = {
+            "title": "Alias Rollback Work",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "alias_rollback.pdf",
+            "roles": [
+                {"person_id": person_id, "role_type": "Author", "credit_name": "A. Keeper"},
+                {"person_id": "P-deleted-meanwhile", "role_type": "Editor"},
+            ],
+        }
+        with patch.object(db, "missing_person_ids", return_value=[]):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual((db.get_person(person_id) or {}).get("aliases") or "", before_aliases)
+        self.assertEqual(
+            db.execute_query(
+                "SELECT revision FROM sync_entity_revisions WHERE scope_id LIKE ?",
+                (f"%{person_id}%",),
+            ),
+            before_rev,
+        )
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Alias Rollback Work", titles)
+
+    def test_5j_valid_roles_still_promote_credit_and_keep_order(self):
+        db = server_module.db
+        a = db.add_person(first_name="Order", last_name="First")
+        b = db.add_person(first_name="Order", last_name="Second")
+        payload = {
+            "title": "Initial Roles Work",
+            "status": "Planned",
+            "roles": [
+                {"person_id": a, "role_type": "Author", "credit_name": "O. First"},
+                {"person_id": b, "role_type": "Author"},
+                {"person_id": b, "role_type": "Author"},
+                {"person_id": a, "role_type": "not-a-role"},
+            ],
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            work_id = json.loads(res.read().decode())["id"]
+        roles = db.get_work_roles(work_id)
+        self.assertEqual([(r["id"], r["role_type"]) for r in roles], [(a, "Author"), (b, "Author")])
+        self.assertEqual(roles[0]["credit_name"], "O. First")
+        self.assertIn("O. First", (db.get_person(a) or {}).get("aliases") or "")
+
+    def test_5k_roles_creation_would_skip_do_not_block_the_work(self):
+        """The pre-create Person check counts only roles creation would insert:
+        an unknown Person on a role with no or an unknown type is ignored."""
+        payload = {
+            "title": "Skipped Roles Work",
+            "status": "Planned",
+            "roles": [
+                {"person_id": "P-unknown-untyped"},
+                {"person_id": "P-unknown-bad-type", "role_type": "not-a-role"},
+            ],
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            work_id = json.loads(res.read().decode())["id"]
+        self.assertEqual(server_module.db.get_work_roles(work_id), [])
+
+    def test_5l_refused_roles_leave_the_playlist_untouched(self):
+        """The playlist is attached only after the roles are in, so a Person
+        deleted after the check writes no playlist revision or timestamp."""
+        db = server_module.db
+        pl_id = db.add_playlist(title="Untouched 5l")
+
+        def playlist_state():
+            return (
+                db.execute_query("SELECT updated_at FROM playlists WHERE id = ?", (pl_id,)),
+                db.execute_query(
+                    "SELECT scope_id, revision FROM sync_entity_revisions WHERE scope_id LIKE ? "
+                    "ORDER BY scope_id",
+                    (f"%{pl_id}%",),
+                ),
+            )
+
+        before = playlist_state()
+        payload = {
+            "title": "Playlist Race Work",
+            "status": "Planned",
+            "playlist_id": pl_id,
+            "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}],
+        }
+        with patch.object(db, "missing_person_ids", return_value=[]), \
+                patch.object(db, "add_work_to_playlist", wraps=db.add_work_to_playlist) as attach:
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        attach.assert_not_called()
+        self.assertEqual(playlist_state(), before)
+
+    def test_5m_undoing_a_create_keeps_an_adopted_pdf(self):
+        """Codex review on #151 (P1): a refused create that ADOPTED an existing
+        managed PDF removes its Work row but never the bytes it did not upload,
+        whether the roles or the folder refuse it."""
+        db = server_module.db
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+
+        def adopted(name):
+            path = os.path.join(pdfs_dir, name)
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.4\n%ADOPTED\n%%EOF\n")
+            return path
+
+        def post(payload):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+            return cm.exception.code
+
+        def titles():
+            with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+                return [w.get("title") for w in json.loads(res.read().decode())]
+
+        role_pdf = adopted("adopt-then-role-race.pdf")
+        with patch.object(db, "missing_person_ids", return_value=[]):
+            code = post({
+                "title": "Adopt Role Race",
+                "file_path": "/api/pdfs/adopt-then-role-race.pdf",
+                "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}],
+            })
+        self.assertEqual(code, 409)
+        self.assertTrue(os.path.isfile(role_pdf))
+        self.assertNotIn("Adopt Role Race", titles())
+
+        folder_id = db.add_folder("Adopt Folder Race 5m")
+        folder_pdf = adopted("adopt-then-folder-race.pdf")
+        real_add = db.add_work_to_folder
+
+        def folder_gone(fid, wid):
+            db.delete_empty_folder(fid)
+            return real_add(fid, wid)
+
+        with patch.object(db, "add_work_to_folder", side_effect=folder_gone):
+            code = post({
+                "title": "Adopt Folder Race",
+                "file_path": "/api/pdfs/adopt-then-folder-race.pdf",
+                "folder_id": folder_id,
+            })
+        self.assertEqual(code, 409)
+        self.assertTrue(os.path.isfile(folder_pdf))
+        self.assertNotIn("Adopt Folder Race", titles())
+
+    def test_5h_filing_a_missing_work_is_not_called_a_missing_folder(self):
+        folder_id = server_module.db.add_folder("Filing Target 5h")
+        with self.assertRaisesRegex(ValueError, "file no longer exists"):
+            server_module.db.add_work_to_folder(folder_id, "W-gone")
+
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}
         req = urllib.request.Request(f"{self._base_url}/api/persons", data=json.dumps(payload).encode(), method="POST")

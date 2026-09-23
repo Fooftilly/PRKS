@@ -309,8 +309,12 @@ def validate_delete(op):
         raise ValueError("INVALID_BASE_REVISION")
 
 
-def delete_work_record_on_conn(conn, work_id):
+def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
     """Remove the Work row on the caller's transaction. Cascades handle links.
+
+    ``claim_pdf=False`` is for undoing a create that ADOPTED existing managed
+    bytes: those were never this Work's to reclaim, so no claim is written and
+    they stay exactly as they were before the create.
 
     A managed PDF no surviving row references is claimed for cleanup in this
     same transaction. `works.file_path` is the only thing that ties those bytes
@@ -329,7 +333,7 @@ def delete_work_record_on_conn(conn, work_id):
     deleted_filename = managed_pdf_filename(file_path)
     conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
     still_referenced = False
-    if deleted_filename is not None:
+    if deleted_filename is not None and claim_pdf:
         survivors = conn.execute(
             "SELECT file_path FROM works WHERE file_path IS NOT NULL"
         ).fetchall()

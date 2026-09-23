@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.db_manager import (
     PRKSDatabase,
     BulkWorkError,
+    MissingPersonError,
     effective_source_kind,
     SavedViewError,
     managed_pdf_filename,
@@ -2753,6 +2754,34 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'Invalid YouTube URL'})
                     return
 
+                # A named destination that does not exist is refused before
+                # any bytes are stored or a row is created, matching the
+                # durable CREATE_WORK boundary. Filing only after the commit
+                # used to fail with the Work already created, so a retry
+                # duplicated it.
+                requested_folder = data.get("folder_id")
+                requested_folder = (
+                    str(requested_folder).strip() if requested_folder is not None else ""
+                )
+                if requested_folder and not db.folder_exists(requested_folder):
+                    self.send_json(404, {
+                        'error': 'The selected folder no longer exists.',
+                        'code': 'FOLDER_NOT_FOUND',
+                    })
+                    return
+                # Same for the People the Work is born with: a Person this
+                # server has not heard of yet (e.g. still queued on the
+                # device that created it) would fail its foreign key only
+                # after the Work was committed.
+                # Only roles creation would insert count: one it skips (no
+                # role type, unknown type) must not block the Work.
+                if db.missing_initial_role_person_ids(data.get('roles')):
+                    self.send_json(409, {
+                        'error': 'A person on this file has not finished saving yet.',
+                        'code': 'PERSON_NOT_FOUND',
+                    })
+                    return
+
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
                     try:
@@ -2875,7 +2904,46 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         safe_log_id(w_id),
                         safe_error_type(e),
                     )
-                # Optionally attach to playlist
+                # Undo this create: a PDF this request uploaded goes with it;
+                # existing bytes it only adopted were never its to remove.
+                def undo_create():
+                    delete_library_work(db, text_index, w_id, keep_managed_pdf=not stored_name)
+
+                folder_id = data.get("folder_id")
+                raw_folder = str(folder_id).strip() if folder_id is not None else ""
+                if raw_folder:
+                    try:
+                        db.add_work_to_folder(raw_folder, w_id)
+                    except ValueError as e:
+                        undo_create()
+                        self.send_json(409, {'error': str(e)})
+                        return
+                else:
+                    try:
+                        unc_id = db.ensure_default_uncategorized_folder_id()
+                        db.add_work_to_folder(unc_id, w_id)
+                    except ValueError as e:
+                        undo_create()
+                        self.send_json(409, {'error': str(e)})
+                        return
+                
+                # Link persons/roles provided during upload: all of them in one
+                # transaction, which also re-checks every Person under the write
+                # lock, so a refusal leaves no role and no alias change behind.
+                try:
+                    db.insert_initial_roles(w_id, data.get('roles', []))
+                except MissingPersonError:
+                    # Deleted after the up-front check: same outcome as that
+                    # check, through the existing compensation.
+                    undo_create()
+                    self.send_json(409, {
+                        'error': 'A person on this file no longer exists.',
+                        'code': 'PERSON_NOT_FOUND',
+                    })
+                    return
+
+                # Optionally attach to playlist. Last: it writes playlist
+                # revisions that the refusals above could not undo.
                 playlist_id = (data.get('playlist_id') or '').strip()
                 if playlist_id:
                     try:
@@ -2889,52 +2957,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             safe_log_id(self._prks_request_id),
                             safe_error_type(exc),
                         )
-                folder_id = data.get("folder_id")
-                raw_folder = str(folder_id).strip() if folder_id is not None else ""
-                if raw_folder:
-                    try:
-                        db.add_work_to_folder(raw_folder, w_id)
-                    except ValueError as e:
-                        delete_library_work(db, text_index, w_id)
-                        self.send_json(409, {'error': str(e)})
-                        return
-                else:
-                    try:
-                        unc_id = db.ensure_default_uncategorized_folder_id()
-                        db.add_work_to_folder(unc_id, w_id)
-                    except ValueError as e:
-                        delete_library_work(db, text_index, w_id)
-                        self.send_json(409, {'error': str(e)})
-                        return
-                
-                # Link persons/roles provided during upload
-                roles = data.get('roles', [])
-                if isinstance(roles, list):
-                    for idx, r in enumerate(roles):
-                        if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
-                            continue
-                        p_id = r['person_id']
-                        r_type = r['role_type']
-                        if db.has_work_role(p_id, w_id, r_type):
-                            continue
-                        credit_name = r.get('credit_name', '')
-                        if credit_name is not None and not isinstance(credit_name, str):
-                            credit_name = ''
-                        try:
-                            # CONSTRUCTION: these are the relationships this
-                            # Work is born with, so they carry no revision and
-                            # the caller's author order is preserved. The alias
-                            # side effect happens at that boundary.
-                            db.insert_initial_role(
-                                w_id,
-                                p_id,
-                                r_type,
-                                order_index=idx,
-                                credit_name=credit_name or '',
-                            )
-                        except ValueError:
-                            continue
-                        
+
                 self.send_json(200, {'id': w_id})
             elif path == '/api/playlists':
                 pl_id = db.add_playlist(

@@ -82,6 +82,10 @@ PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "re
 PRKS_BULK_WORK_MAX = 500
 
 
+class MissingPersonError(ValueError):
+    """A role names a Person that does not exist (deleted, or never synced)."""
+
+
 class BulkWorkError(ValueError):
     """Controlled bulk-organization failure. http_status is 400 or 404."""
 
@@ -2171,11 +2175,11 @@ class PRKSDatabase:
         row = r[0] if r else {"c": 0, "m": ""}
         return f'W/"prks-recently-added-{row["c"]}-{row["m"]}"'
 
-    def delete_work_record(self, work_id: str) -> Optional[DeletedWorkRecord]:
+    def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
         from backend.work_lifecycle_sync import delete_work_record_on_conn
 
         with self.connection() as conn:
-            return delete_work_record_on_conn(conn, work_id)
+            return delete_work_record_on_conn(conn, work_id, claim_pdf=claim_pdf)
 
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]
@@ -3447,6 +3451,30 @@ class PRKSDatabase:
                 folder_sync.set_field_on_conn(
                     conn, folder_id, field, "" if value in (None, False) else str(value))
 
+    _ROW_EXISTS_TABLES = frozenset({"folders", "persons", "works"})
+
+    def _row_exists(self, table: str, row_id: str) -> bool:
+        if table not in self._ROW_EXISTS_TABLES:
+            raise ValueError("unsupported table")
+        return bool(self.execute_query(f"SELECT 1 FROM {table} WHERE id = ?", (str(row_id or ""),)))
+
+    def missing_person_ids(self, person_ids) -> List[str]:
+        """The given Person ids that have no row, in the order given."""
+        wanted = [str(p).strip() for p in (person_ids or []) if str(p or "").strip()]
+        if not wanted:
+            return []
+        unique = list(dict.fromkeys(wanted))
+        marks = ",".join("?" for _ in unique)
+        rows = self.execute_query(f"SELECT id FROM persons WHERE id IN ({marks})", tuple(unique))
+        present = {r["id"] for r in rows}
+        return [p for p in unique if p not in present]
+
+    def folder_exists(self, folder_id: str) -> bool:
+        fid = (folder_id or "").strip()
+        if not fid:
+            return False
+        return bool(self.execute_query("SELECT 1 FROM folders WHERE id = ?", (fid,)))
+
     def add_work_to_folder(self, folder_id: str, work_id: str):
         """Attach a work to a folder. Fails if the work is already in a different folder."""
         fid = (folder_id or "").strip()
@@ -3464,10 +3492,23 @@ class PRKSDatabase:
                 raise ValueError("This file is already in another folder.")
         if any(row["folder_id"] == fid for row in existing):
             return
-        self.execute_query(
-            "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-            (fid, wid),
-        )
+        missing = ValueError("The selected folder no longer exists.")
+        if not self.folder_exists(fid):
+            # A refusal the caller can compensate, never a foreign-key 500.
+            raise missing
+        try:
+            self.execute_query(
+                "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                (fid, wid),
+            )
+        except sqlite3.IntegrityError as exc:
+            # The folder or the Work was deleted between the check and the
+            # insert: the foreign key is the atomic answer. Say which.
+            if not self._row_exists("folders", fid):
+                raise missing from exc
+            if not self._row_exists("works", wid):
+                raise ValueError("This file no longer exists.") from exc
+            raise
 
     def move_work_to_folder(self, work_id: str, folder_id: Optional[str]) -> None:
         """Assign / move / clear, through the revision-aware boundary.
@@ -4211,11 +4252,85 @@ class PRKSDatabase:
     def insert_initial_role(self, work_id: str, person_id: str, role_type: str,
                             order_index: int = 0, credit_name: str = "") -> None:
         """A relationship a NEW Work is born with. Creates no revision."""
+        try:
+            with self.connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                work_role_sync.insert_initial_role(
+                    conn, work_id, person_id, role_type, order_index=order_index,
+                    credit_name=credit_name)
+        except sqlite3.IntegrityError as exc:
+            # The Person was deleted after the caller checked for it: the
+            # foreign key is the atomic answer. Any other violation is not ours
+            # to reinterpret.
+            if not self._row_exists("persons", person_id):
+                raise MissingPersonError("A person on this file no longer exists.") from exc
+            raise
+
+    @staticmethod
+    def _eligible_initial_roles(roles) -> list:
+        """The requested roles a new Work would actually be born with.
+
+        One definition for the pre-create check and the insert, so a role that
+        creation skips (no Person, no or unknown role type) cannot block it.
+        Returns (order_index, person_id, role_type, credit_name) tuples.
+        """
+        wanted = []
+        for idx, r in enumerate(roles if isinstance(roles, list) else []):
+            if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
+                continue
+            if r['role_type'] not in work_role_sync.ROLE_TYPE_SET:
+                continue
+            credit = r.get('credit_name', '')
+            if credit is not None and not isinstance(credit, str):
+                credit = ''
+            wanted.append((idx, str(r['person_id']), r['role_type'], credit or ''))
+        return wanted
+
+    def missing_initial_role_person_ids(self, roles) -> List[str]:
+        """Persons named by roles a new Work would be born with that have no row."""
+        return self.missing_person_ids(p for _i, p, _t, _c in self._eligible_initial_roles(roles))
+
+    def insert_initial_roles(self, work_id: str, roles) -> int:
+        """All the relationships a NEW Work is born with, in ONE transaction.
+
+        Every named Person is checked inside the same write transaction that
+        inserts the roles, so a concurrent delete cannot slip between the
+        check and the insert; if any is missing, nothing is written -- no role
+        and no credit-to-alias promotion -- and `MissingPersonError` is raised.
+        An individually invalid role (bad role type or credit) is skipped, as
+        before, without undoing the others. Returns the number inserted.
+        """
+        wanted = self._eligible_initial_roles(roles)
+        if not wanted:
+            return 0
+        inserted = 0
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            work_role_sync.insert_initial_role(
-                conn, work_id, person_id, role_type, order_index=order_index,
-                credit_name=credit_name)
+            ids = list(dict.fromkeys(p for _i, p, _t, _c in wanted))
+            marks = ",".join("?" for _ in ids)
+            present = {row[0] for row in conn.execute(
+                f"SELECT id FROM persons WHERE id IN ({marks})", tuple(ids))}
+            if any(p not in present for p in ids):
+                raise MissingPersonError("A person on this file no longer exists.")
+            for idx, person_id, role_type, credit in wanted:
+                if conn.execute(
+                        "SELECT 1 FROM roles WHERE person_id = ? AND work_id = ? AND role_type = ? LIMIT 1",
+                        (person_id, work_id, role_type)).fetchone():
+                    continue
+                conn.execute("SAVEPOINT initial_role")
+                try:
+                    # CONSTRUCTION: no revision; the caller's author order is
+                    # preserved; the alias side effect happens at this boundary.
+                    work_role_sync.insert_initial_role(
+                        conn, work_id, person_id, role_type, order_index=idx,
+                        credit_name=credit)
+                except ValueError:
+                    conn.execute("ROLLBACK TO SAVEPOINT initial_role")
+                    conn.execute("RELEASE SAVEPOINT initial_role")
+                    continue
+                conn.execute("RELEASE SAVEPOINT initial_role")
+                inserted += 1
+        return inserted
 
     def next_role_order_index(self, work_id: str) -> int:
         """Next order_index for a new role on this work (append after existing links)."""
