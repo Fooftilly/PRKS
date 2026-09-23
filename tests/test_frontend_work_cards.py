@@ -48,13 +48,44 @@ class FrontendWorkCardTests(unittest.TestCase):
         pdf_at = css.find(".work-card__thumb--pdf {")
         self.assertNotEqual(pdf_at, -1)
         self.assertIn("padding", css[pdf_at : pdf_at + 200])
+        self.assertIn(".work-card__thumb--loading", css)
+        self.assertIn(".work-browse-collection--list", css)
+        self.assertIn(".work-card-preview", css)
+        # Error and empty must stay visually distinct (Unavailable vs kind label).
+        self.assertIn('content: "Unavailable"', css)
+        err_at = css.find(".work-card__thumb--error::before")
+        empty_at = css.find(".work-card__thumb--empty::before")
+        self.assertNotEqual(err_at, -1)
+        self.assertNotEqual(empty_at, -1)
+
+    def test_work_browse_mode_helpers_exported(self):
+        src = _read(_WORK_CARDS)
+        self.assertIn("prks.ui.workBrowseMode", src)
+        self.assertIn("function prksGetWorkBrowseMode", src)
+        self.assertIn("function prksWorkBrowseCollectionClass", src)
+        self.assertIn("function prksWorkBrowseModeToggleHtml", src)
+        self.assertIn("function prksBindWorkBrowseMode", src)
+        self.assertIn("function prksShowWorkThumbPreview", src)
+
+    def test_folder_files_and_recently_added_use_browse_collection(self):
+        src = _read(_FOLDERS)
+        self.assertIn("prksWorkBrowseCollectionClass", src)
+        self.assertIn("prksWorkBrowseModeToggleHtml", src)
+        self.assertIn("prks-work-browse-mode-folder-files", src)
+        self.assertIn("prks-work-browse-mode-recently-added", src)
 
     def test_title_clamp_present(self):
         css = _read(_CSS)
-        at = css.find(".project-card--work-card .card-title {")
+        marker = "\n.project-card--work-card .card-title {"
+        at = css.find(marker)
         self.assertNotEqual(at, -1)
         block = css[at : at + 300]
         self.assertIn("-webkit-line-clamp: 2", block)
+        # Compact list tightens to a single title line without replacing the card rule.
+        list_marker = "\n.work-browse-collection--list .project-card--work-card .card-title {"
+        list_at = css.find(list_marker)
+        self.assertNotEqual(list_at, -1)
+        self.assertIn("-webkit-line-clamp: 1", css[list_at : list_at + 120])
 
     def test_recently_added_uses_concise_date_helper(self):
         src = _read(_FOLDERS)

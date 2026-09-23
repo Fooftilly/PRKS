@@ -81,6 +81,11 @@
         const pdfCard = cardHtml({ id: 'W-4', title: 'PDF Work', file_path: '/api/pdfs/w4.pdf' });
         assert('pdf card gets pdf thumb class', pdfCard.indexOf('work-card__thumb--pdf') !== -1);
         assert('pdf card has no video thumb class', pdfCard.indexOf('work-card__thumb--video') === -1);
+        assert('pdf thumb starts in loading state', pdfCard.indexOf('work-card__thumb--loading') !== -1);
+        assert(
+            'pdf thumb carries preview src for quick preview',
+            pdfCard.indexOf('data-prks-thumb-preview-src="/api/works/W-4/thumbnail?page=1"') !== -1
+        );
 
         const videoWork = { id: 'W-5', title: 'Video Work', source_kind: 'video', thumb_url: 'https://img.example/thumb.jpg' };
         const videoCard = cardHtml(videoWork);
@@ -100,6 +105,33 @@
         const emptyPdfCard = cardHtml({ id: 'W-7', title: 'PDF no thumb' });
         assert('empty pdf card marked empty', emptyPdfCard.indexOf('work-card__thumb--empty') !== -1);
         assert('empty pdf card keeps pdf class for CSS-driven label', emptyPdfCard.indexOf('work-card__thumb--pdf') !== -1);
+
+        const suppressed = cardHtml(
+            { id: 'W-8', title: 'Offline PDF', file_path: '/api/pdfs/w8.pdf' },
+            { suppressThumbnail: true }
+        );
+        assert('suppressThumbnail yields empty slot', suppressed.indexOf('work-card__thumb--empty') !== -1);
+        assert('suppressThumbnail does not embed thumb URL', suppressed.indexOf('/thumbnail') === -1);
+
+        // Browse mode preference helpers (default cards; list is opt-in).
+        if (typeof root.prksGetWorkBrowseMode === 'function') {
+            assertEq('default browse mode is cards', root.prksGetWorkBrowseMode(), 'cards');
+            const listClass = root.prksWorkBrowseCollectionClass();
+            assert('cards collection includes card-grid', listClass.indexOf('card-grid') !== -1);
+            if (typeof root.prksSetWorkBrowseMode === 'function' && typeof root.localStorage !== 'undefined') {
+                root.prksSetWorkBrowseMode('list');
+                assertEq('set list mode', root.prksGetWorkBrowseMode(), 'list');
+                const listColl = root.prksWorkBrowseCollectionClass();
+                assert('list collection class', listColl.indexOf('work-browse-collection--list') !== -1);
+                assert('list collection drops card-grid', listColl.indexOf('card-grid') === -1);
+                root.prksSetWorkBrowseMode('cards');
+            }
+            const toggle = typeof root.prksWorkBrowseModeToggleHtml === 'function'
+                ? root.prksWorkBrowseModeToggleHtml('prks-work-browse-mode-test')
+                : '';
+            assert('mode toggle exposes radiogroup', toggle.indexOf('role="radiogroup"') !== -1);
+            assert('mode toggle labels Cards and List', toggle.indexOf('Cards') !== -1 && toggle.indexOf('List') !== -1);
+        }
 
         // Thumbnails stay decorative — no redundant screen-reader announcement of the title.
         assert('thumb image alt is empty', /alt=""/.test(pdfCard));

@@ -93,13 +93,25 @@ function renderWorksByDocType(works, docType, container, options = {}) {
             ? prksDocTypeBadgeHtml(dt)
             : `<span class="status-badge Planned">${prksTypesEsc(label)}</span>`;
 
+    const browseClass =
+        typeof prksWorkBrowseCollectionClass === 'function'
+            ? prksWorkBrowseCollectionClass('types-page__detail-grid')
+            : 'card-grid types-page__detail-grid';
+    const modeToggle =
+        typeof prksWorkBrowseModeToggleHtml === 'function'
+            ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-types')
+            : '';
+
     container.innerHTML = `
         <div class="types-page types-page--detail">
-            <div class="prks-page-header page-header types-page__detail-header">
-                <h2 class="prks-page-title">Files</h2>
-                <div class="types-page__detail-type">${typeBadge}</div>
+            <div class="prks-page-header page-header types-page__detail-header page-header--split">
+                <div class="page-header__title-row">
+                    <h2 class="prks-page-title">Files</h2>
+                    <div class="types-page__detail-type">${typeBadge}</div>
+                    ${modeToggle}
+                </div>
             </div>
-        <div class="card-grid types-page__detail-grid">
+        <div class="${browseClass}">
             ${
                 filtered.length
                     ? filtered
@@ -115,6 +127,7 @@ function renderWorksByDocType(works, docType, container, options = {}) {
         </div>
     `;
     if (!offlineCached && typeof prksInitLazyWorkThumbs === 'function') prksInitLazyWorkThumbs(container);
+    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 

@@ -16,10 +16,24 @@ function prksInferWorkSourceKind(work) {
     return sk;
 }
 
+const memoryStore = Object.create(null);
+const localStorageShim = {
+    getItem(k) {
+        return Object.prototype.hasOwnProperty.call(memoryStore, k) ? memoryStore[k] : null;
+    },
+    setItem(k, v) {
+        memoryStore[k] = String(v);
+    },
+    removeItem(k) {
+        delete memoryStore[k];
+    },
+};
+
 const sandbox = {
     console: console,
     window: null,
     globalThis: null,
+    localStorage: localStorageShim,
     prksInferWorkSourceKind: prksInferWorkSourceKind,
     module: { exports: {} },
     require: require,

@@ -144,7 +144,11 @@
          * results array itself is never mutated. */
         const rows = typeof root.prksEffectiveWorksSync === 'function'
             ? root.prksEffectiveWorksSync(results) : results;
-        let html = '<div class="card-grid">';
+        const browseClass =
+            typeof root.prksWorkBrowseCollectionClass === 'function'
+                ? root.prksWorkBrowseCollectionClass()
+                : 'card-grid';
+        let html = '<div class="' + browseClass + '">';
         if (rows && rows.length > 0) {
             rows.forEach(function (w) {
                 /* The server's own excerpt rule -- code points, not UTF-16

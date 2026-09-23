@@ -48,11 +48,183 @@ function prksWorkThumbUrl(workId, page) {
 const PRKS_WORK_THUMB_PLACEHOLDER =
     'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
+const PRKS_WORK_BROWSE_MODE_KEY = 'prks.ui.workBrowseMode';
+const PRKS_WORK_BROWSE_MODES = ['cards', 'list'];
+
+function prksNormalizeWorkBrowseMode(raw) {
+    const v = String(raw || '')
+        .trim()
+        .toLowerCase();
+    return PRKS_WORK_BROWSE_MODES.includes(v) ? v : 'cards';
+}
+
+/** Global Work browse density: cards (default) or compact list. */
+function prksGetWorkBrowseMode() {
+    try {
+        if (typeof localStorage === 'undefined') return 'cards';
+        return prksNormalizeWorkBrowseMode(localStorage.getItem(PRKS_WORK_BROWSE_MODE_KEY));
+    } catch (_err) {
+        return 'cards';
+    }
+}
+
+/**
+ * Persist Work browse density. Returns the canonical mode that was stored.
+ * Does not re-fetch; callers apply the class change in-place.
+ */
+function prksSetWorkBrowseMode(mode) {
+    const next = prksNormalizeWorkBrowseMode(mode);
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(PRKS_WORK_BROWSE_MODE_KEY, next);
+        }
+    } catch (_err) {
+        /* Preference is best-effort; browsing still works without it. */
+    }
+    return next;
+}
+
+/** Collection wrapper class for the current browse mode (CSS drives layout). */
+function prksWorkBrowseCollectionClass(extraClass) {
+    const mode = prksGetWorkBrowseMode();
+    const base =
+        mode === 'list'
+            ? 'work-browse-collection work-browse-collection--list'
+            : 'work-browse-collection work-browse-collection--cards card-grid';
+    const extra = extraClass != null && String(extraClass).trim() ? ' ' + String(extraClass).trim() : '';
+    return base + extra;
+}
+
+/**
+ * Segmented Cards | List control for Work collection chrome.
+ * @param {string} [hiddenId]
+ */
+function prksWorkBrowseModeToggleHtml(hiddenId) {
+    const id = hiddenId || 'prks-work-browse-mode';
+    const mode = prksGetWorkBrowseMode();
+    const labels = ['Cards', 'List'];
+    const selected = mode === 'list' ? 'List' : 'Cards';
+    if (typeof prksSegmentedControlHtml === 'function') {
+        return (
+            `<div class="work-browse-mode" data-prks-role="work-browse-mode">` +
+            prksSegmentedControlHtml(id, 'Work browse layout', labels, selected, '', {
+                compact: true,
+            }) +
+            `</div>`
+        );
+    }
+    return (
+        `<div class="work-browse-mode" data-prks-role="work-browse-mode">` +
+        `<div class="prks-segmented-wrap prks-segmented-wrap--compact">` +
+        `<input type="hidden" id="${prksWorkCardsEscapeHtml(id)}" value="${prksWorkCardsEscapeHtml(selected)}">` +
+        `<div class="prks-segmented prks-segmented--compact" role="radiogroup" aria-label="Work browse layout">` +
+        labels
+            .map((l) => {
+                const on = l === selected;
+                return (
+                    `<button type="button" class="prks-segmented__btn${on ? ' prks-segmented__btn--active' : ''}"` +
+                    ` data-value="${prksWorkCardsEscapeHtml(l)}" aria-pressed="${on ? 'true' : 'false'}" role="radio">${prksWorkCardsEscapeHtml(l)}</button>`
+                );
+            })
+            .join('') +
+        `</div></div></div>`
+    );
+}
+
+/**
+ * Apply browse mode to every Work collection under root (class only — no refetch).
+ * @param {ParentNode|null} root
+ * @param {string} mode
+ */
+function prksApplyWorkBrowseModeToDom(root, mode) {
+    const host = root && typeof root.querySelectorAll === 'function' ? root : document;
+    const next = prksNormalizeWorkBrowseMode(mode);
+    host.querySelectorAll('.work-browse-collection').forEach((el) => {
+        el.classList.toggle('work-browse-collection--list', next === 'list');
+        el.classList.toggle('work-browse-collection--cards', next === 'cards');
+        el.classList.toggle('card-grid', next === 'cards');
+    });
+    host.querySelectorAll('[data-prks-role="work-browse-mode"]').forEach((wrap) => {
+        const hidden = wrap.querySelector('input[type="hidden"]');
+        const label = next === 'list' ? 'List' : 'Cards';
+        if (hidden) hidden.value = label;
+        wrap.querySelectorAll('.prks-segmented__btn').forEach((btn) => {
+            const on = (btn.getAttribute('data-value') || '') === label;
+            btn.classList.toggle('prks-segmented__btn--active', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+    });
+}
+
+/**
+ * Bind Cards|List toggles under root. Mode change persists and reclasses collections
+ * in-place; optional onModeChange for surfaces that need a full re-paint.
+ * @param {ParentNode|null} root
+ * @param {{ onModeChange?: (mode: string) => void }} [options]
+ */
+function prksBindWorkBrowseMode(root, options) {
+    const host = root && typeof root.querySelectorAll === 'function' ? root : document;
+    const opts = options && typeof options === 'object' ? options : {};
+    host.querySelectorAll('[data-prks-role="work-browse-mode"]').forEach((wrap) => {
+        if (wrap.dataset.prksBrowseModeBound === '1') return;
+        wrap.dataset.prksBrowseModeBound = '1';
+        const hidden = wrap.querySelector('input[type="hidden"]');
+        const seg = wrap.querySelector('.prks-segmented');
+        if (!seg) return;
+        if (hidden && typeof prksBindSegmentedHidden === 'function' && hidden.id) {
+            prksBindSegmentedHidden(hidden.id);
+        }
+        seg.querySelectorAll('.prks-segmented__btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const label = btn.getAttribute('data-value') || 'Cards';
+                const mode = label === 'List' ? 'list' : 'cards';
+                const next = prksSetWorkBrowseMode(mode);
+                prksApplyWorkBrowseModeToDom(host, next);
+                if (typeof opts.onModeChange === 'function') opts.onModeChange(next);
+                if (typeof window.prksInitLazyWorkThumbs === 'function') {
+                    window.prksInitLazyWorkThumbs(host);
+                }
+            });
+        });
+    });
+}
+
+function prksSetWorkThumbState(thumb, state) {
+    if (!thumb || !thumb.classList) return;
+    thumb.classList.remove(
+        'work-card__thumb--loading',
+        'work-card__thumb--ready',
+        'work-card__thumb--error',
+        'work-card__thumb--empty'
+    );
+    const s = String(state || '');
+    if (s === 'loading') thumb.classList.add('work-card__thumb--loading');
+    else if (s === 'ready') thumb.classList.add('work-card__thumb--ready');
+    else if (s === 'error') thumb.classList.add('work-card__thumb--error');
+    else if (s === 'empty') thumb.classList.add('work-card__thumb--empty');
+    thumb.setAttribute('data-prks-thumb-state', s || '');
+}
+
 function prksHydrateLazyWorkThumb(img) {
     if (!img || !(img instanceof HTMLImageElement)) return;
     if (img.dataset.prksThumbLoaded === '1') return;
     const src = String(img.getAttribute('data-prks-thumb-src') || '').trim();
     if (!src) return;
+    const thumb = img.closest('.work-card__thumb');
+    if (thumb) prksSetWorkThumbState(thumb, 'loading');
+    const onLoad = () => {
+        if (thumb) prksSetWorkThumbState(thumb, 'ready');
+        img.removeEventListener('load', onLoad);
+        img.removeEventListener('error', onError);
+    };
+    const onError = () => {
+        if (thumb) prksSetWorkThumbState(thumb, 'error');
+        img.removeEventListener('load', onLoad);
+        img.removeEventListener('error', onError);
+        img.remove();
+    };
+    img.addEventListener('load', onLoad);
+    img.addEventListener('error', onError);
     img.setAttribute('src', src);
     img.dataset.prksThumbLoaded = '1';
     img.removeAttribute('data-prks-thumb-src');
@@ -88,6 +260,10 @@ function prksInitLazyWorkThumbs(root) {
     imgs.forEach((img) => {
         if (img.dataset.prksThumbObserving === '1') return;
         img.dataset.prksThumbObserving = '1';
+        const thumb = img.closest('.work-card__thumb');
+        if (thumb && !thumb.classList.contains('work-card__thumb--ready')) {
+            prksSetWorkThumbState(thumb, 'loading');
+        }
         observer.observe(img);
     });
 }
@@ -133,11 +309,12 @@ function prksWorkCardCreditLine(w) {
 }
 
 /**
- * Work card HTML for card-grid layouts.
+ * Work card HTML for card-grid and compact-list layouts (CSS mode via collection class).
  * @param {object} w
- * @param {object} options { subtitle?: string, thumbPage?: number } — subtitle = contextual line
- *   (abstract excerpt, added/opened date, Person credit) rendered below the bibliographic meta line,
- *   not merged into it.
+ * @param {object} options { subtitle?: string, thumbPage?: number, hideDocTypeBadge?: boolean,
+ *   suppressThumbnail?: boolean }
+ *   — subtitle = contextual line (abstract excerpt, added/opened date, Person credit)
+ *   rendered below the bibliographic meta line, not merged into it.
  */
 function prksWorkCardHtml(w, options = {}) {
     if (!w) return '';
@@ -177,16 +354,35 @@ function prksWorkCardHtml(w, options = {}) {
     const thumbSrc = suppressThumbnail
         ? ''
         : hasPdf
-        ? prksWorkThumbUrl(w.id, thumbPage)
-        : isVideoKind && w.thumb_url
-          ? String(w.thumb_url).trim()
-          : '';
+          ? prksWorkThumbUrl(w.id, thumbPage)
+          : isVideoKind && w.thumb_url
+            ? String(w.thumb_url).trim()
+            : '';
 
-    const thumbHtml = thumbSrc
-        ? `<div class="work-card__thumb ${thumbKindClass}"><img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-src="${prksWorkCardsEscapeHtml(
-              thumbSrc
-          )}" onerror="this.closest('.work-card__thumb')?.classList.add('work-card__thumb--error'); this.remove();" /></div>`
-        : `<div class="work-card__thumb work-card__thumb--empty ${thumbKindClass}" aria-hidden="true"></div>`;
+    let thumbHtml;
+    if (thumbSrc) {
+        thumbHtml =
+            `<div class="work-card__thumb ${thumbKindClass} work-card__thumb--loading" data-prks-thumb-state="loading"` +
+            ` data-prks-thumb-preview-src="${prksWorkCardsEscapeHtml(thumbSrc)}"` +
+            ` data-prks-thumb-preview-kind="${isVideoKind ? 'video' : 'pdf'}">` +
+            `<img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-src="${prksWorkCardsEscapeHtml(
+                thumbSrc
+            )}" />` +
+            `</div>`;
+    } else {
+        const emptyLabel = suppressThumbnail
+            ? 'empty'
+            : 'empty';
+        const emptyTitle = suppressThumbnail
+            ? 'Preview not available offline'
+            : isVideoKind
+              ? 'No video preview'
+              : 'No preview';
+        thumbHtml =
+            `<div class="work-card__thumb work-card__thumb--empty ${thumbKindClass}"` +
+            ` data-prks-thumb-state="${emptyLabel}" title="${prksWorkCardsEscapeHtml(emptyTitle)}"` +
+            ` aria-hidden="true"></div>`;
+    }
 
     const fileSizeHtml = prksWorkFileSizeMbHtml(w);
 
@@ -222,9 +418,139 @@ function prksWorkCardHtml(w, options = {}) {
     `;
 }
 
+/* ---------- Quick preview (hover / keyboard; same thumb URL, no reader) ---------- */
+
+function prksWorkThumbPreviewEl() {
+    let el = document.getElementById('prks-work-thumb-preview');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'prks-work-thumb-preview';
+    el.className = 'work-card-preview';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Work preview');
+    el.hidden = true;
+    el.innerHTML =
+        '<div class="work-card-preview__frame work-card-preview__frame--pdf">' +
+        '<img class="work-card-preview__img" alt="" />' +
+        '</div>';
+    document.body.appendChild(el);
+    return el;
+}
+
+function prksHideWorkThumbPreview() {
+    const el = document.getElementById('prks-work-thumb-preview');
+    if (!el) return;
+    el.hidden = true;
+    el.classList.remove('work-card-preview--visible');
+    const img = el.querySelector('.work-card-preview__img');
+    if (img) {
+        img.removeAttribute('src');
+        img.removeAttribute('data-prks-preview-src');
+    }
+    window.__prksWorkThumbPreviewSource = null;
+}
+
+function prksPositionWorkThumbPreview(el, anchor) {
+    if (!el || !anchor || typeof anchor.getBoundingClientRect !== 'function') return;
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    el.style.visibility = 'hidden';
+    el.hidden = false;
+    el.classList.add('work-card-preview--visible');
+    const pw = el.offsetWidth || 320;
+    const ph = el.offsetHeight || 240;
+    let left = rect.right + margin;
+    let top = rect.top;
+    if (left + pw + margin > vw) {
+        left = rect.left - pw - margin;
+    }
+    if (left < margin) left = Math.max(margin, (vw - pw) / 2);
+    if (top + ph + margin > vh) {
+        top = Math.max(margin, vh - ph - margin);
+    }
+    if (top < margin) top = margin;
+    el.style.left = Math.round(left) + 'px';
+    el.style.top = Math.round(top) + 'px';
+    el.style.visibility = '';
+}
+
+/**
+ * Show a larger preview of an existing thumb asset. Does not open the Work.
+ * Uses the same URL already known for the card — no per-Work API.
+ * @param {Element} thumbEl
+ */
+function prksShowWorkThumbPreview(thumbEl) {
+    if (!thumbEl || !thumbEl.getAttribute) return;
+    if (thumbEl.classList.contains('work-card__thumb--empty')) return;
+    if (thumbEl.classList.contains('work-card__thumb--error')) return;
+    const src =
+        String(thumbEl.getAttribute('data-prks-thumb-preview-src') || '').trim() ||
+        (() => {
+            const img = thumbEl.querySelector('img');
+            if (!img) return '';
+            const lazy = String(img.getAttribute('data-prks-thumb-src') || '').trim();
+            if (lazy) return lazy;
+            const cur = String(img.getAttribute('src') || '').trim();
+            return cur && cur !== PRKS_WORK_THUMB_PLACEHOLDER ? cur : '';
+        })();
+    if (!src) return;
+    const kind = String(thumbEl.getAttribute('data-prks-thumb-preview-kind') || 'pdf');
+    const el = prksWorkThumbPreviewEl();
+    const frame = el.querySelector('.work-card-preview__frame');
+    const img = el.querySelector('.work-card-preview__img');
+    if (!img || !frame) return;
+    frame.classList.toggle('work-card-preview__frame--pdf', kind !== 'video');
+    frame.classList.toggle('work-card-preview__frame--video', kind === 'video');
+    if (img.getAttribute('data-prks-preview-src') !== src) {
+        img.setAttribute('data-prks-preview-src', src);
+        img.setAttribute('src', src);
+    }
+    window.__prksWorkThumbPreviewSource = thumbEl;
+    prksPositionWorkThumbPreview(el, thumbEl);
+}
+
+function prksWorkThumbFromCard(card) {
+    if (!card || !card.querySelector) return null;
+    return card.querySelector('.work-card__thumb[data-prks-thumb-preview-src]');
+}
+
 if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
     window.__prksWorkCardKeyNavBound = true;
     document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            const preview = document.getElementById('prks-work-thumb-preview');
+            if (preview && !preview.hidden) {
+                e.preventDefault();
+                prksHideWorkThumbPreview();
+                return;
+            }
+        }
+        /* Preview without navigating: P while a Work card is focused. */
+        if (
+            (e.key === 'p' || e.key === 'P') &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            !e.altKey
+        ) {
+            const t = e.target;
+            if (t && t.closest && t.closest('input, button, a, textarea, select, [contenteditable="true"]')) {
+                return;
+            }
+            const card =
+                t && t.closest
+                    ? t.closest('.project-card--work-card[data-prks-route][role="link"]')
+                    : null;
+            if (card && t === card) {
+                const thumb = prksWorkThumbFromCard(card);
+                if (thumb) {
+                    e.preventDefault();
+                    prksShowWorkThumbPreview(thumb);
+                    return;
+                }
+            }
+        }
         if (e.key !== 'Enter' && e.key !== ' ') return;
         const t = e.target;
         if (!t || !t.closest) return;
@@ -241,10 +567,64 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
         const hash = card.getAttribute('data-prks-route');
         if (!hash) return;
         e.preventDefault();
+        prksHideWorkThumbPreview();
         if (typeof window.prksNavigate === 'function') window.prksNavigate(hash);
+    });
+
+    document.addEventListener(
+        'pointerover',
+        function (e) {
+            const t = e.target;
+            if (!t || !t.closest) return;
+            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-src]');
+            if (!thumb) return;
+            if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;
+            prksShowWorkThumbPreview(thumb);
+        },
+        true
+    );
+
+    document.addEventListener(
+        'pointerout',
+        function (e) {
+            const t = e.target;
+            if (!t || !t.closest) return;
+            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-src]');
+            if (!thumb) return;
+            const related = e.relatedTarget;
+            if (related && thumb.contains(related)) return;
+            const preview = document.getElementById('prks-work-thumb-preview');
+            if (preview && related && preview.contains(related)) return;
+            if (window.__prksWorkThumbPreviewSource === thumb) prksHideWorkThumbPreview();
+        },
+        true
+    );
+
+    document.addEventListener(
+        'focusout',
+        function () {
+            /* Keep keyboard preview until Escape or another card action. */
+        },
+        true
+    );
+
+    window.addEventListener('scroll', function () {
+        if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
+    }, true);
+
+    window.addEventListener('resize', function () {
+        if (window.__prksWorkThumbPreviewSource) prksHideWorkThumbPreview();
     });
 }
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
 window.prksWorkCardCreditText = prksWorkCardCreditText;
 window.prksWorkCardCreditLine = prksWorkCardCreditLine;
+window.prksGetWorkBrowseMode = prksGetWorkBrowseMode;
+window.prksSetWorkBrowseMode = prksSetWorkBrowseMode;
+window.prksWorkBrowseCollectionClass = prksWorkBrowseCollectionClass;
+window.prksWorkBrowseModeToggleHtml = prksWorkBrowseModeToggleHtml;
+window.prksBindWorkBrowseMode = prksBindWorkBrowseMode;
+window.prksApplyWorkBrowseModeToDom = prksApplyWorkBrowseModeToDom;
+window.prksShowWorkThumbPreview = prksShowWorkThumbPreview;
+window.prksHideWorkThumbPreview = prksHideWorkThumbPreview;

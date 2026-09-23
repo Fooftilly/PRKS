@@ -4589,6 +4589,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(contentDiv);
     }
+    if (typeof window.prksBindWorkBrowseMode === 'function') {
+        window.prksBindWorkBrowseMode(contentDiv);
+    }
 
     const apiErr =
         typeof window.prksConsumeApiError === 'function'
