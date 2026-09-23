@@ -809,6 +809,178 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_tiled_pending_folder_inert_clears_on_focus_other_pane(self):
+        """Ownership transfer must clear stale panel inert while A→B is pending."""
+        from urllib.parse import urlparse
+
+        _server, page, ids = self.start()
+        research = ids["research"]
+        philosophy = ids["philosophy"]
+        ethics = ids["ethics"]
+        self.open_folder(page, research)
+        page.wait_for_selector("#panel-content .prks-private-notes-input", timeout=10000)
+
+        page.evaluate(
+            """(id) => prksNavigate('#/folders/' + encodeURIComponent(id), { target: 'tile' })""",
+            ethics,
+        )
+        page.wait_for_function(
+            """() => {
+                const s = window.prksWorkspaceSnapshot && window.prksWorkspaceSnapshot();
+                return !!(
+                    s &&
+                    s.mode === 'tiled' &&
+                    s.secondaryTree &&
+                    s.secondaryTree.type === 'leaf'
+                );
+            }""",
+            timeout=15000,
+        )
+        page.wait_for_selector(
+            ".prks-tile--secondary [data-prks-role='folder-detail']",
+            timeout=15000,
+        )
+        tabs = page.evaluate(
+            """() => {
+                const s = window.prksWorkspaceSnapshot();
+                return {
+                    main: s.mainTabId,
+                    secondary: s.secondaryTree && s.secondaryTree.tabId,
+                };
+            }"""
+        )
+        # Ensure Main (Research) owns the right panel before starting A→B.
+        page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", tabs["main"])
+        page.wait_for_function(
+            "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+            arg=tabs["main"],
+            timeout=10000,
+        )
+        page.wait_for_function(
+            """(mainId) => {
+                const panel = document.getElementById('panel-content');
+                return !!(
+                    panel &&
+                    panel.dataset.prksOwnerTabId === String(mainId) &&
+                    panel.querySelector('.prks-private-notes-input') &&
+                    !panel.inert
+                );
+            }""",
+            arg=tabs["main"],
+            timeout=10000,
+        )
+
+        held_b = []
+
+        def hold_b(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/folders/" + philosophy:
+                held_b.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders/**", hold_b)
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held_b:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_b, "B (Philosophy) GET not held")
+
+            pending = page.evaluate(
+                """(mainId) => {
+                    const panel = document.getElementById('panel-content');
+                    return {
+                        panelInert: !!(panel && panel.inert),
+                        ownerIsMain: !!(panel && panel.dataset.prksOwnerTabId === String(mainId)),
+                    };
+                }""",
+                tabs["main"],
+            )
+            self.assertTrue(pending["ownerIsMain"], "Main must still own panel while A→B pending")
+            self.assertTrue(pending["panelInert"], "owned panel must be inert while A→B pending")
+
+            # Focus Secondary — ownership transfer must clear stale inert immediately.
+            page.evaluate("(id) => window.prksWorkspaceFocusTab(id)", tabs["secondary"])
+            page.wait_for_function(
+                "id => window.prksWorkspaceSnapshot().focusedTabId === id",
+                arg=tabs["secondary"],
+                timeout=10000,
+            )
+            page.wait_for_function(
+                """(secId) => {
+                    const panel = document.getElementById('panel-content');
+                    return !!(
+                        panel &&
+                        panel.dataset.prksOwnerTabId === String(secId) &&
+                        !panel.inert &&
+                        panel.querySelector('.prks-private-notes-input')
+                    );
+                }""",
+                arg=tabs["secondary"],
+                timeout=10000,
+            )
+            after_focus = page.evaluate(
+                """() => {
+                    const panel = document.getElementById('panel-content');
+                    const notes = panel && panel.querySelector('.prks-private-notes-input');
+                    return {
+                        panelInert: !!(panel && panel.inert),
+                        notesDisabled: !!(notes && notes.disabled),
+                    };
+                }"""
+            )
+            self.assertFalse(after_focus["panelInert"], "panel must be usable right after focus transfer")
+            self.assertFalse(after_focus["notesDisabled"], "Reminders must accept input on focused pane")
+
+            # Let B settle on Main — finish must not re-freeze the Secondary-owned panel.
+            while held_b:
+                held_b.pop(0).fallback()
+            page.wait_for_function(
+                """(title) => {
+                    const t = document.querySelector(
+                        '.prks-tile--main .prks-folder-detail__main .prks-page-title'
+                    );
+                    return !!(t && (t.textContent || '').includes(title));
+                }""",
+                arg=LIBRARY_NAV_PHILOSOPHY,
+                timeout=15000,
+            )
+            after_settle = page.evaluate(
+                """(secId) => {
+                    const panel = document.getElementById('panel-content');
+                    return {
+                        panelInert: !!(panel && panel.inert),
+                        ownerIsSecondary: !!(
+                            panel && panel.dataset.prksOwnerTabId === String(secId)
+                        ),
+                        focusedIsSecondary:
+                            window.prksWorkspaceSnapshot().focusedTabId === secId,
+                    };
+                }""",
+                tabs["secondary"],
+            )
+            self.assertTrue(after_settle["focusedIsSecondary"], "Secondary must stay focused")
+            self.assertTrue(
+                after_settle["ownerIsSecondary"],
+                "Secondary must keep panel ownership after B settles",
+            )
+            self.assertFalse(after_settle["panelInert"], "panel must stay usable after B settles")
+        finally:
+            while held_b:
+                try:
+                    held_b.pop(0).abort()
+                except Exception:
+                    pass
+            try:
+                page.unroute("**/api/folders/**")
+            except Exception:
+                pass
+
     def test_folder_to_folder_stale_detail_cannot_commit(self):
         """Late B detail result after C supersedes must not commit (generation guard)."""
         _server, page, ids = self.start()
@@ -834,11 +1006,33 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                 if (typeof original !== 'function') throw new Error('missing prksOfflineDetailFetch');
                 window.__prksOrigOfflineDetailFetch = original;
                 window.__prksHeldFolderDetail = null;
+                window.__prksHeldBContinuationPastAwait = false;
                 window.prksOfflineDetailFetch = async function (kind, id, path, signal, options) {
                     if (kind === 'folder' && String(id) === String(philosophyId)) {
-                        return await new Promise((resolve) => {
+                        const payload = await new Promise((resolve) => {
                             window.__prksHeldFolderDetail = { resolve };
                         });
+                        // Thenable: mark only after the caller's post-await work
+                        // (including the stale-generation check) has run.
+                        return {
+                            then(onFulfilled, onRejected) {
+                                return Promise.resolve(payload).then(
+                                    (value) => {
+                                        let next;
+                                        try {
+                                            next = onFulfilled ? onFulfilled(value) : value;
+                                        } catch (err) {
+                                            window.__prksHeldBContinuationPastAwait = true;
+                                            throw err;
+                                        }
+                                        return Promise.resolve(next).finally(() => {
+                                            window.__prksHeldBContinuationPastAwait = true;
+                                        });
+                                    },
+                                    onRejected
+                                );
+                            },
+                        };
                     }
                     return original.call(this, kind, id, path, signal, options);
                 };
@@ -885,6 +1079,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                     if (!held || typeof held.resolve !== 'function') {
                         return false;
                     }
+                    window.__prksHeldBContinuationPastAwait = false;
                     held.resolve({
                         value: body,
                         source: 'network',
@@ -896,10 +1091,10 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                 philosophy_body,
             )
             self.assertTrue(delivered, "late B detail must be delivered to the held promise")
-            page.evaluate(
-                "() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))"
+            page.wait_for_function(
+                "() => window.__prksHeldBContinuationPastAwait === true",
+                timeout=10000,
             )
-            page.wait_for_timeout(100)
             title = page.locator(
                 ".prks-tile--main .prks-folder-detail__main .prks-page-title"
             ).inner_text()
@@ -922,6 +1117,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                         } catch (_) {}
                     }
                     window.__prksHeldFolderDetail = null;
+                    window.__prksHeldBContinuationPastAwait = false;
                     if (window.__prksOrigOfflineDetailFetch) {
                         window.prksOfflineDetailFetch = window.__prksOrigOfflineDetailFetch;
                         delete window.__prksOrigOfflineDetailFetch;

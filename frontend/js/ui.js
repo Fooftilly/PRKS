@@ -2463,7 +2463,15 @@ function prksRightPanelOwnedBy(ctx, node) {
 function prksMarkRightPanelOwner(ctx) {
     const panel = document.getElementById('panel-content');
     if (!panel || !ctx) return panel;
-    panel.dataset.prksOwnerTabId = String(ctx.tabId);
+    const nextOwner = String(ctx.tabId);
+    const prevOwner = panel.dataset.prksOwnerTabId || '';
+    // Ownership transfer must clear pending-navigation inert left by a prior
+    // owner. Leaving it set would freeze the newly focused pane's panel after
+    // the old owner's finish refuses to clear (no longer owns the panel).
+    if (prevOwner && prevOwner !== nextOwner) {
+        panel.inert = false;
+    }
+    panel.dataset.prksOwnerTabId = nextOwner;
     panel.dataset.prksOwnerGeneration = String(ctx.generation);
     return panel;
 }
