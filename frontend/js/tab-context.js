@@ -174,8 +174,12 @@
              * Same-route Folder hierarchy tree refill ownership. Independent of
              * ctx.generation / AbortSignal: overlapping live refreshes after
              * CREATE/rename/reparent/DELETE can share one route generation.
+             *
+             * Full and selection-only use separate counters so a selection-only
+             * Folder→Folder fill cannot supersede an in-flight topology refresh.
              */
-            folderHierarchyRefreshGeneration: 0,
+            folderHierarchyFullGeneration: 0,
+            folderHierarchySelectionGeneration: 0,
             abortController: null,
             entity: null,
             routeSidebar: {},
@@ -224,23 +228,46 @@
 
         /**
          * Start a Folder-detail hierarchy tree refresh for this TabContext.
-         * Only the newest token may commit DOM after an async catalogue load.
-         * @returns {number} refresh generation token, or -1 when destroyed
+         * @param {string} [mode] 'full' (default) or 'selection'
+         * @returns {{mode:string,gen:number,fullBase?:number}|null} token, or null when destroyed
+         *
+         * Full tokens stay current until another full begins. Selection tokens
+         * stay current until a newer selection begins OR a full begins after
+         * they started (fullBase captured at start). Selection never bumps the
+         * full counter, so it cannot invalidate an in-flight topology refill.
          */
-        ctx.beginFolderHierarchyRefresh = function () {
-            if (ctx.destroyed) return -1;
-            ctx.folderHierarchyRefreshGeneration += 1;
-            return ctx.folderHierarchyRefreshGeneration;
+        ctx.beginFolderHierarchyRefresh = function (mode) {
+            if (ctx.destroyed) return null;
+            const isSelection = mode === 'selection';
+            if (isSelection) {
+                ctx.folderHierarchySelectionGeneration += 1;
+                return {
+                    mode: 'selection',
+                    gen: ctx.folderHierarchySelectionGeneration,
+                    fullBase: ctx.folderHierarchyFullGeneration,
+                };
+            }
+            ctx.folderHierarchyFullGeneration += 1;
+            return { mode: 'full', gen: ctx.folderHierarchyFullGeneration };
         };
 
         /**
-         * True when this TabContext is still live and `gen` is the newest
-         * Folder hierarchy refresh token (same-route overlap ownership).
+         * True when this TabContext is still live and `token` is still the
+         * newest Folder hierarchy refresh for its mode (see begin above).
          */
-        ctx.isFolderHierarchyRefreshCurrent = function (gen) {
+        ctx.isFolderHierarchyRefreshCurrent = function (token) {
             if (ctx.destroyed || (!ctx.mounted && !ctx.suspended)) return false;
-            if (typeof gen !== 'number' || gen < 0) return false;
-            return gen === ctx.folderHierarchyRefreshGeneration;
+            if (!token || typeof token !== 'object') return false;
+            if (token.mode === 'full') {
+                return token.gen === ctx.folderHierarchyFullGeneration;
+            }
+            if (token.mode === 'selection') {
+                return (
+                    token.gen === ctx.folderHierarchySelectionGeneration &&
+                    token.fullBase === ctx.folderHierarchyFullGeneration
+                );
+            }
+            return false;
         };
 
         ctx.setEntity = function (type, value) {
@@ -349,9 +376,11 @@
             if (ctx.destroyed) return ctx.generation;
             teardownRuntime();
             ctx.generation += 1;
-            // Route change abandons in-flight hierarchy refills; reset so a
-            // later same-route refresh cannot be confused with a pre-route token.
-            ctx.folderHierarchyRefreshGeneration = 0;
+            // Invalidate in-flight hierarchy refills without resetting to zero —
+            // a zero reset would reuse token gen=1 on consecutive routes when the
+            // AbortController stub never aborts (no-AbortController environments).
+            ctx.folderHierarchyFullGeneration += 1;
+            ctx.folderHierarchySelectionGeneration += 1;
             ctx.abortController = createAbort();
             ctx.route = route || null;
             ctx.lastResolvedRoute = null;
@@ -728,14 +757,15 @@
 
     /**
      * Whether a Folder-detail hierarchy refill may commit DOM after its await.
-     * Route AbortSignal covers A→B→C remounts; refreshGen covers same-route
-     * overlapping live refreshes (sync CREATE/rename/reparent/DELETE).
+     * Route AbortSignal covers A→B→C remounts; refreshToken covers same-route
+     * overlapping live refreshes (sync CREATE/rename/reparent/DELETE), with
+     * mode-aware full vs selection ownership on TabContext.
      */
-    function prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal) {
+    function prksFolderHierarchyTreeCommitAllowed(ctx, refreshToken, container, signal) {
         if (signal && signal.aborted) return false;
-        if (refreshGen != null) {
+        if (refreshToken != null) {
             if (!ctx || typeof ctx.isFolderHierarchyRefreshCurrent !== 'function') return false;
-            if (!ctx.isFolderHierarchyRefreshCurrent(refreshGen)) return false;
+            if (!ctx.isFolderHierarchyRefreshCurrent(refreshToken)) return false;
         } else if (ctx && (ctx.destroyed || (!ctx.mounted && !ctx.suspended))) {
             return false;
         }

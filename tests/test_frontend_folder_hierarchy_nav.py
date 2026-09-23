@@ -101,12 +101,18 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         folders = _read(os.path.join(_ROOT, "frontend", "js", "components", "folders.js"))
         self.assertIn("function prksRefreshLiveFolderDetailTrees", folders)
         self.assertIn("selectionOnly: false", folders)
-        # Same-route overlapping live refills (#161): refresh generation owns DOM commit.
+        # Same-route overlapping live refills (#161): mode-aware refresh owns DOM commit.
         self.assertIn("beginFolderHierarchyRefresh", folders)
+        self.assertIn("selectionOnly ? 'selection' : 'full'", folders)
         self.assertIn("prksFolderHierarchyTreeCommitAllowed", folders)
         tab_ctx = _read(os.path.join(_ROOT, "frontend", "js", "tab-context.js"))
-        self.assertIn("folderHierarchyRefreshGeneration", tab_ctx)
+        self.assertIn("folderHierarchyFullGeneration", tab_ctx)
+        self.assertIn("folderHierarchySelectionGeneration", tab_ctx)
+        self.assertNotIn("folderHierarchyRefreshGeneration", tab_ctx)
         self.assertIn("isFolderHierarchyRefreshCurrent", tab_ctx)
+        # beginRoute advances (never resets to 0) so AbortController stubs cannot revive tokens.
+        self.assertIn("folderHierarchyFullGeneration += 1", tab_ctx)
+        self.assertIn("folderHierarchySelectionGeneration += 1", tab_ctx)
         # Commit gate lives on TabContext (require-able; avoids Sonar S1523 vm loads).
         self.assertIn("function prksFolderHierarchyTreeCommitAllowed", tab_ctx)
         self.assertNotIn("function prksFolderHierarchyTreeCommitAllowed", folders)

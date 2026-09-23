@@ -1266,12 +1266,14 @@ function prksFolderDetailSelectInTree(host, folderId, rows) {
 
 /**
  * Live Folder-detail hierarchy refill. Same-route overlap ownership uses
- * TabContext beginFolderHierarchyRefresh / prksFolderHierarchyTreeCommitAllowed
- * (defined in tab-context.js) so an older async catalogue result cannot overwrite
- * a newer committed tree. Route AbortSignal still covers A→B→C remounts.
+ * TabContext beginFolderHierarchyRefresh(mode) / prksFolderHierarchyTreeCommitAllowed
+ * so an older async catalogue result cannot overwrite a newer committed tree.
+ * Selection-only never supersedes an in-flight full topology refresh.
+ * Route AbortSignal still covers A→B→C remounts.
  */
 async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
+    const selectionOnly = !!opts.selectionOnly;
     const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!host || !folder) return;
     // Capture before await: A→B→C can abort B while load() is in flight. The
@@ -1281,13 +1283,13 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
         ctx && ctx.abortController && ctx.abortController.signal
             ? ctx.abortController.signal
             : null;
-    // Same-route overlap ownership: every live refill (full or selection-only)
-    // takes a token; only the newest still-live token may mutate the tree DOM.
-    const refreshGen =
+    // Mode-aware ownership: full vs selection use separate counters so a
+    // Folder→Folder selection-only fill cannot invalidate a pending sync full refill.
+    const refreshToken =
         ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
-            ? ctx.beginFolderHierarchyRefresh()
+            ? ctx.beginFolderHierarchyRefresh(selectionOnly ? 'selection' : 'full')
             : null;
-    if (refreshGen === -1) return;
+    if (refreshToken == null && ctx && ctx.destroyed) return;
     const load =
         typeof prksLoadFolderHierarchyCatalogue === 'function'
             ? prksLoadFolderHierarchyCatalogue
@@ -1304,7 +1306,7 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     }
     if (
         typeof prksFolderHierarchyTreeCommitAllowed !== 'function' ||
-        !prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal)
+        !prksFolderHierarchyTreeCommitAllowed(ctx, refreshToken, container, signal)
     ) {
         return;
     }
@@ -1323,7 +1325,7 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     }
     // Same-workspace Folder→Folder: keep the hierarchy DOM; only move selection.
     if (
-        opts.selectionOnly &&
+        selectionOnly &&
         liveHost.querySelector('.prks-folder-tree--detail-nav') &&
         prksFolderDetailSelectInTree(liveHost, commitFolder.id, rows)
     ) {
