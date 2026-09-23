@@ -780,7 +780,7 @@ class LibraryCreationTourTest(_UXTour):
 
             tour.step("Create a new PDF Work")
             page.locator("#prks-ribbon-new-file").click()
-            page.wait_for_selector("#work-modal:not(.hidden)")
+            page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
             page.fill("#work-title", "UX Tour Created PDF Work")
             page.set_input_files("#work-file", str(MINIMAL_PDF))
             page.locator("#upload-selected-file-name").wait_for(state="visible")
@@ -796,7 +796,7 @@ class LibraryCreationTourTest(_UXTour):
             page.locator('#sidebar a.nav-link[href="#/folders"]').click()
             page.wait_for_function("() => location.hash === '#/folders'")
             page.locator("#prks-ribbon-new-file").click()
-            page.wait_for_selector("#work-modal:not(.hidden)")
+            page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
             page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
             page.locator("#work-video-url").wait_for(state="visible")
             page.fill("#work-title", "UX Tour Created YouTube Work")

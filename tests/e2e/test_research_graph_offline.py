@@ -610,7 +610,7 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         before = self.generations(page)
         for author in (False, True):
             page.locator('#prks-ribbon-new-file').click()
-            page.wait_for_selector('#work-modal:not(.hidden)')
+            page.wait_for_selector('#work-modal:not(.hidden):not([inert])')
             page.fill('#work-title', 'Graph unreferenced work ' + str(author))
             page.set_input_files('#work-file', str(MINIMAL_PDF))
             page.locator('#upload-selected-file-name').wait_for(state='visible')

@@ -2768,6 +2768,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         'code': 'FOLDER_NOT_FOUND',
                     })
                     return
+                # Same for the People the Work is born with: a Person this
+                # server has not heard of yet (e.g. still queued on the
+                # device that created it) would fail its foreign key only
+                # after the Work was committed.
+                requested_roles = data.get('roles') if isinstance(data.get('roles'), list) else []
+                if db.missing_person_ids(
+                    r.get('person_id') for r in requested_roles if isinstance(r, dict)
+                ):
+                    self.send_json(409, {
+                        'error': 'A person on this file has not finished saving yet.',
+                        'code': 'PERSON_NOT_FOUND',
+                    })
+                    return
 
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):

@@ -4638,6 +4638,29 @@ window.prksRenderTabRoute = prksRenderTabRoute;
 window.handleRoute = handleRoute;
 
 
+/**
+ * PDF creation is a plain request, so every Person it links must already be on
+ * the server. A Person quick-created moment ago may still be queued locally:
+ * nudge sync and wait (bounded) until those CREATE_PERSON operations retire.
+ */
+async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
+    const ids = new Set(Array.from(personIds || []).filter(Boolean));
+    if (!ids.size || typeof prksPendingPersonCreates !== 'function') return true;
+    const deadline = Date.now() + (timeoutMs || 10000);
+    for (;;) {
+        const ops = await prksDurableOperationsOrNone();
+        const pending = prksPendingPersonCreates(ops).filter(op => ids.has(op.entity_id));
+        if (!pending.length) return true;
+        if (Date.now() >= deadline) return false;
+        if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.changed === 'function') {
+            prksSync.changed();
+        }
+        await new Promise(resolve => {
+            setTimeout(resolve, 200);
+        });
+    }
+}
+
 /** A refused (4xx) create says plainly that no Work exists, so a retry is safe. */
 function prksWorkCreateFailureText(errText) {
     const text = String(errText || '').trim() || 'Could not create the file.';
@@ -4660,6 +4683,21 @@ function initForms() {
 
     document.getElementById('save-work-btn').onclick = async () => {
         if (window.__prksWorkCreateInFlight) return;
+        // A person quick-created a moment ago is still being written and
+        // added: wait for it so the Work is created with them.
+        const pendingPerson = window.__prksUploadPersonPending;
+        if (pendingPerson) {
+            window.__prksWorkCreateInFlight = true;
+            if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+            try {
+                await pendingPerson;
+            } catch (_e) {
+                /* the quick-create reported its own failure */
+            } finally {
+                window.__prksWorkCreateInFlight = false;
+                if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(false);
+            }
+        }
         const kindEl = document.getElementById('work-source-kind');
         const sourceKind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
         const fileInput = document.getElementById('work-file');
@@ -4926,6 +4964,18 @@ function initForms() {
             return;
         }
 
+        const peopleReady = await prksWaitForPeopleOnServer(
+            (payload.roles || []).map(r => r.person_id)
+        );
+        if (!peopleReady) {
+            if (statusMsg) {
+                statusMsg.textContent =
+                    'A person on this file is still being saved. Nothing was saved; try again in a moment.';
+                statusMsg.classList.remove('hidden');
+            }
+            return;
+        }
+
         let res;
         try {
             res = await prksRequest('/api/works', {
@@ -4981,6 +5031,14 @@ function initForms() {
                     ? 'PRKS could not finish creating the file. Check your library before trying again.'
                     : prksWorkCreateFailureText(errText);
                 statusMsg.classList.remove('hidden');
+            }
+            if (data.code === 'PERSON_NOT_FOUND') {
+                const peopleErr = document.getElementById('upload-people-error');
+                if (peopleErr) {
+                    peopleErr.textContent = 'A person on this file has not reached PRKS yet. Try again in a moment.';
+                    peopleErr.classList.remove('hidden');
+                }
+                return;
             }
             if (data.code === 'FOLDER_NOT_FOUND' && folderSearchEl) {
                 // A stale destination (deleted elsewhere) is a Folder-field

@@ -641,6 +641,30 @@ class TestServerAPI(unittest.TestCase):
         delete_work = __import__("backend.work_deletion", fromlist=["delete_work"]).delete_work
         delete_work(server_module.db, server_module.text_index, work_id)
 
+    def test_5f_post_work_with_unknown_person_is_refused_before_creation(self):
+        """A role naming a Person the server has not heard of (still queued on
+        the creating device) is refused before any Work or PDF exists."""
+        pdf_bytes = _pdf_with_text_bytes("Unknown person body")
+        payload = {
+            "title": "Unknown Person Work",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "unknown_person.pdf",
+            "roles": [{"person_id": "P-not-yet-synced", "role_type": "Author"}],
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(json.loads(cm.exception.read().decode()).get("code"), "PERSON_NOT_FOUND")
+        self.assertEqual(set(os.listdir(server_module.pdfs_dir)), pdfs_before)
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Unknown Person Work", titles)
+
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}
         req = urllib.request.Request(f"{self._base_url}/api/persons", data=json.dumps(payload).encode(), method="POST")

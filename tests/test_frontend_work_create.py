@@ -158,11 +158,15 @@ class FrontendWorkCreateTests(unittest.TestCase):
         # A lost response or a server error does not prove nothing was saved.
         self.assertIn("Could not confirm whether the file was saved", app)
         self.assertIn("res.status >= 500", app)
-        self.assertNotIn("Nothing was saved; try again", app)
+        self.assertNotIn("Could not reach PRKS. Nothing was saved", app)
         ui = _read(_UI)
-        quick = ui.split("onQuickCreate: (typedName) => {\n            const search", 1)[1][:900]
+        quick = ui.split("onQuickCreate: (typedName) => {\n            const search", 1)[1].split("onPersonPick", 1)[0]
         self.assertIn("search.readOnly = true", quick)
         self.assertIn("finally", quick)
+        self.assertIn("window.__prksUploadPersonPending = pending", ui)
+        # Create waits for an in-flight quick-create before building the payload.
+        save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]
+        self.assertLess(save.index("__prksUploadPersonPending"), save.index("const payload"))
 
     def test_selected_source_markup(self):
         html = _read(_INDEX)

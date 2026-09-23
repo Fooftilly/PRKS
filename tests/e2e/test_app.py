@@ -10129,7 +10129,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertIn("New File", page.locator("#prks-ribbon-new-file").inner_text())
         self.assertEqual(page.locator(".top-ribbon__center .ribbon-btn__label", has_text="New…").count(), 0)
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self.assertTrue(page.locator("#work-create-source-heading").is_visible())
         self.assertTrue(page.locator("#save-work-btn").is_visible())
         page.locator("#work-modal-cancel").click()
@@ -10146,7 +10146,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_modal_hierarchy_source_state_and_sticky_footer(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self.assertTrue(page.locator("#work-title").is_visible())
         self.assertTrue(page.locator("#work-folder-search").is_visible())
         self.assertFalse(page.locator("#work-doi").is_visible())
@@ -10234,7 +10234,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_kind_switch_clears_stale_source(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.fill("#work-title", "Switch Title")
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file").wait_for(state="visible")
@@ -10253,7 +10253,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_validation_keeps_input_then_create_navigates(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.fill("#work-title", "E2E Created Work")
         page.locator("#save-work-btn").click()
         page.locator("#work-file-error", has_text="Choose a PDF file.").wait_for()
@@ -10271,7 +10271,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_create_button_blocks_duplicate_post(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.fill("#work-title", "E2E Once")
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")
@@ -10335,11 +10335,15 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         default, folder_id is "" and folder_label is "Uncategorized" — waiting
         on the label avoids the vacuous-empty pass before the continuation runs.
         """
+        # resetUploadModal() already writes the Uncategorized default before the
+        # async continuation runs, so the values alone can match while the
+        # modal is still inert -- and a fill into an inert field is dropped.
         page.wait_for_function(
             """(expected) => {
+                const modal = document.getElementById('work-modal');
                 const idEl = document.getElementById('work-folder-id');
                 const searchEl = document.getElementById('work-folder-search');
-                return !!(idEl && searchEl
+                return !!(modal && !modal.hasAttribute('inert') && idEl && searchEl
                     && idEl.value === expected.id
                     && searchEl.value === expected.label);
             }""",
@@ -10367,7 +10371,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_default_folder_visible_destination_matches_stored_destination(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self._wait_work_modal_uncategorized(page)
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
         self.assertEqual(page.locator("#work-folder-id").input_value(), "")
@@ -10383,7 +10387,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         _server, page, _collector = self._start_app()
         philosophy_id = self._create_folder_via_api(page, "Philosophy")
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self._wait_work_modal_uncategorized(page)
         page.fill("#work-title", "Typed Folder E2E Work")
         page.set_input_files("#work-file", str(MINIMAL_PDF))
@@ -10413,7 +10417,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_explicit_default_after_typing_commits_uncategorized(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self._wait_work_modal_uncategorized(page)
         page.fill("#work-title", "Explicit Default E2E Work")
         page.set_input_files("#work-file", str(MINIMAL_PDF))
@@ -10469,7 +10473,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         try:
             page.locator("#prks-ribbon-new-file").click()
-            page.wait_for_selector("#work-modal:not(.hidden)")
+            page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
             self._wait_work_modal_folder(page, folder_id, "Split Secondary Folder")
             self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
             self.assertEqual(
@@ -10492,7 +10496,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         self._focus_secondary_leaf(page)
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self._wait_work_modal_uncategorized(page)
         self.assertEqual(page.locator("#work-folder-id").input_value(), "")
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Uncategorized")
@@ -10503,7 +10507,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.evaluate("(fid) => window.prksNavigate('#/folders/' + fid)", arg=folder_id)
         page.wait_for_function("() => location.hash.indexOf('#/folders/') === 0")
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         self._wait_work_modal_folder(page, folder_id, "Single Pane Folder")
         self.assertEqual(page.locator("#work-folder-id").input_value(), folder_id)
         self.assertEqual(page.locator("#work-folder-search").input_value(), "Single Pane Folder")
@@ -10512,7 +10516,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
 
     def _open_video_mode(self, page):
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
         page.locator("#work-video-url").wait_for(state="visible")
 
@@ -10580,7 +10584,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def test_inline_errors_use_aria_describedby_not_for(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.locator("#save-work-btn").click()
         page.locator("#work-file-error", has_text="Choose a PDF file.").wait_for()
         self.assertIn(
@@ -10833,7 +10837,12 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#upload-selected-file-name").wait_for(state="visible")
         page.fill("#work-title", "E2E Stale Folder Work")
         page.locator("#work-folder-search").fill("Soon Gone")
-        page.locator("#folder-results .result-item", has_text="E2E Soon Gone").click()
+        page.wait_for_selector("#folder-results.is-open .result-item")
+        page.locator("#work-folder-search").press("ArrowDown")
+        page.locator("#work-folder-search").press("Enter")
+        page.wait_for_function(
+            "id => document.getElementById('work-folder-id').value === id", arg=folder_id
+        )
         page.evaluate(
             """async (id) => { await prksRequest('/api/folders/' + encodeURIComponent(id), { method: 'DELETE' }); }""",
             folder_id,
@@ -10936,6 +10945,34 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertEqual(work["title"], "Stub Lecture")
         self.assertEqual(work["author_text"], "Stub Channel")
         self.assertEqual(work["source_kind"], "video")
+
+    def test_create_waits_for_an_in_flight_quick_create(self):
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Quick Create Race")
+        # Hold the durable person create so Create is pressed while it is pending.
+        page.evaluate(
+            """() => {
+                const real = window.prksCreatePersonDurably;
+                window.__e2eReleasePerson = null;
+                window.prksCreatePersonDurably = (fields) => new Promise((resolve, reject) => {
+                    window.__e2eReleasePerson = () => real(fields).then(resolve, reject);
+                });
+            }"""
+        )
+        page.fill("#upload-person-search", "Zed Quickmade")
+        page.locator("#person-results .result-item--create").click()
+        page.wait_for_function("() => typeof window.__e2eReleasePerson === 'function'")
+        self.assertTrue(page.evaluate("() => document.getElementById('upload-person-search').readOnly"))
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
+        self.assertIn("#/folders", page.evaluate("() => location.hash"))
+        page.evaluate("() => window.__e2eReleasePerson()")
+        work = self._work_detail(page, self._created_work_id(page))
+        names = [(r.get("first_name"), r.get("last_name"), r["role_type"]) for r in work["roles"]]
+        self.assertEqual(names, [("Zed", "Quickmade", "Author")])
 
     def test_short_viewport_scrolls_body_and_keeps_create_visible(self):
         server, page, _collector = self._start_app()

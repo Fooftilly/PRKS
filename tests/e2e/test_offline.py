@@ -6706,7 +6706,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         invalidation hooks are what is under test -- not a helper called by the
         test itself."""
         page.locator("#prks-ribbon-new-file").click()
-        page.wait_for_selector("#work-modal:not(.hidden)")
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
         page.fill("#work-title", title)
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")

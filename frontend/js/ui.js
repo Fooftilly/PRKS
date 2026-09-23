@@ -5794,7 +5794,11 @@ async function populateUploadComboboxes() {
             // overwritten (and then cleared) by the older create.
             search.readOnly = true;
             search.setAttribute('aria-busy', 'true');
-            void (async () => {
+            // Create File awaits this (person created AND row added) so a
+            // quick submit cannot snapshot the People list without them.
+            const modal = document.getElementById('work-modal');
+            const openGeneration = modal ? modal.dataset.prksOpenGeneration : '';
+            const pending = (async () => {
                 try {
                     await prksQuickCreatePersonForSearchField(
                         typedName,
@@ -5808,9 +5812,17 @@ async function populateUploadComboboxes() {
                 }
                 // Quick-create may have set a credit (typed name differs from
                 // the stored profile name); addRoleToUploadList reads it.
+                // Closed or reopened meanwhile: never add to a different form.
+                if (!modal || modal.classList.contains('hidden') ||
+                    modal.dataset.prksOpenGeneration !== openGeneration) return;
                 const hidden = document.getElementById('upload-person-id');
                 if (hidden && hidden.value) addRoleToUploadList();
             })();
+            window.__prksUploadPersonPending = pending;
+            const clear = () => {
+                if (window.__prksUploadPersonPending === pending) window.__prksUploadPersonPending = null;
+            };
+            pending.then(clear, clear);
         },
         // Choosing a person IS adding them: no separate Link step.
         onPersonPick: () => {

@@ -3447,6 +3447,17 @@ class PRKSDatabase:
                 folder_sync.set_field_on_conn(
                     conn, folder_id, field, "" if value in (None, False) else str(value))
 
+    def missing_person_ids(self, person_ids) -> List[str]:
+        """The given Person ids that have no row, in the order given."""
+        wanted = [str(p).strip() for p in (person_ids or []) if str(p or "").strip()]
+        if not wanted:
+            return []
+        unique = list(dict.fromkeys(wanted))
+        marks = ",".join("?" for _ in unique)
+        rows = self.execute_query(f"SELECT id FROM persons WHERE id IN ({marks})", tuple(unique))
+        present = {r["id"] for r in rows}
+        return [p for p in unique if p not in present]
+
     def folder_exists(self, folder_id: str) -> bool:
         fid = (folder_id or "").strip()
         if not fid:
