@@ -4266,6 +4266,55 @@ class PRKSDatabase:
                 raise MissingPersonError("A person on this file no longer exists.") from exc
             raise
 
+    def insert_initial_roles(self, work_id: str, roles) -> int:
+        """All the relationships a NEW Work is born with, in ONE transaction.
+
+        Every named Person is checked inside the same write transaction that
+        inserts the roles, so a concurrent delete cannot slip between the
+        check and the insert; if any is missing, nothing is written -- no role
+        and no credit-to-alias promotion -- and `MissingPersonError` is raised.
+        An individually invalid role (bad role type or credit) is skipped, as
+        before, without undoing the others. Returns the number inserted.
+        """
+        wanted = []
+        for idx, r in enumerate(roles if isinstance(roles, list) else []):
+            if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
+                continue
+            credit = r.get('credit_name', '')
+            if credit is not None and not isinstance(credit, str):
+                credit = ''
+            wanted.append((idx, str(r['person_id']), r['role_type'], credit or ''))
+        if not wanted:
+            return 0
+        inserted = 0
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            ids = list(dict.fromkeys(p for _i, p, _t, _c in wanted))
+            marks = ",".join("?" for _ in ids)
+            present = {row[0] for row in conn.execute(
+                f"SELECT id FROM persons WHERE id IN ({marks})", tuple(ids))}
+            if any(p not in present for p in ids):
+                raise MissingPersonError("A person on this file no longer exists.")
+            for idx, person_id, role_type, credit in wanted:
+                if conn.execute(
+                        "SELECT 1 FROM roles WHERE person_id = ? AND work_id = ? AND role_type = ? LIMIT 1",
+                        (person_id, work_id, role_type)).fetchone():
+                    continue
+                conn.execute("SAVEPOINT initial_role")
+                try:
+                    # CONSTRUCTION: no revision; the caller's author order is
+                    # preserved; the alias side effect happens at this boundary.
+                    work_role_sync.insert_initial_role(
+                        conn, work_id, person_id, role_type, order_index=idx,
+                        credit_name=credit)
+                except ValueError:
+                    conn.execute("ROLLBACK TO SAVEPOINT initial_role")
+                    conn.execute("RELEASE SAVEPOINT initial_role")
+                    continue
+                conn.execute("RELEASE SAVEPOINT initial_role")
+                inserted += 1
+        return inserted
+
     def next_role_order_index(self, work_id: str) -> int:
         """Next order_index for a new role on this work (append after existing links)."""
         rows = self.execute_query(

@@ -2937,43 +2937,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(409, {'error': str(e)})
                         return
                 
-                # Link persons/roles provided during upload
-                roles = data.get('roles', [])
-                if isinstance(roles, list):
-                    for idx, r in enumerate(roles):
-                        if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
-                            continue
-                        p_id = r['person_id']
-                        r_type = r['role_type']
-                        if db.has_work_role(p_id, w_id, r_type):
-                            continue
-                        credit_name = r.get('credit_name', '')
-                        if credit_name is not None and not isinstance(credit_name, str):
-                            credit_name = ''
-                        try:
-                            # CONSTRUCTION: these are the relationships this
-                            # Work is born with, so they carry no revision and
-                            # the caller's author order is preserved. The alias
-                            # side effect happens at that boundary.
-                            db.insert_initial_role(
-                                w_id,
-                                p_id,
-                                r_type,
-                                order_index=idx,
-                                credit_name=credit_name or '',
-                            )
-                        except MissingPersonError:
-                            # Deleted after the up-front check: same outcome
-                            # as that check, through the existing compensation.
-                            delete_library_work(db, text_index, w_id)
-                            self.send_json(409, {
-                                'error': 'A person on this file no longer exists.',
-                                'code': 'PERSON_NOT_FOUND',
-                            })
-                            return
-                        except ValueError:
-                            continue
-                        
+                # Link persons/roles provided during upload: all of them in one
+                # transaction, which also re-checks every Person under the write
+                # lock, so a refusal leaves no role and no alias change behind.
+                try:
+                    db.insert_initial_roles(w_id, data.get('roles', []))
+                except MissingPersonError:
+                    # Deleted after the up-front check: same outcome as that
+                    # check, through the existing compensation.
+                    delete_library_work(db, text_index, w_id)
+                    self.send_json(409, {
+                        'error': 'A person on this file no longer exists.',
+                        'code': 'PERSON_NOT_FOUND',
+                    })
+                    return
+
                 self.send_json(200, {'id': w_id})
             elif path == '/api/playlists':
                 pl_id = db.add_playlist(

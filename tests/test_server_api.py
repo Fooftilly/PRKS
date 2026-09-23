@@ -690,6 +690,71 @@ class TestServerAPI(unittest.TestCase):
             titles = [w.get("title") for w in json.loads(res.read().decode())]
         self.assertNotIn("Person Race Work", titles)
 
+    def test_5i_refused_roles_leave_no_alias_promotion_behind(self):
+        """Roles are one transaction: when a later Person is missing, an earlier
+        role's credit is not promoted into its Person's aliases either."""
+        db = server_module.db
+        person_id = db.add_person(first_name="Alias", last_name="Keeper")
+        before_aliases = (db.get_person(person_id) or {}).get("aliases") or ""
+        before_rev = db.execute_query(
+            "SELECT revision FROM sync_entity_revisions WHERE scope_id LIKE ?",
+            (f"%{person_id}%",),
+        )
+        pdf_bytes = _pdf_with_text_bytes("Alias rollback body")
+        payload = {
+            "title": "Alias Rollback Work",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "alias_rollback.pdf",
+            "roles": [
+                {"person_id": person_id, "role_type": "Author", "credit_name": "A. Keeper"},
+                {"person_id": "P-deleted-meanwhile", "role_type": "Editor"},
+            ],
+        }
+        with patch.object(db, "missing_person_ids", return_value=[]):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual((db.get_person(person_id) or {}).get("aliases") or "", before_aliases)
+        self.assertEqual(
+            db.execute_query(
+                "SELECT revision FROM sync_entity_revisions WHERE scope_id LIKE ?",
+                (f"%{person_id}%",),
+            ),
+            before_rev,
+        )
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Alias Rollback Work", titles)
+
+    def test_5j_valid_roles_still_promote_credit_and_keep_order(self):
+        db = server_module.db
+        a = db.add_person(first_name="Order", last_name="First")
+        b = db.add_person(first_name="Order", last_name="Second")
+        payload = {
+            "title": "Initial Roles Work",
+            "status": "Planned",
+            "roles": [
+                {"person_id": a, "role_type": "Author", "credit_name": "O. First"},
+                {"person_id": b, "role_type": "Author"},
+                {"person_id": b, "role_type": "Author"},
+                {"person_id": a, "role_type": "not-a-role"},
+            ],
+        }
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req) as res:
+            work_id = json.loads(res.read().decode())["id"]
+        roles = db.get_work_roles(work_id)
+        self.assertEqual([(r["id"], r["role_type"]) for r in roles], [(a, "Author"), (b, "Author")])
+        self.assertEqual(roles[0]["credit_name"], "O. First")
+        self.assertIn("O. First", (db.get_person(a) or {}).get("aliases") or "")
+
     def test_5h_filing_a_missing_work_is_not_called_a_missing_folder(self):
         folder_id = server_module.db.add_folder("Filing Target 5h")
         with self.assertRaisesRegex(ValueError, "file no longer exists"):
