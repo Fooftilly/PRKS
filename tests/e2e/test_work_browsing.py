@@ -176,6 +176,35 @@ class WorkBrowsingV1Tests(unittest.TestCase):
             timeout=10000,
         )
 
+        # Folder A → P → Folder B (preserveFolderWorkspace): preview must clear.
+        self.open_folder(page, parent)
+        page.wait_for_selector(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']",
+            timeout=10000,
+        )
+        card = page.locator(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
+        ).first
+        card.focus()
+        page.keyboard.press("p")
+        page.wait_for_selector(
+            "#prks-work-thumb-preview.work-card-preview--visible", timeout=5000
+        )
+        # Navigate to child while folder-detail shell is live (preserve path).
+        self.open_folder(page, child)
+        page.wait_for_function(
+            "() => {"
+            "  const el = document.getElementById('prks-work-thumb-preview');"
+            "  const srcGone = !window.__prksWorkThumbPreviewSource;"
+            "  return srcGone && (!el || el.hidden);"
+            "}",
+            timeout=10000,
+        )
+        page.wait_for_selector(
+            f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_b']}']",
+            timeout=10000,
+        )
+
         # Return to Folder A for the rest of the acceptance path.
         self.open_folder(page, parent)
         page.wait_for_selector(

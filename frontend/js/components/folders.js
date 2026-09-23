@@ -1468,6 +1468,12 @@ function renderFolderDetails(ctx, folder, container, options = {}) {
         container
             .querySelectorAll('[data-prks-role="offline-provenance-banner"]')
             .forEach((banner) => banner.remove());
+        // Body-mounted keyboard/hover preview is keyed to thumbs inside main —
+        // dismiss before this rewrite detaches them (app.js also releases on
+        // route entry; this covers the preserve path at the exact mutation).
+        if (typeof window.prksReleaseWorkThumbPreview === 'function') {
+            window.prksReleaseWorkThumbPreview(existingMain);
+        }
         existingMain.innerHTML = prksFolderDetailMainInnerHtml(ctx, folder, offlineCached);
         if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
             window.prksInitLazyWorkThumbs(existingMain);
