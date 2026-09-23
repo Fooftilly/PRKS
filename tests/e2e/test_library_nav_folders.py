@@ -654,26 +654,9 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
                 page.locator(".prks-tile--main [data-prks-role='folder-detail']").count(),
                 1,
             )
-            # Release older B first — must not overwrite C's pending selection.
-            # Fetch+fulfill waits for B's network body before asserting. A fixed
-            # delay can false-pass when B paints late; expect_response can hang
-            # when C already aborted B's client fetch (no page response event).
-            while held_b:
-                route_b = held_b.pop(0)
-                try:
-                    route_b.fulfill(response=route_b.fetch())
-                except Exception:
-                    try:
-                        route_b.fallback()
-                    except Exception:
-                        pass
-            page.evaluate(
-                "() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)))"
-            )
-            title_mid = page.locator(
-                ".prks-tile--main .prks-folder-detail__main .prks-page-title"
-            ).inner_text()
-            self.assertNotIn(LIBRARY_NAV_PHILOSOPHY, title_mid)
+            # Narrowed guarantee: when C is released first, C commits and the
+            # workspace never paints B. Late-B generation-guard delivery is
+            # covered by test_folder_to_folder_stale_detail_cannot_commit.
             while held_c:
                 held_c.pop(0).fallback()
             self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ethics)
@@ -682,17 +665,269 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             ).inner_text()
             self.assertIn(LIBRARY_NAV_ETHICS, title)
             self.assertNotIn(LIBRARY_NAV_PHILOSOPHY, title)
+            while held_b:
+                held_b.pop(0).abort()
         finally:
             for bucket in (held_b, held_c):
                 while bucket:
+                    route = bucket.pop(0)
                     try:
-                        bucket.pop(0).fallback()
+                        route.abort()
                     except Exception:
-                        pass
+                        try:
+                            route.fallback()
+                        except Exception:
+                            pass
             try:
                 page.unroute("**/api/folders/**")
             except Exception:
                 pass
+
+    def test_folder_to_folder_pending_freezes_owned_panel_not_tree(self):
+        """While A→B is pending, owned right panel is inert; tree can still go to C."""
+        from urllib.parse import urlparse
+
+        _server, page, ids = self.start()
+        research = ids["research"]
+        philosophy = ids["philosophy"]
+        ethics = ids["ethics"]
+        self.open_folder(page, research)
+        page.wait_for_selector("#panel-content .prks-private-notes-input", timeout=10000)
+        page.wait_for_selector(
+            ".prks-tile--main [data-prks-folder-detail-tree-host] .prks-folder-tree__link",
+            timeout=10000,
+        )
+
+        held_b = []
+
+        def hold_b(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.method == "GET" and path == "/api/folders/" + philosophy:
+                held_b.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders/**", hold_b)
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            deadline = page.evaluate("() => Date.now()") + 8000
+            while page.evaluate("() => Date.now()") < deadline and not held_b:
+                page.wait_for_timeout(50)
+            self.assertTrue(held_b, "B (Philosophy) GET not held")
+
+            pending = page.evaluate(
+                """() => {
+                    const panel = document.getElementById('panel-content');
+                    const notes = panel && panel.querySelector('.prks-private-notes-input');
+                    const tagSearch = panel && panel.querySelector('#folder-tag-search');
+                    const main = document.querySelector(
+                        '.prks-tile--main .prks-folder-detail__main'
+                    );
+                    const newBtn = document.querySelector(
+                        '.prks-tile--main [data-prks-role="folder-detail-new-folder"]'
+                    );
+                    const treeLink = document.querySelector(
+                        '.prks-tile--main [data-prks-folder-detail-tree-host] '
+                        + '.prks-folder-tree__link'
+                    );
+                    return {
+                        panelInert: !!(panel && panel.inert),
+                        notesBlocked: !!(notes && (panel && panel.inert)),
+                        tagSearchBlocked: !!(tagSearch && (panel && panel.inert)),
+                        mainInert: !!(main && main.inert),
+                        newDisabled: !!(newBtn && newBtn.disabled),
+                        treeNotInert: !!(
+                            treeLink &&
+                            !treeLink.closest('[inert]') &&
+                            !treeLink.disabled
+                        ),
+                    };
+                }"""
+            )
+            self.assertTrue(pending["panelInert"], "owned #panel-content must be inert while B pending")
+            self.assertTrue(pending["notesBlocked"], "Reminders must not accept input while pending")
+            self.assertTrue(pending["tagSearchBlocked"], "folder tag search must be blocked while pending")
+            self.assertTrue(pending["mainInert"], "Folder main must stay inert while pending")
+            self.assertTrue(pending["newDisabled"], "New Folder must stay disabled while pending")
+            self.assertTrue(pending["treeNotInert"], "hierarchy tree must remain clickable")
+
+            # Expand Philosophy (if needed) and activate Ethics via the live tree
+            # DOM — proves hierarchy is not under inert. Prefer a real click() so
+            # an accidentally-inert tree cannot silently succeed.
+            activated = page.evaluate(
+                """({ philosophyId, ethicsId }) => {
+                    const host = document.querySelector(
+                        '.prks-tile--main [data-prks-folder-detail-tree-host]'
+                    );
+                    if (!host) return { ok: false, reason: 'no-host' };
+                    if (host.closest('[inert]')) return { ok: false, reason: 'host-inert' };
+                    const phil = host.querySelector(
+                        '.prks-folder-tree__row[data-folder-id="' + philosophyId + '"]'
+                    );
+                    if (phil && phil.getAttribute('aria-expanded') !== 'true') {
+                        const toggle = phil.querySelector('.prks-folder-tree__toggle');
+                        if (toggle) toggle.click();
+                    }
+                    const link = host.querySelector(
+                        '.prks-folder-tree__link[href="#/folders/' + ethicsId + '"]'
+                    );
+                    if (!link) return { ok: false, reason: 'no-ethics-link' };
+                    if (link.closest('[inert]')) return { ok: false, reason: 'link-inert' };
+                    link.click();
+                    return { ok: true };
+                }""",
+                {"philosophyId": philosophy, "ethicsId": ethics},
+            )
+            self.assertTrue(activated.get("ok"), f"tree→C failed: {activated}")
+            self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ethics)
+            settled = page.evaluate(
+                """() => {
+                    const panel = document.getElementById('panel-content');
+                    const main = document.querySelector(
+                        '.prks-tile--main .prks-folder-detail__main'
+                    );
+                    return {
+                        panelInert: !!(panel && panel.inert),
+                        mainInert: !!(main && main.inert),
+                    };
+                }"""
+            )
+            self.assertFalse(settled["panelInert"], "panel inert must clear after C commits")
+            self.assertFalse(settled["mainInert"], "main inert must clear after C commits")
+        finally:
+            while held_b:
+                try:
+                    held_b.pop(0).abort()
+                except Exception:
+                    pass
+            try:
+                page.unroute("**/api/folders/**")
+            except Exception:
+                pass
+
+    def test_folder_to_folder_stale_detail_cannot_commit(self):
+        """Late B detail result after C supersedes must not commit (generation guard)."""
+        _server, page, ids = self.start()
+        research = ids["research"]
+        philosophy = ids["philosophy"]
+        ethics = ids["ethics"]
+        self.open_folder(page, research)
+        self.wait_folder_title(page, LIBRARY_NAV_RESEARCH, research)
+
+        philosophy_body = page.evaluate(
+            """async (id) => {
+                const res = await fetch('/api/folders/' + encodeURIComponent(id));
+                if (!res.ok) throw new Error('philosophy fetch failed');
+                return await res.json();
+            }""",
+            philosophy,
+        )
+        self.assertEqual(philosophy_body.get("id"), philosophy)
+
+        page.evaluate(
+            """({ philosophyId }) => {
+                const original = window.prksOfflineDetailFetch;
+                if (typeof original !== 'function') throw new Error('missing prksOfflineDetailFetch');
+                window.__prksOrigOfflineDetailFetch = original;
+                window.__prksHeldFolderDetail = null;
+                window.prksOfflineDetailFetch = async function (kind, id, path, signal, options) {
+                    if (kind === 'folder' && String(id) === String(philosophyId)) {
+                        return await new Promise((resolve) => {
+                            window.__prksHeldFolderDetail = { resolve };
+                        });
+                    }
+                    return original.call(this, kind, id, path, signal, options);
+                };
+            }""",
+            {"philosophyId": philosophy},
+        )
+        try:
+            page.locator(
+                f'.prks-tile--main [data-prks-folder-detail-tree-host] '
+                f'.prks-folder-tree__link[href="#/folders/{philosophy}"]'
+            ).click()
+            page.wait_for_function(
+                "() => !!(window.__prksHeldFolderDetail && window.__prksHeldFolderDetail.resolve)",
+                timeout=10000,
+            )
+            activated = page.evaluate(
+                """({ philosophyId, ethicsId }) => {
+                    const host = document.querySelector(
+                        '.prks-tile--main [data-prks-folder-detail-tree-host]'
+                    );
+                    if (!host) return { ok: false, reason: 'no-host' };
+                    const phil = host.querySelector(
+                        '.prks-folder-tree__row[data-folder-id="' + philosophyId + '"]'
+                    );
+                    if (phil && phil.getAttribute('aria-expanded') !== 'true') {
+                        const toggle = phil.querySelector('.prks-folder-tree__toggle');
+                        if (toggle) toggle.click();
+                    }
+                    const link = host.querySelector(
+                        '.prks-folder-tree__link[href="#/folders/' + ethicsId + '"]'
+                    );
+                    if (!link) return { ok: false, reason: 'no-ethics-link' };
+                    link.click();
+                    return { ok: true };
+                }""",
+                {"philosophyId": philosophy, "ethicsId": ethics},
+            )
+            self.assertTrue(activated.get("ok"), f"tree→C failed: {activated}")
+            self.wait_folder_title(page, LIBRARY_NAV_ETHICS, ethics)
+
+            delivered = page.evaluate(
+                """(body) => {
+                    const held = window.__prksHeldFolderDetail;
+                    if (!held || typeof held.resolve !== 'function') {
+                        return false;
+                    }
+                    held.resolve({
+                        value: body,
+                        source: 'network',
+                        cachedAt: null,
+                    });
+                    window.__prksHeldFolderDetail = null;
+                    return true;
+                }""",
+                philosophy_body,
+            )
+            self.assertTrue(delivered, "late B detail must be delivered to the held promise")
+            page.evaluate(
+                "() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))"
+            )
+            page.wait_for_timeout(100)
+            title = page.locator(
+                ".prks-tile--main .prks-folder-detail__main .prks-page-title"
+            ).inner_text()
+            self.assertIn(LIBRARY_NAV_ETHICS, title)
+            self.assertNotIn(LIBRARY_NAV_PHILOSOPHY, title)
+            self.assertEqual(
+                page.evaluate("() => location.hash"),
+                "#/folders/" + ethics,
+            )
+        finally:
+            page.evaluate(
+                """() => {
+                    if (window.__prksHeldFolderDetail && window.__prksHeldFolderDetail.resolve) {
+                        try {
+                            window.__prksHeldFolderDetail.resolve({
+                                value: null,
+                                source: 'unavailable',
+                                cachedAt: null,
+                            });
+                        } catch (_) {}
+                    }
+                    window.__prksHeldFolderDetail = null;
+                    if (window.__prksOrigOfflineDetailFetch) {
+                        window.prksOfflineDetailFetch = window.__prksOrigOfflineDetailFetch;
+                        delete window.__prksOrigOfflineDetailFetch;
+                    }
+                }"""
+            )
 
     def test_folder_to_folder_replaces_offline_provenance_banner(self):
         """In-place Folder→Folder must not stack or leave stale Offline banners."""

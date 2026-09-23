@@ -1329,15 +1329,8 @@
         const cd = contentDiv || (ctx && ctx.root ? ctx.root : null);
         if (cd && cd.removeAttribute) cd.removeAttribute('aria-busy');
         if (ctx.root && ctx.root.removeAttribute) ctx.root.removeAttribute('aria-busy');
-        const folderShell =
-            cd && typeof cd.querySelector === 'function'
-                ? cd.querySelector('[data-prks-role="folder-detail"]')
-                : null;
-        if (folderShell) {
-            const main = folderShell.querySelector('.prks-folder-detail__main');
-            if (main) main.inert = false;
-            const newBtn = folderShell.querySelector('[data-prks-role="folder-detail-new-folder"]');
-            if (newBtn) newBtn.disabled = false;
+        if (typeof root.prksSetFolderPendingOwnerInert === 'function') {
+            root.prksSetFolderPendingOwnerInert(ctx, cd, false);
         }
 
         const resolvedTitle = prksResolvedRouteTitle(route, opts);

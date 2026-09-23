@@ -3366,16 +3366,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {
         contentDiv.setAttribute('aria-busy', 'true');
-        // aria-busy alone does not block activation. Retained Delete (in main)
-        // and New Folder (tree head) must not act on the previous Folder while
-        // the destination resolves — but the hierarchy tree must stay clickable
-        // so A→B→C can abort B. Whole-shell inert would trap the user on A.
-        const shell = contentDiv.querySelector('[data-prks-role="folder-detail"]');
-        if (shell) {
-            const main = shell.querySelector('.prks-folder-detail__main');
-            if (main) main.inert = true;
-            const newBtn = shell.querySelector('[data-prks-role="folder-detail-new-folder"]');
-            if (newBtn) newBtn.disabled = true;
+        // aria-busy alone does not block activation. Retained Delete (in main),
+        // New Folder (tree head), and the owned right panel must not mutate the
+        // previous Folder while the destination resolves — but the hierarchy
+        // tree must stay clickable so A→B→C can abort B.
+        if (typeof prksSetFolderPendingOwnerInert === 'function') {
+            prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
     }
 
@@ -4581,12 +4577,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
             prksFinishRouteRender(ctx, route, generation, contentDiv, titleOpts);
         } else {
             contentDiv.removeAttribute('aria-busy');
-            const errShell = contentDiv.querySelector('[data-prks-role="folder-detail"]');
-            if (errShell) {
-                const main = errShell.querySelector('.prks-folder-detail__main');
-                if (main) main.inert = false;
-                const newBtn = errShell.querySelector('[data-prks-role="folder-detail-new-folder"]');
-                if (newBtn) newBtn.disabled = false;
+            if (typeof prksSetFolderPendingOwnerInert === 'function') {
+                prksSetFolderPendingOwnerInert(ctx, contentDiv, false);
             }
         }
         return;
@@ -4635,12 +4627,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
     } else {
         ctx.lastResolvedRoute = route;
         contentDiv.removeAttribute('aria-busy');
-        const okShell = contentDiv.querySelector('[data-prks-role="folder-detail"]');
-        if (okShell) {
-            const main = okShell.querySelector('.prks-folder-detail__main');
-            if (main) main.inert = false;
-            const newBtn = okShell.querySelector('[data-prks-role="folder-detail-new-folder"]');
-            if (newBtn) newBtn.disabled = false;
+        if (typeof prksSetFolderPendingOwnerInert === 'function') {
+            prksSetFolderPendingOwnerInert(ctx, contentDiv, false);
         }
         prksPlayPageEnterAnimation(contentDiv);
     }
