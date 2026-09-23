@@ -10934,8 +10934,11 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self._open_disclosure(page, "work-upload-biblio-details")
         self.assertEqual(page.locator("#work-video-channel").input_value(), "Stub Channel")
         self.assertFalse(page.locator("#work-date").is_visible())
+        utc_today = "() => new Date().toISOString().slice(0, 10)"
+        date_before = page.evaluate(utc_today)
         page.locator("#save-work-btn").click()
         work_id = self._created_work_id(page)
+        date_after = page.evaluate(utc_today)
         wait_for_async(
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
@@ -10946,8 +10949,51 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertEqual(work["author_text"], "Stub Channel")
         self.assertEqual(work["source_kind"], "video")
         # The accessed date is stored, not left empty (owner review on #151).
-        today_utc = page.evaluate("() => new Date().toISOString().slice(0, 10)")
-        self.assertEqual(work.get("urldate"), today_utc)
+        # Submission may straddle UTC midnight: accept either side of it.
+        self.assertIn(work.get("urldate"), {date_before, date_after})
+
+    def test_enter_waits_for_tag_results_of_the_latest_query(self):
+        """Codex review on #151: Enter must not pick a row left over from the previous query."""
+        _server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        self._open_disclosure(page, "work-upload-more-details")
+        page.evaluate(
+            """() => {
+                const real = window.fetchTags;
+                window.__prksRealFetchTags = real;
+                window.__prksTagGate = null;
+                const tags = [{ id: 'tag-alpha', name: 'alpha' }, { id: 'tag-beta', name: 'beta' }];
+                window.fetchTags = async () => {
+                    if (window.__prksTagGate) await window.__prksTagGate.promise;
+                    return tags.map((t) => ({ ...t }));
+                };
+            }"""
+        )
+        self.addCleanup(lambda: page.evaluate(
+            "() => { if (window.__prksRealFetchTags) window.fetchTags = window.__prksRealFetchTags; }"
+        ))
+        page.locator("#upload-tag-search").click()
+        page.locator("#upload-tag-results .result-item", has_text="alpha").wait_for()
+        page.evaluate(
+            """() => {
+                let release;
+                const promise = new Promise((resolve) => { release = resolve; });
+                window.__prksTagGate = { promise, release };
+            }"""
+        )
+        page.keyboard.type("bet")
+        page.keyboard.press("Enter")  # the open rows still belong to the empty query
+        self.assertEqual(page.evaluate("() => uploadTagsSelected.map((t) => t.name)"), [])
+        page.evaluate("() => { const g = window.__prksTagGate; window.__prksTagGate = null; g.release(); }")
+        page.wait_for_function(
+            """() => {
+                const rows = [...document.querySelectorAll(
+                    '#upload-tag-results .result-item:not(.result-item--create)')];
+                return rows.length === 1 && rows[0].textContent === 'beta';
+            }"""
+        )
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => uploadTagsSelected.map((t) => t.name).join() === 'beta'")
 
     def test_create_waits_for_an_in_flight_quick_create(self):
         server, page, _collector = self._start_app()

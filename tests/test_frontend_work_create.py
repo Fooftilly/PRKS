@@ -140,6 +140,13 @@ class FrontendWorkCreateTests(unittest.TestCase):
         keys = ui.split("function prksBindWorkModalComboboxKeys", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("aria-activedescendant", keys)
         self.assertIn("result-item--create", keys)
+        # Typing marks the open rows stale until the list re-renders, so a
+        # quick Enter cannot pick a row from the previous query.
+        self.assertIn("stale = true", keys)
+        self.assertIn("stale = false", keys)
+        self.assertIn("if (stale)", keys)
+        tags = ui.split("function initUploadTagCombobox", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("if (seq !== renderSeq) return;", tags)
         escape = ui.split("function prksDismissModalInnerEscapeLayer", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("prksIsComboboxPanelOpen", escape)
         form = ui.split("function prksBindWorkModalFormUi", 1)[1].split("\n}\n", 1)[0]

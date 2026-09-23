@@ -5065,9 +5065,13 @@ function initUploadTagCombobox() {
     input.dataset.bound = '1';
 
     const attachedIds = () => new Set(uploadTagsSelected.map((t) => t.id));
+    let renderSeq = 0;
 
     async function renderDropdown() {
+        const seq = ++renderSeq;
         const all = await fetchTags({ used: false });
+        // A newer keystroke started its own render: never show older rows.
+        if (seq !== renderSeq) return;
 
         const val = input.value.trim();
         const valLower = val.toLowerCase();
@@ -5487,6 +5491,9 @@ function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
     // Set when ArrowDown reopens a closed list: highlight once rows exist
     // (some lists render asynchronously), so one press still lands on a match.
     let highlightOnRender = false;
+    // Typing invalidates the open rows until the list re-renders (the tag and
+    // playlist lists render after a fetch): Enter must not pick a stale row.
+    let stale = false;
     const items = () => Array.from(results.querySelectorAll('.result-item:not(.no-results)'));
     const firstRealIndex = (list) => {
         const i = list.findIndex((el) => !el.classList.contains('result-item--create'));
@@ -5510,14 +5517,22 @@ function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
         input.setAttribute('aria-expanded', prksIsComboboxPanelOpen(results) ? 'true' : 'false');
     }).observe(results, { attributes: true, attributeFilter: ['class'] });
     new MutationObserver(() => {
+        stale = false;
         const list = items();
         active = highlightOnRender && list.length ? firstRealIndex(list) : -1;
         if (list.length) highlightOnRender = false;
         paint();
     }).observe(results, { childList: true });
-    input.addEventListener('input', () => {
-        highlightOnRender = false;
-    });
+    // Capture phase: runs before the list's own input handler, whose render
+    // (synchronous or not) is what marks the rows fresh again.
+    input.addEventListener(
+        'input',
+        () => {
+            highlightOnRender = false;
+            stale = true;
+        },
+        true
+    );
     input.addEventListener('keydown', (e) => {
         if (e.isComposing) return;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -5539,6 +5554,11 @@ function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
         }
         if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (!prksIsComboboxPanelOpen(results)) return;
+        if (stale) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
         const list = items();
         let pick = active >= 0 ? list[active] : null;
         if (!pick && String(input.value || '').trim()) {
