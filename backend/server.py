@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.db_manager import (
     PRKSDatabase,
     BulkWorkError,
+    MissingPersonError,
     effective_source_kind,
     SavedViewError,
     managed_pdf_filename,
@@ -2961,6 +2962,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 order_index=idx,
                                 credit_name=credit_name or '',
                             )
+                        except MissingPersonError:
+                            # Deleted after the up-front check: same outcome
+                            # as that check, through the existing compensation.
+                            delete_library_work(db, text_index, w_id)
+                            self.send_json(409, {
+                                'error': 'A person on this file no longer exists.',
+                                'code': 'PERSON_NOT_FOUND',
+                            })
+                            return
                         except ValueError:
                             continue
                         

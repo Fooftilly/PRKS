@@ -82,6 +82,10 @@ PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "re
 PRKS_BULK_WORK_MAX = 500
 
 
+class MissingPersonError(ValueError):
+    """A role names a Person that does not exist (deleted, or never synced)."""
+
+
 class BulkWorkError(ValueError):
     """Controlled bulk-organization failure. http_status is 400 or 404."""
 
@@ -3447,6 +3451,13 @@ class PRKSDatabase:
                 folder_sync.set_field_on_conn(
                     conn, folder_id, field, "" if value in (None, False) else str(value))
 
+    _ROW_EXISTS_TABLES = frozenset({"folders", "persons", "works"})
+
+    def _row_exists(self, table: str, row_id: str) -> bool:
+        if table not in self._ROW_EXISTS_TABLES:
+            raise ValueError("unsupported table")
+        return bool(self.execute_query(f"SELECT 1 FROM {table} WHERE id = ?", (str(row_id or ""),)))
+
     def missing_person_ids(self, person_ids) -> List[str]:
         """The given Person ids that have no row, in the order given."""
         wanted = [str(p).strip() for p in (person_ids or []) if str(p or "").strip()]
@@ -3491,9 +3502,13 @@ class PRKSDatabase:
                 (fid, wid),
             )
         except sqlite3.IntegrityError as exc:
-            # The folder was deleted between the check and the insert: the
-            # foreign key is the atomic answer, reported the same way.
-            raise missing from exc
+            # The folder or the Work was deleted between the check and the
+            # insert: the foreign key is the atomic answer. Say which.
+            if not self._row_exists("folders", fid):
+                raise missing from exc
+            if not self._row_exists("works", wid):
+                raise ValueError("This file no longer exists.") from exc
+            raise
 
     def move_work_to_folder(self, work_id: str, folder_id: Optional[str]) -> None:
         """Assign / move / clear, through the revision-aware boundary.
@@ -4237,11 +4252,19 @@ class PRKSDatabase:
     def insert_initial_role(self, work_id: str, person_id: str, role_type: str,
                             order_index: int = 0, credit_name: str = "") -> None:
         """A relationship a NEW Work is born with. Creates no revision."""
-        with self.connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            work_role_sync.insert_initial_role(
-                conn, work_id, person_id, role_type, order_index=order_index,
-                credit_name=credit_name)
+        try:
+            with self.connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                work_role_sync.insert_initial_role(
+                    conn, work_id, person_id, role_type, order_index=order_index,
+                    credit_name=credit_name)
+        except sqlite3.IntegrityError as exc:
+            # The Person was deleted after the caller checked for it: the
+            # foreign key is the atomic answer. Any other violation is not ours
+            # to reinterpret.
+            if not self._row_exists("persons", person_id):
+                raise MissingPersonError("A person on this file no longer exists.") from exc
+            raise
 
     def next_role_order_index(self, work_id: str) -> int:
         """Next order_index for a new role on this work (append after existing links)."""

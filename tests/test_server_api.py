@@ -665,6 +665,36 @@ class TestServerAPI(unittest.TestCase):
             titles = [w.get("title") for w in json.loads(res.read().decode())]
         self.assertNotIn("Unknown Person Work", titles)
 
+    def test_5g_person_deleted_after_the_check_leaves_no_work(self):
+        """A Person deleted between the up-front check and the role insert is
+        refused the same way, and the committed Work and PDF are removed."""
+        pdf_bytes = _pdf_with_text_bytes("Person race body")
+        payload = {
+            "title": "Person Race Work",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "person_race.pdf",
+            "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}],
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        with patch.object(server_module.db, "missing_person_ids", return_value=[]):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/works", data=json.dumps(payload).encode(), method="POST"
+            )
+            req.add_header("Content-Type", "application/json")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(json.loads(cm.exception.read().decode()).get("code"), "PERSON_NOT_FOUND")
+        self.assertEqual(set(os.listdir(server_module.pdfs_dir)), pdfs_before)
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Person Race Work", titles)
+
+    def test_5h_filing_a_missing_work_is_not_called_a_missing_folder(self):
+        folder_id = server_module.db.add_folder("Filing Target 5h")
+        with self.assertRaisesRegex(ValueError, "file no longer exists"):
+            server_module.db.add_work_to_folder(folder_id, "W-gone")
+
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}
         req = urllib.request.Request(f"{self._base_url}/api/persons", data=json.dumps(payload).encode(), method="POST")

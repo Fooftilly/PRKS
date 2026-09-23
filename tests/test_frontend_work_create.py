@@ -143,6 +143,11 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("e.ctrlKey || e.metaKey", form)
         self.assertIn("work-title", form)
 
+    def test_stale_blur_does_not_close_a_refocused_list(self):
+        ui = _read(_UI)
+        blur = ui.split("// Hide results when focus moves away", 1)[1].split("function renderResults", 1)[0]
+        self.assertIn("document.activeElement === input", blur)
+
     def test_errors_inside_disclosures_open_them_first(self):
         ui = _read(_UI)
         focus = ui.split("function prksFocusWorkModalControl", 1)[1].split("\n}\n", 1)[0]

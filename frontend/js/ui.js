@@ -5969,6 +5969,9 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
     input.onblur = () => {
         // Delay hide to allow clicks on result items to fire first
         setTimeout(() => {
+            // Focus came back meanwhile (e.g. validation refocused the field
+            // and reopened the list): this stale blur must not close it.
+            if (document.activeElement === input) return;
             prksHideInlineComboboxResults(results);
         }, 200);
     };
