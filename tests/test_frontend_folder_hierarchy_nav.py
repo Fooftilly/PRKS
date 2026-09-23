@@ -104,12 +104,12 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         # Same-route overlapping live refills (#161): refresh generation owns DOM commit.
         self.assertIn("beginFolderHierarchyRefresh", folders)
         self.assertIn("prksFolderHierarchyTreeCommitAllowed", folders)
-        self.assertIn("folderHierarchyRefreshGeneration", _read(
-            os.path.join(_ROOT, "frontend", "js", "tab-context.js")
-        ))
-        self.assertIn("isFolderHierarchyRefreshCurrent", _read(
-            os.path.join(_ROOT, "frontend", "js", "tab-context.js")
-        ))
+        tab_ctx = _read(os.path.join(_ROOT, "frontend", "js", "tab-context.js"))
+        self.assertIn("folderHierarchyRefreshGeneration", tab_ctx)
+        self.assertIn("isFolderHierarchyRefreshCurrent", tab_ctx)
+        # Commit gate lives on TabContext (require-able; avoids Sonar S1523 vm loads).
+        self.assertIn("function prksFolderHierarchyTreeCommitAllowed", tab_ctx)
+        self.assertNotIn("function prksFolderHierarchyTreeCommitAllowed", folders)
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertIn("'/js/folder-hierarchy-nav.js'", sw)
         # Must be a STATIC_PRECACHE_PATHS entry (shell-manifest coverage), not

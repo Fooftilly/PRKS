@@ -726,6 +726,23 @@
         return typeof routeGen !== 'number';
     }
 
+    /**
+     * Whether a Folder-detail hierarchy refill may commit DOM after its await.
+     * Route AbortSignal covers A→B→C remounts; refreshGen covers same-route
+     * overlapping live refreshes (sync CREATE/rename/reparent/DELETE).
+     */
+    function prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal) {
+        if (signal && signal.aborted) return false;
+        if (refreshGen != null) {
+            if (!ctx || typeof ctx.isFolderHierarchyRefreshCurrent !== 'function') return false;
+            if (!ctx.isFolderHierarchyRefreshCurrent(refreshGen)) return false;
+        } else if (ctx && (ctx.destroyed || (!ctx.mounted && !ctx.suspended))) {
+            return false;
+        }
+        if (!container || !container.isConnected) return false;
+        return !!container.querySelector('[data-prks-folder-detail-tree-host]');
+    }
+
     const api = {
         createPrksTabContext: createPrksTabContext,
         prksEnsureTabContext: prksEnsureTabContext,
@@ -759,6 +776,7 @@
         prksFocusedTimer: prksFocusedTimer,
         prksClearFocusedTimer: prksClearFocusedTimer,
         prksFocusedRouteSidebar: prksFocusedRouteSidebar,
+        prksFolderHierarchyTreeCommitAllowed: prksFolderHierarchyTreeCommitAllowed,
     };
 
     Object.keys(api).forEach(function (k) {

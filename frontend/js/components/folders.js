@@ -1265,22 +1265,11 @@ function prksFolderDetailSelectInTree(host, folderId, rows) {
 }
 
 /**
- * Whether a Folder-detail hierarchy refill may commit DOM after its await.
- * Route AbortSignal covers A→B→C remounts; refreshGen covers same-route
- * overlapping live refreshes (sync CREATE/rename/reparent/DELETE).
+ * Live Folder-detail hierarchy refill. Same-route overlap ownership uses
+ * TabContext beginFolderHierarchyRefresh / prksFolderHierarchyTreeCommitAllowed
+ * (defined in tab-context.js) so an older async catalogue result cannot overwrite
+ * a newer committed tree. Route AbortSignal still covers A→B→C remounts.
  */
-function prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal) {
-    if (signal && signal.aborted) return false;
-    if (refreshGen != null) {
-        if (!ctx || typeof ctx.isFolderHierarchyRefreshCurrent !== 'function') return false;
-        if (!ctx.isFolderHierarchyRefreshCurrent(refreshGen)) return false;
-    } else if (ctx && (ctx.destroyed || (!ctx.mounted && !ctx.suspended))) {
-        return false;
-    }
-    if (!container || !container.isConnected) return false;
-    return !!container.querySelector('[data-prks-folder-detail-tree-host]');
-}
-
 async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
     const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
@@ -1313,7 +1302,12 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
             rows = null;
         }
     }
-    if (!prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal)) return;
+    if (
+        typeof prksFolderHierarchyTreeCommitAllowed !== 'function' ||
+        !prksFolderHierarchyTreeCommitAllowed(ctx, refreshGen, container, signal)
+    ) {
+        return;
+    }
     const liveHost = container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!liveHost) return;
     // Re-read the live Folder entity after the await (in-place Folder→Folder
@@ -1873,4 +1867,3 @@ window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
 window.prksFillFolderDetailTree = prksFillFolderDetailTree;
-window.prksFolderHierarchyTreeCommitAllowed = prksFolderHierarchyTreeCommitAllowed;
