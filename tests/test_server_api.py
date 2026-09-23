@@ -632,6 +632,14 @@ class TestServerAPI(unittest.TestCase):
         the domain method, so the handler's existing compensation runs."""
         with self.assertRaisesRegex(ValueError, "no longer exists"):
             server_module.db.add_work_to_folder("F-does-not-exist", "W-any")
+        # Deleted between the existence check and the insert: the foreign-key
+        # failure is the same refusal, not an IntegrityError.
+        work_id = server_module.db.add_work(title="Race Filing Work")
+        with patch.object(server_module.db, "folder_exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "no longer exists"):
+                server_module.db.add_work_to_folder("F-deleted-meanwhile", work_id)
+        delete_work = __import__("backend.work_deletion", fromlist=["delete_work"]).delete_work
+        delete_work(server_module.db, server_module.text_index, work_id)
 
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}

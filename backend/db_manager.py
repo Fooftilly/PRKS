@@ -3470,13 +3470,19 @@ class PRKSDatabase:
                 raise ValueError("This file is already in another folder.")
         if any(row["folder_id"] == fid for row in existing):
             return
+        missing = ValueError("The selected folder no longer exists.")
         if not self.folder_exists(fid):
             # A refusal the caller can compensate, never a foreign-key 500.
-            raise ValueError("The selected folder no longer exists.")
-        self.execute_query(
-            "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-            (fid, wid),
-        )
+            raise missing
+        try:
+            self.execute_query(
+                "INSERT INTO folder_files (folder_id, work_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                (fid, wid),
+            )
+        except sqlite3.IntegrityError as exc:
+            # The folder was deleted between the check and the insert: the
+            # foreign key is the atomic answer, reported the same way.
+            raise missing from exc
 
     def move_work_to_folder(self, work_id: str, folder_id: Optional[str]) -> None:
         """Assign / move / clear, through the revision-aware boundary.
