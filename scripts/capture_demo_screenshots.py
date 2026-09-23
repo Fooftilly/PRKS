@@ -457,9 +457,17 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
                 page.wait_for_selector(wait_selector, timeout=20000)
                 page.evaluate(
                     """() => {
-                      document.querySelectorAll('img[data-prks-thumb-src]').forEach((img) => {
-                        const u = img.getAttribute('data-prks-thumb-src');
-                        if (u) img.src = u;
+                      if (typeof prksInitLazyWorkThumbs === 'function') {
+                        prksInitLazyWorkThumbs(document);
+                        return;
+                      }
+                      document.querySelectorAll('img[data-prks-thumb-lazy]').forEach((img) => {
+                        const thumb = img.closest('.work-card__thumb');
+                        const src =
+                          typeof prksResolveWorkThumbSrc === 'function' && thumb
+                            ? prksResolveWorkThumbSrc(thumb)
+                            : '';
+                        if (src) img.src = src;
                       });
                     }"""
                 )

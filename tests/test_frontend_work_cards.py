@@ -66,6 +66,18 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("function prksWorkBrowseModeToggleHtml", src)
         self.assertIn("function prksBindWorkBrowseMode", src)
         self.assertIn("function prksShowWorkThumbPreview", src)
+        # Preference change must sync every mounted collection, not only the local host.
+        self.assertIn("prksApplyWorkBrowseModeToDom(document, next)", src)
+        # No URL-bearing thumb attrs that get read back into src/HTML sinks.
+        self.assertNotIn("data-prks-thumb-preview-src", src)
+        self.assertNotIn("data-prks-thumb-src=", src)
+        self.assertIn("data-prks-thumb-lazy", src)
+
+    def test_saved_view_detail_exposes_browse_mode_toggle(self):
+        sv = _read(os.path.join(_FRONTEND, "js", "saved-views.js"))
+        self.assertIn("prks-work-browse-mode-saved-view", sv)
+        self.assertIn("prksWorkBrowseModeToggleHtml", sv)
+        self.assertIn("prksBindWorkBrowseMode", sv)
 
     def test_folder_files_and_recently_added_use_browse_collection(self):
         src = _read(_FOLDERS)

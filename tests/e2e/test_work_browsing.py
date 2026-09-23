@@ -97,7 +97,7 @@ class WorkBrowsingV1Tests(unittest.TestCase):
         card = page.locator(
             f".prks-tile--main .project-card--work-card[data-work-id='{ids['work_a']}']"
         ).first
-        thumb = card.locator(".work-card__thumb[data-prks-thumb-preview-src]").first
+        thumb = card.locator(".work-card__thumb[data-prks-thumb-preview-kind]").first
         self.assertEqual(thumb.count(), 1)
 
         # Keyboard preview on focused card (P); Escape dismisses.

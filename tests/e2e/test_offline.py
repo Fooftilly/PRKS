@@ -6280,8 +6280,8 @@ class OfflinePeopleTests(unittest.TestCase):
             self.assertIn(PERSON_A_ABOUT, _content_text(page))
             self.assertEqual(page.locator("img.person-portrait").count(), 0)
             # Work cards keep their placeholder box (no broken image), but carry
-            # no thumbnail source to fetch.
-            self.assertEqual(page.locator("[data-prks-thumb-src]").count(), 0)
+            # no thumbnail lazy marker to fetch.
+            self.assertEqual(page.locator("[data-prks-thumb-lazy]").count(), 0)
             self.assertGreaterEqual(page.locator(".work-card__thumb--empty").count(), 1)
         finally:
             _safe_unroute(page, "**/api/**", record_media)

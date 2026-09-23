@@ -77,25 +77,48 @@
         assert('full title present in DOM text', longCard.indexOf(longTitle) !== -1);
         assert('full title exposed via title attribute', longCard.indexOf('title="' + longTitle + '"') !== -1);
 
-        // Thumbnail source-awareness: PDF vs video classes, no extra network call.
+        // Thumbnail source-awareness: PDF vs video classes, no URL in DOM attrs.
         const pdfCard = cardHtml({ id: 'W-4', title: 'PDF Work', file_path: '/api/pdfs/w4.pdf' });
         assert('pdf card gets pdf thumb class', pdfCard.indexOf('work-card__thumb--pdf') !== -1);
         assert('pdf card has no video thumb class', pdfCard.indexOf('work-card__thumb--video') === -1);
         assert('pdf thumb starts in loading state', pdfCard.indexOf('work-card__thumb--loading') !== -1);
         assert(
-            'pdf thumb carries preview src for quick preview',
-            pdfCard.indexOf('data-prks-thumb-preview-src="/api/works/W-4/thumbnail?page=1"') !== -1
+            'pdf thumb marks preview kind (no URL attr)',
+            pdfCard.indexOf('data-prks-thumb-preview-kind="pdf"') !== -1
+        );
+        assert(
+            'pdf thumb carries digit page for rebuild',
+            pdfCard.indexOf('data-prks-thumb-page="1"') !== -1
+        );
+        assert(
+            'pdf markup has no URL-bearing preview-src attr',
+            pdfCard.indexOf('data-prks-thumb-preview-src') === -1
+        );
+        assert(
+            'pdf markup has no lazy URL attr',
+            pdfCard.indexOf('data-prks-thumb-src') === -1 && pdfCard.indexOf('data-prks-thumb-lazy="1"') !== -1
         );
 
         const videoWork = { id: 'W-5', title: 'Video Work', source_kind: 'video', thumb_url: 'https://img.example/thumb.jpg' };
         const videoCard = cardHtml(videoWork);
         assert('video card gets video thumb class', videoCard.indexOf('work-card__thumb--video') !== -1);
         assert('video card has no pdf thumb class', videoCard.indexOf('work-card__thumb--pdf') === -1);
-        assert('video thumb uses provided thumb_url as lazy src', videoCard.indexOf('data-prks-thumb-src="https://img.example/thumb.jpg"') !== -1);
         assert(
-            'no eager network request in markup — real URL only in the lazy data attribute',
+            'video thumb uses lazy marker without embedding URL in markup',
+            videoCard.indexOf('data-prks-thumb-lazy="1"') !== -1 &&
+                videoCard.indexOf('https://img.example/thumb.jpg') === -1
+        );
+        assert(
+            'no eager network request in markup',
             videoCard.indexOf(' src="https://img.example/thumb.jpg"') === -1
         );
+        if (typeof root.prksLookupRegisteredWorkThumbUrl === 'function') {
+            assertEq(
+                'video thumb registered by work id (not DOM)',
+                root.prksLookupRegisteredWorkThumbUrl('W-5'),
+                'https://img.example/thumb.jpg'
+            );
+        }
 
         // Empty thumbnail fallback is source-appropriate, not a blanket "PDF".
         const emptyVideoCard = cardHtml({ id: 'W-6', title: 'Video no thumb', source_kind: 'video' });
@@ -158,6 +181,29 @@
                 'relative non-thumb path rejected',
                 root.prksSafeWorkThumbSrc('/api/pdfs/x.pdf'),
                 ''
+            );
+        }
+
+        // PDF resolve rebuilds from work-id + page without reading a URL attr.
+        if (
+            typeof root.prksResolveWorkThumbSrc === 'function' &&
+            typeof document !== 'undefined' &&
+            document.createElement
+        ) {
+            const wrap = document.createElement('div');
+            wrap.innerHTML =
+                '<div class="project-card project-card--work-card" data-work-id="W-resolve">' +
+                '<div class="work-card__thumb" data-prks-thumb-preview-kind="pdf" data-prks-thumb-page="3"></div>' +
+                '</div>';
+            const thumb = wrap.querySelector('.work-card__thumb');
+            assertEq(
+                'resolve rebuilds PDF thumb from id+page',
+                root.prksResolveWorkThumbSrc(thumb),
+                '/api/works/W-resolve/thumbnail?page=3'
+            );
+            assert(
+                'resolve does not require preview-src attr',
+                !thumb.hasAttribute('data-prks-thumb-preview-src')
             );
         }
 

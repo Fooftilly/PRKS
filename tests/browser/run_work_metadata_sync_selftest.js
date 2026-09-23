@@ -916,8 +916,20 @@ function thumbnailResourceIdentity() {
         globalThis.prksEffectiveWorkSync(work), options || {});
     const pdf = { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 };
     const srcOf = html => {
-        const m = /data-prks-thumb-src="([^"]*)"/.exec(html);
-        return m ? m[1] : '';
+        // Thumb URLs are no longer mirrored into DOM attributes (CodeQL).
+        // Card build registers an allowlisted URL by work id; PDF also exposes
+        // a digit-only page attr that rebuilds the same resource identity.
+        const idM = /data-work-id="([^"]+)"/.exec(html);
+        if (!idM) return '';
+        if (typeof globalThis.prksLookupRegisteredWorkThumbUrl === 'function') {
+            const registered = globalThis.prksLookupRegisteredWorkThumbUrl(idM[1]);
+            if (registered) return registered;
+        }
+        const pageM = /data-prks-thumb-page="(\d+)"/.exec(html);
+        if (pageM) {
+            return '/api/works/' + encodeURIComponent(idM[1]) + '/thumbnail?page=' + pageM[1];
+        }
+        return '';
     };
 
     // Acknowledged: the stored page, stated.

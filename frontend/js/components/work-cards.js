@@ -199,8 +199,9 @@ function prksApplyWorkBrowseModeToDom(root, mode) {
 }
 
 /**
- * Bind Cards|List toggles under root. Mode change persists and reclasses collections
- * in-place; optional onModeChange for surfaces that need a full re-paint.
+ * Bind Cards|List toggles under root. Mode change persists and reclasses every
+ * mounted Work collection (document-wide), so split panes stay in sync.
+ * Optional onModeChange for surfaces that need a full re-paint.
  * @param {ParentNode|null} root
  * @param {{ onModeChange?: (mode: string) => void }} [options]
  */
@@ -221,14 +222,127 @@ function prksBindWorkBrowseMode(root, options) {
                 const label = btn.getAttribute('data-value') || 'Cards';
                 const mode = label === 'List' ? 'list' : 'cards';
                 const next = prksSetWorkBrowseMode(mode);
-                prksApplyWorkBrowseModeToDom(host, next);
+                // Global preference — sync every mounted browse surface, not only host.
+                prksApplyWorkBrowseModeToDom(document, next);
                 if (typeof opts.onModeChange === 'function') opts.onModeChange(next);
                 if (typeof window.prksInitLazyWorkThumbs === 'function') {
-                    window.prksInitLazyWorkThumbs(host);
+                    window.prksInitLazyWorkThumbs(document);
                 }
             });
         });
     });
+}
+
+function prksWorkThumbSrcMap() {
+    if (!window.__prksWorkThumbSrcByEl && typeof WeakMap !== 'undefined') {
+        window.__prksWorkThumbSrcByEl = new WeakMap();
+    }
+    return window.__prksWorkThumbSrcByEl || null;
+}
+
+/** Remember a rebuilt (untainted) thumb URL for preview/hydrate — never read URL attrs back. */
+function prksRememberWorkThumbSrc(thumbEl, src) {
+    const map = prksWorkThumbSrcMap();
+    if (!map || !thumbEl || !src) return;
+    map.set(thumbEl, src);
+}
+
+function prksRecallWorkThumbSrc(thumbEl) {
+    const map = prksWorkThumbSrcMap();
+    if (!map || !thumbEl) return '';
+    const src = map.get(thumbEl);
+    return src ? String(src) : '';
+}
+
+/**
+ * Work-id → allowlisted thumb URL, registered at card HTML build from Work data
+ * (never from DOM attributes). Video thumbs use this; PDFs rebuild from id+page.
+ */
+function prksWorkThumbUrlByWorkId() {
+    if (!window.__prksWorkThumbUrlByWorkId) {
+        window.__prksWorkThumbUrlByWorkId = new Map();
+    }
+    return window.__prksWorkThumbUrlByWorkId;
+}
+
+function prksRegisterWorkThumbUrl(workId, rawSrc) {
+    const id = String(workId == null ? '' : workId).trim();
+    if (!id) return '';
+    const safe = prksSafeWorkThumbSrc(rawSrc);
+    if (!safe) {
+        prksWorkThumbUrlByWorkId().delete(id);
+        return '';
+    }
+    prksWorkThumbUrlByWorkId().set(id, safe);
+    return safe;
+}
+
+function prksLookupRegisteredWorkThumbUrl(workId) {
+    const id = String(workId == null ? '' : workId).trim();
+    if (!id) return '';
+    const src = prksWorkThumbUrlByWorkId().get(id);
+    return src ? String(src) : '';
+}
+
+function prksPreviewImgSrcMap() {
+    if (!window.__prksPreviewSrcByImg && typeof WeakMap !== 'undefined') {
+        window.__prksPreviewSrcByImg = new WeakMap();
+    }
+    return window.__prksPreviewSrcByImg || null;
+}
+
+function prksRememberPreviewImgSrc(img, src) {
+    const map = prksPreviewImgSrcMap();
+    if (!map || !img || !src) return;
+    map.set(img, src);
+}
+
+function prksRecallPreviewImgSrc(img) {
+    const map = prksPreviewImgSrcMap();
+    if (!map || !img) return '';
+    const src = map.get(img);
+    return src ? String(src) : '';
+}
+
+/**
+ * Resolve the thumb URL for an already-rendered thumb slot without reading a
+ * URL-bearing attribute back into an HTML sink (CodeQL js/xss-through-dom).
+ * PDF: rebuild from card data-work-id + digit-only data-prks-thumb-page.
+ * Video/other: Map registered at card-build from allowlisted Work thumb_url.
+ */
+function prksResolveWorkThumbSrc(thumbEl) {
+    if (!thumbEl || !thumbEl.getAttribute) return '';
+    const remembered = prksRecallWorkThumbSrc(thumbEl);
+    if (remembered) return remembered;
+
+    const card =
+        typeof thumbEl.closest === 'function'
+            ? thumbEl.closest('.project-card--work-card[data-work-id]')
+            : null;
+    if (!card) return '';
+    const workId = String(card.getAttribute('data-work-id') || '').trim();
+    if (!workId) return '';
+
+    const kind = String(thumbEl.getAttribute('data-prks-thumb-preview-kind') || '');
+    if (kind === 'video') {
+        const registered = prksLookupRegisteredWorkThumbUrl(workId);
+        if (registered) prksRememberWorkThumbSrc(thumbEl, registered);
+        return registered;
+    }
+
+    const pageRaw = String(thumbEl.getAttribute('data-prks-thumb-page') || '1').trim();
+    if (!/^\d+$/.test(pageRaw)) return '';
+    const page = parseInt(pageRaw, 10);
+    if (!Number.isFinite(page) || page < 1) return '';
+    const src = prksWorkThumbUrl(workId, page);
+    if (src) prksRememberWorkThumbSrc(thumbEl, src);
+    return src;
+}
+
+function prksAssignImgSrc(img, src) {
+    if (!img || !src) return;
+    // Property assignment of a rebuilt/registered URL — never setAttribute with DOM text.
+    img.src = src;
 }
 
 function prksSetWorkThumbState(thumb, state) {
@@ -250,15 +364,15 @@ function prksSetWorkThumbState(thumb, state) {
 function prksHydrateLazyWorkThumb(img) {
     if (!img || !(img instanceof HTMLImageElement)) return;
     if (img.dataset.prksThumbLoaded === '1') return;
-    const src = prksSafeWorkThumbSrc(img.getAttribute('data-prks-thumb-src') || '');
+    const thumb = img.closest('.work-card__thumb');
+    img.removeAttribute('data-prks-thumb-lazy');
+    // Never read a URL from DOM attributes into src — resolve via rebuild/Map only.
+    const src = thumb ? prksResolveWorkThumbSrc(thumb) : '';
     if (!src) {
-        const thumb = img.closest('.work-card__thumb');
         if (thumb) prksSetWorkThumbState(thumb, 'error');
-        img.removeAttribute('data-prks-thumb-src');
         img.remove();
         return;
     }
-    const thumb = img.closest('.work-card__thumb');
     if (thumb) prksSetWorkThumbState(thumb, 'loading');
     const onLoad = () => {
         if (thumb) prksSetWorkThumbState(thumb, 'ready');
@@ -273,9 +387,8 @@ function prksHydrateLazyWorkThumb(img) {
     };
     img.addEventListener('load', onLoad);
     img.addEventListener('error', onError);
-    img.setAttribute('src', src);
+    prksAssignImgSrc(img, src);
     img.dataset.prksThumbLoaded = '1';
-    img.removeAttribute('data-prks-thumb-src');
 }
 
 function prksLazyThumbObserver() {
@@ -298,7 +411,7 @@ function prksLazyThumbObserver() {
 
 function prksInitLazyWorkThumbs(root) {
     const host = root && typeof root.querySelectorAll === 'function' ? root : document;
-    const imgs = host.querySelectorAll('img[data-prks-thumb-src]');
+    const imgs = host.querySelectorAll('img[data-prks-thumb-lazy]');
     if (!imgs.length) return;
     const observer = prksLazyThumbObserver();
     if (!observer) {
@@ -409,13 +522,23 @@ function prksWorkCardHtml(w, options = {}) {
 
     let thumbHtml;
     if (thumbSrc) {
+        // Register allowlisted URL from Work data (not DOM) so hydrate/preview
+        // never read a URL-bearing attribute into an HTML/src sink.
+        prksRegisterWorkThumbUrl(w.id, thumbSrc);
+        const pageForAttr = hasPdf
+            ? (() => {
+                  const p = thumbPage != null && String(thumbPage).trim() !== '' ? Number(thumbPage) : null;
+                  const resolved = p && Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
+                  return String(resolved);
+              })()
+            : '';
+        const pageAttr = pageForAttr
+            ? ` data-prks-thumb-page="${prksWorkCardsEscapeHtml(pageForAttr)}"`
+            : '';
         thumbHtml =
             `<div class="work-card__thumb ${thumbKindClass} work-card__thumb--loading" data-prks-thumb-state="loading"` +
-            ` data-prks-thumb-preview-src="${prksWorkCardsEscapeHtml(thumbSrc)}"` +
-            ` data-prks-thumb-preview-kind="${isVideoKind ? 'video' : 'pdf'}">` +
-            `<img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-src="${prksWorkCardsEscapeHtml(
-                thumbSrc
-            )}" />` +
+            ` data-prks-thumb-preview-kind="${isVideoKind ? 'video' : 'pdf'}"${pageAttr}>` +
+            `<img loading="lazy" alt="" src="${PRKS_WORK_THUMB_PLACEHOLDER}" data-prks-thumb-lazy="1" />` +
             `</div>`;
     } else {
         const emptyTitle = suppressThumbnail
@@ -474,10 +597,13 @@ function prksWorkThumbPreviewEl() {
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', 'Work preview');
     el.hidden = true;
-    el.innerHTML =
-        '<div class="work-card-preview__frame work-card-preview__frame--pdf">' +
-        '<img class="work-card-preview__img" alt="" />' +
-        '</div>';
+    const frame = document.createElement('div');
+    frame.className = 'work-card-preview__frame work-card-preview__frame--pdf';
+    const img = document.createElement('img');
+    img.className = 'work-card-preview__img';
+    img.alt = '';
+    frame.appendChild(img);
+    el.appendChild(frame);
     document.body.appendChild(el);
     return el;
 }
@@ -490,7 +616,6 @@ function prksHideWorkThumbPreview() {
     const img = el.querySelector('.work-card-preview__img');
     if (img) {
         img.removeAttribute('src');
-        img.removeAttribute('data-prks-preview-src');
     }
     window.__prksWorkThumbPreviewSource = null;
 }
@@ -523,36 +648,34 @@ function prksPositionWorkThumbPreview(el, anchor) {
 
 /**
  * Show a larger preview of an existing thumb asset. Does not open the Work.
- * Uses the same URL already known for the card — no per-Work API.
+ * Resolves the URL without reading URL-bearing DOM attributes into an HTML sink.
  * @param {Element} thumbEl
  */
 function prksShowWorkThumbPreview(thumbEl) {
     if (!thumbEl || !thumbEl.getAttribute) return;
     if (thumbEl.classList.contains('work-card__thumb--empty')) return;
     if (thumbEl.classList.contains('work-card__thumb--error')) return;
-    const rawSrc =
-        String(thumbEl.getAttribute('data-prks-thumb-preview-src') || '').trim() ||
-        (() => {
-            const img = thumbEl.querySelector('img');
-            if (!img) return '';
-            const lazy = String(img.getAttribute('data-prks-thumb-src') || '').trim();
-            if (lazy) return lazy;
-            const cur = String(img.getAttribute('src') || '').trim();
-            return cur && cur !== PRKS_WORK_THUMB_PLACEHOLDER ? cur : '';
-        })();
-    const src = prksSafeWorkThumbSrc(rawSrc);
+    const src = prksResolveWorkThumbSrc(thumbEl);
     if (!src) return;
     const kindRaw = String(thumbEl.getAttribute('data-prks-thumb-preview-kind') || 'pdf');
     const kind = kindRaw === 'video' ? 'video' : 'pdf';
     const el = prksWorkThumbPreviewEl();
     const frame = el.querySelector('.work-card-preview__frame');
-    const img = el.querySelector('.work-card-preview__img');
-    if (!img || !frame) return;
+    let img = el.querySelector('.work-card-preview__img');
+    if (!frame) return;
     frame.classList.toggle('work-card-preview__frame--pdf', kind !== 'video');
     frame.classList.toggle('work-card-preview__frame--video', kind === 'video');
-    if (img.getAttribute('data-prks-preview-src') !== src) {
-        img.setAttribute('data-prks-preview-src', src);
-        img.setAttribute('src', src);
+    // Fresh <img> each distinct src: createElement + property assign; never
+    // setAttribute('src', …) with anything that touched the DOM as text.
+    if (!img || prksRecallPreviewImgSrc(img) !== src) {
+        const fresh = document.createElement('img');
+        fresh.className = 'work-card-preview__img';
+        fresh.alt = '';
+        prksAssignImgSrc(fresh, src);
+        prksRememberPreviewImgSrc(fresh, src);
+        if (img) frame.replaceChild(fresh, img);
+        else frame.appendChild(fresh);
+        img = fresh;
     }
     window.__prksWorkThumbPreviewSource = thumbEl;
     prksPositionWorkThumbPreview(el, thumbEl);
@@ -560,7 +683,7 @@ function prksShowWorkThumbPreview(thumbEl) {
 
 function prksWorkThumbFromCard(card) {
     if (!card || !card.querySelector) return null;
-    return card.querySelector('.work-card__thumb[data-prks-thumb-preview-src]');
+    return card.querySelector('.work-card__thumb[data-prks-thumb-preview-kind]');
 }
 
 if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
@@ -623,7 +746,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
         function (e) {
             const t = e.target;
             if (!t || !t.closest) return;
-            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-src]');
+            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
             if (!thumb) return;
             if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;
             prksShowWorkThumbPreview(thumb);
@@ -636,7 +759,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
         function (e) {
             const t = e.target;
             if (!t || !t.closest) return;
-            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-src]');
+            const thumb = t.closest('.work-card__thumb[data-prks-thumb-preview-kind]');
             if (!thumb) return;
             const related = e.relatedTarget;
             if (related && thumb.contains(related)) return;
@@ -674,6 +797,8 @@ window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
 window.prksWorkCardCreditText = prksWorkCardCreditText;
 window.prksWorkCardCreditLine = prksWorkCardCreditLine;
 window.prksSafeWorkThumbSrc = prksSafeWorkThumbSrc;
+window.prksLookupRegisteredWorkThumbUrl = prksLookupRegisteredWorkThumbUrl;
+window.prksResolveWorkThumbSrc = prksResolveWorkThumbSrc;
 window.prksGetWorkBrowseMode = prksGetWorkBrowseMode;
 window.prksSetWorkBrowseMode = prksSetWorkBrowseMode;
 window.prksWorkBrowseCollectionClass = prksWorkBrowseCollectionClass;

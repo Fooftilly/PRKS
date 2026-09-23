@@ -1452,15 +1452,19 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def thumb_src(self, page_obj, work_id):
         """The thumbnail resource this card points at.
 
-        The lazy loader promotes `data-prks-thumb-src` into `src` once the
-        image is in view, so both have to be read -- checking only the data
-        attribute would report "no thumbnail" for every card that had
-        successfully loaded one."""
+        Thumb URLs are not stored in DOM attributes (CodeQL). Resolve via the
+        shared helper (rebuild PDF from id+page, or Map for video); fall back
+        to a hydrated img.src once the lazy loader has fired."""
         return page_obj.evaluate("""id => {
-            const img = document.querySelector('[data-work-id="' + id + '"] .work-card__thumb img');
+            const card = document.querySelector('[data-work-id="' + id + '"]');
+            if (!card) return '';
+            const thumb = card.querySelector('.work-card__thumb');
+            if (thumb && typeof prksResolveWorkThumbSrc === 'function') {
+                const resolved = prksResolveWorkThumbSrc(thumb);
+                if (resolved) return resolved;
+            }
+            const img = card.querySelector('.work-card__thumb img');
             if (!img) return '';
-            const pending = img.getAttribute('data-prks-thumb-src') || '';
-            if (pending) return pending;
             const src = img.getAttribute('src') || '';
             return src.indexOf('data:') === 0 ? '' : src;
         }""", work_id)
