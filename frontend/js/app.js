@@ -4638,12 +4638,15 @@ window.prksRenderTabRoute = prksRenderTabRoute;
 window.handleRoute = handleRoute;
 
 
+/** A refused create says plainly that no Work exists, so a retry is safe. */
+function prksWorkCreateFailureText(errText) {
+    const text = String(errText || '').trim() || 'Could not create the file.';
+    return (/[.!?]$/.test(text) ? text : text + '.') + ' Nothing was saved.';
+}
+
 function initForms() {
     if (typeof initPrksDocTypeMenu === 'function') {
         initPrksDocTypeMenu('work-doc-type', { selectedValue: 'article' });
-    }
-    if (typeof prksMountUploadRoleSegmented === 'function') {
-        prksMountUploadRoleSegmented('Author');
     }
     if (typeof prksMountLinkRoleSegmented === 'function') {
         prksMountLinkRoleSegmented('Author');
@@ -4824,7 +4827,13 @@ function initForms() {
             folder_id: folderId && folderId.trim() !== "" ? folderId : null,
             file_b64: fileBase64,
             file_name: fileName,
-            roles: uploadRoles,
+            roles: Array.isArray(uploadRoles) ? uploadRoles.map(function (r) {
+                return {
+                    person_id: r.person_id,
+                    role_type: r.role_type || 'Author',
+                    credit_name: r.credit_name || '',
+                };
+            }) : [],
             source_kind: sourceKind,
             source_url: sourceUrl,
             thumb_url: sourceKind === 'video' && meta && meta.thumbnail_url ? String(meta.thumbnail_url) : "",
@@ -4899,7 +4908,7 @@ function initForms() {
             } catch (e) {
                 const errText = (e && e.message) || 'Could not create the file.';
                 if (statusMsg) {
-                    statusMsg.textContent = errText;
+                    statusMsg.textContent = prksWorkCreateFailureText(errText);
                     statusMsg.classList.remove('hidden');
                 }
                 if (videoUrlEl && /url|youtube/i.test(errText)) {
@@ -4926,7 +4935,7 @@ function initForms() {
             });
         } catch (e) {
             if (statusMsg) {
-                statusMsg.textContent = 'Could not create the file. Try again.';
+                statusMsg.textContent = 'Could not reach PRKS. Nothing was saved; try again.';
                 statusMsg.classList.remove('hidden');
             }
             return;
@@ -4964,8 +4973,21 @@ function initForms() {
         if (!res.ok) {
             const errText = data.error || 'Could not create the file.';
             if (statusMsg) {
-                statusMsg.textContent = errText;
+                statusMsg.textContent = prksWorkCreateFailureText(errText);
                 statusMsg.classList.remove('hidden');
+            }
+            if (data.code === 'FOLDER_NOT_FOUND' && folderSearchEl) {
+                // A stale destination (deleted elsewhere) is a Folder-field
+                // problem: say so there and keep everything else as typed.
+                if (typeof prksSetWorkModalFieldError === 'function') {
+                    prksSetWorkModalFieldError(
+                        folderSearchEl,
+                        'This folder no longer exists. Choose another folder.',
+                        'work-folder-error'
+                    );
+                }
+                if (typeof prksFocusWorkModalControl === 'function') prksFocusWorkModalControl(folderSearchEl);
+                return;
             }
             const lower = String(errText).toLowerCase();
             if (sourceKind === 'video' && videoUrlEl && lower.indexOf('url') !== -1) {
@@ -4977,6 +4999,7 @@ function initForms() {
             return;
         }
         const newId = data.id;
+        let tagsFailed = 0;
         if (newId && typeof uploadTagsSelected !== 'undefined' && uploadTagsSelected.length) {
             for (const t of uploadTagsSelected) {
                 try {
@@ -4987,17 +5010,21 @@ function initForms() {
                     });
                     if (!tr.ok) throw new Error('tag attach failed');
                 } catch (_e) {
-                    if (statusMsg) {
-                        statusMsg.textContent = 'File added, but one or more tags could not be attached.';
-                        statusMsg.classList.remove('hidden');
-                    }
-                    break;
+                    tagsFailed += 1;
                 }
             }
         }
+        // The Work exists now: close and open it either way, so a retry can
+        // never create a second one. A partial enrichment is said out loud.
         closeModals();
         if (newId && typeof prksNavigate === 'function') {
             prksNavigate('#/works/' + encodeURIComponent(newId));
+        }
+        if (tagsFailed && typeof prksAlertMessage === 'function') {
+            void prksAlertMessage(
+                `The file was created, but ${tagsFailed === 1 ? 'one tag' : tagsFailed + ' tags'} could not be attached. Add ${tagsFailed === 1 ? 'it' : 'them'} from the file's details.`,
+                'Tags not attached'
+            );
         }
         } finally {
             window.__prksWorkCreateInFlight = false;

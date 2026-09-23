@@ -582,6 +582,15 @@ function prksCloseStandalonePageModal(modal) {
 function prksDismissModalInnerEscapeLayer() {
     const modal = document.querySelector('.modal:not(.hidden)');
     if (!modal) return false;
+    // An open New File result list is its own layer, like the doc-type menu.
+    const openResults =
+        modal.id === 'work-modal'
+            ? Array.from(modal.querySelectorAll('.combobox-results')).find((r) => prksIsComboboxPanelOpen(r))
+            : null;
+    if (openResults) {
+        prksHideInlineComboboxResults(openResults);
+        return true;
+    }
     const openPanel = modal.querySelector('.prks-doc-type-menu__panel:not(.hidden)');
     if (!openPanel) return false;
     if (typeof prksCloseAllDocTypeMenus === 'function') {
@@ -775,7 +784,7 @@ const PRKS_HINT_HTML = {
     'group-edit-parent':
         '<p>Search or type a new top-level parent name (created on save).</p>',
     'upload-biblio-details':
-        '<p>Publisher, location (place of publication), journal, DOI, thumbnail page, and related bibliographic fields.</p>',
+        '<p>For a PDF: published date, original URL, publisher, location, edition, journal, volume, issue, pages, ISBN, DOI and thumbnail page. For YouTube: channel, date published and accessed date.</p>',
 };
 
 let __prksHintAnchor = null;
@@ -4131,10 +4140,6 @@ function prksMountRoleSegmented(mountId, hiddenId, selectedValue, labels, ariaLa
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(mount);
 }
 
-function prksMountUploadRoleSegmented(selectedValue) {
-    prksMountRoleSegmented('upload-role-seg-mount', 'upload-role-type', selectedValue);
-}
-
 function prksMountLinkRoleSegmented(selectedValue) {
     prksMountRoleSegmented(
         'role-role-seg-mount',
@@ -4149,7 +4154,6 @@ function prksMountMetaRoleSegmented(selectedValue) {
     prksMountRoleSegmented('meta-role-seg-mount', 'meta-role-type', selectedValue);
 }
 
-window.prksMountUploadRoleSegmented = prksMountUploadRoleSegmented;
 window.prksMountLinkRoleSegmented = prksMountLinkRoleSegmented;
 window.prksMountMetaRoleSegmented = prksMountMetaRoleSegmented;
 
@@ -5033,16 +5037,19 @@ function renderUploadTagsChips() {
     if (!container) return;
     if (!uploadTagsSelected.length) {
         container.innerHTML = '<span class="status-chip-list__empty">No tags selected</span>';
+        prksRefreshWorkModalDisclosureCounts();
         return;
     }
     container.innerHTML = uploadTagsSelected
         .map(
             (t, idx) =>
                 `<span class="tag work-tag-chip">${escapeHtml(t.name || '')} ` +
-                `<button type="button" class="work-tag-remove" title="Remove" aria-label="Remove tag" ` +
+                `<input type="hidden" data-prks-count data-upload-tag-id value="${prksEscapeAttr(t.id)}">` +
+                `<button type="button" class="work-tag-remove" title="Remove" aria-label="Remove tag ${prksEscapeAttr(t.name || '')}" ` +
                 `onclick="removeUploadTagFromModal(${idx})">&times;</button></span>`
         )
         .join('');
+    prksRefreshWorkModalDisclosureCounts();
 }
 
 window.removeUploadTagFromModal = function (idx) {
@@ -5273,6 +5280,13 @@ function prksSetWorkModalFieldError(control, message, errorId) {
 
 function prksFocusWorkModalControl(el) {
     if (!el || typeof el.focus !== 'function') return;
+    // A control inside a collapsed disclosure is inert: open it first so an
+    // error there is never hidden behind "Optional".
+    const details = el.closest ? el.closest('#work-modal details.work-upload-meta__details') : null;
+    if (details && !details.open) {
+        details.open = true;
+        prksSyncWorkModalDisclosureInert();
+    }
     try {
         el.focus({ preventScroll: false });
         if (typeof el.scrollIntoView === 'function') {
@@ -5447,7 +5461,204 @@ function prksIsValidYoutubeUrl(rawUrl) {
     return !!prksExtractYoutubeVideoId(rawUrl);
 }
 
+function prksIsComboboxPanelOpen(results) {
+    if (!results || results.classList.contains('hidden')) return false;
+    return prksIsInlineComboboxPanel(results) ? results.classList.contains('is-open') : true;
+}
+
+/**
+ * Keyboard model for the New File comboboxes: ArrowUp/ArrowDown move the
+ * highlighted result, Enter picks it (or the first real match for a typed
+ * query), Escape is the modal lifecycle's inner layer. Picking reuses the
+ * row's own mousedown handler, so keyboard and pointer share one commit path.
+ */
+function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
+    const input = document.getElementById(inputId);
+    const results = document.getElementById(resultsId);
+    if (!input || !results || input.dataset.prksKeysBound === '1') return;
+    input.dataset.prksKeysBound = '1';
+    const enterCreates = !!(options && options.enterCreates);
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', resultsId);
+    input.setAttribute('aria-expanded', 'false');
+    results.setAttribute('role', 'listbox');
+    let active = -1;
+    const items = () => Array.from(results.querySelectorAll('.result-item:not(.no-results)'));
+    const paint = () => {
+        items().forEach((el, i) => {
+            if (!el.id) el.id = `${resultsId}-opt-${i}`;
+            el.setAttribute('role', 'option');
+            const on = i === active;
+            el.classList.toggle('result-item--active', on);
+            el.setAttribute('aria-selected', on ? 'true' : 'false');
+            if (on) {
+                input.setAttribute('aria-activedescendant', el.id);
+                if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+            }
+        });
+        if (active < 0) input.removeAttribute('aria-activedescendant');
+    };
+    new MutationObserver(() => {
+        input.setAttribute('aria-expanded', prksIsComboboxPanelOpen(results) ? 'true' : 'false');
+    }).observe(results, { attributes: true, attributeFilter: ['class'] });
+    new MutationObserver(() => {
+        active = -1;
+        paint();
+    }).observe(results, { childList: true });
+    input.addEventListener('keydown', (e) => {
+        if (e.isComposing) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (!prksIsComboboxPanelOpen(results)) {
+                if (typeof input.onfocus === 'function') input.onfocus();
+                return;
+            }
+            const list = items();
+            if (!list.length) return;
+            if (e.key === 'ArrowDown' && active < 0) {
+                // A "Quick-create …" row is listed first; land on a real match.
+                const firstReal = list.findIndex((el) => !el.classList.contains('result-item--create'));
+                active = firstReal >= 0 ? firstReal : 0;
+            } else if (e.key === 'ArrowDown') active = (active + 1) % list.length;
+            else active = active <= 0 ? list.length - 1 : active - 1;
+            paint();
+            return;
+        }
+        if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (!prksIsComboboxPanelOpen(results)) return;
+        const list = items();
+        let pick = active >= 0 ? list[active] : null;
+        if (!pick && String(input.value || '').trim()) {
+            pick =
+                list.find((el) => !el.classList.contains('result-item--create')) ||
+                (enterCreates ? list.find((el) => el.classList.contains('result-item--create')) : null) ||
+                null;
+        }
+        if (!pick) return;
+        e.preventDefault();
+        e.stopPropagation();
+        pick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    });
+}
+
+/** Collapsed disclosures say how much they hold, so nothing entered is silently out of sight. */
+function prksRefreshWorkModalDisclosureCounts() {
+    prksWorkModalDisclosureIds().forEach((id) => {
+        const details = document.getElementById(id);
+        const badge = document.querySelector(`#work-modal [data-prks-count-for="${id}"]`);
+        if (!details || !badge) return;
+        let n = 0;
+        details.querySelectorAll('[data-prks-count]').forEach((el) => {
+            if (el.closest('.hidden')) return;
+            const v = String(el.value || '').trim();
+            if (!v) return;
+            const dflt = el.getAttribute('data-prks-count-default');
+            if (dflt != null && v === dflt) return;
+            n += 1;
+        });
+        badge.textContent = n ? `${n} set` : '';
+        badge.hidden = !n;
+    });
+}
+
+function prksClearWorkModalFieldError(control, errorId) {
+    const err = errorId ? document.getElementById(errorId) : null;
+    if (err) {
+        err.textContent = '';
+        err.classList.add('hidden');
+    }
+    if (control && control.removeAttribute) control.removeAttribute('aria-invalid');
+}
+
+/** Early, field-local validation: the same rules and copy the Create handler applies. */
+function prksValidateWorkModalField(id) {
+    const modal = document.getElementById('work-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    const el = document.getElementById(id);
+    if (!el || el.closest('.hidden')) return;
+    const value = String(el.value || '').trim();
+    if (id === 'work-folder-search') {
+        if (prksIsWorkModalFolderCommitted() || !value) return;
+        prksSetWorkModalFieldError(
+            el,
+            'Choose a folder from the list, create this folder, or select Uncategorized.',
+            'work-folder-error'
+        );
+        return;
+    }
+    if (id === 'work-video-url') {
+        if (value && !prksIsValidYoutubeUrl(value)) {
+            prksSetWorkModalFieldError(el, 'Enter a valid YouTube URL.', 'work-video-url-error');
+        }
+        return;
+    }
+    const dateErrors = { 'work-date': 'work-date-error', 'work-video-published-date': 'work-video-published-date-error' };
+    if (dateErrors[id] && value && typeof prksParsePublishedDateInput === 'function' && !prksParsePublishedDateInput(value)) {
+        prksSetWorkModalFieldError(el, 'Use dd/mm/yyyy.', dateErrors[id]);
+    }
+}
+
+function prksBindWorkModalFormUi() {
+    const modal = document.getElementById('work-modal');
+    if (!modal || modal.dataset.prksFormUiBound === '1') return;
+    modal.dataset.prksFormUiBound = '1';
+
+    let countFrame = 0;
+    const scheduleCounts = () => {
+        if (countFrame) return;
+        countFrame = requestAnimationFrame(() => {
+            countFrame = 0;
+            prksRefreshWorkModalDisclosureCounts();
+        });
+    };
+    ['input', 'change', 'click'].forEach((type) => modal.addEventListener(type, scheduleCounts));
+
+    const errorIds = {
+        'work-folder-search': 'work-folder-error',
+        'work-video-url': 'work-video-url-error',
+        'work-date': 'work-date-error',
+        'work-video-published-date': 'work-video-published-date-error',
+    };
+    Object.keys(errorIds).forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        // Editing a field retracts its own error; leaving it re-checks.
+        el.addEventListener('input', () => prksClearWorkModalFieldError(el, errorIds[id]));
+        el.addEventListener('blur', () => {
+            if (id !== 'work-folder-search') {
+                prksValidateWorkModalField(id);
+                return;
+            }
+            // Let a result pick or the quick-create button commit first.
+            window.setTimeout(() => {
+                const row = el.closest('.prks-combobox-with-action');
+                if (row && row.contains(document.activeElement)) return;
+                prksValidateWorkModalField(id);
+            }, 250);
+        });
+    });
+
+    const title = document.getElementById('work-title');
+    if (title) {
+        title.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || e.isComposing || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            const btn = document.getElementById('save-work-btn');
+            if (btn && !btn.disabled) btn.click();
+        });
+    }
+    modal.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.isComposing || !(e.ctrlKey || e.metaKey)) return;
+        e.preventDefault();
+        const btn = document.getElementById('save-work-btn');
+        if (btn && !btn.disabled) btn.click();
+    });
+}
+
 window.prksFormatByteSize = prksFormatByteSize;
+window.prksRefreshWorkModalDisclosureCounts = prksRefreshWorkModalDisclosureCounts;
+window.prksValidateWorkModalField = prksValidateWorkModalField;
 window.prksShowUploadPdfSelected = prksShowUploadPdfSelected;
 window.prksSyncWorkModalDisclosureInert = prksSyncWorkModalDisclosureInert;
 window.prksClearWorkModalErrors = prksClearWorkModalErrors;
@@ -5467,9 +5678,8 @@ window.prksIsValidYoutubeUrl = prksIsValidYoutubeUrl;
 function resetUploadModal() {
     uploadRoles = [];
     uploadTagsSelected = [];
-    if (typeof prksMountUploadRoleSegmented === 'function') {
-        prksMountUploadRoleSegmented('Author');
-    }
+    prksCloseUploadCreditPanel({ restoreFocus: false });
+    renderUploadRoles();
     renderUploadTagsChips();
     const tagSearch = document.getElementById('upload-tag-search');
     if (tagSearch) tagSearch.value = '';
@@ -5499,6 +5709,18 @@ function resetUploadModal() {
     if (wThumb) wThumb.value = '';
     const wPriv = document.getElementById('work-private-notes');
     if (wPriv) wPriv.value = '';
+    const wChan = document.getElementById('work-video-channel');
+    if (wChan) wChan.value = '';
+    const wVidPub = document.getElementById('work-video-published-date');
+    if (wVidPub) wVidPub.value = '';
+    const wStatus = document.getElementById('work-status');
+    if (wStatus && wStatus.value !== 'Not Started') {
+        const notStarted = document.querySelector(
+            '#work-modal .prks-segmented--status .prks-segmented__btn[data-value="Not Started"]'
+        );
+        if (notStarted) notStarted.click();
+        else wStatus.value = 'Not Started';
+    }
     const bibDetails = document.getElementById('work-upload-biblio-details');
     if (bibDetails) bibDetails.open = false;
     const moreDetails = document.getElementById('work-upload-more-details');
@@ -5522,8 +5744,8 @@ function resetUploadModal() {
     document.getElementById('upload-person-search').value = '';
     prksRefreshRoleCreditPicker('upload-role', null);
     removeUploadPdfPreview();
-    document.getElementById('upload-roles-list').innerHTML = '<span class="status-chip-list__empty">No persons linked yet</span>';
     window.__prksUploadVideoMeta = null;
+    window.__prksLastVideoPreviewUrl = '';
     const vPlSearch = document.getElementById('work-video-playlist-search');
     const vPlId = document.getElementById('work-video-playlist-id');
     if (vPlSearch) vPlSearch.value = '';
@@ -5536,6 +5758,7 @@ function resetUploadModal() {
     if (typeof window.prksSyncUploadModalKindUi === 'function') {
         window.prksSyncUploadModalKindUi();
     }
+    prksRefreshWorkModalDisclosureCounts();
 }
 
 let allPersons = [];
@@ -5552,17 +5775,32 @@ async function populateUploadComboboxes() {
     initSearchableCombobox('work-folder-search', 'folder-results', 'work-folder-id', 'folder');
     initSearchableCombobox('upload-person-search', 'person-results', 'upload-person-id', 'person', {
         onQuickCreate: (typedName) => {
-            void prksQuickCreatePersonForSearchField(
-                typedName,
-                'upload-person-search',
-                'upload-person-id',
-                'Quick-created from upload'
-            );
+            void (async () => {
+                await prksQuickCreatePersonForSearchField(
+                    typedName,
+                    'upload-person-search',
+                    'upload-person-id',
+                    'Quick-created from upload'
+                );
+                // Quick-create may have set a credit (typed name differs from
+                // the stored profile name); addRoleToUploadList reads it.
+                const hidden = document.getElementById('upload-person-id');
+                if (hidden && hidden.value) addRoleToUploadList();
+            })();
         },
-        onPersonPick: (person) => prksRefreshRoleCreditPicker('upload-role', person),
+        // Choosing a person IS adding them: no separate Link step.
+        onPersonPick: () => {
+            prksRefreshRoleCreditPicker('upload-role', null);
+            addRoleToUploadList();
+        },
     });
     prksBindRoleCreditPicker('upload-role');
+    prksBindUploadPeopleUi();
     initUploadTagCombobox();
+    prksBindWorkModalComboboxKeys('work-folder-search', 'folder-results');
+    prksBindWorkModalComboboxKeys('upload-person-search', 'person-results');
+    prksBindWorkModalComboboxKeys('upload-tag-search', 'upload-tag-results', { enterCreates: true });
+    prksBindWorkModalComboboxKeys('work-video-playlist-search', 'work-video-playlist-results', { enterCreates: true });
 }
 
 /** Extra line under the name in person comboboxes (disambiguate same names). Uses helpers from people.js when loaded. */
@@ -5762,6 +6000,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
                     input.value = 'Uncategorized';
                     hidden.value = '';
                     input.dataset.prksFolderDefault = '1';
+                    if (input.id === 'work-folder-search') prksClearWorkModalFieldError(input, 'work-folder-error');
                     prksHideInlineComboboxResults(results);
                 };
                 const q = valRaw.trim().toLowerCase();
@@ -5823,6 +6062,7 @@ function initSearchableCombobox(inputId, resultsId, hiddenId, type, comboboxOpti
                     input.value = label;
                     hidden.value = item.id;
                     if (type === 'folder') delete input.dataset.prksFolderDefault;
+                    if (input.id === 'work-folder-search') prksClearWorkModalFieldError(input, 'work-folder-error');
                     if (type === 'person' && typeof comboboxOptions.onPersonPick === 'function') {
                         comboboxOptions.onPersonPick(item);
                     }
@@ -5858,60 +6098,268 @@ async function quickCreateFolder() {
     document.getElementById('work-folder-id').value = newFolderId;
     document.getElementById('work-folder-search').value = title;
     delete document.getElementById('work-folder-search').dataset.prksFolderDefault;
+    prksClearWorkModalFieldError(document.getElementById('work-folder-search'), 'work-folder-error');
     prksHideInlineComboboxResults(document.getElementById('folder-results'));
 }
 
-function addRoleToUploadList() {
+/* —— New File: People on this file ——
+ * Picking a person adds them at once (default role Author, or the first role
+ * they do not hold yet). Each row owns its role <select>, a "Name on file"
+ * credit editor and Remove. The credit editor is the one shared
+ * `upload-role` credit picker, moved under the row being edited, so
+ * credit_name keeps the picker's alias/override semantics. Nothing here
+ * links anything: `uploadRoles` is sent with the one canonical create. */
+
+function prksUploadRoleLabels() {
+    return Array.isArray(PRKS_UPLOAD_ROLE_LABELS) && PRKS_UPLOAD_ROLE_LABELS.length
+        ? PRKS_UPLOAD_ROLE_LABELS
+        : ['Author'];
+}
+
+function prksShowUploadPeopleError(message) {
+    const err = document.getElementById('upload-people-error');
+    if (!err) return;
+    const msg = String(message || '').trim();
+    err.textContent = msg;
+    err.classList.toggle('hidden', !msg);
+}
+
+function prksUploadPersonProfileName(personId, fallback) {
+    const person = typeof prksFindPersonInCache === 'function' ? prksFindPersonInCache(personId) : null;
+    const canonical = person ? prksPersonCanonicalName(person) : '';
+    return canonical || String(fallback || '').trim() || 'Unnamed person';
+}
+
+function addRoleToUploadList(roleType) {
     const hidden = document.getElementById('upload-person-id');
     const input = document.getElementById('upload-person-search');
-    const rSelect = document.getElementById('upload-role-type');
-    
-    if (!hidden.value) {
-        void prksAlertMessage(
-            'Please select a person from the search results or create a new one first.',
-            'Validation'
+    if (!hidden || !input) return false;
+    const personId = String(hidden.value || '').trim();
+    if (!personId) {
+        prksShowUploadPeopleError('Choose a person from the list, or quick-create one.');
+        return false;
+    }
+    const labels = prksUploadRoleLabels();
+    let rType = String(roleType || '').trim();
+    if (!rType) {
+        rType = labels.find((label) => !prksWorkHasRoleLink(uploadRoles, personId, label)) || '';
+    }
+    if (!rType || prksWorkHasRoleLink(uploadRoles, personId, rType)) {
+        prksShowUploadPeopleError(
+            rType
+                ? `${input.value || 'This person'} is already on this file as ${rType}.`
+                : `${input.value || 'This person'} already holds every role on this file.`
         );
-        return;
+        return false;
     }
-    
-    const pName = input.value;
-    const rType = rSelect.value;
-    if (prksWorkHasRoleLink(uploadRoles, hidden.value, rType)) {
-        void prksShowDuplicateRoleLinkAlert(rType);
-        return;
-    }
-
-    const creditName = prksResolveRoleCreditNameForLink('upload-role', hidden.value, 'upload-person-search');
-    const displayName = creditName || pName;
+    const creditName = prksResolveRoleCreditNameForLink('upload-role', personId, 'upload-person-search');
+    const profileName = prksUploadPersonProfileName(personId, input.value);
     uploadRoles.push({
-        person_id: hidden.value,
-        person_name: displayName,
+        person_id: personId,
+        person_name: creditName || profileName,
+        profile_name: profileName,
         role_type: rType,
         credit_name: creditName,
     });
-    renderUploadRoles();
-
+    prksShowUploadPeopleError('');
     hidden.value = '';
     input.value = '';
     prksRefreshRoleCreditPicker('upload-role', null);
+    renderUploadRoles();
+    return true;
 }
 
+function prksUploadRoleRowNameHtml(r) {
+    const profile = escapeHtml(r.profile_name || r.person_name || '');
+    const credit = String(r.credit_name || '').trim();
+    return (
+        `<span class="prks-upload-person-row__profile">${profile}</span>` +
+        (credit
+            ? ` <span class="prks-upload-person-row__credit">as “${escapeHtml(credit)}”</span>`
+            : '')
+    );
+}
 
 function renderUploadRoles() {
     const container = document.getElementById('upload-roles-list');
+    const help = document.getElementById('upload-people-help');
+    if (!container) return;
+    prksParkUploadCreditPanel();
+    if (help) help.hidden = uploadRoles.length > 0;
     if (uploadRoles.length === 0) {
-        container.innerHTML = '<span class="status-chip-list__empty">No persons linked yet</span>';
+        container.innerHTML = '';
+        container.hidden = true;
+        prksRefreshWorkModalDisclosureCounts();
         return;
     }
-    container.innerHTML = uploadRoles.map((r, idx) => `
-        <span class="tag author-tag">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} <span class="author-tag__name">${escapeHtml(r.person_name)}</span> <span class="author-tag__role">${escapeHtml(r.role_type)}</span> <button type="button" class="status-chip-remove" onclick="removeUploadRole(${idx})" aria-label="Remove ${escapeHtml(r.person_name)}">&times;</button></span>
-    `).join(' ');
+    container.hidden = false;
+    const labels = prksUploadRoleLabels();
+    container.innerHTML = uploadRoles
+        .map((r, idx) => {
+            const name = r.profile_name || r.person_name || '';
+            const options = labels
+                .concat(labels.includes(r.role_type) ? [] : [r.role_type])
+                .map(
+                    (label) =>
+                        `<option value="${prksEscapeAttr(label)}"${label === r.role_type ? ' selected' : ''}>${escapeHtml(label)}</option>`
+                )
+                .join('');
+            return (
+                `<li class="prks-upload-person-row" data-upload-role-idx="${idx}">` +
+                `<span class="prks-upload-person-row__icon" aria-hidden="true">${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''}</span>` +
+                `<span class="prks-upload-person-row__name">${prksUploadRoleRowNameHtml(r)}</span>` +
+                `<label class="prks-sr-only" for="upload-role-row-${idx}">Role for ${escapeHtml(name)}</label>` +
+                `<select id="upload-role-row-${idx}" class="prks-select prks-upload-person-row__role" data-upload-role-select="${idx}">${options}</select>` +
+                `<button type="button" class="prks-btn prks-btn--ghost prks-btn--sm prks-upload-person-row__credit-btn" data-upload-role-credit="${idx}" aria-expanded="false" aria-controls="upload-role-credit-panel" aria-label="Name on this file for ${escapeHtml(name)}">Name on file</button>` +
+                `<button type="button" class="prks-icon-btn prks-icon-btn--ghost prks-icon-btn--sm" data-upload-role-remove="${idx}" aria-label="Remove ${escapeHtml(name)} (${escapeHtml(r.role_type)})">&times;</button>` +
+                `</li>`
+            );
+        })
+        .join('');
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+    prksRefreshWorkModalDisclosureCounts();
 }
 
 function removeUploadRole(idx) {
+    if (!(idx >= 0 && idx < uploadRoles.length)) return;
     uploadRoles.splice(idx, 1);
+    prksShowUploadPeopleError('');
     renderUploadRoles();
+    // Keep keyboard users in the list: the next row's Remove, else the search.
+    const list = document.getElementById('upload-roles-list');
+    const next =
+        (list && list.querySelector(`[data-upload-role-remove="${Math.min(idx, uploadRoles.length - 1)}"]`)) ||
+        document.getElementById('upload-person-search');
+    if (next && typeof next.focus === 'function') next.focus();
+}
+
+function prksChangeUploadRoleType(idx, select) {
+    const row = uploadRoles[idx];
+    if (!row || !select) return;
+    const next = String(select.value || '').trim();
+    if (!next || next === row.role_type) return;
+    const others = uploadRoles.filter((_r, i) => i !== idx);
+    if (prksWorkHasRoleLink(others, row.person_id, next)) {
+        select.value = row.role_type;
+        prksShowUploadPeopleError(
+            `${row.profile_name || row.person_name || 'This person'} is already on this file as ${next}.`
+        );
+        return;
+    }
+    row.role_type = next;
+    prksShowUploadPeopleError('');
+    const remove = document.querySelector(`#upload-roles-list [data-upload-role-remove="${idx}"]`);
+    if (remove) {
+        remove.setAttribute('aria-label', `Remove ${row.profile_name || row.person_name || ''} (${next})`);
+    }
+}
+
+let __prksUploadCreditIdx = -1;
+
+function prksParkUploadCreditPanel() {
+    const panel = document.getElementById('upload-role-credit-panel');
+    const parking = document.getElementById('upload-role-credit-parking');
+    if (panel && parking && panel.parentElement !== parking) parking.appendChild(panel);
+    document
+        .querySelectorAll('#upload-roles-list [data-upload-role-credit][aria-expanded="true"]')
+        .forEach((btn) => btn.setAttribute('aria-expanded', 'false'));
+    __prksUploadCreditIdx = -1;
+}
+
+function prksCloseUploadCreditPanel(options) {
+    const idx = __prksUploadCreditIdx;
+    prksParkUploadCreditPanel();
+    prksRefreshRoleCreditPicker('upload-role', null);
+    if (idx < 0 || (options && options.restoreFocus === false)) return;
+    const btn = document.querySelector(`#upload-roles-list [data-upload-role-credit="${idx}"]`);
+    if (btn) btn.focus();
+}
+
+function prksOpenUploadCreditPanel(idx) {
+    const row = uploadRoles[idx];
+    const li = document.querySelector(`#upload-roles-list [data-upload-role-idx="${idx}"]`);
+    const panel = document.getElementById('upload-role-credit-panel');
+    if (!row || !li || !panel) return;
+    if (__prksUploadCreditIdx === idx) {
+        prksCloseUploadCreditPanel();
+        return;
+    }
+    prksParkUploadCreditPanel();
+    const person = prksFindPersonInCache(row.person_id) || {
+        id: row.person_id,
+        first_name: row.profile_name || row.person_name || '',
+        last_name: '',
+        aliases: '',
+    };
+    prksRefreshRoleCreditPicker('upload-role', person);
+    prksSetRoleCreditPickerValue('upload-role', row.credit_name || '');
+    li.appendChild(panel);
+    __prksUploadCreditIdx = idx;
+    const btn = li.querySelector('[data-upload-role-credit]');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    const enable = document.getElementById('upload-role-credit-enable');
+    const input = document.getElementById('upload-role-credit-input');
+    const target = input && !input.disabled ? input : enable;
+    if (target) target.focus();
+}
+
+/** Mirror the shared picker into the row being edited, after the picker's own handlers ran. */
+function prksSyncUploadCreditFromPicker() {
+    const idx = __prksUploadCreditIdx;
+    const row = uploadRoles[idx];
+    if (!row) return;
+    const credit = prksReadRoleCreditName('upload-role');
+    row.credit_name = credit;
+    row.person_name = credit || row.profile_name || row.person_name;
+    const nameEl = document.querySelector(
+        `#upload-roles-list [data-upload-role-idx="${idx}"] .prks-upload-person-row__name`
+    );
+    if (nameEl) nameEl.innerHTML = prksUploadRoleRowNameHtml(row);
+}
+
+function prksBindUploadPeopleUi() {
+    const list = document.getElementById('upload-roles-list');
+    if (list && list.dataset.prksBound !== '1') {
+        list.dataset.prksBound = '1';
+        list.addEventListener('change', (e) => {
+            const select = e.target.closest('[data-upload-role-select]');
+            if (!select) return;
+            prksChangeUploadRoleType(Number(select.getAttribute('data-upload-role-select')), select);
+        });
+        list.addEventListener('click', (e) => {
+            const remove = e.target.closest('[data-upload-role-remove]');
+            if (remove) {
+                removeUploadRole(Number(remove.getAttribute('data-upload-role-remove')));
+                return;
+            }
+            const credit = e.target.closest('[data-upload-role-credit]');
+            if (credit) prksOpenUploadCreditPanel(Number(credit.getAttribute('data-upload-role-credit')));
+        });
+    }
+    const panel = document.getElementById('upload-role-credit-panel');
+    if (panel && panel.dataset.prksBound !== '1') {
+        panel.dataset.prksBound = '1';
+        ['input', 'change', 'click'].forEach((type) =>
+            panel.addEventListener(type, () => prksSyncUploadCreditFromPicker())
+        );
+        const done = document.getElementById('upload-role-credit-done');
+        if (done) done.addEventListener('click', () => prksCloseUploadCreditPanel());
+        panel.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target && e.target.id === 'upload-role-credit-input') {
+                e.preventDefault();
+                prksCloseUploadCreditPanel();
+            }
+        });
+    }
+    const search = document.getElementById('upload-person-search');
+    if (search && search.dataset.prksPeopleBound !== '1') {
+        search.dataset.prksPeopleBound = '1';
+        // The credit picker is shared: never let a new pick repaint the row being edited.
+        search.addEventListener('focus', () => {
+            if (__prksUploadCreditIdx >= 0) prksCloseUploadCreditPanel({ restoreFocus: false });
+        });
+        search.addEventListener('input', () => prksShowUploadPeopleError(''));
+    }
 }
 
 function initUploadDragAndDrop() {
@@ -5926,18 +6374,7 @@ function initUploadDragAndDrop() {
         cancelBtn.addEventListener('click', () => requestModalClose('button'));
     }
 
-    const personSearch = document.getElementById('upload-person-search');
-    if (personSearch && personSearch.dataset.prksEnterLinkBound !== '1') {
-        personSearch.dataset.prksEnterLinkBound = '1';
-        personSearch.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter') return;
-            const hidden = document.getElementById('upload-person-id');
-            if (hidden && hidden.value) {
-                e.preventDefault();
-                addRoleToUploadList();
-            }
-        });
-    }
+    prksBindWorkModalFormUi();
 
     if (zone.dataset.prksClickBound !== '1') {
         zone.dataset.prksClickBound = '1';
@@ -6077,8 +6514,15 @@ function initUploadDragAndDrop() {
 
             const pdfMeta = document.getElementById('work-upload-pdf-only-meta');
             if (pdfMeta) pdfMeta.classList.toggle('hidden', kindVal !== 'pdf');
-            const pubCol = document.getElementById('work-upload-published-date-col');
-            if (pubCol) pubCol.classList.toggle('hidden', kindVal !== 'pdf');
+            const videoMeta = document.getElementById('work-upload-video-only-meta');
+            if (videoMeta) videoMeta.classList.toggle('hidden', kindVal !== 'video');
+            const playlistRow = document.getElementById('work-video-playlist-row');
+            if (playlistRow) playlistRow.classList.toggle('hidden', kindVal !== 'video');
+            const moreTitle = document.getElementById('work-upload-more-title');
+            if (moreTitle) {
+                moreTitle.textContent =
+                    kindVal === 'video' ? 'Playlist, tags, status & notes' : 'Tags, status & notes';
+            }
 
             if (switched && kindVal !== prevKind) {
                 if (kindVal === 'video') {
@@ -6099,7 +6543,7 @@ function initUploadDragAndDrop() {
             }
 
             if (dropLabel) {
-                dropLabel.innerHTML = 'Drop a PDF here<br><span class="drop-zone__label-sub">or click to browse · PDF files only</span>';
+                dropLabel.innerHTML = 'Drop a PDF here <span class="drop-zone__label-sub">or click to browse · PDF files only</span>';
             }
             if (fileInput) fileInput.disabled = kindVal === 'video';
 
@@ -6138,6 +6582,7 @@ function initUploadDragAndDrop() {
                     }
                 }
             }
+            prksRefreshWorkModalDisclosureCounts();
         };
     }
 
@@ -6204,6 +6649,8 @@ function initUploadDragAndDrop() {
                         if (channelInput && !String(channelInput.value || '').trim() && meta.author_name) {
                             channelInput.value = String(meta.author_name).trim();
                         }
+                        // Autofill sets values without input events.
+                        prksRefreshWorkModalDisclosureCounts();
                     }
                 }
             } catch (_e) {}
@@ -6312,7 +6759,7 @@ function initUploadDragAndDrop() {
                     }
                 }
 
-                results.classList.remove('hidden');
+                prksShowInlineComboboxResults(input, results);
             }
 
             input.onfocus = async () => {

@@ -618,10 +618,9 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                 page.evaluate('''pid => {
                     document.getElementById('upload-person-id').value = pid;
                     document.getElementById('upload-person-search').value = 'E2E Author';
-                    document.getElementById('upload-role-type').value = 'Author';
-                    addRoleToUploadList();
+                    addRoleToUploadList('Author');
                 }''', server.ids['person'])
-                page.locator('#upload-roles-list .author-tag').first.wait_for()
+                page.locator('#upload-roles-list .prks-upload-person-row').first.wait_for()
             with page.expect_response(lambda r: '/api/works' in r.url and r.request.method == 'POST') as response:
                 page.locator('#save-work-btn').click()
             self.assertTrue(response.value.ok)

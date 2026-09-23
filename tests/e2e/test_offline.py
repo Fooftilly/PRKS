@@ -6716,12 +6716,11 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
                 """([pid, roleType]) => {
                     document.getElementById('upload-person-id').value = pid;
                     document.getElementById('upload-person-search').value = 'E2E linked person';
-                    document.getElementById('upload-role-type').value = roleType;
+                    window.addRoleToUploadList(roleType);
                 }""",
                 [person_id, role_type],
             )
-            page.evaluate("() => window.addRoleToUploadList()")
-            page.locator("#upload-roles-list .author-tag").first.wait_for()
+            page.locator("#upload-roles-list .prks-upload-person-row").first.wait_for()
         page.locator("#save-work-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
 

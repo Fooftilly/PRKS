@@ -2,6 +2,7 @@ from backend import work_note_sync, work_role_sync, work_source_sync
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
+import sqlite3
 import json
 import gzip
 import os
@@ -2753,6 +2754,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'Invalid YouTube URL'})
                     return
 
+                # A named destination that does not exist is refused before
+                # any bytes are stored or a row is created, matching the
+                # durable CREATE_WORK boundary. Filing only after the commit
+                # used to fail with the Work already created, so a retry
+                # duplicated it.
+                requested_folder = data.get("folder_id")
+                requested_folder = (
+                    str(requested_folder).strip() if requested_folder is not None else ""
+                )
+                if requested_folder and not db.folder_exists(requested_folder):
+                    self.send_json(404, {
+                        'error': 'The selected folder no longer exists.',
+                        'code': 'FOLDER_NOT_FOUND',
+                    })
+                    return
+
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
                     try:
@@ -2897,6 +2914,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except ValueError as e:
                         delete_library_work(db, text_index, w_id)
                         self.send_json(409, {'error': str(e)})
+                        return
+                    except sqlite3.IntegrityError:
+                        # The folder was deleted after the check above.
+                        delete_library_work(db, text_index, w_id)
+                        self.send_json(404, {
+                            'error': 'The selected folder no longer exists.',
+                            'code': 'FOLDER_NOT_FOUND',
+                        })
                         return
                 else:
                     try:

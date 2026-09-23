@@ -10593,6 +10593,363 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#upload-selected-file-name").wait_for(state="visible")
         self.assertIsNone(page.locator("#upload-drop-zone").get_attribute("aria-invalid"))
 
+    # -- Ingestion V1 (#85): essentials first, enrichment on demand ----------
+
+    def _open_new_file_ready(self, page):
+        """Open New File and wait until openModal's continuation has run."""
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_function(
+            """() => {
+                const m = document.getElementById('work-modal');
+                const ready = window.__prksModalBaselineReady;
+                return !!(m && !m.classList.contains('hidden') && !m.hasAttribute('inert')
+                    && ready && ready['work-modal'] === true);
+            }"""
+        )
+
+    def _open_disclosure(self, page, details_id):
+        page.locator("#%s > summary" % details_id).click()
+        page.wait_for_selector("#%s .work-upload-meta__details-body:not([inert])" % details_id)
+
+    def _close_disclosure(self, page, details_id):
+        page.locator("#%s > summary" % details_id).click()
+        page.wait_for_selector("#%s .work-upload-meta__details-body[inert]" % details_id, state="attached")
+
+    def _work_detail(self, page, work_id):
+        return page.evaluate(
+            """async (id) => {
+                const res = await prksRequest('/api/works/' + encodeURIComponent(id));
+                return await res.json();
+            }""",
+            work_id,
+        )
+
+    def _created_work_id(self, page):
+        page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
+        return unquote(page.evaluate("() => location.hash").split("#/works/", 1)[1].split("?", 1)[0])
+
+    def _create_person_via_api(self, page, first, last, aliases=""):
+        return page.evaluate(
+            """async (p) => {
+                const res = await prksRequest('/api/persons', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(p),
+                });
+                return (await res.json()).id;
+            }""",
+            {"first_name": first, "last_name": last, "aliases": aliases},
+        )
+
+    def _assert_modal_fits_without_scrolling(self, page):
+        geo = page.evaluate(
+            """() => {
+                const body = document.querySelector('#work-modal .modal-body--scroll');
+                const btn = document.getElementById('save-work-btn').getBoundingClientRect();
+                return {scrollH: body.scrollHeight, clientH: body.clientHeight,
+                        btnTop: btn.top, btnBottom: btn.bottom, vh: innerHeight};
+            }"""
+        )
+        self.assertLessEqual(geo["scrollH"], geo["clientH"] + 1, geo)
+        self.assertGreaterEqual(geo["btnTop"], 0, geo)
+        self.assertLessEqual(geo["btnBottom"], geo["vh"], geo)
+
+    def test_fast_path_pdf_essentials_fit_and_create_without_enrichment(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 1280, "height": 800})
+        folder_id = self._create_folder_via_api(page, "E2E Daily Reading")
+        self._open_new_file_ready(page)
+
+        # Essentials and Create are all on screen; enrichment is collapsed and
+        # no role surface exists before there is a person.
+        self._assert_modal_fits_without_scrolling(page)
+        for sel in ("#work-title", "#work-folder-search", "#work-doc-type-trigger",
+                    "#upload-person-search", "#save-work-btn"):
+            self.assertTrue(page.locator(sel).is_visible(), sel)
+        self.assertEqual(page.locator("#work-modal .prks-field__required").count() >= 2, True)
+        self.assertFalse(page.locator("#upload-roles-list").is_visible())
+        self.assertFalse(page.locator("#upload-role-credit-wrap").is_visible())
+        self.assertEqual(page.locator("#work-modal select").count(), 0)
+        for details_id in ("work-upload-biblio-details", "work-upload-more-details"):
+            self.assertFalse(page.evaluate("id => document.getElementById(id).open", details_id))
+
+        # Daily ingestion: file, title, folder (keyboard), Enter to create.
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        self.assertEqual(page.locator("#work-title").input_value(), "minimal")
+        self._assert_modal_fits_without_scrolling(page)
+        page.locator("#work-folder-search").click()
+        page.keyboard.type("Daily Read")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        page.wait_for_function(
+            "id => document.getElementById('work-folder-id').value === id", arg=folder_id
+        )
+        page.fill("#work-title", "E2E Fast Path Work")
+        page.locator("#work-title").press("Enter")
+        work_id = self._created_work_id(page)
+        page.locator("#work-modal").wait_for(state="hidden")
+        work = self._work_detail(page, work_id)
+        self.assertEqual(work["title"], "E2E Fast Path Work")
+        self.assertEqual(work["folder_id"], folder_id)
+        self.assertEqual(work.get("roles") or [], [])
+
+    def test_enriched_creation_people_roles_credit_and_details(self):
+        server, page, _collector = self._start_app()
+        ada_id = self._create_person_via_api(page, "Ada", "Lovelace", "A. A. Lovelace, Augusta King")
+        author_id = server.ids["person"]
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Enriched Work")
+
+        # Keyboard pick: the first ArrowDown skips "Quick-create" and lands on a match.
+        page.locator("#upload-person-search").click()
+        page.keyboard.type("E2E Auth")
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Enter")
+        rows = page.locator("#upload-roles-list .prks-upload-person-row")
+        rows.first.wait_for()
+        self.assertEqual(page.locator("#upload-role-row-0").input_value(), "Author")
+        self.assertEqual(page.locator("#upload-person-search").input_value(), "")
+
+        # Pointer pick adds a second person immediately.
+        page.fill("#upload-person-search", "Lovel")
+        page.locator("#person-results .result-item--person-pick", has_text="Ada Lovelace").click()
+        page.wait_for_function("() => document.querySelectorAll('#upload-roles-list li').length === 2")
+        page.select_option("#upload-role-row-1", "Translator")
+
+        # The same person again takes the next free role, and a duplicate
+        # person+role change is refused at the row.
+        page.fill("#upload-person-search", "E2E Auth")
+        page.locator("#person-results .result-item--person-pick", has_text=PERSON_DISPLAY).click()
+        page.wait_for_function("() => document.querySelectorAll('#upload-roles-list li').length === 3")
+        self.assertEqual(page.locator("#upload-role-row-2").input_value(), "Editor")
+        page.select_option("#upload-role-row-2", "Author")
+        page.locator("#upload-people-error", has_text="already on this file as Author").wait_for()
+        self.assertEqual(page.locator("#upload-role-row-2").input_value(), "Editor")
+        page.locator("[data-upload-role-remove='2']").click()
+        page.wait_for_function("() => document.querySelectorAll('#upload-roles-list li').length === 2")
+
+        # Credit: the shared picker opens under the row; an alias becomes credit_name.
+        page.locator("[data-upload-role-credit='1']").click()
+        page.locator("#upload-role-credit-wrap").wait_for(state="visible")
+        self.assertEqual(
+            page.locator("[data-upload-role-credit='1']").get_attribute("aria-expanded"), "true"
+        )
+        page.locator(".prks-role-credit-picker__alias-chip", has_text="A. A. Lovelace").click()
+        page.locator("#upload-role-credit-done").click()
+        page.locator("#upload-role-credit-wrap").wait_for(state="hidden")
+        page.locator(
+            "#upload-roles-list [data-upload-role-idx='1'] .prks-upload-person-row__credit",
+            has_text="A. A. Lovelace",
+        ).wait_for()
+
+        # Optional details, then collapsed with a visible count.
+        self._open_disclosure(page, "work-upload-biblio-details")
+        page.fill("#work-date", "12/10/1843")
+        page.fill("#work-doi", "10.1000/e2e-enriched")
+        self._close_disclosure(page, "work-upload-biblio-details")
+        page.locator(
+            "[data-prks-count-for='work-upload-biblio-details']", has_text="2 set"
+        ).wait_for()
+        self._open_disclosure(page, "work-upload-more-details")
+        page.locator("#work-upload-more-details .prks-segmented__btn[data-value='Planned']").click()
+        page.fill("#work-private-notes", "Read before Thursday")
+
+        page.keyboard.press("Control+Enter")
+        work_id = self._created_work_id(page)
+        work = self._work_detail(page, work_id)
+        self.assertEqual(work["title"], "E2E Enriched Work")
+        self.assertEqual(work["published_date"], "1843-10-12")
+        self.assertEqual(work["doi"], "10.1000/e2e-enriched")
+        self.assertEqual(work["status"], "Planned")
+        self.assertEqual(work["private_notes"], "Read before Thursday")
+        roles = sorted(
+            (r["id"], r["role_type"], r.get("credit_name") or "") for r in work["roles"]
+        )
+        self.assertEqual(
+            roles,
+            sorted([(author_id, "Author", ""), (ada_id, "Translator", "A. A. Lovelace")]),
+        )
+
+    def test_state_survives_disclosures_validation_and_opens_hidden_errors(self):
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.fill("#work-title", "E2E Kept State")
+        page.fill("#upload-person-search", "E2E Auth")
+        page.locator("#person-results .result-item--person-pick", has_text=PERSON_DISPLAY).click()
+        page.locator("#upload-roles-list .prks-upload-person-row").first.wait_for()
+        self._open_disclosure(page, "work-upload-biblio-details")
+        page.fill("#work-publisher", "E2E Press")
+        page.fill("#work-date", "31/31/2020")
+        page.locator("#work-journal").click()  # leaving the date checks it early
+        page.locator("#work-date-error", has_text="dd/mm/yyyy").wait_for()
+        self._close_disclosure(page, "work-upload-biblio-details")
+
+        # Missing source: nothing is cleared.
+        page.locator("#save-work-btn").click()
+        page.locator("#work-file-error", has_text="Choose a PDF file.").wait_for()
+        self.assertEqual(page.locator("#work-title").input_value(), "E2E Kept State")
+        self.assertEqual(page.locator("#work-publisher").input_value(), "E2E Press")
+        self.assertEqual(page.locator("#upload-roles-list .prks-upload-person-row").count(), 1)
+
+        # With a source, the error inside the collapsed disclosure opens it and is focused.
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Kept State")
+        page.locator("#save-work-btn").click()
+        page.wait_for_function("() => document.getElementById('work-upload-biblio-details').open")
+        page.wait_for_function("() => document.activeElement && document.activeElement.id === 'work-date'")
+        self.assertEqual(page.locator("#work-date").get_attribute("aria-invalid"), "true")
+        page.fill("#work-date", "01/02/2020")
+        self.assertIsNone(page.locator("#work-date").get_attribute("aria-invalid"))
+        page.locator("#save-work-btn").click()
+        work = self._work_detail(page, self._created_work_id(page))
+        self.assertEqual(work["publisher"], "E2E Press")
+        self.assertEqual(work["published_date"], "2020-02-01")
+        self.assertEqual(len(work["roles"]), 1)
+
+    def test_folder_query_errors_on_leave_and_stale_folder_creates_nothing(self):
+        server, page, collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.fill("#work-folder-search", "No Such Folder zz")
+        page.locator("#work-title").click()
+        page.locator("#work-folder-error", has_text="Choose a folder from the list").wait_for()
+        page.locator("#work-folder-search").click()
+        page.locator("#work-folder-search").fill("Uncategorized")
+        page.locator("#folder-results .result-item", has_text="Uncategorized").first.click()
+        page.locator("#work-folder-error").wait_for(state="hidden")
+        page.locator("#work-modal-cancel").click()
+        if page.locator("#prks-modal-unsaved-confirm:not(.hidden)").count():
+            page.locator("#prks-modal-unsaved-confirm-discard").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+
+        # A destination deleted after it was chosen is refused before anything
+        # is created, and reported on the Folder field with input kept.
+        folder_id = self._create_folder_via_api(page, "E2E Soon Gone")
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Stale Folder Work")
+        page.locator("#work-folder-search").fill("Soon Gone")
+        page.locator("#folder-results .result-item", has_text="E2E Soon Gone").click()
+        page.evaluate(
+            """async (id) => { await prksRequest('/api/folders/' + encodeURIComponent(id), { method: 'DELETE' }); }""",
+            folder_id,
+        )
+        try:
+            page.locator("#save-work-btn").click()
+            page.locator("#work-folder-error", has_text="no longer exists").wait_for()
+            page.locator("#upload-status-msg", has_text="Nothing was saved.").wait_for()
+            self.assertEqual(page.locator("#work-title").input_value(), "E2E Stale Folder Work")
+            self.assertTrue(page.locator("#work-modal").is_visible())
+            titles = page.evaluate("async () => (await fetchWorks()).map(w => w.title)")
+            self.assertNotIn("E2E Stale Folder Work", titles)
+        finally:
+            collector.console_errors[:] = [
+                e for e in collector.console_errors if "404 (Not Found)" not in e
+            ]
+
+    def test_escape_layers_cancel_and_fresh_reopen(self):
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        # An open result list is its own Escape layer.
+        page.locator("#upload-person-search").click()
+        page.wait_for_selector("#person-results.is-open")
+        self.assertEqual(page.locator("#upload-person-search").get_attribute("aria-expanded"), "true")
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#person-results.is-open", state="detached")
+        self.assertTrue(page.locator("#work-modal").is_visible())
+
+        # Enter data in essentials and enrichment, then discard.
+        page.fill("#work-title", "E2E Discarded")
+        page.locator("#upload-person-search").fill("E2E Auth")
+        page.locator("#person-results .result-item--person-pick", has_text=PERSON_DISPLAY).click()
+        page.locator("#upload-roles-list .prks-upload-person-row").first.wait_for()
+        self._open_disclosure(page, "work-upload-more-details")
+        page.fill("#work-abstract", "Discard me")
+        page.locator("#work-modal-cancel").click()
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for()
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
+        page.locator("#work-modal").wait_for(state="hidden")
+        page.wait_for_function(
+            "() => document.activeElement && document.activeElement.id === 'prks-ribbon-new-file'"
+        )
+
+        # Reopening starts fresh.
+        self._open_new_file_ready(page)
+        self.assertEqual(page.locator("#work-title").input_value(), "")
+        self.assertEqual(page.locator("#work-abstract").input_value(), "")
+        self.assertFalse(page.locator("#upload-roles-list").is_visible())
+        self.assertEqual(page.evaluate("() => uploadRoles.length"), 0)
+        self.assertFalse(page.evaluate("() => document.getElementById('work-upload-more-details').open"))
+        self.assertTrue(page.locator("[data-prks-count-for='work-upload-more-details']").is_hidden())
+        page.keyboard.press("Escape")
+        page.locator("#work-modal").wait_for(state="hidden")
+
+    def test_youtube_source_details_and_playlist_live_in_disclosures(self):
+        server, page, _collector = self._start_app()
+
+        def _stub_youtube(route):
+            if "oembed" in route.request.url:
+                route.fulfill(status=200, content_type="application/json",
+                              body=json.dumps({"title": "Stub Lecture", "author_name": "Stub Channel"}))
+            else:
+                route.fulfill(status=200, content_type="text/html", body="<html></html>")
+
+        page.route("https://www.youtube.com/**", _stub_youtube)
+        self.addCleanup(lambda: page.unroute("https://www.youtube.com/**", _stub_youtube))
+        self._open_new_file_ready(page)
+        page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
+        page.locator("#work-video-url").wait_for(state="visible")
+        self._assert_modal_fits_without_scrolling(page)
+        self.assertFalse(page.locator("#work-video-channel").is_visible())
+        self.assertFalse(page.locator("#work-video-playlist-search").is_visible())
+        page.locator("#work-upload-more-title", has_text="Playlist").wait_for()
+
+        page.fill("#work-video-url", "https://example.com/not-youtube")
+        page.locator("#work-title").click()
+        page.locator("#work-video-url-error", has_text="valid YouTube URL").wait_for()
+        page.fill("#work-video-url", "https://youtu.be/dQw4w9WgXcQ")
+        page.locator("#work-video-url-error").wait_for(state="hidden")
+        page.locator("#work-title").click()  # blur fetches oEmbed metadata
+        page.wait_for_function("() => document.getElementById('work-title').value === 'Stub Lecture'")
+        page.locator("[data-prks-count-for='work-upload-biblio-details']", has_text="1 set").wait_for()
+        self._open_disclosure(page, "work-upload-biblio-details")
+        self.assertEqual(page.locator("#work-video-channel").input_value(), "Stub Channel")
+        self.assertFalse(page.locator("#work-date").is_visible())
+        page.locator("#save-work-btn").click()
+        work_id = self._created_work_id(page)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+        )
+        work = self._work_detail(page, work_id)
+        self.assertEqual(work["title"], "Stub Lecture")
+        self.assertEqual(work["author_text"], "Stub Channel")
+        self.assertEqual(work["source_kind"], "video")
+
+    def test_short_viewport_scrolls_body_and_keeps_create_visible(self):
+        server, page, _collector = self._start_app()
+        page.set_viewport_size({"width": 900, "height": 560})
+        self._open_new_file_ready(page)
+        geo = page.evaluate(
+            """() => {
+                const body = document.querySelector('#work-modal .modal-body--scroll');
+                const btn = document.getElementById('save-work-btn').getBoundingClientRect();
+                return {scrollH: body.scrollHeight, clientH: body.clientHeight,
+                        btnBottom: btn.bottom, vh: innerHeight,
+                        hscroll: document.documentElement.scrollWidth > innerWidth};
+            }"""
+        )
+        self.assertGreater(geo["scrollH"], geo["clientH"], geo)
+        self.assertLessEqual(geo["btnBottom"], geo["vh"], geo)
+        self.assertFalse(geo["hscroll"], geo)
+        page.locator("#upload-person-search").scroll_into_view_if_needed()
+        self.assertTrue(page.locator("#save-work-btn").is_visible())
+
 
 def _open_settings(page):
     page.locator("button.settings-btn").click()

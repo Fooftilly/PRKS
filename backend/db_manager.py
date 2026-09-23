@@ -3447,6 +3447,12 @@ class PRKSDatabase:
                 folder_sync.set_field_on_conn(
                     conn, folder_id, field, "" if value in (None, False) else str(value))
 
+    def folder_exists(self, folder_id: str) -> bool:
+        fid = (folder_id or "").strip()
+        if not fid:
+            return False
+        return bool(self.execute_query("SELECT 1 FROM folders WHERE id = ?", (fid,)))
+
     def add_work_to_folder(self, folder_id: str, work_id: str):
         """Attach a work to a folder. Fails if the work is already in a different folder."""
         fid = (folder_id or "").strip()

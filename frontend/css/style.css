@@ -532,6 +532,16 @@ body {
     line-height: var(--line-normal);
 }
 
+/* Required marker: text, never color or an asterisk alone. Sits after a label. */
+.prks-field__required {
+    margin-left: var(--space-xs);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-medium);
+    color: var(--text-tertiary);
+    letter-spacing: 0;
+    text-transform: none;
+}
+
 .prks-input,
 .prks-select,
 .prks-textarea,
@@ -7487,6 +7497,9 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
 #work-modal.modal--create-file {
     width: 42rem !important;
     max-width: 95vw;
+    /* A stable height: a YouTube preview, a People row or an opened
+       disclosure scrolls the body instead of moving Create under the pointer. */
+    height: min(95vh, 48rem);
     max-height: 95vh;
     overflow: hidden;
 }
@@ -7524,6 +7537,174 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
 #work-modal.modal--create-file .drop-zone {
     min-height: 6.25rem;
     padding: var(--space-md) var(--space-lg);
+}
+/* New File V1 (#85): essentials first, enrichment on demand. */
+#work-modal.modal--create-file .form-pane > .prks-create-section,
+#work-modal.modal--create-file .prks-create-details-grid {
+    gap: var(--space-sm);
+}
+#work-modal.modal--create-file .prks-field {
+    gap: var(--space-xs);
+}
+#work-modal.modal--create-file .prks-create-grid {
+    gap: var(--space-sm) var(--space-md);
+}
+#work-modal.modal--create-file .prks-create-details-grid {
+    display: flex;
+    flex-direction: column;
+}
+#work-modal.modal--create-file .meta-row--hint {
+    margin: 0;
+}
+.prks-create-section__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    min-width: 0;
+}
+.prks-create-section__head .prks-field__required {
+    margin-left: 0;
+}
+.prks-create-section__head .prks-kind-toggle {
+    margin-left: auto;
+}
+.prks-kind-toggle--compact {
+    padding: 2px;
+    gap: 2px;
+}
+#work-modal.modal--create-file .prks-kind-toggle--compact .prks-kind-toggle__btn {
+    flex: 0 0 auto;
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-md);
+}
+.prks-kind-toggle--compact .prks-kind-toggle__label {
+    font-size: var(--text-sm);
+}
+.prks-kind-toggle--compact .prks-kind-toggle__icon .prks-icon,
+.prks-kind-toggle--compact .prks-kind-toggle__icon .prks-icon svg {
+    --prks-icon-size: 14px;
+}
+#work-modal.modal--create-file .drop-zone.drop-zone--inline {
+    flex-direction: row;
+    gap: var(--space-sm);
+    min-height: 3.5rem;
+    padding: var(--space-sm) var(--space-lg);
+}
+.drop-zone--inline .drop-zone__icon {
+    margin-bottom: 0;
+}
+.drop-zone--inline .drop-zone__icon .prks-icon,
+.drop-zone--inline .drop-zone__icon .prks-icon svg {
+    --prks-icon-size: 20px;
+}
+.drop-zone--inline p {
+    margin: 0;
+}
+#work-modal.modal--create-file .upload-selected-file {
+    padding: var(--space-sm) var(--space-md);
+}
+#work-modal.modal--create-file .form-pane .prks-doc-type-menu__trigger {
+    min-height: var(--control-height-md);
+    padding: 0 var(--space-sm);
+    font-size: var(--text-md);
+}
+#work-modal #upload-viewer .prks-video-preview__frame {
+    width: 100%;
+    max-width: 20rem;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--border);
+}
+#work-modal #upload-viewer .prks-video-preview__frame iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+#work-modal .upload-video-preview:not(.hidden) {
+    border: none;
+    background: none;
+}
+/* The shared credit picker says `hidden` before a person is chosen. */
+#work-modal .prks-role-credit-picker[hidden] {
+    display: none;
+}
+.prks-upload-people-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+.prks-upload-people-list[hidden] {
+    display: none;
+}
+.prks-upload-person-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+    min-height: var(--control-height-md);
+    padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-sm);
+}
+.prks-upload-person-row + .prks-upload-person-row {
+    border-top: 1px solid var(--border);
+}
+.prks-upload-person-row__icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: var(--text-tertiary);
+}
+.prks-upload-person-row__name {
+    flex: 1 1 8rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-md);
+    color: var(--text-primary);
+}
+.prks-upload-person-row__credit {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+.form-pane .prks-upload-person-row__role {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 8.5rem;
+    min-height: var(--control-height-sm);
+    font-size: var(--text-sm);
+}
+.prks-upload-person-row__credit-btn[aria-expanded="true"] {
+    background: var(--surface-selected);
+}
+.prks-upload-credit-panel {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+    border-top: 1px solid var(--border);
+    background: var(--surface-muted);
+}
+.prks-upload-credit-panel .prks-role-credit-picker {
+    margin-top: 0;
+}
+.prks-upload-credit-panel__actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.work-upload-meta__summary-count {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-secondary);
+}
+.work-upload-meta__summary-count[hidden] {
+    display: none;
+}
+#work-modal.modal--create-file .work-upload-meta__details {
+    margin-top: 0;
 }
 .prks-create-section {
     display: flex;
@@ -8683,6 +8864,11 @@ textarea[data-prks-autosize="1"] {
 .result-item:hover {
     background: var(--surface-muted);
     color: var(--accent);
+}
+/* Keyboard highlight in a combobox list: the quiet selected grammar. */
+.result-item.result-item--active {
+    background: var(--surface-selected);
+    color: var(--text-primary);
 }
 .result-item.no-results {
     color: var(--text-tertiary);

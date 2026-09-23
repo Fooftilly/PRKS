@@ -598,6 +598,35 @@ class TestServerAPI(unittest.TestCase):
         leftover_ids = server_module.text_index.search_work_ids(term)
         self.assertEqual(leftover_ids, [])
 
+    def test_5d_post_work_into_missing_folder_is_refused_before_creation(self):
+        """A stale destination is refused before any row or PDF exists (#85),
+        like the durable CREATE_WORK boundary, so a retry cannot duplicate."""
+        pdf_bytes = _pdf_with_text_bytes("Stale folder body")
+        payload = {
+            "title": "Stale Folder Work",
+            "status": "Planned",
+            "folder_id": "F-does-not-exist",
+            "file_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+            "file_name": "stale_folder.pdf",
+        }
+        pdfs_before = set(os.listdir(server_module.pdfs_dir))
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps(payload).encode(),
+            method="POST",
+        )
+        req.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 404)
+        body = json.loads(cm.exception.read().decode())
+        self.assertEqual(body.get("code"), "FOLDER_NOT_FOUND")
+        self.assertIn("folder", body.get("error", "").lower())
+        self.assertEqual(set(os.listdir(server_module.pdfs_dir)), pdfs_before)
+        with urllib.request.urlopen(f"{self._base_url}/api/works") as res:
+            titles = [w.get("title") for w in json.loads(res.read().decode())]
+        self.assertNotIn("Stale Folder Work", titles)
+
     def test_6_patch_person(self):
         payload = {"first_name": "Test", "last_name": "Philosopher"}
         req = urllib.request.Request(f"{self._base_url}/api/persons", data=json.dumps(payload).encode(), method="POST")
