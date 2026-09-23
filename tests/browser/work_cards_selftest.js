@@ -147,6 +147,14 @@
                 const listColl = root.prksWorkBrowseCollectionClass();
                 assert('list collection class', listColl.indexOf('work-browse-collection--list') !== -1);
                 assert('list collection drops card-grid', listColl.indexOf('card-grid') === -1);
+                if (typeof root.prksWorkBrowseModeToggleHtml === 'function') {
+                    const listToggle = root.prksWorkBrowseModeToggleHtml('prks-work-browse-mode-test');
+                    assert(
+                        'list mode checks only List radio',
+                        listToggle.indexOf('data-value="Cards" aria-checked="false"') !== -1 &&
+                            listToggle.indexOf('data-value="List" aria-checked="true"') !== -1
+                    );
+                }
                 root.prksSetWorkBrowseMode('cards');
             }
             const toggle = typeof root.prksWorkBrowseModeToggleHtml === 'function'
@@ -157,6 +165,11 @@
             assert(
                 'mode toggle radios use aria-checked',
                 toggle.indexOf('aria-checked=') !== -1 && toggle.indexOf('aria-pressed=') === -1
+            );
+            assert(
+                'cards mode checks only Cards radio',
+                toggle.indexOf('data-value="Cards" aria-checked="true"') !== -1 &&
+                    toggle.indexOf('data-value="List" aria-checked="false"') !== -1
             );
         }
 
