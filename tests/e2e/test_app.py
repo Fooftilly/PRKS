@@ -11103,6 +11103,37 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         self.assertNotIn("E2E Discarded While Syncing", titles)
 
+    def test_create_waits_for_an_in_flight_tag_quick_create(self):
+        """Codex review on #151: Ctrl+Enter right after "Create tag" creates the
+        Work with that tag, not before the tag is attached."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Tag Race")
+        self._open_disclosure(page, "work-upload-more-details")
+        page.evaluate(
+            """() => {
+                const real = window.prksCreateTagDurably;
+                window.__e2eReleaseTag = null;
+                window.prksCreateTagDurably = (...args) => new Promise((resolve, reject) => {
+                    window.__e2eReleaseTag = () => real(...args).then(resolve, reject);
+                });
+            }"""
+        )
+        page.locator("#upload-tag-search").click()
+        page.keyboard.type("racetag")
+        # The row for the full query: Enter on rows still rendering is ignored.
+        page.locator("#upload-tag-results .result-item--create", has_text='"racetag"').wait_for()
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => typeof window.__e2eReleaseTag === 'function'")
+        page.keyboard.press("Control+Enter")
+        page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
+        self.assertNotIn("#/works/", page.evaluate("() => location.hash"))
+        page.evaluate("() => window.__e2eReleaseTag()")
+        work = self._work_detail(page, self._created_work_id(page))
+        self.assertEqual([t.get("name") for t in work.get("tags") or []], ["racetag"])
+
     def test_failed_quick_create_stops_create_instead_of_dropping_the_person(self):
         server, page, collector = self._start_app()
         # The simulated storage failure is logged by the quick-create on purpose.

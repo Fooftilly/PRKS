@@ -4728,6 +4728,31 @@ function initForms() {
                 return;
             }
         }
+        // Same for a tag or playlist created from this form a moment ago: the
+        // Work is created with it, or not at all.
+        const pendingEnrichment = typeof prksPendingWorkModalQuickCreates === 'function'
+            ? prksPendingWorkModalQuickCreates() : [];
+        if (pendingEnrichment.length) {
+            window.__prksWorkCreateInFlight = true;
+            if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(true);
+            let enrichmentAdded = false;
+            try {
+                enrichmentAdded = (await Promise.all(pendingEnrichment)).every(Boolean);
+            } finally {
+                window.__prksWorkCreateInFlight = false;
+                if (typeof prksSetWorkModalCreateBusy === 'function') prksSetWorkModalCreateBusy(false);
+            }
+            if (!createFormStillOpen()) return;
+            if (!enrichmentAdded) {
+                const statusMsg = document.getElementById('upload-status-msg');
+                if (statusMsg) {
+                    statusMsg.textContent =
+                        'A tag or playlist could not be created, so the file was not created. Nothing was saved.';
+                    statusMsg.classList.remove('hidden');
+                }
+                return;
+            }
+        }
         const kindEl = document.getElementById('work-source-kind');
         const sourceKind = kindEl ? String(kindEl.value || 'pdf') : 'pdf';
         const fileInput = document.getElementById('work-file');

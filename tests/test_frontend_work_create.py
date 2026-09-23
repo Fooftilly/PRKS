@@ -181,6 +181,8 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("window.__prksUploadPersonPending = pending", ui)
         # Scoped to one opening of the form: reset drops it and the lock.
         self.assertIn("pending.prksOpenGeneration = openGeneration", ui)
+        # Tag and playlist quick-creates are awaited by Create, per opening.
+        self.assertEqual(ui.count("void prksTrackWorkModalQuickCreate("), 2)
         # A discarded form voids a submit still waiting before its create.
         app = _read(_APP)
         self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
@@ -188,6 +190,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("window.__prksUploadPersonPending = null", reset)
         self.assertIn("personSearch.readOnly = false", reset)
+        self.assertIn("window.__prksWorkModalQuickCreates = [];", reset)
         self.assertIn("{ stillApplies }", ui)
         # Create waits for an in-flight quick-create before building the payload.
         save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]

@@ -5062,6 +5062,36 @@ window.removeUploadTagFromModal = function (idx) {
     renderUploadTagsChips();
 };
 
+/**
+ * Enrichment quick-creates (a new tag, a new playlist) still running for this
+ * opening of New File. Create waits for them, so a fast submit cannot snapshot
+ * the form before the tag or playlist it asked for is attached.
+ * `task` resolves true once its result is in the form, false if it failed.
+ */
+function prksTrackWorkModalQuickCreate(task) {
+    const modal = document.getElementById('work-modal');
+    const entry = {
+        generation: modal ? modal.dataset.prksOpenGeneration : '',
+        done: Promise.resolve(task).then((ok) => ok === true, () => false),
+    };
+    const list = (window.__prksWorkModalQuickCreates = window.__prksWorkModalQuickCreates || []);
+    list.push(entry);
+    entry.done.then(() => {
+        const i = (window.__prksWorkModalQuickCreates || []).indexOf(entry);
+        if (i >= 0) window.__prksWorkModalQuickCreates.splice(i, 1);
+    });
+    return entry.done;
+}
+
+/** This opening's pending enrichment quick-creates, as promises of success. */
+function prksPendingWorkModalQuickCreates() {
+    const modal = document.getElementById('work-modal');
+    const generation = modal ? modal.dataset.prksOpenGeneration : '';
+    return (window.__prksWorkModalQuickCreates || [])
+        .filter((entry) => entry.generation === generation)
+        .map((entry) => entry.done);
+}
+
 function initUploadTagCombobox() {
     const input = document.getElementById('upload-tag-search');
     const results = document.getElementById('upload-tag-results');
@@ -5093,7 +5123,7 @@ function initUploadTagCombobox() {
             c.textContent = 'Create tag "' + val + '"';
             c.onmousedown = (ev) => {
                 ev.preventDefault();
-                void (async () => {
+                void prksTrackWorkModalQuickCreate((async () => {
                     try {
                         const known = typeof fetchTags === 'function' ? await fetchTags() : [];
                         const created = await prksCreateTagDurably(
@@ -5104,11 +5134,13 @@ function initUploadTagCombobox() {
                         }
                         input.value = '';
                         prksHideInlineComboboxResults(results);
+                        return true;
                     } catch (e) {
                         await prksAlertMessage(
                             prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
+                        return false;
                     }
-                })();
+                })());
             };
             results.appendChild(c);
         }
@@ -5715,6 +5747,7 @@ function resetUploadModal() {
     // A quick-create still running for the previous form no longer concerns
     // this one: Create must not wait on it, and People search is usable.
     window.__prksUploadPersonPending = null;
+    window.__prksWorkModalQuickCreates = [];
     const personSearch = document.getElementById('upload-person-search');
     if (personSearch) {
         personSearch.readOnly = false;
@@ -6805,18 +6838,21 @@ function initUploadDragAndDrop() {
                     const c = document.createElement('div');
                     c.className = 'result-item result-item--create';
                     c.textContent = `Create playlist "${qRaw}"`;
-                    c.onmousedown = async (ev) => {
+                    c.onmousedown = (ev) => {
                         ev.preventDefault();
-                        try {
-                            const created = await quickCreate(qRaw);
-                            if (created) {
+                        void prksTrackWorkModalQuickCreate((async () => {
+                            try {
+                                const created = await quickCreate(qRaw);
+                                if (!created) return false;
                                 input.value = created.title;
                                 hidden.value = created.id;
                                 prksHideInlineComboboxResults(results);
+                                return true;
+                            } catch (_e) {
+                                await prksAlertMessage('Could not create playlist.', 'Error');
+                                return false;
                             }
-                        } catch (_e) {
-                            await prksAlertMessage('Could not create playlist.', 'Error');
-                        }
+                        })());
                     };
                     results.appendChild(c);
                 }
