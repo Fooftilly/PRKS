@@ -289,6 +289,59 @@
             root.prksHideWorkThumbPreview();
         }
 
+        // Lazy-thumb IntersectionObserver must not retain detached card trees.
+        if (
+            typeof root.prksInitLazyWorkThumbs === 'function' &&
+            typeof root.prksReleaseLazyWorkThumbs === 'function' &&
+            typeof document !== 'undefined' &&
+            document.body &&
+            document.createElement &&
+            typeof root.IntersectionObserver === 'function'
+        ) {
+            const host = document.createElement('div');
+            host.className = 'work-browse-collection';
+            const thumb = document.createElement('div');
+            thumb.className = 'work-card__thumb work-card__thumb--pdf';
+            thumb.setAttribute('data-prks-thumb-preview-kind', 'pdf');
+            thumb.setAttribute('data-prks-thumb-page', '2');
+            const img = document.createElement('img');
+            img.setAttribute('data-prks-thumb-lazy', '1');
+            img.setAttribute('alt', '');
+            thumb.appendChild(img);
+            host.appendChild(thumb);
+            document.body.appendChild(host);
+
+            root.prksInitLazyWorkThumbs(host);
+            const observed = root.__prksWorkThumbObserved;
+            const obs = root.__prksWorkThumbObserver;
+            assert('lazy init tracks observed set', !!(observed && observed.has(img)));
+            assert('lazy init observes target', !!(obs && obs.targets && obs.targets.has(img)));
+            assert('lazy init marks observing attr', img.getAttribute('data-prks-thumb-observing') === '1');
+
+            // Explicit release while still connected (route/tab teardown path).
+            root.prksReleaseLazyWorkThumbs(host);
+            assert('release drops tracked entry', !(observed && observed.has(img)));
+            assert('release unobserves target', !(obs && obs.targets && obs.targets.has(img)));
+            assert(
+                'release clears observing attr',
+                img.getAttribute('data-prks-thumb-observing') == null ||
+                    img.getAttribute('data-prks-thumb-observing') === ''
+            );
+
+            // Re-init, then detach without release — prune on next init must clean up.
+            root.prksInitLazyWorkThumbs(host);
+            assert('re-init tracks again', !!(observed && observed.has(img)));
+            if (typeof document.body.removeChild === 'function') {
+                document.body.removeChild(host);
+            } else {
+                host.parentNode = null;
+            }
+            assert('detached thumb reports not connected', img.isConnected === false);
+            root.prksInitLazyWorkThumbs(document.body);
+            assert('prune on init drops detached', !(observed && observed.has(img)));
+            assert('prune on init unobserves detached', !(obs && obs.targets && obs.targets.has(img)));
+        }
+
         // Thumbnails stay decorative — no redundant screen-reader announcement of the title.
         assert('thumb image alt is empty', /alt=""/.test(pdfCard));
         assert('thumb image alt does not repeat title', pdfCard.indexOf('alt="PDF Work"') === -1);

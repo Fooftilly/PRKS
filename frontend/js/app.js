@@ -3362,6 +3362,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
         route.name === 'folder-detail' &&
         contentDiv.querySelector('[data-prks-role="folder-detail"]')
     );
+    // Drop lazy-thumb observations for this pane before the route paint replaces
+    // its DOM — otherwise never-intersected cards stay retained by the singleton
+    // IntersectionObserver after the subtree is detached.
+    if (!sameFolderWorkspace && typeof window.prksReleaseLazyWorkThumbs === 'function') {
+        window.prksReleaseLazyWorkThumbs(contentDiv);
+    }
     if (!sameFolderWorkspace) {
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {

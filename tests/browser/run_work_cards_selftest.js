@@ -163,6 +163,24 @@ function makeDom() {
                 };
                 return walk(el);
             },
+            querySelectorAll(sel) {
+                const out = [];
+                const parts = String(sel || '')
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                const walk = (node, one) => {
+                    for (const c of node.children || []) {
+                        if (matches(c, one)) out.push(c);
+                        walk(c, one);
+                    }
+                };
+                for (const one of parts.length ? parts : [sel]) {
+                    walk(el, one);
+                }
+                // De-dupe while preserving order (comma selectors may overlap).
+                return out.filter((n, i) => out.indexOf(n) === i);
+            },
             closest(sel) {
                 let n = el;
                 while (n) {
@@ -170,6 +188,64 @@ function makeDom() {
                     n = n.parentNode;
                 }
                 return null;
+            },
+            get isConnected() {
+                let n = el;
+                while (n) {
+                    if (n === body || n === document) return true;
+                    n = n.parentNode;
+                }
+                return false;
+            },
+            get dataset() {
+                const ds = {};
+                for (const k of Object.keys(attrs)) {
+                    if (k.slice(0, 5) !== 'data-') continue;
+                    const camel = k
+                        .slice(5)
+                        .split('-')
+                        .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
+                        .join('');
+                    Object.defineProperty(ds, camel, {
+                        enumerable: true,
+                        configurable: true,
+                        get() {
+                            return attrs[k];
+                        },
+                        set(v) {
+                            if (v == null) delete attrs[k];
+                            else attrs[k] = String(v);
+                        },
+                    });
+                }
+                // Allow writes for keys not yet present (e.g. prksThumbObserving).
+                return new Proxy(ds, {
+                    get(target, prop) {
+                        if (prop in target) return target[prop];
+                        const attr =
+                            'data-' +
+                            String(prop)
+                                .replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+                        return attrs[attr];
+                    },
+                    set(_target, prop, v) {
+                        const attr =
+                            'data-' +
+                            String(prop)
+                                .replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+                        if (v == null || v === '') delete attrs[attr];
+                        else attrs[attr] = String(v);
+                        return true;
+                    },
+                    deleteProperty(_target, prop) {
+                        const attr =
+                            'data-' +
+                            String(prop)
+                                .replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+                        delete attrs[attr];
+                        return true;
+                    },
+                });
             },
             getBoundingClientRect() {
                 return { top: 10, left: 10, right: 110, bottom: 110, width: 100, height: 100 };
@@ -186,10 +262,25 @@ function makeDom() {
             get offsetHeight() {
                 return 240;
             },
+            addEventListener() {},
+            removeEventListener() {},
+            remove() {
+                if (el.parentNode && Array.isArray(el.parentNode.children)) {
+                    const kids = el.parentNode.children;
+                    const i = kids.indexOf(el);
+                    if (i >= 0) kids.splice(i, 1);
+                    el.parentNode = null;
+                }
+            },
         };
+        if (String(tag).toLowerCase() === 'img') {
+            Object.setPrototypeOf(el, HTMLImageElement.prototype);
+        }
         return el;
     }
 
+    // Forward reference: body/document filled below; isConnected closes over them.
+    let document = null;
     const body = createElement('body');
     body.appendChild = function (child) {
         bodyChildren.push(child);
@@ -197,8 +288,37 @@ function makeDom() {
         if (child.id) byId[child.id] = child;
         return child;
     };
+    body.removeChild = function (child) {
+        const i = bodyChildren.indexOf(child);
+        if (i >= 0) bodyChildren.splice(i, 1);
+        child.parentNode = null;
+        if (child.id && byId[child.id] === child) delete byId[child.id];
+        return child;
+    };
+    // Prefer bodyChildren for body.querySelectorAll so detached cards leave the tree.
+    body.querySelectorAll = function (sel) {
+        const out = [];
+        const parts = String(sel || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const walk = (node, one) => {
+            for (const c of node.children || []) {
+                if (matches(c, one)) out.push(c);
+                walk(c, one);
+            }
+        };
+        for (const one of parts.length ? parts : [sel]) {
+            for (const c of bodyChildren) {
+                if (matches(c, one)) out.push(c);
+                walk(c, one);
+            }
+        }
+        return out.filter((n, i) => out.indexOf(n) === i);
+    };
+    body.children = bodyChildren;
 
-    const document = {
+    document = {
         body,
         documentElement: { clientWidth: 1024, clientHeight: 768 },
         createElement,
@@ -209,10 +329,34 @@ function makeDom() {
         querySelector() {
             return null;
         },
+        querySelectorAll(sel) {
+            return body.querySelectorAll(sel);
+        },
     };
 
-    return { document, createElement, byId };
+    return { document, createElement, byId, bodyChildren };
 }
+
+function HTMLImageElement() {}
+
+class FakeIntersectionObserver {
+    constructor(callback, options) {
+        this.callback = callback;
+        this.options = options || {};
+        this.targets = new Set();
+        FakeIntersectionObserver.instances.push(this);
+    }
+    observe(el) {
+        this.targets.add(el);
+    }
+    unobserve(el) {
+        this.targets.delete(el);
+    }
+    disconnect() {
+        this.targets.clear();
+    }
+}
+FakeIntersectionObserver.instances = [];
 
 const dom = makeDom();
 
@@ -225,6 +369,8 @@ const sandbox = {
     URL: URL,
     Map: Map,
     WeakMap: WeakMap,
+    Set: Set,
+    Array: Array,
     encodeURIComponent: encodeURIComponent,
     decodeURIComponent: decodeURIComponent,
     prksInferWorkSourceKind: prksInferWorkSourceKind,
@@ -232,6 +378,8 @@ const sandbox = {
     require: require,
     innerWidth: 1024,
     innerHeight: 768,
+    HTMLImageElement: HTMLImageElement,
+    IntersectionObserver: FakeIntersectionObserver,
     matchMedia() {
         return { matches: false };
     },

@@ -394,16 +394,86 @@ function prksHydrateLazyWorkThumb(img) {
     img.dataset.prksThumbLoaded = '1';
 }
 
+/**
+ * Tracked targets for the singleton lazy-thumb IntersectionObserver.
+ * Needed because observer.unobserve only runs on intersect today would leave
+ * detached (never-scrolled-into-view) card trees retained across route/tab
+ * replacements in a long-running session.
+ */
+function prksObservedLazyWorkThumbs() {
+    if (!window.__prksWorkThumbObserved) {
+        window.__prksWorkThumbObserved = new Set();
+    }
+    return window.__prksWorkThumbObserved;
+}
+
+function prksUnobserveLazyWorkThumb(img, observer) {
+    if (!img) return;
+    const obs = observer || window.__prksWorkThumbObserver;
+    if (obs) {
+        try {
+            obs.unobserve(img);
+        } catch (_err) {
+            /* Target may already be unknown to the observer. */
+        }
+    }
+    prksObservedLazyWorkThumbs().delete(img);
+    if (typeof img.removeAttribute === 'function') {
+        img.removeAttribute('data-prks-thumb-observing');
+    } else if (img.dataset) {
+        delete img.dataset.prksThumbObserving;
+    }
+}
+
+/** Drop observer targets that are no longer in the document. */
+function prksPruneDisconnectedLazyWorkThumbs() {
+    const obs = window.__prksWorkThumbObserver;
+    if (!obs) return;
+    for (const img of Array.from(prksObservedLazyWorkThumbs())) {
+        if (!img || !img.isConnected) {
+            prksUnobserveLazyWorkThumb(img, obs);
+        }
+    }
+}
+
+/**
+ * Explicit teardown for a browse subtree that is about to be unmounted or
+ * replaced. Pass a root to release only its descendants; omit to release all
+ * tracked lazy thumbs.
+ * @param {ParentNode|null} [root]
+ */
+function prksReleaseLazyWorkThumbs(root) {
+    const obs = window.__prksWorkThumbObserver;
+    if (!obs) return;
+    const tracked = prksObservedLazyWorkThumbs();
+    if (root && typeof root.querySelectorAll === 'function') {
+        root.querySelectorAll('img[data-prks-thumb-observing], img[data-prks-thumb-lazy]').forEach((img) => {
+            if (tracked.has(img) || (img.dataset && img.dataset.prksThumbObserving === '1')) {
+                prksUnobserveLazyWorkThumb(img, obs);
+            }
+        });
+        return;
+    }
+    for (const img of Array.from(tracked)) {
+        prksUnobserveLazyWorkThumb(img, obs);
+    }
+}
+
 function prksLazyThumbObserver() {
     if (!('IntersectionObserver' in window)) return null;
     if (!window.__prksWorkThumbObserver) {
         window.__prksWorkThumbObserver = new IntersectionObserver(
             (entries, obs) => {
                 entries.forEach((entry) => {
-                    if (!entry || !entry.isIntersecting) return;
+                    if (!entry || !entry.target) return;
+                    // Detached trees must not stay observed after route/tab replace.
+                    if (!entry.target.isConnected) {
+                        prksUnobserveLazyWorkThumb(entry.target, obs);
+                        return;
+                    }
+                    if (!entry.isIntersecting) return;
                     prksHydrateLazyWorkThumb(entry.target);
-                    obs.unobserve(entry.target);
-                    entry.target.removeAttribute('data-prks-thumb-observing');
+                    prksUnobserveLazyWorkThumb(entry.target, obs);
                 });
             },
             { root: null, rootMargin: '240px 0px', threshold: 0.01 }
@@ -413,6 +483,9 @@ function prksLazyThumbObserver() {
 }
 
 function prksInitLazyWorkThumbs(root) {
+    // Always prune first so a replace that already detached prior cards cannot
+    // accumulate observed targets across navigations.
+    prksPruneDisconnectedLazyWorkThumbs();
     const host = root && typeof root.querySelectorAll === 'function' ? root : document;
     const imgs = host.querySelectorAll('img[data-prks-thumb-lazy]');
     if (!imgs.length) return;
@@ -429,6 +502,7 @@ function prksInitLazyWorkThumbs(root) {
             prksSetWorkThumbState(thumb, 'loading');
         }
         observer.observe(img);
+        prksObservedLazyWorkThumbs().add(img);
     });
 }
 
@@ -811,6 +885,7 @@ if (typeof document !== 'undefined' && !window.__prksWorkCardKeyNavBound) {
 }
 
 window.prksInitLazyWorkThumbs = prksInitLazyWorkThumbs;
+window.prksReleaseLazyWorkThumbs = prksReleaseLazyWorkThumbs;
 window.prksWorkCardCreditText = prksWorkCardCreditText;
 window.prksWorkCardCreditLine = prksWorkCardCreditLine;
 window.prksSafeWorkThumbSrc = prksSafeWorkThumbSrc;

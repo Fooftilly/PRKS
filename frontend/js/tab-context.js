@@ -368,6 +368,11 @@
                 return ctx;
             }
             teardownRuntime();
+            // Release lazy-thumb observer targets while the subtree is still reachable.
+            if (typeof window.prksReleaseLazyWorkThumbs === 'function') {
+                if (ctx.root) window.prksReleaseLazyWorkThumbs(ctx.root);
+                else if (ctx.host) window.prksReleaseLazyWorkThumbs(ctx.host);
+            }
             if (ctx.root && ctx.root.parentNode && typeof ctx.root.parentNode.removeChild === 'function') {
                 try {
                     ctx.root.parentNode.removeChild(ctx.root);
