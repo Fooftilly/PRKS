@@ -5320,6 +5320,9 @@ function prksSetWorkModalFieldError(control, message, errorId) {
 
 function prksFocusWorkModalControl(el) {
     if (!el || typeof el.focus !== 'function') return;
+    // Pointing at a field means the submit is over: a frozen form would
+    // silently refuse the focus.
+    prksThawWorkModalForm();
     // A control inside a collapsed disclosure is inert: open it first so an
     // error there is never hidden behind "Optional".
     const details = el.closest ? el.closest('#work-modal details.work-upload-meta__details') : null;
@@ -5355,10 +5358,33 @@ function prksFocusWorkModalInitial() {
     prksFocusWorkModalControl(zone || document.getElementById('work-title'));
 }
 
+/**
+ * The form fields (not the footer: Cancel stays usable) while a submit runs.
+ * Frozen, nothing can start a Person, tag or playlist create that the submit
+ * has already stopped waiting for, or change what it is about to send.
+ */
+function prksWorkModalFormBody() {
+    return document.querySelector('#work-modal .modal-body--scroll');
+}
+
+function prksThawWorkModalForm() {
+    const body = prksWorkModalFormBody();
+    if (!body) return;
+    body.removeAttribute('inert');
+    body.removeAttribute('aria-busy');
+}
+
 function prksSetWorkModalCreateBusy(busy) {
+    const on = !!busy;
+    const body = prksWorkModalFormBody();
+    if (body && on) {
+        body.setAttribute('inert', '');
+        body.setAttribute('aria-busy', 'true');
+    } else if (!on) {
+        prksThawWorkModalForm();
+    }
     const btn = document.getElementById('save-work-btn');
     if (!btn) return;
-    const on = !!busy;
     btn.disabled = on;
     btn.setAttribute('aria-busy', on ? 'true' : 'false');
     if (!btn.dataset.prksIdleLabel) btn.dataset.prksIdleLabel = 'Create File';
@@ -5748,6 +5774,7 @@ function resetUploadModal() {
     // this one: Create must not wait on it, and People search is usable.
     window.__prksUploadPersonPending = null;
     window.__prksWorkModalQuickCreates = [];
+    prksThawWorkModalForm();
     const personSearch = document.getElementById('upload-person-search');
     if (personSearch) {
         personSearch.readOnly = false;

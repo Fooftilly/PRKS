@@ -11130,6 +11130,11 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.keyboard.press("Control+Enter")
         page.wait_for_function("() => document.getElementById('save-work-btn').disabled === true")
         self.assertNotIn("#/works/", page.evaluate("() => location.hash"))
+        # Frozen while it waits: no second quick-create can start that this
+        # submit would not wait for (Codex review on #151); Cancel stays live.
+        self.assertTrue(page.evaluate(
+            "() => document.querySelector('#work-modal .modal-body--scroll').hasAttribute('inert')"))
+        self.assertTrue(page.locator("#work-modal-cancel").is_enabled())
         page.evaluate("() => window.__e2eReleaseTag()")
         work = self._work_detail(page, self._created_work_id(page))
         self.assertEqual([t.get("name") for t in work.get("tags") or []], ["racetag"])

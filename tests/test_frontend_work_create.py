@@ -191,6 +191,11 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("window.__prksUploadPersonPending = null", reset)
         self.assertIn("personSearch.readOnly = false", reset)
         self.assertIn("window.__prksWorkModalQuickCreates = [];", reset)
+        self.assertIn("prksThawWorkModalForm();", reset)
+        busy = ui.split("function prksSetWorkModalCreateBusy", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("body.setAttribute('inert', '')", busy)
+        focus = ui.split("function prksFocusWorkModalControl", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("prksThawWorkModalForm();", focus)
         self.assertIn("{ stillApplies }", ui)
         # Create waits for an in-flight quick-create before building the payload.
         save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]
