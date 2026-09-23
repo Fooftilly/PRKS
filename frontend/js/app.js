@@ -3369,9 +3369,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
     }
     // Keyboard/hover quick preview is body-mounted but keyed to a thumb in this
-    // pane — dismiss it when the pane paint will replace that subtree, without
-    // touching a preview owned by another still-mounted tile.
-    if (!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview === 'function') {
+    // pane — dismiss whenever this pane's paint will replace those thumbs
+    // (including Folder→Folder preserve, which keeps contentDiv/shell but swaps
+    // the card subtree). Scoped release leaves another tile's preview alone.
+    // Unlike lazy thumbs, preview has no prune-on-init, so do not skip this on
+    // sameFolderWorkspace.
+    if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
     if (!sameFolderWorkspace) {
