@@ -2463,7 +2463,15 @@ function prksRightPanelOwnedBy(ctx, node) {
 function prksMarkRightPanelOwner(ctx) {
     const panel = document.getElementById('panel-content');
     if (!panel || !ctx) return panel;
-    panel.dataset.prksOwnerTabId = String(ctx.tabId);
+    const nextOwner = String(ctx.tabId);
+    const prevOwner = panel.dataset.prksOwnerTabId || '';
+    // Ownership transfer must clear pending-navigation inert left by a prior
+    // owner. Leaving it set would freeze the newly focused pane's panel after
+    // the old owner's finish refuses to clear (no longer owns the panel).
+    if (prevOwner && prevOwner !== nextOwner) {
+        panel.inert = false;
+    }
+    panel.dataset.prksOwnerTabId = nextOwner;
     panel.dataset.prksOwnerGeneration = String(ctx.generation);
     return panel;
 }
@@ -2478,6 +2486,35 @@ function prksPrepareRightPanelReplace(ctx) {
 }
 
 window.prksRightPanelOwnedBy = prksRightPanelOwnedBy;
+
+/**
+ * Folder→Folder pending navigation: freeze retained mutation surfaces for this
+ * TabContext without blocking the hierarchy tree (needed for A→B→C).
+ * Right panel is shared outside the tile — only touch it when this ctx owns it.
+ */
+function prksSetFolderPendingOwnerInert(ctx, contentDiv, pending) {
+    const on = !!pending;
+    const shell =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector('[data-prks-role="folder-detail"]')
+            : null;
+    if (shell) {
+        const main = shell.querySelector('.prks-folder-detail__main');
+        if (main) main.inert = on;
+        const newBtn = shell.querySelector('[data-prks-role="folder-detail-new-folder"]');
+        if (newBtn) newBtn.disabled = on;
+    }
+    const panel = document.getElementById('panel-content');
+    if (
+        panel &&
+        ctx &&
+        panel.dataset.prksOwnerTabId === String(ctx.tabId)
+    ) {
+        panel.inert = on;
+    }
+}
+
+window.prksSetFolderPendingOwnerInert = prksSetFolderPendingOwnerInert;
 
 function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     if (!prksOwnerTabIsFocused(ctx) || !work) return false;

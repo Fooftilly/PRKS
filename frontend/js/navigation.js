@@ -1209,6 +1209,7 @@
         'position-detail': true,
         'argument-detail': true,
         'playlist-detail': true,
+        'folder-detail': true,
     };
 
     function prksRouteSupportsTile(hashOrRoute) {
@@ -1328,6 +1329,9 @@
         const cd = contentDiv || (ctx && ctx.root ? ctx.root : null);
         if (cd && cd.removeAttribute) cd.removeAttribute('aria-busy');
         if (ctx.root && ctx.root.removeAttribute) ctx.root.removeAttribute('aria-busy');
+        if (typeof root.prksSetFolderPendingOwnerInert === 'function') {
+            root.prksSetFolderPendingOwnerInert(ctx, cd, false);
+        }
 
         const resolvedTitle = prksResolvedRouteTitle(route, opts);
         const routeHash = route ? route.canonicalHash || route.hash : '';
@@ -1343,7 +1347,9 @@
             if (typeof prksSyncNavDisclosures === 'function') prksSyncNavDisclosures(route);
         }
 
-        const skipAnim = restored && Number(restored.scrollTop) > 8;
+        const skipAnim =
+            !!(opts && opts.skipPageEnter) ||
+            (restored && Number(restored.scrollTop) > 8);
         if (!skipAnim && typeof root.prksPlayPageEnterAnimation === 'function' && cd) {
             root.prksPlayPageEnterAnimation(cd);
         }

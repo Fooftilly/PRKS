@@ -1182,12 +1182,12 @@ Promise.resolve()
                 );
                 assert(
                     'split initial empty lists examples',
-                    /Work, Person, Playlist, Concept, Position, or Argument/.test(guidanceText())
+                    /Work, Person, Playlist, Concept, Position, Argument, or Folder/.test(guidanceText())
                 );
                 assertEq(
                     'split initial empty helper',
                     root.prksPaletteSplitEmptyMessage(),
-                    'Search for a detail page that supports split — Work, Person, Playlist, Concept, Position, or Argument.'
+                    'Search for a detail page that supports split — Work, Person, Playlist, Concept, Position, Argument, or Folder.'
                 );
                 assertEq('listbox empty while guiding', listHtml().indexOf('role="option"'), -1);
                 assertEq('split initial empty not a result row', root.prksCommandPaletteGetResults().length, 0);

@@ -1454,6 +1454,7 @@ body.prks-workspace-dragging * {
 .prks-tile__body:has(.document-view),
 .prks-tile__body:has(.research-graph),
 .prks-tile__body:has(.prks-folder-library),
+.prks-tile__body:has(.prks-folder-detail),
 .prks-tile__body:has(.prks-group-library),
 .prks-tile__body:has(.prks-people-library) {
     overflow: hidden;
@@ -5478,6 +5479,514 @@ a.tag {
 
 .prks-folder-tree__create-btn {
     margin-top: 12px;
+}
+
+
+/* Folder detail (#/folders/:id): stretch tree | contents to the tile bottom */
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) .top-ribbon {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) .prks-workspace-tabs-shell {
+    flex-shrink: 0;
+}
+
+#main-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) #page-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#page-content:has(.prks-workspace-canvas--stacked .prks-folder-detail) {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+/* Library Navigation V1 — Folder detail workspace (tree | contents)
+ * Compact Location+Nearby nav is the narrow/tile fallback only. */
+.prks-folder-detail {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+    gap: 0;
+}
+
+.prks-tab-root:has(> .prks-folder-detail) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.prks-folder-detail__tree-pane {
+    flex: 0 0 clamp(180px, 28%, 280px);
+    max-width: 320px;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.prks-folder-detail__tree-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 36px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.prks-folder-detail__tree-all {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    min-width: 0;
+}
+
+.prks-folder-detail__tree-all:hover {
+    color: var(--accent);
+}
+
+.prks-folder-detail__tree-new {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.prks-folder-detail__tree-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.prks-folder-detail__main {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: auto;
+    padding-left: var(--space-md, 12px);
+}
+
+.prks-folder-detail[data-prks-folder-layout="narrow"] .prks-folder-detail__tree-pane {
+    display: none;
+}
+
+.prks-folder-detail[data-prks-folder-layout="wide"] .prks-folder-nav {
+    display: none;
+}
+
+.prks-folder-tree--detail-nav .prks-folder-tree__row {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.prks-folder-tree--detail-nav .prks-folder-tree__meta {
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-xs, 11px);
+}
+
+/* Compact hierarchical Folder switcher (narrow/tile fallback) */
+.prks-folder-nav {
+    min-width: 0;
+    max-width: 100%;
+    margin: 0 0 var(--space-md, 12px);
+}
+
+.prks-folder-nav__band {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    overflow: hidden;
+}
+
+.prks-folder-nav__location {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 6px 8px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.prks-folder-nav__location-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+.prks-folder-nav__eyebrow {
+    flex: 0 0 auto;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    line-height: 1.2;
+}
+
+.prks-folder-nav__crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 0;
+    min-width: 0;
+    font-size: var(--text-sm);
+    line-height: 1.35;
+}
+
+.prks-folder-nav__crumb {
+    display: inline-flex;
+    align-items: center;
+    max-width: 14rem;
+    min-height: var(--control-height-sm, 28px);
+    padding: 1px 6px;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+    line-height: 1.25;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+button.prks-folder-nav__crumb:hover {
+    border-color: var(--border);
+    background: var(--hover-overlay);
+}
+
+button.prks-folder-nav__crumb:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+}
+
+.prks-folder-nav__crumb.is-current {
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+    background: var(--surface-selected);
+    border-color: var(--border);
+    cursor: default;
+}
+
+.prks-folder-nav__crumb--library {
+    color: var(--text-secondary);
+}
+
+.prks-folder-nav__sep {
+    flex: 0 0 auto;
+    padding: 0 2px;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1;
+    user-select: none;
+}
+
+.prks-folder-nav__nearby {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 6px 8px 8px;
+}
+
+.prks-folder-nav__nearby[hidden] {
+    display: none !important;
+}
+
+.prks-folder-nav__nearby-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.prks-folder-nav__nearby-label {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    line-height: 1.2;
+}
+
+.prks-folder-nav__chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.prks-folder-nav__chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 12rem;
+    min-height: var(--control-height-sm, 28px);
+    padding: 1px 8px;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.prks-folder-nav__chip:hover {
+    border-color: var(--border-strong);
+    background: var(--hover-overlay);
+}
+
+.prks-folder-nav__chip:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+}
+
+.prks-folder-nav__nearby-more,
+.prks-folder-nav__nearby-empty {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
+.prks-folder-nav__nearby-more {
+    padding: 0 2px;
+}
+
+.prks-folder-nav__trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    max-width: 100%;
+    min-height: var(--control-height-sm, 28px);
+    padding: 2px 6px 2px 8px;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    line-height: 1.25;
+    text-align: left;
+    cursor: pointer;
+}
+
+.prks-folder-nav__trigger-label {
+    white-space: nowrap;
+}
+
+.prks-folder-nav__trigger:hover {
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+    background: var(--hover-overlay);
+}
+
+.prks-folder-nav__trigger:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.prks-folder-nav__trigger[aria-expanded="true"] {
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+    background: var(--surface-selected);
+}
+
+.prks-folder-nav__chevron {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+    color: var(--text-secondary);
+}
+
+.prks-folder-nav__chevron .prks-icon,
+.prks-folder-nav__chevron .prks-icon svg {
+    --prks-icon-size: 14px;
+}
+
+.prks-folder-nav__panel {
+    position: fixed;
+    z-index: 1200;
+    display: flex;
+    flex-direction: column;
+    max-height: min(70vh, 28rem);
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: none;
+    overflow: hidden;
+}
+
+.prks-folder-nav__panel[hidden] {
+    display: none !important;
+}
+
+.prks-folder-nav__filter {
+    flex: 0 0 auto;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.prks-folder-nav__filter-input {
+    width: 100%;
+    min-height: var(--control-height-sm, 28px);
+    padding: 4px 8px;
+    font-size: var(--text-sm);
+}
+
+.prks-folder-nav__list {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 4px 0 6px;
+}
+
+.prks-folder-nav__section {
+    padding: 6px 10px 2px;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.prks-folder-nav__empty {
+    margin: 0;
+    padding: 4px 10px 8px;
+    font-size: var(--text-sm);
+}
+
+.prks-folder-nav__option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: var(--control-height-md, 32px);
+    padding: 4px 10px;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+}
+
+.prks-folder-nav__option--depth-1 {
+    padding-left: 18px;
+}
+
+.prks-folder-nav__option--depth-2 {
+    padding-left: 26px;
+}
+
+.prks-folder-nav__option--depth-3 {
+    padding-left: 34px;
+}
+
+.prks-folder-nav__option:hover {
+    background: var(--hover-overlay);
+}
+
+.prks-folder-nav__option.is-active,
+.prks-folder-nav__option:focus-visible {
+    background: var(--surface-selected);
+    outline: none;
+}
+
+.prks-folder-nav__option:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+.prks-folder-nav__option.is-current {
+    font-weight: var(--weight-semibold);
+    background: var(--surface-selected);
+}
+
+.prks-folder-nav__option-title {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prks-folder-nav__option-meta {
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+}
+
+.prks-folder-nav__option-mark {
+    flex-shrink: 0;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+    .prks-folder-nav__crumb {
+        max-width: 9rem;
+    }
+
+    .prks-folder-nav__chip {
+        max-width: 8rem;
+    }
+
+    .prks-folder-nav__panel {
+        max-width: calc(100vw - 16px);
+    }
 }
 
 /* Folder detail page: subfolder list matches library tree rows */

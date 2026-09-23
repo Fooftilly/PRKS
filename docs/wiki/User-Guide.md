@@ -27,6 +27,8 @@ PRKS keeps source identity separate from descriptive metadata. Video identity in
 
 Folders provide the main hierarchical organization for the library. Browse surfaces also include Progress, File types, Recently opened, Recently added, search results, and Saved Views.
 
+On a Folder detail page at a normal desktop width, a persistent **hierarchy tree** sits beside the current Folder’s contents so you can jump elsewhere in the library without leaving the page. On a narrow pane, tile, or small viewport, that tree yields to a compact **folder navigation** band (Library path crumbs, nearby Folders, and **Browse hierarchy**). Choosing a Folder uses the same Folder routes as the Folder library (including the current workspace tab or split pane).
+
 Supported work-list pages provide bulk selection for operations such as progress changes, folder moves, and tag changes. Bulk mutations are transactional: an invalid target should not leave only part of the selection changed.
 
 ## Tags
@@ -49,7 +51,7 @@ Open the command palette with Ctrl+K (Cmd+K on macOS), or use **Search or jump**
 
 It can navigate to major entities and sections, search the library, create common records, and open Settings/actions. Alt+Enter can route supported destinations into split view.
 
-**Open in split view** (from the workspace Split control or pane menu) opens the same palette in a restricted mode: only tile-capable detail pages appear (Works, People, Playlists, Concepts, Positions, Arguments). Library index destinations such as Folders, Recent, Saved Views, and Progress stay main-only; the empty state explains that when a query matches one of them.
+**Open in split view** (from the workspace Split control or pane menu) opens the same palette in a restricted mode: only tile-capable detail pages appear (Works, People, Playlists, Concepts, Positions, Arguments, Folders). Library index destinations such as the Folder library, Recent, Saved Views, and Progress stay main-only; the empty state explains that when a query matches one of them.
 
 ## Notes and research context
 

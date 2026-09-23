@@ -138,6 +138,7 @@
         '/js/ui.js',
         '/js/ribbon-create.js',
         '/js/components/work-cards.js',
+        '/js/folder-hierarchy-nav.js',
         '/js/components/folders.js',
         '/js/research-links.js',
         '/js/components/works.js',

@@ -2909,13 +2909,32 @@ function prksOfflineProvenanceBannerHtml(offlineResult) {
     );
 }
 
-/** Prepends the cached-provenance banner into an already-rendered detail page. Online/not-found renders are untouched. */
+/** Prepends the cached-provenance banner into an already-rendered detail page.
+ *  Always clears any prior provenance banner first so preserved containers
+ *  (Folder→Folder in-place) cannot stack or leave a stale Offline banner when
+ *  the destination is served online. Online/not-found renders are untouched
+ *  beyond that clear. */
 function prksOfflinePrependBanner(container, offlineResult) {
+    if (container && typeof container.querySelectorAll === 'function') {
+        container.querySelectorAll('[data-prks-role="offline-provenance-banner"]').forEach(function (el) {
+            el.remove();
+        });
+    }
     if (!container || !offlineResult || offlineResult.source !== 'cache') return;
     const html = prksOfflineProvenanceBannerHtml(offlineResult);
     if (!html) return;
     container.insertAdjacentHTML('afterbegin', html);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+}
+
+/** Route-scoped warning banners that used to vanish when contentDiv was wiped.
+ *  Folder→Folder keeps the shell mounted, so clear them explicitly before a
+ *  new route finish can prepend a fresh one (or none). */
+function prksClearRouteScopedApiWarningBanners(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    container.querySelectorAll('.api-warning-banner').forEach(function (el) {
+        el.remove();
+    });
 }
 
 function prksOfflineRenderUnavailable(container, label) {
@@ -3331,7 +3350,30 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
     }
 
-    prksRenderRouteLoading(contentDiv, route.hash);
+    /* Folder→Folder in the same mounted TabContext is an in-place workspace
+     * selection change: keep the existing Folder shell (tree + prior contents)
+     * visible while the destination resolves. Do not paint the generic
+     * Loading view... screen that blanks the center pane.
+     *
+     * Detect via the live shell, not only prevRoute.name: beginRoute clears
+     * lastResolvedRoute, so a rapid A→B→C would otherwise treat B→C as a fresh
+     * entry and wipe the workspace mid-flight. */
+    const sameFolderWorkspace = !!(
+        route.name === 'folder-detail' &&
+        contentDiv.querySelector('[data-prks-role="folder-detail"]')
+    );
+    if (!sameFolderWorkspace) {
+        prksRenderRouteLoading(contentDiv, route.hash);
+    } else {
+        contentDiv.setAttribute('aria-busy', 'true');
+        // aria-busy alone does not block activation. Retained Delete (in main),
+        // New Folder (tree head), and the owned right panel must not mutate the
+        // previous Folder while the destination resolves — but the hierarchy
+        // tree must stay clickable so A→B→C can abort B.
+        if (typeof prksSetFolderPendingOwnerInert === 'function') {
+            prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
+        }
+    }
 
     let titleOpts = {};
 
@@ -3523,10 +3565,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 ctx.setEntity('folder', folder);
                 renderFolderDetails(ctx, folder, contentDiv, {
                     offlineCached: offlineFolder.source === 'cache',
+                    preserveFolderWorkspace: sameFolderWorkspace,
                 });
+                // In-place commit keeps the shell: drop prior route banners before
+                // destination provenance (or none) is applied.
+                if (sameFolderWorkspace) {
+                    prksClearRouteScopedApiWarningBanners(contentDiv);
+                }
                 prksOfflinePrependBanner(contentDiv, offlineFolder);
                 titleOpts = folder
-                    ? { entityTitle: folder.title || 'Folder' }
+                    ? {
+                          entityTitle: folder.title || 'Folder',
+                          skipPageEnter: sameFolderWorkspace,
+                      }
                     : { notFound: true, notFoundTitle: 'Folder not found' };
                 break;
             }
@@ -4526,6 +4577,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
             prksFinishRouteRender(ctx, route, generation, contentDiv, titleOpts);
         } else {
             contentDiv.removeAttribute('aria-busy');
+            if (typeof prksSetFolderPendingOwnerInert === 'function') {
+                prksSetFolderPendingOwnerInert(ctx, contentDiv, false);
+            }
         }
         return;
     }
@@ -4540,6 +4594,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         typeof window.prksConsumeApiError === 'function'
             ? window.prksConsumeApiError(routeSignal)
             : null;
+    // Preserved Folder (and any future in-place) shells keep prior DOM: drop
+    // stale route warnings before optionally prepending a fresh one.
+    prksClearRouteScopedApiWarningBanners(contentDiv);
     if (apiErr && contentDiv && !contentDiv.querySelector('#prks-route-retry')) {
         const bar = document.createElement('div');
         bar.className = 'api-warning-banner';
@@ -4570,6 +4627,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     } else {
         ctx.lastResolvedRoute = route;
         contentDiv.removeAttribute('aria-busy');
+        if (typeof prksSetFolderPendingOwnerInert === 'function') {
+            prksSetFolderPendingOwnerInert(ctx, contentDiv, false);
+        }
         prksPlayPageEnterAnimation(contentDiv);
     }
 }
