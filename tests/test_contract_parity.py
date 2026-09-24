@@ -33,6 +33,44 @@ def _js_prev_significant(source: str, index: int) -> str:
     return source[j] if j >= 0 else ""
 
 
+def _blank_keep_newlines(text: str) -> str:
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+def _scan_js_quoted_end(source: str, start: int) -> int:
+    """Return index just past a quote/template that begins at start."""
+    quote = source[start]
+    i = start + 1
+    n = len(source)
+    while i < n:
+        c = source[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == quote:
+            return i + 1
+        i += 1
+    return n
+
+
+def _scan_js_line_comment_end(source: str, start: int) -> int:
+    i = start + 2
+    n = len(source)
+    while i < n and source[i] != "\n":
+        i += 1
+    return i
+
+
+def _scan_js_block_comment_end(source: str, start: int) -> int:
+    i = start + 2
+    n = len(source)
+    while i < n:
+        if source[i] == "*" and i + 1 < n and source[i + 1] == "/":
+            return i + 2
+        i += 1
+    return n
+
+
 def _scan_js_regex_literal(source: str, start: int) -> int:
     """Return index just past a RegExp literal that begins at start (`/`)."""
     i = start + 1
@@ -41,13 +79,12 @@ def _scan_js_regex_literal(source: str, start: int) -> int:
     while i < n:
         c = source[i]
         if c == "\n":
-            break
+            return start + 1
         if c == "\\" and i + 1 < n:
             i += 2
             continue
         if in_class:
-            if c == "]":
-                in_class = False
+            in_class = c != "]"
             i += 1
             continue
         if c == "[":
@@ -63,6 +100,22 @@ def _scan_js_regex_literal(source: str, start: int) -> int:
     return start + 1
 
 
+def _emit_optional_blank(out: list[str], chunk: str, blank: bool) -> None:
+    out.append(_blank_keep_newlines(chunk) if blank else chunk)
+
+
+def _emit_string_region(out: list[str], chunk: str, blank_strings: bool) -> None:
+    if not blank_strings:
+        out.append(chunk)
+        return
+    if len(chunk) < 2:
+        out.append(_blank_keep_newlines(chunk))
+        return
+    out.append(chunk[0])
+    out.append(_blank_keep_newlines(chunk[1:-1]))
+    out.append(chunk[-1])
+
+
 def _scan_js_regions(source: str, *, blank_comments: bool, blank_strings: bool) -> str:
     """Rewrite JS source with optional comment/string blanking.
 
@@ -74,71 +127,29 @@ def _scan_js_regions(source: str, *, blank_comments: bool, blank_strings: bool) 
     out: list[str] = []
     i = 0
     n = len(source)
-
-    def append_blanked_run(text: str) -> None:
-        for c in text:
-            out.append("\n" if c == "\n" else " ")
-
     while i < n:
         ch = source[i]
         nxt = source[i + 1] if i + 1 < n else ""
-
         if ch in ("'", '"', "`"):
-            quote = ch
-            start = i
-            i += 1
-            while i < n:
-                c = source[i]
-                if c == "\\" and i + 1 < n:
-                    i += 2
-                    continue
-                if c == quote:
-                    i += 1
-                    break
-                i += 1
-            chunk = source[start:i]
-            if blank_strings:
-                if len(chunk) >= 2:
-                    out.append(chunk[0])
-                    append_blanked_run(chunk[1:-1])
-                    out.append(chunk[-1])
-                else:
-                    append_blanked_run(chunk)
-            else:
-                out.append(chunk)
+            end = _scan_js_quoted_end(source, i)
+            _emit_string_region(out, source[i:end], blank_strings)
+            i = end
             continue
-
         if ch == "/" and nxt == "/":
-            start = i
-            i += 2
-            while i < n and source[i] != "\n":
-                i += 1
-            if blank_comments:
-                append_blanked_run(source[start:i])
-            else:
-                out.append(source[start:i])
+            end = _scan_js_line_comment_end(source, i)
+            _emit_optional_blank(out, source[i:end], blank_comments)
+            i = end
             continue
-
         if ch == "/" and nxt == "*":
-            start = i
-            i += 2
-            while i < n:
-                if source[i] == "*" and i + 1 < n and source[i + 1] == "/":
-                    i += 2
-                    break
-                i += 1
-            if blank_comments:
-                append_blanked_run(source[start:i])
-            else:
-                out.append(source[start:i])
+            end = _scan_js_block_comment_end(source, i)
+            _emit_optional_blank(out, source[i:end], blank_comments)
+            i = end
             continue
-
         if ch == "/" and _js_prev_significant(source, i) in _JS_REGEX_PREV:
             end = _scan_js_regex_literal(source, i)
             out.append(source[i:end])
             i = end
             continue
-
         out.append(ch)
         i += 1
     return "".join(out)
