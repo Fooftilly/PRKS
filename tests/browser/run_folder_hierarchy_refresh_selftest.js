@@ -4,19 +4,39 @@
 /**
  * Same-route Folder hierarchy refresh ownership (#161).
  *
- * Exercises TabContext mode-aware tokens + commitAllowed (no folders.js load,
- * no vm sandbox — Sonar S1523). Mirrors prksFillFolderDetailTree's gate with a
- * deferred-load harness.
+ * TabContext mode-aware tokens + commitAllowed, plus race coverage against the
+ * real prksFillFolderDetailTree (deferred loads via prksFolderHierarchyNavLoadForTests).
+ * No vm sandbox — Sonar S1523.
  */
 
 const path = require('path');
 const rootDir = path.resolve(__dirname, '../..');
+
+globalThis.window = globalThis;
+if (typeof globalThis.document === 'undefined') {
+    globalThis.document = {
+        getElementById: function () {
+            return null;
+        },
+        querySelector: function () {
+            return null;
+        },
+        querySelectorAll: function () {
+            return [];
+        },
+    };
+}
+
 const tc = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 const {
     createPrksTabContext,
     prksDestroyAllTabContexts,
     prksFolderHierarchyTreeCommitAllowed,
 } = tc;
+
+// Browser script: assigns window.prksFillFolderDetailTree (and helpers) on load.
+require(path.join(rootDir, 'frontend/js/components/folders.js'));
+const fillTree = globalThis.prksFillFolderDetailTree;
 
 const tally = { pass: 0, fail: 0 };
 function ok(label, cond, msg) {
@@ -31,6 +51,15 @@ function ok(label, cond, msg) {
 function same(label, a, b) {
     ok(label, Object.is(a, b), 'expected ' + JSON.stringify(b) + ', got ' + JSON.stringify(a));
 }
+function hasTitle(html, title) {
+    return String(html || '').indexOf('>' + title + '<') !== -1 || String(html || '').indexOf(title) !== -1;
+}
+function selectedIdFromHtml(html) {
+    const m = String(html || '').match(
+        /prks-folder-tree__row[^>]*is-selected[^>]*data-folder-id="([^"]+)"|prks-folder-tree__row[^>]*data-folder-id="([^"]+)"[^>]*is-selected/
+    );
+    return m ? m[1] || m[2] : null;
+}
 
 function gate() {
     let unlock;
@@ -40,64 +69,202 @@ function gate() {
     return { p: p, unlock: unlock };
 }
 
-function treeSlot() {
-    const slot = { marker: 'empty', selectedId: null };
-    slot.getAttribute = function (k) {
-        return k === 'data-prks-folder-detail-tree-host' ? '' : null;
-    };
-    const box = {
-        isConnected: true,
-        querySelector: function (sel) {
-            return String(sel).indexOf('data-prks-folder-detail-tree-host') !== -1 ? slot : null;
-        },
-    };
-    return { box: box, slot: slot };
-}
-
-/**
- * @param {'full'|'selection'} mode
- */
-async function fillOnce(ctx, box, slot, loadFn, folderId, mode) {
-    const signal =
-        ctx && ctx.abortController && ctx.abortController.signal
-            ? ctx.abortController.signal
-            : null;
-    const token = ctx.beginFolderHierarchyRefresh(mode || 'full');
-    if (token == null) return 'destroyed';
-    let rows = null;
-    try {
-        rows = await loadFn();
-    } catch (_e) {
-        rows = null;
-    }
-    if (!prksFolderHierarchyTreeCommitAllowed(ctx, token, box, signal)) return 'stale';
-    const live =
-        ctx.getEntity && ctx.getEntity('folder') && ctx.getEntity('folder').id != null
-            ? String(ctx.getEntity('folder').id)
-            : String(folderId);
-    if (mode === 'selection') {
-        // Selection-only: move selection, leave topology marker untouched.
-        slot.selectedId = live;
-        return 'committed';
-    }
-    slot.marker = Array.isArray(rows)
-        ? rows
-              .map(function (r) {
-                  return r && r.title;
-              })
-              .join('|')
-        : 'error';
-    slot.selectedId = live;
-    return 'committed';
-}
-
 function nextTick() {
     return new Promise(function (r) {
         setImmediate(r);
     });
 }
 
+/** Queue deferred catalogue loads; each call pushes a gate for the test to unlock. */
+function installDeferredLoad(gates) {
+    delete globalThis.prksLoadFolderHierarchyCatalogue;
+    globalThis.prksFolderHierarchyNavLoadForTests = function () {
+        const g = gate();
+        gates.push(g);
+        return g.p;
+    };
+}
+
+function installSyncLoad(rows) {
+    delete globalThis.prksLoadFolderHierarchyCatalogue;
+    globalThis.prksFolderHierarchyNavLoadForTests = async function () {
+        return rows;
+    };
+}
+
+/**
+ * Minimal container + liveHost for prksFillFolderDetailTree.
+ * Supports innerHTML paint and selection-only class moves (no full HTML parser).
+ */
+function detailTreeDom(initialHtml) {
+    let html = initialHtml != null ? String(initialHtml) : '';
+    const rowCache = Object.create(null);
+
+    function linkFor(row) {
+        return {
+            setAttribute: function (k, v) {
+                row.linkAttrs[k] = String(v);
+            },
+            removeAttribute: function (k) {
+                delete row.linkAttrs[k];
+            },
+            getAttribute: function (k) {
+                return Object.prototype.hasOwnProperty.call(row.linkAttrs, k)
+                    ? row.linkAttrs[k]
+                    : null;
+            },
+        };
+    }
+
+    function ensureRow(id, selected) {
+        let row = rowCache[id];
+        if (!row) {
+            row = {
+                folderId: id,
+                classes: new Set(['prks-folder-tree__row']),
+                attrs: { 'data-folder-id': id },
+                linkAttrs: {},
+            };
+            row.classList = {
+                add: function (c) {
+                    row.classes.add(c);
+                    rewriteSelectionInHtml();
+                },
+                remove: function (c) {
+                    row.classes.delete(c);
+                    rewriteSelectionInHtml();
+                },
+                contains: function (c) {
+                    return row.classes.has(c);
+                },
+                toggle: function (c, on) {
+                    if (on === undefined) on = !row.classes.has(c);
+                    if (on) row.classes.add(c);
+                    else row.classes.delete(c);
+                },
+            };
+            row.setAttribute = function (k, v) {
+                row.attrs[k] = String(v);
+            };
+            row.getAttribute = function (k) {
+                return Object.prototype.hasOwnProperty.call(row.attrs, k) ? row.attrs[k] : null;
+            };
+            row.querySelector = function (sel) {
+                return String(sel).indexOf('prks-folder-tree__link') !== -1 ? linkFor(row) : null;
+            };
+            rowCache[id] = row;
+        }
+        if (selected) {
+            row.classes.add('is-selected');
+            row.linkAttrs['aria-current'] = 'page';
+        }
+        return row;
+    }
+
+    function rebuildRowCacheFromHtml() {
+        Object.keys(rowCache).forEach(function (k) {
+            delete rowCache[k];
+        });
+        const re = /data-folder-id="([^"]+)"/g;
+        let m;
+        while ((m = re.exec(html))) {
+            const id = m[1];
+            if (rowCache[id]) continue;
+            const start = Math.max(0, m.index - 120);
+            const around = html.slice(start, m.index + 40);
+            ensureRow(id, around.indexOf('is-selected') !== -1);
+        }
+    }
+
+    function rewriteSelectionInHtml() {
+        Object.keys(rowCache).forEach(function (id) {
+            const row = rowCache[id];
+            const wantSel = row.classes.has('is-selected');
+            html = html.replace(
+                new RegExp(
+                    '(<div class="prks-folder-tree__row)([^"]*)"([^>]*data-folder-id="' +
+                        id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+                        '")',
+                    'g'
+                ),
+                function (_all, open, cls, rest) {
+                    const parts = String(cls || '')
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .filter(function (c) {
+                            return c !== 'is-selected';
+                        });
+                    if (wantSel) parts.push('is-selected');
+                    return open + (parts.length ? ' ' + parts.join(' ') : '') + '"' + rest;
+                }
+            );
+        });
+    }
+
+    rebuildRowCacheFromHtml();
+
+    const liveHost = {
+        getAttribute: function (k) {
+            return k === 'data-prks-folder-detail-tree-host' ? '' : null;
+        },
+        querySelector: function (sel) {
+            const s = String(sel || '');
+            if (s.indexOf('prks-folder-tree--detail-nav') !== -1) {
+                return html.indexOf('prks-folder-tree--detail-nav') !== -1 ? {} : null;
+            }
+            if (s.indexOf('prks-folder-tree__branch') !== -1) return null;
+            const m = s.match(/data-folder-id="([^"]+)"/);
+            if (m) {
+                rebuildRowCacheFromHtml();
+                return rowCache[m[1]] || null;
+            }
+            return null;
+        },
+        querySelectorAll: function (sel) {
+            const s = String(sel || '');
+            rebuildRowCacheFromHtml();
+            if (s.indexOf('is-selected') !== -1) {
+                return Object.keys(rowCache)
+                    .filter(function (id) {
+                        return rowCache[id].classes.has('is-selected');
+                    })
+                    .map(function (id) {
+                        return rowCache[id];
+                    });
+            }
+            return [];
+        },
+    };
+    Object.defineProperty(liveHost, 'innerHTML', {
+        get: function () {
+            return html;
+        },
+        set: function (v) {
+            html = String(v || '');
+            rebuildRowCacheFromHtml();
+        },
+    });
+
+    const container = {
+        isConnected: true,
+        querySelector: function (sel) {
+            return String(sel).indexOf('data-prks-folder-detail-tree-host') !== -1
+                ? liveHost
+                : null;
+        },
+    };
+    return { container: container, liveHost: liveHost };
+}
+
+function mountCtx(id, folder) {
+    const ctx = createPrksTabContext(id);
+    ctx.mount({ appendChild: function () {}, children: [] });
+    if (folder) ctx.setEntity('folder', folder);
+    return ctx;
+}
+
 async function run() {
+    ok('prksFillFolderDetailTree exported', typeof fillTree === 'function');
     prksDestroyAllTabContexts();
 
     // --- Mode-aware TabContext tokens ---
@@ -142,13 +309,13 @@ async function run() {
         const savedAC = global.AbortController;
         try {
             delete global.AbortController;
-            const ctx = createPrksTabContext('no-ac');
-            ctx.mount({ appendChild: function () {}, children: [] });
-            const tree = treeSlot();
-            const g = gate();
-            const pending = fillOnce(ctx, tree.box, tree.slot, function () {
-                return g.p;
-            }, 'x', 'full');
+            const ctx = mountCtx('no-ac', { id: 'x', title: 'Old' });
+            const dom = detailTreeDom('<p class="prks-inline-message">Loading…</p>');
+            const gates = [];
+            installDeferredLoad(gates);
+            const pending = fillTree(ctx, { id: 'x', title: 'Old' }, dom.container, {
+                selectionOnly: false,
+            });
             await nextTick();
             same('stub never aborts', ctx.abortController.signal.aborted, false);
             const inFlight = { mode: 'full', gen: 1 };
@@ -156,12 +323,11 @@ async function run() {
             ctx.beginRoute({ name: 'folder-detail' });
             same('stub still not aborted', ctx.abortController.signal.aborted, false);
             ok('route bump stale without abort', !ctx.isFolderHierarchyRefreshCurrent(inFlight));
-            g.unlock([{ id: 'x', title: 'Old' }]);
-            same('pre-route fill stale', await pending, 'stale');
-            same('no topology write', tree.slot.marker, 'empty');
+            gates[0].unlock([{ id: 'x', title: 'Old', parent_id: null, child_count: 0 }]);
+            await pending;
+            same('no topology write', dom.liveHost.innerHTML, '<p class="prks-inline-message">Loading…</p>');
             const post = ctx.beginFolderHierarchyRefresh('full');
             ok('post-route token current', ctx.isFolderHierarchyRefreshCurrent(post));
-            // Without bump, reset-to-0 would reuse gen=1 and both could look current.
             ok('post-route gen not reused as 1', post.gen !== 1);
         } finally {
             if (savedAC) global.AbortController = savedAC;
@@ -173,196 +339,189 @@ async function run() {
     // --- commitAllowed contracts ---
     {
         const ctx = createPrksTabContext('allowed');
-        const tree = treeSlot();
+        const dom = detailTreeDom('');
         ctx.mount({ appendChild: function () {}, children: [] });
         const tok = ctx.beginFolderHierarchyRefresh('full');
         ok(
             'allowed current',
-            prksFolderHierarchyTreeCommitAllowed(ctx, tok, tree.box, { aborted: false })
+            prksFolderHierarchyTreeCommitAllowed(ctx, tok, dom.container, { aborted: false })
         );
         ctx.beginFolderHierarchyRefresh('full');
         ok(
             'refused stale token',
-            !prksFolderHierarchyTreeCommitAllowed(ctx, tok, tree.box, { aborted: false })
+            !prksFolderHierarchyTreeCommitAllowed(ctx, tok, dom.container, { aborted: false })
         );
         const tok2 = ctx.beginFolderHierarchyRefresh('full');
         ok(
             'refused aborted',
-            !prksFolderHierarchyTreeCommitAllowed(ctx, tok2, tree.box, { aborted: true })
+            !prksFolderHierarchyTreeCommitAllowed(ctx, tok2, dom.container, { aborted: true })
         );
-        tree.box.isConnected = false;
+        dom.container.isConnected = false;
         ok(
             'refused disconnected',
-            !prksFolderHierarchyTreeCommitAllowed(ctx, tok2, tree.box, { aborted: false })
+            !prksFolderHierarchyTreeCommitAllowed(ctx, tok2, dom.container, { aborted: false })
         );
         prksDestroyAllTabContexts();
     }
 
-    // --- Overlapping full A then B; B first; stale A cannot overwrite ---
+    // --- Overlapping full A then B against real fill; B first; stale A cannot overwrite ---
     {
-        const ctx = createPrksTabContext('race');
-        const tree = treeSlot();
-        ctx.mount({ appendChild: function () {}, children: [] });
-        ctx.setEntity('folder', { id: 'alpha', title: 'Alpha' });
+        const ctx = mountCtx('race', { id: 'alpha', title: 'Alpha' });
+        const dom = detailTreeDom('');
         const gates = [];
-        const load = function () {
-            const g = gate();
-            gates.push(g);
-            return g.p;
-        };
-        const pA = fillOnce(ctx, tree.box, tree.slot, load, 'alpha', 'full');
-        const pB = fillOnce(ctx, tree.box, tree.slot, load, 'alpha', 'full');
+        installDeferredLoad(gates);
+        const pA = fillTree(ctx, { id: 'alpha', title: 'Alpha' }, dom.container, {
+            selectionOnly: false,
+        });
+        const pB = fillTree(ctx, { id: 'alpha', title: 'Alpha' }, dom.container, {
+            selectionOnly: false,
+        });
         await nextTick();
         same('race gated', gates.length, 2);
         gates[1].unlock([
-            { id: 'alpha', title: 'Alpha-NEW' },
-            { id: 'child', title: 'Child-NEW' },
+            { id: 'alpha', title: 'Alpha-NEW', parent_id: null, child_count: 1 },
+            { id: 'child', title: 'Child-NEW', parent_id: 'alpha', child_count: 0 },
         ]);
-        same('B commits', await pB, 'committed');
-        same('B topology', tree.slot.marker, 'Alpha-NEW|Child-NEW');
+        await pB;
+        ok('B topology Alpha-NEW', hasTitle(dom.liveHost.innerHTML, 'Alpha-NEW'));
+        ok('B topology Child-NEW', hasTitle(dom.liveHost.innerHTML, 'Child-NEW'));
+        const afterB = dom.liveHost.innerHTML;
         gates[0].unlock([
-            { id: 'alpha', title: 'Alpha-OLD' },
-            { id: 'legacy', title: 'Legacy' },
+            { id: 'alpha', title: 'Alpha-OLD', parent_id: null, child_count: 1 },
+            { id: 'legacy', title: 'Legacy', parent_id: 'alpha', child_count: 0 },
         ]);
-        same('A stale', await pA, 'stale');
-        same('A did not overwrite', tree.slot.marker, 'Alpha-NEW|Child-NEW');
+        await pA;
+        same('A did not overwrite', dom.liveHost.innerHTML, afterB);
+        ok('A titles absent', !hasTitle(dom.liveHost.innerHTML, 'Alpha-OLD'));
         prksDestroyAllTabContexts();
     }
 
     // --- P1: full starts first; selection-only finishes first; full still commits ---
     {
-        const ctx = createPrksTabContext('full-vs-sel');
-        const tree = treeSlot();
-        tree.slot.marker = 'PRE-SYNC';
-        tree.slot.selectedId = 'old-sel';
-        ctx.mount({ appendChild: function () {}, children: [] });
-        ctx.setEntity('folder', { id: 'old-sel', title: 'Old' });
+        const ctx = mountCtx('full-vs-sel', { id: 'old-sel', title: 'Old' });
+        const seedRows = [
+            { id: 'old-sel', title: 'PRE-SYNC', parent_id: null, child_count: 0 },
+            { id: 'new-sel', title: 'PRE-SYNC-B', parent_id: null, child_count: 0 },
+        ];
+        installSyncLoad(seedRows);
+        const dom = detailTreeDom('');
+        await fillTree(ctx, { id: 'old-sel', title: 'Old' }, dom.container, {
+            selectionOnly: false,
+        });
+        ok('seed has PRE-SYNC', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC'));
+        same('seed selected old-sel', selectedIdFromHtml(dom.liveHost.innerHTML), 'old-sel');
+
         const gates = [];
-        const load = function () {
-            const g = gate();
-            gates.push(g);
-            return g.p;
-        };
-        const pFull = fillOnce(ctx, tree.box, tree.slot, load, 'old-sel', 'full');
+        installDeferredLoad(gates);
+        const pFull = fillTree(ctx, { id: 'old-sel', title: 'Old' }, dom.container, {
+            selectionOnly: false,
+        });
         ctx.setEntity('folder', { id: 'new-sel', title: 'New' });
-        const pSel = fillOnce(ctx, tree.box, tree.slot, load, 'new-sel', 'selection');
+        const pSel = fillTree(ctx, { id: 'new-sel', title: 'New' }, dom.container, {
+            selectionOnly: true,
+        });
         await nextTick();
         same('full+sel gated', gates.length, 2);
-        // Selection-only resolves first: may move selection, must not steal full ownership.
-        gates[1].unlock([
-            { id: 'old-sel', title: 'StaleTopo' },
-            { id: 'new-sel', title: 'StaleTopoB' },
-        ]);
-        same('sel commits', await pSel, 'committed');
-        same('sel moved id', tree.slot.selectedId, 'new-sel');
-        same('sel left topology', tree.slot.marker, 'PRE-SYNC');
-        ok('full still current after sel', ctx.isFolderHierarchyRefreshCurrent(
-            // Reconstruct token shape matching first full (gen 1).
-            { mode: 'full', gen: 1 }
-        ));
+        gates[1].unlock(seedRows);
+        await pSel;
+        // Selection may move is-selected / aria-current; titles/structure must stay.
+        ok('sel left PRE-SYNC title', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC'));
+        ok('sel left PRE-SYNC-B title', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC-B'));
+        ok('sel did not rebuild PostCreate', !hasTitle(dom.liveHost.innerHTML, 'PostCreate'));
+        same('sel moved id', selectedIdFromHtml(dom.liveHost.innerHTML), 'new-sel');
+        ok(
+            'full still current after sel',
+            ctx.isFolderHierarchyRefreshCurrent({ mode: 'full', gen: 2 })
+        );
         gates[0].unlock([
-            { id: 'old-sel', title: 'PostCreate' },
-            { id: 'new-sel', title: 'PostCreateChild' },
-            { id: 'extra', title: 'Extra' },
+            { id: 'old-sel', title: 'PostCreate', parent_id: null, child_count: 0 },
+            { id: 'new-sel', title: 'PostCreateChild', parent_id: null, child_count: 0 },
+            { id: 'extra', title: 'Extra', parent_id: null, child_count: 0 },
         ]);
-        same('full commits after sel', await pFull, 'committed');
-        same('full topology applied', tree.slot.marker, 'PostCreate|PostCreateChild|Extra');
-        same('full used live selection', tree.slot.selectedId, 'new-sel');
+        await pFull;
+        ok('full topology PostCreate', hasTitle(dom.liveHost.innerHTML, 'PostCreate'));
+        ok('full topology Extra', hasTitle(dom.liveHost.innerHTML, 'Extra'));
+        same('full used live selection', selectedIdFromHtml(dom.liveHost.innerHTML), 'new-sel');
         prksDestroyAllTabContexts();
     }
 
-    // --- Selection race: newer full selection path; stale full cannot restore ---
+    // --- Selection race: newer full; stale full cannot restore ---
     {
-        const ctx = createPrksTabContext('sel');
-        const tree = treeSlot();
-        ctx.mount({ appendChild: function () {}, children: [] });
+        const ctx = mountCtx('sel', { id: 'a-sel', title: 'A' });
+        const dom = detailTreeDom('');
         const gates = [];
-        const load = function () {
-            const g = gate();
-            gates.push(g);
-            return g.p;
-        };
-        ctx.setEntity('folder', { id: 'a-sel', title: 'A' });
-        const pA = fillOnce(ctx, tree.box, tree.slot, load, 'a-sel', 'full');
+        installDeferredLoad(gates);
+        const pA = fillTree(ctx, { id: 'a-sel', title: 'A' }, dom.container, {
+            selectionOnly: false,
+        });
         ctx.setEntity('folder', { id: 'b-sel', title: 'B' });
-        const pB = fillOnce(ctx, tree.box, tree.slot, load, 'b-sel', 'full');
+        const pB = fillTree(ctx, { id: 'b-sel', title: 'B' }, dom.container, {
+            selectionOnly: false,
+        });
         await nextTick();
         gates[1].unlock([
-            { id: 'b-sel', title: 'Select-B' },
-            { id: 'c-sel', title: 'Select-C' },
+            { id: 'b-sel', title: 'Select-B', parent_id: null, child_count: 0 },
+            { id: 'c-sel', title: 'Select-C', parent_id: null, child_count: 0 },
         ]);
-        same('sel B commits', await pB, 'committed');
-        same('sel B id', tree.slot.selectedId, 'b-sel');
-        same('sel B marker', tree.slot.marker, 'Select-B|Select-C');
+        await pB;
+        ok('sel B marker', hasTitle(dom.liveHost.innerHTML, 'Select-B'));
+        ok('sel B has C', hasTitle(dom.liveHost.innerHTML, 'Select-C'));
+        same('sel B id', selectedIdFromHtml(dom.liveHost.innerHTML), 'b-sel');
+        const afterB = dom.liveHost.innerHTML;
         gates[0].unlock([
-            { id: 'a-sel', title: 'Select-A' },
-            { id: 'b-sel', title: 'Select-B' },
+            { id: 'a-sel', title: 'Select-A', parent_id: null, child_count: 0 },
+            { id: 'b-sel', title: 'Select-B', parent_id: null, child_count: 0 },
         ]);
-        same('sel A stale', await pA, 'stale');
-        same('sel still b-sel', tree.slot.selectedId, 'b-sel');
-        same('sel kept C', tree.slot.marker, 'Select-B|Select-C');
+        await pA;
+        same('sel kept B tree', dom.liveHost.innerHTML, afterB);
+        same('sel still b-sel', selectedIdFromHtml(dom.liveHost.innerHTML), 'b-sel');
         prksDestroyAllTabContexts();
     }
 
     // --- Destroy mid-flight: no commit, no throw ---
     {
-        const ctx = createPrksTabContext('unmount');
-        const tree = treeSlot();
-        tree.slot.marker = 'LOADING';
-        ctx.mount({ appendChild: function () {}, children: [] });
-        ctx.setEntity('folder', { id: 'u1', title: 'U' });
-        const g = gate();
-        const pending = fillOnce(
-            ctx,
-            tree.box,
-            tree.slot,
-            function () {
-                return g.p;
-            },
-            'u1',
-            'full'
-        );
+        const ctx = mountCtx('unmount', { id: 'u1', title: 'U' });
+        const dom = detailTreeDom('<p class="loading">LOADING</p>');
+        const gates = [];
+        installDeferredLoad(gates);
+        const pending = fillTree(ctx, { id: 'u1', title: 'U' }, dom.container, {
+            selectionOnly: false,
+        });
         await nextTick();
         ctx.destroy();
-        g.unlock([{ id: 'u1', title: 'Should-Not-Commit' }]);
+        gates[0].unlock([{ id: 'u1', title: 'Should-Not-Commit', parent_id: null, child_count: 0 }]);
         let threw = false;
-        let outcome = null;
         try {
-            outcome = await pending;
+            await pending;
         } catch (_e) {
             threw = true;
         }
         ok('destroy no throw', !threw);
-        ok('destroy outcome stale/destroyed', outcome === 'stale' || outcome === 'destroyed');
-        same('destroy no commit', tree.slot.marker, 'LOADING');
+        same('destroy no commit', dom.liveHost.innerHTML, '<p class="loading">LOADING</p>');
         prksDestroyAllTabContexts();
     }
 
     // --- Rapid CREATE/rename/DELETE-style triggers: final = latest ---
     {
-        const ctx = createPrksTabContext('rapid');
-        const tree = treeSlot();
-        ctx.mount({ appendChild: function () {}, children: [] });
-        ctx.setEntity('folder', { id: 'root', title: 'Root' });
+        const ctx = mountCtx('rapid', { id: 'root', title: 'Root' });
+        const dom = detailTreeDom('');
         const gates = [];
-        const load = function () {
-            const g = gate();
-            gates.push(g);
-            return g.p;
-        };
+        installDeferredLoad(gates);
         const snaps = [
-            [{ id: 'root', title: 'v1' }],
+            [{ id: 'root', title: 'v1', parent_id: null, child_count: 0 }],
             [
-                { id: 'root', title: 'v2-renamed' },
-                { id: 'kid', title: 'Kid' },
+                { id: 'root', title: 'v2-renamed', parent_id: null, child_count: 1 },
+                { id: 'kid', title: 'Kid', parent_id: 'root', child_count: 0 },
             ],
             [
-                { id: 'root', title: 'v3-final' },
-                { id: 'other', title: 'Other' },
+                { id: 'root', title: 'v3-final', parent_id: null, child_count: 1 },
+                { id: 'other', title: 'Other', parent_id: 'root', child_count: 0 },
             ],
         ];
         const pending = snaps.map(function () {
-            return fillOnce(ctx, tree.box, tree.slot, load, 'root', 'full');
+            return fillTree(ctx, { id: 'root', title: 'Root' }, dom.container, {
+                selectionOnly: false,
+            });
         });
         await nextTick();
         same('rapid gated', gates.length, 3);
@@ -372,7 +531,9 @@ async function run() {
         await pending[0];
         gates[2].unlock(snaps[2]);
         await pending[2];
-        same('final marker', tree.slot.marker, 'v3-final|Other');
+        ok('final v3-final', hasTitle(dom.liveHost.innerHTML, 'v3-final'));
+        ok('final Other', hasTitle(dom.liveHost.innerHTML, 'Other'));
+        ok('not v1', !hasTitle(dom.liveHost.innerHTML, '>v1<'));
         prksDestroyAllTabContexts();
     }
 }
