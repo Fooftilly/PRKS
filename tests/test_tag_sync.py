@@ -252,6 +252,91 @@ class TagVocabularySyncTests(unittest.TestCase):
         self.assertEqual(out["affected_work_ids"], [work])
         self.assertEqual(self.lifecycle(source)["state"], "MERGED")
 
+    def test_ordinary_delete_shares_the_destruction_boundary(self):
+        """DELETE /api/tags/:id and DELETE_TAG must not maintain two cascade
+        bodies. The HTTP wrapper only opens a txn and maps 'not found'."""
+        tid = self.db.add_tag("Epistemology")["id"]
+        work = self.db.add_work(title="A Work")
+        folder = self.db.add_folder("F")
+        self.db.add_tag_to_work(work, tid)
+        self.db.add_tag_to_folder(folder, tid)
+        with self.db.connection() as conn:
+            work_before = work_tag_sync.get_revision(conn, work, tid)
+            folder_before = folder_tag_sync.get_revision(conn, folder, tid)
+        out = self.db.delete_tag(tid)
+        self.assertEqual(out["status"], "deleted")
+        self.assertEqual(out["affected_work_ids"], [work])
+        self.assertEqual(out["affected_folder_ids"], [folder])
+        self.assertIsNone(self.stored(tid))
+        self.assertEqual(self.lifecycle(tid), {"state": "DELETED"})
+        self.assertEqual(self.db.get_work_tags(work), [])
+        self.assertEqual(self.db.get_folder_tags(folder), [])
+        with self.db.connection() as conn:
+            self.assertEqual(work_tag_sync.get_revision(conn, work, tid),
+                             work_before + 1)
+            self.assertEqual(folder_tag_sync.get_revision(conn, folder, tid),
+                             folder_before + 1)
+
+    def test_http_and_sync_delete_leave_equivalent_canonical_state(self):
+        """Same Tag shape destroyed by either path ends in the same catalogue,
+        lifecycle and relationship revisions — the tip of the strangler."""
+        http_tag = self.db.add_tag("ViaHTTP")["id"]
+        sync_tag, _, _ = self.create("ViaSync")
+        work_http = self.db.add_work(title="W-HTTP")
+        work_sync = self.db.add_work(title="W-Sync")
+        self.db.add_tag_to_work(work_http, http_tag)
+        self.db.add_tag_to_work(work_sync, sync_tag)
+
+        http_out = self.db.delete_tag(http_tag)
+        status, sync_out = self.send("DELETE_TAG", sync_tag, {})
+
+        self.assertEqual(http_out["status"], "deleted")
+        self.assertEqual((status, sync_out["code"], sync_out["changed"]),
+                         (200, "ACKNOWLEDGED", True))
+        for tid, wid, affected in (
+            (http_tag, work_http, http_out),
+            (sync_tag, work_sync, sync_out),
+        ):
+            self.assertIsNone(self.stored(tid))
+            self.assertEqual(self.lifecycle(tid), {"state": "DELETED"})
+            self.assertEqual(affected["affected_work_ids"], [wid])
+            self.assertEqual(self.db.get_work_tags(wid), [])
+
+    def test_delete_tag_on_conn_is_a_no_op_when_the_row_is_already_gone(self):
+        tid = self.db.add_tag("Epistemology")["id"]
+        self.db.delete_tag(tid)
+        with self.db.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            deleted, affected = tag_sync.delete_tag_on_conn(conn, tid)
+            self.assertFalse(deleted)
+            self.assertEqual(affected["affected_work_ids"], [])
+            self.assertEqual(affected["affected_folder_ids"], [])
+
+    def test_http_delete_of_missing_tag_still_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.db.delete_tag("T-" + "0" * 32)
+        self.assertIn("not found", str(ctx.exception).lower())
+
+    def test_delete_tag_on_conn_rolls_back_with_the_callers_transaction(self):
+        """Conn-scoped mutation must not commit on its own — a failed outer
+        txn must restore the Tag and its links."""
+        tid = self.db.add_tag("Epistemology")["id"]
+        work = self.db.add_work(title="A Work")
+        self.db.add_tag_to_work(work, tid)
+
+        class _Abort(Exception):
+            pass
+
+        with self.assertRaises(_Abort):
+            with self.db.connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                deleted, _ = tag_sync.delete_tag_on_conn(conn, tid)
+                self.assertTrue(deleted)
+                raise _Abort()
+        self.assertIsNotNone(self.stored(tid))
+        self.assertEqual(self.lifecycle(tid), {"state": "ACTIVE"})
+        self.assertEqual([t["id"] for t in self.db.get_work_tags(work)], [tid])
+
 
 if __name__ == "__main__":
     unittest.main()

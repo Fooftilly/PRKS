@@ -4706,7 +4706,7 @@ class PRKSDatabase:
         # Everything linked to the SOURCE has its rendered tag list change:
         # the source name disappears, whether or not the target was already
         # present. Entities linked only to the target are untouched.
-        affected = self._entities_linked_to_tag_on_conn(conn, source)
+        affected = tag_sync.entities_linked_to_tag_on_conn(conn, source)
 
         for wid in affected["affected_work_ids"]:
             work_tag_sync.set_state(conn, wid, target, True)
@@ -4926,42 +4926,8 @@ class PRKSDatabase:
         return rows
 
     def _entities_linked_to_tag_on_conn(self, conn, tag_id: str) -> Dict[str, List[str]]:
-        """Works and folders whose rendered tag list contains this tag.
-
-        Offline coherence needs these from the canonical boundary: a cached
-        Work detail embeds `work.tags[]` and a cached Folder detail
-        `folder.tags[]`, so deleting or merging a tag stales exactly these
-        entities. Collected from the server so the answer is right regardless
-        of which route, tab or UI initiated the mutation -- and right even
-        when the client never loaded those relationships.
-        """
-        works = [
-            r["work_id"]
-            for r in conn.execute(
-                "SELECT work_id FROM work_tags WHERE tag_id = ?", (tag_id,)
-            ).fetchall()
-            if r["work_id"]
-        ]
-        folders = [
-            r["folder_id"]
-            for r in conn.execute(
-                "SELECT folder_id FROM folder_tags WHERE tag_id = ?", (tag_id,)
-            ).fetchall()
-            if r["folder_id"]
-        ]
-        option_works = set(works)
-        for row in conn.execute("SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'work-tag'"):
-            pair = json.loads(row["scope_id"])
-            if pair[1] == tag_id:
-                option_works.add(pair[0])
-        option_folders = set(folders)
-        for row in conn.execute("SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'folder-tag'"):
-            pair = json.loads(row["scope_id"])
-            if pair[1] == tag_id:
-                option_folders.add(pair[0])
-        return {"affected_work_ids": works, "affected_folder_ids": folders,
-                "affected_tag_options_work_ids": sorted(option_works),
-                "affected_tag_options_folder_ids": sorted(option_folders)}
+        """Compatibility wrapper — canonical helper lives in ``tag_sync``."""
+        return tag_sync.entities_linked_to_tag_on_conn(conn, tag_id)
 
     def delete_tag(self, tag_id: str) -> Dict[str, Any]:
         """Explicitly destroy a Tag. Relationships cascade.
@@ -4988,24 +4954,20 @@ class PRKSDatabase:
         wanted it must be an explicit, user-initiated action (an "unused tags"
         list with its own delete), never garbage collection during an
         unrelated operation.
+
+        Opens a transaction and delegates destruction to
+        ``tag_sync.delete_tag_on_conn`` — the same primitive ``DELETE_TAG``
+        uses. Sync must not call this wrapper (nested txn / HTTP-shaped
+        errors); call the conn-scoped helper instead.
         """
         tid = (tag_id or "").strip()
         if not tid:
             raise ValueError("tag_id is required")
-        # Collect BEFORE the delete: the FK cascade removes the link rows, so
-        # afterwards there is nothing left to report.
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT id FROM tags WHERE id = ?", (tid,)).fetchone()
-            if not row:
+            deleted, affected = tag_sync.delete_tag_on_conn(conn, tid)
+            if not deleted:
                 raise ValueError("tag not found")
-            affected = self._entities_linked_to_tag_on_conn(conn, tid)
-            for wid in affected["affected_work_ids"]:
-                work_tag_sync.set_state(conn, wid, tid, False)
-            for fid in affected["affected_folder_ids"]:
-                folder_tag_sync.set_state(conn, fid, tid, False)
-            conn.execute("UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tid,))
-            conn.execute("DELETE FROM tags WHERE id = ?", (tid,))
         return {"status": "deleted", **affected}
 
     def add_tag_to_work(self, work_id: str, tag_id: str):
