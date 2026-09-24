@@ -13,12 +13,38 @@ from __future__ import annotations
 import os
 
 
-def publish_derived_cache_bytes(cache_path: str, body: bytes) -> None:
-    """Write ``body`` to ``cache_path`` via a sibling temp + ``os.replace``."""
-    parent = os.path.dirname(cache_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp = cache_path + ".tmp"
+def _contained_cache_path(cache_dir: str, filename: str) -> str:
+    """Return ``cache_dir/filename`` after CodeQL path-injection containment.
+
+    Runtime callers already build cache basenames from sanitized ids
+    (``prks_thumb_cache_stem`` / ``prks_person_image_cache_path``). The sink
+    still rebuilds with join+normpath+startswith so CodeQL does not treat a
+    helper return as still-tainted user data at the FS boundary.
+    """
+    base_path = os.path.realpath(cache_dir)
+    # CodeQL py/path-injection documented sanitizer (query help user_picture3):
+    # build with join+normpath, then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    if not name or name in {".", ".."}:
+        raise ValueError("Invalid or unsafe derived cache path")
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
+        raise ValueError("Invalid or unsafe derived cache path")
+    return fullpath
+
+
+def publish_derived_cache_bytes(cache_dir: str, filename: str, body: bytes) -> str:
+    """Write ``body`` under ``cache_dir/filename`` via a sibling temp + ``os.replace``.
+
+    Returns the absolute path published.
+    """
+    fullpath = _contained_cache_path(cache_dir, filename)
+    parent = os.path.dirname(fullpath)
+    os.makedirs(parent, exist_ok=True)
+    # Temp lives next to the destination under the same contained directory.
+    tmp_name = os.path.basename(fullpath) + ".tmp"
+    tmp = _contained_cache_path(cache_dir, tmp_name)
     with open(tmp, "wb") as fp:
         fp.write(body)
-    os.replace(tmp, cache_path)
+    os.replace(tmp, fullpath)
+    return fullpath
