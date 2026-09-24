@@ -57,6 +57,14 @@ _TEST_GATE_REJECTED_SOURCE_OPTIONS = frozenset(
         "--editable",
     }
 )
+_TEST_GATE_APPROVED_INSTALL_STEP = "Install pinned runtime dependencies"
+# Fail-closed: any of these in a non-approved step's run body is refused.
+_TEST_GATE_PACKAGE_INSTALL_RE = re.compile(
+    r"(?:^|[\s;&|`$()])"
+    r"(?:python3?\s+-m\s+pip\s+install|uv\s+pip\s+install|pip3?\s+install)"
+    r"\b",
+    re.MULTILINE,
+)
 
 
 def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
@@ -137,6 +145,88 @@ def test_gate_install_argv_from_run_body(
             f"(got {' '.join(args[:4]) if args else '<empty>'})"
         )
     return args
+
+
+def _test_gate_run_body_without_shell_comments(body: str) -> str:
+    """Drop blank and ``#`` comment lines from a run body before install scans."""
+    kept: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        kept.append(stripped)
+    return "\n".join(kept)
+
+
+def run_body_has_package_install(body: str) -> bool:
+    """True when a run body contains a package-install command form."""
+    text = _test_gate_run_body_without_shell_comments(body)
+    return _TEST_GATE_PACKAGE_INSTALL_RE.search(text) is not None
+
+
+def iter_test_gate_step_run_bodies(
+    workflow: str, *, step_indent: int = 6
+) -> list[tuple[str | None, str]]:
+    """Return ``(step_name, run_body)`` for every steps[] entry that has ``run:``.
+
+    ``step_name`` is None for unnamed ``- run:`` steps. Scoped to GitHub Actions
+    list items at ``step_indent`` (PRKS test-gate uses 6).
+    """
+    dash = f"{' ' * step_indent}- "
+    field_indent = step_indent + 2
+    field = " " * field_indent
+    body_indent = step_indent + 4
+    starts = [m.start() for m in re.finditer(rf"(?m)^{re.escape(dash)}", workflow)]
+    results: list[tuple[str | None, str]] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(workflow)
+        block = workflow[start:end]
+        first_nl = block.find("\n")
+        first = block[:first_nl] if first_nl >= 0 else block
+        name: str | None = None
+        name_match = re.match(rf"^{re.escape(dash)}name:\s*(.+)$", first)
+        if name_match:
+            name = name_match.group(1).strip()
+        # `- run: …` on the list item itself (no separate name key).
+        inline_run = re.match(rf"^{re.escape(dash)}run:\s*(.*)$", first)
+        if inline_run is not None:
+            results.append((name, inline_run.group(1)))
+            continue
+        run_match = re.search(
+            rf"(?m)^{re.escape(field)}run:\s*"
+            rf"(?:([|>])[-+]?\n((?: {{{body_indent},}}[^\n]*\n)+)|([^\n]*))",
+            block,
+        )
+        if run_match is None:
+            continue
+        if run_match.group(1) is not None:
+            results.append((name, run_match.group(2)))
+        else:
+            results.append((name, run_match.group(3) or ""))
+    return results
+
+
+def assert_test_gate_no_extra_package_installs(workflow: str) -> None:
+    """Refuse package-install commands outside the approved Install step.
+
+    Covers ``pip install``, ``python``/``python3 -m pip install``,
+    ``uv pip install``, and their ``-r``/``-e`` forms (all match the install
+    verb). Only ``Install pinned runtime dependencies`` may install packages.
+    """
+    found_approved = False
+    for name, body in iter_test_gate_step_run_bodies(workflow):
+        if name == _TEST_GATE_APPROVED_INSTALL_STEP:
+            found_approved = True
+            continue
+        if run_body_has_package_install(body):
+            label = name if name else "<unnamed step>"
+            raise ValueError(
+                f"package install outside approved Install step: {label}"
+            )
+    if not found_approved:
+        raise ValueError(
+            f"missing approved Install step {_TEST_GATE_APPROVED_INSTALL_STEP!r}"
+        )
 
 
 class RequirementsParsingTests(unittest.TestCase):
@@ -780,11 +870,13 @@ class RepoGateLiveTests(unittest.TestCase):
         A literal Install body must be exactly one non-comment command — the
         approved ``python -m pip install`` — so ``pip install`` /
         ``python3 -m pip install`` / ``uv pip install`` cannot hide after it.
+        Workflow-wide: no other step may run a package-install command.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
+        assert_test_gate_no_extra_package_installs(workflow)
         # Anchor on step name; allow comments / id / other fields before run,
         # and either `|` or `>` block scalars (with optional chomping).
         match = re.search(
@@ -807,6 +899,25 @@ class RepoGateLiveTests(unittest.TestCase):
         # install is an approved option or an exact name==version pin.
         install_pins = parse_test_gate_pip_install_pins(pip_args)
         self.assertEqual(install_pins, pins)
+
+    def test_test_gate_rejects_package_install_in_other_step(self):
+        """A later YAML step with `run: pip install requests` must fail closed."""
+        workflow = (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: >-\n"
+            "          python -m pip install --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Prepare test helper\n"
+            "        run: pip install requests\n"
+        )
+        with self.assertRaisesRegex(
+            ValueError, r"package install outside approved Install step: Prepare test helper"
+        ):
+            assert_test_gate_no_extra_package_installs(workflow)
 
     def test_test_gate_literal_rejects_extra_pip_install_line(self):
         """Later `pip install` / `python3 -m pip` lines must fail the literal check."""
