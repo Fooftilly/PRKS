@@ -45,7 +45,7 @@ jobs:
         # PIP_* env / user config (PIP_REQUIREMENT, PIP_EDITABLE, …).
         run: >-
           python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"
+          "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
 
       - name: Run PRKS unit, API, structural, and Node tests
         run: python run_tests.py
