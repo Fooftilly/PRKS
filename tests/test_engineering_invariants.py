@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
-import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +13,8 @@ _SCRIPT = _ROOT / "scripts" / "check_invariants.py"
 _SPEC = importlib.util.spec_from_file_location("prks_check_invariants", _SCRIPT)
 assert _SPEC and _SPEC.loader
 checker = importlib.util.module_from_spec(_SPEC)
+# Dataclass processing looks the class module up in sys.modules (3.12+).
+sys.modules[_SPEC.name] = checker
 _SPEC.loader.exec_module(checker)
 
 
@@ -31,6 +33,43 @@ class EngineeringInvariantTests(unittest.TestCase):
         )
         self.assertEqual([f.code for f in findings], ["INV-STORAGE-001"])
 
+    def test_alias_reuse_across_functions_keeps_storage_violation(self):
+        """Same alias may bind shutil in one function and os in another.
+
+        A tree-wide final alias map would let the later binding overwrite the
+        earlier one and misclassify (or drop) INV-STORAGE-001.
+        """
+        source_copy_first = (
+            "def publish():\n"
+            "    import shutil as s\n"
+            "    s.copy2('a', 'b')\n"
+            "\n"
+            "def commit():\n"
+            "    import os as s\n"
+            "    s.replace('a', 'b')\n"
+        )
+        source_replace_first = (
+            "def commit():\n"
+            "    import os as s\n"
+            "    s.replace('a', 'b')\n"
+            "\n"
+            "def publish():\n"
+            "    import shutil as s\n"
+            "    s.copy2('a', 'b')\n"
+        )
+        cases = (
+            ("copy_then_replace", source_copy_first),
+            ("replace_then_copy", source_replace_first),
+        )
+        for label, source in cases:
+            with self.subTest(order=label):
+                findings = checker.check_source(source, "backend/example.py")
+                codes = sorted(f.code for f in findings)
+                self.assertEqual(
+                    codes,
+                    ["INV-DURABILITY-001", "INV-STORAGE-001"],
+                )
+
     def test_replace_is_allowed_only_at_approved_boundary(self):
         allowed = checker.check_source(
             "import os\nos.replace('a', 'b')\n",
@@ -46,14 +85,21 @@ class EngineeringInvariantTests(unittest.TestCase):
     def test_fsync_is_allowed_only_at_approved_boundary(self):
         allowed = checker.check_source(
             "from os import fsync\nfsync(1)\n",
-            "backend/services/work_pdf_replace.py",
+            "backend/fs_durability.py",
         )
-        blocked = checker.check_source(
+        blocked_feature = checker.check_source(
             "from os import fsync as sync\nsync(1)\n",
             "backend/new_feature.py",
         )
+        # Managed-PDF replace must not be an fsync island — bare os.fsync there
+        # is still INV-DURABILITY-002 (use fsync_open_file / fsync_directory).
+        blocked_pdf = checker.check_source(
+            "from os import fsync\nfsync(1)\n",
+            "backend/services/work_pdf_replace.py",
+        )
         self.assertEqual(allowed, [])
-        self.assertEqual([f.code for f in blocked], ["INV-DURABILITY-002"])
+        self.assertEqual([f.code for f in blocked_feature], ["INV-DURABILITY-002"])
+        self.assertEqual([f.code for f in blocked_pdf], ["INV-DURABILITY-002"])
 
     def test_current_backend_passes(self):
         findings = checker.check_repo(_ROOT)
