@@ -5,20 +5,20 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
+  workflow_run:
+    workflows: ["Review event signal"]
+    types: [completed]
 
-permissions:
-  issues: write
-  pull-requests: write
+concurrency:
+  group: suppress-noisy-review-bot-comments
+  cancel-in-progress: false
 
 jobs:
   remove-noise-comment:
-    # No `on:` filter can match comment text, so every comment in the repository
-    # starts a run that this condition then skips. Skipped jobs are not billed.
-    #
-    # Identity is the bot login alone. `performed_via_github_app` describes the
-    # app a comment was posted THROUGH, not who wrote it: comments authored by a
-    # human carry the connector's slug when they are relayed through it, and this
-    # repository has such comments. Matching on the slug would put those in scope.
+    # Comment events can be handled directly because they run in the base
+    # repository context. The submitted-review path is intentionally handled
+    # separately through workflow_run so fork pull requests cannot downgrade the
+    # token used for suppression.
     if: >-
       (
         (
@@ -34,6 +34,15 @@ jobs:
             'Qodo reviewed your code and found no material issues that require review'
           ) &&
           github.event.comment.user.login == 'qodo-code-review[bot]'
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          contains(
+            github.event.comment.body,
+            'has reached the 50-credit limit for trial accounts'
+          ) &&
+          contains(github.event.comment.body, 'To continue receiving code reviews') &&
+          github.event.comment.user.login == 'greptile-apps[bot]'
         )
       ) &&
       (
@@ -41,13 +50,17 @@ jobs:
         github.event.issue.pull_request
       )
 
+    permissions:
+      issues: write
+      pull-requests: write
+
     runs-on: ubuntu-24.04
     timeout-minutes: 2
 
     steps:
-      # The comment body reaches this job only through the `contains()` checks
-      # above, never the shell: the step interpolates no event text, and the one
-      # comment it can delete is the comment that triggered the run.
+      # The comment body reaches this job only through the contains() checks
+      # above, never the shell. The one comment it can delete is the comment
+      # that triggered the run.
       - name: Delete matched bot-noise comment
         env:
           GH_TOKEN: ${{ github.token }}
@@ -64,3 +77,99 @@ jobs:
           fi
 
           gh api --method DELETE "${endpoint}"
+
+  suppress-greptile-quota-review:
+    # workflow_run executes from the default branch with the base repository's
+    # permissions, even when Review event signal was triggered by a fork PR.
+    # The signal workflow checks out and executes no pull-request code.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success'
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+
+    steps:
+      - name: Suppress matched Greptile quota review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SIGNAL_TITLE: ${{ github.event.workflow_run.display_title }}
+        run: |
+          set -euo pipefail
+
+          # Review event signal encodes only GitHub numeric IDs in run-name.
+          # Reject anything else rather than using untrusted text as API input.
+          if [[ ! "${SIGNAL_TITLE}" =~ ^review-([0-9]+)-pr-([0-9]+)$ ]]; then
+            echo "Unexpected review signal title: ${SIGNAL_TITLE}" >&2
+            exit 1
+          fi
+
+          review_id="${BASH_REMATCH[1]}"
+          pr_number="${BASH_REMATCH[2]}"
+
+          review_json="$(mktemp)"
+          trap 'rm -f "${review_json}"' EXIT
+
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPOSITORY}/pulls/${pr_number}/reviews/${review_id}" \
+            > "${review_json}"
+
+          # Re-read the review from GitHub in the trusted workflow and match
+          # both the exact bot identity and both distinctive quota fragments.
+          if ! jq -e '
+            (.user.login == "greptile-apps[bot]") and
+            ((.body // "") | contains("has reached the 50-credit limit for trial accounts")) and
+            ((.body // "") | contains("To continue receiving code reviews"))
+          ' "${review_json}" >/dev/null; then
+            exit 0
+          fi
+
+          review_node_id="$(jq -r '.node_id // empty' "${review_json}")"
+          if [[ ! "${review_node_id}" =~ ^PRR_ ]]; then
+            echo "Missing or invalid review node ID" >&2
+            exit 1
+          fi
+
+          deleted=""
+          if deleted="$(gh api graphql \
+            -f query='
+              mutation($reviewId: ID!) {
+                deletePullRequestReview(
+                  input: {pullRequestReviewId: $reviewId}
+                ) {
+                  clientMutationId
+                }
+              }
+            ' \
+            -f reviewId="${review_node_id}" \
+            --jq '.data.deletePullRequestReview != null')" &&
+            [[ "${deleted}" == "true" ]]
+          then
+            exit 0
+          fi
+
+          minimized="$(gh api graphql \
+            -f query='
+              mutation($reviewId: ID!) {
+                minimizeComment(
+                  input: {subjectId: $reviewId, classifier: OFF_TOPIC}
+                ) {
+                  minimizedComment {
+                    isMinimized
+                  }
+                }
+              }
+            ' \
+            -f reviewId="${review_node_id}" \
+            --jq '.data.minimizeComment.minimizedComment.isMinimized')"
+
+          if [[ "${minimized}" != "true" ]]; then
+            echo "Greptile quota review was neither deleted nor minimized" >&2
+            exit 1
+          fi
