@@ -23,14 +23,28 @@ def read(rel: str) -> str:
 
 
 # Slash after these tokens introduces a RegExp literal, not division.
-_JS_REGEX_PREV = frozenset("=(,[{;:!&|?~+-*%^}")
+_JS_REGEX_PREV = frozenset("=(,[{;:!&|?~+-*%^}<>")
+_JS_REGEX_PREV_KEYWORDS = frozenset({
+    "return", "typeof", "case", "do", "else", "in", "instanceof",
+    "new", "delete", "void", "throw", "yield", "await",
+})
 
 
-def _js_prev_significant(source: str, index: int) -> str:
+def _js_regex_allowed(source: str, index: int) -> bool:
+    """True when `/` at index starts a RegExp literal rather than division."""
     j = index - 1
     while j >= 0 and source[j] in " \t\r\n":
         j -= 1
-    return source[j] if j >= 0 else ""
+    if j < 0:
+        return True
+    if source[j] in _JS_REGEX_PREV:
+        return True
+    k = j
+    while k >= 0 and (source[k].isalnum() or source[k] in "_$"):
+        k -= 1
+    word = source[k + 1 : j + 1]
+    # Property access like `obj.of / x` is division; bare keyword is RegExp.
+    return word in _JS_REGEX_PREV_KEYWORDS and (k < 0 or source[k] != ".")
 
 
 def _blank_keep_newlines(text: str) -> str:
@@ -145,7 +159,7 @@ def _scan_js_regions(source: str, *, blank_comments: bool, blank_strings: bool) 
             _emit_optional_blank(out, source[i:end], blank_comments)
             i = end
             continue
-        if ch == "/" and _js_prev_significant(source, i) in _JS_REGEX_PREV:
+        if ch == "/" and _js_regex_allowed(source, i):
             end = _scan_js_regex_literal(source, i)
             out.append(source[i:end])
             i = end
@@ -245,6 +259,8 @@ class ContractParityTests(unittest.TestCase):
             "// const RECENT_LIMIT = 30;\n"
             "/* const RECENT_LIMIT = 30; */\n"
             "const esc = s.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n"
+            "const arrow = s => /\"/.test(s);\n"
+            "function check(s) { return /'/g; }\n"
             "const RECENT_LIMIT = 25;\n"
             "const msg = 'const RECENT_LIMIT = 30;';\n"
         )
