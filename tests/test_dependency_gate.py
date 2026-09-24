@@ -42,6 +42,7 @@ from backend.dependency_gate import (
 _TEST_GATE_PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)==([^#\s]+)$")
 _TEST_GATE_APPROVED_OPTIONS = frozenset(
     {
+        "--isolated",
         "--disable-pip-version-check",
         "--only-binary=:all:",
     }
@@ -65,6 +66,20 @@ _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
         _TEST_GATE_RUN_TESTS_STEP,
     }
 )
+# Env vars that can inject requirements/config into pip even with an allowlisted argv.
+_TEST_GATE_REJECTED_PIP_ENV = frozenset(
+    {
+        "PIP_REQUIREMENT",
+        "PIP_EDITABLE",
+        "PIP_CONSTRAINT",
+        "PIP_CONFIG_FILE",
+    }
+)
+_TEST_GATE_REJECTED_PIP_ENV_RE = re.compile(
+    r"(?m)^[ \t]+("
+    + "|".join(sorted(_TEST_GATE_REJECTED_PIP_ENV))
+    + r")\s*:"
+)
 
 
 def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
@@ -72,10 +87,13 @@ def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
 
     Every operand after ``install`` must be an approved pip option or an exact
     ``name==version`` pin. Bare names, ``-r``/``-e``, paths/wheels, and
-    URL/VCS sources are rejected.
+    URL/VCS sources are rejected. ``--isolated`` is required so ``PIP_*``
+    env vars and user config cannot inject requirements.
     """
     if pip_args[:4] != ["python", "-m", "pip", "install"]:
         raise ValueError("expected python -m pip install prefix")
+    if "--isolated" not in pip_args[4:]:
+        raise ValueError("approved install requires --isolated")
     pins: dict[str, str] = {}
     index = 4
     while index < len(pip_args):
@@ -297,13 +315,32 @@ def assert_test_gate_run_tests_body(scalar_style: str, body: str) -> None:
         )
 
 
+def assert_test_gate_no_pip_inject_env(workflow: str) -> None:
+    """Refuse job/step ``PIP_REQUIREMENT`` / ``PIP_EDITABLE`` / similar env keys.
+
+    ``--isolated`` is still required on the Install argv; this rejects the
+    inject vectors at the workflow YAML layer as well.
+    """
+    for match in _TEST_GATE_REJECTED_PIP_ENV_RE.finditer(workflow):
+        line_start = workflow.rfind("\n", 0, match.start()) + 1
+        line_end = workflow.find("\n", match.start())
+        if line_end < 0:
+            line_end = len(workflow)
+        line = workflow[line_start:line_end]
+        if line.lstrip().startswith("#"):
+            continue
+        raise ValueError(f"disallowed pip inject env: {match.group(1)}")
+
+
 def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     """Invert policy: only Install + run_tests may have ``run:`` bodies.
 
     ``uses:``-only steps are unrestricted. Any additional ``run:`` step is
     refused — including quoted inline installs and backslash-continued
-    spellings — without enumerating pip/shell forms.
+    spellings — without enumerating pip/shell forms. Job/step pip-inject
+    env vars are refused; Install argv must include ``--isolated``.
     """
+    assert_test_gate_no_pip_inject_env(workflow)
     unique_test_gate_install_step(workflow)
     style, body = unique_test_gate_run_tests_step(workflow)
     assert_test_gate_run_tests_body(style, body)
@@ -961,6 +998,8 @@ class RepoGateLiveTests(unittest.TestCase):
         approved ``python -m pip install``.
         Invert policy: exactly two ``run:`` steps (Install + ``run_tests.py``);
         any additional ``run:`` is refused without enumerating pip spellings.
+        Install argv must include ``--isolated``; job/step ``PIP_REQUIREMENT``
+        (and similar) env is refused.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
@@ -973,6 +1012,7 @@ class RepoGateLiveTests(unittest.TestCase):
         # Inline run: treat as a single folded command.
         style_for_parse = scalar_style if scalar_style else ">"
         pip_args = test_gate_install_argv_from_run_body(style_for_parse, body_lines)
+        self.assertIn("--isolated", pip_args)
         self.assertIn("--only-binary=:all:", pip_args)
         # Two-way equality via fail-closed operand walk: every argv token after
         # install is an approved option or an exact name==version pin.
@@ -987,7 +1027,7 @@ class RepoGateLiveTests(unittest.TestCase):
             "    steps:\n"
             "      - name: Install pinned runtime dependencies\n"
             "        run: >-\n"
-            "          python -m pip install --disable-pip-version-check "
+            "          python -m pip install --isolated --disable-pip-version-check "
             '"--only-binary=:all:"\n'
             '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
             "      - name: Run PRKS unit, API, structural, and Node tests\n"
@@ -1028,10 +1068,61 @@ class RepoGateLiveTests(unittest.TestCase):
         ):
             unique_test_gate_install_step(workflow)
 
+    def test_test_gate_requires_isolated(self):
+        """Approved install argv without --isolated must fail closed."""
+        with self.assertRaisesRegex(ValueError, "approved install requires --isolated"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--only-binary=:all:",
+                    "PyMuPDF==1.28.2",
+                    "Pillow==12.3.0",
+                ]
+            )
+
+    def test_test_gate_rejects_pip_requirement_env(self):
+        """Job/step PIP_REQUIREMENT (and similar) must be refused."""
+        step_env = (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        env:\n"
+            "          PIP_REQUIREMENT: extra.txt\n"
+            "        run: >-\n"
+            "          python -m pip install --isolated --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Run PRKS unit, API, structural, and Node tests\n"
+            "        run: python run_tests.py\n"
+        )
+        job_env = (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    env:\n"
+            "      PIP_REQUIREMENT: extra.txt\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: >-\n"
+            "          python -m pip install --isolated --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Run PRKS unit, API, structural, and Node tests\n"
+            "        run: python run_tests.py\n"
+        )
+        with self.assertRaisesRegex(ValueError, r"disallowed pip inject env: PIP_REQUIREMENT"):
+            assert_test_gate_run_steps_allowlisted(step_env)
+        with self.assertRaisesRegex(ValueError, r"disallowed pip inject env: PIP_REQUIREMENT"):
+            assert_test_gate_run_steps_allowlisted(job_env)
+
     def test_test_gate_literal_rejects_extra_pip_install_line(self):
         """Later `pip install` / `python3 -m pip` lines must fail the literal check."""
         pinned = (
-            "python -m pip install --disable-pip-version-check "
+            "python -m pip install --isolated --disable-pip-version-check "
             '"--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"'
         )
         with self.assertRaisesRegex(
@@ -1061,6 +1152,7 @@ class RepoGateLiveTests(unittest.TestCase):
                     "-m",
                     "pip",
                     "install",
+                    "--isolated",
                     "--disable-pip-version-check",
                     "--only-binary=:all:",
                     "PyMuPDF==1.28.2",
@@ -1076,6 +1168,7 @@ class RepoGateLiveTests(unittest.TestCase):
                     "-m",
                     "pip",
                     "install",
+                    "--isolated",
                     "--disable-pip-version-check",
                     "--only-binary=:all:",
                     "PyMuPDF==1.28.2",
@@ -1092,6 +1185,7 @@ class RepoGateLiveTests(unittest.TestCase):
                     "-m",
                     "pip",
                     "install",
+                    "--isolated",
                     "--only-binary=:all:",
                     "./Pillow-12.3.0-py3-none-any.whl",
                 ]
@@ -1103,6 +1197,7 @@ class RepoGateLiveTests(unittest.TestCase):
                     "-m",
                     "pip",
                     "install",
+                    "--isolated",
                     "--only-binary=:all:",
                     "git+https://example.invalid/pkg.git",
                 ]
