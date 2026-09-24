@@ -69,6 +69,13 @@ def _bind_import(scope: _Scope, node: ast.Import) -> None:
     for item in node.names:
         if item.name in {"os", "shutil"}:
             scope.modules[item.asname or item.name] = item.name
+            continue
+        # ``import os.path`` (no ``as``) still binds the top-level name ``os``
+        # to the ``os`` package. ``import os.path as p`` binds only ``p``.
+        if item.asname is None:
+            top = item.name.split(".", 1)[0]
+            if top in {"os", "shutil"}:
+                scope.modules[top] = top
 
 
 def _bind_import_from(scope: _Scope, node: ast.ImportFrom) -> None:

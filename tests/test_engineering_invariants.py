@@ -70,6 +70,20 @@ class EngineeringInvariantTests(unittest.TestCase):
                     ["INV-DURABILITY-001", "INV-STORAGE-001"],
                 )
 
+    def test_import_os_path_still_binds_os_for_replace(self):
+        """``import os.path`` binds the name ``os``; dotted ``as`` must not."""
+        findings = checker.check_source(
+            "import os.path\nos.replace('a', 'b')\n",
+            "backend/new_feature.py",
+        )
+        self.assertEqual([f.code for f in findings], ["INV-DURABILITY-001"])
+        aliased = checker.check_source(
+            "import os.path as p\nos.replace('a', 'b')\n",
+            "backend/new_feature.py",
+        )
+        # ``os`` was never bound; ``os.replace`` is an unresolved Name path.
+        self.assertEqual(aliased, [])
+
     def test_replace_is_allowed_only_at_approved_boundary(self):
         allowed = checker.check_source(
             "import os\nos.replace('a', 'b')\n",
