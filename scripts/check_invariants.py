@@ -213,14 +213,26 @@ def check_source(source: str, relpath: str) -> list[Finding]:
     return visitor.findings
 
 
-def iter_backend_python(root: Path) -> Iterable[Path]:
+def iter_production_python(root: Path) -> Iterable[Path]:
+    """Yield production Python paths the invariant checker must cover.
+
+    Includes the process entry ``prks_app.py`` (same set Ruff checks) plus
+    every file under ``backend/``. Scripts and tests are out of scope.
+    """
+    app = root / "prks_app.py"
+    if app.is_file():
+        yield app
     backend = root / "backend"
     yield from sorted(p for p in backend.rglob("*.py") if p.is_file())
 
 
+# Back-compat alias for earlier call sites / imports.
+iter_backend_python = iter_production_python
+
+
 def check_repo(root: Path = REPO_ROOT) -> list[Finding]:
     findings: list[Finding] = []
-    for path in iter_backend_python(root):
+    for path in iter_production_python(root):
         rel = path.relative_to(root).as_posix()
         findings.extend(check_source(path.read_text(encoding="utf-8"), rel))
     return findings

@@ -141,6 +141,24 @@ class EngineeringInvariantTests(unittest.TestCase):
             findings = checker.check_repo(root)
             self.assertEqual([f.code for f in findings], ["INV-STORAGE-001"])
 
+    def test_repo_scan_covers_prks_app_entry(self):
+        """Startup/orchestration in prks_app.py must not bypass INV-* rules."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "backend").mkdir()
+            (root / "prks_app.py").write_text(
+                "import shutil\nshutil.copy2('a', 'b')\n",
+                encoding="utf-8",
+            )
+            findings = checker.check_repo(root)
+            self.assertEqual([f.code for f in findings], ["INV-STORAGE-001"])
+            self.assertEqual(findings[0].path, "prks_app.py")
+            scanned = [
+                p.relative_to(root).as_posix()
+                for p in checker.iter_production_python(root)
+            ]
+            self.assertIn("prks_app.py", scanned)
+
 
 if __name__ == "__main__":
     unittest.main()
