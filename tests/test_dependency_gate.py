@@ -675,6 +675,8 @@ class RepoGateLiveTests(unittest.TestCase):
 
         Assert against the install step's executable `run` args only — a pin
         or `--only-binary` mention in a comment must not satisfy the check.
+        Package pins collected from that argv must equal requirements.txt
+        (one-way assertIn would miss leftover workflow pins).
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
@@ -712,10 +714,25 @@ class RepoGateLiveTests(unittest.TestCase):
             pip_args, "no python -m pip install command in Install step run body"
         )
         self.assertIn("--only-binary=:all:", pip_args)
-        # Complete-argument match: Pillow==12.3.0 must not pass via
-        # Pillow==12.3.0.post1, nor via a pin on a different shell command.
-        for name, version in pins.items():
-            self.assertIn(f"{name}=={version}", pip_args)
+        # Two-way equality: workflow package==version args must match
+        # requirements.txt exactly (extra leftover pins must fail).
+        install_pins: dict[str, str] = {}
+        for arg in pip_args:
+            if arg.startswith("-"):
+                continue
+            pin_match = re.fullmatch(
+                r"([A-Za-z0-9][A-Za-z0-9_.\-]*)==([^#\s]+)", arg
+            )
+            if pin_match is None:
+                continue
+            name, version = pin_match.group(1), pin_match.group(2)
+            self.assertNotIn(
+                name,
+                install_pins,
+                f"duplicate package pin for {name} in Install step",
+            )
+            install_pins[name] = version
+        self.assertEqual(install_pins, pins)
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
