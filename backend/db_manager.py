@@ -261,7 +261,8 @@ _PRKS_WORK_SUMMARY_COLUMNS: Tuple[str, ...] = (
 # whole abstract, the bibliographic block (journal/volume/issue/pages/isbn/doi),
 # or the timestamps a card never shows. Carrying the full abstract measured at
 # ~59.5% of the /api/works payload while only #/progress reads it -- and only
-# its first 100 characters. See AGENTS.md, "Offline browse catalogs".
+# its first 100 characters. See docs/agent-rules/offline-pwa.md,
+# "Offline browse catalogs".
 _PRKS_WORK_BROWSE_COLUMNS: Tuple[str, ...] = (
     "id",
     "title",
