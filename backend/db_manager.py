@@ -6,11 +6,10 @@ import uuid
 import json
 import hashlib
 import html
-import shutil
 import logging
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
@@ -30,7 +29,6 @@ from backend.pdf_annotations import (
     round_trip_annotation,
 )
 from backend import pdf_annotation_sync
-from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.performance import (
     classify_sql_write,
     clock_ns,
@@ -746,8 +744,18 @@ def safe_pdf_path_under_dir(
     )
 
 
-def managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Return the filename only for an exact literal /api/pdfs/<filename> ownership path."""
+def _managed_pdf_basename_from_path(
+    file_path: str, *, allow_url_delimiters: bool
+) -> Optional[str]:
+    """Exact ``/api/pdfs/<basename>`` extract, optionally allowing ``?;#``.
+
+    Route-addressable ownership (`managed_pdf_filename`) refuses URL
+    delimiters because ``urlparse`` strips them before the HTTP PDF route
+    sees the path. Physical cleanup ownership (`owned_managed_pdf_basename`)
+    still accepts them so a library that already stored
+    ``/api/pdfs/legacy.pdf?x`` (and the matching on-disk name) can claim and
+    unlink those bytes after upgrade.
+    """
     prefix = "/api/pdfs/"
     if not file_path.startswith(prefix):
         return None
@@ -755,6 +763,8 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
     if not remainder or remainder != remainder.strip():
         return None
     if "/" in remainder or "\\" in remainder:
+        return None
+    if not allow_url_delimiters and any(ch in remainder for ch in "?;#"):
         return None
     if remainder in (".", ".."):
         return None
@@ -767,26 +777,143 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
     return remainder
 
 
+def managed_pdf_filename(file_path: str) -> Optional[str]:
+    """Return the filename for a route-addressable ``/api/pdfs/<filename>`` path.
+
+    The basename must round-trip through the HTTP PDF route. ``urlparse`` strips
+    ``?`` (query), ``;`` (params), and ``#`` (fragment) before
+    ``_safe_pdf_path_for_route`` sees the path, so adopting
+    ``/api/pdfs/foo.pdf?x`` would lock/persist ``foo.pdf?x`` while GET resolved
+    ``foo.pdf``. Mint sanitizes these characters away; new adoption must
+    refuse them. Legacy rows that already used delimiter-bearing names are
+    cleaned up via ``owned_managed_pdf_basename``, not this helper.
+    """
+    return _managed_pdf_basename_from_path(file_path, allow_url_delimiters=False)
+
+
+def owned_managed_pdf_basename(file_path: str) -> Optional[str]:
+    """Physical cleanup ownership basename, including legacy ``?;#`` names.
+
+    Used when deleting a Work or retrying ``pending_pdf_cleanup``: the claim
+    must name the on-disk basename even when that spelling is not
+    route-addressable. Never used for adoption.
+    """
+    return _managed_pdf_basename_from_path(file_path, allow_url_delimiters=True)
+
+
 def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Managed filename a stored file_path can resolve to, matching current serving identity.
+    """Fail-closed over-approximation of a stored path's serving identity.
 
     Deliberately looser than ``managed_pdf_filename()``. That helper answers
-    "does this row *own* a managed PDF?" and must be exact. This one answers
-    "could this row still be pointing at managed PDF X?" and is only ever used
-    to decide whether deleting bytes is safe, so it must over-approximate:
-    a malformed or legacy spelling that fails to resolve here would let cleanup
-    delete a PDF another row still references. Outer whitespace is therefore
-    tolerated, while the filename itself is preserved exactly rather than
-    normalized into some other managed resource.
+    "may this path be *adopted* as route-addressable ownership?" and must be
+    exact. This one answers "could this row *might* still be pointing at
+    managed PDF X?" and is only ever used to refuse deleting bytes, so it
+    must over-approximate: a malformed or legacy spelling that fails to
+    resolve here would let cleanup delete a PDF another row still
+    references.
+
+    Outer whitespace is tolerated. ``urlparse`` strips query/params/fragment
+    before the last segment is taken, matching ``GET /api/pdfs/...`` so a
+    surviving ``/api/pdfs/foo.pdf?q`` row protects ``foo.pdf``. Physical
+    delimiter-bearing ownership (``legacy.pdf?x`` on disk) is checked
+    separately via ``owned_managed_pdf_basename`` /
+    ``row_references_managed_pdf``.
+
+    Never use this output as positive deletion authority: traversal, nested,
+    and encoded-slash aliases map here but the HTTP route cannot serve them,
+    so they must not mint ``pending_pdf_cleanup`` claims.
     """
     fp = str(file_path or "").strip()
     if not fp.startswith("/api/pdfs/"):
         return None
-    segment = fp.split("/")[-1]
+    # Match HTTP serving: urlparse drops query/params/fragment from .path.
+    path = urlparse(fp).path
+    if not path.startswith("/api/pdfs/"):
+        return None
+    segment = path.split("/")[-1]
     name = os.path.basename(unquote(segment))
     if not name or name in (".", ".."):
         return None
     return name
+
+
+def row_references_managed_pdf(file_path: str, filename: str) -> bool:
+    """True when a stored path fail-closed-protects managed basename ``filename``.
+
+    Checks the loose serving over-approximation
+    (``referenced_managed_pdf_filename``) and physical ownership
+    (``owned_managed_pdf_basename``) so cleanup refuses to unlink while any
+    such row exists. This is a *blocker*, not ownership proof — see
+    ``row_strongly_references_managed_pdf`` / ``managed_basenames_protected_by``
+    for identities that may retire or mint cleanup claims.
+    """
+    name = str(filename or "")
+    if not name:
+        return False
+    if referenced_managed_pdf_filename(file_path) == name:
+        return True
+    if owned_managed_pdf_basename(file_path) == name:
+        return True
+    return False
+
+
+def row_strongly_references_managed_pdf(file_path: str, filename: str) -> bool:
+    """True when a stored path strongly owns or serves ``filename``.
+
+    Strong identities are ones the HTTP PDF route / physical cleanup can
+    actually resolve: exact ``owned_managed_pdf_basename`` (including legacy
+    ``?;#`` on-disk names) and the urlparse-stripped path when that path is
+    itself an exact route-addressable ``/api/pdfs/<name>`` spelling (so
+    ``/api/pdfs/foo.pdf?q`` strongly serves ``foo.pdf``). Traversal, nested,
+    and encoded-slash aliases are intentionally excluded — they only
+    fail-closed-block unlink via ``row_references_managed_pdf``.
+    """
+    name = str(filename or "")
+    if not name:
+        return False
+    if owned_managed_pdf_basename(file_path) == name:
+        return True
+    fp = str(file_path or "").strip()
+    if not fp.startswith("/api/pdfs/"):
+        return False
+    serving = managed_pdf_filename(urlparse(fp).path)
+    return serving == name
+
+
+def managed_basenames_protected_by(file_path: str) -> Tuple[str, ...]:
+    """Distinct *strong* managed basenames a stored path may claim on delete.
+
+    Only strong ownership / serving identities mint ``pending_pdf_cleanup``
+    claims. A delimiter legacy path such as ``/api/pdfs/foo.pdf?x`` strongly
+    protects both physical ``foo.pdf?x`` and serving stem ``foo.pdf``, so
+    deleting that survivor reclaims a stem claim it previously superseded.
+
+    Weak fail-closed aliases (``/api/pdfs/../x.pdf``, nested segments,
+    ``%2F``) are deliberately excluded: ``referenced_managed_pdf_filename``
+    may map them to a containable stem, but the route cannot resolve those
+    spellings, so using them as positive deletion authority would unlink
+    bytes the row never owned. Those aliases keep an *existing* stem claim
+    pending (settle refuses to retire it; unlink is blocked) until they
+    disappear — they never create a new claim.
+    """
+    names: List[str] = []
+    seen = set()
+
+    def _add(name: Optional[str]) -> None:
+        if not name or name in seen:
+            return
+        # Containable managed basenames only.
+        if owned_managed_pdf_basename(f"/api/pdfs/{name}") != name:
+            return
+        seen.add(name)
+        names.append(name)
+
+    _add(owned_managed_pdf_basename(file_path))
+    fp = str(file_path or "").strip()
+    if fp.startswith("/api/pdfs/"):
+        # Strong serving stem: urlparse-stripped path must be exact ownership.
+        _add(managed_pdf_filename(urlparse(fp).path))
+    return tuple(names)
 
 
 def safe_processing_path_under_dir(
@@ -1777,14 +1904,47 @@ class PRKSDatabase:
             )
             raise ValueError(msg)
 
-        local_filename = mint_managed_pdf_filename(
-            row.get("filename") or os.path.basename(source_abs)
+        # Publish through the same exclusive + durable managed-PDF store as
+        # ordinary upload/create. Stream from the inbox in bounded chunks —
+        # never shutil.copy2 / overwrite, and never hold the whole PDF in RAM.
+        # Linearization runs inside the store *after* the durability barrier.
+        # Remove the inbox only after DB success — moving first could leave the
+        # inbox empty with no Work row.
+        from backend.services.work_pdf_replace import (
+            ManagedPdfStoreError,
+            discard_unowned_managed_pdf,
+            store_new_managed_pdf_from_path,
         )
+        from backend.work_deletion import _remove_managed_pdf
+
         pdfs_dir = self.storage.pdfs_dir
         os.makedirs(pdfs_dir, exist_ok=True)
-        destination_abs = safe_pdf_path_under_dir(pdfs_dir, local_filename)
-        if not destination_abs:
-            msg = "Could not allocate safe destination path for PDF import."
+        original_name = row.get("filename") or os.path.basename(source_abs)
+
+        try:
+            local_filename = store_new_managed_pdf_from_path(
+                pdfs_dir,
+                original_name,
+                source_abs,
+                linearize_context="processing-import",
+            )
+        except ManagedPdfStoreError as e:
+            # name_taken leaves the pre-existing bytes alone; write_failed has
+            # already discarded any partial exclusive create.
+            msg = e.message or "Could not store PDF into managed storage."
+            if e.reason == "name_taken":
+                msg = "Could not allocate a managed PDF path (name already taken)."
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
+        except Exception as e:
+            msg = f"Could not store PDF into managed storage: {e}"
             self.execute_query(
                 """
                 UPDATE processing_files
@@ -1795,12 +1955,12 @@ class PRKSDatabase:
             )
             raise ValueError(msg)
 
-        # Copy first, remove inbox only after DB success. Moving before add_work could leave
-        # inbox empty while no work row exists; retry then deletes the processing_files row.
-        try:
-            shutil.copy2(source_abs, destination_abs)
-        except Exception as e:
-            msg = f"Could not copy PDF into managed storage: {e}"
+        destination_abs = safe_pdf_path_under_dir(pdfs_dir, local_filename)
+        if not destination_abs:
+            # Store returned a name this process cannot contain — discard under
+            # the shared lock before refusing the import.
+            discard_unowned_managed_pdf(pdfs_dir, local_filename, db=self)
+            msg = "Could not allocate safe destination path for PDF import."
             self.execute_query(
                 """
                 UPDATE processing_files
@@ -1810,18 +1970,6 @@ class PRKSDatabase:
                 (msg, processing_file_id),
             )
             raise ValueError(msg)
-        try:
-            changed, reason = maybe_linearize_pdf_in_place(destination_abs, context="processing-import")
-            LOGGER.info(
-                "pdf_linearize_result context=processing-import changed=%s reason=%s",
-                "true" if changed else "false",
-                safe_log_label(reason),
-            )
-        except Exception as e:
-            LOGGER.warning(
-                "pdf_linearize_error context=processing-import error_type=%s",
-                safe_error_type(e),
-            )
 
         title = (row.get("title") or "").strip() or os.path.splitext(row.get("filename") or "Untitled")[0]
         status_draft = (row.get("status_draft") or "Not Started").strip() or "Not Started"
@@ -1878,30 +2026,23 @@ class PRKSDatabase:
             uncategorized_id = self.ensure_default_uncategorized_folder_id()
             self.add_work_to_folder(fid if fid else uncategorized_id, work_id)
         except Exception as e:
-            can_remove_destination = work_id is None
+            # Survivor-aware rollback: never raw os.remove. After a successful
+            # Work delete, `_remove_managed_pdf` holds managed_pdf_path_lock,
+            # re-asks the live catalogue, unlinks only when unowned, settles
+            # pending_pdf_cleanup only when finished, and fails closed when the
+            # catalogue is unreadable. OSError leaves the claim for retry.
             if work_id:
                 try:
                     self.delete_work_record(work_id)
-                    can_remove_destination = True
                 except Exception:
-                    can_remove_destination = False
-            if can_remove_destination:
-                removed = False
-                try:
-                    os.remove(destination_abs)
-                    removed = True
-                except FileNotFoundError:
-                    removed = True
-                except OSError:
                     pass
-                if removed and work_id:
-                    # Deleting the row claimed this basename for post-delete
-                    # cleanup; the rollback has now removed those bytes itself,
-                    # so the claim is settled here rather than left for a retry
-                    # pass to discover a file that is already gone.
-                    from backend.work_deletion import forget_pending_pdf_cleanup
-
-                    forget_pending_pdf_cleanup(self, local_filename)
+                else:
+                    try:
+                        _remove_managed_pdf(self, local_filename, pdfs_dir)
+                    except OSError:
+                        pass
+            else:
+                discard_unowned_managed_pdf(pdfs_dir, local_filename, db=self)
             msg = f"Failed to insert imported file into works table: {e}"
             self.execute_query(
                 """
@@ -2638,7 +2779,14 @@ class PRKSDatabase:
         return rows
 
     def update_work_metadata(self, work_id: str, fields: dict):
-        """Update arbitrary metadata fields on a work."""
+        """Update arbitrary metadata fields on a work.
+
+        Returns a tuple of managed basenames claimed for cleanup when
+        ``file_path`` retargets away from strong ownership of those names.
+        Empty when nothing was released. Callers that change ``file_path``
+        must run post-commit survivor-aware cleanup for any returned names
+        (see ``cleanup_released_managed_pdfs``).
+        """
         allowed = {'title', 'status', 'abstract', 'published_date',
                    'author_text', 'year', 'publisher', 'location', 'edition', 'journal',
                    'volume', 'issue', 'pages', 'isbn', 'doi', 'text_content', 'doc_type',
@@ -2680,7 +2828,7 @@ class PRKSDatabase:
         # instead of guessing -- the same rule an uninterpretable Published
         # Date follows. See work_metadata_sync.FIELD_CODECS.
         if not updates:
-            return
+            return ()
         # Revisions record CANONICAL history, not sync-endpoint history. An
         # ordinary online PATCH that changes a synchronized field has to
         # advance that field's revision, or an offline device holding the old
@@ -2717,6 +2865,7 @@ class PRKSDatabase:
         # Now that every value is known-good, put PATCH and the synchronization
         # handler on ONE representation before either writes.
         synced = {k: work_metadata_sync.canonical_wire(k, v) for k, v in synced.items()}
+        claimed_old: tuple = ()
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             # The same guard the synchronization handler applies: a field-scoped
@@ -2728,6 +2877,20 @@ class PRKSDatabase:
                     raise ValueError(
                         "%s cannot be set on this Work: its source identity is not a "
                         "field-scoped value" % field)
+            # Owner P2 on #172: retargeting file_path must claim the old
+            # strong basenames in THIS transaction, or a crash between the
+            # path write and post-commit cleanup loses the only durable
+            # cleanup identity (same invariant as Work delete).
+            old_file_path = None
+            if "file_path" in plain:
+                row = conn.execute(
+                    "SELECT file_path FROM works WHERE id = ?",
+                    (work_id,),
+                ).fetchone()
+                if row is not None:
+                    old_file_path = (
+                        "" if row["file_path"] is None else str(row["file_path"])
+                    )
             if plain:
                 set_clause = ", ".join(f"{k} = ?" for k in plain)
                 conn.execute(
@@ -2747,6 +2910,19 @@ class PRKSDatabase:
                     raise ValueError(str(exc)) from exc
             for field, value in synced.items():
                 work_metadata_sync.set_field_on_conn(conn, work_id, field, value)
+            if old_file_path is not None:
+                new_file_path = (
+                    "" if plain.get("file_path") is None
+                    else str(plain.get("file_path") or "")
+                )
+                if new_file_path != old_file_path:
+                    from backend.work_deletion import (
+                        claim_released_managed_basenames_on_conn,
+                    )
+                    claimed_old = claim_released_managed_basenames_on_conn(
+                        conn, old_file_path
+                    )
+        return claimed_old
 
     def get_work_notes_state(self, work_id: str) -> Optional[dict]:
         """The two whole-document revisions; values live on Work detail."""

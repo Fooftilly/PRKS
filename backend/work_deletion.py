@@ -26,9 +26,11 @@ from typing import Collection, Optional
 
 from backend.db_manager import (
     PRKSDatabase,
-    managed_pdf_filename,
+    managed_basenames_protected_by,
+    owned_managed_pdf_basename,
     prks_delete_pdf_thumbnails_for_work_id,
-    referenced_managed_pdf_filename,
+    row_references_managed_pdf,
+    row_strongly_references_managed_pdf,
     safe_pdf_path_under_dir,
 )
 from backend.log_safety import safe_error_type, safe_log_id
@@ -56,14 +58,15 @@ class WorkDeletionResult:
 def canonical_managed_basename(filename: str) -> Optional[str]:
     """The exact managed basename ``filename`` names, or None.
 
-    Reuses `managed_pdf_filename()` rather than repeating its rules, so a name
-    accepted here is exactly a name PRKS would accept as a Work's own managed
-    PDF ownership path.
+    Uses physical cleanup ownership (`owned_managed_pdf_basename`) so a
+    pre-upgrade claim for a delimiter-bearing name such as ``legacy.pdf?x``
+    remains actionable. Route-addressable adoption continues to refuse those
+    spellings via `managed_pdf_filename`.
     """
     name = str(filename or "")
     if not name:
         return None
-    return managed_pdf_filename(f"/api/pdfs/{name}")
+    return owned_managed_pdf_basename(f"/api/pdfs/{name}")
 
 
 def record_pending_pdf_cleanup_on_conn(conn, filename: str) -> bool:
@@ -88,6 +91,67 @@ def record_pending_pdf_cleanup_on_conn(conn, filename: str) -> bool:
         (name,),
     )
     return True
+
+
+def claim_released_managed_basenames_on_conn(conn, old_file_path: str) -> tuple[str, ...]:
+    """Claim strong basenames released by a delete or ``file_path`` retarget.
+
+    Caller must already have removed/retargeted the releasing Work so this
+    catalogue query does not still see the old path as protecting the bytes.
+    Only *strong* identities mint claims; weak fail-closed aliases neither
+    prevent minting nor supersede an existing claim (unlink stays deferred).
+
+    Returns every strong basename that is now owed a cleanup (newly inserted
+    or already present via ``ON CONFLICT DO NOTHING``).
+    """
+    protected = managed_basenames_protected_by(old_file_path)
+    if not protected:
+        return ()
+    survivors = conn.execute(
+        "SELECT file_path FROM works WHERE file_path IS NOT NULL"
+    ).fetchall()
+    claimed: list[str] = []
+    for name in protected:
+        if any(
+            row_strongly_references_managed_pdf(r["file_path"], name)
+            for r in survivors
+        ):
+            continue
+        if record_pending_pdf_cleanup_on_conn(conn, name):
+            claimed.append(name)
+    return tuple(claimed)
+
+
+def cleanup_released_managed_pdfs(
+    db: PRKSDatabase, filenames: Collection[str]
+) -> bool:
+    """Post-commit survivor-aware unlink for basenames claimed on retarget/delete.
+
+    Always runs one bounded ``retry_pending_pdf_cleanup`` pass afterward, even
+    when ``filenames`` is empty: a weak-alias ``file_path`` retarget mints no
+    strong claim but may have been the last blocker for a deferred stem claim,
+    and recovery must not wait for an unrelated delete or restart.
+
+    Returns True when any newly-acted claim remains pending after this pass
+    (weak-alias defer, FS failure, or unreadable catalogue).
+    """
+    pending = False
+    names = tuple(str(n) for n in (filenames or ()) if n)
+    for filename in names:
+        try:
+            if not _remove_managed_pdf(db, filename, db.storage.pdfs_dir):
+                pending = True
+        except OSError as e:
+            pending = True
+            LOGGER.warning(
+                "pdf_retarget_cleanup_failed error_type=%s",
+                safe_error_type(e),
+            )
+    # Drain deferred claims whether or not this retarget minted any. ``skip``
+    # only excludes names this call already handled; an empty mint still wakes
+    # the backlog.
+    retry_pending_pdf_cleanup(db, skip=names)
+    return pending
 
 
 def forget_pending_pdf_cleanup(db: PRKSDatabase, filename: str) -> None:
@@ -146,11 +210,17 @@ def _note_attempt(db: PRKSDatabase, filename: str) -> None:
 
 
 def settle_claim_if_referenced(db: PRKSDatabase, filename: str) -> Optional[bool]:
-    """Retire the claim on ``filename`` iff a live Work still references it.
+    """Retire the claim on ``filename`` iff a live Work *strongly* references it.
 
-    Returns True when a referrer was found and the claim was retired, False
-    when the name is genuinely unreferenced (the claim is left standing for
-    the caller to act on), and None when the catalogue could not be read.
+    Returns True when a strong referrer was found and the claim was retired,
+    False when no strong referrer exists (the claim is left standing for the
+    caller to act on — including the case where only a weak fail-closed alias
+    is present), and None when the catalogue could not be read.
+
+    Only strong ownership / serving identities may retire a claim. A weak
+    alias that merely fail-closed-blocks unlink must leave the claim pending
+    so cleanup can finish once that alias disappears, rather than orphaning
+    the bytes with no durable record.
 
     The read and the retirement are ONE write transaction, and that is the
     point. Settling by basename alone races the deletion of the last
@@ -171,13 +241,37 @@ def settle_claim_if_referenced(db: PRKSDatabase, filename: str) -> Optional[bool
                 "SELECT file_path FROM works WHERE file_path IS NOT NULL"
             ).fetchall()
             for row in rows or ():
-                if referenced_managed_pdf_filename(row["file_path"]) == name:
+                if row_strongly_references_managed_pdf(row["file_path"], name):
                     conn.execute(
                         "DELETE FROM pending_pdf_cleanup WHERE filename = ?",
                         (name,),
                     )
                     return True
             return False
+    except Exception:
+        return None
+
+
+def _catalogue_blocks_managed_pdf_unlink(
+    db: PRKSDatabase, filename: str
+) -> Optional[bool]:
+    """True when any live row fail-closed-protects ``filename`` (strong or weak).
+
+    Used after a strong-only settle returned False: a weak alias must still
+    block the unlink while leaving the claim pending. None means the
+    catalogue could not be read.
+    """
+    name = str(filename or "")
+    if not name:
+        return False
+    try:
+        rows = db.execute_query(
+            "SELECT file_path FROM works WHERE file_path IS NOT NULL"
+        )
+        for row in rows or ():
+            if row_references_managed_pdf(row["file_path"], name):
+                return True
+        return False
     except Exception:
         return None
 
@@ -208,9 +302,16 @@ def _remove_managed_pdf(db: PRKSDatabase, filename: Optional[str], pdfs_dir: str
         if referenced is None:
             return False
         if referenced:
-            # A live Work owns these bytes. Nothing is owed, and the claim was
-            # retired in that same transaction.
+            # A live Work strongly owns/serves these bytes. Nothing is owed,
+            # and the claim was retired in that same transaction.
             return True
+        # Fail-closed: a weak alias still blocks unlink but must not retire
+        # the claim — keep it pending until the alias disappears.
+        blocked = _catalogue_blocks_managed_pdf_unlink(db, filename)
+        if blocked is None:
+            return False
+        if blocked:
+            return False
         abs_path = safe_pdf_path_under_dir(pdfs_dir, filename)
         if not abs_path:
             return False
@@ -301,10 +402,20 @@ def retry_pending_pdf_cleanup(
                 _note_attempt(db, name)
                 continue
             if referenced:
-                # A live Work owns these bytes now, so nothing is owed: the
-                # claim was retired inside that same transaction rather than
-                # left dormant over a file PRKS is serving.
+                # A live Work strongly owns/serves these bytes now, so nothing
+                # is owed: the claim was retired inside that same transaction.
                 summary["superseded"] += 1
+                continue
+            # Weak fail-closed aliases block unlink but must leave the claim
+            # pending (they are not ownership proof and must not supersede).
+            blocked = _catalogue_blocks_managed_pdf_unlink(db, name)
+            if blocked is None:
+                summary["deferred"] += 1
+                _note_attempt(db, name)
+                continue
+            if blocked:
+                summary["deferred"] += 1
+                _note_attempt(db, name)
                 continue
             abs_path = safe_pdf_path_under_dir(pdfs_dir, name)
             if not abs_path:
@@ -425,16 +536,18 @@ def cleanup_after_work_delete(
             wid,
             safe_error_type(e),
         )
-    filename = managed_pdf_filename(file_path) if existed else None
-    if filename is not None:
+    filenames = managed_basenames_protected_by(file_path) if existed else ()
+    for filename in filenames:
         try:
             # Reported from what actually happened, not from the absence of an
             # exception: a check this pass could not complete leaves the claim
             # standing, and saying otherwise would hide the degradation the
             # durable record exists to preserve.
-            pending_pdf = not _remove_managed_pdf(db, filename, db.storage.pdfs_dir)
+            if not _remove_managed_pdf(db, filename, db.storage.pdfs_dir):
+                pending_pdf = True
         except OSError as e:
-            failures.append("pdf")
+            if "pdf" not in failures:
+                failures.append("pdf")
             pending_pdf = True
             LOGGER.warning(
                 "work_delete_pdf_cleanup_failed work_id=%s error_type=%s",
@@ -443,11 +556,9 @@ def cleanup_after_work_delete(
             )
     # Draining the backlog here is what makes recovery independent of a
     # restart: the process that could not remove bytes a minute ago is usually
-    # the one that can now. Bounded, and never re-attempts the name this call
+    # the one that can now. Bounded, and never re-attempts the names this call
     # just handled.
-    retry_pending_pdf_cleanup(
-        db, skip=() if filename is None else (filename,)
-    )
+    retry_pending_pdf_cleanup(db, skip=filenames)
     return WorkDeletionResult(
         existed=existed,
         cleanup_failures=tuple(failures),

@@ -16,9 +16,9 @@ import sqlite3
 from backend.db_manager import (
     DeletedWorkRecord,
     _canonical_new_source,
-    managed_pdf_filename,
+    managed_basenames_protected_by,
     normalize_doc_type,
-    referenced_managed_pdf_filename,
+    row_strongly_references_managed_pdf,
 )
 from backend.entity_ids import generate as generate_entity_id
 from backend.entity_ids import is_distributed
@@ -330,19 +330,25 @@ def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
     if row is None:
         return None
     file_path = "" if row["file_path"] is None else str(row["file_path"])
-    deleted_filename = managed_pdf_filename(file_path)
+    # Strong ownership / serving identities only. Weak fail-closed aliases
+    # (traversal / nested / %2F) must not mint claims, and must not prevent
+    # minting either: when only a weak alias survives, the claim is still
+    # written so cleanup can finish after that alias disappears.
+    protected = managed_basenames_protected_by(file_path)
     conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
     still_referenced = False
-    if deleted_filename is not None and claim_pdf:
+    if protected and claim_pdf:
         survivors = conn.execute(
             "SELECT file_path FROM works WHERE file_path IS NOT NULL"
         ).fetchall()
-        still_referenced = any(
-            referenced_managed_pdf_filename(r["file_path"]) == deleted_filename
-            for r in survivors
-        )
-        if not still_referenced:
-            record_pending_pdf_cleanup_on_conn(conn, deleted_filename)
+        for name in protected:
+            if any(
+                row_strongly_references_managed_pdf(r["file_path"], name)
+                for r in survivors
+            ):
+                still_referenced = True
+            else:
+                record_pending_pdf_cleanup_on_conn(conn, name)
     return DeletedWorkRecord(
         work_id=work_id,
         file_path=file_path,

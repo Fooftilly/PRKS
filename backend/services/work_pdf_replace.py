@@ -38,6 +38,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Optional
 
 from backend.db_manager import (
@@ -46,6 +47,7 @@ from backend.db_manager import (
     mint_managed_pdf_filename,
     prks_thumb_cache_safe_wid,
     referenced_managed_pdf_filename,
+    row_references_managed_pdf,
     safe_pdf_path_under_dir,
 )
 from backend.fs_durability import fsync_directory, fsync_open_file
@@ -217,7 +219,7 @@ def other_works_share_managed_filename(
         if str(wid) == str(exclude_work_id):
             continue
         fp = row["file_path"] if isinstance(row, dict) else row[1]
-        if referenced_managed_pdf_filename(fp) == name:
+        if row_references_managed_pdf(fp, name):
             return True
     return False
 
@@ -250,7 +252,152 @@ class ManagedPdfStoreError(Exception):
         self.http_status = http_status
 
 
-def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) -> str:
+# Chunk size for path/stream publication. Large enough to avoid syscall thrash,
+# small enough that a Processing Inbox PDF is never held whole in RAM.
+_STORE_COPY_CHUNK = 1024 * 1024
+
+
+@contextmanager
+def managed_pdf_adoption_guard(pdfs_dir: str, file_path_value):
+    """Serialize claiming an EXISTING managed PDF with post-delete cleanup.
+
+    Yields the managed basename when ``file_path_value`` is a trimmed-canonical
+    ownership path (``/api/pdfs/<name>``, outer whitespace OK), or ``None`` when
+    the caller is not adopting managed bytes (video Work, empty path,
+    non-managed URL). Callers must persist ``/api/pdfs/<yielded>``.
+
+    Adoption deliberately does **not** use ``referenced_managed_pdf_filename``.
+    That helper is cleanup-only and over-approximates via
+    ``basename(unquote(...))``, which would let
+    ``/api/pdfs/subdir%2Ffoo.pdf`` lock and persist ``foo.pdf``. Exact
+    ownership/serving must reject encoded slash and other non-canonical
+    spellings with ``invalid_file_name`` instead of aliasing.
+
+    Outer whitespace is stripped once, then ``managed_pdf_filename`` must
+    accept the result — the same exact rules as ownership, after the one
+    trim the frontend already applies.
+
+    While yielding, this holds ``managed_pdf_path_lock`` and has re-confirmed
+    the contained file still exists. Cleanup that won the race unlinks under
+    the same lock, so a waiting adopter resumes only after the bytes are gone
+    and then raises ``ManagedPdfStoreError(reason="missing_pdf")`` instead of
+    committing a Work that points at nothing.
+
+    Uploads that just minted an exclusive name must not use this guard — they
+    own bytes no cleanup could have claimed.
+    """
+    name = _adoption_managed_basename(file_path_value)
+    if not name:
+        yield None
+        return
+    lock = managed_pdf_path_lock(pdfs_dir, name)
+    if lock is None:
+        raise ManagedPdfStoreError(
+            "invalid_file_name",
+            "Invalid or unsafe PDF storage path",
+            http_status=400,
+        )
+    with lock:
+        path = safe_pdf_path_under_dir(pdfs_dir, name)
+        if not path or not os.path.isfile(path):
+            raise ManagedPdfStoreError(
+                "missing_pdf",
+                "Managed PDF is no longer available",
+                http_status=409,
+            )
+        yield name
+
+
+def _adoption_managed_basename(file_path_value) -> Optional[str]:
+    """Return the basename to adopt, or ``None`` if this is not a managed adopt.
+
+    After stripping outer whitespace the path must be exact
+    ``/api/pdfs/<name>`` (``managed_pdf_filename``). A trimmed value that still
+    looks managed but fails that exact check — encoded ``%2F``, traversal,
+    nested segments — raises ``invalid_file_name`` so adoption cannot alias
+    through cleanup's broader parser.
+    """
+    trimmed = str(file_path_value or "").strip()
+    if not trimmed:
+        return None
+    name = managed_pdf_filename(trimmed)
+    if name is not None:
+        return name
+    # Looks like a managed path (or would under cleanup's loose parser) but is
+    # not an exact ownership spelling — refuse rather than alias.
+    if trimmed.startswith("/api/pdfs/") or referenced_managed_pdf_filename(
+        trimmed
+    ):
+        raise ManagedPdfStoreError(
+            "invalid_file_name",
+            "Invalid or unsafe PDF storage path",
+            http_status=400,
+        )
+    return None
+
+
+def _exclusive_managed_create_paths(
+    pdfs_dir: str, original_name: str
+) -> tuple[str, str]:
+    """Mint and contain a new managed basename; return ``(name, fullpath)``."""
+    os.makedirs(pdfs_dir, exist_ok=True)
+    filename = mint_managed_pdf_filename(original_name)
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+    base_path = os.path.realpath(pdfs_dir)
+    # CodeQL py/path-injection documented sanitizer: build with join+normpath,
+    # then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+    return name, fullpath
+
+
+def _finalize_exclusive_managed_create(
+    pdfs_dir: str,
+    name: str,
+    fullpath: str,
+    *,
+    linearize_context: str,
+) -> str:
+    """Parent-dir sync + optional linearize after a durable exclusive create."""
+    if not fsync_managed_pdf_parent(pdfs_dir, name):
+        # Best-effort: the file exists and its contents are durable, so a
+        # directory sync the platform refused is worth recording and not worth
+        # discarding a good upload for.
+        LOGGER.warning("pdf_upload_dir_sync_failed")
+
+    # Linearization is an optimization, and the bytes on disk are already the
+    # PDF the caller sent. It swallows its own failures but can still raise
+    # before its internal try — `tempfile.mkstemp` sits above it — and letting
+    # that escape would fail a good upload and leave it unowned. Never fail the
+    # store for it.
+    lin_ctx = str(linearize_context or "work-create-upload").strip() or "work-create-upload"
+    try:
+        changed, reason = maybe_linearize_pdf_in_place(fullpath, context=lin_ctx)
+        LOGGER.info(
+            "pdf_linearize_result context=%s changed=%s reason=%s",
+            safe_log_label(lin_ctx),
+            "true" if changed else "false",
+            safe_log_label(reason),
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "pdf_linearize_error context=%s error_type=%s",
+            safe_log_label(lin_ctx),
+            safe_error_type(exc),
+        )
+    return name
+
+
+def store_new_managed_pdf_bytes(
+    pdfs_dir: str,
+    original_name: str,
+    body: bytes,
+    *,
+    linearize_context: str = "work-create-upload",
+) -> str:
     """Store ``body`` as a brand-new managed PDF; return its basename.
 
     Owns the whole filesystem side of an upload so the HTTP adapter does not:
@@ -274,24 +421,68 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     and the managed directory is synced after. A refused content sync is not a
     stored PDF -- the partial file is removed and ``ManagedPdfStoreError`` is
     raised rather than handing back a name a Work would then reference.
-    """
-    os.makedirs(pdfs_dir, exist_ok=True)
-    created = False
-    filename = mint_managed_pdf_filename(original_name)
-    if not safe_pdf_path_under_dir(pdfs_dir, filename):
-        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
-    base_path = os.path.realpath(pdfs_dir)
-    # CodeQL py/path-injection documented sanitizer: build with join+normpath,
-    # then startswith the root before any FS sink.
-    name = os.path.basename(str(filename))
-    fullpath = os.path.normpath(os.path.join(base_path, name))
-    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
-        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
 
+    ``linearize_context`` is log/metadata only. Linearization runs *after* the
+    durability barrier and is never what makes the first write durable.
+    Processing Inbox import uses ``store_new_managed_pdf_from_path`` instead so
+    large inbox files are never held whole in RAM; ordinary upload keeps this
+    byte API (the request body is already in memory).
+    """
+    name, fullpath = _exclusive_managed_create_paths(pdfs_dir, original_name)
+
+    def _write_body(fp) -> None:
+        fp.write(body)
+
+    _exclusive_create_write_and_fsync(pdfs_dir, name, fullpath, _write_body)
+    return _finalize_exclusive_managed_create(
+        pdfs_dir, name, fullpath, linearize_context=linearize_context
+    )
+
+
+def store_new_managed_pdf_from_path(
+    pdfs_dir: str,
+    original_name: str,
+    source_path: str,
+    *,
+    linearize_context: str = "processing-import",
+) -> str:
+    """Publish a trusted on-disk PDF into managed storage without a full RAM copy.
+
+    Same exclusive-create + content/parent durability + post-barrier linearize
+    contract as ``store_new_managed_pdf_bytes``, but copies from ``source_path``
+    in bounded chunks. Callers must already have contained ``source_path``
+    (Processing Inbox via ``safe_processing_path_under_dir``); this helper does
+    not re-interpret a user basename as a path.
+    """
+    if not os.path.isfile(source_path):
+        raise ManagedPdfStoreError(
+            "source_missing",
+            "Source PDF is no longer present",
+            http_status=400,
+        )
+    name, fullpath = _exclusive_managed_create_paths(pdfs_dir, original_name)
+
+    def _copy_chunks(fp) -> None:
+        with open(source_path, "rb") as src:
+            while True:
+                chunk = src.read(_STORE_COPY_CHUNK)
+                if not chunk:
+                    break
+                fp.write(chunk)
+
+    _exclusive_create_write_and_fsync(pdfs_dir, name, fullpath, _copy_chunks)
+    return _finalize_exclusive_managed_create(
+        pdfs_dir, name, fullpath, linearize_context=linearize_context
+    )
+
+
+def _exclusive_create_write_and_fsync(pdfs_dir: str, name: str, fullpath: str, write_into) -> None:
+    """Exclusive ``xb`` create, caller write, content fsync; shared by byte/path stores."""
+    created = False
     try:
         with open(fullpath, "xb") as fp:
             created = True
-            fp.write(body)
+            write_into(fp)
             fp.flush()
             # Same content barrier the replace path owes, at the boundary this
             # path has: the name already exists, so what must not happen before
@@ -314,31 +505,6 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
         raise ManagedPdfStoreError(
             "write_failed", "Could not store the uploaded PDF"
         ) from exc
-    if not fsync_managed_pdf_parent(pdfs_dir, name):
-        # Best-effort, as above: the file exists and its contents are durable,
-        # so a directory sync the platform refused is worth recording and not
-        # worth discarding a good upload for.
-        LOGGER.warning("pdf_upload_dir_sync_failed")
-
-    # Linearization is an optimization, and the bytes on disk are already the
-    # PDF the caller sent. It swallows its own failures but can still raise
-    # before its internal try — `tempfile.mkstemp` sits above it — and letting
-    # that escape would fail a good upload and leave it unowned. Never fail the
-    # store for it.
-    try:
-        changed, reason = maybe_linearize_pdf_in_place(fullpath, context="work-create-upload")
-        LOGGER.info(
-            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
-            "true" if changed else "false",
-            safe_log_label(reason),
-        )
-    except Exception as exc:
-        LOGGER.warning(
-            "pdf_linearize_error context=work-create-upload error_type=%s",
-            safe_error_type(exc),
-        )
-    return name
-
 
 def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db=None) -> bool:
     """Roll back a `store_new_managed_pdf_bytes()` that never gained an owner.
@@ -354,16 +520,27 @@ def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db
     removing that is the data-loss this module exists to prevent; `None` (the
     request referenced an existing `file_path` rather than uploading) is a
     no-op for the same reason.
+
+    The live-reference check and the unlink share ``managed_pdf_path_lock`` —
+    the same lock post-delete cleanup and COW adoption take — so a Work cannot
+    commit ownership of the name in the gap between deciding it is unreferenced
+    and removing the bytes.
     """
     if not stored_name:
         return False
-    # One-directional on purpose: remove only what is proven unreferenced.
-    # `other_works_share_managed_filename` fails closed on a query error, so an
-    # unreadable database keeps the bytes rather than risking a Work's PDF —
-    # and a failure can arrive *after* a commit, when the row does own the file.
-    if db is not None and other_works_share_managed_filename(db, stored_name, exclude_work_id=""):
+    lock = managed_pdf_path_lock(pdfs_dir, stored_name)
+    if lock is None:
         return False
-    return unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
+    with lock:
+        # One-directional on purpose: remove only what is proven unreferenced.
+        # `other_works_share_managed_filename` fails closed on a query error, so an
+        # unreadable database keeps the bytes rather than risking a Work's PDF —
+        # and a failure can arrive *after* a commit, when the row does own the file.
+        if db is not None and other_works_share_managed_filename(
+            db, stored_name, exclude_work_id=""
+        ):
+            return False
+        return unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
 
 
 def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:

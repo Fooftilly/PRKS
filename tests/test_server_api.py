@@ -239,6 +239,419 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name}")
 
+    def test_patch_echoing_same_file_path_skips_adoption_when_pdf_missing(self):
+        """CodeRabbit Minor on #172: PATCH with an unchanged file_path must
+        not run the adoption guard — otherwise a title/status edit that
+        happens to re-send file_path 409s missing_pdf after bytes are gone.
+        """
+        name = "echo-missing-adopt.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path = os.path.join(pdfs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ECHO\n%%EOF\n")
+        fp = f"/api/pdfs/{name}"
+        work_id = server_module.db.add_work("Echo path", file_path=fp)
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+        os.remove(path)
+        self.assertFalse(os.path.isfile(path))
+
+        payload = json.dumps({
+            "title": "Renamed without retargeting",
+            "file_path": fp,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        rows = server_module.db.execute_query(
+            "SELECT title, file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["title"], "Renamed without retargeting")
+        self.assertEqual(rows[0]["file_path"], fp)
+
+    def test_patch_retarget_claims_and_unlinks_old_managed_pdf(self):
+        """Owner P2 on #172: PATCH A→B must claim/unlink A when nothing else owns it."""
+        name_a = "patch-retarget-a.pdf"
+        name_b = "patch-retarget-b.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path_a = os.path.join(pdfs_dir, name_a)
+        path_b = os.path.join(pdfs_dir, name_b)
+        with open(path_a, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%A\n%%EOF\n")
+        with open(path_b, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%B\n%%EOF\n")
+        work_id = server_module.db.add_work(
+            "Retarget me", file_path=f"/api/pdfs/{name_a}"
+        )
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+
+        payload = json.dumps({"file_path": f"/api/pdfs/{name_b}"}).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name_b}")
+        self.assertFalse(os.path.isfile(path_a))
+        self.assertTrue(os.path.isfile(path_b))
+        claims = server_module.db.execute_query(
+            "SELECT filename FROM pending_pdf_cleanup"
+        )
+        self.assertEqual(claims, [])
+
+    def test_patch_retarget_away_last_weak_alias_wakes_deferred_claim(self):
+        """Owner P2 on #172: PATCH last weak alias must wake deferred a.pdf claim.
+
+        Strong owner gone → pending claim deferred by ``/api/pdfs/../a.pdf``;
+        PATCH alias to b.pdf mints no strong claim but the same request's
+        cleanup pass must remove a.pdf and settle the claim.
+        """
+        name_a = "patch-wake-a.pdf"
+        name_b = "patch-wake-b.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path_a = os.path.join(pdfs_dir, name_a)
+        path_b = os.path.join(pdfs_dir, name_b)
+        with open(path_a, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%A\n%%EOF\n")
+        with open(path_b, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%B\n%%EOF\n")
+        with server_module.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (name_a,),
+            )
+            conn.commit()
+        alias_id = server_module.db.add_work(
+            "Weak alias survivor",
+            file_path=f"/api/pdfs/../{name_a}",
+        )
+        self.addCleanup(server_module.db.delete_work_record, alias_id)
+
+        payload = json.dumps({"file_path": f"/api/pdfs/{name_b}"}).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{alias_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (alias_id,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name_b}")
+        self.assertFalse(os.path.isfile(path_a))
+        self.assertTrue(os.path.isfile(path_b))
+        claims = server_module.db.execute_query(
+            "SELECT filename FROM pending_pdf_cleanup"
+        )
+        self.assertEqual(claims, [])
+
+    def test_patch_same_path_drop_survives_concurrent_retarget_cleanup(self):
+        """Owner P2 TOCTOU on #172: same-path PATCH must drop file_path so a
+        concurrent retarget + cleanup cannot be overwritten without the guard.
+
+        Barriers: after the pre-read SELECT, retarget Work to b.pdf and unlink
+        a.pdf under its lock; the PATCH then commits without rewriting
+        file_path and must leave Work on b.pdf (not missing a.pdf).
+        """
+        from backend.services import work_pdf_replace
+
+        name_a = "toctou-a.pdf"
+        name_b = "toctou-b.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path_a = os.path.join(pdfs_dir, name_a)
+        path_b = os.path.join(pdfs_dir, name_b)
+        with open(path_a, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%A\n%%EOF\n")
+        with open(path_b, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%B\n%%EOF\n")
+        fp_a = f"/api/pdfs/{name_a}"
+        fp_b = f"/api/pdfs/{name_b}"
+        work_id = server_module.db.add_work("TOCTOU work", file_path=fp_a)
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+
+        select_passed = threading.Event()
+        retarget_done = threading.Event()
+        observed = {"update_fields": None, "selects": 0}
+        real_eq = server_module.db.execute_query
+        real_update = server_module.db.update_work_metadata
+
+        def watching_eq(sql, params=(), *args, **kwargs):
+            rows = real_eq(sql, params, *args, **kwargs)
+            if (
+                isinstance(sql, str)
+                and "SELECT file_path FROM works WHERE id" in sql
+                and params
+                and params[0] == work_id
+            ):
+                observed["selects"] += 1
+                if observed["selects"] == 1:
+                    select_passed.set()
+                    self.assertTrue(retarget_done.wait(timeout=5))
+            return rows
+
+        def watching_update(wid, fields):
+            observed["update_fields"] = dict(fields)
+            return real_update(wid, fields)
+
+        def concurrent_retarget_and_cleanup():
+            self.assertTrue(select_passed.wait(timeout=5))
+            # Retarget ownership away from a.pdf (direct SQL: this is the B
+            # writer in the race, already past its own adoption boundary).
+            server_module.db.execute_query(
+                "UPDATE works SET file_path = ? WHERE id = ?",
+                (fp_b, work_id),
+            )
+            lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name_a)
+            self.assertIsNotNone(lock)
+            with lock:
+                # No live referrer to a.pdf after the retarget.
+                if os.path.isfile(path_a):
+                    os.remove(path_a)
+            retarget_done.set()
+
+        racer = threading.Thread(target=concurrent_retarget_and_cleanup, daemon=True)
+        racer.start()
+        payload = json.dumps({
+            "title": "Title after race",
+            "file_path": fp_a,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with patch.object(server_module.db, "execute_query", side_effect=watching_eq):
+            with patch.object(
+                server_module.db, "update_work_metadata", side_effect=watching_update
+            ):
+                with urllib.request.urlopen(req) as res:
+                    self.assertEqual(res.status, 200)
+        racer.join(timeout=5)
+        self.assertFalse(racer.is_alive())
+
+        self.assertIsNotNone(observed["update_fields"])
+        self.assertNotIn(
+            "file_path",
+            observed["update_fields"],
+            "unchanged echo must drop file_path so it cannot rewrite after retarget",
+        )
+        rows = server_module.db.execute_query(
+            "SELECT title, file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["title"], "Title after race")
+        self.assertEqual(rows[0]["file_path"], fp_b)
+        self.assertFalse(os.path.isfile(path_a))
+        self.assertTrue(os.path.isfile(path_b))
+
+    def test_create_rejects_encoded_slash_file_path_alias(self):
+        """Owner P2: adoption must not follow cleanup's basename(unquote) alias."""
+        name = "encode-alias.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ENC\n%%EOF\n")
+        payload = json.dumps({
+            "title": "Encoded slash adopt",
+            "file_path": f"/api/pdfs/subdir%2F{name}",
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+        body = json.loads(cm.exception.read().decode())
+        self.assertIn("error", body)
+        # No Work should have been created pointing at the aliased basename.
+        rows = server_module.db.execute_query(
+            "SELECT id FROM works WHERE file_path = ?",
+            (f"/api/pdfs/{name}",),
+        )
+        self.assertEqual(rows, [])
+
+    def test_create_rejects_url_delimiter_file_path_spellings(self):
+        """Adoption must refuse ``?``/``;``/``#`` that GET strips via urlparse."""
+        from backend.db_manager import managed_pdf_filename
+
+        name = "delim-adopt.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        target = os.path.join(pdfs_dir, name)
+        with open(target, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%DELIM\n%%EOF\n")
+        self.addCleanup(lambda: os.path.isfile(target) and os.remove(target))
+
+        for spelling in (
+            f"/api/pdfs/{name}?x",
+            f"/api/pdfs/{name};bar",
+            f"/api/pdfs/{name}#frag",
+        ):
+            with self.subTest(spelling=spelling):
+                self.assertIsNone(managed_pdf_filename(spelling))
+                payload = json.dumps({
+                    "title": f"Delim adopt {spelling[-4:]}",
+                    "file_path": spelling,
+                }).encode()
+                req = urllib.request.Request(
+                    f"{self._base_url}/api/works",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(req)
+                self.assertEqual(cm.exception.code, 400)
+                # Must not have persisted the delimiter spelling — or aliased
+                # onto the stem name the GET route would actually serve.
+                for fp in (spelling, f"/api/pdfs/{name}"):
+                    rows = server_module.db.execute_query(
+                        "SELECT id FROM works WHERE file_path = ?",
+                        (fp,),
+                    )
+                    self.assertEqual(rows, [])
+
+    def test_pdf_get_strips_url_delimiters_to_stem_path(self):
+        """GET/HEAD serve urlparse(.path) only — proving delimiter mismatch.
+
+        A request for ``/api/pdfs/name.pdf?x`` (also ``;``) resolves the stem
+        ``name.pdf``, never a basename that includes the delimiter. Fragment
+        ``#`` is stripped by urlparse the same way (clients omit it on the
+        wire; the ownership parser still refuses it). That is why adoption
+        must refuse those spellings rather than lock and persist bytes the
+        route cannot address under the stored URL.
+        """
+        from urllib.parse import urlparse
+
+        from backend.db_manager import managed_pdf_filename
+        from backend.server import _safe_pdf_path_for_route
+
+        name = "route_delim_strip.pdf"
+        target = os.path.join(server_module.pdfs_dir, name)
+        body = b"%PDF-1.4 delim-strip\n%%EOF\n"
+        with open(target, "wb") as handle:
+            handle.write(body)
+        self.addCleanup(lambda: os.path.isfile(target) and os.remove(target))
+
+        # Stem without delimiters serves normally.
+        for method in ("GET", "HEAD"):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/pdfs/{name}", method=method
+            )
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                if method == "GET":
+                    self.assertEqual(res.read(), body)
+
+        # Query and params reach the server in self.path; urlparse drops them
+        # before _safe_pdf_path_for_route, so they hit the same stem bytes.
+        for suffix in (f"{name}?x=1", f"{name};bar"):
+            for method in ("GET", "HEAD"):
+                with self.subTest(suffix=suffix, method=method):
+                    req = urllib.request.Request(
+                        f"{self._base_url}/api/pdfs/{suffix}", method=method
+                    )
+                    with urllib.request.urlopen(req) as res:
+                        self.assertEqual(res.status, 200)
+                        if method == "GET":
+                            self.assertEqual(res.read(), body)
+
+        # Fragment is client-stripped on the wire; the server's urlparse
+        # contract is the same, and ownership rejects the stored spelling.
+        frag_spelling = f"/api/pdfs/{name}#frag"
+        self.assertIsNone(managed_pdf_filename(frag_spelling))
+        parsed = urlparse(frag_spelling)
+        self.assertEqual(parsed.path, f"/api/pdfs/{name}")
+        self.assertEqual(parsed.fragment, "frag")
+        resolved = _safe_pdf_path_for_route(parsed.path)
+        self.assertEqual(resolved, target)
+
+        # A delimiter-bearing on-disk name is unreachable via the HTTP route:
+        # the request that looks like it names those bytes still resolves the
+        # stem, so inventing an ownership path with ``?`` would 404 or serve
+        # the wrong file after a "successful" adoption.
+        literal = f"{name}?orphan"
+        literal_path = os.path.join(server_module.pdfs_dir, literal)
+        try:
+            with open(literal_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 orphan-delim\n%%EOF\n")
+        except OSError:
+            return
+        self.addCleanup(
+            lambda: os.path.isfile(literal_path) and os.remove(literal_path)
+        )
+        self.assertIsNone(managed_pdf_filename(f"/api/pdfs/{literal}"))
+        req = urllib.request.Request(
+            f"{self._base_url}/api/pdfs/{literal}", method="GET"
+        )
+        with urllib.request.urlopen(req) as res:
+            # urlparse drops ``?orphan`` → serves stem, not the orphan bytes.
+            self.assertEqual(res.status, 200)
+            self.assertEqual(res.read(), body)
+
+    def test_create_with_whitespace_file_path_stores_canonical_and_holds_lock(self):
+        """Outer whitespace is trimmed once; exact ownership form is stored."""
+        from backend.db_manager import managed_pdf_filename
+        from backend.services import work_pdf_replace
+
+        name = "adopt-ws-canonical.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%WS\n%%EOF\n")
+        messy = f" /api/pdfs/{name} "
+        self.assertIsNone(managed_pdf_filename(messy))
+        lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
+        observed = {}
+        real_add_work = server_module.db.add_work
+
+        def watching_add_work(**kwargs):
+            observed["held"] = lock.locked()
+            observed["file_path"] = kwargs.get("file_path")
+            return real_add_work(**kwargs)
+
+        payload = json.dumps({
+            "title": "Whitespace adopt",
+            "file_path": messy,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with patch.object(server_module.db, "add_work", side_effect=watching_add_work):
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                created = json.loads(res.read().decode())
+        self.assertTrue(observed.get("held"))
+        self.assertEqual(observed.get("file_path"), f"/api/pdfs/{name}")
+        wid = created.get("id") or created.get("work_id")
+        self.addCleanup(server_module.db.delete_work_record, wid)
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (wid,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name}")
+
     def test_1_get_works_empty(self):
         req = urllib.request.Request(f"{self._base_url}/api/works")
         with urllib.request.urlopen(req) as res:
@@ -1511,6 +1924,12 @@ class TestServerAPI(unittest.TestCase):
         self.assertIn(w_id, ids)
 
     def test_17_post_pdf_rejects_unsafe_stored_file_path(self):
+        """PDF replace 404s when the stored path is not a managed basename.
+
+        Adoption now refuses ``/api/pdfs/..`` on PATCH (400), so the unsafe
+        stored path is seeded via SQL — the same shape a pre-guard library
+        could already hold — then POST /pdf must still report no managed PDF.
+        """
         req_w = urllib.request.Request(
             f"{self._base_url}/api/works",
             data=json.dumps({"title": "Unsafe path work", "status": "Not Started"}).encode(),
@@ -1520,14 +1939,12 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_w) as rw:
             w_id = json.loads(rw.read().decode())["id"]
 
-        patch = urllib.request.Request(
-            f"{self._base_url}/api/works/{w_id}",
-            data=json.dumps({"file_path": "/api/pdfs/.."}).encode(),
-            method="PATCH",
+        # PATCH of /api/pdfs/.. is refused at the adoption boundary (separate
+        # assertion below). Seed the invalid stored path directly.
+        server_module.db.execute_query(
+            "UPDATE works SET file_path = ? WHERE id = ?",
+            ("/api/pdfs/..", w_id),
         )
-        patch.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(patch) as rp:
-            self.assertEqual(rp.status, 200)
 
         pdf_bytes = b"%PDF-1.4\n%T\n%%EOF\n"
         post_pdf = urllib.request.Request(
@@ -1546,21 +1963,67 @@ class TestServerAPI(unittest.TestCase):
         self.assertIn("error", err)
         self.assertIn("managed PDF", err["error"])
 
-    def test_18_delete_work_with_dotdot_file_path_does_not_crash(self):
+    def test_17b_post_and_patch_reject_dotdot_file_path_with_400(self):
+        """Adoption refuses ``/api/pdfs/..`` on create and metadata PATCH."""
+        # POST create with the unsafe path.
+        req_post = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({
+                "title": "Dotdot create refuse",
+                "status": "Not Started",
+                "file_path": "/api/pdfs/..",
+            }).encode(),
+            method="POST",
+        )
+        req_post.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm_post:
+            urllib.request.urlopen(req_post)
+        self.assertEqual(cm_post.exception.code, 400)
+        post_body = json.loads(cm_post.exception.read().decode())
+        self.assertIn("Invalid or unsafe PDF storage path", post_body.get("error", ""))
+
+        # PATCH onto an existing Work.
         req_w = urllib.request.Request(
             f"{self._base_url}/api/works",
-            data=json.dumps(
-                {
-                    "title": "Dotdot work",
-                    "status": "Not Started",
-                    "file_path": "/api/pdfs/..",
-                }
-            ).encode(),
+            data=json.dumps({"title": "Dotdot patch target", "status": "Not Started"}).encode(),
             method="POST",
         )
         req_w.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req_w) as rw:
             w_id = json.loads(rw.read().decode())["id"]
+        self.addCleanup(server_module.db.delete_work_record, w_id)
+
+        patch = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}",
+            data=json.dumps({"file_path": "/api/pdfs/.."}).encode(),
+            method="PATCH",
+        )
+        patch.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm_patch:
+            urllib.request.urlopen(patch)
+        self.assertEqual(cm_patch.exception.code, 400)
+        patch_body = json.loads(cm_patch.exception.read().decode())
+        self.assertIn("Invalid or unsafe PDF storage path", patch_body.get("error", ""))
+
+    def test_18_delete_work_with_dotdot_file_path_does_not_crash(self):
+        """Delete of a Work whose stored path is ``/api/pdfs/..`` stays safe.
+
+        POST create no longer accepts that path (400); seed via SQL so delete
+        still exercises a pre-existing invalid row without crashing.
+        """
+        req_w = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Dotdot work", "status": "Not Started"}).encode(),
+            method="POST",
+        )
+        req_w.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_w) as rw:
+            w_id = json.loads(rw.read().decode())["id"]
+
+        server_module.db.execute_query(
+            "UPDATE works SET file_path = ? WHERE id = ?",
+            ("/api/pdfs/..", w_id),
+        )
 
         del_req = urllib.request.Request(f"{self._base_url}/api/works/{w_id}", method="DELETE")
         with urllib.request.urlopen(del_req) as rd:
