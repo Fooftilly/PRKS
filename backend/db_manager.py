@@ -6,7 +6,6 @@ import uuid
 import json
 import hashlib
 import html
-import shutil
 import logging
 from collections import Counter, defaultdict
 from contextlib import contextmanager
@@ -30,7 +29,6 @@ from backend.pdf_annotations import (
     round_trip_annotation,
 )
 from backend import pdf_annotation_sync
-from backend.pdf_linearize import maybe_linearize_pdf_in_place
 from backend.performance import (
     classify_sql_write,
     clock_ns,
@@ -1777,14 +1775,26 @@ class PRKSDatabase:
             )
             raise ValueError(msg)
 
-        local_filename = mint_managed_pdf_filename(
-            row.get("filename") or os.path.basename(source_abs)
+        # Publish through the same exclusive + durable managed-PDF store as
+        # ordinary upload/create. Read the inbox once; never shutil.copy2 /
+        # overwrite an existing basename. Linearization runs inside the store
+        # *after* the durability barrier. Remove the inbox only after DB
+        # success — moving first could leave the inbox empty with no Work row.
+        from backend.services.work_pdf_replace import (
+            ManagedPdfStoreError,
+            discard_unowned_managed_pdf,
+            store_new_managed_pdf_bytes,
         )
+        from backend.work_deletion import _remove_managed_pdf
+
         pdfs_dir = self.storage.pdfs_dir
         os.makedirs(pdfs_dir, exist_ok=True)
-        destination_abs = safe_pdf_path_under_dir(pdfs_dir, local_filename)
-        if not destination_abs:
-            msg = "Could not allocate safe destination path for PDF import."
+        original_name = row.get("filename") or os.path.basename(source_abs)
+        try:
+            with open(source_abs, "rb") as fp:
+                body = fp.read()
+        except OSError as e:
+            msg = f"Could not read source PDF: {e}"
             self.execute_query(
                 """
                 UPDATE processing_files
@@ -1795,12 +1805,19 @@ class PRKSDatabase:
             )
             raise ValueError(msg)
 
-        # Copy first, remove inbox only after DB success. Moving before add_work could leave
-        # inbox empty while no work row exists; retry then deletes the processing_files row.
         try:
-            shutil.copy2(source_abs, destination_abs)
-        except Exception as e:
-            msg = f"Could not copy PDF into managed storage: {e}"
+            local_filename = store_new_managed_pdf_bytes(
+                pdfs_dir,
+                original_name,
+                body,
+                linearize_context="processing-import",
+            )
+        except ManagedPdfStoreError as e:
+            # name_taken leaves the pre-existing bytes alone; write_failed has
+            # already discarded any partial exclusive create.
+            msg = e.message or "Could not store PDF into managed storage."
+            if e.reason == "name_taken":
+                msg = "Could not allocate a managed PDF path (name already taken)."
             self.execute_query(
                 """
                 UPDATE processing_files
@@ -1810,18 +1827,33 @@ class PRKSDatabase:
                 (msg, processing_file_id),
             )
             raise ValueError(msg)
-        try:
-            changed, reason = maybe_linearize_pdf_in_place(destination_abs, context="processing-import")
-            LOGGER.info(
-                "pdf_linearize_result context=processing-import changed=%s reason=%s",
-                "true" if changed else "false",
-                safe_log_label(reason),
-            )
         except Exception as e:
-            LOGGER.warning(
-                "pdf_linearize_error context=processing-import error_type=%s",
-                safe_error_type(e),
+            msg = f"Could not store PDF into managed storage: {e}"
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
             )
+            raise ValueError(msg)
+
+        destination_abs = safe_pdf_path_under_dir(pdfs_dir, local_filename)
+        if not destination_abs:
+            # Store returned a name this process cannot contain — discard under
+            # the shared lock before refusing the import.
+            discard_unowned_managed_pdf(pdfs_dir, local_filename, db=self)
+            msg = "Could not allocate safe destination path for PDF import."
+            self.execute_query(
+                """
+                UPDATE processing_files
+                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (msg, processing_file_id),
+            )
+            raise ValueError(msg)
 
         title = (row.get("title") or "").strip() or os.path.splitext(row.get("filename") or "Untitled")[0]
         status_draft = (row.get("status_draft") or "Not Started").strip() or "Not Started"
@@ -1878,30 +1910,23 @@ class PRKSDatabase:
             uncategorized_id = self.ensure_default_uncategorized_folder_id()
             self.add_work_to_folder(fid if fid else uncategorized_id, work_id)
         except Exception as e:
-            can_remove_destination = work_id is None
+            # Survivor-aware rollback: never raw os.remove. After a successful
+            # Work delete, `_remove_managed_pdf` holds managed_pdf_path_lock,
+            # re-asks the live catalogue, unlinks only when unowned, settles
+            # pending_pdf_cleanup only when finished, and fails closed when the
+            # catalogue is unreadable. OSError leaves the claim for retry.
             if work_id:
                 try:
                     self.delete_work_record(work_id)
-                    can_remove_destination = True
                 except Exception:
-                    can_remove_destination = False
-            if can_remove_destination:
-                removed = False
-                try:
-                    os.remove(destination_abs)
-                    removed = True
-                except FileNotFoundError:
-                    removed = True
-                except OSError:
                     pass
-                if removed and work_id:
-                    # Deleting the row claimed this basename for post-delete
-                    # cleanup; the rollback has now removed those bytes itself,
-                    # so the claim is settled here rather than left for a retry
-                    # pass to discover a file that is already gone.
-                    from backend.work_deletion import forget_pending_pdf_cleanup
-
-                    forget_pending_pdf_cleanup(self, local_filename)
+                else:
+                    try:
+                        _remove_managed_pdf(self, local_filename, pdfs_dir)
+                    except OSError:
+                        pass
+            else:
+                discard_unowned_managed_pdf(pdfs_dir, local_filename, db=self)
             msg = f"Failed to insert imported file into works table: {e}"
             self.execute_query(
                 """

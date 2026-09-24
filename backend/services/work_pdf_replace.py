@@ -250,7 +250,13 @@ class ManagedPdfStoreError(Exception):
         self.http_status = http_status
 
 
-def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) -> str:
+def store_new_managed_pdf_bytes(
+    pdfs_dir: str,
+    original_name: str,
+    body: bytes,
+    *,
+    linearize_context: str = "work-create-upload",
+) -> str:
     """Store ``body`` as a brand-new managed PDF; return its basename.
 
     Owns the whole filesystem side of an upload so the HTTP adapter does not:
@@ -274,6 +280,11 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     and the managed directory is synced after. A refused content sync is not a
     stored PDF -- the partial file is removed and ``ManagedPdfStoreError`` is
     raised rather than handing back a name a Work would then reference.
+
+    ``linearize_context`` is log/metadata only. Linearization runs *after* the
+    durability barrier and is never what makes the first write durable.
+    Processing Inbox import uses ``processing-import``; ordinary upload keeps
+    the default ``work-create-upload``.
     """
     os.makedirs(pdfs_dir, exist_ok=True)
     created = False
@@ -325,16 +336,19 @@ def store_new_managed_pdf_bytes(pdfs_dir: str, original_name: str, body: bytes) 
     # before its internal try — `tempfile.mkstemp` sits above it — and letting
     # that escape would fail a good upload and leave it unowned. Never fail the
     # store for it.
+    lin_ctx = str(linearize_context or "work-create-upload").strip() or "work-create-upload"
     try:
-        changed, reason = maybe_linearize_pdf_in_place(fullpath, context="work-create-upload")
+        changed, reason = maybe_linearize_pdf_in_place(fullpath, context=lin_ctx)
         LOGGER.info(
-            "pdf_linearize_result context=work-create-upload changed=%s reason=%s",
+            "pdf_linearize_result context=%s changed=%s reason=%s",
+            safe_log_label(lin_ctx),
             "true" if changed else "false",
             safe_log_label(reason),
         )
     except Exception as exc:
         LOGGER.warning(
-            "pdf_linearize_error context=work-create-upload error_type=%s",
+            "pdf_linearize_error context=%s error_type=%s",
+            safe_log_label(lin_ctx),
             safe_error_type(exc),
         )
     return name
@@ -354,16 +368,27 @@ def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db
     removing that is the data-loss this module exists to prevent; `None` (the
     request referenced an existing `file_path` rather than uploading) is a
     no-op for the same reason.
+
+    The live-reference check and the unlink share ``managed_pdf_path_lock`` —
+    the same lock post-delete cleanup and COW adoption take — so a Work cannot
+    commit ownership of the name in the gap between deciding it is unreferenced
+    and removing the bytes.
     """
     if not stored_name:
         return False
-    # One-directional on purpose: remove only what is proven unreferenced.
-    # `other_works_share_managed_filename` fails closed on a query error, so an
-    # unreadable database keeps the bytes rather than risking a Work's PDF —
-    # and a failure can arrive *after* a commit, when the row does own the file.
-    if db is not None and other_works_share_managed_filename(db, stored_name, exclude_work_id=""):
+    lock = managed_pdf_path_lock(pdfs_dir, stored_name)
+    if lock is None:
         return False
-    return unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
+    with lock:
+        # One-directional on purpose: remove only what is proven unreferenced.
+        # `other_works_share_managed_filename` fails closed on a query error, so an
+        # unreadable database keeps the bytes rather than risking a Work's PDF —
+        # and a failure can arrive *after* a commit, when the row does own the file.
+        if db is not None and other_works_share_managed_filename(
+            db, stored_name, exclude_work_id=""
+        ):
+            return False
+        return unlink_managed_pdf_best_effort(pdfs_dir, stored_name)
 
 
 def unlink_managed_pdf_best_effort(pdfs_dir: str, filename: str) -> bool:
