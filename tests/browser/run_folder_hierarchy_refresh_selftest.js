@@ -52,7 +52,8 @@ function same(label, a, b) {
     ok(label, Object.is(a, b), 'expected ' + JSON.stringify(b) + ', got ' + JSON.stringify(a));
 }
 function hasTitle(html, title) {
-    return String(html || '').indexOf('>' + title + '<') !== -1 || String(html || '').indexOf(title) !== -1;
+    // Require the full span-title boundary so PRE-SYNC-B cannot satisfy PRE-SYNC.
+    return String(html || '').indexOf('>' + title + '<') !== -1;
 }
 function selectedIdFromHtml(html) {
     const m = String(html || '').match(
@@ -422,12 +423,16 @@ async function run() {
         });
         await nextTick();
         same('full+sel gated', gates.length, 2);
-        gates[1].unlock(seedRows);
+        // Distinct titles: if selection-only rebuilt, these would appear.
+        gates[1].unlock([
+            { id: 'old-sel', title: 'SEL-ROWS-A', parent_id: null, child_count: 0 },
+            { id: 'new-sel', title: 'SEL-ROWS-B', parent_id: null, child_count: 0 },
+        ]);
         await pSel;
         // Selection may move is-selected / aria-current; titles/structure must stay.
         ok('sel left PRE-SYNC title', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC'));
         ok('sel left PRE-SYNC-B title', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC-B'));
-        ok('sel did not rebuild PostCreate', !hasTitle(dom.liveHost.innerHTML, 'PostCreate'));
+        ok('sel did not rebuild from its rows', !hasTitle(dom.liveHost.innerHTML, 'SEL-ROWS-A'));
         same('sel moved id', selectedIdFromHtml(dom.liveHost.innerHTML), 'new-sel');
         ok(
             'full still current after sel',
@@ -533,7 +538,7 @@ async function run() {
         await pending[2];
         ok('final v3-final', hasTitle(dom.liveHost.innerHTML, 'v3-final'));
         ok('final Other', hasTitle(dom.liveHost.innerHTML, 'Other'));
-        ok('not v1', !hasTitle(dom.liveHost.innerHTML, '>v1<'));
+        ok('not v1', !hasTitle(dom.liveHost.innerHTML, 'v1'));
         prksDestroyAllTabContexts();
     }
 }
