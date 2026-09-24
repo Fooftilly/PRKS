@@ -27,7 +27,6 @@ from backend.db_manager import (
     BulkWorkError,
     MissingPersonError,
     effective_source_kind,
-    SavedViewError,
     managed_pdf_filename,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
@@ -37,6 +36,7 @@ from backend.db_manager import (
     prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
+from backend.api import saved_views as saved_views_api
 from backend.services import work_pdf_replace
 from backend.text_index import (
     PRKSTextIndex,
@@ -1244,31 +1244,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, db.get_app_settings_response())
-            elif path.startswith('/api/saved-views/') and len(path.split('/')) == 4:
-                vid = unquote(path.split('/')[-1])
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                has_name = 'name' in data
-                has_search = 'search' in data
-                if not has_name and not has_search:
-                    self.send_json(400, {'error': 'Nothing to update.'})
-                    return
-                try:
-                    view = db.update_saved_view(
-                        vid,
-                        name=data.get('name') if has_name else None,
-                        search=data.get('search') if has_search else None,
-                    )
-                except SavedViewError as e:
-                    self.send_json(int(e.http_status), {'error': str(e)})
-                    return
-                LOGGER.info(
-                    "saved_view_updated view_id=%s definition_changed=%s",
-                    safe_log_id(view.get("id")),
-                    "true" if has_search else "false",
-                )
-                self.send_json(200, view)
+            elif saved_views_api.handle_patch(self, db, path, data):
+                return
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
                 if not isinstance(data, dict):
@@ -1564,18 +1541,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, {'status': 'deleted'})
                 else:
                     self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/saved-views/') and len(path.split('/')) == 4:
-                vid = unquote(path.split('/')[-1])
-                try:
-                    db.delete_saved_view(vid)
-                except SavedViewError as e:
-                    self.send_json(int(e.http_status), {'error': str(e)})
-                    return
-                LOGGER.info(
-                    "saved_view_deleted view_id=%s",
-                    safe_log_id(vid),
-                )
-                self.send_json(200, {'status': 'deleted'})
+            elif saved_views_api.handle_delete(self, db, path):
+                return
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
                 try:
@@ -2266,15 +2233,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data)
                 else:
                     self.send_error(404, "Group not found")
-            elif path == '/api/saved-views':
-                self.send_json(200, db.get_saved_views())
-            elif path.startswith('/api/saved-views/') and len(path.split('/')) == 4:
-                vid = unquote(path.split('/')[-1])
-                data = db.get_saved_view(vid)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_json(404, {'error': 'Saved View not found.'})
+            elif saved_views_api.handle_get(self, db, path):
+                return
             elif path == '/api/research-graph':
                 raw_people = (query.get('people') or [''])[0].strip().lower()
                 include_people = raw_people in ('1', 'true', 'yes', 'on')
@@ -3081,21 +3041,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                 else:
                     self.send_json(200, {'id': g_id})
-            elif path == '/api/saved-views':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    view = db.create_saved_view(data.get('name'), data.get('search'))
-                except SavedViewError as e:
-                    self.send_json(int(e.http_status), {'error': str(e)})
-                    return
-                LOGGER.info(
-                    "saved_view_created view_id=%s mode=%s",
-                    safe_log_id(view.get("id")),
-                    safe_log_label((view.get("search") or {}).get("mode")),
-                )
-                self.send_json(201, view)
+            elif saved_views_api.handle_post(self, db, path, data):
+                return
             elif path == '/api/concepts':
                 if not isinstance(data, dict):
                     self.send_json(400, {'error': 'JSON object body required'})

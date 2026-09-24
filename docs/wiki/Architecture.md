@@ -44,7 +44,8 @@ The frontend under `frontend/` is a browser SPA composed from vanilla JavaScript
 
 Important backend areas include:
 
-- `backend/server.py` — HTTP/API routing and request handling.
+- `backend/server.py` — HTTP adapter lifecycle and method dispatch.
+- `backend/api/` — optional domain HTTP controllers extracted from `server.py` (parse/validate, invoke domain, map errors). First family: Saved Views.
 - `backend/db_manager.py` — database access and canonical persistence operations.
 - `backend/db_migrations.py` and `backend/db_schema.sql` — schema evolution and baseline schema.
 - `backend/concurrency.py` — storage-access coordination.
