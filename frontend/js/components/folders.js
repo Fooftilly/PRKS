@@ -1265,6 +1265,30 @@ function prksFolderDetailSelectInTree(host, folderId, rows) {
 }
 
 /**
+ * Claim a Folder-detail hierarchy refresh token for `mode`, or null when the
+ * TabContext cannot begin (destroyed / API absent). Shared by the initial
+ * claim and the selection-fallback full claim so Sonar does not flag the
+ * begin+commitAllowed shape twice in prksFillFolderDetailTree.
+ */
+function prksBeginFolderHierarchyRefresh(ctx, mode) {
+    return ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
+        ? ctx.beginFolderHierarchyRefresh(mode)
+        : null;
+}
+
+/**
+ * True when this claim may still write the live hierarchy host.
+ * Handles destroyed-ctx (null token) the same way at both gate sites.
+ */
+function prksFolderHierarchyClaimMayCommit(ctx, token, container, signal) {
+    if (token == null && ctx && ctx.destroyed) return false;
+    return (
+        typeof prksFolderHierarchyTreeCommitAllowed === 'function' &&
+        prksFolderHierarchyTreeCommitAllowed(ctx, token, container, signal)
+    );
+}
+
+/**
  * Live Folder-detail hierarchy refill. Same-route overlap ownership uses
  * TabContext beginFolderHierarchyRefresh(mode) / prksFolderHierarchyTreeCommitAllowed
  * so an older async catalogue result cannot overwrite a newer committed tree.
@@ -1288,10 +1312,12 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     // Mode-aware ownership: full vs selection use separate counters so a
     // Folder→Folder in-place selection fill cannot invalidate a pending sync
     // full refill. Fallback rebuilds claim full below.
-    const refreshToken =
-        ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
-            ? ctx.beginFolderHierarchyRefresh(selectionOnly ? 'selection' : 'full')
-            : null;
+    const refreshToken = prksBeginFolderHierarchyRefresh(
+        ctx,
+        selectionOnly ? 'selection' : 'full'
+    );
+    // Destroyed before await: begin returned null. After await we re-check via
+    // prksFolderHierarchyClaimMayCommit.
     if (refreshToken == null && ctx && ctx.destroyed) return;
     const load =
         typeof prksLoadFolderHierarchyCatalogue === 'function'
@@ -1307,10 +1333,7 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
             rows = null;
         }
     }
-    if (
-        typeof prksFolderHierarchyTreeCommitAllowed !== 'function' ||
-        !prksFolderHierarchyTreeCommitAllowed(ctx, refreshToken, container, signal)
-    ) {
+    if (!prksFolderHierarchyClaimMayCommit(ctx, refreshToken, container, signal)) {
         return;
     }
     const liveHost = container.querySelector('[data-prks-folder-detail-tree-host]');
@@ -1339,15 +1362,8 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     // in-flight full cannot overwrite this newer tree. The successful in-place
     // select path above does not bump full and leaves pending fulls current.
     if (selectionOnly) {
-        const fullClaim =
-            ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
-                ? ctx.beginFolderHierarchyRefresh('full')
-                : null;
-        if (fullClaim == null && ctx && ctx.destroyed) return;
-        if (
-            typeof prksFolderHierarchyTreeCommitAllowed !== 'function' ||
-            !prksFolderHierarchyTreeCommitAllowed(ctx, fullClaim, container, signal)
-        ) {
+        const fullClaim = prksBeginFolderHierarchyRefresh(ctx, 'full');
+        if (!prksFolderHierarchyClaimMayCommit(ctx, fullClaim, container, signal)) {
             return;
         }
     }

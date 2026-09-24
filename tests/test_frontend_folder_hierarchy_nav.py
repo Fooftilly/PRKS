@@ -107,7 +107,8 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("prksFolderHierarchyTreeCommitAllowed", folders)
         # Selection-only fallback rebuild must claim full ownership (#161 P1).
         self.assertIn("Claim full ownership before writing", folders)
-        self.assertIn("beginFolderHierarchyRefresh('full')", folders)
+        self.assertIn("prksBeginFolderHierarchyRefresh(ctx, 'full')", folders)
+        self.assertIn("function prksFolderHierarchyClaimMayCommit", folders)
         tab_ctx = _read(os.path.join(_ROOT, "frontend", "js", "tab-context.js"))
         self.assertIn("folderHierarchyFullGeneration", tab_ctx)
         self.assertIn("folderHierarchySelectionGeneration", tab_ctx)

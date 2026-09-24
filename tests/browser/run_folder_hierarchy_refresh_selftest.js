@@ -264,6 +264,59 @@ function mountCtx(id, folder) {
     return ctx;
 }
 
+function row(id, title, parentId, childCount) {
+    return {
+        id: id,
+        title: title,
+        parent_id: parentId == null ? null : parentId,
+        child_count: childCount || 0,
+    };
+}
+
+function assertTitles(prefix, html, present, absent) {
+    (present || []).forEach(function (t) {
+        ok(prefix + ' has ' + t, hasTitle(html, t));
+    });
+    (absent || []).forEach(function (t) {
+        ok(prefix + ' lacks ' + t, !hasTitle(html, t));
+    });
+}
+
+/** Start fills under one deferred-load queue. Each step may setEntity then fill. */
+async function startDeferredRace(ctx, container, steps) {
+    const gates = [];
+    installDeferredLoad(gates);
+    const pending = steps.map(function (step) {
+        if (step.entity) ctx.setEntity('folder', step.entity);
+        const folder = step.folder || step.entity;
+        return fillTree(ctx, folder, container, {
+            selectionOnly: !!step.selectionOnly,
+        });
+    });
+    await nextTick();
+    return { gates: gates, pending: pending };
+}
+
+async function unlockAwait(gates, pending, index, rows) {
+    gates[index].unlock(rows);
+    await pending[index];
+}
+
+/**
+ * Classic two-fill race: settle newer (index 1) first, snapshot, settle older,
+ * assert HTML unchanged and optional title/selection checks.
+ */
+async function settleNewerWins(label, race, liveHost, newerRows, olderRows, afterNewer) {
+    same(label + ' gated', race.gates.length, 2);
+    await unlockAwait(race.gates, race.pending, 1, newerRows);
+    const html = liveHost.innerHTML;
+    if (afterNewer) afterNewer(html);
+    const snap = liveHost.innerHTML;
+    await unlockAwait(race.gates, race.pending, 0, olderRows);
+    same(label + ' older did not overwrite', liveHost.innerHTML, snap);
+    return snap;
+}
+
 async function run() {
     ok('prksFillFolderDetailTree exported', typeof fillTree === 'function');
     prksDestroyAllTabContexts();
@@ -310,23 +363,20 @@ async function run() {
         const savedAC = global.AbortController;
         try {
             delete global.AbortController;
+            const loadingHtml = '<p class="prks-inline-message">Loading…</p>';
             const ctx = mountCtx('no-ac', { id: 'x', title: 'Old' });
-            const dom = detailTreeDom('<p class="prks-inline-message">Loading…</p>');
-            const gates = [];
-            installDeferredLoad(gates);
-            const pending = fillTree(ctx, { id: 'x', title: 'Old' }, dom.container, {
-                selectionOnly: false,
-            });
-            await nextTick();
+            const dom = detailTreeDom(loadingHtml);
+            const race = await startDeferredRace(ctx, dom.container, [
+                { folder: { id: 'x', title: 'Old' } },
+            ]);
             same('stub never aborts', ctx.abortController.signal.aborted, false);
             const inFlight = { mode: 'full', gen: 1 };
             ok('in-flight full current before route', ctx.isFolderHierarchyRefreshCurrent(inFlight));
             ctx.beginRoute({ name: 'folder-detail' });
             same('stub still not aborted', ctx.abortController.signal.aborted, false);
             ok('route bump stale without abort', !ctx.isFolderHierarchyRefreshCurrent(inFlight));
-            gates[0].unlock([{ id: 'x', title: 'Old', parent_id: null, child_count: 0 }]);
-            await pending;
-            same('no topology write', dom.liveHost.innerHTML, '<p class="prks-inline-message">Loading…</p>');
+            await unlockAwait(race.gates, race.pending, 0, [row('x', 'Old')]);
+            same('no topology write', dom.liveHost.innerHTML, loadingHtml);
             const post = ctx.beginFolderHierarchyRefresh('full');
             ok('post-route token current', ctx.isFolderHierarchyRefreshCurrent(post));
             ok('post-route gen not reused as 1', post.gen !== 1);
@@ -365,217 +415,166 @@ async function run() {
         prksDestroyAllTabContexts();
     }
 
-    // --- Overlapping full A then B against real fill; B first; stale A cannot overwrite ---
+    // --- Overlapping full A then B; B first; stale A cannot overwrite ---
     {
-        const ctx = mountCtx('race', { id: 'alpha', title: 'Alpha' });
+        const folder = { id: 'alpha', title: 'Alpha' };
+        const ctx = mountCtx('race', folder);
         const dom = detailTreeDom('');
-        const gates = [];
-        installDeferredLoad(gates);
-        const pA = fillTree(ctx, { id: 'alpha', title: 'Alpha' }, dom.container, {
-            selectionOnly: false,
-        });
-        const pB = fillTree(ctx, { id: 'alpha', title: 'Alpha' }, dom.container, {
-            selectionOnly: false,
-        });
-        await nextTick();
-        same('race gated', gates.length, 2);
-        gates[1].unlock([
-            { id: 'alpha', title: 'Alpha-NEW', parent_id: null, child_count: 1 },
-            { id: 'child', title: 'Child-NEW', parent_id: 'alpha', child_count: 0 },
+        const race = await startDeferredRace(ctx, dom.container, [
+            { folder: folder },
+            { folder: folder },
         ]);
-        await pB;
-        ok('B topology Alpha-NEW', hasTitle(dom.liveHost.innerHTML, 'Alpha-NEW'));
-        ok('B topology Child-NEW', hasTitle(dom.liveHost.innerHTML, 'Child-NEW'));
-        const afterB = dom.liveHost.innerHTML;
-        gates[0].unlock([
-            { id: 'alpha', title: 'Alpha-OLD', parent_id: null, child_count: 1 },
-            { id: 'legacy', title: 'Legacy', parent_id: 'alpha', child_count: 0 },
-        ]);
-        await pA;
-        same('A did not overwrite', dom.liveHost.innerHTML, afterB);
-        ok('A titles absent', !hasTitle(dom.liveHost.innerHTML, 'Alpha-OLD'));
+        await settleNewerWins(
+            'race',
+            race,
+            dom.liveHost,
+            [row('alpha', 'Alpha-NEW', null, 1), row('child', 'Child-NEW', 'alpha')],
+            [row('alpha', 'Alpha-OLD', null, 1), row('legacy', 'Legacy', 'alpha')],
+            function (html) {
+                assertTitles('B topology', html, ['Alpha-NEW', 'Child-NEW']);
+            }
+        );
+        assertTitles('after A', dom.liveHost.innerHTML, null, ['Alpha-OLD']);
         prksDestroyAllTabContexts();
     }
 
     // --- P1: full starts first; selection-only finishes first; full still commits ---
     {
-        const ctx = mountCtx('full-vs-sel', { id: 'old-sel', title: 'Old' });
-        const seedRows = [
-            { id: 'old-sel', title: 'PRE-SYNC', parent_id: null, child_count: 0 },
-            { id: 'new-sel', title: 'PRE-SYNC-B', parent_id: null, child_count: 0 },
-        ];
-        installSyncLoad(seedRows);
+        const oldF = { id: 'old-sel', title: 'Old' };
+        const newF = { id: 'new-sel', title: 'New' };
+        const ctx = mountCtx('full-vs-sel', oldF);
         const dom = detailTreeDom('');
-        await fillTree(ctx, { id: 'old-sel', title: 'Old' }, dom.container, {
-            selectionOnly: false,
-        });
+        installSyncLoad([row('old-sel', 'PRE-SYNC'), row('new-sel', 'PRE-SYNC-B')]);
+        await fillTree(ctx, oldF, dom.container, { selectionOnly: false });
         ok('seed has PRE-SYNC', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC'));
         same('seed selected old-sel', selectedIdFromHtml(dom.liveHost.innerHTML), 'old-sel');
 
-        const gates = [];
-        installDeferredLoad(gates);
-        const pFull = fillTree(ctx, { id: 'old-sel', title: 'Old' }, dom.container, {
-            selectionOnly: false,
-        });
-        ctx.setEntity('folder', { id: 'new-sel', title: 'New' });
-        const pSel = fillTree(ctx, { id: 'new-sel', title: 'New' }, dom.container, {
-            selectionOnly: true,
-        });
-        await nextTick();
-        same('full+sel gated', gates.length, 2);
-        // Distinct titles: if selection-only rebuilt, these would appear.
-        gates[1].unlock([
-            { id: 'old-sel', title: 'SEL-ROWS-A', parent_id: null, child_count: 0 },
-            { id: 'new-sel', title: 'SEL-ROWS-B', parent_id: null, child_count: 0 },
+        const race = await startDeferredRace(ctx, dom.container, [
+            { folder: oldF },
+            { entity: newF, selectionOnly: true },
         ]);
-        await pSel;
-        // Selection may move is-selected / aria-current; titles/structure must stay.
-        ok('sel left PRE-SYNC title', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC'));
-        ok('sel left PRE-SYNC-B title', hasTitle(dom.liveHost.innerHTML, 'PRE-SYNC-B'));
-        ok('sel did not rebuild from its rows', !hasTitle(dom.liveHost.innerHTML, 'SEL-ROWS-A'));
+        same('full+sel gated', race.gates.length, 2);
+        await unlockAwait(race.gates, race.pending, 1, [
+            row('old-sel', 'SEL-ROWS-A'),
+            row('new-sel', 'SEL-ROWS-B'),
+        ]);
+        assertTitles('sel left seed', dom.liveHost.innerHTML, ['PRE-SYNC', 'PRE-SYNC-B'], [
+            'SEL-ROWS-A',
+        ]);
         same('sel moved id', selectedIdFromHtml(dom.liveHost.innerHTML), 'new-sel');
         ok(
             'full still current after sel',
             ctx.isFolderHierarchyRefreshCurrent({ mode: 'full', gen: 2 })
         );
-        gates[0].unlock([
-            { id: 'old-sel', title: 'PostCreate', parent_id: null, child_count: 0 },
-            { id: 'new-sel', title: 'PostCreateChild', parent_id: null, child_count: 0 },
-            { id: 'extra', title: 'Extra', parent_id: null, child_count: 0 },
+        await unlockAwait(race.gates, race.pending, 0, [
+            row('old-sel', 'PostCreate'),
+            row('new-sel', 'PostCreateChild'),
+            row('extra', 'Extra'),
         ]);
-        await pFull;
-        ok('full topology PostCreate', hasTitle(dom.liveHost.innerHTML, 'PostCreate'));
-        ok('full topology Extra', hasTitle(dom.liveHost.innerHTML, 'Extra'));
+        assertTitles('full topology', dom.liveHost.innerHTML, ['PostCreate', 'Extra']);
         same('full used live selection', selectedIdFromHtml(dom.liveHost.innerHTML), 'new-sel');
         prksDestroyAllTabContexts();
     }
 
     // --- P1: selection-only fallback rebuild claims full; older full A rejected ---
-    // Tree still loading (no detail-nav / destination absent) → select fails →
-    // B rebuilds with newer rows and must supersede in-flight full A.
+    // Empty/loading host → select fails → B rebuilds and supersedes in-flight full A.
     {
-        const ctx = mountCtx('sel-fallback', { id: 'old', title: 'Old' });
+        const oldF = { id: 'old', title: 'Old' };
+        const newF = { id: 'new', title: 'New' };
+        const ctx = mountCtx('sel-fallback', oldF);
         const dom = detailTreeDom('<p class="loading">LOADING</p>');
-        const gates = [];
-        installDeferredLoad(gates);
-        const pFull = fillTree(ctx, { id: 'old', title: 'Old' }, dom.container, {
-            selectionOnly: false,
-        });
-        ctx.setEntity('folder', { id: 'new', title: 'New' });
-        const pSel = fillTree(ctx, { id: 'new', title: 'New' }, dom.container, {
-            selectionOnly: true,
-        });
-        await nextTick();
-        same('fallback gated', gates.length, 2);
-        gates[1].unlock([
-            { id: 'old', title: 'NEW-TOPO-OLD', parent_id: null, child_count: 0 },
-            { id: 'new', title: 'NEW-TOPO-NEW', parent_id: null, child_count: 0 },
+        const race = await startDeferredRace(ctx, dom.container, [
+            { folder: oldF },
+            { entity: newF, selectionOnly: true },
         ]);
-        await pSel;
-        ok('B rebuilt NEW-TOPO-NEW', hasTitle(dom.liveHost.innerHTML, 'NEW-TOPO-NEW'));
-        ok('B rebuilt NEW-TOPO-OLD', hasTitle(dom.liveHost.innerHTML, 'NEW-TOPO-OLD'));
-        same('B selected new', selectedIdFromHtml(dom.liveHost.innerHTML), 'new');
-        ok(
-            'full A stale after B fallback claim',
-            !ctx.isFolderHierarchyRefreshCurrent({ mode: 'full', gen: 1 })
+        await settleNewerWins(
+            'fallback',
+            race,
+            dom.liveHost,
+            [row('old', 'NEW-TOPO-OLD'), row('new', 'NEW-TOPO-NEW')],
+            [row('old', 'OLD-TOPO')],
+            function (html) {
+                assertTitles('B rebuilt', html, ['NEW-TOPO-NEW', 'NEW-TOPO-OLD']);
+                same('B selected new', selectedIdFromHtml(html), 'new');
+                ok(
+                    'full A stale after B fallback claim',
+                    !ctx.isFolderHierarchyRefreshCurrent({ mode: 'full', gen: 1 })
+                );
+            }
         );
-        const afterB = dom.liveHost.innerHTML;
-        gates[0].unlock([{ id: 'old', title: 'OLD-TOPO', parent_id: null, child_count: 0 }]);
-        await pFull;
-        same('A did not overwrite B fallback', dom.liveHost.innerHTML, afterB);
-        ok('OLD-TOPO absent', !hasTitle(dom.liveHost.innerHTML, 'OLD-TOPO'));
+        assertTitles('after A', dom.liveHost.innerHTML, null, ['OLD-TOPO']);
         prksDestroyAllTabContexts();
     }
 
     // --- Selection race: newer full; stale full cannot restore ---
     {
-        const ctx = mountCtx('sel', { id: 'a-sel', title: 'A' });
+        const aF = { id: 'a-sel', title: 'A' };
+        const bF = { id: 'b-sel', title: 'B' };
+        const ctx = mountCtx('sel', aF);
         const dom = detailTreeDom('');
-        const gates = [];
-        installDeferredLoad(gates);
-        const pA = fillTree(ctx, { id: 'a-sel', title: 'A' }, dom.container, {
-            selectionOnly: false,
-        });
-        ctx.setEntity('folder', { id: 'b-sel', title: 'B' });
-        const pB = fillTree(ctx, { id: 'b-sel', title: 'B' }, dom.container, {
-            selectionOnly: false,
-        });
-        await nextTick();
-        gates[1].unlock([
-            { id: 'b-sel', title: 'Select-B', parent_id: null, child_count: 0 },
-            { id: 'c-sel', title: 'Select-C', parent_id: null, child_count: 0 },
+        const race = await startDeferredRace(ctx, dom.container, [
+            { folder: aF },
+            { entity: bF },
         ]);
-        await pB;
-        ok('sel B marker', hasTitle(dom.liveHost.innerHTML, 'Select-B'));
-        ok('sel B has C', hasTitle(dom.liveHost.innerHTML, 'Select-C'));
-        same('sel B id', selectedIdFromHtml(dom.liveHost.innerHTML), 'b-sel');
-        const afterB = dom.liveHost.innerHTML;
-        gates[0].unlock([
-            { id: 'a-sel', title: 'Select-A', parent_id: null, child_count: 0 },
-            { id: 'b-sel', title: 'Select-B', parent_id: null, child_count: 0 },
-        ]);
-        await pA;
-        same('sel kept B tree', dom.liveHost.innerHTML, afterB);
+        await settleNewerWins(
+            'sel',
+            race,
+            dom.liveHost,
+            [row('b-sel', 'Select-B'), row('c-sel', 'Select-C')],
+            [row('a-sel', 'Select-A'), row('b-sel', 'Select-B')],
+            function (html) {
+                assertTitles('sel B', html, ['Select-B', 'Select-C']);
+                same('sel B id', selectedIdFromHtml(html), 'b-sel');
+            }
+        );
         same('sel still b-sel', selectedIdFromHtml(dom.liveHost.innerHTML), 'b-sel');
         prksDestroyAllTabContexts();
     }
 
     // --- Destroy mid-flight: no commit, no throw ---
     {
+        const loadingHtml = '<p class="loading">LOADING</p>';
         const ctx = mountCtx('unmount', { id: 'u1', title: 'U' });
-        const dom = detailTreeDom('<p class="loading">LOADING</p>');
-        const gates = [];
-        installDeferredLoad(gates);
-        const pending = fillTree(ctx, { id: 'u1', title: 'U' }, dom.container, {
-            selectionOnly: false,
-        });
-        await nextTick();
+        const dom = detailTreeDom(loadingHtml);
+        const race = await startDeferredRace(ctx, dom.container, [
+            { folder: { id: 'u1', title: 'U' } },
+        ]);
         ctx.destroy();
-        gates[0].unlock([{ id: 'u1', title: 'Should-Not-Commit', parent_id: null, child_count: 0 }]);
         let threw = false;
         try {
-            await pending;
+            await unlockAwait(race.gates, race.pending, 0, [row('u1', 'Should-Not-Commit')]);
         } catch (_e) {
             threw = true;
         }
         ok('destroy no throw', !threw);
-        same('destroy no commit', dom.liveHost.innerHTML, '<p class="loading">LOADING</p>');
+        same('destroy no commit', dom.liveHost.innerHTML, loadingHtml);
         prksDestroyAllTabContexts();
     }
 
     // --- Rapid CREATE/rename/DELETE-style triggers: final = latest ---
     {
-        const ctx = mountCtx('rapid', { id: 'root', title: 'Root' });
+        const root = { id: 'root', title: 'Root' };
+        const ctx = mountCtx('rapid', root);
         const dom = detailTreeDom('');
-        const gates = [];
-        installDeferredLoad(gates);
         const snaps = [
-            [{ id: 'root', title: 'v1', parent_id: null, child_count: 0 }],
-            [
-                { id: 'root', title: 'v2-renamed', parent_id: null, child_count: 1 },
-                { id: 'kid', title: 'Kid', parent_id: 'root', child_count: 0 },
-            ],
-            [
-                { id: 'root', title: 'v3-final', parent_id: null, child_count: 1 },
-                { id: 'other', title: 'Other', parent_id: 'root', child_count: 0 },
-            ],
+            [row('root', 'v1')],
+            [row('root', 'v2-renamed', null, 1), row('kid', 'Kid', 'root')],
+            [row('root', 'v3-final', null, 1), row('other', 'Other', 'root')],
         ];
-        const pending = snaps.map(function () {
-            return fillTree(ctx, { id: 'root', title: 'Root' }, dom.container, {
-                selectionOnly: false,
-            });
-        });
-        await nextTick();
-        same('rapid gated', gates.length, 3);
-        gates[1].unlock(snaps[1]);
-        await pending[1];
-        gates[0].unlock(snaps[0]);
-        await pending[0];
-        gates[2].unlock(snaps[2]);
-        await pending[2];
-        ok('final v3-final', hasTitle(dom.liveHost.innerHTML, 'v3-final'));
-        ok('final Other', hasTitle(dom.liveHost.innerHTML, 'Other'));
-        ok('not v1', !hasTitle(dom.liveHost.innerHTML, 'v1'));
+        const race = await startDeferredRace(
+            ctx,
+            dom.container,
+            snaps.map(function () {
+                return { folder: root };
+            })
+        );
+        same('rapid gated', race.gates.length, 3);
+        const order = [1, 0, 2];
+        for (let i = 0; i < order.length; i++) {
+            const idx = order[i];
+            await unlockAwait(race.gates, race.pending, idx, snaps[idx]);
+        }
+        assertTitles('final', dom.liveHost.innerHTML, ['v3-final', 'Other'], ['v1']);
         prksDestroyAllTabContexts();
     }
 }
