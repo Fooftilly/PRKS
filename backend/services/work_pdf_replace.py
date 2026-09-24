@@ -260,18 +260,21 @@ _STORE_COPY_CHUNK = 1024 * 1024
 def managed_pdf_adoption_guard(pdfs_dir: str, file_path_value):
     """Serialize claiming an EXISTING managed PDF with post-delete cleanup.
 
-    Yields the managed basename when ``file_path_value`` resolves to a managed
-    PDF under the same identity cleanup uses
-    (``referenced_managed_pdf_filename``), or ``None`` when it does not (video
-    Work, empty path, non-managed URL). Callers must persist the canonical
-    ownership form ``/api/pdfs/<yielded>`` — never the raw input spelling.
+    Yields the managed basename when ``file_path_value`` is a trimmed-canonical
+    ownership path (``/api/pdfs/<name>``, outer whitespace OK), or ``None`` when
+    the caller is not adopting managed bytes (video Work, empty path,
+    non-managed URL). Callers must persist ``/api/pdfs/<yielded>``.
 
-    Lock identity deliberately matches cleanup, not exact
-    ``managed_pdf_filename()``. Exact ownership is intentionally strict
-    (``" /api/pdfs/foo.pdf "`` is not ownership), but cleanup and the frontend
-    trim and still treat that spelling as a reference to ``foo.pdf``. Guarding
-    only the exact form let a concurrent create/PATCH with outer whitespace
-    commit outside the lock while cleanup unlinked under it.
+    Adoption deliberately does **not** use ``referenced_managed_pdf_filename``.
+    That helper is cleanup-only and over-approximates via
+    ``basename(unquote(...))``, which would let
+    ``/api/pdfs/subdir%2Ffoo.pdf`` lock and persist ``foo.pdf``. Exact
+    ownership/serving must reject encoded slash and other non-canonical
+    spellings with ``invalid_file_name`` instead of aliasing.
+
+    Outer whitespace is stripped once, then ``managed_pdf_filename`` must
+    accept the result — the same exact rules as ownership, after the one
+    trim the frontend already applies.
 
     While yielding, this holds ``managed_pdf_path_lock`` and has re-confirmed
     the contained file still exists. Cleanup that won the race unlinks under
@@ -282,20 +285,10 @@ def managed_pdf_adoption_guard(pdfs_dir: str, file_path_value):
     Uploads that just minted an exclusive name must not use this guard — they
     own bytes no cleanup could have claimed.
     """
-    # Same over-approximation cleanup uses when deciding whether bytes are
-    # still referenced — not exact managed_pdf_filename().
-    name = referenced_managed_pdf_filename(str(file_path_value or ""))
+    name = _adoption_managed_basename(file_path_value)
     if not name:
         yield None
         return
-    # A basename cleanup / serving would accept must still be a legal exact
-    # ownership spelling once rewritten to /api/pdfs/<name>.
-    if managed_pdf_filename(f"/api/pdfs/{name}") != name:
-        raise ManagedPdfStoreError(
-            "invalid_file_name",
-            "Invalid or unsafe PDF storage path",
-            http_status=400,
-        )
     lock = managed_pdf_path_lock(pdfs_dir, name)
     if lock is None:
         raise ManagedPdfStoreError(
@@ -312,6 +305,34 @@ def managed_pdf_adoption_guard(pdfs_dir: str, file_path_value):
                 http_status=409,
             )
         yield name
+
+
+def _adoption_managed_basename(file_path_value) -> Optional[str]:
+    """Return the basename to adopt, or ``None`` if this is not a managed adopt.
+
+    After stripping outer whitespace the path must be exact
+    ``/api/pdfs/<name>`` (``managed_pdf_filename``). A trimmed value that still
+    looks managed but fails that exact check — encoded ``%2F``, traversal,
+    nested segments — raises ``invalid_file_name`` so adoption cannot alias
+    through cleanup's broader parser.
+    """
+    trimmed = str(file_path_value or "").strip()
+    if not trimmed:
+        return None
+    name = managed_pdf_filename(trimmed)
+    if name is not None:
+        return name
+    # Looks like a managed path (or would under cleanup's loose parser) but is
+    # not an exact ownership spelling — refuse rather than alias.
+    if trimmed.startswith("/api/pdfs/") or referenced_managed_pdf_filename(
+        trimmed
+    ):
+        raise ManagedPdfStoreError(
+            "invalid_file_name",
+            "Invalid or unsafe PDF storage path",
+            http_status=400,
+        )
+    return None
 
 
 def _exclusive_managed_create_paths(

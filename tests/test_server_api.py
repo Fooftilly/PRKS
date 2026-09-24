@@ -274,10 +274,137 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(rows[0]["title"], "Renamed without retargeting")
         self.assertEqual(rows[0]["file_path"], fp)
 
-    def test_create_with_whitespace_file_path_stores_canonical_and_holds_lock(self):
-        """Owner P2 on #172: non-canonical managed spelling must still lock
-        and persist only the exact /api/pdfs/<name> ownership form.
+    def test_patch_same_path_drop_survives_concurrent_retarget_cleanup(self):
+        """Owner P2 TOCTOU on #172: same-path PATCH must drop file_path so a
+        concurrent retarget + cleanup cannot be overwritten without the guard.
+
+        Barriers: after the pre-read SELECT, retarget Work to b.pdf and unlink
+        a.pdf under its lock; the PATCH then commits without rewriting
+        file_path and must leave Work on b.pdf (not missing a.pdf).
         """
+        from backend.services import work_pdf_replace
+
+        name_a = "toctou-a.pdf"
+        name_b = "toctou-b.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path_a = os.path.join(pdfs_dir, name_a)
+        path_b = os.path.join(pdfs_dir, name_b)
+        with open(path_a, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%A\n%%EOF\n")
+        with open(path_b, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%B\n%%EOF\n")
+        fp_a = f"/api/pdfs/{name_a}"
+        fp_b = f"/api/pdfs/{name_b}"
+        work_id = server_module.db.add_work("TOCTOU work", file_path=fp_a)
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+
+        select_passed = threading.Event()
+        retarget_done = threading.Event()
+        observed = {"update_fields": None, "selects": 0}
+        real_eq = server_module.db.execute_query
+        real_update = server_module.db.update_work_metadata
+
+        def watching_eq(sql, params=(), *args, **kwargs):
+            rows = real_eq(sql, params, *args, **kwargs)
+            if (
+                isinstance(sql, str)
+                and "SELECT file_path FROM works WHERE id" in sql
+                and params
+                and params[0] == work_id
+            ):
+                observed["selects"] += 1
+                if observed["selects"] == 1:
+                    select_passed.set()
+                    self.assertTrue(retarget_done.wait(timeout=5))
+            return rows
+
+        def watching_update(wid, fields):
+            observed["update_fields"] = dict(fields)
+            return real_update(wid, fields)
+
+        def concurrent_retarget_and_cleanup():
+            self.assertTrue(select_passed.wait(timeout=5))
+            # Retarget ownership away from a.pdf (direct SQL: this is the B
+            # writer in the race, already past its own adoption boundary).
+            server_module.db.execute_query(
+                "UPDATE works SET file_path = ? WHERE id = ?",
+                (fp_b, work_id),
+            )
+            lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name_a)
+            self.assertIsNotNone(lock)
+            with lock:
+                # No live referrer to a.pdf after the retarget.
+                if os.path.isfile(path_a):
+                    os.remove(path_a)
+            retarget_done.set()
+
+        racer = threading.Thread(target=concurrent_retarget_and_cleanup, daemon=True)
+        racer.start()
+        payload = json.dumps({
+            "title": "Title after race",
+            "file_path": fp_a,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with patch.object(server_module.db, "execute_query", side_effect=watching_eq):
+            with patch.object(
+                server_module.db, "update_work_metadata", side_effect=watching_update
+            ):
+                with urllib.request.urlopen(req) as res:
+                    self.assertEqual(res.status, 200)
+        racer.join(timeout=5)
+        self.assertFalse(racer.is_alive())
+
+        self.assertIsNotNone(observed["update_fields"])
+        self.assertNotIn(
+            "file_path",
+            observed["update_fields"],
+            "unchanged echo must drop file_path so it cannot rewrite after retarget",
+        )
+        rows = server_module.db.execute_query(
+            "SELECT title, file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["title"], "Title after race")
+        self.assertEqual(rows[0]["file_path"], fp_b)
+        self.assertFalse(os.path.isfile(path_a))
+        self.assertTrue(os.path.isfile(path_b))
+
+    def test_create_rejects_encoded_slash_file_path_alias(self):
+        """Owner P2: adoption must not follow cleanup's basename(unquote) alias."""
+        name = "encode-alias.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ENC\n%%EOF\n")
+        payload = json.dumps({
+            "title": "Encoded slash adopt",
+            "file_path": f"/api/pdfs/subdir%2F{name}",
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+        body = json.loads(cm.exception.read().decode())
+        self.assertIn("error", body)
+        # No Work should have been created pointing at the aliased basename.
+        rows = server_module.db.execute_query(
+            "SELECT id FROM works WHERE file_path = ?",
+            (f"/api/pdfs/{name}",),
+        )
+        self.assertEqual(rows, [])
+
+    def test_create_with_whitespace_file_path_stores_canonical_and_holds_lock(self):
+        """Outer whitespace is trimmed once; exact ownership form is stored."""
         from backend.db_manager import managed_pdf_filename
         from backend.services import work_pdf_replace
 

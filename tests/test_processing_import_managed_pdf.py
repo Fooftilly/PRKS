@@ -10,9 +10,10 @@ pre-seeded basename and delete bytes a surviving Work still referenced.
 Import now uses ``store_new_managed_pdf_from_path`` (chunked copy, same
 barriers) so large inbox PDFs are never held whole in RAM. Adoption of an
 existing managed basename goes through ``managed_pdf_adoption_guard``, which
-locks on ``referenced_managed_pdf_filename`` (cleanup's identity) and yields
-the basename for a canonical ``/api/pdfs/<name>`` store — so a late adopter
-(including a whitespace spelling) cannot land a Work on missing bytes.
+accepts only a trimmed-canonical ``/api/pdfs/<name>`` (outer whitespace OK;
+``%2F`` / traversal refused) and yields the basename for storage — so a late
+adopter cannot land a Work on missing bytes, and cannot alias through
+cleanup's broader parser.
 
 These tests pin the unified contract without sleeps: hooks and threading
 barriers drive the survivor race.
@@ -492,17 +493,16 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
         )
 
     def test_case_a_noncanonical_spelling_race_fails_without_work(self):
-        """Whitespace ``file_path`` must share cleanup's lock (owner P2).
+        """Outer-whitespace ``file_path`` still shares cleanup's basename lock.
 
-        ``managed_pdf_filename(" /api/pdfs/X ")`` is None, so an exact-only
-        guard would skip the lock while ``referenced_managed_pdf_filename``
-        still treats it as X — the race this PR closes. Barriers only.
+        Trim then exact ownership: ``" /api/pdfs/X "`` adopts ``X`` under the
+        same lock cleanup uses. Barriers only.
         """
 
         def whitespace_path(name, _fp):
             messy = f" /api/pdfs/{name} "
             self.assertIsNone(managed_pdf_filename(messy))
-            self.assertEqual(referenced_managed_pdf_filename(messy), name)
+            self.assertEqual(managed_pdf_filename(messy.strip()), name)
             return messy
 
         self._assert_cleanup_wins_late_adoption(
@@ -512,6 +512,39 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
                 "non-canonical late adopter must not leave a Work on missing bytes"
             ),
         )
+
+    def test_adoption_guard_refuses_encoded_slash_alias(self):
+        """Cleanup's loose parser must not retarget adoption via ``%2F`` (owner P2)."""
+        name = f"alias-{uuid.uuid4().hex}.pdf"
+        path = os.path.join(self.storage.pdfs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(PDF_BODY)
+        # Cleanup would resolve this to ``name``; adoption must refuse.
+        encoded = f"/api/pdfs/subdir%2F{name}"
+        self.assertEqual(referenced_managed_pdf_filename(encoded), name)
+        self.assertIsNone(managed_pdf_filename(encoded))
+        with self.assertRaises(work_pdf_replace.ManagedPdfStoreError) as raised:
+            with work_pdf_replace.managed_pdf_adoption_guard(
+                self.storage.pdfs_dir, encoded
+            ):
+                self.fail("must not adopt via encoded slash")
+        self.assertEqual(raised.exception.reason, "invalid_file_name")
+        self.assertEqual(raised.exception.http_status, 400)
+        self.assertTrue(os.path.isfile(path))
+
+    def test_adoption_guard_refuses_nested_segment_alias(self):
+        name = f"nested-{uuid.uuid4().hex}.pdf"
+        path = os.path.join(self.storage.pdfs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(PDF_BODY)
+        nested = f"/api/pdfs/subdir/{name}"
+        self.assertEqual(referenced_managed_pdf_filename(nested), name)
+        with self.assertRaises(work_pdf_replace.ManagedPdfStoreError) as raised:
+            with work_pdf_replace.managed_pdf_adoption_guard(
+                self.storage.pdfs_dir, nested
+            ):
+                self.fail("must not adopt via nested segment")
+        self.assertEqual(raised.exception.reason, "invalid_file_name")
 
     def test_adoption_guard_holds_lock_for_canonical_and_whitespace(self):
         """Guard takes the cleanup lock for exact and trimmed resolving spellings."""

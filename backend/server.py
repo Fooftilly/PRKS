@@ -1074,6 +1074,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     # path would actually change. Echoing the same file_path
                     # on a title/status PATCH must not 409 missing_pdf when
                     # the bytes are already gone (CodeRabbit Minor on #172).
+                    # When the echo matches the observed row, DROP file_path
+                    # from the body so this request cannot rewrite it after a
+                    # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
                     file_path_changing = False
                     if patched_file_path:
                         rows = db.execute_query(
@@ -1084,9 +1087,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             (rows[0].get("file_path") or "") if rows else ""
                         )
                         incoming_fp = body.get("file_path")
-                        file_path_changing = str(incoming_fp or "") != str(
-                            stored_fp or ""
-                        )
+                        if str(incoming_fp or "") == str(stored_fp or ""):
+                            body.pop("file_path", None)
+                            file_path_changing = False
+                        else:
+                            file_path_changing = True
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
@@ -1108,7 +1113,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         # `update_work_metadata`'s allowed set), so a real
                         # path change is an ownership-claiming path: hold the
                         # cleanup lock and prove the contained file still
-                        # exists before commit. Unchanged echo skips the guard.
+                        # exists before commit. An unchanged echo was popped
+                        # above and never reaches this rewrite.
                         try:
                             with (
                                 work_pdf_replace.managed_pdf_adoption_guard(
