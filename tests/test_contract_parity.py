@@ -30,11 +30,42 @@ _JS_REGEX_PREV_KEYWORDS = frozenset({
 })
 
 
+def _js_prev_non_comment(source: str, index: int) -> int:
+    """Index of the nearest non-trivia char before index, or -1.
+
+    Skips whitespace and block/line comments so RegExp context is taken from
+    the preceding code token (e.g. `return /* note */ /"/g`).
+    """
+    j = index - 1
+    while j >= 0:
+        while j >= 0 and source[j] in " \t\r\n":
+            j -= 1
+        if j < 0:
+            return -1
+        if j >= 1 and source[j - 1] == "*" and source[j] == "/":
+            # Walk back to the matching `/*`.
+            k = j - 2
+            while k >= 1:
+                if source[k - 1] == "/" and source[k] == "*":
+                    j = k - 2
+                    break
+                k -= 1
+            else:
+                return j
+            continue
+        # If this line has `//` before j, the rest of the line is a comment.
+        line_start = source.rfind("\n", 0, j + 1) + 1
+        comment = source.find("//", line_start, j + 1)
+        if comment != -1:
+            j = comment - 1
+            continue
+        return j
+    return -1
+
+
 def _js_regex_allowed(source: str, index: int) -> bool:
     """True when `/` at index starts a RegExp literal rather than division."""
-    j = index - 1
-    while j >= 0 and source[j] in " \t\r\n":
-        j -= 1
+    j = _js_prev_non_comment(source, index)
     if j < 0:
         return True
     if source[j] in _JS_REGEX_PREV:
@@ -261,6 +292,7 @@ class ContractParityTests(unittest.TestCase):
             "const esc = s.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n"
             "const arrow = s => /\"/.test(s);\n"
             "function check(s) { return /'/g; }\n"
+            "function noted(s) { return /* note */ /\"/g; }\n"
             "const RECENT_LIMIT = 25;\n"
             "const msg = 'const RECENT_LIMIT = 30;';\n"
         )
