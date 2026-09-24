@@ -685,23 +685,37 @@ class RepoGateLiveTests(unittest.TestCase):
         match = re.search(
             r"(?m)^ {6}- name: Install pinned runtime dependencies\n"
             r"(?: {8,}(?!run:)[^\n]*\n)*"
-            r" {8}run: [|>][-+]?\n"
+            r" {8}run: ([|>])[-+]?\n"
             r"((?: {10,}[^\n]*\n)+)",
             workflow,
         )
         self.assertIsNotNone(
             match, "missing Install pinned runtime dependencies run step"
         )
-        install_cmd = " ".join(
-            line.strip() for line in match.group(1).splitlines() if line.strip()
+        scalar_style = match.group(1)
+        body_lines = [
+            line.strip() for line in match.group(2).splitlines() if line.strip()
+        ]
+        if scalar_style == ">":
+            # Folded: YAML turns newlines into spaces — one shell command.
+            command_lines = [" ".join(body_lines)]
+        else:
+            # Literal: preserve line boundaries (each line is its own command).
+            command_lines = body_lines
+        pip_args = None
+        for command in command_lines:
+            args = shlex.split(command)
+            if args[:4] == ["python", "-m", "pip", "install"]:
+                pip_args = args
+                break
+        self.assertIsNotNone(
+            pip_args, "no python -m pip install command in Install step run body"
         )
-        args = shlex.split(install_cmd)
-        self.assertIn("--only-binary=:all:", args)
-        self.assertEqual(args[:4], ["python", "-m", "pip", "install"])
+        self.assertIn("--only-binary=:all:", pip_args)
         # Complete-argument match: Pillow==12.3.0 must not pass via
-        # Pillow==12.3.0.post1.
+        # Pillow==12.3.0.post1, nor via a pin on a different shell command.
         for name, version in pins.items():
-            self.assertIn(f"{name}=={version}", args)
+            self.assertIn(f"{name}=={version}", pip_args)
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
