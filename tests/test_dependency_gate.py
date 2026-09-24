@@ -38,6 +38,70 @@ from backend.dependency_gate import (
     validate_requirements_file,
 )
 
+# Exact pins only for the CI test-gate install argv (see RepoGateLiveTests).
+_TEST_GATE_PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)==([^#\s]+)$")
+_TEST_GATE_APPROVED_OPTIONS = frozenset(
+    {
+        "--disable-pip-version-check",
+        "--only-binary=:all:",
+    }
+)
+_TEST_GATE_APPROVED_OPTIONS_WITH_VALUE = {
+    "--only-binary": frozenset({":all:"}),
+}
+_TEST_GATE_REJECTED_SOURCE_OPTIONS = frozenset(
+    {
+        "-r",
+        "--requirement",
+        "-e",
+        "--editable",
+    }
+)
+
+
+def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
+    """Parse `python -m pip install ...` argv into exact name==version pins.
+
+    Every operand after ``install`` must be an approved pip option or an exact
+    ``name==version`` pin. Bare names, ``-r``/``-e``, paths/wheels, and
+    URL/VCS sources are rejected.
+    """
+    if pip_args[:4] != ["python", "-m", "pip", "install"]:
+        raise ValueError("expected python -m pip install prefix")
+    pins: dict[str, str] = {}
+    index = 4
+    while index < len(pip_args):
+        arg = pip_args[index]
+        if (
+            arg in _TEST_GATE_REJECTED_SOURCE_OPTIONS
+            or arg.startswith("--requirement=")
+            or arg.startswith("--editable=")
+        ):
+            raise ValueError(f"disallowed requirement source option: {arg}")
+        if arg in _TEST_GATE_APPROVED_OPTIONS:
+            index += 1
+            continue
+        if arg in _TEST_GATE_APPROVED_OPTIONS_WITH_VALUE:
+            if index + 1 >= len(pip_args):
+                raise ValueError(f"option {arg} missing value")
+            value = pip_args[index + 1]
+            allowed = _TEST_GATE_APPROVED_OPTIONS_WITH_VALUE[arg]
+            if value not in allowed:
+                raise ValueError(f"disallowed value for {arg}: {value}")
+            index += 2
+            continue
+        if arg.startswith("-"):
+            raise ValueError(f"unapproved pip option: {arg}")
+        pin_match = _TEST_GATE_PIN_RE.fullmatch(arg)
+        if pin_match is None:
+            raise ValueError(f"non-exact package/requirement source: {arg}")
+        name, version = pin_match.group(1), pin_match.group(2)
+        if name in pins:
+            raise ValueError(f"duplicate package pin for {name}")
+        pins[name] = version
+        index += 1
+    return pins
+
 
 class RequirementsParsingTests(unittest.TestCase):
     def test_parse_exact_pins_ignores_comments(self):
@@ -675,8 +739,8 @@ class RepoGateLiveTests(unittest.TestCase):
 
         Assert against the install step's executable `run` args only — a pin
         or `--only-binary` mention in a comment must not satisfy the check.
-        Package pins collected from that argv must equal requirements.txt
-        (one-way assertIn would miss leftover workflow pins).
+        Package pins collected from that argv must equal requirements.txt;
+        bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
@@ -714,25 +778,65 @@ class RepoGateLiveTests(unittest.TestCase):
             pip_args, "no python -m pip install command in Install step run body"
         )
         self.assertIn("--only-binary=:all:", pip_args)
-        # Two-way equality: workflow package==version args must match
-        # requirements.txt exactly (extra leftover pins must fail).
-        install_pins: dict[str, str] = {}
-        for arg in pip_args:
-            if arg.startswith("-"):
-                continue
-            pin_match = re.fullmatch(
-                r"([A-Za-z0-9][A-Za-z0-9_.\-]*)==([^#\s]+)", arg
-            )
-            if pin_match is None:
-                continue
-            name, version = pin_match.group(1), pin_match.group(2)
-            self.assertNotIn(
-                name,
-                install_pins,
-                f"duplicate package pin for {name} in Install step",
-            )
-            install_pins[name] = version
+        # Two-way equality via fail-closed operand walk: every argv token after
+        # install is an approved option or an exact name==version pin.
+        install_pins = parse_test_gate_pip_install_pins(pip_args)
         self.assertEqual(install_pins, pins)
+
+    def test_test_gate_pip_install_rejects_bare_package(self):
+        with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--only-binary=:all:",
+                    "PyMuPDF==1.28.2",
+                    "requests",
+                ]
+            )
+
+    def test_test_gate_pip_install_rejects_requirements_file(self):
+        with self.assertRaisesRegex(ValueError, "disallowed requirement source option"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--only-binary=:all:",
+                    "PyMuPDF==1.28.2",
+                    "-r",
+                    "extra.txt",
+                ]
+            )
+
+    def test_test_gate_pip_install_rejects_wheel_and_vcs(self):
+        with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--only-binary=:all:",
+                    "./Pillow-12.3.0-py3-none-any.whl",
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--only-binary=:all:",
+                    "git+https://example.invalid/pkg.git",
+                ]
+            )
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
