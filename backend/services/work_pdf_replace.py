@@ -47,6 +47,7 @@ from backend.db_manager import (
     mint_managed_pdf_filename,
     prks_thumb_cache_safe_wid,
     referenced_managed_pdf_filename,
+    row_references_managed_pdf,
     safe_pdf_path_under_dir,
 )
 from backend.fs_durability import fsync_directory, fsync_open_file
@@ -218,7 +219,7 @@ def other_works_share_managed_filename(
         if str(wid) == str(exclude_work_id):
             continue
         fp = row["file_path"] if isinstance(row, dict) else row[1]
-        if referenced_managed_pdf_filename(fp) == name:
+        if row_references_managed_pdf(fp, name):
             return True
     return False
 

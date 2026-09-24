@@ -26,9 +26,9 @@ from typing import Collection, Optional
 
 from backend.db_manager import (
     PRKSDatabase,
-    managed_pdf_filename,
+    owned_managed_pdf_basename,
     prks_delete_pdf_thumbnails_for_work_id,
-    referenced_managed_pdf_filename,
+    row_references_managed_pdf,
     safe_pdf_path_under_dir,
 )
 from backend.log_safety import safe_error_type, safe_log_id
@@ -56,14 +56,15 @@ class WorkDeletionResult:
 def canonical_managed_basename(filename: str) -> Optional[str]:
     """The exact managed basename ``filename`` names, or None.
 
-    Reuses `managed_pdf_filename()` rather than repeating its rules, so a name
-    accepted here is exactly a name PRKS would accept as a Work's own managed
-    PDF ownership path.
+    Uses physical cleanup ownership (`owned_managed_pdf_basename`) so a
+    pre-upgrade claim for a delimiter-bearing name such as ``legacy.pdf?x``
+    remains actionable. Route-addressable adoption continues to refuse those
+    spellings via `managed_pdf_filename`.
     """
     name = str(filename or "")
     if not name:
         return None
-    return managed_pdf_filename(f"/api/pdfs/{name}")
+    return owned_managed_pdf_basename(f"/api/pdfs/{name}")
 
 
 def record_pending_pdf_cleanup_on_conn(conn, filename: str) -> bool:
@@ -171,7 +172,7 @@ def settle_claim_if_referenced(db: PRKSDatabase, filename: str) -> Optional[bool
                 "SELECT file_path FROM works WHERE file_path IS NOT NULL"
             ).fetchall()
             for row in rows or ():
-                if referenced_managed_pdf_filename(row["file_path"]) == name:
+                if row_references_managed_pdf(row["file_path"], name):
                     conn.execute(
                         "DELETE FROM pending_pdf_cleanup WHERE filename = ?",
                         (name,),
@@ -425,7 +426,7 @@ def cleanup_after_work_delete(
             wid,
             safe_error_type(e),
         )
-    filename = managed_pdf_filename(file_path) if existed else None
+    filename = owned_managed_pdf_basename(file_path) if existed else None
     if filename is not None:
         try:
             # Reported from what actually happened, not from the absence of an

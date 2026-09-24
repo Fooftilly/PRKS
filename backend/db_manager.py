@@ -9,7 +9,7 @@ import html
 import logging
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Tuple
@@ -744,16 +744,17 @@ def safe_pdf_path_under_dir(
     )
 
 
-def managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Return the filename only for an exact literal /api/pdfs/<filename> ownership path.
+def _managed_pdf_basename_from_path(
+    file_path: str, *, allow_url_delimiters: bool
+) -> Optional[str]:
+    """Exact ``/api/pdfs/<basename>`` extract, optionally allowing ``?;#``.
 
-    The basename must round-trip through the HTTP PDF route. ``urlparse`` strips
-    ``?`` (query), ``;`` (params), and ``#`` (fragment) before
-    ``_safe_pdf_path_for_route`` sees the path, so a stored
-    ``/api/pdfs/foo.pdf?x`` would lock/persist ``foo.pdf?x`` while GET resolved
-    ``foo.pdf``. Mint sanitizes these characters away; adoption of legacy or
-    restored names must refuse them rather than claim bytes the route cannot
-    serve under that spelling.
+    Route-addressable ownership (`managed_pdf_filename`) refuses URL
+    delimiters because ``urlparse`` strips them before the HTTP PDF route
+    sees the path. Physical cleanup ownership (`owned_managed_pdf_basename`)
+    still accepts them so a library that already stored
+    ``/api/pdfs/legacy.pdf?x`` (and the matching on-disk name) can claim and
+    unlink those bytes after upgrade.
     """
     prefix = "/api/pdfs/"
     if not file_path.startswith(prefix):
@@ -763,8 +764,7 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
         return None
     if "/" in remainder or "\\" in remainder:
         return None
-    # URL component delimiters: not part of a path segment once urlparse runs.
-    if any(ch in remainder for ch in "?;#"):
+    if not allow_url_delimiters and any(ch in remainder for ch in "?;#"):
         return None
     if remainder in (".", ".."):
         return None
@@ -777,26 +777,78 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
     return remainder
 
 
+def managed_pdf_filename(file_path: str) -> Optional[str]:
+    """Return the filename for a route-addressable ``/api/pdfs/<filename>`` path.
+
+    The basename must round-trip through the HTTP PDF route. ``urlparse`` strips
+    ``?`` (query), ``;`` (params), and ``#`` (fragment) before
+    ``_safe_pdf_path_for_route`` sees the path, so adopting
+    ``/api/pdfs/foo.pdf?x`` would lock/persist ``foo.pdf?x`` while GET resolved
+    ``foo.pdf``. Mint sanitizes these characters away; new adoption must
+    refuse them. Legacy rows that already used delimiter-bearing names are
+    cleaned up via ``owned_managed_pdf_basename``, not this helper.
+    """
+    return _managed_pdf_basename_from_path(file_path, allow_url_delimiters=False)
+
+
+def owned_managed_pdf_basename(file_path: str) -> Optional[str]:
+    """Physical cleanup ownership basename, including legacy ``?;#`` names.
+
+    Used when deleting a Work or retrying ``pending_pdf_cleanup``: the claim
+    must name the on-disk basename even when that spelling is not
+    route-addressable. Never used for adoption.
+    """
+    return _managed_pdf_basename_from_path(file_path, allow_url_delimiters=True)
+
+
 def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Managed filename a stored file_path can resolve to, matching current serving identity.
+    """Serving identity a stored file_path can resolve to (HTTP PDF route).
 
     Deliberately looser than ``managed_pdf_filename()``. That helper answers
-    "does this row *own* a managed PDF?" and must be exact. This one answers
-    "could this row still be pointing at managed PDF X?" and is only ever used
-    to decide whether deleting bytes is safe, so it must over-approximate:
-    a malformed or legacy spelling that fails to resolve here would let cleanup
-    delete a PDF another row still references. Outer whitespace is therefore
-    tolerated, while the filename itself is preserved exactly rather than
-    normalized into some other managed resource.
+    "may this path be *adopted* as route-addressable ownership?" and must be
+    exact. This one answers "could this row still be pointing at managed PDF
+    X via the bytes the PDF route would serve?" and is only ever used to
+    decide whether deleting bytes is safe, so it must over-approximate:
+    a malformed or legacy spelling that fails to resolve here would let
+    cleanup delete a PDF another row still references.
+
+    Outer whitespace is tolerated. ``urlparse`` strips query/params/fragment
+    before the last segment is taken, matching ``GET /api/pdfs/...`` so a
+    surviving ``/api/pdfs/foo.pdf?q`` row protects ``foo.pdf``. Physical
+    delimiter-bearing ownership (``legacy.pdf?x`` on disk) is checked
+    separately via ``owned_managed_pdf_basename`` /
+    ``row_references_managed_pdf``.
     """
     fp = str(file_path or "").strip()
     if not fp.startswith("/api/pdfs/"):
         return None
-    segment = fp.split("/")[-1]
+    # Match HTTP serving: urlparse drops query/params/fragment from .path.
+    path = urlparse(fp).path
+    if not path.startswith("/api/pdfs/"):
+        return None
+    segment = path.split("/")[-1]
     name = os.path.basename(unquote(segment))
     if not name or name in (".", ".."):
         return None
     return name
+
+
+def row_references_managed_pdf(file_path: str, filename: str) -> bool:
+    """True when a stored path still protects managed basename ``filename``.
+
+    Checks serving identity (``referenced_managed_pdf_filename``) and physical
+    ownership (``owned_managed_pdf_basename``) so both
+    ``/api/pdfs/foo.pdf?q`` → protect ``foo.pdf`` and
+    ``/api/pdfs/legacy.pdf?x`` → protect ``legacy.pdf?x`` hold.
+    """
+    name = str(filename or "")
+    if not name:
+        return False
+    if referenced_managed_pdf_filename(file_path) == name:
+        return True
+    if owned_managed_pdf_basename(file_path) == name:
+        return True
+    return False
 
 
 def safe_processing_path_under_dir(

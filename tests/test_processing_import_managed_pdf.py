@@ -546,10 +546,10 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
         )
         for adopt_fp in cases:
             with self.subTest(adopt_fp=adopt_fp):
-                # Cleanup's last-segment parse keeps the delimiter in the
-                # basename; ownership must refuse rather than lock that alias.
+                # Serving identity maps to the stem; route-addressable ownership
+                # must refuse rather than adopt under a non-round-tripping URL.
                 self.assertIsNone(managed_pdf_filename(adopt_fp))
-                self.assertIsNotNone(referenced_managed_pdf_filename(adopt_fp))
+                self.assertEqual(referenced_managed_pdf_filename(adopt_fp), stem)
                 with self.assertRaises(work_pdf_replace.ManagedPdfStoreError) as raised:
                     with work_pdf_replace.managed_pdf_adoption_guard(
                         self.storage.pdfs_dir, adopt_fp

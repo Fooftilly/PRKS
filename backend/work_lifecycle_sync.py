@@ -16,9 +16,9 @@ import sqlite3
 from backend.db_manager import (
     DeletedWorkRecord,
     _canonical_new_source,
-    managed_pdf_filename,
+    owned_managed_pdf_basename,
     normalize_doc_type,
-    referenced_managed_pdf_filename,
+    row_references_managed_pdf,
 )
 from backend.entity_ids import generate as generate_entity_id
 from backend.entity_ids import is_distributed
@@ -330,7 +330,9 @@ def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
     if row is None:
         return None
     file_path = "" if row["file_path"] is None else str(row["file_path"])
-    deleted_filename = managed_pdf_filename(file_path)
+    # Physical cleanup ownership (legacy delimiter-bearing names included);
+    # route-addressable adoption refuses those via managed_pdf_filename.
+    deleted_filename = owned_managed_pdf_basename(file_path)
     conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
     still_referenced = False
     if deleted_filename is not None and claim_pdf:
@@ -338,7 +340,7 @@ def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
             "SELECT file_path FROM works WHERE file_path IS NOT NULL"
         ).fetchall()
         still_referenced = any(
-            referenced_managed_pdf_filename(r["file_path"]) == deleted_filename
+            row_references_managed_pdf(r["file_path"], deleted_filename)
             for r in survivors
         )
         if not still_referenced:

@@ -313,6 +313,77 @@ class PendingPdfCleanupTests(unittest.TestCase):
         self.assertEqual(retry_pending_pdf_cleanup(self.db)["removed"], 1)
         self.assertEqual(self._claims(), [])
 
+    def test_delete_legacy_delimiter_named_work_unlinks_bytes(self):
+        """Owner P2: physical cleanup still owns pre-upgrade ``?;#`` names.
+
+        ``managed_pdf_filename`` refuses these for adoption/serving, but a
+        restored library may already hold ``file_path=/api/pdfs/legacy.pdf?x``
+        with matching on-disk bytes. Delete must claim and unlink them.
+        """
+        name = f"legacy-{uuid.uuid4().hex}.pdf?x"
+        try:
+            abs_path = self._write_pdf(name)
+        except OSError:
+            self.skipTest("filesystem refuses '?' in filenames")
+        work_id = self.db.add_work(
+            title="Legacy delimiter",
+            file_path=f"/api/pdfs/{name}",
+        )
+        from backend.db_manager import managed_pdf_filename, owned_managed_pdf_basename
+
+        self.assertIsNone(managed_pdf_filename(f"/api/pdfs/{name}"))
+        self.assertEqual(owned_managed_pdf_basename(f"/api/pdfs/{name}"), name)
+
+        result = delete_work(self.db, self.index, work_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertFalse(result.pending_pdf_cleanup)
+        self.assertFalse(os.path.isfile(abs_path))
+        self.assertEqual(self._claims(), [])
+
+    def test_retry_preexisting_delimiter_cleanup_claim(self):
+        """A pending claim for ``legacy.pdf?x`` must settle across the new rules."""
+        name = f"claim-{uuid.uuid4().hex}.pdf?x"
+        try:
+            abs_path = self._write_pdf(name)
+        except OSError:
+            self.skipTest("filesystem refuses '?' in filenames")
+        with self.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (name,),
+            )
+            conn.commit()
+        self.assertEqual(self._claims(), [name])
+        summary = retry_pending_pdf_cleanup(self.db)
+        self.assertEqual(summary["removed"], 1)
+        self.assertEqual(summary["unsafe"], 0)
+        self.assertFalse(os.path.isfile(abs_path))
+        self.assertEqual(self._claims(), [])
+
+    def test_surviving_query_spelling_protects_stem_basename(self):
+        """CodeRabbit: ``/api/pdfs/x.pdf?q`` protects ``x.pdf`` from cleanup."""
+        stem = f"protect-{uuid.uuid4().hex}.pdf"
+        abs_path = self._write_pdf(stem)
+        # Survivor uses a delimiter spelling that GET would strip to the stem.
+        survivor_id = self.db.add_work(
+            title="Query survivor",
+            file_path=f"/api/pdfs/{stem}?q",
+        )
+        with self.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (stem,),
+            )
+            conn.commit()
+        self.assertEqual(self._claims(), [stem])
+        summary = retry_pending_pdf_cleanup(self.db)
+        self.assertEqual(summary["superseded"], 1)
+        self.assertEqual(summary["removed"], 0)
+        self.assertTrue(os.path.isfile(abs_path))
+        self.assertEqual(self._claims(), [])
+        self.assertIsNotNone(self.db.get_work(survivor_id))
+
     def test_a_failed_delete_does_not_retry_itself_in_the_same_breath(self):
         work_id, name, abs_path = self._managed_work("NoDoubleTry")
         with self._failing_remove(abs_path) as removal:

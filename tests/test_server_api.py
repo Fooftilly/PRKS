@@ -1838,6 +1838,12 @@ class TestServerAPI(unittest.TestCase):
         self.assertIn(w_id, ids)
 
     def test_17_post_pdf_rejects_unsafe_stored_file_path(self):
+        """PDF replace 404s when the stored path is not a managed basename.
+
+        Adoption now refuses ``/api/pdfs/..`` on PATCH (400), so the unsafe
+        stored path is seeded via SQL — the same shape a pre-guard library
+        could already hold — then POST /pdf must still report no managed PDF.
+        """
         req_w = urllib.request.Request(
             f"{self._base_url}/api/works",
             data=json.dumps({"title": "Unsafe path work", "status": "Not Started"}).encode(),
@@ -1847,14 +1853,12 @@ class TestServerAPI(unittest.TestCase):
         with urllib.request.urlopen(req_w) as rw:
             w_id = json.loads(rw.read().decode())["id"]
 
-        patch = urllib.request.Request(
-            f"{self._base_url}/api/works/{w_id}",
-            data=json.dumps({"file_path": "/api/pdfs/.."}).encode(),
-            method="PATCH",
+        # PATCH of /api/pdfs/.. is refused at the adoption boundary (separate
+        # assertion below). Seed the invalid stored path directly.
+        server_module.db.execute_query(
+            "UPDATE works SET file_path = ? WHERE id = ?",
+            ("/api/pdfs/..", w_id),
         )
-        patch.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(patch) as rp:
-            self.assertEqual(rp.status, 200)
 
         pdf_bytes = b"%PDF-1.4\n%T\n%%EOF\n"
         post_pdf = urllib.request.Request(
@@ -1873,21 +1877,67 @@ class TestServerAPI(unittest.TestCase):
         self.assertIn("error", err)
         self.assertIn("managed PDF", err["error"])
 
-    def test_18_delete_work_with_dotdot_file_path_does_not_crash(self):
+    def test_17b_post_and_patch_reject_dotdot_file_path_with_400(self):
+        """Adoption refuses ``/api/pdfs/..`` on create and metadata PATCH."""
+        # POST create with the unsafe path.
+        req_post = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({
+                "title": "Dotdot create refuse",
+                "status": "Not Started",
+                "file_path": "/api/pdfs/..",
+            }).encode(),
+            method="POST",
+        )
+        req_post.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm_post:
+            urllib.request.urlopen(req_post)
+        self.assertEqual(cm_post.exception.code, 400)
+        post_body = json.loads(cm_post.exception.read().decode())
+        self.assertIn("Invalid or unsafe PDF storage path", post_body.get("error", ""))
+
+        # PATCH onto an existing Work.
         req_w = urllib.request.Request(
             f"{self._base_url}/api/works",
-            data=json.dumps(
-                {
-                    "title": "Dotdot work",
-                    "status": "Not Started",
-                    "file_path": "/api/pdfs/..",
-                }
-            ).encode(),
+            data=json.dumps({"title": "Dotdot patch target", "status": "Not Started"}).encode(),
             method="POST",
         )
         req_w.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req_w) as rw:
             w_id = json.loads(rw.read().decode())["id"]
+        self.addCleanup(server_module.db.delete_work_record, w_id)
+
+        patch = urllib.request.Request(
+            f"{self._base_url}/api/works/{w_id}",
+            data=json.dumps({"file_path": "/api/pdfs/.."}).encode(),
+            method="PATCH",
+        )
+        patch.add_header("Content-Type", "application/json")
+        with self.assertRaises(urllib.error.HTTPError) as cm_patch:
+            urllib.request.urlopen(patch)
+        self.assertEqual(cm_patch.exception.code, 400)
+        patch_body = json.loads(cm_patch.exception.read().decode())
+        self.assertIn("Invalid or unsafe PDF storage path", patch_body.get("error", ""))
+
+    def test_18_delete_work_with_dotdot_file_path_does_not_crash(self):
+        """Delete of a Work whose stored path is ``/api/pdfs/..`` stays safe.
+
+        POST create no longer accepts that path (400); seed via SQL so delete
+        still exercises a pre-existing invalid row without crashing.
+        """
+        req_w = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=json.dumps({"title": "Dotdot work", "status": "Not Started"}).encode(),
+            method="POST",
+        )
+        req_w.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req_w) as rw:
+            w_id = json.loads(rw.read().decode())["id"]
+
+        server_module.db.execute_query(
+            "UPDATE works SET file_path = ? WHERE id = ?",
+            ("/api/pdfs/..", w_id),
+        )
 
         del_req = urllib.request.Request(f"{self._base_url}/api/works/{w_id}", method="DELETE")
         with urllib.request.urlopen(del_req) as rd:

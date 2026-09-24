@@ -17,9 +17,11 @@ apply_isolated_test_env(_PROJECT_DIR)
 from backend.db_manager import (
     PRKSDatabase,
     managed_pdf_filename,
+    owned_managed_pdf_basename,
     prks_delete_pdf_thumbnails_for_work_id,
     prks_thumb_cache_stem,
     referenced_managed_pdf_filename,
+    row_references_managed_pdf,
     safe_pdf_path_under_dir,
 )
 from backend.storage.config import StorageConfig
@@ -456,18 +458,55 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIsNone(managed_pdf_filename(path))
 
+    def test_owned_managed_pdf_basename_keeps_legacy_delimiters(self):
+        """Physical cleanup ownership still names delimiter-bearing basenames."""
+        self.assertEqual(
+            owned_managed_pdf_basename("/api/pdfs/legacy.pdf?x"),
+            "legacy.pdf?x",
+        )
+        self.assertEqual(
+            owned_managed_pdf_basename("/api/pdfs/legacy.pdf;bar"),
+            "legacy.pdf;bar",
+        )
+        self.assertEqual(
+            owned_managed_pdf_basename("/api/pdfs/legacy.pdf#frag"),
+            "legacy.pdf#frag",
+        )
+        # Route-addressable rules still refuse the same spellings.
+        self.assertIsNone(managed_pdf_filename("/api/pdfs/legacy.pdf?x"))
+        # Traversal / encoding still refused for physical ownership too.
+        self.assertIsNone(owned_managed_pdf_basename("/api/pdfs/../x.pdf"))
+        self.assertIsNone(owned_managed_pdf_basename("/api/pdfs/foo%2Fx.pdf"))
+
     def test_referenced_managed_pdf_filename_pins(self):
         pinned = (
-            "/api/pdfs/victim.pdf",
-            "/api/pdfs/subdir/victim.pdf",
-            "/api/pdfs/../victim.pdf",
-            "/api/pdfs/foo%2Fvictim.pdf",
-            " /api/pdfs/victim.pdf ",
-            "\t/api/pdfs/victim.pdf\n",
+            ("/api/pdfs/victim.pdf", "victim.pdf"),
+            ("/api/pdfs/subdir/victim.pdf", "victim.pdf"),
+            ("/api/pdfs/../victim.pdf", "victim.pdf"),
+            ("/api/pdfs/foo%2Fvictim.pdf", "victim.pdf"),
+            (" /api/pdfs/victim.pdf ", "victim.pdf"),
+            ("\t/api/pdfs/victim.pdf\n", "victim.pdf"),
+            # Serving identity: urlparse strips delimiters like the PDF route.
+            ("/api/pdfs/victim.pdf?q", "victim.pdf"),
+            ("/api/pdfs/victim.pdf;bar", "victim.pdf"),
+            ("/api/pdfs/victim.pdf#frag", "victim.pdf"),
         )
-        for path in pinned:
+        for path, expected in pinned:
             with self.subTest(path=path):
-                self.assertEqual(referenced_managed_pdf_filename(path), "victim.pdf")
+                self.assertEqual(referenced_managed_pdf_filename(path), expected)
+
+    def test_row_references_protects_serving_and_physical_identities(self):
+        # Surviving delimiter spelling protects the stem the route would serve.
+        self.assertTrue(
+            row_references_managed_pdf("/api/pdfs/x.pdf?q", "x.pdf")
+        )
+        # Physical legacy ownership protects the on-disk delimiter basename.
+        self.assertTrue(
+            row_references_managed_pdf("/api/pdfs/legacy.pdf?x", "legacy.pdf?x")
+        )
+        self.assertFalse(
+            row_references_managed_pdf("/api/pdfs/other.pdf", "x.pdf")
+        )
 
     def test_safe_pdf_path_under_dir_rejects_nul(self):
         pdfs = tempfile.mkdtemp()
