@@ -48,7 +48,7 @@ class DerivedCachePublishTests(unittest.TestCase):
             lock = threading.Lock()
             real_open = os.open
 
-            def spy_open(path, flags, mode=0o777, *args, **kwargs):
+            def spy_open(path, flags, mode=0o600, *args, **kwargs):
                 if flags & os.O_EXCL:
                     with lock:
                         temps.append(path)
