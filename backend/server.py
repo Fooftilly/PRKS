@@ -57,6 +57,7 @@ import backend.research_network as research_network
 from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
+from backend.derived_cache_publish import publish_derived_cache_bytes
 from backend.storage import paths
 from backend.storage.config import StorageConfig
 from backend.log_safety import (
@@ -524,12 +525,11 @@ def _prks_pil_to_jpeg_bytes(img, quality: int = 82) -> bytes | None:
 
 
 def _prks_write_person_image_cache(cache_path: str, body: bytes) -> None:
-    parent = os.path.dirname(cache_path)
-    os.makedirs(parent, exist_ok=True)
-    tmp = cache_path + ".tmp"
-    with open(tmp, "wb") as fp:
-        fp.write(body)
-    os.replace(tmp, cache_path)
+    publish_derived_cache_bytes(
+        os.path.dirname(cache_path),
+        os.path.basename(cache_path),
+        body,
+    )
 
 
 def _prks_pixmap_to_jpeg_bytes(pix, quality: int = 82) -> bytes | None:
@@ -2033,13 +2033,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
                         # Best-effort cache write: if this fails (read-only volume, perms, etc),
                         # still serve the generated image to the client.
+                        tmp_name = f"{cache_base}.{ext}.tmp"
                         try:
-                            tmp_path = (cache_path or "") + ".tmp"
-                            with open(tmp_path, "wb") as f:
-                                f.write(generated_bytes)
-                            os.replace(tmp_path, cache_path)
+                            publish_derived_cache_bytes(
+                                thumbs_dir, f"{cache_base}.{ext}", generated_bytes
+                            )
                         except Exception:
                             try:
+                                tmp_path = os.path.join(thumbs_dir, tmp_name)
                                 if os.path.exists(tmp_path):
                                     os.remove(tmp_path)
                             except Exception:

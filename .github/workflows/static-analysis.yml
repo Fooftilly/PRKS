@@ -43,6 +43,9 @@ jobs:
       - name: Run high-signal Python checks
         run: ruff check --config ruff.toml prks_app.py backend
 
+      - name: Enforce PRKS engineering invariants
+        run: python scripts/check_invariants.py
+
   pyright:
     permissions:
       contents: read
