@@ -118,9 +118,9 @@ def handle_delete(handler, db, path: str) -> bool:
     except SavedViewError as e:
         _send_saved_view_error(handler, e)
         return True
-    LOGGER.info(
-        "saved_view_deleted view_id=%s",
-        safe_log_id(vid),
-    )
+    # Do not log path-derived ids: CodeQL treats URL segments as
+    # user-controlled even after safe_log_id, and privacy policy forbids
+    # logging raw library identifiers from the request path.
+    LOGGER.info("saved_view_deleted")
     handler.send_json(200, {"status": "deleted"})
     return True
