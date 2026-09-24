@@ -261,6 +261,158 @@ def _require_exactly_one_span(
     return match
 
 
+def _skip_js_ws(body: str, index: int) -> int:
+    n = len(body)
+    while index < n and body[index] in " \t\r\n":
+        index += 1
+    return index
+
+
+def _read_js_string_literal(body: str, index: int, label: str) -> tuple[str, int]:
+    """Return (unescaped contents, index past closing quote)."""
+    if index >= len(body) or body[index] not in "'\"":
+        raise AssertionError(
+            f"unsupported syntax in JavaScript {label}: expected string literal"
+        )
+    quote = body[index]
+    i = index + 1
+    out: list[str] = []
+    n = len(body)
+    while i < n:
+        c = body[i]
+        if c == "\\" and i + 1 < n:
+            out.append(body[i + 1])
+            i += 2
+            continue
+        if c == quote:
+            return "".join(out), i + 1
+        if c == "\n":
+            break
+        out.append(c)
+        i += 1
+    raise AssertionError(
+        f"unsupported syntax in JavaScript {label}: unclosed string literal"
+    )
+
+
+def _parse_js_string_array_body(body: str, label: str) -> tuple[str, ...]:
+    """Fail-closed: only string literals, commas, and whitespace."""
+    i = _skip_js_ws(body, 0)
+    n = len(body)
+    if i >= n:
+        return ()
+    items: list[str] = []
+    while True:
+        value, i = _read_js_string_literal(body, i, label)
+        items.append(value)
+        i = _skip_js_ws(body, i)
+        if i >= n:
+            break
+        if body[i] != ",":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript {label}: "
+                "expected ',' or end of array"
+            )
+        i = _skip_js_ws(body, i + 1)
+        if i >= n:
+            break
+    return tuple(items)
+
+
+def _parse_js_true_object_body(body: str, label: str) -> tuple[str, ...]:
+    """Fail-closed: only `key: true` / `'key': true` entries."""
+    i = _skip_js_ws(body, 0)
+    n = len(body)
+    if i >= n:
+        raise AssertionError(f"could not parse JavaScript object {label}")
+    keys: list[str] = []
+    bare_key = re.compile(r"[A-Za-z_$][\w$-]*")
+    while True:
+        if body[i] in "'\"":
+            key, i = _read_js_string_literal(body, i, label)
+        else:
+            m = bare_key.match(body, i)
+            if m is None:
+                raise AssertionError(
+                    f"unsupported syntax in JavaScript object {label}: "
+                    "expected identifier or string key (no spreads/computed keys)"
+                )
+            key = m.group(0)
+            i = m.end()
+        i = _skip_js_ws(body, i)
+        if i >= n or body[i] != ":":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript object {label}: expected ':'"
+            )
+        i = _skip_js_ws(body, i + 1)
+        if body[i : i + 4] != "true":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript object {label}: "
+                "expected literal true"
+            )
+        after = i + 4
+        if after < n and (body[after].isalnum() or body[after] in "_$"):
+            raise AssertionError(
+                f"unsupported syntax in JavaScript object {label}: "
+                "expected literal true"
+            )
+        i = _skip_js_ws(body, after)
+        keys.append(key)
+        if i >= n:
+            break
+        if body[i] != ",":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript object {label}: "
+                "expected ',' or end of object"
+            )
+        i = _skip_js_ws(body, i + 1)
+        if i >= n:
+            break
+    return tuple(keys)
+
+
+def _parse_js_bibtex_defs_body(body: str, label: str) -> tuple[str, ...]:
+    """Fail-closed: only `['id', 'Label']` pairs."""
+    i = _skip_js_ws(body, 0)
+    n = len(body)
+    if i >= n:
+        return ()
+    ids: list[str] = []
+    while True:
+        if body[i] != "[":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript {label}: "
+                "expected [id, label] tuple (no spreads)"
+            )
+        i = _skip_js_ws(body, i + 1)
+        field_id, i = _read_js_string_literal(body, i, label)
+        i = _skip_js_ws(body, i)
+        if i >= n or body[i] != ",":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript {label}: expected ',' in tuple"
+            )
+        i = _skip_js_ws(body, i + 1)
+        _label, i = _read_js_string_literal(body, i, label)
+        i = _skip_js_ws(body, i)
+        if i >= n or body[i] != "]":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript {label}: expected ']' after tuple"
+            )
+        i = _skip_js_ws(body, i + 1)
+        ids.append(field_id)
+        if i >= n:
+            break
+        if body[i] != ",":
+            raise AssertionError(
+                f"unsupported syntax in JavaScript {label}: "
+                "expected ',' or end of array"
+            )
+        i = _skip_js_ws(body, i + 1)
+        if i >= n:
+            break
+    return tuple(ids)
+
+
 def js_string_array(source: str, name: str) -> tuple[str, ...]:
     pattern = (
         r"const\s+" + re.escape(name) +
@@ -269,7 +421,7 @@ def js_string_array(source: str, name: str) -> tuple[str, ...]:
     match = _require_exactly_one_span(
         source, pattern, f"array {name}", flags=re.S,
     )
-    return tuple(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
+    return _parse_js_string_array_body(match.group(1), f"array {name}")
 
 
 def js_true_object_keys(source: str, name: str) -> tuple[str, ...]:
@@ -279,16 +431,7 @@ def js_true_object_keys(source: str, name: str) -> tuple[str, ...]:
         f"object {name}",
         flags=re.S,
     )
-    keys: list[str] = []
-    for quoted, bare in re.findall(
-        r"^\s*(?:['\"]([^'\"]+)['\"]|([A-Za-z_$][\w$-]*))\s*:\s*true\s*,?\s*$",
-        match.group(1),
-        re.M,
-    ):
-        keys.append(quoted or bare)
-    if not keys:
-        raise AssertionError(f"could not parse JavaScript object {name}")
-    return tuple(keys)
+    return _parse_js_true_object_body(match.group(1), name)
 
 
 def js_bibtex_field_ids(source: str) -> tuple[str, ...]:
@@ -298,8 +441,9 @@ def js_bibtex_field_ids(source: str) -> tuple[str, ...]:
         "BibTeX Settings field definitions",
         flags=re.S,
     )
-    return tuple(re.findall(r"\[\s*['\"]([^'\"]+)['\"]\s*,", match.group(1)))
-
+    return _parse_js_bibtex_defs_body(
+        match.group(1), "BibTeX Settings field definitions"
+    )
 
 def js_recent_limit(source: str) -> int:
     match = _require_exactly_one_span(
@@ -338,6 +482,53 @@ class ContractParityTests(unittest.TestCase):
         with self.assertRaises(AssertionError) as cm:
             js_recent_limit("// const RECENT_LIMIT = 30;\n")
         self.assertIn("could not find", str(cm.exception))
+
+    def test_extractors_fail_closed_on_unsupported_initializer_syntax(self):
+        """Partial literal extraction must not silently drop spreads/etc."""
+        with self.assertRaises(AssertionError) as cm:
+            js_true_object_keys(
+                "const TILE = {\n  ...EXTRA,\n  work: true,\n};\n",
+                "TILE",
+            )
+        self.assertIn("unsupported syntax", str(cm.exception))
+
+        with self.assertRaises(AssertionError) as cm:
+            js_true_object_keys(
+                "const TILE = {\n  [computed]: true,\n  work: true,\n};\n",
+                "TILE",
+            )
+        self.assertIn("unsupported syntax", str(cm.exception))
+
+        with self.assertRaises(AssertionError) as cm:
+            js_true_object_keys(
+                "const TILE = {\n  work: false,\n  person: true,\n};\n",
+                "TILE",
+            )
+        self.assertIn("unsupported syntax", str(cm.exception))
+
+        with self.assertRaises(AssertionError) as cm:
+            js_string_array(
+                "const ARR = [\n  'a',\n  ...MORE,\n  'b',\n];\n",
+                "ARR",
+            )
+        self.assertIn("unsupported syntax", str(cm.exception))
+
+        with self.assertRaises(AssertionError) as cm:
+            js_string_array(
+                "const ARR = [\n  'a',\n  OTHER,\n];\n",
+                "ARR",
+            )
+        self.assertIn("unsupported syntax", str(cm.exception))
+
+        with self.assertRaises(AssertionError) as cm:
+            js_bibtex_field_ids(
+                "const PRKS_BIBTEX_EXPORT_FIELD_DEFS = [\n"
+                "  ['a', 'A'],\n"
+                "  ...EXTRA,\n"
+                "  ['b', 'B'],\n"
+                "];\n"
+            )
+        self.assertIn("unsupported syntax", str(cm.exception))
 
     def test_work_status_registries_match_backend_contract(self):
         canonical = tuple(WORK_STATUSES)
