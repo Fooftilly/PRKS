@@ -33,8 +33,9 @@ _JS_REGEX_PREV_KEYWORDS = frozenset({
 def _js_line_comment_start(source: str, line_start: int, end: int) -> int:
     """Index of a real `//` comment start in [line_start, end), or -1.
 
-    Skips string/template literals and block comments so `//` inside quotes
-    is not treated as a line comment.
+    Skips string/template literals, block comments, and RegExp literals
+    (including `//` inside character classes) so those are not treated as
+    line comments.
     """
     i = line_start
     while i < end:
@@ -43,11 +44,15 @@ def _js_line_comment_start(source: str, line_start: int, end: int) -> int:
         if ch in ("'", '"', "`"):
             i = min(_scan_js_quoted_end(source, i), end)
             continue
-        if ch == "/" and nxt == "*":
-            i = min(_scan_js_block_comment_end(source, i), end)
-            continue
-        if ch == "/" and nxt == "/":
-            return i
+        if ch == "/":
+            if nxt == "/":
+                return i
+            if nxt == "*":
+                i = min(_scan_js_block_comment_end(source, i), end)
+                continue
+            if _js_regex_allowed(source, i):
+                i = min(_scan_js_regex_literal(source, i), end)
+                continue
         i += 1
     return -1
 
@@ -316,6 +321,7 @@ class ContractParityTests(unittest.TestCase):
             "function check(s) { return /'/g; }\n"
             "function noted(s) { return /* note */ /\"/g; }\n"
             "function pathy(s) { const path = 'root//child'; return /\"/g; }\n"
+            "function classy(s) { if (/[a//b]/.test(s)) return /\"/g; }\n"
             "const RECENT_LIMIT = 25;\n"
             "const msg = 'const RECENT_LIMIT = 30;';\n"
         )
