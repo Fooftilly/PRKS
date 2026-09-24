@@ -30,6 +30,28 @@ _JS_REGEX_PREV_KEYWORDS = frozenset({
 })
 
 
+def _js_line_comment_start(source: str, line_start: int, end: int) -> int:
+    """Index of a real `//` comment start in [line_start, end), or -1.
+
+    Skips string/template literals and block comments so `//` inside quotes
+    is not treated as a line comment.
+    """
+    i = line_start
+    while i < end:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < end else ""
+        if ch in ("'", '"', "`"):
+            i = min(_scan_js_quoted_end(source, i), end)
+            continue
+        if ch == "/" and nxt == "*":
+            i = min(_scan_js_block_comment_end(source, i), end)
+            continue
+        if ch == "/" and nxt == "/":
+            return i
+        i += 1
+    return -1
+
+
 def _js_prev_non_comment(source: str, index: int) -> int:
     """Index of the nearest non-trivia char before index, or -1.
 
@@ -53,9 +75,9 @@ def _js_prev_non_comment(source: str, index: int) -> int:
             else:
                 return j
             continue
-        # If this line has `//` before j, the rest of the line is a comment.
+        # If this line has a real `//` comment before j, skip it.
         line_start = source.rfind("\n", 0, j + 1) + 1
-        comment = source.find("//", line_start, j + 1)
+        comment = _js_line_comment_start(source, line_start, j + 1)
         if comment != -1:
             j = comment - 1
             continue
@@ -293,6 +315,7 @@ class ContractParityTests(unittest.TestCase):
             "const arrow = s => /\"/.test(s);\n"
             "function check(s) { return /'/g; }\n"
             "function noted(s) { return /* note */ /\"/g; }\n"
+            "function pathy(s) { const path = 'root//child'; return /\"/g; }\n"
             "const RECENT_LIMIT = 25;\n"
             "const msg = 'const RECENT_LIMIT = 30;';\n"
         )
