@@ -93,6 +93,60 @@ def record_pending_pdf_cleanup_on_conn(conn, filename: str) -> bool:
     return True
 
 
+def claim_released_managed_basenames_on_conn(conn, old_file_path: str) -> tuple[str, ...]:
+    """Claim strong basenames released by a delete or ``file_path`` retarget.
+
+    Caller must already have removed/retargeted the releasing Work so this
+    catalogue query does not still see the old path as protecting the bytes.
+    Only *strong* identities mint claims; weak fail-closed aliases neither
+    prevent minting nor supersede an existing claim (unlink stays deferred).
+
+    Returns every strong basename that is now owed a cleanup (newly inserted
+    or already present via ``ON CONFLICT DO NOTHING``).
+    """
+    protected = managed_basenames_protected_by(old_file_path)
+    if not protected:
+        return ()
+    survivors = conn.execute(
+        "SELECT file_path FROM works WHERE file_path IS NOT NULL"
+    ).fetchall()
+    claimed: list[str] = []
+    for name in protected:
+        if any(
+            row_strongly_references_managed_pdf(r["file_path"], name)
+            for r in survivors
+        ):
+            continue
+        if record_pending_pdf_cleanup_on_conn(conn, name):
+            claimed.append(name)
+    return tuple(claimed)
+
+
+def cleanup_released_managed_pdfs(
+    db: PRKSDatabase, filenames: Collection[str]
+) -> bool:
+    """Post-commit survivor-aware unlink for basenames claimed on retarget/delete.
+
+    Returns True when any claim remains pending after this pass (weak-alias
+    defer, FS failure, or unreadable catalogue).
+    """
+    pending = False
+    names = tuple(str(n) for n in (filenames or ()) if n)
+    for filename in names:
+        try:
+            if not _remove_managed_pdf(db, filename, db.storage.pdfs_dir):
+                pending = True
+        except OSError as e:
+            pending = True
+            LOGGER.warning(
+                "pdf_retarget_cleanup_failed error_type=%s",
+                safe_error_type(e),
+            )
+    if names:
+        retry_pending_pdf_cleanup(db, skip=names)
+    return pending
+
+
 def forget_pending_pdf_cleanup(db: PRKSDatabase, filename: str) -> None:
     """Settle the claim on ``filename``. Best-effort and idempotent.
 

@@ -2779,7 +2779,14 @@ class PRKSDatabase:
         return rows
 
     def update_work_metadata(self, work_id: str, fields: dict):
-        """Update arbitrary metadata fields on a work."""
+        """Update arbitrary metadata fields on a work.
+
+        Returns a tuple of managed basenames claimed for cleanup when
+        ``file_path`` retargets away from strong ownership of those names.
+        Empty when nothing was released. Callers that change ``file_path``
+        must run post-commit survivor-aware cleanup for any returned names
+        (see ``cleanup_released_managed_pdfs``).
+        """
         allowed = {'title', 'status', 'abstract', 'published_date',
                    'author_text', 'year', 'publisher', 'location', 'edition', 'journal',
                    'volume', 'issue', 'pages', 'isbn', 'doi', 'text_content', 'doc_type',
@@ -2821,7 +2828,7 @@ class PRKSDatabase:
         # instead of guessing -- the same rule an uninterpretable Published
         # Date follows. See work_metadata_sync.FIELD_CODECS.
         if not updates:
-            return
+            return ()
         # Revisions record CANONICAL history, not sync-endpoint history. An
         # ordinary online PATCH that changes a synchronized field has to
         # advance that field's revision, or an offline device holding the old
@@ -2858,6 +2865,7 @@ class PRKSDatabase:
         # Now that every value is known-good, put PATCH and the synchronization
         # handler on ONE representation before either writes.
         synced = {k: work_metadata_sync.canonical_wire(k, v) for k, v in synced.items()}
+        claimed_old: tuple = ()
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             # The same guard the synchronization handler applies: a field-scoped
@@ -2869,6 +2877,20 @@ class PRKSDatabase:
                     raise ValueError(
                         "%s cannot be set on this Work: its source identity is not a "
                         "field-scoped value" % field)
+            # Owner P2 on #172: retargeting file_path must claim the old
+            # strong basenames in THIS transaction, or a crash between the
+            # path write and post-commit cleanup loses the only durable
+            # cleanup identity (same invariant as Work delete).
+            old_file_path = None
+            if "file_path" in plain:
+                row = conn.execute(
+                    "SELECT file_path FROM works WHERE id = ?",
+                    (work_id,),
+                ).fetchone()
+                if row is not None:
+                    old_file_path = (
+                        "" if row["file_path"] is None else str(row["file_path"])
+                    )
             if plain:
                 set_clause = ", ".join(f"{k} = ?" for k in plain)
                 conn.execute(
@@ -2888,6 +2910,19 @@ class PRKSDatabase:
                     raise ValueError(str(exc)) from exc
             for field, value in synced.items():
                 work_metadata_sync.set_field_on_conn(conn, work_id, field, value)
+            if old_file_path is not None:
+                new_file_path = (
+                    "" if plain.get("file_path") is None
+                    else str(plain.get("file_path") or "")
+                )
+                if new_file_path != old_file_path:
+                    from backend.work_deletion import (
+                        claim_released_managed_basenames_on_conn,
+                    )
+                    claimed_old = claim_released_managed_basenames_on_conn(
+                        conn, old_file_path
+                    )
+        return claimed_old
 
     def get_work_notes_state(self, work_id: str) -> Optional[dict]:
         """The two whole-document revisions; values live on Work detail."""

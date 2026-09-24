@@ -30,6 +30,7 @@ from backend.services.work_pdf_replace import managed_pdf_path_lock
 from backend.work_deletion import (
     PENDING_PDF_CLEANUP_RETRY_LIMIT,
     cleanup_after_work_delete,
+    cleanup_released_managed_pdfs,
     delete_work,
     pending_pdf_cleanup_count,
     retry_pending_pdf_cleanup,
@@ -502,6 +503,114 @@ class PendingPdfCleanupTests(unittest.TestCase):
                 self.assertTrue(result.existed)
                 self.assertFalse(os.path.isfile(stem_b_path))
                 self.assertEqual(self._claims(), [])
+
+    def test_retarget_alone_claims_and_unlinks_old_pdf(self):
+        """Owner P2: A→B with no other A referrer must claim and remove A."""
+        a_id, a_name, a_path = self._managed_work("OnA")
+        b_name = f"b-{uuid.uuid4().hex}.pdf"
+        b_path = self._write_pdf(b_name)
+        # Observe the durable-claim boundary before post-commit unlink.
+        claimed = self.db.update_work_metadata(
+            a_id, {"file_path": f"/api/pdfs/{b_name}"}
+        )
+        self.assertEqual(claimed, (a_name,))
+        self.assertEqual(self._claims(), [a_name])
+        self.assertTrue(os.path.isfile(a_path))
+        pending = cleanup_released_managed_pdfs(self.db, claimed)
+        self.assertFalse(pending)
+        self.assertFalse(os.path.isfile(a_path))
+        self.assertTrue(os.path.isfile(b_path))
+        self.assertEqual(self._claims(), [])
+        rows = self.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (a_id,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{b_name}")
+
+    def test_retarget_with_shared_referrer_keeps_old_pdf(self):
+        """Owner P2: A→B while another Work still strongly owns A claims nothing."""
+        a_name = f"shared-{uuid.uuid4().hex}.pdf"
+        a_path = self._write_pdf(a_name)
+        first = self.db.add_work(title="First", file_path=f"/api/pdfs/{a_name}")
+        second = self.db.add_work(title="Second", file_path=f"/api/pdfs/{a_name}")
+        b_name = f"b-{uuid.uuid4().hex}.pdf"
+        self._write_pdf(b_name)
+        claimed = self.db.update_work_metadata(
+            first, {"file_path": f"/api/pdfs/{b_name}"}
+        )
+        self.assertEqual(claimed, ())
+        self.assertEqual(self._claims(), [])
+        cleanup_released_managed_pdfs(self.db, claimed)
+        self.assertTrue(os.path.isfile(a_path))
+        self.assertIsNotNone(self.db.get_work(second))
+
+    def test_retarget_recreates_previously_superseded_claim(self):
+        """Owner P2: Work that retired an A claim must recreate it on A→B."""
+        a_name = f"supersede-{uuid.uuid4().hex}.pdf"
+        a_path = self._write_pdf(a_name)
+        # Orphan claim as after deleting a prior owner.
+        with self.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (a_name,),
+            )
+            conn.commit()
+        owner = self.db.add_work(title="Owner", file_path=f"/api/pdfs/{a_name}")
+        summary = retry_pending_pdf_cleanup(self.db)
+        self.assertEqual(summary["superseded"], 1)
+        self.assertEqual(self._claims(), [])
+        self.assertTrue(os.path.isfile(a_path))
+
+        b_name = f"b-{uuid.uuid4().hex}.pdf"
+        self._write_pdf(b_name)
+        claimed = self.db.update_work_metadata(
+            owner, {"file_path": f"/api/pdfs/{b_name}"}
+        )
+        self.assertEqual(claimed, (a_name,))
+        self.assertEqual(self._claims(), [a_name])
+        pending = cleanup_released_managed_pdfs(self.db, claimed)
+        self.assertFalse(pending)
+        self.assertFalse(os.path.isfile(a_path))
+        self.assertEqual(self._claims(), [])
+
+    def test_retarget_claim_survives_missing_post_commit_cleanup(self):
+        """Crash after path commit still leaves a retryable claim for A."""
+        a_id, a_name, a_path = self._managed_work("CrashBoundary")
+        b_name = f"b-{uuid.uuid4().hex}.pdf"
+        self._write_pdf(b_name)
+        claimed = self.db.update_work_metadata(
+            a_id, {"file_path": f"/api/pdfs/{b_name}"}
+        )
+        self.assertEqual(claimed, (a_name,))
+        self.assertEqual(self._claims(), [a_name])
+        self.assertTrue(os.path.isfile(a_path))
+        # No cleanup_released_managed_pdfs — simulate process death.
+        restarted = self._open_db()
+        self.assertEqual(self._claims(restarted), [a_name])
+        summary = retry_pending_pdf_cleanup(restarted)
+        self.assertEqual(summary["removed"], 1)
+        self.assertFalse(os.path.isfile(a_path))
+        self.assertEqual(self._claims(restarted), [])
+
+    def test_retarget_defers_when_only_weak_alias_survives(self):
+        """Weak alias after A→B keeps the claim pending (does not supersede)."""
+        a_name = f"weak-retarget-{uuid.uuid4().hex}.pdf"
+        a_path = self._write_pdf(a_name)
+        owner = self.db.add_work(title="Owner", file_path=f"/api/pdfs/{a_name}")
+        self.db.add_work(
+            title="Weak alias",
+            file_path=f"/api/pdfs/../{a_name}",
+        )
+        b_name = f"b-{uuid.uuid4().hex}.pdf"
+        self._write_pdf(b_name)
+        claimed = self.db.update_work_metadata(
+            owner, {"file_path": f"/api/pdfs/{b_name}"}
+        )
+        self.assertEqual(claimed, (a_name,))
+        self.assertEqual(self._claims(), [a_name])
+        pending = cleanup_released_managed_pdfs(self.db, claimed)
+        self.assertTrue(pending)
+        self.assertTrue(os.path.isfile(a_path))
+        self.assertEqual(self._claims(), [a_name])
 
     def test_a_failed_delete_does_not_retry_itself_in_the_same_breath(self):
         work_id, name, abs_path = self._managed_work("NoDoubleTry")

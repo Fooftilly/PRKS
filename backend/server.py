@@ -1115,6 +1115,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         # cleanup lock and prove the contained file still
                         # exists before commit. An unchanged echo was popped
                         # above and never reaches this rewrite.
+                        # Released-PDF claims (old strong basenames) are
+                        # recorded inside update_work_metadata's transaction;
+                        # filesystem cleanup runs after the adoption lock
+                        # releases so it can take the old basename's lock.
+                        claimed_old = ()
                         try:
                             with (
                                 work_pdf_replace.managed_pdf_adoption_guard(
@@ -1127,7 +1132,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 # persist only the exact ownership spelling.
                                 if adopted_name:
                                     body["file_path"] = f"/api/pdfs/{adopted_name}"
-                                db.update_work_metadata(w_id, body)
+                                claimed_old = (
+                                    db.update_work_metadata(w_id, body) or ()
+                                )
                         except work_pdf_replace.ManagedPdfStoreError as e:
                             self.send_json(e.http_status, {'error': e.message})
                             return
@@ -1136,6 +1143,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             # server fault: say so rather than 500.
                             self.send_json(400, {'error': str(e)})
                             return
+                        if claimed_old:
+                            from backend.work_deletion import (
+                                cleanup_released_managed_pdfs,
+                            )
+                            try:
+                                cleanup_released_managed_pdfs(db, claimed_old)
+                            except Exception as e:
+                                LOGGER.warning(
+                                    "work_patch_pdf_cleanup_failed work_id=%s "
+                                    "error_type=%s",
+                                    safe_log_id(w_id),
+                                    safe_error_type(e),
+                                )
                     if file_path_changing:
                         try:
                             rows = db.execute_query(

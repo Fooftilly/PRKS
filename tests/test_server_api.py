@@ -274,6 +274,43 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(rows[0]["title"], "Renamed without retargeting")
         self.assertEqual(rows[0]["file_path"], fp)
 
+    def test_patch_retarget_claims_and_unlinks_old_managed_pdf(self):
+        """Owner P2 on #172: PATCH A→B must claim/unlink A when nothing else owns it."""
+        name_a = "patch-retarget-a.pdf"
+        name_b = "patch-retarget-b.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path_a = os.path.join(pdfs_dir, name_a)
+        path_b = os.path.join(pdfs_dir, name_b)
+        with open(path_a, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%A\n%%EOF\n")
+        with open(path_b, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%B\n%%EOF\n")
+        work_id = server_module.db.add_work(
+            "Retarget me", file_path=f"/api/pdfs/{name_a}"
+        )
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+
+        payload = json.dumps({"file_path": f"/api/pdfs/{name_b}"}).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name_b}")
+        self.assertFalse(os.path.isfile(path_a))
+        self.assertTrue(os.path.isfile(path_b))
+        claims = server_module.db.execute_query(
+            "SELECT filename FROM pending_pdf_cleanup"
+        )
+        self.assertEqual(claims, [])
+
     def test_patch_same_path_drop_survives_concurrent_retarget_cleanup(self):
         """Owner P2 TOCTOU on #172: same-path PATCH must drop file_path so a
         concurrent retarget + cleanup cannot be overwritten without the guard.
