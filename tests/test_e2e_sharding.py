@@ -364,10 +364,12 @@ class RunnerDiscoveryTests(unittest.TestCase):
         with _import_runner() as runner:
             ids = runner.discover_test_ids()
             expected_modules = set(runner.E2E_MODULES)
+            # Same shape as run.py's _E2E_TEST_ID_LINE (digits allowed: V1 classes).
+            id_line = runner._E2E_TEST_ID_LINE
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual({module_of(t) for t in ids}, expected_modules)
         for test_id in ids:
-            self.assertRegex(test_id, r"^tests\.e2e\.[A-Za-z_]+\.[A-Za-z_]+\.test_")
+            self.assertRegex(test_id, id_line)
 
 
 class HungWorkerDiagnosticsTests(unittest.TestCase):

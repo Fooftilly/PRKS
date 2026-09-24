@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -35,6 +37,323 @@ from backend.dependency_gate import (
     validate_python_version,
     validate_requirements_file,
 )
+
+# Exact pins only for the CI test-gate install argv (see RepoGateLiveTests).
+_TEST_GATE_PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)==([^#\s]+)$")
+_TEST_GATE_APPROVED_OPTIONS = frozenset(
+    {
+        "--isolated",
+        "--disable-pip-version-check",
+        "--only-binary=:all:",
+    }
+)
+_TEST_GATE_APPROVED_OPTIONS_WITH_VALUE = {
+    "--only-binary": frozenset({":all:"}),
+}
+_TEST_GATE_REJECTED_SOURCE_OPTIONS = frozenset(
+    {
+        "-r",
+        "--requirement",
+        "-e",
+        "--editable",
+    }
+)
+_TEST_GATE_APPROVED_INSTALL_STEP = "Install pinned runtime dependencies"
+_TEST_GATE_RUN_TESTS_STEP = "Run PRKS unit, API, structural, and Node tests"
+_TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
+    {
+        _TEST_GATE_APPROVED_INSTALL_STEP,
+        _TEST_GATE_RUN_TESTS_STEP,
+    }
+)
+# Env vars that can inject requirements/config into pip even with an allowlisted argv.
+_TEST_GATE_REJECTED_PIP_ENV = frozenset(
+    {
+        "PIP_REQUIREMENT",
+        "PIP_EDITABLE",
+        "PIP_CONSTRAINT",
+        "PIP_CONFIG_FILE",
+    }
+)
+_TEST_GATE_REJECTED_PIP_ENV_RE = re.compile(
+    r"(?m)^[ \t]+("
+    + "|".join(sorted(_TEST_GATE_REJECTED_PIP_ENV))
+    + r")\s*:"
+)
+
+
+def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
+    """Parse `python -m pip install ...` argv into exact name==version pins.
+
+    Every operand after ``install`` must be an approved pip option or an exact
+    ``name==version`` pin. Bare names, ``-r``/``-e``, paths/wheels, and
+    URL/VCS sources are rejected. ``--isolated`` is required so ``PIP_*``
+    env vars and user config cannot inject requirements.
+    """
+    if pip_args[:4] != ["python", "-m", "pip", "install"]:
+        raise ValueError("expected python -m pip install prefix")
+    if "--isolated" not in pip_args[4:]:
+        raise ValueError("approved install requires --isolated")
+    pins: dict[str, str] = {}
+    index = 4
+    while index < len(pip_args):
+        arg = pip_args[index]
+        if (
+            arg in _TEST_GATE_REJECTED_SOURCE_OPTIONS
+            or arg.startswith("--requirement=")
+            or arg.startswith("--editable=")
+        ):
+            raise ValueError(f"disallowed requirement source option: {arg}")
+        if arg in _TEST_GATE_APPROVED_OPTIONS:
+            index += 1
+            continue
+        if arg in _TEST_GATE_APPROVED_OPTIONS_WITH_VALUE:
+            if index + 1 >= len(pip_args):
+                raise ValueError(f"option {arg} missing value")
+            value = pip_args[index + 1]
+            allowed = _TEST_GATE_APPROVED_OPTIONS_WITH_VALUE[arg]
+            if value not in allowed:
+                raise ValueError(f"disallowed value for {arg}: {value}")
+            index += 2
+            continue
+        if arg.startswith("-"):
+            raise ValueError(f"unapproved pip option: {arg}")
+        pin_match = _TEST_GATE_PIN_RE.fullmatch(arg)
+        if pin_match is None:
+            raise ValueError(f"non-exact package/requirement source: {arg}")
+        name, version = pin_match.group(1), pin_match.group(2)
+        if name in pins:
+            raise ValueError(f"duplicate package pin for {name}")
+        pins[name] = version
+        index += 1
+    return pins
+
+
+def test_gate_install_argv_from_run_body(
+    scalar_style: str, body_lines: list[str]
+) -> list[str]:
+    """Extract the approved Install-step ``python -m pip install`` argv.
+
+    Literal ``|`` bodies may contain only one non-comment executable command
+    (so ``pip install`` / ``python3 -m pip install`` / ``uv pip install``
+    after the pinned install cannot hide). Folded ``>`` bodies keep a single
+    folded command and the fail-closed argv parse.
+    """
+    if scalar_style == ">":
+        # Folded: YAML turns newlines into spaces — one shell command.
+        folded = " ".join(
+            line for line in body_lines if line and not line.startswith("#")
+        )
+        if not folded:
+            raise ValueError("empty Install step run body")
+        args = shlex.split(folded)
+    else:
+        executable = [
+            line for line in body_lines if line and not line.startswith("#")
+        ]
+        if len(executable) != 1:
+            raise ValueError(
+                "literal Install step must contain exactly one non-comment "
+                f"executable command (found {len(executable)})"
+            )
+        args = shlex.split(executable[0])
+    if args[:4] != ["python", "-m", "pip", "install"]:
+        raise ValueError(
+            "Install step command must be python -m pip install "
+            f"(got {' '.join(args[:4]) if args else '<empty>'})"
+        )
+    return args
+
+
+def _test_gate_run_body_without_shell_comments(body: str) -> str:
+    """Drop blank and ``#`` comment lines from a run body."""
+    kept: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        kept.append(stripped)
+    return "\n".join(kept)
+
+
+def _normalize_yaml_flow_scalar(value: str) -> str:
+    """Strip one layer of YAML single/double quotes from an inline scalar."""
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return text[1:-1]
+    return text
+
+
+def iter_test_gate_step_run_bodies(
+    workflow: str, *, step_indent: int = 6
+) -> list[tuple[str | None, str, str]]:
+    """Return ``(step_name, scalar_style, run_body)`` for every step with ``run:``.
+
+    ``scalar_style`` is ``"|"``, ``">"``, or ``""`` for a single-line ``run:``.
+    ``step_name`` is None for unnamed ``- run:`` steps. Scoped to GitHub Actions
+    list items at ``step_indent`` (PRKS test-gate uses 6).
+    """
+    dash = f"{' ' * step_indent}- "
+    field_indent = step_indent + 2
+    field = " " * field_indent
+    body_indent = step_indent + 4
+    starts = [m.start() for m in re.finditer(rf"(?m)^{re.escape(dash)}", workflow)]
+    results: list[tuple[str | None, str, str]] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(workflow)
+        block = workflow[start:end]
+        first_nl = block.find("\n")
+        first = block[:first_nl] if first_nl >= 0 else block
+        name: str | None = None
+        name_match = re.match(rf"^{re.escape(dash)}name:\s*(.+)$", first)
+        if name_match:
+            name = name_match.group(1).strip()
+        # `- run: …` on the list item itself (no separate name key).
+        inline_run = re.match(rf"^{re.escape(dash)}run:\s*(.*)$", first)
+        if inline_run is not None:
+            results.append((name, "", inline_run.group(1)))
+            continue
+        run_match = re.search(
+            rf"(?m)^{re.escape(field)}run:\s*"
+            rf"(?:([|>])[-+]?\n((?: {{{body_indent},}}[^\n]*\n)+)|([^\n]*))",
+            block,
+        )
+        if run_match is None:
+            continue
+        if run_match.group(1) is not None:
+            results.append((name, run_match.group(1), run_match.group(2)))
+        else:
+            results.append((name, "", run_match.group(3) or ""))
+    return results
+
+
+def count_test_gate_steps_named(
+    workflow: str, step_name: str, *, step_indent: int = 6
+) -> int:
+    """Count steps[] entries whose ``name:`` equals ``step_name`` (with or without run)."""
+    dash = f"{' ' * step_indent}- "
+    starts = [m.start() for m in re.finditer(rf"(?m)^{re.escape(dash)}", workflow)]
+    count = 0
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(workflow)
+        block = workflow[start:end]
+        first_nl = block.find("\n")
+        first = block[:first_nl] if first_nl >= 0 else block
+        name_match = re.match(rf"^{re.escape(dash)}name:\s*(.+)$", first)
+        if name_match and name_match.group(1).strip() == step_name:
+            count += 1
+    return count
+
+
+def unique_test_gate_install_step(workflow: str) -> tuple[str, str]:
+    """Return ``(scalar_style, run_body)`` for the sole approved Install step.
+
+    Exactly one step named ``Install pinned runtime dependencies`` must exist;
+    a duplicate same-named step is refused so it cannot bypass allowlisting.
+    """
+    named = count_test_gate_steps_named(workflow, _TEST_GATE_APPROVED_INSTALL_STEP)
+    if named == 0:
+        raise ValueError(
+            f"missing approved Install step {_TEST_GATE_APPROVED_INSTALL_STEP!r}"
+        )
+    if named > 1:
+        raise ValueError(
+            f"exactly one {_TEST_GATE_APPROVED_INSTALL_STEP!r} step required "
+            f"(found {named})"
+        )
+    for name, style, body in iter_test_gate_step_run_bodies(workflow):
+        if name == _TEST_GATE_APPROVED_INSTALL_STEP:
+            return style, body
+    raise ValueError(
+        f"approved Install step {_TEST_GATE_APPROVED_INSTALL_STEP!r} has no run body"
+    )
+
+
+def unique_test_gate_run_tests_step(workflow: str) -> tuple[str, str]:
+    """Return ``(scalar_style, run_body)`` for the sole ``run_tests.py`` step."""
+    named = count_test_gate_steps_named(workflow, _TEST_GATE_RUN_TESTS_STEP)
+    if named == 0:
+        raise ValueError(f"missing run-tests step {_TEST_GATE_RUN_TESTS_STEP!r}")
+    if named > 1:
+        raise ValueError(
+            f"exactly one {_TEST_GATE_RUN_TESTS_STEP!r} step required "
+            f"(found {named})"
+        )
+    for name, style, body in iter_test_gate_step_run_bodies(workflow):
+        if name == _TEST_GATE_RUN_TESTS_STEP:
+            return style, body
+    raise ValueError(
+        f"run-tests step {_TEST_GATE_RUN_TESTS_STEP!r} has no run body"
+    )
+
+
+def assert_test_gate_run_tests_body(scalar_style: str, body: str) -> None:
+    """Require the run-tests step body to be exactly ``python run_tests.py``."""
+    text = _test_gate_run_body_without_shell_comments(body)
+    if not text:
+        raise ValueError("empty run-tests step run body")
+    if scalar_style == "|":
+        lines = text.splitlines()
+        if len(lines) != 1:
+            raise ValueError(
+                "literal run-tests step must contain exactly one non-comment "
+                f"command (found {len(lines)})"
+            )
+        command = _normalize_yaml_flow_scalar(lines[0])
+    elif scalar_style == ">":
+        command = _normalize_yaml_flow_scalar(" ".join(text.splitlines()))
+    else:
+        command = _normalize_yaml_flow_scalar(text)
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"unparseable run-tests command: {exc}") from exc
+    if argv != ["python", "run_tests.py"]:
+        raise ValueError(
+            "run-tests step must be exactly `python run_tests.py` "
+            f"(got {argv!r})"
+        )
+
+
+def assert_test_gate_no_pip_inject_env(workflow: str) -> None:
+    """Refuse job/step ``PIP_REQUIREMENT`` / ``PIP_EDITABLE`` / similar env keys.
+
+    ``--isolated`` is still required on the Install argv; this rejects the
+    inject vectors at the workflow YAML layer as well.
+    """
+    for match in _TEST_GATE_REJECTED_PIP_ENV_RE.finditer(workflow):
+        line_start = workflow.rfind("\n", 0, match.start()) + 1
+        line_end = workflow.find("\n", match.start())
+        if line_end < 0:
+            line_end = len(workflow)
+        line = workflow[line_start:line_end]
+        if line.lstrip().startswith("#"):
+            continue
+        raise ValueError(f"disallowed pip inject env: {match.group(1)}")
+
+
+def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
+    """Invert policy: only Install + run_tests may have ``run:`` bodies.
+
+    ``uses:``-only steps are unrestricted. Any additional ``run:`` step is
+    refused — including quoted inline installs and backslash-continued
+    spellings — without enumerating pip/shell forms. Job/step pip-inject
+    env vars are refused; Install argv must include ``--isolated``.
+    """
+    assert_test_gate_no_pip_inject_env(workflow)
+    unique_test_gate_install_step(workflow)
+    style, body = unique_test_gate_run_tests_step(workflow)
+    assert_test_gate_run_tests_body(style, body)
+    run_steps = iter_test_gate_step_run_bodies(workflow)
+    for name, _style, _body in run_steps:
+        if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
+            label = name if name else "<unnamed step>"
+            raise ValueError(f"disallowed run step: {label}")
+    if len(run_steps) != 2:
+        raise ValueError(
+            "test-gate must have exactly two run steps "
+            f"(Install + run-tests); found {len(run_steps)}"
+        )
 
 
 class RequirementsParsingTests(unittest.TestCase):
@@ -666,6 +985,223 @@ class RepoGateLiveTests(unittest.TestCase):
             docker,
             r"(?m)^\s*COPY\s+dependency-inventory\.json\s+",
         )
+
+    def test_test_gate_workflow_pins_match_requirements(self):
+        """CI install must name the same == pins as requirements.txt (Sonar
+        rejects unlocked `-r` installs; keep the two sources equal).
+
+        Assert against the install step's executable `run` args only — a pin
+        or `--only-binary` mention in a comment must not satisfy the check.
+        Package pins collected from that argv must equal requirements.txt;
+        bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
+        A literal Install body must be exactly one non-comment command — the
+        approved ``python -m pip install``.
+        Invert policy: exactly two ``run:`` steps (Install + ``run_tests.py``);
+        any additional ``run:`` is refused without enumerating pip spellings.
+        Install argv must include ``--isolated``; job/step ``PIP_REQUIREMENT``
+        (and similar) env is refused.
+        """
+        pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
+        workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        assert_test_gate_run_steps_allowlisted(workflow)
+        # Validate the sole approved Install step's run body.
+        scalar_style, body = unique_test_gate_install_step(workflow)
+        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
+        # Inline run: treat as a single folded command.
+        style_for_parse = scalar_style if scalar_style else ">"
+        pip_args = test_gate_install_argv_from_run_body(style_for_parse, body_lines)
+        self.assertIn("--isolated", pip_args)
+        self.assertIn("--only-binary=:all:", pip_args)
+        # Two-way equality via fail-closed operand walk: every argv token after
+        # install is an approved option or an exact name==version pin.
+        install_pins = parse_test_gate_pip_install_pins(pip_args)
+        self.assertEqual(install_pins, pins)
+
+    def _minimal_allowlisted_workflow(self, extra_step: str = "") -> str:
+        """Install + run_tests skeleton; optional extra YAML step(s) appended."""
+        return (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: >-\n"
+            "          python -m pip install --isolated --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Run PRKS unit, API, structural, and Node tests\n"
+            "        run: python run_tests.py\n"
+            f"{extra_step}"
+        )
+
+    def test_test_gate_rejects_extra_run_step(self):
+        """Any additional run: step is refused (invert allowlist policy)."""
+        for extra in (
+            "      - name: Prepare test helper\n"
+            "        run: pip install requests\n",
+            "      - name: Prepare test helper\n"
+            '        run: "pip install requests"\n',
+            "      - name: Prepare test helper\n"
+            "        run: |\n"
+            "          pip \\\n"
+            "            install requests\n",
+        ):
+            with self.subTest(extra=extra.strip().splitlines()[0]):
+                with self.assertRaisesRegex(ValueError, r"disallowed run step:"):
+                    assert_test_gate_run_steps_allowlisted(
+                        self._minimal_allowlisted_workflow(extra)
+                    )
+
+    def test_test_gate_rejects_duplicate_install_step_name(self):
+        """A second same-named Install step must fail (cannot bypass by name)."""
+        workflow = self._minimal_allowlisted_workflow(
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: pip install requests\n"
+        )
+        with self.assertRaisesRegex(
+            ValueError, r"exactly one .*Install pinned runtime dependencies.* required"
+        ):
+            assert_test_gate_run_steps_allowlisted(workflow)
+        with self.assertRaisesRegex(
+            ValueError, r"exactly one .*Install pinned runtime dependencies.* required"
+        ):
+            unique_test_gate_install_step(workflow)
+
+    def test_test_gate_requires_isolated(self):
+        """Approved install argv without --isolated must fail closed."""
+        with self.assertRaisesRegex(ValueError, "approved install requires --isolated"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--only-binary=:all:",
+                    "PyMuPDF==1.28.2",
+                    "Pillow==12.3.0",
+                ]
+            )
+
+    def test_test_gate_rejects_pip_requirement_env(self):
+        """Job/step PIP_REQUIREMENT (and similar) must be refused."""
+        step_env = (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        env:\n"
+            "          PIP_REQUIREMENT: extra.txt\n"
+            "        run: >-\n"
+            "          python -m pip install --isolated --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Run PRKS unit, API, structural, and Node tests\n"
+            "        run: python run_tests.py\n"
+        )
+        job_env = (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    env:\n"
+            "      PIP_REQUIREMENT: extra.txt\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: >-\n"
+            "          python -m pip install --isolated --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Run PRKS unit, API, structural, and Node tests\n"
+            "        run: python run_tests.py\n"
+        )
+        with self.assertRaisesRegex(ValueError, r"disallowed pip inject env: PIP_REQUIREMENT"):
+            assert_test_gate_run_steps_allowlisted(step_env)
+        with self.assertRaisesRegex(ValueError, r"disallowed pip inject env: PIP_REQUIREMENT"):
+            assert_test_gate_run_steps_allowlisted(job_env)
+
+    def test_test_gate_literal_rejects_extra_pip_install_line(self):
+        """Later `pip install` / `python3 -m pip` lines must fail the literal check."""
+        pinned = (
+            "python -m pip install --isolated --disable-pip-version-check "
+            '"--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"'
+        )
+        with self.assertRaisesRegex(
+            ValueError, "exactly one non-comment executable command"
+        ):
+            test_gate_install_argv_from_run_body(
+                "|", [pinned, "pip install requests"]
+            )
+        with self.assertRaisesRegex(
+            ValueError, "exactly one non-comment executable command"
+        ):
+            test_gate_install_argv_from_run_body(
+                "|", [pinned, "python3 -m pip install requests"]
+            )
+        with self.assertRaisesRegex(
+            ValueError, "exactly one non-comment executable command"
+        ):
+            test_gate_install_argv_from_run_body(
+                "|", [pinned, "uv pip install requests"]
+            )
+
+    def test_test_gate_pip_install_rejects_bare_package(self):
+        with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "--only-binary=:all:",
+                    "PyMuPDF==1.28.2",
+                    "requests",
+                ]
+            )
+
+    def test_test_gate_pip_install_rejects_requirements_file(self):
+        with self.assertRaisesRegex(ValueError, "disallowed requirement source option"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "--only-binary=:all:",
+                    "PyMuPDF==1.28.2",
+                    "-r",
+                    "extra.txt",
+                ]
+            )
+
+    def test_test_gate_pip_install_rejects_wheel_and_vcs(self):
+        with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--only-binary=:all:",
+                    "./Pillow-12.3.0-py3-none-any.whl",
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
+            parse_test_gate_pip_install_pins(
+                [
+                    "python",
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--only-binary=:all:",
+                    "git+https://example.invalid/pkg.git",
+                ]
+            )
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
