@@ -1264,8 +1264,42 @@ function prksFolderDetailSelectInTree(host, folderId, rows) {
     return true;
 }
 
+/**
+ * Claim a Folder-detail hierarchy refresh token for `mode`, or null when the
+ * TabContext cannot begin (destroyed / API absent). Shared by the initial
+ * claim and the selection-fallback full claim so Sonar does not flag the
+ * begin+commitAllowed shape twice in prksFillFolderDetailTree.
+ */
+function prksBeginFolderHierarchyRefresh(ctx, mode) {
+    return ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
+        ? ctx.beginFolderHierarchyRefresh(mode)
+        : null;
+}
+
+/**
+ * True when this claim may still write the live hierarchy host.
+ * Handles destroyed-ctx (null token) the same way at both gate sites.
+ */
+function prksFolderHierarchyClaimMayCommit(ctx, token, container, signal) {
+    if (token == null && ctx && ctx.destroyed) return false;
+    return (
+        typeof prksFolderHierarchyTreeCommitAllowed === 'function' &&
+        prksFolderHierarchyTreeCommitAllowed(ctx, token, container, signal)
+    );
+}
+
+/**
+ * Live Folder-detail hierarchy refill. Same-route overlap ownership uses
+ * TabContext beginFolderHierarchyRefresh(mode) / prksFolderHierarchyTreeCommitAllowed
+ * so an older async catalogue result cannot overwrite a newer committed tree.
+ * Successful in-place selection never supersedes an in-flight full topology
+ * refresh. When selection-only falls through to a full tree rebuild (missing
+ * tree or destination row), it claims full ownership first so an older full
+ * cannot overwrite that newer topology. Route AbortSignal still covers A→B→C.
+ */
 async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
+    const selectionOnly = !!opts.selectionOnly;
     const host = container && container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!host || !folder) return;
     // Capture before await: A→B→C can abort B while load() is in flight. The
@@ -1275,6 +1309,16 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
         ctx && ctx.abortController && ctx.abortController.signal
             ? ctx.abortController.signal
             : null;
+    // Mode-aware ownership: full vs selection use separate counters so a
+    // Folder→Folder in-place selection fill cannot invalidate a pending sync
+    // full refill. Fallback rebuilds claim full below.
+    const refreshToken = prksBeginFolderHierarchyRefresh(
+        ctx,
+        selectionOnly ? 'selection' : 'full'
+    );
+    // Destroyed before await: begin returned null. After await we re-check via
+    // prksFolderHierarchyClaimMayCommit.
+    if (refreshToken == null && ctx && ctx.destroyed) return;
     const load =
         typeof prksLoadFolderHierarchyCatalogue === 'function'
             ? prksLoadFolderHierarchyCatalogue
@@ -1289,10 +1333,17 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
             rows = null;
         }
     }
-    if (signal && signal.aborted) return;
-    if (!container.isConnected) return;
+    if (!prksFolderHierarchyClaimMayCommit(ctx, refreshToken, container, signal)) {
+        return;
+    }
     const liveHost = container.querySelector('[data-prks-folder-detail-tree-host]');
     if (!liveHost) return;
+    // Re-read the live Folder entity after the await (in-place Folder→Folder
+    // can advance selection while a sync-triggered full refill was in flight).
+    const liveFolder =
+        ctx && typeof ctx.getEntity === 'function' ? ctx.getEntity('folder') : null;
+    const commitFolder =
+        liveFolder && liveFolder.id != null && liveFolder.id !== '' ? liveFolder : folder;
     if (!Array.isArray(rows)) {
         liveHost.innerHTML =
             '<p class="prks-inline-message prks-folder-tree__empty">Could not load folders.</p>';
@@ -1300,14 +1351,24 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     }
     // Same-workspace Folder→Folder: keep the hierarchy DOM; only move selection.
     if (
-        opts.selectionOnly &&
+        selectionOnly &&
         liveHost.querySelector('.prks-folder-tree--detail-nav') &&
-        prksFolderDetailSelectInTree(liveHost, folder.id, rows)
+        prksFolderDetailSelectInTree(liveHost, commitFolder.id, rows)
     ) {
         return;
     }
-    prksFolderDetailExpandAncestors(folder.id, rows);
-    liveHost.innerHTML = prksFolderDetailTreeHtml(rows, folder.id);
+    // Selection-only fell through to a topology rebuild (tree not built yet, or
+    // destination row absent). Claim full ownership before writing so an older
+    // in-flight full cannot overwrite this newer tree. The successful in-place
+    // select path above does not bump full and leaves pending fulls current.
+    if (selectionOnly) {
+        const fullClaim = prksBeginFolderHierarchyRefresh(ctx, 'full');
+        if (!prksFolderHierarchyClaimMayCommit(ctx, fullClaim, container, signal)) {
+            return;
+        }
+    }
+    prksFolderDetailExpandAncestors(commitFolder.id, rows);
+    liveHost.innerHTML = prksFolderDetailTreeHtml(rows, commitFolder.id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(liveHost);
 }
 
@@ -1843,3 +1904,4 @@ window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
 window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
+window.prksFillFolderDetailTree = prksFillFolderDetailTree;
