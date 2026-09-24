@@ -58,12 +58,12 @@ _TEST_GATE_REJECTED_SOURCE_OPTIONS = frozenset(
     }
 )
 _TEST_GATE_APPROVED_INSTALL_STEP = "Install pinned runtime dependencies"
-# Fail-closed: any of these in a non-approved step's run body is refused.
-_TEST_GATE_PACKAGE_INSTALL_RE = re.compile(
-    r"(?:^|[\s;&|`$()])"
-    r"(?:python3?\s+-m\s+pip\s+install|uv\s+pip\s+install|pip3?\s+install)"
-    r"\b",
-    re.MULTILINE,
+_TEST_GATE_RUN_TESTS_STEP = "Run PRKS unit, API, structural, and Node tests"
+_TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
+    {
+        _TEST_GATE_APPROVED_INSTALL_STEP,
+        _TEST_GATE_RUN_TESTS_STEP,
+    }
 )
 
 
@@ -148,7 +148,7 @@ def test_gate_install_argv_from_run_body(
 
 
 def _test_gate_run_body_without_shell_comments(body: str) -> str:
-    """Drop blank and ``#`` comment lines from a run body before install scans."""
+    """Drop blank and ``#`` comment lines from a run body."""
     kept: list[str] = []
     for line in body.splitlines():
         stripped = line.strip()
@@ -158,10 +158,12 @@ def _test_gate_run_body_without_shell_comments(body: str) -> str:
     return "\n".join(kept)
 
 
-def run_body_has_package_install(body: str) -> bool:
-    """True when a run body contains a package-install command form."""
-    text = _test_gate_run_body_without_shell_comments(body)
-    return _TEST_GATE_PACKAGE_INSTALL_RE.search(text) is not None
+def _normalize_yaml_flow_scalar(value: str) -> str:
+    """Strip one layer of YAML single/double quotes from an inline scalar."""
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return text[1:-1]
+    return text
 
 
 def iter_test_gate_step_run_bodies(
@@ -229,8 +231,7 @@ def unique_test_gate_install_step(workflow: str) -> tuple[str, str]:
     """Return ``(scalar_style, run_body)`` for the sole approved Install step.
 
     Exactly one step named ``Install pinned runtime dependencies`` must exist;
-    a duplicate same-named step (e.g. carrying ``pip install requests``) is
-    refused so it cannot bypass the workflow-wide name skip.
+    a duplicate same-named step is refused so it cannot bypass allowlisting.
     """
     named = count_test_gate_steps_named(workflow, _TEST_GATE_APPROVED_INSTALL_STEP)
     if named == 0:
@@ -250,23 +251,72 @@ def unique_test_gate_install_step(workflow: str) -> tuple[str, str]:
     )
 
 
-def assert_test_gate_no_extra_package_installs(workflow: str) -> None:
-    """Refuse package-install commands outside the sole approved Install step.
+def unique_test_gate_run_tests_step(workflow: str) -> tuple[str, str]:
+    """Return ``(scalar_style, run_body)`` for the sole ``run_tests.py`` step."""
+    named = count_test_gate_steps_named(workflow, _TEST_GATE_RUN_TESTS_STEP)
+    if named == 0:
+        raise ValueError(f"missing run-tests step {_TEST_GATE_RUN_TESTS_STEP!r}")
+    if named > 1:
+        raise ValueError(
+            f"exactly one {_TEST_GATE_RUN_TESTS_STEP!r} step required "
+            f"(found {named})"
+        )
+    for name, style, body in iter_test_gate_step_run_bodies(workflow):
+        if name == _TEST_GATE_RUN_TESTS_STEP:
+            return style, body
+    raise ValueError(
+        f"run-tests step {_TEST_GATE_RUN_TESTS_STEP!r} has no run body"
+    )
 
-    Covers ``pip install``, ``python``/``python3 -m pip install``,
-    ``uv pip install``, and their ``-r``/``-e`` forms (all match the install
-    verb). Exactly one ``Install pinned runtime dependencies`` step may exist,
-    and only that step may install packages.
+
+def assert_test_gate_run_tests_body(scalar_style: str, body: str) -> None:
+    """Require the run-tests step body to be exactly ``python run_tests.py``."""
+    text = _test_gate_run_body_without_shell_comments(body)
+    if not text:
+        raise ValueError("empty run-tests step run body")
+    if scalar_style == "|":
+        lines = text.splitlines()
+        if len(lines) != 1:
+            raise ValueError(
+                "literal run-tests step must contain exactly one non-comment "
+                f"command (found {len(lines)})"
+            )
+        command = _normalize_yaml_flow_scalar(lines[0])
+    elif scalar_style == ">":
+        command = _normalize_yaml_flow_scalar(" ".join(text.splitlines()))
+    else:
+        command = _normalize_yaml_flow_scalar(text)
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"unparseable run-tests command: {exc}") from exc
+    if argv != ["python", "run_tests.py"]:
+        raise ValueError(
+            "run-tests step must be exactly `python run_tests.py` "
+            f"(got {argv!r})"
+        )
+
+
+def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
+    """Invert policy: only Install + run_tests may have ``run:`` bodies.
+
+    ``uses:``-only steps are unrestricted. Any additional ``run:`` step is
+    refused — including quoted inline installs and backslash-continued
+    spellings — without enumerating pip/shell forms.
     """
     unique_test_gate_install_step(workflow)
-    for name, _style, body in iter_test_gate_step_run_bodies(workflow):
-        if name == _TEST_GATE_APPROVED_INSTALL_STEP:
-            continue
-        if run_body_has_package_install(body):
+    style, body = unique_test_gate_run_tests_step(workflow)
+    assert_test_gate_run_tests_body(style, body)
+    run_steps = iter_test_gate_step_run_bodies(workflow)
+    for name, _style, _body in run_steps:
+        if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
             label = name if name else "<unnamed step>"
-            raise ValueError(
-                f"package install outside approved Install step: {label}"
-            )
+            raise ValueError(f"disallowed run step: {label}")
+    if len(run_steps) != 2:
+        raise ValueError(
+            "test-gate must have exactly two run steps "
+            f"(Install + run-tests); found {len(run_steps)}"
+        )
 
 
 class RequirementsParsingTests(unittest.TestCase):
@@ -908,19 +958,16 @@ class RepoGateLiveTests(unittest.TestCase):
         Package pins collected from that argv must equal requirements.txt;
         bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
         A literal Install body must be exactly one non-comment command — the
-        approved ``python -m pip install`` — so ``pip install`` /
-        ``python3 -m pip install`` / ``uv pip install`` cannot hide after it.
-        Workflow-wide: no other step may run a package-install command.
-        Exactly one step may use the approved Install name; its body alone
-        is pin-validated (a duplicate same-named step cannot bypass the guard).
+        approved ``python -m pip install``.
+        Invert policy: exactly two ``run:`` steps (Install + ``run_tests.py``);
+        any additional ``run:`` is refused without enumerating pip spellings.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
-        assert_test_gate_no_extra_package_installs(workflow)
-        # Validate the sole approved Install step's run body (not a first-match
-        # regex that would ignore a duplicate same-named step).
+        assert_test_gate_run_steps_allowlisted(workflow)
+        # Validate the sole approved Install step's run body.
         scalar_style, body = unique_test_gate_install_step(workflow)
         body_lines = [line.strip() for line in body.splitlines() if line.strip()]
         # Inline run: treat as a single folded command.
@@ -932,9 +979,9 @@ class RepoGateLiveTests(unittest.TestCase):
         install_pins = parse_test_gate_pip_install_pins(pip_args)
         self.assertEqual(install_pins, pins)
 
-    def test_test_gate_rejects_package_install_in_other_step(self):
-        """A later YAML step with `run: pip install requests` must fail closed."""
-        workflow = (
+    def _minimal_allowlisted_workflow(self, extra_step: str = "") -> str:
+        """Install + run_tests skeleton; optional extra YAML step(s) appended."""
+        return (
             "jobs:\n"
             "  unit-api-contract:\n"
             "    steps:\n"
@@ -943,32 +990,39 @@ class RepoGateLiveTests(unittest.TestCase):
             "          python -m pip install --disable-pip-version-check "
             '"--only-binary=:all:"\n'
             '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
-            "      - name: Prepare test helper\n"
-            "        run: pip install requests\n"
+            "      - name: Run PRKS unit, API, structural, and Node tests\n"
+            "        run: python run_tests.py\n"
+            f"{extra_step}"
         )
-        with self.assertRaisesRegex(
-            ValueError, r"package install outside approved Install step: Prepare test helper"
+
+    def test_test_gate_rejects_extra_run_step(self):
+        """Any additional run: step is refused (invert allowlist policy)."""
+        for extra in (
+            "      - name: Prepare test helper\n"
+            "        run: pip install requests\n",
+            "      - name: Prepare test helper\n"
+            '        run: "pip install requests"\n',
+            "      - name: Prepare test helper\n"
+            "        run: |\n"
+            "          pip \\\n"
+            "            install requests\n",
         ):
-            assert_test_gate_no_extra_package_installs(workflow)
+            with self.subTest(extra=extra.strip().splitlines()[0]):
+                with self.assertRaisesRegex(ValueError, r"disallowed run step:"):
+                    assert_test_gate_run_steps_allowlisted(
+                        self._minimal_allowlisted_workflow(extra)
+                    )
 
     def test_test_gate_rejects_duplicate_install_step_name(self):
         """A second same-named Install step must fail (cannot bypass by name)."""
-        workflow = (
-            "jobs:\n"
-            "  unit-api-contract:\n"
-            "    steps:\n"
-            "      - name: Install pinned runtime dependencies\n"
-            "        run: >-\n"
-            "          python -m pip install --disable-pip-version-check "
-            '"--only-binary=:all:"\n'
-            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+        workflow = self._minimal_allowlisted_workflow(
             "      - name: Install pinned runtime dependencies\n"
             "        run: pip install requests\n"
         )
         with self.assertRaisesRegex(
             ValueError, r"exactly one .*Install pinned runtime dependencies.* required"
         ):
-            assert_test_gate_no_extra_package_installs(workflow)
+            assert_test_gate_run_steps_allowlisted(workflow)
         with self.assertRaisesRegex(
             ValueError, r"exactly one .*Install pinned runtime dependencies.* required"
         ):
