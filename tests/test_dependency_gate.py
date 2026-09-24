@@ -166,9 +166,10 @@ def run_body_has_package_install(body: str) -> bool:
 
 def iter_test_gate_step_run_bodies(
     workflow: str, *, step_indent: int = 6
-) -> list[tuple[str | None, str]]:
-    """Return ``(step_name, run_body)`` for every steps[] entry that has ``run:``.
+) -> list[tuple[str | None, str, str]]:
+    """Return ``(step_name, scalar_style, run_body)`` for every step with ``run:``.
 
+    ``scalar_style`` is ``"|"``, ``">"``, or ``""`` for a single-line ``run:``.
     ``step_name`` is None for unnamed ``- run:`` steps. Scoped to GitHub Actions
     list items at ``step_indent`` (PRKS test-gate uses 6).
     """
@@ -177,7 +178,7 @@ def iter_test_gate_step_run_bodies(
     field = " " * field_indent
     body_indent = step_indent + 4
     starts = [m.start() for m in re.finditer(rf"(?m)^{re.escape(dash)}", workflow)]
-    results: list[tuple[str | None, str]] = []
+    results: list[tuple[str | None, str, str]] = []
     for index, start in enumerate(starts):
         end = starts[index + 1] if index + 1 < len(starts) else len(workflow)
         block = workflow[start:end]
@@ -190,7 +191,7 @@ def iter_test_gate_step_run_bodies(
         # `- run: …` on the list item itself (no separate name key).
         inline_run = re.match(rf"^{re.escape(dash)}run:\s*(.*)$", first)
         if inline_run is not None:
-            results.append((name, inline_run.group(1)))
+            results.append((name, "", inline_run.group(1)))
             continue
         run_match = re.search(
             rf"(?m)^{re.escape(field)}run:\s*"
@@ -200,33 +201,72 @@ def iter_test_gate_step_run_bodies(
         if run_match is None:
             continue
         if run_match.group(1) is not None:
-            results.append((name, run_match.group(2)))
+            results.append((name, run_match.group(1), run_match.group(2)))
         else:
-            results.append((name, run_match.group(3) or ""))
+            results.append((name, "", run_match.group(3) or ""))
     return results
 
 
+def count_test_gate_steps_named(
+    workflow: str, step_name: str, *, step_indent: int = 6
+) -> int:
+    """Count steps[] entries whose ``name:`` equals ``step_name`` (with or without run)."""
+    dash = f"{' ' * step_indent}- "
+    starts = [m.start() for m in re.finditer(rf"(?m)^{re.escape(dash)}", workflow)]
+    count = 0
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(workflow)
+        block = workflow[start:end]
+        first_nl = block.find("\n")
+        first = block[:first_nl] if first_nl >= 0 else block
+        name_match = re.match(rf"^{re.escape(dash)}name:\s*(.+)$", first)
+        if name_match and name_match.group(1).strip() == step_name:
+            count += 1
+    return count
+
+
+def unique_test_gate_install_step(workflow: str) -> tuple[str, str]:
+    """Return ``(scalar_style, run_body)`` for the sole approved Install step.
+
+    Exactly one step named ``Install pinned runtime dependencies`` must exist;
+    a duplicate same-named step (e.g. carrying ``pip install requests``) is
+    refused so it cannot bypass the workflow-wide name skip.
+    """
+    named = count_test_gate_steps_named(workflow, _TEST_GATE_APPROVED_INSTALL_STEP)
+    if named == 0:
+        raise ValueError(
+            f"missing approved Install step {_TEST_GATE_APPROVED_INSTALL_STEP!r}"
+        )
+    if named > 1:
+        raise ValueError(
+            f"exactly one {_TEST_GATE_APPROVED_INSTALL_STEP!r} step required "
+            f"(found {named})"
+        )
+    for name, style, body in iter_test_gate_step_run_bodies(workflow):
+        if name == _TEST_GATE_APPROVED_INSTALL_STEP:
+            return style, body
+    raise ValueError(
+        f"approved Install step {_TEST_GATE_APPROVED_INSTALL_STEP!r} has no run body"
+    )
+
+
 def assert_test_gate_no_extra_package_installs(workflow: str) -> None:
-    """Refuse package-install commands outside the approved Install step.
+    """Refuse package-install commands outside the sole approved Install step.
 
     Covers ``pip install``, ``python``/``python3 -m pip install``,
     ``uv pip install``, and their ``-r``/``-e`` forms (all match the install
-    verb). Only ``Install pinned runtime dependencies`` may install packages.
+    verb). Exactly one ``Install pinned runtime dependencies`` step may exist,
+    and only that step may install packages.
     """
-    found_approved = False
-    for name, body in iter_test_gate_step_run_bodies(workflow):
+    unique_test_gate_install_step(workflow)
+    for name, _style, body in iter_test_gate_step_run_bodies(workflow):
         if name == _TEST_GATE_APPROVED_INSTALL_STEP:
-            found_approved = True
             continue
         if run_body_has_package_install(body):
             label = name if name else "<unnamed step>"
             raise ValueError(
                 f"package install outside approved Install step: {label}"
             )
-    if not found_approved:
-        raise ValueError(
-            f"missing approved Install step {_TEST_GATE_APPROVED_INSTALL_STEP!r}"
-        )
 
 
 class RequirementsParsingTests(unittest.TestCase):
@@ -871,29 +911,21 @@ class RepoGateLiveTests(unittest.TestCase):
         approved ``python -m pip install`` — so ``pip install`` /
         ``python3 -m pip install`` / ``uv pip install`` cannot hide after it.
         Workflow-wide: no other step may run a package-install command.
+        Exactly one step may use the approved Install name; its body alone
+        is pin-validated (a duplicate same-named step cannot bypass the guard).
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
         assert_test_gate_no_extra_package_installs(workflow)
-        # Anchor on step name; allow comments / id / other fields before run,
-        # and either `|` or `>` block scalars (with optional chomping).
-        match = re.search(
-            r"(?m)^ {6}- name: Install pinned runtime dependencies\n"
-            r"(?: {8,}(?!run:)[^\n]*\n)*"
-            r" {8}run: ([|>])[-+]?\n"
-            r"((?: {10,}[^\n]*\n)+)",
-            workflow,
-        )
-        self.assertIsNotNone(
-            match, "missing Install pinned runtime dependencies run step"
-        )
-        scalar_style = match.group(1)
-        body_lines = [
-            line.strip() for line in match.group(2).splitlines() if line.strip()
-        ]
-        pip_args = test_gate_install_argv_from_run_body(scalar_style, body_lines)
+        # Validate the sole approved Install step's run body (not a first-match
+        # regex that would ignore a duplicate same-named step).
+        scalar_style, body = unique_test_gate_install_step(workflow)
+        body_lines = [line.strip() for line in body.splitlines() if line.strip()]
+        # Inline run: treat as a single folded command.
+        style_for_parse = scalar_style if scalar_style else ">"
+        pip_args = test_gate_install_argv_from_run_body(style_for_parse, body_lines)
         self.assertIn("--only-binary=:all:", pip_args)
         # Two-way equality via fail-closed operand walk: every argv token after
         # install is an approved option or an exact name==version pin.
@@ -918,6 +950,29 @@ class RepoGateLiveTests(unittest.TestCase):
             ValueError, r"package install outside approved Install step: Prepare test helper"
         ):
             assert_test_gate_no_extra_package_installs(workflow)
+
+    def test_test_gate_rejects_duplicate_install_step_name(self):
+        """A second same-named Install step must fail (cannot bypass by name)."""
+        workflow = (
+            "jobs:\n"
+            "  unit-api-contract:\n"
+            "    steps:\n"
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: >-\n"
+            "          python -m pip install --disable-pip-version-check "
+            '"--only-binary=:all:"\n'
+            '          "PyMuPDF==1.28.2" "Pillow==12.3.0"\n'
+            "      - name: Install pinned runtime dependencies\n"
+            "        run: pip install requests\n"
+        )
+        with self.assertRaisesRegex(
+            ValueError, r"exactly one .*Install pinned runtime dependencies.* required"
+        ):
+            assert_test_gate_no_extra_package_installs(workflow)
+        with self.assertRaisesRegex(
+            ValueError, r"exactly one .*Install pinned runtime dependencies.* required"
+        ):
+            unique_test_gate_install_step(workflow)
 
     def test_test_gate_literal_rejects_extra_pip_install_line(self):
         """Later `pip install` / `python3 -m pip` lines must fail the literal check."""
