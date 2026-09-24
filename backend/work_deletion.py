@@ -127,8 +127,13 @@ def cleanup_released_managed_pdfs(
 ) -> bool:
     """Post-commit survivor-aware unlink for basenames claimed on retarget/delete.
 
-    Returns True when any claim remains pending after this pass (weak-alias
-    defer, FS failure, or unreadable catalogue).
+    Always runs one bounded ``retry_pending_pdf_cleanup`` pass afterward, even
+    when ``filenames`` is empty: a weak-alias ``file_path`` retarget mints no
+    strong claim but may have been the last blocker for a deferred stem claim,
+    and recovery must not wait for an unrelated delete or restart.
+
+    Returns True when any newly-acted claim remains pending after this pass
+    (weak-alias defer, FS failure, or unreadable catalogue).
     """
     pending = False
     names = tuple(str(n) for n in (filenames or ()) if n)
@@ -142,8 +147,10 @@ def cleanup_released_managed_pdfs(
                 "pdf_retarget_cleanup_failed error_type=%s",
                 safe_error_type(e),
             )
-    if names:
-        retry_pending_pdf_cleanup(db, skip=names)
+    # Drain deferred claims whether or not this retarget minted any. ``skip``
+    # only excludes names this call already handled; an empty mint still wakes
+    # the backlog.
+    retry_pending_pdf_cleanup(db, skip=names)
     return pending
 
 

@@ -612,6 +612,46 @@ class PendingPdfCleanupTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(a_path))
         self.assertEqual(self._claims(), [a_name])
 
+    def test_retarget_away_last_weak_alias_wakes_deferred_claim(self):
+        """Owner P2: retargeting the last weak alias settles a deferred stem claim.
+
+        Lifecycle: strong owner of a.pdf is gone, claim deferred by
+        ``/api/pdfs/../a.pdf``; PATCH that alias to b.pdf mints no strong claim
+        (weak aliases are not deletion authority) but must still wake
+        ``retry_pending_pdf_cleanup`` in the same pass so a.pdf and its claim
+        do not wait for an unrelated delete/restart.
+        """
+        a_name = f"wake-alias-{uuid.uuid4().hex}.pdf"
+        a_path = self._write_pdf(a_name)
+        with self.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (a_name,),
+            )
+            conn.commit()
+        alias_id = self.db.add_work(
+            title="Last weak alias",
+            file_path=f"/api/pdfs/../{a_name}",
+        )
+        deferred = retry_pending_pdf_cleanup(self.db)
+        self.assertEqual(deferred["removed"], 0)
+        self.assertGreaterEqual(deferred["deferred"], 1)
+        self.assertEqual(self._claims(), [a_name])
+        self.assertTrue(os.path.isfile(a_path))
+
+        b_name = f"b-wake-{uuid.uuid4().hex}.pdf"
+        self._write_pdf(b_name)
+        claimed = self.db.update_work_metadata(
+            alias_id, {"file_path": f"/api/pdfs/{b_name}"}
+        )
+        self.assertEqual(claimed, ())
+        self.assertEqual(self._claims(), [a_name])
+        # Empty mint must still wake the deferred claim in this same pass.
+        pending = cleanup_released_managed_pdfs(self.db, claimed)
+        self.assertFalse(pending)
+        self.assertFalse(os.path.isfile(a_path))
+        self.assertEqual(self._claims(), [])
+
     def test_a_failed_delete_does_not_retry_itself_in_the_same_breath(self):
         work_id, name, abs_path = self._managed_work("NoDoubleTry")
         with self._failing_remove(abs_path) as removal:

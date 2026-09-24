@@ -311,6 +311,55 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(claims, [])
 
+    def test_patch_retarget_away_last_weak_alias_wakes_deferred_claim(self):
+        """Owner P2 on #172: PATCH last weak alias must wake deferred a.pdf claim.
+
+        Strong owner gone → pending claim deferred by ``/api/pdfs/../a.pdf``;
+        PATCH alias to b.pdf mints no strong claim but the same request's
+        cleanup pass must remove a.pdf and settle the claim.
+        """
+        name_a = "patch-wake-a.pdf"
+        name_b = "patch-wake-b.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path_a = os.path.join(pdfs_dir, name_a)
+        path_b = os.path.join(pdfs_dir, name_b)
+        with open(path_a, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%A\n%%EOF\n")
+        with open(path_b, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%B\n%%EOF\n")
+        with server_module.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (name_a,),
+            )
+            conn.commit()
+        alias_id = server_module.db.add_work(
+            "Weak alias survivor",
+            file_path=f"/api/pdfs/../{name_a}",
+        )
+        self.addCleanup(server_module.db.delete_work_record, alias_id)
+
+        payload = json.dumps({"file_path": f"/api/pdfs/{name_b}"}).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{alias_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (alias_id,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name_b}")
+        self.assertFalse(os.path.isfile(path_a))
+        self.assertTrue(os.path.isfile(path_b))
+        claims = server_module.db.execute_query(
+            "SELECT filename FROM pending_pdf_cleanup"
+        )
+        self.assertEqual(claims, [])
+
     def test_patch_same_path_drop_survives_concurrent_retarget_cleanup(self):
         """Owner P2 TOCTOU on #172: same-path PATCH must drop file_path so a
         concurrent retarget + cleanup cannot be overwritten without the guard.

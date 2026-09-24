@@ -1143,17 +1143,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             # server fault: say so rather than 500.
                             self.send_json(400, {'error': str(e)})
                             return
-                        if claimed_old:
+                        if file_path_changing:
+                            # Strong basenames are claimed above; weak aliases
+                            # mint nothing but may unblock a deferred stem
+                            # claim. Always run the post-retarget cleanup pass
+                            # (empty claimed_old still wakes pending retry).
                             from backend.work_deletion import (
                                 cleanup_released_managed_pdfs,
                             )
                             try:
                                 cleanup_released_managed_pdfs(db, claimed_old)
                             except Exception as e:
+                                # Metadata-only: never log work ids / paths /
+                                # exception text (CodeQL log-injection + privacy).
                                 LOGGER.warning(
-                                    "work_patch_pdf_cleanup_failed work_id=%s "
-                                    "error_type=%s",
-                                    safe_log_id(w_id),
+                                    "work_patch_pdf_cleanup_failed error_type=%s",
                                     safe_error_type(e),
                                 )
                     if file_path_changing:
