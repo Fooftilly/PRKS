@@ -4,6 +4,14 @@ This page collects detailed contributor commands that are useful to humans worki
 
 The authoritative contributor/agent rules remain in [AGENTS.md](https://github.com/Fooftilly/PRKS/blob/master/AGENTS.md). UI rules remain in [DESIGN.md](https://github.com/Fooftilly/PRKS/blob/master/DESIGN.md).
 
+## Typed API boundary (#180 / #45)
+
+Positions is the first HTTP family with Pydantic request/response models at the
+adapter boundary only. See [docs/api-contract-boundary.md](../api-contract-boundary.md)
+for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
+Live fragment: `GET /api/openapi.json`. Checked-in artifact:
+`docs/api/openapi-positions.json`.
+
 ## UI design
 
 `DESIGN.md` is authoritative for PRKS visual and interaction work. New UI primitives must be specified there and shown in `tests/browser/design_system.html` before they are used in production. Do not treat a generic design skill as a license to replace Inter, round the chrome, or add decorative surfaces.

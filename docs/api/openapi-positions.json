@@ -1,0 +1,535 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Positions slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for the Positions HTTP family (#180 / #45). Not the full PRKS surface. Request/response schemas are generated from Pydantic boundary models; canonical mutations remain in research_network/position_sync."
+  },
+  "paths": {
+    "/api/positions": {
+      "get": {
+        "operationId": "listPositions",
+        "summary": "List Positions",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Position index (no embedded arguments).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionSummaryList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPosition",
+        "summary": "Create a Position",
+        "tags": [
+          "positions"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Position detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or domain refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/positions/{position_id}": {
+      "parameters": [
+        {
+          "name": "position_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPosition",
+        "summary": "Get Position detail",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Position detail with targeting Arguments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePosition",
+        "summary": "Update Position fields",
+        "tags": [
+          "positions"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Position detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or domain refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deletePosition",
+        "summary": "Delete a Position",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Domain refusal (e.g. POSITION_IN_USE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/positions/{position_id}/sync-state": {
+      "parameters": [
+        {
+          "name": "position_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPositionSyncState",
+        "summary": "Position field revisions (sync-state)",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionSyncState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Standard JSON error body at the HTTP adapter boundary.",
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable machine-readable code when the domain provides one.",
+            "title": "Code"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "PositionCreateRequest": {
+        "description": "POST /api/positions body.",
+        "properties": {
+          "name": {
+            "description": "Position claim name (domain-normalized).",
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional markdown description; domain enforces limits.",
+            "title": "Description"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "PositionUpdateRequest": {
+        "description": "PATCH /api/positions/{id} body.\n\nOmitted fields are not updated. Whether at least one field is supplied is a\ndomain rule (``nothing_to_update``), not enforced here.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          }
+        },
+        "type": "object"
+      },
+      "PositionSummary": {
+        "description": "Index row from GET /api/positions (no embedded arguments).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "PositionArgumentSummary": {
+        "description": "Argument/Stance row embedded on Position detail.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "verdict_id": {
+            "title": "Verdict Id",
+            "type": "string"
+          },
+          "verdict_label": {
+            "title": "Verdict Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "verdict_id",
+          "verdict_label"
+        ],
+        "title": "PositionArgumentSummary",
+        "type": "object"
+      },
+      "PositionDetail": {
+        "description": "Detail / create / update response including Arguments targeting this Position.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/PositionArgumentSummary"
+            },
+            "title": "Arguments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "PositionDeleted": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "pattern": "^deleted$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PositionSyncFieldState": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "PositionSyncFieldState",
+        "type": "object"
+      },
+      "PositionSyncState": {
+        "description": "GET /api/positions/{id}/sync-state \u2014 revisions only.",
+        "properties": {
+          "position_id": {
+            "title": "Position Id",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PositionSyncFieldState"
+            },
+            "title": "Fields",
+            "type": "object"
+          }
+        },
+        "required": [
+          "position_id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "PositionSummaryList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/PositionSummary"
+        }
+      }
+    }
+  }
+}

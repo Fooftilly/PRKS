@@ -96,6 +96,8 @@ _STATIC_API_PATHS = frozenset(
         "/api/argument-verdicts",
         "/api/concepts",
         "/api/positions",
+        "/api/openapi.json",
+        "/api/openapi/positions.json",
         "/api/research-graph",
     }
 )

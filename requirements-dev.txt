@@ -1,2 +1,5 @@
 # Maintainer / browser-test dependencies. Not used by Docker or production runtime.
 playwright==1.63.0
+# Contract-test helpers for the typed API boundary (#180 / #45). Optional at
+# runtime; used by unit tests that check OpenAPI ↔ implementation agreement.
+openapi-core==0.23.1
