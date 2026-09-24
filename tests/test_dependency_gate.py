@@ -103,6 +103,27 @@ def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
     return pins
 
 
+def single_test_gate_pip_install_argv(command_lines: list[str]) -> list[str]:
+    """Return the sole ``python -m pip install`` argv from a run-step body.
+
+    A second install (e.g. a later literal-block line with an unpinned package)
+    is refused — stopping at the first install would miss it.
+    """
+    installs: list[list[str]] = []
+    for command in command_lines:
+        args = shlex.split(command)
+        if args[:4] == ["python", "-m", "pip", "install"]:
+            installs.append(args)
+    if not installs:
+        raise ValueError("no python -m pip install command in Install step run body")
+    if len(installs) > 1:
+        raise ValueError(
+            f"Install step must contain exactly one python -m pip install "
+            f"(found {len(installs)})"
+        )
+    return installs[0]
+
+
 class RequirementsParsingTests(unittest.TestCase):
     def test_parse_exact_pins_ignores_comments(self):
         text = "# comment\nPyMuPDF==1.28.2\n\nPillow==12.3.0\n"
@@ -741,6 +762,8 @@ class RepoGateLiveTests(unittest.TestCase):
         or `--only-binary` mention in a comment must not satisfy the check.
         Package pins collected from that argv must equal requirements.txt;
         bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
+        The Install step must contain exactly one ``python -m pip install``
+        (a later unpinned install in a literal block must not be ignored).
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
@@ -768,20 +791,26 @@ class RepoGateLiveTests(unittest.TestCase):
         else:
             # Literal: preserve line boundaries (each line is its own command).
             command_lines = body_lines
-        pip_args = None
-        for command in command_lines:
-            args = shlex.split(command)
-            if args[:4] == ["python", "-m", "pip", "install"]:
-                pip_args = args
-                break
-        self.assertIsNotNone(
-            pip_args, "no python -m pip install command in Install step run body"
-        )
+        # Exactly one pip install — a later unpinned install must not be skipped.
+        pip_args = single_test_gate_pip_install_argv(command_lines)
         self.assertIn("--only-binary=:all:", pip_args)
         # Two-way equality via fail-closed operand walk: every argv token after
         # install is an approved option or an exact name==version pin.
         install_pins = parse_test_gate_pip_install_pins(pip_args)
         self.assertEqual(install_pins, pins)
+
+    def test_test_gate_rejects_second_unpinned_pip_install(self):
+        """A later literal-block `pip install requests` must fail the gate check."""
+        with self.assertRaisesRegex(ValueError, "exactly one python -m pip install"):
+            single_test_gate_pip_install_argv(
+                [
+                    (
+                        "python -m pip install --disable-pip-version-check "
+                        '"--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"'
+                    ),
+                    "python -m pip install requests",
+                ]
+            )
 
     def test_test_gate_pip_install_rejects_bare_package(self):
         with self.assertRaisesRegex(ValueError, "non-exact package/requirement source"):
