@@ -103,25 +103,40 @@ def parse_test_gate_pip_install_pins(pip_args: list[str]) -> dict[str, str]:
     return pins
 
 
-def single_test_gate_pip_install_argv(command_lines: list[str]) -> list[str]:
-    """Return the sole ``python -m pip install`` argv from a run-step body.
+def test_gate_install_argv_from_run_body(
+    scalar_style: str, body_lines: list[str]
+) -> list[str]:
+    """Extract the approved Install-step ``python -m pip install`` argv.
 
-    A second install (e.g. a later literal-block line with an unpinned package)
-    is refused — stopping at the first install would miss it.
+    Literal ``|`` bodies may contain only one non-comment executable command
+    (so ``pip install`` / ``python3 -m pip install`` / ``uv pip install``
+    after the pinned install cannot hide). Folded ``>`` bodies keep a single
+    folded command and the fail-closed argv parse.
     """
-    installs: list[list[str]] = []
-    for command in command_lines:
-        args = shlex.split(command)
-        if args[:4] == ["python", "-m", "pip", "install"]:
-            installs.append(args)
-    if not installs:
-        raise ValueError("no python -m pip install command in Install step run body")
-    if len(installs) > 1:
-        raise ValueError(
-            f"Install step must contain exactly one python -m pip install "
-            f"(found {len(installs)})"
+    if scalar_style == ">":
+        # Folded: YAML turns newlines into spaces — one shell command.
+        folded = " ".join(
+            line for line in body_lines if line and not line.startswith("#")
         )
-    return installs[0]
+        if not folded:
+            raise ValueError("empty Install step run body")
+        args = shlex.split(folded)
+    else:
+        executable = [
+            line for line in body_lines if line and not line.startswith("#")
+        ]
+        if len(executable) != 1:
+            raise ValueError(
+                "literal Install step must contain exactly one non-comment "
+                f"executable command (found {len(executable)})"
+            )
+        args = shlex.split(executable[0])
+    if args[:4] != ["python", "-m", "pip", "install"]:
+        raise ValueError(
+            "Install step command must be python -m pip install "
+            f"(got {' '.join(args[:4]) if args else '<empty>'})"
+        )
+    return args
 
 
 class RequirementsParsingTests(unittest.TestCase):
@@ -762,8 +777,9 @@ class RepoGateLiveTests(unittest.TestCase):
         or `--only-binary` mention in a comment must not satisfy the check.
         Package pins collected from that argv must equal requirements.txt;
         bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
-        The Install step must contain exactly one ``python -m pip install``
-        (a later unpinned install in a literal block must not be ignored).
+        A literal Install body must be exactly one non-comment command — the
+        approved ``python -m pip install`` — so ``pip install`` /
+        ``python3 -m pip install`` / ``uv pip install`` cannot hide after it.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
@@ -785,31 +801,36 @@ class RepoGateLiveTests(unittest.TestCase):
         body_lines = [
             line.strip() for line in match.group(2).splitlines() if line.strip()
         ]
-        if scalar_style == ">":
-            # Folded: YAML turns newlines into spaces — one shell command.
-            command_lines = [" ".join(body_lines)]
-        else:
-            # Literal: preserve line boundaries (each line is its own command).
-            command_lines = body_lines
-        # Exactly one pip install — a later unpinned install must not be skipped.
-        pip_args = single_test_gate_pip_install_argv(command_lines)
+        pip_args = test_gate_install_argv_from_run_body(scalar_style, body_lines)
         self.assertIn("--only-binary=:all:", pip_args)
         # Two-way equality via fail-closed operand walk: every argv token after
         # install is an approved option or an exact name==version pin.
         install_pins = parse_test_gate_pip_install_pins(pip_args)
         self.assertEqual(install_pins, pins)
 
-    def test_test_gate_rejects_second_unpinned_pip_install(self):
-        """A later literal-block `pip install requests` must fail the gate check."""
-        with self.assertRaisesRegex(ValueError, "exactly one python -m pip install"):
-            single_test_gate_pip_install_argv(
-                [
-                    (
-                        "python -m pip install --disable-pip-version-check "
-                        '"--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"'
-                    ),
-                    "python -m pip install requests",
-                ]
+    def test_test_gate_literal_rejects_extra_pip_install_line(self):
+        """Later `pip install` / `python3 -m pip` lines must fail the literal check."""
+        pinned = (
+            "python -m pip install --disable-pip-version-check "
+            '"--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0"'
+        )
+        with self.assertRaisesRegex(
+            ValueError, "exactly one non-comment executable command"
+        ):
+            test_gate_install_argv_from_run_body(
+                "|", [pinned, "pip install requests"]
+            )
+        with self.assertRaisesRegex(
+            ValueError, "exactly one non-comment executable command"
+        ):
+            test_gate_install_argv_from_run_body(
+                "|", [pinned, "python3 -m pip install requests"]
+            )
+        with self.assertRaisesRegex(
+            ValueError, "exactly one non-comment executable command"
+        ):
+            test_gate_install_argv_from_run_body(
+                "|", [pinned, "uv pip install requests"]
             )
 
     def test_test_gate_pip_install_rejects_bare_package(self):
