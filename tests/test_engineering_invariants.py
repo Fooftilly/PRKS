@@ -89,12 +89,23 @@ class EngineeringInvariantTests(unittest.TestCase):
             "import os\nos.replace('a', 'b')\n",
             "backend/fs_durability.py",
         )
+        derived = checker.check_source(
+            "import os\nos.replace('a', 'b')\n",
+            "backend/derived_cache_publish.py",
+        )
         blocked = checker.check_source(
             "import os\nos.replace('a', 'b')\n",
             "backend/new_feature.py",
         )
+        # HTTP adapter must not be a file-level escape hatch.
+        blocked_server = checker.check_source(
+            "import os\nos.replace('a', 'b')\n",
+            "backend/server.py",
+        )
         self.assertEqual(allowed, [])
+        self.assertEqual(derived, [])
         self.assertEqual([f.code for f in blocked], ["INV-DURABILITY-001"])
+        self.assertEqual([f.code for f in blocked_server], ["INV-DURABILITY-001"])
 
     def test_fsync_is_allowed_only_at_approved_boundary(self):
         allowed = checker.check_source(

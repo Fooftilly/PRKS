@@ -32,9 +32,12 @@ BANNED_SHUTIL_COPY_CALLS = {"copy", "copy2", "copyfile"}
 # attribute call as os.replace.
 OS_REPLACE_ALLOWLIST = {
     "backend/backup_restore.py",
+    # Disposable thumb / Person-image cache publication only — not canonical
+    # library state. Keep ``backend/server.py`` non-exempt so new raw replaces
+    # in the HTTP adapter fail INV-DURABILITY-001 by default.
+    "backend/derived_cache_publish.py",
     "backend/fs_durability.py",
     "backend/pdf_linearize.py",
-    "backend/server.py",
     "backend/services/work_pdf_replace.py",
 }
 # Bare os.fsync belongs only in fs_durability. Managed-PDF code must use
