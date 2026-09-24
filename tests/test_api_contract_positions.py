@@ -1,16 +1,16 @@
 """Positions typed API boundary + OpenAPI contract (#180)."""
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import shutil
 import socket
 import sys
 import tempfile
 import threading
 import time
 import unittest
-import urllib.error
-import urllib.request
 from dataclasses import replace
 from pathlib import Path
 
@@ -124,7 +124,23 @@ class PositionBoundaryUnitTests(unittest.TestCase):
 
 
 class PositionHttpContractTests(unittest.TestCase):
-    """Live HTTP: behavior preserved + responses match response models / OpenAPI."""
+    """Live HTTP: behavior preserved + responses match response models / OpenAPI.
+
+    Uses ``http.client`` (not ``urllib.request.urlopen``) so Bandit B310 does
+    not flag localhost contract probes as open-scheme URL opens.
+    """
+
+    @classmethod
+    def _request(cls, method: str, path: str, body: bytes | None = None,
+                 headers: dict | None = None, timeout: float = 5.0):
+        conn = http.client.HTTPConnection("127.0.0.1", cls._test_port, timeout=timeout)
+        try:
+            conn.request(method, path, body=body, headers=headers or {})
+            res = conn.getresponse()
+            raw = res.read()
+            return res.status, raw
+        finally:
+            conn.close()
 
     @classmethod
     def _wait_ready(cls, timeout_seconds=8.0):
@@ -132,12 +148,10 @@ class PositionHttpContractTests(unittest.TestCase):
         last_err = None
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(
-                    f"{cls._base_url}/api/positions", timeout=1.2
-                ) as res:
-                    if res.status == 200:
-                        return
-            except Exception as e:
+                status, _raw = cls._request("GET", "/api/positions", timeout=1.2)
+                if status == 200:
+                    return
+            except (OSError, http.client.HTTPException) as e:
                 last_err = e
             time.sleep(0.1)
         raise RuntimeError(f"server not ready: {last_err}")
@@ -145,7 +159,6 @@ class PositionHttpContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._test_port = _find_free_port()
-        cls._base_url = f"http://127.0.0.1:{cls._test_port}"
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-positions-contract-")
         storage = os.path.join(cls._tmpdir, "storage")
         processing = os.path.join(cls._tmpdir, "processing")
@@ -166,35 +179,19 @@ class PositionHttpContractTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "_tmpdir", None):
-            try:
-                import shutil
-
-                shutil.rmtree(cls._tmpdir, ignore_errors=True)
-            except Exception:
-                pass
+        tmpdir = getattr(cls, "_tmpdir", None)
+        if tmpdir:
+            # ignore_errors already swallows filesystem races; no bare except.
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _json(self, method: str, path: str, body=None, expect_status=None):
-        data = None
         headers = {"Accept": "application/json"}
+        payload = None
         if body is not None:
-            data = json.dumps(body).encode("utf-8")
+            payload = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(
-            f"{self._base_url}{path}",
-            data=data,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as res:
-                status = res.status
-                raw = res.read()
-                parsed = json.loads(raw.decode("utf-8")) if raw else None
-        except urllib.error.HTTPError as e:
-            status = e.code
-            raw = e.read()
-            parsed = json.loads(raw.decode("utf-8")) if raw else None
+        status, raw = self._request(method, path, body=payload, headers=headers)
+        parsed = json.loads(raw.decode("utf-8")) if raw else None
         if expect_status is not None:
             self.assertEqual(status, expect_status, parsed)
         return status, parsed
