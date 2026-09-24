@@ -3,6 +3,8 @@ name: Suppress noisy review bot comments
 on:
   issue_comment:
     types: [created]
+  pull_request_review:
+    types: [submitted]
   pull_request_review_comment:
     types: [created]
 
@@ -12,8 +14,8 @@ permissions:
 
 jobs:
   remove-noise-comment:
-    # No `on:` filter can match comment text, so every comment in the repository
-    # starts a run that this condition then skips. Skipped jobs are not billed.
+    # No `on:` filter can match comment text, so every supported comment/review
+    # event starts a run that this condition then skips. Skipped jobs are not billed.
     #
     # Identity is the bot login alone. `performed_via_github_app` describes the
     # app a comment was posted THROUGH, not who wrote it: comments authored by a
@@ -22,6 +24,7 @@ jobs:
     if: >-
       (
         (
+          github.event_name != 'pull_request_review' &&
           contains(github.event.comment.body, 'You have reached your Codex usage limits') &&
           contains(github.event.comment.body, 'code reviews') &&
           github.event.comment.user.login == 'chatgpt-codex-connector[bot]'
@@ -43,9 +46,19 @@ jobs:
           ) &&
           contains(github.event.comment.body, 'To continue receiving code reviews') &&
           github.event.comment.user.login == 'greptile-apps[bot]'
+        ) ||
+        (
+          github.event_name == 'pull_request_review' &&
+          contains(
+            github.event.review.body,
+            'has reached the 50-credit limit for trial accounts'
+          ) &&
+          contains(github.event.review.body, 'To continue receiving code reviews') &&
+          github.event.review.user.login == 'greptile-apps[bot]'
         )
       ) &&
       (
+        github.event_name == 'pull_request_review' ||
         github.event_name == 'pull_request_review_comment' ||
         github.event.issue.pull_request
       )
@@ -54,17 +67,55 @@ jobs:
     timeout-minutes: 2
 
     steps:
-      # The comment body reaches this job only through the `contains()` checks
-      # above, never the shell: the step interpolates no event text, and the one
-      # comment it can delete is the comment that triggered the run.
-      - name: Delete matched bot-noise comment
+      # Event text reaches this job only through the `contains()` checks above,
+      # never the shell. The action can only suppress the object that triggered
+      # the run.
+      - name: Suppress matched bot-noise item
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id }}
+          REVIEW_NODE_ID: ${{ github.event.review.node_id }}
         run: |
           set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "pull_request_review" ]]; then
+            # Greptile's quota notice is a submitted review body, not a normal
+            # PR comment. Try the GraphQL review-delete mutation first. GitHub's
+            # REST delete endpoint only accepts pending reviews; if GitHub also
+            # refuses deletion here, minimize the submitted review so the quota
+            # notice is collapsed rather than left prominently in the PR thread.
+            if gh api graphql \
+              -f query='
+                mutation($reviewId: ID!) {
+                  deletePullRequestReview(
+                    input: {pullRequestReviewId: $reviewId}
+                  ) {
+                    clientMutationId
+                  }
+                }
+              ' \
+              -f reviewId="${REVIEW_NODE_ID}"
+            then
+              exit 0
+            fi
+
+            gh api graphql \
+              -f query='
+                mutation($reviewId: ID!) {
+                  minimizeComment(
+                    input: {subjectId: $reviewId, classifier: OFF_TOPIC}
+                  ) {
+                    minimizedComment {
+                      isMinimized
+                    }
+                  }
+                }
+              ' \
+              -f reviewId="${REVIEW_NODE_ID}"
+            exit 0
+          fi
 
           if [[ "${EVENT_NAME}" == "issue_comment" ]]; then
             endpoint="repos/${REPOSITORY}/issues/comments/${COMMENT_ID}"
