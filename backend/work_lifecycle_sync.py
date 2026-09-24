@@ -18,7 +18,7 @@ from backend.db_manager import (
     _canonical_new_source,
     managed_basenames_protected_by,
     normalize_doc_type,
-    row_references_managed_pdf,
+    row_strongly_references_managed_pdf,
 )
 from backend.entity_ids import generate as generate_entity_id
 from backend.entity_ids import is_distributed
@@ -330,10 +330,10 @@ def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
     if row is None:
         return None
     file_path = "" if row["file_path"] is None else str(row["file_path"])
-    # Every distinct basename this row protects (physical ownership and HTTP
-    # serving identity). A legacy ``/api/pdfs/foo.pdf?x`` row keeps both
-    # ``foo.pdf?x`` and stem ``foo.pdf`` alive; claiming only the physical
-    # name would orphan the stem after a prior stem claim was superseded.
+    # Strong ownership / serving identities only. Weak fail-closed aliases
+    # (traversal / nested / %2F) must not mint claims, and must not prevent
+    # minting either: when only a weak alias survives, the claim is still
+    # written so cleanup can finish after that alias disappears.
     protected = managed_basenames_protected_by(file_path)
     conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
     still_referenced = False
@@ -343,7 +343,7 @@ def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
         ).fetchall()
         for name in protected:
             if any(
-                row_references_managed_pdf(r["file_path"], name)
+                row_strongly_references_managed_pdf(r["file_path"], name)
                 for r in survivors
             ):
                 still_referenced = True

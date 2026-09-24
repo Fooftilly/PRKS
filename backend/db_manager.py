@@ -802,15 +802,15 @@ def owned_managed_pdf_basename(file_path: str) -> Optional[str]:
 
 
 def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Serving identity a stored file_path can resolve to (HTTP PDF route).
+    """Fail-closed over-approximation of a stored path's serving identity.
 
     Deliberately looser than ``managed_pdf_filename()``. That helper answers
     "may this path be *adopted* as route-addressable ownership?" and must be
-    exact. This one answers "could this row still be pointing at managed PDF
-    X via the bytes the PDF route would serve?" and is only ever used to
-    decide whether deleting bytes is safe, so it must over-approximate:
-    a malformed or legacy spelling that fails to resolve here would let
-    cleanup delete a PDF another row still references.
+    exact. This one answers "could this row *might* still be pointing at
+    managed PDF X?" and is only ever used to refuse deleting bytes, so it
+    must over-approximate: a malformed or legacy spelling that fails to
+    resolve here would let cleanup delete a PDF another row still
+    references.
 
     Outer whitespace is tolerated. ``urlparse`` strips query/params/fragment
     before the last segment is taken, matching ``GET /api/pdfs/...`` so a
@@ -818,6 +818,10 @@ def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
     delimiter-bearing ownership (``legacy.pdf?x`` on disk) is checked
     separately via ``owned_managed_pdf_basename`` /
     ``row_references_managed_pdf``.
+
+    Never use this output as positive deletion authority: traversal, nested,
+    and encoded-slash aliases map here but the HTTP route cannot serve them,
+    so they must not mint ``pending_pdf_cleanup`` claims.
     """
     fp = str(file_path or "").strip()
     if not fp.startswith("/api/pdfs/"):
@@ -834,12 +838,14 @@ def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
 
 
 def row_references_managed_pdf(file_path: str, filename: str) -> bool:
-    """True when a stored path still protects managed basename ``filename``.
+    """True when a stored path fail-closed-protects managed basename ``filename``.
 
-    Checks serving identity (``referenced_managed_pdf_filename``) and physical
-    ownership (``owned_managed_pdf_basename``) so both
-    ``/api/pdfs/foo.pdf?q`` → protect ``foo.pdf`` and
-    ``/api/pdfs/legacy.pdf?x`` → protect ``legacy.pdf?x`` hold.
+    Checks the loose serving over-approximation
+    (``referenced_managed_pdf_filename``) and physical ownership
+    (``owned_managed_pdf_basename``) so cleanup refuses to unlink while any
+    such row exists. This is a *blocker*, not ownership proof — see
+    ``row_strongly_references_managed_pdf`` / ``managed_basenames_protected_by``
+    for identities that may retire or mint cleanup claims.
     """
     name = str(filename or "")
     if not name:
@@ -851,23 +857,44 @@ def row_references_managed_pdf(file_path: str, filename: str) -> bool:
     return False
 
 
+def row_strongly_references_managed_pdf(file_path: str, filename: str) -> bool:
+    """True when a stored path strongly owns or serves ``filename``.
+
+    Strong identities are ones the HTTP PDF route / physical cleanup can
+    actually resolve: exact ``owned_managed_pdf_basename`` (including legacy
+    ``?;#`` on-disk names) and the urlparse-stripped path when that path is
+    itself an exact route-addressable ``/api/pdfs/<name>`` spelling (so
+    ``/api/pdfs/foo.pdf?q`` strongly serves ``foo.pdf``). Traversal, nested,
+    and encoded-slash aliases are intentionally excluded — they only
+    fail-closed-block unlink via ``row_references_managed_pdf``.
+    """
+    name = str(filename or "")
+    if not name:
+        return False
+    if owned_managed_pdf_basename(file_path) == name:
+        return True
+    fp = str(file_path or "").strip()
+    if not fp.startswith("/api/pdfs/"):
+        return False
+    serving = managed_pdf_filename(urlparse(fp).path)
+    return serving == name
+
+
 def managed_basenames_protected_by(file_path: str) -> Tuple[str, ...]:
-    """Distinct managed basenames a stored path keeps alive for cleanup.
+    """Distinct *strong* managed basenames a stored path may claim on delete.
 
-    Every identity that can *suppress* a ``pending_pdf_cleanup`` claim via
-    ``row_references_managed_pdf`` must be reclaimable when this row is
-    deleted — otherwise a stem claim settled by a survivor is never
-    recreated and the bytes are orphaned forever. That covers:
+    Only strong ownership / serving identities mint ``pending_pdf_cleanup``
+    claims. A delimiter legacy path such as ``/api/pdfs/foo.pdf?x`` strongly
+    protects both physical ``foo.pdf?x`` and serving stem ``foo.pdf``, so
+    deleting that survivor reclaims a stem claim it previously superseded.
 
-    * exact ownership (``/api/pdfs/foo.pdf`` → ``foo.pdf``)
-    * delimiter legacy physical + serving stem (``/api/pdfs/foo.pdf?x`` →
-      ``foo.pdf?x`` and ``foo.pdf``)
-    * traversal / nested / encoded aliases that over-approximate to a
-      containable stem (``/api/pdfs/../foo.pdf``, ``.../subdir/foo.pdf``,
-      ``.../x%2Ffoo.pdf`` → ``foo.pdf``)
-
-    Only containable managed basenames are claimed (the same spelling
-    ``owned_managed_pdf_basename`` would accept as ``/api/pdfs/<name>``).
+    Weak fail-closed aliases (``/api/pdfs/../x.pdf``, nested segments,
+    ``%2F``) are deliberately excluded: ``referenced_managed_pdf_filename``
+    may map them to a containable stem, but the route cannot resolve those
+    spellings, so using them as positive deletion authority would unlink
+    bytes the row never owned. Those aliases keep an *existing* stem claim
+    pending (settle refuses to retire it; unlink is blocked) until they
+    disappear — they never create a new claim.
     """
     names: List[str] = []
     seen = set()
@@ -875,17 +902,17 @@ def managed_basenames_protected_by(file_path: str) -> Tuple[str, ...]:
     def _add(name: Optional[str]) -> None:
         if not name or name in seen:
             return
-        # Refuse non-containable stems (traversal segments, embedded
-        # separators, etc.) — those cannot be durable cleanup targets.
+        # Containable managed basenames only.
         if owned_managed_pdf_basename(f"/api/pdfs/{name}") != name:
             return
         seen.add(name)
         names.append(name)
 
     _add(owned_managed_pdf_basename(file_path))
-    # Fail-closed reference identity: whatever can retire another Work's
-    # claim must recreate that claim when this row disappears.
-    _add(referenced_managed_pdf_filename(file_path))
+    fp = str(file_path or "").strip()
+    if fp.startswith("/api/pdfs/"):
+        # Strong serving stem: urlparse-stripped path must be exact ownership.
+        _add(managed_pdf_filename(urlparse(fp).path))
     return tuple(names)
 
 

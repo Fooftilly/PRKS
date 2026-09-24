@@ -426,14 +426,13 @@ class PendingPdfCleanupTests(unittest.TestCase):
             self.assertFalse(os.path.isfile(physical_path))
         self.assertEqual(self._claims(), [])
 
-    def test_delete_alias_survivor_reclaims_superseded_stem(self):
-        """Owner P2: traversal/nested/%2F aliases reclaim the stem on final delete.
+    def test_delete_alias_survivor_defers_stem_claim_until_alias_gone(self):
+        """Owner P2: weak aliases defer stem cleanup; they never mint claims.
 
-        Same lifecycle leak as the delimiter case: an alias that can settle a
-        stem claim via ``row_references_managed_pdf`` must recreate that claim
-        when it is itself deleted. Covers both an explicit pending claim and
-        the no-prior-claim path (canon deleted while alias lives → no claim
-        written because still-referenced → alias delete must still clean).
+        Fail-closed aliases (traversal / nested / ``%2F``) block unlink but
+        must not retire a pending stem claim and must not create a new one on
+        their own delete. Sequence: claim stays pending while the alias lives;
+        after the alias is gone the existing claim settles.
         """
         aliases = (
             ("traversal", "/api/pdfs/../{stem}"),
@@ -444,7 +443,7 @@ class PendingPdfCleanupTests(unittest.TestCase):
             with self.subTest(alias=label):
                 stem = f"{label}-{uuid.uuid4().hex}.pdf"
                 stem_path = self._write_pdf(stem)
-                # --- path A: pending claim superseded then reclaimed ---
+                # --- path A: pending claim deferred (not superseded) by weak alias ---
                 with self.db.connection() as conn:
                     conn.execute(
                         "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
@@ -456,17 +455,20 @@ class PendingPdfCleanupTests(unittest.TestCase):
                     file_path=template.format(stem=stem),
                 )
                 summary = retry_pending_pdf_cleanup(self.db)
-                self.assertEqual(summary["superseded"], 1)
-                self.assertEqual(self._claims(), [])
+                self.assertEqual(summary["superseded"], 0)
+                self.assertEqual(summary["removed"], 0)
+                self.assertGreaterEqual(summary["deferred"], 1)
+                self.assertEqual(self._claims(), [stem])
                 self.assertTrue(os.path.isfile(stem_path))
+                # Weak alias delete mints nothing; existing claim then settles
+                # inside delete_work's post-commit retry pass.
                 result = delete_work(self.db, self.index, survivor_id)
                 self.assertTrue(result.existed)
                 self.assertEqual(result.cleanup_failures, ())
-                self.assertFalse(result.pending_pdf_cleanup)
                 self.assertFalse(os.path.isfile(stem_path))
                 self.assertEqual(self._claims(), [])
 
-                # --- path B: no prior claim; alias alone kept the stem ---
+                # --- path B: canon delete mints claim; observe before cleanup ---
                 stem_b = f"{label}-b-{uuid.uuid4().hex}.pdf"
                 stem_b_path = self._write_pdf(stem_b)
                 canon_id = self.db.add_work(
@@ -477,16 +479,27 @@ class PendingPdfCleanupTests(unittest.TestCase):
                     title=f"AliasB {label}",
                     file_path=template.format(stem=stem_b),
                 )
-                # Canon delete: alias still references → no claim, bytes kept.
-                result = delete_work(self.db, self.index, canon_id)
-                self.assertTrue(result.existed)
-                self.assertEqual(self._claims(), [])
+                # Split the durable-claim boundary from post-commit cleanup so
+                # an empty claims list cannot mean "never claimed".
+                rec = self.db.delete_work_record(canon_id)
+                self.assertIsNotNone(rec)
+                self.assertFalse(rec.managed_pdf_still_referenced)
+                self.assertEqual(self._claims(), [stem_b])
+                cleanup = cleanup_after_work_delete(
+                    self.db,
+                    self.index,
+                    canon_id,
+                    file_path=rec.file_path,
+                    existed=True,
+                )
+                self.assertEqual(cleanup.cleanup_failures, ())
+                # Weak alias still blocks unlink; claim must remain.
+                self.assertTrue(cleanup.pending_pdf_cleanup)
+                self.assertEqual(self._claims(), [stem_b])
                 self.assertTrue(os.path.isfile(stem_b_path))
-                # Final alias delete must claim and clean the stem.
+                # Alias gone → pending claim settles in delete_work's retry.
                 result = delete_work(self.db, self.index, alias_id)
                 self.assertTrue(result.existed)
-                self.assertEqual(result.cleanup_failures, ())
-                self.assertFalse(result.pending_pdf_cleanup)
                 self.assertFalse(os.path.isfile(stem_b_path))
                 self.assertEqual(self._claims(), [])
 

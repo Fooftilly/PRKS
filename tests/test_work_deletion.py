@@ -23,6 +23,7 @@ from backend.db_manager import (
     prks_thumb_cache_stem,
     referenced_managed_pdf_filename,
     row_references_managed_pdf,
+    row_strongly_references_managed_pdf,
     safe_pdf_path_under_dir,
 )
 from backend.storage.config import StorageConfig
@@ -335,74 +336,123 @@ class TestWorkDeletion(unittest.TestCase):
         self.assertFalse(os.path.isfile(pdf_abs))
 
     def test_surviving_nested_legacy_alias_keeps_pdf(self):
+        """Weak nested alias defers stem cleanup (claim stays pending)."""
         pdf_abs = self._write_pdf("victim.pdf")
         a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
         b_id = self.db.add_work(title="Nested", file_path="/api/pdfs/subdir/victim.pdf")
         result, rec = self._delete_capturing(a_id)
         self.assertTrue(result.existed)
         self.assertEqual(result.cleanup_failures, ())
-        self.assertTrue(rec.managed_pdf_still_referenced)
+        # Weak alias is not strong ownership — claim is minted and kept pending.
+        self.assertFalse(rec.managed_pdf_still_referenced)
+        self.assertEqual(
+            [r["filename"] for r in self.db.execute_query(
+                "SELECT filename FROM pending_pdf_cleanup"
+            )],
+            ["victim.pdf"],
+        )
         self.assertIsNone(self.db.get_work(a_id))
         self.assertIsNotNone(self.db.get_work(b_id))
         self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_surviving_traversal_legacy_alias_keeps_pdf(self):
+        """Weak traversal alias defers stem cleanup (claim stays pending)."""
         pdf_abs = self._write_pdf("victim.pdf")
         a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
         b_id = self.db.add_work(title="Traversal", file_path="/api/pdfs/../victim.pdf")
         result, rec = self._delete_capturing(a_id)
         self.assertTrue(result.existed)
         self.assertEqual(result.cleanup_failures, ())
-        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertFalse(rec.managed_pdf_still_referenced)
+        self.assertEqual(
+            [r["filename"] for r in self.db.execute_query(
+                "SELECT filename FROM pending_pdf_cleanup"
+            )],
+            ["victim.pdf"],
+        )
         self.assertIsNone(self.db.get_work(a_id))
         self.assertIsNotNone(self.db.get_work(b_id))
         self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_surviving_encoded_alias_keeps_pdf(self):
+        """Weak %2F alias defers stem cleanup (claim stays pending)."""
         pdf_abs = self._write_pdf("victim.pdf")
         a_id = self.db.add_work(title="Canon", file_path="/api/pdfs/victim.pdf")
         b_id = self.db.add_work(title="Encoded", file_path="/api/pdfs/foo%2Fvictim.pdf")
         result, rec = self._delete_capturing(a_id)
         self.assertTrue(result.existed)
         self.assertEqual(result.cleanup_failures, ())
-        self.assertTrue(rec.managed_pdf_still_referenced)
+        self.assertFalse(rec.managed_pdf_still_referenced)
+        self.assertEqual(
+            [r["filename"] for r in self.db.execute_query(
+                "SELECT filename FROM pending_pdf_cleanup"
+            )],
+            ["victim.pdf"],
+        )
         self.assertIsNone(self.db.get_work(a_id))
         self.assertIsNotNone(self.db.get_work(b_id))
         self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_malformed_deleted_row_cannot_claim_owned_pdf(self):
-        """Alias delete must not unlink while a real owner still references.
+        """Weak aliases are not deletion authority — they mint no stem claim.
 
-        Traversal/nested/%2F aliases now *claim* the stem they suppress, so
-        with a live owner ``managed_pdf_still_referenced`` is True and no
-        claim is written — the PDF stays. ``%5C`` does not map to the stem
-        under ``referenced_managed_pdf_filename`` and still claims nothing.
+        With a live strong owner, deleting a traversal/nested/%2F row claims
+        nothing (``managed_basenames_protected_by`` is empty for those
+        spellings) and must not unlink the owner's PDF.
         """
         pdf_abs = self._write_pdf("victim.pdf")
         owner_id = self.db.add_work(title="Owner", file_path="/api/pdfs/victim.pdf")
-        stem_suppressors = (
+        malformed = (
             "/api/pdfs/../victim.pdf",
             "/api/pdfs/subdir/victim.pdf",
             "/api/pdfs/foo%2Fvictim.pdf",
+            "/api/pdfs/foo%5Cvictim.pdf",
         )
-        for i, path in enumerate(stem_suppressors):
+        for i, path in enumerate(malformed):
             w_id = self.db.add_work(title=f"Bad{i}", file_path=path)
             result, rec = self._delete_capturing(w_id)
             self.assertTrue(result.existed)
             self.assertEqual(result.cleanup_failures, ())
-            self.assertTrue(rec.managed_pdf_still_referenced)
+            self.assertFalse(rec.managed_pdf_still_referenced)
+            self.assertEqual(
+                self.db.execute_query("SELECT filename FROM pending_pdf_cleanup"),
+                [],
+            )
             self.assertIsNone(self.db.get_work(w_id))
             self.assertIsNotNone(self.db.get_work(owner_id))
             self.assertTrue(os.path.isfile(pdf_abs))
-        # Encoded backslash does not suppress/claim the stem basename.
-        w_id = self.db.add_work(title="BadBS", file_path="/api/pdfs/foo%5Cvictim.pdf")
-        result, rec = self._delete_capturing(w_id)
-        self.assertTrue(result.existed)
-        self.assertEqual(result.cleanup_failures, ())
-        self.assertFalse(rec.managed_pdf_still_referenced)
-        self.assertIsNone(self.db.get_work(w_id))
-        self.assertIsNotNone(self.db.get_work(owner_id))
-        self.assertTrue(os.path.isfile(pdf_abs))
+
+    def test_malformed_alias_alone_does_not_delete_unrelated_stem(self):
+        """Owner P2: weak alias delete must not unlink a stem it cannot serve.
+
+        ``/api/pdfs/foo%2Fvictim.pdf`` fail-closed-maps to ``victim.pdf`` but
+        the HTTP route cannot resolve that spelling. Deleting that Work alone
+        must not claim or remove an otherwise-unrelated ``victim.pdf``.
+        """
+        pdf_abs = self._write_pdf("victim.pdf")
+        aliases = (
+            "/api/pdfs/../victim.pdf",
+            "/api/pdfs/subdir/victim.pdf",
+            "/api/pdfs/foo%2Fvictim.pdf",
+        )
+        for i, path in enumerate(aliases):
+            with self.subTest(path=path):
+                # Fresh stem bytes each spelling (prior subTest may not touch).
+                if not os.path.isfile(pdf_abs):
+                    self._write_pdf("victim.pdf")
+                w_id = self.db.add_work(title=f"OnlyAlias{i}", file_path=path)
+                result, rec = self._delete_capturing(w_id)
+                self.assertTrue(result.existed)
+                self.assertEqual(result.cleanup_failures, ())
+                self.assertFalse(rec.managed_pdf_still_referenced)
+                self.assertEqual(
+                    self.db.execute_query(
+                        "SELECT filename FROM pending_pdf_cleanup"
+                    ),
+                    [],
+                )
+                self.assertIsNone(self.db.get_work(w_id))
+                self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_nul_file_path_row_deletes_without_pdf_failure(self):
         pdf_abs = self._write_pdf("victim.pdf")
@@ -523,6 +573,16 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
         self.assertFalse(
             row_references_managed_pdf("/api/pdfs/other.pdf", "x.pdf")
         )
+        # Weak aliases fail-closed-block but are not strong ownership.
+        self.assertTrue(
+            row_references_managed_pdf("/api/pdfs/foo%2Fx.pdf", "x.pdf")
+        )
+        self.assertFalse(
+            row_strongly_references_managed_pdf("/api/pdfs/foo%2Fx.pdf", "x.pdf")
+        )
+        self.assertTrue(
+            row_strongly_references_managed_pdf("/api/pdfs/x.pdf?q", "x.pdf")
+        )
 
     def test_managed_basenames_protected_by_lists_physical_and_serving(self):
         self.assertEqual(
@@ -537,18 +597,13 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
             managed_basenames_protected_by("/api/pdfs/foo.pdf;bar"),
             ("foo.pdf;bar", "foo.pdf"),
         )
-        # Traversal/nested/encoded aliases reclaim the stem they suppress.
+        # Weak aliases are never positive deletion authority.
+        self.assertEqual(managed_basenames_protected_by("/api/pdfs/../x.pdf"), ())
         self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/../x.pdf"),
-            ("x.pdf",),
+            managed_basenames_protected_by("/api/pdfs/subdir/x.pdf"), ()
         )
         self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/subdir/x.pdf"),
-            ("x.pdf",),
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo%2Fx.pdf"),
-            ("x.pdf",),
+            managed_basenames_protected_by("/api/pdfs/foo%2Fx.pdf"), ()
         )
 
     def test_safe_pdf_path_under_dir_rejects_nul(self):
