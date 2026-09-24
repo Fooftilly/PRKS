@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -669,14 +670,34 @@ class RepoGateLiveTests(unittest.TestCase):
 
     def test_test_gate_workflow_pins_match_requirements(self):
         """CI install must name the same == pins as requirements.txt (Sonar
-        rejects unlocked `-r` installs; keep the two sources equal)."""
+        rejects unlocked `-r` installs; keep the two sources equal).
+
+        Assert against the install step's executable `run` args only — a pin
+        or `--only-binary` mention in a comment must not satisfy the check.
+        """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"--only-binary=:all:"', workflow)
+        match = re.search(
+            r"(?m)^ {6}- name: Install pinned runtime dependencies\n"
+            r"(?: {8}#.*\n)*"
+            r" {8}run: >-\n"
+            r"((?: {10}[^\n]*\n)+)",
+            workflow,
+        )
+        self.assertIsNotNone(
+            match, "missing Install pinned runtime dependencies run step"
+        )
+        install_cmd = " ".join(
+            line.strip() for line in match.group(1).splitlines() if line.strip()
+        )
+        self.assertIn("--only-binary=:all:", install_cmd)
+        self.assertIn("python -m pip install", install_cmd)
         for name, version in pins.items():
-            self.assertIn(f'"{name}=={version}"', workflow)
+            self.assertIn(f"{name}=={version}", install_cmd)
+        # Comments on this step must not be the only place the pins appear.
+        self.assertNotIn("#", install_cmd)
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
