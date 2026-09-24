@@ -46,14 +46,14 @@ class DerivedCachePublishTests(unittest.TestCase):
             temps: list[str] = []
             barrier = threading.Barrier(2)
             lock = threading.Lock()
-            real_mkstemp = tempfile.mkstemp
+            real_open = os.open
 
-            def spy_mkstemp(*args, **kwargs):
-                fd, path = real_mkstemp(*args, **kwargs)
-                with lock:
-                    temps.append(path)
-                barrier.wait(timeout=5)
-                return fd, path
+            def spy_open(path, flags, mode=0o777, *args, **kwargs):
+                if flags & os.O_EXCL:
+                    with lock:
+                        temps.append(path)
+                    barrier.wait(timeout=5)
+                return real_open(path, flags, mode, *args, **kwargs)
 
             errors: list[BaseException] = []
 
@@ -63,10 +63,7 @@ class DerivedCachePublishTests(unittest.TestCase):
                 except BaseException as exc:  # noqa: BLE001 — collect for assert
                     errors.append(exc)
 
-            with mock.patch(
-                "backend.derived_cache_publish.tempfile.mkstemp",
-                side_effect=spy_mkstemp,
-            ):
+            with mock.patch("backend.derived_cache_publish.os.open", spy_open):
                 threads = [
                     threading.Thread(target=worker, args=(b"aaaaaaaaaa",)),
                     threading.Thread(target=worker, args=(b"bbbbbbbbbb",)),
@@ -81,7 +78,6 @@ class DerivedCachePublishTests(unittest.TestCase):
             self.assertNotEqual(temps[0], temps[1])
             final = Path(tmp, "shared.webp").read_bytes()
             self.assertIn(final, {b"aaaaaaaaaa", b"bbbbbbbbbb"})
-            # No leftover exclusive temps after successful replaces.
             leftovers = [
                 p for p in Path(tmp).iterdir() if p.name.startswith(".prks-cache-")
             ]
@@ -89,7 +85,6 @@ class DerivedCachePublishTests(unittest.TestCase):
 
     def test_failed_write_removes_only_this_writers_temp(self):
         with tempfile.TemporaryDirectory() as tmp:
-            # Pre-existing peer temp must survive another writer's failure.
             peer = Path(tmp) / ".prks-cache-peer.tmp"
             peer.write_bytes(b"peer")
 
@@ -113,7 +108,6 @@ class DerivedCachePublishTests(unittest.TestCase):
 
             self.assertTrue(peer.is_file())
             self.assertFalse(Path(tmp, "card.webp").exists())
-            # Failed writer's exclusive temp cleaned up.
             leftovers = [
                 p
                 for p in Path(tmp).iterdir()
