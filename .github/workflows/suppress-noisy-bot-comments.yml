@@ -34,6 +34,15 @@ jobs:
             'Qodo reviewed your code and found no material issues that require review'
           ) &&
           github.event.comment.user.login == 'qodo-code-review[bot]'
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          contains(
+            github.event.comment.body,
+            'has reached the 50-credit limit for trial accounts'
+          ) &&
+          contains(github.event.comment.body, 'To continue receiving code reviews') &&
+          github.event.comment.user.login == 'greptile-apps[bot]'
         )
       ) &&
       (
