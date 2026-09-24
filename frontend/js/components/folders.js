@@ -1268,8 +1268,10 @@ function prksFolderDetailSelectInTree(host, folderId, rows) {
  * Live Folder-detail hierarchy refill. Same-route overlap ownership uses
  * TabContext beginFolderHierarchyRefresh(mode) / prksFolderHierarchyTreeCommitAllowed
  * so an older async catalogue result cannot overwrite a newer committed tree.
- * Selection-only never supersedes an in-flight full topology refresh.
- * Route AbortSignal still covers A→B→C remounts.
+ * Successful in-place selection never supersedes an in-flight full topology
+ * refresh. When selection-only falls through to a full tree rebuild (missing
+ * tree or destination row), it claims full ownership first so an older full
+ * cannot overwrite that newer topology. Route AbortSignal still covers A→B→C.
  */
 async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
@@ -1284,7 +1286,8 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
             ? ctx.abortController.signal
             : null;
     // Mode-aware ownership: full vs selection use separate counters so a
-    // Folder→Folder selection-only fill cannot invalidate a pending sync full refill.
+    // Folder→Folder in-place selection fill cannot invalidate a pending sync
+    // full refill. Fallback rebuilds claim full below.
     const refreshToken =
         ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
             ? ctx.beginFolderHierarchyRefresh(selectionOnly ? 'selection' : 'full')
@@ -1330,6 +1333,23 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
         prksFolderDetailSelectInTree(liveHost, commitFolder.id, rows)
     ) {
         return;
+    }
+    // Selection-only fell through to a topology rebuild (tree not built yet, or
+    // destination row absent). Claim full ownership before writing so an older
+    // in-flight full cannot overwrite this newer tree. The successful in-place
+    // select path above does not bump full and leaves pending fulls current.
+    if (selectionOnly) {
+        const fullClaim =
+            ctx && typeof ctx.beginFolderHierarchyRefresh === 'function'
+                ? ctx.beginFolderHierarchyRefresh('full')
+                : null;
+        if (fullClaim == null && ctx && ctx.destroyed) return;
+        if (
+            typeof prksFolderHierarchyTreeCommitAllowed !== 'function' ||
+            !prksFolderHierarchyTreeCommitAllowed(ctx, fullClaim, container, signal)
+        ) {
+            return;
+        }
     }
     prksFolderDetailExpandAncestors(commitFolder.id, rows);
     liveHost.innerHTML = prksFolderDetailTreeHtml(rows, commitFolder.id);

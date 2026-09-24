@@ -450,6 +450,43 @@ async function run() {
         prksDestroyAllTabContexts();
     }
 
+    // --- P1: selection-only fallback rebuild claims full; older full A rejected ---
+    // Tree still loading (no detail-nav / destination absent) → select fails →
+    // B rebuilds with newer rows and must supersede in-flight full A.
+    {
+        const ctx = mountCtx('sel-fallback', { id: 'old', title: 'Old' });
+        const dom = detailTreeDom('<p class="loading">LOADING</p>');
+        const gates = [];
+        installDeferredLoad(gates);
+        const pFull = fillTree(ctx, { id: 'old', title: 'Old' }, dom.container, {
+            selectionOnly: false,
+        });
+        ctx.setEntity('folder', { id: 'new', title: 'New' });
+        const pSel = fillTree(ctx, { id: 'new', title: 'New' }, dom.container, {
+            selectionOnly: true,
+        });
+        await nextTick();
+        same('fallback gated', gates.length, 2);
+        gates[1].unlock([
+            { id: 'old', title: 'NEW-TOPO-OLD', parent_id: null, child_count: 0 },
+            { id: 'new', title: 'NEW-TOPO-NEW', parent_id: null, child_count: 0 },
+        ]);
+        await pSel;
+        ok('B rebuilt NEW-TOPO-NEW', hasTitle(dom.liveHost.innerHTML, 'NEW-TOPO-NEW'));
+        ok('B rebuilt NEW-TOPO-OLD', hasTitle(dom.liveHost.innerHTML, 'NEW-TOPO-OLD'));
+        same('B selected new', selectedIdFromHtml(dom.liveHost.innerHTML), 'new');
+        ok(
+            'full A stale after B fallback claim',
+            !ctx.isFolderHierarchyRefreshCurrent({ mode: 'full', gen: 1 })
+        );
+        const afterB = dom.liveHost.innerHTML;
+        gates[0].unlock([{ id: 'old', title: 'OLD-TOPO', parent_id: null, child_count: 0 }]);
+        await pFull;
+        same('A did not overwrite B fallback', dom.liveHost.innerHTML, afterB);
+        ok('OLD-TOPO absent', !hasTitle(dom.liveHost.innerHTML, 'OLD-TOPO'));
+        prksDestroyAllTabContexts();
+    }
+
     // --- Selection race: newer full; stale full cannot restore ---
     {
         const ctx = mountCtx('sel', { id: 'a-sel', title: 'A' });

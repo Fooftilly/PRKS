@@ -234,7 +234,9 @@
          * Full tokens stay current until another full begins. Selection tokens
          * stay current until a newer selection begins OR a full begins after
          * they started (fullBase captured at start). Selection never bumps the
-         * full counter, so it cannot invalidate an in-flight topology refill.
+         * full counter by itself (so a successful in-place select cannot
+         * invalidate an in-flight topology refill); callers that fall through
+         * to a tree rebuild must call begin('full') before writing.
          */
         ctx.beginFolderHierarchyRefresh = function (mode) {
             if (ctx.destroyed) return null;
