@@ -403,6 +403,125 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(rows, [])
 
+    def test_create_rejects_url_delimiter_file_path_spellings(self):
+        """Adoption must refuse ``?``/``;``/``#`` that GET strips via urlparse."""
+        from backend.db_manager import managed_pdf_filename
+
+        name = "delim-adopt.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        target = os.path.join(pdfs_dir, name)
+        with open(target, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%DELIM\n%%EOF\n")
+        self.addCleanup(lambda: os.path.isfile(target) and os.remove(target))
+
+        for spelling in (
+            f"/api/pdfs/{name}?x",
+            f"/api/pdfs/{name};bar",
+            f"/api/pdfs/{name}#frag",
+        ):
+            with self.subTest(spelling=spelling):
+                self.assertIsNone(managed_pdf_filename(spelling))
+                payload = json.dumps({
+                    "title": f"Delim adopt {spelling[-4:]}",
+                    "file_path": spelling,
+                }).encode()
+                req = urllib.request.Request(
+                    f"{self._base_url}/api/works",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(req)
+                self.assertEqual(cm.exception.code, 400)
+                # Must not have persisted the delimiter spelling — or aliased
+                # onto the stem name the GET route would actually serve.
+                for fp in (spelling, f"/api/pdfs/{name}"):
+                    rows = server_module.db.execute_query(
+                        "SELECT id FROM works WHERE file_path = ?",
+                        (fp,),
+                    )
+                    self.assertEqual(rows, [])
+
+    def test_pdf_get_strips_url_delimiters_to_stem_path(self):
+        """GET/HEAD serve urlparse(.path) only — proving delimiter mismatch.
+
+        A request for ``/api/pdfs/name.pdf?x`` (also ``;``) resolves the stem
+        ``name.pdf``, never a basename that includes the delimiter. Fragment
+        ``#`` is stripped by urlparse the same way (clients omit it on the
+        wire; the ownership parser still refuses it). That is why adoption
+        must refuse those spellings rather than lock and persist bytes the
+        route cannot address under the stored URL.
+        """
+        from urllib.parse import urlparse
+
+        from backend.db_manager import managed_pdf_filename
+        from backend.server import _safe_pdf_path_for_route
+
+        name = "route_delim_strip.pdf"
+        target = os.path.join(server_module.pdfs_dir, name)
+        body = b"%PDF-1.4 delim-strip\n%%EOF\n"
+        with open(target, "wb") as handle:
+            handle.write(body)
+        self.addCleanup(lambda: os.path.isfile(target) and os.remove(target))
+
+        # Stem without delimiters serves normally.
+        for method in ("GET", "HEAD"):
+            req = urllib.request.Request(
+                f"{self._base_url}/api/pdfs/{name}", method=method
+            )
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                if method == "GET":
+                    self.assertEqual(res.read(), body)
+
+        # Query and params reach the server in self.path; urlparse drops them
+        # before _safe_pdf_path_for_route, so they hit the same stem bytes.
+        for suffix in (f"{name}?x=1", f"{name};bar"):
+            for method in ("GET", "HEAD"):
+                with self.subTest(suffix=suffix, method=method):
+                    req = urllib.request.Request(
+                        f"{self._base_url}/api/pdfs/{suffix}", method=method
+                    )
+                    with urllib.request.urlopen(req) as res:
+                        self.assertEqual(res.status, 200)
+                        if method == "GET":
+                            self.assertEqual(res.read(), body)
+
+        # Fragment is client-stripped on the wire; the server's urlparse
+        # contract is the same, and ownership rejects the stored spelling.
+        frag_spelling = f"/api/pdfs/{name}#frag"
+        self.assertIsNone(managed_pdf_filename(frag_spelling))
+        parsed = urlparse(frag_spelling)
+        self.assertEqual(parsed.path, f"/api/pdfs/{name}")
+        self.assertEqual(parsed.fragment, "frag")
+        resolved = _safe_pdf_path_for_route(parsed.path)
+        self.assertEqual(resolved, target)
+
+        # A delimiter-bearing on-disk name is unreachable via the HTTP route:
+        # the request that looks like it names those bytes still resolves the
+        # stem, so inventing an ownership path with ``?`` would 404 or serve
+        # the wrong file after a "successful" adoption.
+        literal = f"{name}?orphan"
+        literal_path = os.path.join(server_module.pdfs_dir, literal)
+        try:
+            with open(literal_path, "wb") as handle:
+                handle.write(b"%PDF-1.4 orphan-delim\n%%EOF\n")
+        except OSError:
+            return
+        self.addCleanup(
+            lambda: os.path.isfile(literal_path) and os.remove(literal_path)
+        )
+        self.assertIsNone(managed_pdf_filename(f"/api/pdfs/{literal}"))
+        req = urllib.request.Request(
+            f"{self._base_url}/api/pdfs/{literal}", method="GET"
+        )
+        with urllib.request.urlopen(req) as res:
+            # urlparse drops ``?orphan`` → serves stem, not the orphan bytes.
+            self.assertEqual(res.status, 200)
+            self.assertEqual(res.read(), body)
+
     def test_create_with_whitespace_file_path_stores_canonical_and_holds_lock(self):
         """Outer whitespace is trimmed once; exact ownership form is stored."""
         from backend.db_manager import managed_pdf_filename

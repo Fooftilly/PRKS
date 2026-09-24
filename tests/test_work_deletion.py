@@ -446,6 +446,11 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
             "/api/pdfs/%2e%2e",
             " /api/pdfs/victim.pdf ",
             "/api/pdfs/bad\x00name.pdf",
+            # urlparse strips these before the HTTP PDF route sees the path.
+            "/api/pdfs/example.pdf?x",
+            "/api/pdfs/example.pdf;bar",
+            "/api/pdfs/example.pdf#frag",
+            "/api/pdfs/foo.pdf?x=1#y",
         )
         for path in rejected:
             with self.subTest(path=path):

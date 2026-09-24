@@ -532,6 +532,56 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
         self.assertEqual(raised.exception.http_status, 400)
         self.assertTrue(os.path.isfile(path))
 
+    def test_adoption_guard_refuses_url_delimiter_spellings(self):
+        """Ownership must reject ``?``/``;``/``#`` that HTTP serving strips (owner P2)."""
+        stem = f"delim-{uuid.uuid4().hex}.pdf"
+        stem_path = os.path.join(self.storage.pdfs_dir, stem)
+        with open(stem_path, "wb") as handle:
+            handle.write(PDF_BODY)
+
+        cases = (
+            f"/api/pdfs/{stem}?x",
+            f"/api/pdfs/{stem};bar",
+            f"/api/pdfs/{stem}#frag",
+        )
+        for adopt_fp in cases:
+            with self.subTest(adopt_fp=adopt_fp):
+                # Cleanup's last-segment parse keeps the delimiter in the
+                # basename; ownership must refuse rather than lock that alias.
+                self.assertIsNone(managed_pdf_filename(adopt_fp))
+                self.assertIsNotNone(referenced_managed_pdf_filename(adopt_fp))
+                with self.assertRaises(work_pdf_replace.ManagedPdfStoreError) as raised:
+                    with work_pdf_replace.managed_pdf_adoption_guard(
+                        self.storage.pdfs_dir, adopt_fp
+                    ):
+                        self.fail("must not adopt URL-delimiter spelling")
+                self.assertEqual(raised.exception.reason, "invalid_file_name")
+                self.assertEqual(raised.exception.http_status, 400)
+
+        # A legacy/restored on-disk name that itself contains ``?`` — adoption
+        # of that ownership spelling must still refuse: the HTTP route would
+        # strip to the stem and never serve those bytes under that URL.
+        literal_q = f"literal-{uuid.uuid4().hex}.pdf?x"
+        literal_path = os.path.join(self.storage.pdfs_dir, literal_q)
+        try:
+            with open(literal_path, "wb") as handle:
+                handle.write(PDF_BODY)
+        except OSError:
+            literal_path = None  # some filesystems refuse ``?`` in names
+
+        if literal_path is not None:
+            claim = f"/api/pdfs/{literal_q}"
+            self.assertIsNone(managed_pdf_filename(claim))
+            with self.assertRaises(work_pdf_replace.ManagedPdfStoreError) as raised:
+                with work_pdf_replace.managed_pdf_adoption_guard(
+                    self.storage.pdfs_dir, claim
+                ):
+                    self.fail("must not adopt delimiter-bearing basename")
+            self.assertEqual(raised.exception.reason, "invalid_file_name")
+            os.remove(literal_path)
+
+        self.assertTrue(os.path.isfile(stem_path))
+
     def test_adoption_guard_refuses_nested_segment_alias(self):
         name = f"nested-{uuid.uuid4().hex}.pdf"
         path = os.path.join(self.storage.pdfs_dir, name)

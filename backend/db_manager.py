@@ -745,7 +745,16 @@ def safe_pdf_path_under_dir(
 
 
 def managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Return the filename only for an exact literal /api/pdfs/<filename> ownership path."""
+    """Return the filename only for an exact literal /api/pdfs/<filename> ownership path.
+
+    The basename must round-trip through the HTTP PDF route. ``urlparse`` strips
+    ``?`` (query), ``;`` (params), and ``#`` (fragment) before
+    ``_safe_pdf_path_for_route`` sees the path, so a stored
+    ``/api/pdfs/foo.pdf?x`` would lock/persist ``foo.pdf?x`` while GET resolved
+    ``foo.pdf``. Mint sanitizes these characters away; adoption of legacy or
+    restored names must refuse them rather than claim bytes the route cannot
+    serve under that spelling.
+    """
     prefix = "/api/pdfs/"
     if not file_path.startswith(prefix):
         return None
@@ -753,6 +762,9 @@ def managed_pdf_filename(file_path: str) -> Optional[str]:
     if not remainder or remainder != remainder.strip():
         return None
     if "/" in remainder or "\\" in remainder:
+        return None
+    # URL component delimiters: not part of a path segment once urlparse runs.
+    if any(ch in remainder for ch in "?;#"):
         return None
     if remainder in (".", ".."):
         return None
