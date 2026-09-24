@@ -7,6 +7,11 @@ worst offline defects came from exactly that -- a surface was made durable, the
 guidance still said "read-only offline", and the next change re-added a
 connectivity guard in front of an operation that no longer needed one.
 
+The detailed Offline/PWA contract lives in `docs/agent-rules/offline-pwa.md`,
+routed from the root `AGENTS.md` stub. Obsolete-phrase and durable-family
+assertions therefore cover the files agents are expected to read for that
+domain, not root `AGENTS.md` alone.
+
 These are deliberately *phrase* assertions rather than a general style check.
 They fail loudly when a specific obsolete claim returns, and they say what is
 true instead. `docs/local-first-rollout-status.md` is the running score and is
@@ -20,11 +25,12 @@ from backend.db_migrations import LATEST_SCHEMA_VERSION
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "AGENTS.md"
+OFFLINE_PWA = ROOT / "docs" / "agent-rules" / "offline-pwa.md"
 STATUS = ROOT / "docs" / "local-first-rollout-status.md"
 README = ROOT / "README.md"
 
 # Families that are durable today. Each entry is (operation, the domain word a
-# reader would search AGENTS.md for).
+# reader would search the Offline/PWA contract for).
 DURABLE_FAMILIES = (
     "ADD_WORK_TAG",
     "REMOVE_WORK_TAG",
@@ -79,6 +85,9 @@ DURABLE_FAMILIES = (
 class AgentGuidanceTests(unittest.TestCase):
     def setUp(self):
         self.agents = AGENTS.read_text()
+        self.offline_pwa = OFFLINE_PWA.read_text()
+        # Combined corpus agents read for offline/local-first guidance.
+        self.guidance = self.agents + "\n" + self.offline_pwa
         self.status = STATUS.read_text()
 
     # ---- obsolete phrases that must never come back ------------------------
@@ -93,16 +102,16 @@ class AgentGuidanceTests(unittest.TestCase):
             "Playlist routes are read-only offline",
         ):
             with self.subTest(phrase=phrase):
-                self.assertNotIn(phrase, self.agents,
+                self.assertNotIn(phrase, self.guidance,
                                  "Playlists are local-first: see the Playlists "
                                  "section and docs/local-first-sync.md (3G)")
 
     def test_the_blanket_no_offline_list_is_gone(self):
         """"No offline Tag creation, Folder edits, Playlists, ..." was true in
         Phase 1 and is now wrong about four separate families at once."""
-        self.assertNotIn("No offline Tag creation", self.agents)
+        self.assertNotIn("No offline Tag creation", self.guidance)
         self.assertNotRegex(
-            self.agents,
+            self.guidance,
             r"No offline[^.\n]*\b(Tag creation|Folder edits|Playlists)\b",
             "those families are durable; say what is actually still missing")
 
@@ -117,7 +126,7 @@ class AgentGuidanceTests(unittest.TestCase):
                 pattern = re.compile(
                     r"^%s[^\n]*\*\*read-only\*\* offline" % re.escape(domain),
                     re.MULTILINE)
-                self.assertIsNone(pattern.search(self.agents),
+                self.assertIsNone(pattern.search(self.guidance),
                                   "%s is durable; describe what it supports" % domain)
 
     def test_person_and_group_creation_are_not_described_as_guarded(self):
@@ -128,38 +137,46 @@ class AgentGuidanceTests(unittest.TestCase):
             "`openModal('playlist-modal')` is guarded centrally",
         ):
             with self.subTest(phrase=phrase):
-                self.assertNotIn(phrase, self.agents)
+                self.assertNotIn(phrase, self.guidance)
 
     def test_work_tags_are_not_the_only_mutation_that_crosses_the_cache(self):
         self.assertNotIn(
             "Existing Work Tags are the one\nmutation that crosses it",
-            self.agents)
+            self.guidance)
         self.assertNotIn(
             "Apart from existing Work Tags (see *Local-first Work Tags* below), "
             "there is no\noffline mutation outbox",
-            self.agents)
+            self.guidance)
 
     # ---- and the positive half: the truth has to be stated ----------------
 
-    def test_agents_md_names_every_durable_family(self):
+    def test_offline_pwa_contract_names_every_durable_family(self):
         """Not a vague "everything works offline": the exact operation names, so
-        a reader can tell a durable surface from a server-bound one."""
-        missing = [f for f in DURABLE_FAMILIES if f not in self.agents]
+        a reader can tell a durable surface from a server-bound one. Lives in
+        the scoped Offline/PWA contract, not the root routing stub."""
+        missing = [f for f in DURABLE_FAMILIES if f not in self.offline_pwa]
         self.assertEqual(missing, [],
-                         "AGENTS.md must name each durable family explicitly")
+                         "docs/agent-rules/offline-pwa.md must name each "
+                         "durable family explicitly")
+
+    def test_agents_md_routes_to_offline_pwa_contract(self):
+        """Root AGENTS.md keeps the Offline/PWA heading and points agents at
+        the scoped contract before offline work."""
+        self.assertIn("## Offline / PWA", self.agents)
+        self.assertIn("docs/agent-rules/offline-pwa.md", self.agents)
 
     def test_agents_md_points_at_the_running_score(self):
         self.assertIn("docs/local-first-rollout-status.md", self.agents)
 
-    def test_agents_md_still_names_what_is_server_bound(self):
+    def test_offline_pwa_still_names_what_is_server_bound(self):
         """The list must stay honest in both directions -- a reader has to be
         able to find what is NOT durable."""
         for phrase in ("PDF annotations",
                        "multi-user sync", "server push"):
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, self.agents)
+                self.assertIn(phrase, self.offline_pwa)
 
-    def test_the_status_doc_and_agents_md_agree_on_the_durable_set(self):
+    def test_the_status_doc_and_offline_contract_agree_on_the_durable_set(self):
         """The two documents are written by hand and drift apart silently."""
         for family in DURABLE_FAMILIES:
             with self.subTest(family=family):

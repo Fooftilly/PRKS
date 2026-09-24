@@ -626,7 +626,8 @@ Do not add another probe timer in the coordinator — recovery stays in
 Offline/local-first work has a large, load-bearing domain contract that is
 intentionally scoped out of this global file. **Before changing offline,
 local-first, synchronization, service-worker, conflict/revision, or client-cache
-behavior, read `docs/agent-rules/offline-pwa.md` completely.**
+behavior — or tests that encode those contracts — read
+`docs/agent-rules/offline-pwa.md` completely.**
 
 Global rules still apply, especially:
 

@@ -1103,8 +1103,8 @@ function prksMarkConceptsDomainChanged() {
  * Positions domain policy is deliberately conservative: any
  * successful call to one of those helpers invalidates the whole Positions
  * domain rather than working out which Positions were actually affected.
- * Independent of the Concepts domain by construction -- see AGENTS.md
- * "Offline coherence domains".
+ * Independent of the Concepts domain by construction -- see
+ * docs/agent-rules/offline-pwa.md "Offline coherence domains".
  */
 function prksMarkPositionsDomainChanged() {
     if (typeof prksOfflineMarkPositionsChanged !== 'function') return null;
@@ -1164,7 +1164,7 @@ function prksMarkPlaylistsDomainChanged() {
  * the sync coordinator needs ONE place to change "discard the projection" into
  * "apply the pending operation to it optimistically". A scattered
  * deleteList('works-browse:index') would have to be rewritten everywhere.
- * See AGENTS.md, "Offline browse catalogs".
+ * See docs/agent-rules/offline-pwa.md, "Offline browse catalogs".
  * ------------------------------------------------------------------------ */
 
 /** The stable Work catalog behind #/progress, #/types and #/types/:type. */
@@ -1204,7 +1204,7 @@ function prksMarkWorkBrowseDisplayChanged() {
  * Folder: moving a Work changes two Folder details AND both `work_count`s in
  * `folders:index`, and reparenting changes the hierarchy for every ancestor.
  * A cached Folder detail also embeds whole Work cards, so Work display changes
- * stale it too -- see AGENTS.md, "Offline coherence domains".
+ * stale it too -- see docs/agent-rules/offline-pwa.md, "Offline coherence domains".
  */
 function prksMarkFoldersDomainChanged() {
     if (typeof prksOfflineMarkFoldersChanged !== 'function') return null;

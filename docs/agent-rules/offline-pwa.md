@@ -1127,7 +1127,7 @@ The families are deliberately different in kind, and that is the point:
   Added filters locally over it, so a pending publisher must reach that
   projection's filtering. `FIELD_PROJECTIONS` names that dependency on both
   sides and the parity is pinned by a test. Before adding a field here, check
-  the fan-out table in [docs/local-first-sync.md](docs/local-first-sync.md) --
+  the fan-out table in [docs/local-first-sync.md](../local-first-sync.md) --
   and check what *filters* on it, not only what renders it.
 - The cross-projection overlay lives in `work-metadata-state.js`. Components
   say "repaint"; they must not grow a second opinion about which operations are
@@ -1389,7 +1389,7 @@ The families are deliberately different in kind, and that is the point:
 Existing Work Tag add/remove uses one durable-first path online and offline.
 See `docs/local-first-rollout-status.md` for other families and for surfaces that
 remain connection-required. The Work-Tag implementation contract is in
-[docs/local-first-sync.md](docs/local-first-sync.md).
+[docs/local-first-sync.md](../local-first-sync.md).
 
 - `local-store.js` owns `prks-local-v1`, physically separate from the disposable
   `prks-offline-v1`. Clear offline cache must never touch durable operations.
