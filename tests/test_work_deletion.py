@@ -16,6 +16,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import (
     PRKSDatabase,
+    managed_basenames_protected_by,
     managed_pdf_filename,
     owned_managed_pdf_basename,
     prks_delete_pdf_thumbnails_for_work_id,
@@ -507,6 +508,21 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
         self.assertFalse(
             row_references_managed_pdf("/api/pdfs/other.pdf", "x.pdf")
         )
+
+    def test_managed_basenames_protected_by_lists_physical_and_serving(self):
+        self.assertEqual(
+            managed_basenames_protected_by("/api/pdfs/foo.pdf"),
+            ("foo.pdf",),
+        )
+        self.assertEqual(
+            managed_basenames_protected_by("/api/pdfs/foo.pdf?x"),
+            ("foo.pdf?x", "foo.pdf"),
+        )
+        self.assertEqual(
+            managed_basenames_protected_by("/api/pdfs/foo.pdf;bar"),
+            ("foo.pdf;bar", "foo.pdf"),
+        )
+        self.assertEqual(managed_basenames_protected_by("/api/pdfs/../x.pdf"), ())
 
     def test_safe_pdf_path_under_dir_rejects_nul(self):
         pdfs = tempfile.mkdtemp()

@@ -851,6 +851,37 @@ def row_references_managed_pdf(file_path: str, filename: str) -> bool:
     return False
 
 
+def managed_basenames_protected_by(file_path: str) -> Tuple[str, ...]:
+    """Distinct managed basenames a stored path keeps alive for cleanup.
+
+    A delimiter legacy path such as ``/api/pdfs/foo.pdf?x`` protects both the
+    physical on-disk name ``foo.pdf?x`` and the HTTP serving stem ``foo.pdf``.
+    Deletion must claim every one that no survivor still references —
+    otherwise a stem claim superseded by this row is never recreated when the
+    row itself is deleted, and ``foo.pdf`` is orphaned forever.
+
+    The serving stem is taken only from the urlparse-stripped path when that
+    path is itself an exact route-addressable ``/api/pdfs/<name>`` spelling.
+    Traversal or encoded-slash aliases are not claim targets here (they still
+    *protect* via ``row_references_managed_pdf`` when deciding whether another
+    Work's claim may settle).
+    """
+    names: List[str] = []
+    seen = set()
+    physical = owned_managed_pdf_basename(file_path)
+    if physical:
+        seen.add(physical)
+        names.append(physical)
+    fp = str(file_path or "").strip()
+    if fp.startswith("/api/pdfs/"):
+        # urlparse drops ?/;/#; require the remaining path to be exact ownership.
+        serving = managed_pdf_filename(urlparse(fp).path)
+        if serving and serving not in seen:
+            if owned_managed_pdf_basename(f"/api/pdfs/{serving}") == serving:
+                names.append(serving)
+    return tuple(names)
+
+
 def safe_processing_path_under_dir(
     processing_dir: str,
     relative_path: str,

@@ -384,6 +384,48 @@ class PendingPdfCleanupTests(unittest.TestCase):
         self.assertEqual(self._claims(), [])
         self.assertIsNotNone(self.db.get_work(survivor_id))
 
+    def test_delete_delimiter_survivor_reclaims_superseded_stem(self):
+        """Owner P2: stem claim superseded by ``?x`` survivor is reclaimed on delete.
+
+        Sequence: claim(stem) → delimiter survivor supersedes → delete survivor
+        → both physical ``stem?x`` and serving stem cleanup eventually settle.
+        """
+        stem = f"stem-{uuid.uuid4().hex}.pdf"
+        physical = f"{stem}?x"
+        stem_path = self._write_pdf(stem)
+        try:
+            physical_path = self._write_pdf(physical)
+        except OSError:
+            physical_path = None  # optional; missing physical is still success
+
+        # Stem claim pending (as after deleting the canonical stem owner).
+        with self.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                (stem,),
+            )
+            conn.commit()
+
+        survivor_id = self.db.add_work(
+            title="Delimiter survivor",
+            file_path=f"/api/pdfs/{physical}",
+        )
+        # While the survivor lives, the stem claim must retire as superseded.
+        summary = retry_pending_pdf_cleanup(self.db)
+        self.assertEqual(summary["superseded"], 1)
+        self.assertEqual(self._claims(), [])
+        self.assertTrue(os.path.isfile(stem_path))
+
+        # Deleting the survivor must claim BOTH physical and serving identities.
+        result = delete_work(self.db, self.index, survivor_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertFalse(result.pending_pdf_cleanup)
+        self.assertFalse(os.path.isfile(stem_path))
+        if physical_path is not None:
+            self.assertFalse(os.path.isfile(physical_path))
+        self.assertEqual(self._claims(), [])
+
     def test_a_failed_delete_does_not_retry_itself_in_the_same_breath(self):
         work_id, name, abs_path = self._managed_work("NoDoubleTry")
         with self._failing_remove(abs_path) as removal:

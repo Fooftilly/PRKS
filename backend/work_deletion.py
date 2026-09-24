@@ -26,6 +26,7 @@ from typing import Collection, Optional
 
 from backend.db_manager import (
     PRKSDatabase,
+    managed_basenames_protected_by,
     owned_managed_pdf_basename,
     prks_delete_pdf_thumbnails_for_work_id,
     row_references_managed_pdf,
@@ -426,16 +427,18 @@ def cleanup_after_work_delete(
             wid,
             safe_error_type(e),
         )
-    filename = owned_managed_pdf_basename(file_path) if existed else None
-    if filename is not None:
+    filenames = managed_basenames_protected_by(file_path) if existed else ()
+    for filename in filenames:
         try:
             # Reported from what actually happened, not from the absence of an
             # exception: a check this pass could not complete leaves the claim
             # standing, and saying otherwise would hide the degradation the
             # durable record exists to preserve.
-            pending_pdf = not _remove_managed_pdf(db, filename, db.storage.pdfs_dir)
+            if not _remove_managed_pdf(db, filename, db.storage.pdfs_dir):
+                pending_pdf = True
         except OSError as e:
-            failures.append("pdf")
+            if "pdf" not in failures:
+                failures.append("pdf")
             pending_pdf = True
             LOGGER.warning(
                 "work_delete_pdf_cleanup_failed work_id=%s error_type=%s",
@@ -444,11 +447,9 @@ def cleanup_after_work_delete(
             )
     # Draining the backlog here is what makes recovery independent of a
     # restart: the process that could not remove bytes a minute ago is usually
-    # the one that can now. Bounded, and never re-attempts the name this call
+    # the one that can now. Bounded, and never re-attempts the names this call
     # just handled.
-    retry_pending_pdf_cleanup(
-        db, skip=() if filename is None else (filename,)
-    )
+    retry_pending_pdf_cleanup(db, skip=filenames)
     return WorkDeletionResult(
         existed=existed,
         cleanup_failures=tuple(failures),

@@ -16,7 +16,7 @@ import sqlite3
 from backend.db_manager import (
     DeletedWorkRecord,
     _canonical_new_source,
-    owned_managed_pdf_basename,
+    managed_basenames_protected_by,
     normalize_doc_type,
     row_references_managed_pdf,
 )
@@ -330,21 +330,25 @@ def delete_work_record_on_conn(conn, work_id, *, claim_pdf=True):
     if row is None:
         return None
     file_path = "" if row["file_path"] is None else str(row["file_path"])
-    # Physical cleanup ownership (legacy delimiter-bearing names included);
-    # route-addressable adoption refuses those via managed_pdf_filename.
-    deleted_filename = owned_managed_pdf_basename(file_path)
+    # Every distinct basename this row protects (physical ownership and HTTP
+    # serving identity). A legacy ``/api/pdfs/foo.pdf?x`` row keeps both
+    # ``foo.pdf?x`` and stem ``foo.pdf`` alive; claiming only the physical
+    # name would orphan the stem after a prior stem claim was superseded.
+    protected = managed_basenames_protected_by(file_path)
     conn.execute("DELETE FROM works WHERE id = ?", (work_id,))
     still_referenced = False
-    if deleted_filename is not None and claim_pdf:
+    if protected and claim_pdf:
         survivors = conn.execute(
             "SELECT file_path FROM works WHERE file_path IS NOT NULL"
         ).fetchall()
-        still_referenced = any(
-            row_references_managed_pdf(r["file_path"], deleted_filename)
-            for r in survivors
-        )
-        if not still_referenced:
-            record_pending_pdf_cleanup_on_conn(conn, deleted_filename)
+        for name in protected:
+            if any(
+                row_references_managed_pdf(r["file_path"], name)
+                for r in survivors
+            ):
+                still_referenced = True
+            else:
+                record_pending_pdf_cleanup_on_conn(conn, name)
     return DeletedWorkRecord(
         work_id=work_id,
         file_path=file_path,
