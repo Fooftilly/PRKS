@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -679,11 +680,13 @@ class RepoGateLiveTests(unittest.TestCase):
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
+        # Anchor on step name; allow comments / id / other fields before run,
+        # and either `|` or `>` block scalars (with optional chomping).
         match = re.search(
             r"(?m)^ {6}- name: Install pinned runtime dependencies\n"
-            r"(?: {8}#.*\n)*"
-            r" {8}run: >-\n"
-            r"((?: {10}[^\n]*\n)+)",
+            r"(?: {8,}(?!run:)[^\n]*\n)*"
+            r" {8}run: [|>][-+]?\n"
+            r"((?: {10,}[^\n]*\n)+)",
             workflow,
         )
         self.assertIsNotNone(
@@ -692,12 +695,13 @@ class RepoGateLiveTests(unittest.TestCase):
         install_cmd = " ".join(
             line.strip() for line in match.group(1).splitlines() if line.strip()
         )
-        self.assertIn("--only-binary=:all:", install_cmd)
-        self.assertIn("python -m pip install", install_cmd)
+        args = shlex.split(install_cmd)
+        self.assertIn("--only-binary=:all:", args)
+        self.assertEqual(args[:4], ["python", "-m", "pip", "install"])
+        # Complete-argument match: Pillow==12.3.0 must not pass via
+        # Pillow==12.3.0.post1.
         for name, version in pins.items():
-            self.assertIn(f"{name}=={version}", install_cmd)
-        # Comments on this step must not be the only place the pins appear.
-        self.assertNotIn("#", install_cmd)
+            self.assertIn(f"{name}=={version}", args)
 
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
