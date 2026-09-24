@@ -407,33 +407,11 @@ def store_new_managed_pdf_bytes(
     byte API (the request body is already in memory).
     """
     name, fullpath = _exclusive_managed_create_paths(pdfs_dir, original_name)
-    created = False
-    try:
-        with open(fullpath, "xb") as fp:
-            created = True
-            fp.write(body)
-            fp.flush()
-            # Same content barrier the replace path owes, at the boundary this
-            # path has: the name already exists, so what must not happen before
-            # the sync is the store reporting success. A refused sync leaves the
-            # OSError handler below to remove the file and fail the upload.
-            fsync_open_file(fp.fileno())
-    except FileExistsError as exc:
-        # The name was already taken, so the file on disk is not ours to remove.
-        raise ManagedPdfStoreError(
-            "name_taken", "Could not allocate a managed PDF path", http_status=409
-        ) from exc
-    except OSError as exc:
-        # Create can succeed and write or fsync still fail — a full disk is the
-        # likeliest cause and the likeliest to be retried. No Work row will
-        # reference this path, so leaving the partial file behind would
-        # accumulate orphans exactly when space is short.
-        if created:
-            unlink_managed_pdf_best_effort(pdfs_dir, name)
-        LOGGER.error("pdf_upload_write_failed error_type=%s", safe_error_type(exc))
-        raise ManagedPdfStoreError(
-            "write_failed", "Could not store the uploaded PDF"
-        ) from exc
+
+    def _write_body(fp) -> None:
+        fp.write(body)
+
+    _exclusive_create_write_and_fsync(pdfs_dir, name, fullpath, _write_body)
     return _finalize_exclusive_managed_create(
         pdfs_dir, name, fullpath, linearize_context=linearize_context
     )
@@ -461,32 +439,50 @@ def store_new_managed_pdf_from_path(
             http_status=400,
         )
     name, fullpath = _exclusive_managed_create_paths(pdfs_dir, original_name)
+
+    def _copy_chunks(fp) -> None:
+        with open(source_path, "rb") as src:
+            while True:
+                chunk = src.read(_STORE_COPY_CHUNK)
+                if not chunk:
+                    break
+                fp.write(chunk)
+
+    _exclusive_create_write_and_fsync(pdfs_dir, name, fullpath, _copy_chunks)
+    return _finalize_exclusive_managed_create(
+        pdfs_dir, name, fullpath, linearize_context=linearize_context
+    )
+
+
+def _exclusive_create_write_and_fsync(pdfs_dir: str, name: str, fullpath: str, write_into) -> None:
+    """Exclusive ``xb`` create, caller write, content fsync; shared by byte/path stores."""
     created = False
     try:
         with open(fullpath, "xb") as fp:
             created = True
-            with open(source_path, "rb") as src:
-                while True:
-                    chunk = src.read(_STORE_COPY_CHUNK)
-                    if not chunk:
-                        break
-                    fp.write(chunk)
+            write_into(fp)
             fp.flush()
+            # Same content barrier the replace path owes, at the boundary this
+            # path has: the name already exists, so what must not happen before
+            # the sync is the store reporting success. A refused sync leaves the
+            # OSError handler below to remove the file and fail the upload.
             fsync_open_file(fp.fileno())
     except FileExistsError as exc:
+        # The name was already taken, so the file on disk is not ours to remove.
         raise ManagedPdfStoreError(
             "name_taken", "Could not allocate a managed PDF path", http_status=409
         ) from exc
     except OSError as exc:
+        # Create can succeed and write or fsync still fail — a full disk is the
+        # likeliest cause and the likeliest to be retried. No Work row will
+        # reference this path, so leaving the partial file behind would
+        # accumulate orphans exactly when space is short.
         if created:
             unlink_managed_pdf_best_effort(pdfs_dir, name)
         LOGGER.error("pdf_upload_write_failed error_type=%s", safe_error_type(exc))
         raise ManagedPdfStoreError(
             "write_failed", "Could not store the uploaded PDF"
         ) from exc
-    return _finalize_exclusive_managed_create(
-        pdfs_dir, name, fullpath, linearize_context=linearize_context
-    )
 
 def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db=None) -> bool:
     """Roll back a `store_new_managed_pdf_bytes()` that never gained an owner.

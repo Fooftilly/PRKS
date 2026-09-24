@@ -380,15 +380,20 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
             os.path.isfile(os.path.join(self.storage.processing_dir, "shared-roll.pdf"))
         )
 
-    def test_case_a_survivor_race_with_barriers_no_sleeps(self):
-        """Cleanup wins the lock → late adopter refuses; no Work on missing bytes.
+    def _assert_cleanup_wins_late_adoption(
+        self,
+        *,
+        stage_name: str,
+        adopt_path_for,
+        fail_message: str,
+    ):
+        """Shared barrier race: cleanup unlinks under the lock; late adopter fails.
 
-        Barriers only (no sleeps). The adopter observes the lock held, then
-        uses ``managed_pdf_adoption_guard`` (the same path create/PATCH take).
-        After cleanup unlinks under the lock, the guard must raise
-        ``missing_pdf`` and must not create a Work.
+        ``adopt_path_for(name, canonical_fp)`` returns the ``file_path`` spelling
+        the adopter presents to ``managed_pdf_adoption_guard`` (canonical or a
+        non-canonical-but-resolving form).
         """
-        row = self._stage("race.pdf")
+        row = self._stage(stage_name)
         remove_entered = threading.Event()
         adopter_observed = threading.Event()
         adopter_done = threading.Event()
@@ -398,7 +403,6 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
             "adopt_error": None,
             "adopter_work_id": None,
         }
-
         minted = {"fp": None, "name": None}
         real_add = self.db.add_work
 
@@ -426,107 +430,17 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
             self.assertIsNotNone(lock)
             observed["adopter_saw_lock"] = lock.locked()
             adopter_observed.set()
+            adopt_fp = adopt_path_for(minted["name"], minted["fp"])
             try:
                 with work_pdf_replace.managed_pdf_adoption_guard(
-                    self.storage.pdfs_dir, minted["fp"]
-                ):
-                    observed["adopter_work_id"] = self.db.add_work(
-                        title="Late adopter", file_path=minted["fp"]
-                    )
-            except work_pdf_replace.ManagedPdfStoreError as exc:
-                observed["adopt_error"] = exc.reason
-            adopter_done.set()
-
-        thread = threading.Thread(target=adopter, daemon=True)
-        thread.start()
-        with patch.object(self.db, "add_work", side_effect=capturing_add):
-            with patch.object(
-                self.db,
-                "add_work_to_folder",
-                side_effect=RuntimeError("post-step fail"),
-            ):
-                with patch(
-                    "backend.work_deletion.os.remove", side_effect=blocked_remove
-                ):
-                    with self.assertRaises(ValueError):
-                        self.db.import_processing_file(row["id"])
-        self.assertTrue(adopter_done.wait(timeout=5))
-        thread.join(timeout=5)
-
-        self.assertTrue(observed["held"])
-        self.assertTrue(observed["adopter_saw_lock"])
-        self.assertEqual(observed["adopt_error"], "missing_pdf")
-        self.assertIsNone(observed["adopter_work_id"])
-        self.assertFalse(
-            os.path.isfile(os.path.join(self.storage.pdfs_dir, minted["name"]))
-        )
-        self.assertEqual(
-            self.db.execute_query("SELECT id FROM works"),
-            [],
-            "late adopter must not leave a Work pointing at missing bytes",
-        )
-
-    def test_case_a_noncanonical_spelling_race_fails_without_work(self):
-        """Whitespace ``file_path`` must share cleanup's lock (owner P2).
-
-        ``managed_pdf_filename(" /api/pdfs/X ")`` is None, so an exact-only
-        guard would skip the lock while ``referenced_managed_pdf_filename``
-        still treats it as X — the race this PR closes. Barriers only.
-        """
-        row = self._stage("race-ws.pdf")
-        remove_entered = threading.Event()
-        adopter_observed = threading.Event()
-        adopter_done = threading.Event()
-        observed = {
-            "held": False,
-            "adopter_saw_lock": False,
-            "adopt_error": None,
-            "adopter_work_id": None,
-            "stored_fp": None,
-        }
-
-        minted = {"fp": None, "name": None}
-        real_add = self.db.add_work
-
-        def capturing_add(*args, **kwargs):
-            wid = real_add(*args, **kwargs)
-            minted["fp"] = kwargs.get("file_path")
-            minted["name"] = (minted["fp"] or "").rsplit("/", 1)[-1]
-            return wid
-
-        real_remove = os.remove
-
-        def blocked_remove(path, *args, **kwargs):
-            name = os.path.basename(path)
-            lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
-            observed["held"] = bool(lock and lock.locked())
-            remove_entered.set()
-            self.assertTrue(adopter_observed.wait(timeout=5))
-            return real_remove(path, *args, **kwargs)
-
-        def adopter():
-            self.assertTrue(remove_entered.wait(timeout=5))
-            lock = work_pdf_replace.managed_pdf_path_lock(
-                self.storage.pdfs_dir, minted["name"]
-            )
-            self.assertIsNotNone(lock)
-            observed["adopter_saw_lock"] = lock.locked()
-            adopter_observed.set()
-            # Non-canonical but resolving — same identity cleanup uses.
-            messy = f" /api/pdfs/{minted['name']} "
-            self.assertIsNone(managed_pdf_filename(messy))
-            self.assertEqual(
-                referenced_managed_pdf_filename(messy), minted["name"]
-            )
-            try:
-                with work_pdf_replace.managed_pdf_adoption_guard(
-                    self.storage.pdfs_dir, messy
+                    self.storage.pdfs_dir, adopt_fp
                 ) as adopted:
-                    observed["adopter_work_id"] = self.db.add_work(
-                        title="Late whitespace adopter",
-                        file_path=f"/api/pdfs/{adopted}",
+                    store_fp = (
+                        f"/api/pdfs/{adopted}" if adopted else adopt_fp
                     )
-                    observed["stored_fp"] = f"/api/pdfs/{adopted}"
+                    observed["adopter_work_id"] = self.db.add_work(
+                        title="Late adopter", file_path=store_fp
+                    )
             except work_pdf_replace.ManagedPdfStoreError as exc:
                 observed["adopt_error"] = exc.reason
             adopter_done.set()
@@ -550,38 +464,81 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
         self.assertTrue(observed["held"])
         self.assertTrue(
             observed["adopter_saw_lock"],
-            "whitespace spelling must wait on the same basename lock as cleanup",
+            "adopter must wait on the same basename lock as cleanup",
         )
         self.assertEqual(observed["adopt_error"], "missing_pdf")
         self.assertIsNone(observed["adopter_work_id"])
-        self.assertIsNone(observed["stored_fp"])
         self.assertFalse(
             os.path.isfile(os.path.join(self.storage.pdfs_dir, minted["name"]))
         )
         self.assertEqual(
             self.db.execute_query("SELECT id FROM works"),
             [],
-            "non-canonical late adopter must not leave a Work on missing bytes",
+            fail_message,
         )
 
-    def test_adoption_guard_locks_noncanonical_whitespace_and_yields_basename(self):
-        """Guard takes the cleanup lock for a trimmed resolving spelling."""
-        name = f"ws-{uuid.uuid4().hex}.pdf"
-        path = os.path.join(self.storage.pdfs_dir, name)
-        with open(path, "wb") as handle:
-            handle.write(PDF_BODY)
-        lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
-        messy = f"\t/api/pdfs/{name} \n"
-        self.assertIsNone(managed_pdf_filename(messy))
-        observed = {}
-        with work_pdf_replace.managed_pdf_adoption_guard(
-            self.storage.pdfs_dir, messy
-        ) as adopted:
-            observed["held"] = bool(lock and lock.locked())
-            observed["name"] = adopted
-        self.assertTrue(observed["held"])
-        self.assertEqual(observed["name"], name)
-        self.assertFalse(lock.locked())
+    def test_case_a_survivor_race_with_barriers_no_sleeps(self):
+        """Cleanup wins the lock → late adopter refuses; no Work on missing bytes.
+
+        Barriers only (no sleeps). The adopter observes the lock held, then
+        uses ``managed_pdf_adoption_guard`` (the same path create/PATCH take).
+        After cleanup unlinks under the lock, the guard must raise
+        ``missing_pdf`` and must not create a Work.
+        """
+        self._assert_cleanup_wins_late_adoption(
+            stage_name="race.pdf",
+            adopt_path_for=lambda _name, fp: fp,
+            fail_message="late adopter must not leave a Work pointing at missing bytes",
+        )
+
+    def test_case_a_noncanonical_spelling_race_fails_without_work(self):
+        """Whitespace ``file_path`` must share cleanup's lock (owner P2).
+
+        ``managed_pdf_filename(" /api/pdfs/X ")`` is None, so an exact-only
+        guard would skip the lock while ``referenced_managed_pdf_filename``
+        still treats it as X — the race this PR closes. Barriers only.
+        """
+
+        def whitespace_path(name, _fp):
+            messy = f" /api/pdfs/{name} "
+            self.assertIsNone(managed_pdf_filename(messy))
+            self.assertEqual(referenced_managed_pdf_filename(messy), name)
+            return messy
+
+        self._assert_cleanup_wins_late_adoption(
+            stage_name="race-ws.pdf",
+            adopt_path_for=whitespace_path,
+            fail_message=(
+                "non-canonical late adopter must not leave a Work on missing bytes"
+            ),
+        )
+
+    def test_adoption_guard_holds_lock_for_canonical_and_whitespace(self):
+        """Guard takes the cleanup lock for exact and trimmed resolving spellings."""
+        for label, path_for in (
+            ("canonical", lambda n: f"/api/pdfs/{n}"),
+            ("whitespace", lambda n: f"\t/api/pdfs/{n} \n"),
+        ):
+            with self.subTest(spelling=label):
+                name = f"{label}-{uuid.uuid4().hex}.pdf"
+                path = os.path.join(self.storage.pdfs_dir, name)
+                with open(path, "wb") as handle:
+                    handle.write(PDF_BODY)
+                lock = work_pdf_replace.managed_pdf_path_lock(
+                    self.storage.pdfs_dir, name
+                )
+                adopt_fp = path_for(name)
+                if label == "whitespace":
+                    self.assertIsNone(managed_pdf_filename(adopt_fp))
+                observed = {}
+                with work_pdf_replace.managed_pdf_adoption_guard(
+                    self.storage.pdfs_dir, adopt_fp
+                ) as adopted:
+                    observed["held"] = bool(lock and lock.locked())
+                    observed["name"] = adopted
+                self.assertTrue(observed["held"])
+                self.assertEqual(observed["name"], name)
+                self.assertFalse(lock.locked())
 
     def test_adoption_guard_refuses_when_file_already_gone(self):
         name = f"gone-{uuid.uuid4().hex}.pdf"
@@ -591,22 +548,6 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
                 self.fail("must not enter the adoption body")
         self.assertEqual(raised.exception.reason, "missing_pdf")
         self.assertEqual(raised.exception.http_status, 409)
-
-    def test_adoption_guard_holds_lock_while_file_present(self):
-        name = f"live-{uuid.uuid4().hex}.pdf"
-        path = os.path.join(self.storage.pdfs_dir, name)
-        with open(path, "wb") as handle:
-            handle.write(PDF_BODY)
-        lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
-        observed = {}
-        with work_pdf_replace.managed_pdf_adoption_guard(
-            self.storage.pdfs_dir, f"/api/pdfs/{name}"
-        ) as adopted:
-            observed["held"] = lock.locked()
-            observed["name"] = adopted
-        self.assertTrue(observed["held"])
-        self.assertEqual(observed["name"], name)
-        self.assertFalse(lock.locked())
 
     def test_case_a_survivor_committed_before_cleanup_keeps_bytes(self):
         """Sibling commits (Event barrier) before rollback cleanup runs."""
