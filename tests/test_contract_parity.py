@@ -22,25 +22,180 @@ def read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+# Slash after these tokens introduces a RegExp literal, not division.
+_JS_REGEX_PREV = frozenset("=(,[{;:!&|?~+-*%^}")
+
+
+def _js_prev_significant(source: str, index: int) -> str:
+    j = index - 1
+    while j >= 0 and source[j] in " \t\r\n":
+        j -= 1
+    return source[j] if j >= 0 else ""
+
+
+def _scan_js_regex_literal(source: str, start: int) -> int:
+    """Return index just past a RegExp literal that begins at start (`/`)."""
+    i = start + 1
+    n = len(source)
+    in_class = False
+    while i < n:
+        c = source[i]
+        if c == "\n":
+            break
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if in_class:
+            if c == "]":
+                in_class = False
+            i += 1
+            continue
+        if c == "[":
+            in_class = True
+            i += 1
+            continue
+        if c == "/":
+            i += 1
+            while i < n and source[i].isalpha():
+                i += 1
+            return i
+        i += 1
+    return start + 1
+
+
+def _scan_js_regions(source: str, *, blank_comments: bool, blank_strings: bool) -> str:
+    """Rewrite JS source with optional comment/string blanking.
+
+    Comments are blanked (newlines kept). String/template interiors can be
+    blanked so declaration searches never match prose inside quotes. RegExp
+    literals are recognized so `/\"/g` does not open a string. Offsets are
+    preserved so spans remain usable on a sibling rewrite that keeps strings.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(source)
+
+    def append_blanked_run(text: str) -> None:
+        for c in text:
+            out.append("\n" if c == "\n" else " ")
+
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+
+        if ch in ("'", '"', "`"):
+            quote = ch
+            start = i
+            i += 1
+            while i < n:
+                c = source[i]
+                if c == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if c == quote:
+                    i += 1
+                    break
+                i += 1
+            chunk = source[start:i]
+            if blank_strings:
+                if len(chunk) >= 2:
+                    out.append(chunk[0])
+                    append_blanked_run(chunk[1:-1])
+                    out.append(chunk[-1])
+                else:
+                    append_blanked_run(chunk)
+            else:
+                out.append(chunk)
+            continue
+
+        if ch == "/" and nxt == "/":
+            start = i
+            i += 2
+            while i < n and source[i] != "\n":
+                i += 1
+            if blank_comments:
+                append_blanked_run(source[start:i])
+            else:
+                out.append(source[start:i])
+            continue
+
+        if ch == "/" and nxt == "*":
+            start = i
+            i += 2
+            while i < n:
+                if source[i] == "*" and i + 1 < n and source[i + 1] == "/":
+                    i += 2
+                    break
+                i += 1
+            if blank_comments:
+                append_blanked_run(source[start:i])
+            else:
+                out.append(source[start:i])
+            continue
+
+        if ch == "/" and _js_prev_significant(source, i) in _JS_REGEX_PREV:
+            end = _scan_js_regex_literal(source, i)
+            out.append(source[i:end])
+            i = end
+            continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def active_js_source(source: str) -> str:
+    """Comment-free JavaScript with string contents preserved."""
+    return _scan_js_regions(source, blank_comments=True, blank_strings=False)
+
+
+def declaration_search_surface(source: str) -> str:
+    """Comment-free JavaScript with string interiors blanked for matching."""
+    return _scan_js_regions(source, blank_comments=True, blank_strings=True)
+
+
+def _require_exactly_one_span(
+    source: str,
+    pattern: str,
+    label: str,
+    *,
+    flags: int = 0,
+) -> re.Match[str]:
+    """Find exactly one active declaration; return a match into comment-free source."""
+    active = active_js_source(source)
+    surface = declaration_search_surface(source)
+    spans = [m.span() for m in re.finditer(pattern, surface, flags)]
+    if not spans:
+        raise AssertionError(f"could not find active JavaScript {label}")
+    if len(spans) != 1:
+        raise AssertionError(
+            f"expected exactly one active JavaScript {label}, found {len(spans)}"
+        )
+    start, end = spans[0]
+    match = re.match(pattern, active[start:end], flags)
+    if match is None:
+        raise AssertionError(f"active JavaScript {label} failed to reparse")
+    return match
+
+
 def js_string_array(source: str, name: str) -> tuple[str, ...]:
     pattern = (
         r"const\s+" + re.escape(name) +
         r"\s*=\s*(?:Object\.freeze\(\s*)?\[(.*?)\]\s*\)?\s*;"
     )
-    match = re.search(pattern, source, re.S)
-    if not match:
-        raise AssertionError(f"could not find JavaScript array {name}")
+    match = _require_exactly_one_span(
+        source, pattern, f"array {name}", flags=re.S,
+    )
     return tuple(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
 
 
 def js_true_object_keys(source: str, name: str) -> tuple[str, ...]:
-    match = re.search(
-        r"const\s+" + re.escape(name) + r"\s*=\s*\{(.*?)\}\s*;",
+    match = _require_exactly_one_span(
         source,
-        re.S,
+        r"const\s+" + re.escape(name) + r"\s*=\s*\{(.*?)\}\s*;",
+        f"object {name}",
+        flags=re.S,
     )
-    if not match:
-        raise AssertionError(f"could not find JavaScript object {name}")
     keys: list[str] = []
     for quoted, bare in re.findall(
         r"^\s*(?:['\"]([^'\"]+)['\"]|([A-Za-z_$][\w$-]*))\s*:\s*true\s*,?\s*$",
@@ -53,7 +208,49 @@ def js_true_object_keys(source: str, name: str) -> tuple[str, ...]:
     return tuple(keys)
 
 
+def js_bibtex_field_ids(source: str) -> tuple[str, ...]:
+    match = _require_exactly_one_span(
+        source,
+        r"const\s+PRKS_BIBTEX_EXPORT_FIELD_DEFS\s*=\s*\[(.*?)\]\s*;",
+        "BibTeX Settings field definitions",
+        flags=re.S,
+    )
+    return tuple(re.findall(r"\[\s*['\"]([^'\"]+)['\"]\s*,", match.group(1)))
+
+
+def js_recent_limit(source: str) -> int:
+    match = _require_exactly_one_span(
+        source,
+        r"const\s+RECENT_LIMIT\s*=\s*(\d+)\s*;",
+        "RECENT_LIMIT",
+    )
+    return int(match.group(1))
+
+
 class ContractParityTests(unittest.TestCase):
+    def test_commented_out_declarations_are_ignored(self):
+        """Stale commented copies must not satisfy a protected contract."""
+        poisoned = (
+            "// const RECENT_LIMIT = 30;\n"
+            "/* const RECENT_LIMIT = 30; */\n"
+            "const esc = s.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n"
+            "const RECENT_LIMIT = 25;\n"
+            "const msg = 'const RECENT_LIMIT = 30;';\n"
+        )
+        self.assertEqual(js_recent_limit(poisoned), 25)
+
+        with self.assertRaises(AssertionError) as cm:
+            js_recent_limit(
+                "// const RECENT_LIMIT = 30;\n"
+                "const RECENT_LIMIT = 25;\n"
+                "const RECENT_LIMIT = 40;\n"
+            )
+        self.assertIn("exactly one", str(cm.exception))
+
+        with self.assertRaises(AssertionError) as cm:
+            js_recent_limit("// const RECENT_LIMIT = 30;\n")
+        self.assertIn("could not find", str(cm.exception))
+
     def test_work_status_registries_match_backend_contract(self):
         canonical = tuple(WORK_STATUSES)
         mirrors = {
@@ -72,16 +269,7 @@ class ContractParityTests(unittest.TestCase):
                 self.assertEqual(actual, canonical)
 
     def test_bibtex_settings_fields_match_backend_accepted_fields(self):
-        source = read("frontend/js/app.js")
-        match = re.search(
-            r"const\s+PRKS_BIBTEX_EXPORT_FIELD_DEFS\s*=\s*\[(.*?)\]\s*;",
-            source,
-            re.S,
-        )
-        self.assertIsNotNone(match, "BibTeX Settings field definitions not found")
-        frontend_ids = tuple(
-            re.findall(r"\[\s*['\"]([^'\"]+)['\"]\s*,", match.group(1))
-        )
+        frontend_ids = js_bibtex_field_ids(read("frontend/js/app.js"))
         self.assertEqual(frontend_ids, tuple(PRKS_BIBTEX_EXPORT_FIELD_IDS))
 
     def test_tile_route_fallback_matches_navigation_policy(self):
@@ -94,10 +282,7 @@ class ContractParityTests(unittest.TestCase):
         self.assertEqual(workspace_fallback, navigation)
 
     def test_recent_projection_limit_matches_server_default(self):
-        source = read("frontend/js/work-open-state.js")
-        match = re.search(r"const\s+RECENT_LIMIT\s*=\s*(\d+)\s*;", source)
-        self.assertIsNotNone(match, "frontend RECENT_LIMIT not found")
-        frontend_limit = int(match.group(1))
+        frontend_limit = js_recent_limit(read("frontend/js/work-open-state.js"))
 
         param = inspect.signature(PRKSDatabase.get_recent_browse).parameters["limit"]
         self.assertIsInstance(param.default, int)
