@@ -371,23 +371,38 @@ class TestWorkDeletion(unittest.TestCase):
         self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_malformed_deleted_row_cannot_claim_owned_pdf(self):
+        """Alias delete must not unlink while a real owner still references.
+
+        Traversal/nested/%2F aliases now *claim* the stem they suppress, so
+        with a live owner ``managed_pdf_still_referenced`` is True and no
+        claim is written — the PDF stays. ``%5C`` does not map to the stem
+        under ``referenced_managed_pdf_filename`` and still claims nothing.
+        """
         pdf_abs = self._write_pdf("victim.pdf")
         owner_id = self.db.add_work(title="Owner", file_path="/api/pdfs/victim.pdf")
-        malformed = (
+        stem_suppressors = (
             "/api/pdfs/../victim.pdf",
             "/api/pdfs/subdir/victim.pdf",
             "/api/pdfs/foo%2Fvictim.pdf",
-            "/api/pdfs/foo%5Cvictim.pdf",
         )
-        for i, path in enumerate(malformed):
+        for i, path in enumerate(stem_suppressors):
             w_id = self.db.add_work(title=f"Bad{i}", file_path=path)
             result, rec = self._delete_capturing(w_id)
             self.assertTrue(result.existed)
             self.assertEqual(result.cleanup_failures, ())
-            self.assertFalse(rec.managed_pdf_still_referenced)
+            self.assertTrue(rec.managed_pdf_still_referenced)
             self.assertIsNone(self.db.get_work(w_id))
             self.assertIsNotNone(self.db.get_work(owner_id))
             self.assertTrue(os.path.isfile(pdf_abs))
+        # Encoded backslash does not suppress/claim the stem basename.
+        w_id = self.db.add_work(title="BadBS", file_path="/api/pdfs/foo%5Cvictim.pdf")
+        result, rec = self._delete_capturing(w_id)
+        self.assertTrue(result.existed)
+        self.assertEqual(result.cleanup_failures, ())
+        self.assertFalse(rec.managed_pdf_still_referenced)
+        self.assertIsNone(self.db.get_work(w_id))
+        self.assertIsNotNone(self.db.get_work(owner_id))
+        self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_nul_file_path_row_deletes_without_pdf_failure(self):
         pdf_abs = self._write_pdf("victim.pdf")
@@ -522,7 +537,19 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
             managed_basenames_protected_by("/api/pdfs/foo.pdf;bar"),
             ("foo.pdf;bar", "foo.pdf"),
         )
-        self.assertEqual(managed_basenames_protected_by("/api/pdfs/../x.pdf"), ())
+        # Traversal/nested/encoded aliases reclaim the stem they suppress.
+        self.assertEqual(
+            managed_basenames_protected_by("/api/pdfs/../x.pdf"),
+            ("x.pdf",),
+        )
+        self.assertEqual(
+            managed_basenames_protected_by("/api/pdfs/subdir/x.pdf"),
+            ("x.pdf",),
+        )
+        self.assertEqual(
+            managed_basenames_protected_by("/api/pdfs/foo%2Fx.pdf"),
+            ("x.pdf",),
+        )
 
     def test_safe_pdf_path_under_dir_rejects_nul(self):
         pdfs = tempfile.mkdtemp()

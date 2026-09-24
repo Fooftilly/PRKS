@@ -426,6 +426,70 @@ class PendingPdfCleanupTests(unittest.TestCase):
             self.assertFalse(os.path.isfile(physical_path))
         self.assertEqual(self._claims(), [])
 
+    def test_delete_alias_survivor_reclaims_superseded_stem(self):
+        """Owner P2: traversal/nested/%2F aliases reclaim the stem on final delete.
+
+        Same lifecycle leak as the delimiter case: an alias that can settle a
+        stem claim via ``row_references_managed_pdf`` must recreate that claim
+        when it is itself deleted. Covers both an explicit pending claim and
+        the no-prior-claim path (canon deleted while alias lives → no claim
+        written because still-referenced → alias delete must still clean).
+        """
+        aliases = (
+            ("traversal", "/api/pdfs/../{stem}"),
+            ("nested", "/api/pdfs/subdir/{stem}"),
+            ("encoded", "/api/pdfs/foo%2F{stem}"),
+        )
+        for label, template in aliases:
+            with self.subTest(alias=label):
+                stem = f"{label}-{uuid.uuid4().hex}.pdf"
+                stem_path = self._write_pdf(stem)
+                # --- path A: pending claim superseded then reclaimed ---
+                with self.db.connection() as conn:
+                    conn.execute(
+                        "INSERT INTO pending_pdf_cleanup (filename) VALUES (?)",
+                        (stem,),
+                    )
+                    conn.commit()
+                survivor_id = self.db.add_work(
+                    title=f"Alias {label}",
+                    file_path=template.format(stem=stem),
+                )
+                summary = retry_pending_pdf_cleanup(self.db)
+                self.assertEqual(summary["superseded"], 1)
+                self.assertEqual(self._claims(), [])
+                self.assertTrue(os.path.isfile(stem_path))
+                result = delete_work(self.db, self.index, survivor_id)
+                self.assertTrue(result.existed)
+                self.assertEqual(result.cleanup_failures, ())
+                self.assertFalse(result.pending_pdf_cleanup)
+                self.assertFalse(os.path.isfile(stem_path))
+                self.assertEqual(self._claims(), [])
+
+                # --- path B: no prior claim; alias alone kept the stem ---
+                stem_b = f"{label}-b-{uuid.uuid4().hex}.pdf"
+                stem_b_path = self._write_pdf(stem_b)
+                canon_id = self.db.add_work(
+                    title=f"Canon {label}",
+                    file_path=f"/api/pdfs/{stem_b}",
+                )
+                alias_id = self.db.add_work(
+                    title=f"AliasB {label}",
+                    file_path=template.format(stem=stem_b),
+                )
+                # Canon delete: alias still references → no claim, bytes kept.
+                result = delete_work(self.db, self.index, canon_id)
+                self.assertTrue(result.existed)
+                self.assertEqual(self._claims(), [])
+                self.assertTrue(os.path.isfile(stem_b_path))
+                # Final alias delete must claim and clean the stem.
+                result = delete_work(self.db, self.index, alias_id)
+                self.assertTrue(result.existed)
+                self.assertEqual(result.cleanup_failures, ())
+                self.assertFalse(result.pending_pdf_cleanup)
+                self.assertFalse(os.path.isfile(stem_b_path))
+                self.assertEqual(self._claims(), [])
+
     def test_a_failed_delete_does_not_retry_itself_in_the_same_breath(self):
         work_id, name, abs_path = self._managed_work("NoDoubleTry")
         with self._failing_remove(abs_path) as removal:
