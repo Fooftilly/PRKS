@@ -9,9 +9,10 @@ pre-seeded basename and delete bytes a surviving Work still referenced.
 
 Import now uses ``store_new_managed_pdf_from_path`` (chunked copy, same
 barriers) so large inbox PDFs are never held whole in RAM. Adoption of an
-existing managed basename goes through ``managed_pdf_adoption_guard``
-(lock + existence check) so a late adopter after cleanup cannot land a Work
-on missing bytes.
+existing managed basename goes through ``managed_pdf_adoption_guard``, which
+locks on ``referenced_managed_pdf_filename`` (cleanup's identity) and yields
+the basename for a canonical ``/api/pdfs/<name>`` store — so a late adopter
+(including a whitespace spelling) cannot land a Work on missing bytes.
 
 These tests pin the unified contract without sleeps: hooks and threading
 barriers drive the survivor race.
@@ -40,7 +41,11 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend import fs_durability
-from backend.db_manager import PRKSDatabase
+from backend.db_manager import (
+    PRKSDatabase,
+    managed_pdf_filename,
+    referenced_managed_pdf_filename,
+)
 from backend.services import work_pdf_replace
 from backend.storage.config import StorageConfig
 from backend.work_deletion import (
@@ -460,6 +465,123 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
             [],
             "late adopter must not leave a Work pointing at missing bytes",
         )
+
+    def test_case_a_noncanonical_spelling_race_fails_without_work(self):
+        """Whitespace ``file_path`` must share cleanup's lock (owner P2).
+
+        ``managed_pdf_filename(" /api/pdfs/X ")`` is None, so an exact-only
+        guard would skip the lock while ``referenced_managed_pdf_filename``
+        still treats it as X — the race this PR closes. Barriers only.
+        """
+        row = self._stage("race-ws.pdf")
+        remove_entered = threading.Event()
+        adopter_observed = threading.Event()
+        adopter_done = threading.Event()
+        observed = {
+            "held": False,
+            "adopter_saw_lock": False,
+            "adopt_error": None,
+            "adopter_work_id": None,
+            "stored_fp": None,
+        }
+
+        minted = {"fp": None, "name": None}
+        real_add = self.db.add_work
+
+        def capturing_add(*args, **kwargs):
+            wid = real_add(*args, **kwargs)
+            minted["fp"] = kwargs.get("file_path")
+            minted["name"] = (minted["fp"] or "").rsplit("/", 1)[-1]
+            return wid
+
+        real_remove = os.remove
+
+        def blocked_remove(path, *args, **kwargs):
+            name = os.path.basename(path)
+            lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
+            observed["held"] = bool(lock and lock.locked())
+            remove_entered.set()
+            self.assertTrue(adopter_observed.wait(timeout=5))
+            return real_remove(path, *args, **kwargs)
+
+        def adopter():
+            self.assertTrue(remove_entered.wait(timeout=5))
+            lock = work_pdf_replace.managed_pdf_path_lock(
+                self.storage.pdfs_dir, minted["name"]
+            )
+            self.assertIsNotNone(lock)
+            observed["adopter_saw_lock"] = lock.locked()
+            adopter_observed.set()
+            # Non-canonical but resolving — same identity cleanup uses.
+            messy = f" /api/pdfs/{minted['name']} "
+            self.assertIsNone(managed_pdf_filename(messy))
+            self.assertEqual(
+                referenced_managed_pdf_filename(messy), minted["name"]
+            )
+            try:
+                with work_pdf_replace.managed_pdf_adoption_guard(
+                    self.storage.pdfs_dir, messy
+                ) as adopted:
+                    observed["adopter_work_id"] = self.db.add_work(
+                        title="Late whitespace adopter",
+                        file_path=f"/api/pdfs/{adopted}",
+                    )
+                    observed["stored_fp"] = f"/api/pdfs/{adopted}"
+            except work_pdf_replace.ManagedPdfStoreError as exc:
+                observed["adopt_error"] = exc.reason
+            adopter_done.set()
+
+        thread = threading.Thread(target=adopter, daemon=True)
+        thread.start()
+        with patch.object(self.db, "add_work", side_effect=capturing_add):
+            with patch.object(
+                self.db,
+                "add_work_to_folder",
+                side_effect=RuntimeError("post-step fail"),
+            ):
+                with patch(
+                    "backend.work_deletion.os.remove", side_effect=blocked_remove
+                ):
+                    with self.assertRaises(ValueError):
+                        self.db.import_processing_file(row["id"])
+        self.assertTrue(adopter_done.wait(timeout=5))
+        thread.join(timeout=5)
+
+        self.assertTrue(observed["held"])
+        self.assertTrue(
+            observed["adopter_saw_lock"],
+            "whitespace spelling must wait on the same basename lock as cleanup",
+        )
+        self.assertEqual(observed["adopt_error"], "missing_pdf")
+        self.assertIsNone(observed["adopter_work_id"])
+        self.assertIsNone(observed["stored_fp"])
+        self.assertFalse(
+            os.path.isfile(os.path.join(self.storage.pdfs_dir, minted["name"]))
+        )
+        self.assertEqual(
+            self.db.execute_query("SELECT id FROM works"),
+            [],
+            "non-canonical late adopter must not leave a Work on missing bytes",
+        )
+
+    def test_adoption_guard_locks_noncanonical_whitespace_and_yields_basename(self):
+        """Guard takes the cleanup lock for a trimmed resolving spelling."""
+        name = f"ws-{uuid.uuid4().hex}.pdf"
+        path = os.path.join(self.storage.pdfs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(PDF_BODY)
+        lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
+        messy = f"\t/api/pdfs/{name} \n"
+        self.assertIsNone(managed_pdf_filename(messy))
+        observed = {}
+        with work_pdf_replace.managed_pdf_adoption_guard(
+            self.storage.pdfs_dir, messy
+        ) as adopted:
+            observed["held"] = bool(lock and lock.locked())
+            observed["name"] = adopted
+        self.assertTrue(observed["held"])
+        self.assertEqual(observed["name"], name)
+        self.assertFalse(lock.locked())
 
     def test_adoption_guard_refuses_when_file_already_gone(self):
         name = f"gone-{uuid.uuid4().hex}.pdf"

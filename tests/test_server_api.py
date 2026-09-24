@@ -239,6 +239,87 @@ class TestServerAPI(unittest.TestCase):
         )
         self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name}")
 
+    def test_patch_echoing_same_file_path_skips_adoption_when_pdf_missing(self):
+        """CodeRabbit Minor on #172: PATCH with an unchanged file_path must
+        not run the adoption guard — otherwise a title/status edit that
+        happens to re-send file_path 409s missing_pdf after bytes are gone.
+        """
+        name = "echo-missing-adopt.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        path = os.path.join(pdfs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(b"%PDF-1.4\n%ECHO\n%%EOF\n")
+        fp = f"/api/pdfs/{name}"
+        work_id = server_module.db.add_work("Echo path", file_path=fp)
+        self.addCleanup(server_module.db.delete_work_record, work_id)
+        os.remove(path)
+        self.assertFalse(os.path.isfile(path))
+
+        payload = json.dumps({
+            "title": "Renamed without retargeting",
+            "file_path": fp,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works/{work_id}",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="PATCH",
+        )
+        with urllib.request.urlopen(req) as res:
+            self.assertEqual(res.status, 200)
+        rows = server_module.db.execute_query(
+            "SELECT title, file_path FROM works WHERE id = ?", (work_id,)
+        )
+        self.assertEqual(rows[0]["title"], "Renamed without retargeting")
+        self.assertEqual(rows[0]["file_path"], fp)
+
+    def test_create_with_whitespace_file_path_stores_canonical_and_holds_lock(self):
+        """Owner P2 on #172: non-canonical managed spelling must still lock
+        and persist only the exact /api/pdfs/<name> ownership form.
+        """
+        from backend.db_manager import managed_pdf_filename
+        from backend.services import work_pdf_replace
+
+        name = "adopt-ws-canonical.pdf"
+        pdfs_dir = server_module.pdfs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        with open(os.path.join(pdfs_dir, name), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%WS\n%%EOF\n")
+        messy = f" /api/pdfs/{name} "
+        self.assertIsNone(managed_pdf_filename(messy))
+        lock = work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
+        observed = {}
+        real_add_work = server_module.db.add_work
+
+        def watching_add_work(**kwargs):
+            observed["held"] = lock.locked()
+            observed["file_path"] = kwargs.get("file_path")
+            return real_add_work(**kwargs)
+
+        payload = json.dumps({
+            "title": "Whitespace adopt",
+            "file_path": messy,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._base_url}/api/works",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with patch.object(server_module.db, "add_work", side_effect=watching_add_work):
+            with urllib.request.urlopen(req) as res:
+                self.assertEqual(res.status, 200)
+                created = json.loads(res.read().decode())
+        self.assertTrue(observed.get("held"))
+        self.assertEqual(observed.get("file_path"), f"/api/pdfs/{name}")
+        wid = created.get("id") or created.get("work_id")
+        self.addCleanup(server_module.db.delete_work_record, wid)
+        rows = server_module.db.execute_query(
+            "SELECT file_path FROM works WHERE id = ?", (wid,)
+        )
+        self.assertEqual(rows[0]["file_path"], f"/api/pdfs/{name}")
+
     def test_1_get_works_empty(self):
         req = urllib.request.Request(f"{self._base_url}/api/works")
         with urllib.request.urlopen(req) as res:

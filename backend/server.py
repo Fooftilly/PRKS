@@ -1070,6 +1070,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         return
                 if body:
                     patched_file_path = "file_path" in body
+                    # Adoption lock + existence check only when the stored
+                    # path would actually change. Echoing the same file_path
+                    # on a title/status PATCH must not 409 missing_pdf when
+                    # the bytes are already gone (CodeRabbit Minor on #172).
+                    file_path_changing = False
+                    if patched_file_path:
+                        rows = db.execute_query(
+                            "SELECT file_path FROM works WHERE id = ?",
+                            (w_id,),
+                        )
+                        stored_fp = (
+                            (rows[0].get("file_path") or "") if rows else ""
+                        )
+                        incoming_fp = body.get("file_path")
+                        file_path_changing = str(incoming_fp or "") != str(
+                            stored_fp or ""
+                        )
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
@@ -1088,17 +1105,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             )
                     if body:
                         # PATCH can assign `file_path` (it is in
-                        # `update_work_metadata`'s allowed set), so it is an
-                        # ownership-claiming path: hold the cleanup lock and
-                        # prove the contained file still exists before commit.
+                        # `update_work_metadata`'s allowed set), so a real
+                        # path change is an ownership-claiming path: hold the
+                        # cleanup lock and prove the contained file still
+                        # exists before commit. Unchanged echo skips the guard.
                         try:
                             with (
                                 work_pdf_replace.managed_pdf_adoption_guard(
                                     pdfs_dir, body.get("file_path")
                                 )
-                                if patched_file_path
+                                if file_path_changing
                                 else nullcontext()
-                            ):
+                            ) as adopted_name:
+                                # Guard yields the cleanup/serving basename;
+                                # persist only the exact ownership spelling.
+                                if adopted_name:
+                                    body["file_path"] = f"/api/pdfs/{adopted_name}"
                                 db.update_work_metadata(w_id, body)
                         except work_pdf_replace.ManagedPdfStoreError as e:
                             self.send_json(e.http_status, {'error': e.message})
@@ -1108,7 +1130,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             # server fault: say so rather than 500.
                             self.send_json(400, {'error': str(e)})
                             return
-                    if patched_file_path:
+                    if file_path_changing:
                         try:
                             rows = db.execute_query(
                                 "SELECT file_path FROM works WHERE id = ?",
@@ -2842,7 +2864,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         )
                         if not stored_name
                         else nullcontext()
-                    ):
+                    ) as adopted_name:
+                        # Non-canonical but resolving spellings (outer
+                        # whitespace, …) share cleanup's lock identity; store
+                        # only the exact /api/pdfs/<name> ownership form.
+                        if adopted_name:
+                            file_path = f"/api/pdfs/{adopted_name}"
                         w_id = db.add_work(
                             title=data.get('title', 'Untitled'),
                             status=data.get('status', 'Not Started'),

@@ -260,23 +260,42 @@ _STORE_COPY_CHUNK = 1024 * 1024
 def managed_pdf_adoption_guard(pdfs_dir: str, file_path_value):
     """Serialize claiming an EXISTING managed PDF with post-delete cleanup.
 
-    Yields the managed basename when ``file_path_value`` names a managed PDF, or
-    ``None`` when it does not (the caller is not adopting existing bytes — e.g.
-    a video Work or an empty path).
+    Yields the managed basename when ``file_path_value`` resolves to a managed
+    PDF under the same identity cleanup uses
+    (``referenced_managed_pdf_filename``), or ``None`` when it does not (video
+    Work, empty path, non-managed URL). Callers must persist the canonical
+    ownership form ``/api/pdfs/<yielded>`` — never the raw input spelling.
 
-    While yielding a basename this holds ``managed_pdf_path_lock`` and has
-    re-confirmed the contained file still exists. Cleanup that won the race
-    unlinks under the same lock, so a waiting adopter resumes only after the
-    bytes are gone and then raises ``ManagedPdfStoreError(reason="missing_pdf")``
-    instead of committing a Work that points at nothing.
+    Lock identity deliberately matches cleanup, not exact
+    ``managed_pdf_filename()``. Exact ownership is intentionally strict
+    (``" /api/pdfs/foo.pdf "`` is not ownership), but cleanup and the frontend
+    trim and still treat that spelling as a reference to ``foo.pdf``. Guarding
+    only the exact form let a concurrent create/PATCH with outer whitespace
+    commit outside the lock while cleanup unlinked under it.
+
+    While yielding, this holds ``managed_pdf_path_lock`` and has re-confirmed
+    the contained file still exists. Cleanup that won the race unlinks under
+    the same lock, so a waiting adopter resumes only after the bytes are gone
+    and then raises ``ManagedPdfStoreError(reason="missing_pdf")`` instead of
+    committing a Work that points at nothing.
 
     Uploads that just minted an exclusive name must not use this guard — they
     own bytes no cleanup could have claimed.
     """
-    name = managed_pdf_filename(str(file_path_value or ""))
+    # Same over-approximation cleanup uses when deciding whether bytes are
+    # still referenced — not exact managed_pdf_filename().
+    name = referenced_managed_pdf_filename(str(file_path_value or ""))
     if not name:
         yield None
         return
+    # A basename cleanup / serving would accept must still be a legal exact
+    # ownership spelling once rewritten to /api/pdfs/<name>.
+    if managed_pdf_filename(f"/api/pdfs/{name}") != name:
+        raise ManagedPdfStoreError(
+            "invalid_file_name",
+            "Invalid or unsafe PDF storage path",
+            http_status=400,
+        )
     lock = managed_pdf_path_lock(pdfs_dir, name)
     if lock is None:
         raise ManagedPdfStoreError(
