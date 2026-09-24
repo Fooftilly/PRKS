@@ -11,6 +11,10 @@
     'use strict';
 
     const NARROW_PX = 720;
+    /* Shared with works.js notes layout and CSS @container max-width: 720px.
+     * workspace-tabs.js prefers prksWorkspaceCanvasIsNarrow(); this named
+     * export is the single JS authority for the pixel value. */
+    root.PRKS_WORKSPACE_NARROW_PX = NARROW_PX;
     let bound = false;
     let resizeObserver = null;
     let observedCanvas = null;
@@ -726,6 +730,7 @@
         prksWorkspaceInitTiles: prksWorkspaceInitTiles,
         prksWorkspaceEnsureTileHost: ensureTile,
         prksWorkspaceCanvasIsNarrow: prksWorkspaceCanvasIsNarrow,
+        PRKS_WORKSPACE_NARROW_PX: NARROW_PX,
     };
 
     Object.keys(api).forEach(function (k) {

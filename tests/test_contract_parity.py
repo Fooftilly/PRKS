@@ -13,6 +13,7 @@ from pathlib import Path
 
 from backend.db_manager import PRKSDatabase, PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import WORK_STATUSES
+from backend.work_role_sync import PEOPLE_ROLE_TYPES, ROLE_TYPES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -551,16 +552,17 @@ class ContractParityTests(unittest.TestCase):
         frontend_ids = js_bibtex_field_ids(read("frontend/js/app.js"))
         self.assertEqual(frontend_ids, tuple(PRKS_BIBTEX_EXPORT_FIELD_IDS))
 
-    def test_tile_route_fallback_matches_navigation_policy(self):
+    def test_tile_route_policy_has_no_workspace_fallback_allowlist(self):
+        """prksRouteSupportsTile is the sole production tile-eligibility policy."""
         navigation = js_true_object_keys(
             read("frontend/js/navigation.js"), "PRKS_TILE_ROUTE_NAMES"
         )
-        workspace_fallback = js_true_object_keys(
-            read("frontend/js/workspace-tabs.js"), "TILE_ROUTE_NAMES"
-        )
-        # Runtime policy is key membership only; declaration order is not part
-        # of the contract.
-        self.assertEqual(frozenset(workspace_fallback), frozenset(navigation))
+        self.assertTrue(navigation)
+        workspace = read("frontend/js/workspace-tabs.js")
+        self.assertNotIn("TILE_ROUTE_NAMES", workspace)
+        self.assertIn("prksRouteSupportsTile", workspace)
+        # Fail closed when the policy helper is absent.
+        self.assertIn("return false;", workspace)
 
     def test_recent_projection_limit_matches_server_default(self):
         frontend_limit = js_recent_limit(read("frontend/js/work-open-state.js"))
@@ -568,6 +570,100 @@ class ContractParityTests(unittest.TestCase):
         param = inspect.signature(PRKSDatabase.get_recent_browse).parameters["limit"]
         self.assertIsInstance(param.default, int)
         self.assertEqual(frontend_limit, param.default)
+
+    def test_people_role_subset_excludes_mentioned_intentionally(self):
+        """People nav / Processing share one subset; Mentioned stays Work-role-only."""
+        self.assertEqual(
+            PEOPLE_ROLE_TYPES,
+            tuple(role for role in ROLE_TYPES if role != "Mentioned"),
+        )
+        self.assertNotIn("Mentioned", PEOPLE_ROLE_TYPES)
+        self.assertIn("Mentioned", ROLE_TYPES)
+
+        people = js_string_array(
+            read("frontend/js/navigation.js"), "PRKS_PEOPLE_ROLES"
+        )
+        self.assertEqual(people, PEOPLE_ROLE_TYPES)
+
+        processing = read("frontend/js/components/processing-files.js")
+        self.assertIn("window.PRKS_PEOPLE_ROLES", processing)
+        self.assertNotRegex(
+            processing,
+            r"const\s+PRKS_PROCESSING_ROLE_TYPES\s*=\s*\[",
+            "Processing must not keep a second hard-coded role array",
+        )
+
+    def test_people_role_sidebar_and_palette_match_navigation_registry(self):
+        people = js_string_array(
+            read("frontend/js/navigation.js"), "PRKS_PEOPLE_ROLES"
+        )
+        expected_hrefs = tuple(
+            f"#/people/role/{role}" for role in people
+        )
+
+        sidebar = re.findall(
+            r'href="(#/people/role/[A-Za-z]+)"',
+            read("frontend/index.html"),
+        )
+        self.assertEqual(tuple(sidebar), expected_hrefs)
+
+        palette_active = active_js_source(read("frontend/js/command-palette.js"))
+        palette_hrefs = re.findall(
+            r"hash:\s*'(#/people/role/[A-Za-z]+)'",
+            palette_active,
+        )
+        self.assertEqual(tuple(palette_hrefs), expected_hrefs)
+
+    def test_workspace_narrow_px_matches_css_container_queries(self):
+        tiling = read("frontend/js/workspace-tiling.js")
+        match = _require_exactly_one_span(
+            tiling,
+            r"const\s+NARROW_PX\s*=\s*(\d+)\s*;",
+            "NARROW_PX",
+        )
+        narrow_px = int(match.group(1))
+        self.assertEqual(narrow_px, 720)
+        self.assertIn("PRKS_WORKSPACE_NARROW_PX", tiling)
+        self.assertIn("PRKS_WORKSPACE_NARROW_PX", read("frontend/js/components/works.js"))
+
+        css = read("frontend/css/style.css")
+        for container in ("prks-main", "prks-work-main"):
+            pattern = (
+                r"@container\s+" + re.escape(container) +
+                r"\s*\(\s*max-width:\s*" + str(narrow_px) + r"px\s*\)"
+            )
+            self.assertRegex(
+                css,
+                pattern,
+                f"CSS @container {container} must use the same {narrow_px}px boundary",
+            )
+
+    def test_small_screen_mq_matches_css_media_query(self):
+        ui = read("frontend/js/ui.js")
+        match = _require_exactly_one_span(
+            ui,
+            r"const\s+PRKS_SMALL_SCREEN_MQ\s*=\s*'([^']*)'\s*;",
+            "PRKS_SMALL_SCREEN_MQ",
+        )
+        mq = match.group(1)
+        px_match = re.fullmatch(r"\(max-width:\s*(\d+)px\)", mq)
+        self.assertIsNotNone(px_match, f"unexpected small-screen MQ: {mq!r}")
+        px = int(px_match.group(1))
+        self.assertEqual(px, 900)
+        self.assertIn("prksMatchesSmallScreenViewport", ui)
+        self.assertIn("prksMatchesSmallScreenViewport", read("frontend/js/app.js"))
+        self.assertNotIn("max-width: 900px", read("frontend/js/app.js"))
+
+        css = read("frontend/css/style.css")
+        media = re.findall(
+            r"@media\s*\(\s*max-width:\s*" + str(px) + r"px\s*\)",
+            css,
+        )
+        self.assertGreaterEqual(
+            len(media),
+            1,
+            f"CSS must declare @media (max-width: {px}px) for the small-screen shell",
+        )
 
 
 if __name__ == "__main__":

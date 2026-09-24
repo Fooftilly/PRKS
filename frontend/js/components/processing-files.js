@@ -73,15 +73,13 @@ function prksProcessingEnsureResizeSync() {
     });
 }
 
-const PRKS_PROCESSING_ROLE_TYPES = [
-    'Author',
-    'Editor',
-    'Reviewer',
-    'Translator',
-    'Introduction',
-    'Foreword',
-    'Afterword',
-];
+/* Processing File roles share the People-navigation subset (excludes Mentioned).
+ * navigation.js owns PRKS_PEOPLE_ROLES and loads before this module. */
+const PRKS_PROCESSING_ROLE_TYPES = (
+    typeof window !== 'undefined' && Array.isArray(window.PRKS_PEOPLE_ROLES)
+        ? window.PRKS_PEOPLE_ROLES
+        : []
+);
 
 function prksProcessingPersonDisplayName(person) {
     if (!person || typeof person !== 'object') return '';

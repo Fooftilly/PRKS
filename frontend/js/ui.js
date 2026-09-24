@@ -908,14 +908,27 @@ window.prksSetHintsEnabled = prksSetHintsEnabled;
 window.prksCloseHintPopover = prksCloseHintPopover;
 window.initPrksHintUi = initPrksHintUi;
 
+const PRKS_SMALL_SCREEN_MQ = '(max-width: 900px)';
+
 function prksIsSmallScreen() {
     try {
         if (document.documentElement.classList.contains('prks-force-mobile')) return true;
-        return !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+        return !!(window.matchMedia && window.matchMedia(PRKS_SMALL_SCREEN_MQ).matches);
     } catch (_e) {
         return false;
     }
 }
+
+function prksMatchesSmallScreenViewport() {
+    try {
+        return !!(window.matchMedia && window.matchMedia(PRKS_SMALL_SCREEN_MQ).matches);
+    } catch (_e) {
+        return false;
+    }
+}
+
+window.PRKS_SMALL_SCREEN_MQ = PRKS_SMALL_SCREEN_MQ;
+window.prksMatchesSmallScreenViewport = prksMatchesSmallScreenViewport;
 
 function prksAnyModalOpen() {
     const any = document.querySelector('.modal:not(.hidden)');

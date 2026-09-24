@@ -27,6 +27,8 @@
         'Foreword',
         'Afterword',
     ];
+    /* Intentionally excludes Mentioned. Mirrors backend
+     * work_role_sync.PEOPLE_ROLE_TYPES; pinned by tests/test_contract_parity.py. */
 
     const PRKS_ROUTE_META = {
         folders: {

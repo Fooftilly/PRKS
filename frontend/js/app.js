@@ -463,8 +463,8 @@ function initForceMobileSetting() {
                 }
                 if (
                     !on &&
-                    window.matchMedia &&
-                    !window.matchMedia('(max-width: 900px)').matches &&
+                    typeof prksMatchesSmallScreenViewport === 'function' &&
+                    !prksMatchesSmallScreenViewport() &&
                     typeof prksCloseOverlays === 'function'
                 ) {
                     prksCloseOverlays();

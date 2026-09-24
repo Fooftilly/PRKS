@@ -19,16 +19,6 @@
         'button, a, input, select, textarea, [contenteditable="true"],' +
         '[role="button"], [role="link"], [role="menuitem"], [role="tab"],' +
         '[role="checkbox"], [role="radio"], [role="switch"]';
-    const TILE_ROUTE_NAMES = {
-        work: true,
-        person: true,
-        'concept-detail': true,
-        'position-detail': true,
-        'argument-detail': true,
-        'playlist-detail': true,
-        'folder-detail': true,
-    };
-
     function defaultHome() {
         if (typeof root.PRKS_HOME_HASH === 'string' && root.PRKS_HOME_HASH) return root.PRKS_HOME_HASH;
         return HOME_HASH;
@@ -228,10 +218,11 @@
         }
 
         function routeSupportsTile(hash) {
+            /* Sole policy: navigation.js prksRouteSupportsTile / injected deps.
+             * No second allow-list here — fail closed when the policy is absent. */
             if (supportsTileFn) return !!supportsTileFn(hash);
             if (typeof root.prksRouteSupportsTile === 'function') return !!root.prksRouteSupportsTile(hash);
-            const route = parseRoute(hash);
-            return !!(route && TILE_ROUTE_NAMES[route.name]);
+            return false;
         }
 
         function tabIndex(tabId) {
@@ -364,11 +355,17 @@
             if (typeof root.prksWorkspaceCanvasIsNarrow === 'function') {
                 return !!root.prksWorkspaceCanvasIsNarrow();
             }
+            const narrowPx =
+                typeof root.PRKS_WORKSPACE_NARROW_PX === 'number' && root.PRKS_WORKSPACE_NARROW_PX > 0
+                    ? root.PRKS_WORKSPACE_NARROW_PX
+                    : 720;
             if (typeof document !== 'undefined' && document.querySelector) {
                 const canvas = document.querySelector('.prks-workspace-canvas');
-                if (canvas && canvas.clientWidth > 0) return canvas.clientWidth < 720;
+                if (canvas && canvas.clientWidth > 0) return canvas.clientWidth < narrowPx;
             }
-            if (typeof root.innerWidth === 'number' && root.innerWidth > 0) return root.innerWidth < 720;
+            if (typeof root.innerWidth === 'number' && root.innerWidth > 0) {
+                return root.innerWidth < narrowPx;
+            }
             return false;
         }
 
