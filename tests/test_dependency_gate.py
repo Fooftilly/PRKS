@@ -667,6 +667,17 @@ class RepoGateLiveTests(unittest.TestCase):
             r"(?m)^\s*COPY\s+dependency-inventory\.json\s+",
         )
 
+    def test_test_gate_workflow_pins_match_requirements(self):
+        """CI install must name the same == pins as requirements.txt (Sonar
+        rejects unlocked `-r` installs; keep the two sources equal)."""
+        pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
+        workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"--only-binary=:all:"', workflow)
+        for name, version in pins.items():
+            self.assertIn(f'"{name}=={version}"', workflow)
+
     def test_inventory_lists_core_deps(self):
         inv = json.loads((_PROJECT / "dependency-inventory.json").read_text(encoding="utf-8"))
         names = {d["name"] for d in inv["dependencies"]}
