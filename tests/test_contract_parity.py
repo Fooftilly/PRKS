@@ -290,7 +290,9 @@ class ContractParityTests(unittest.TestCase):
         workspace_fallback = js_true_object_keys(
             read("frontend/js/workspace-tabs.js"), "TILE_ROUTE_NAMES"
         )
-        self.assertEqual(workspace_fallback, navigation)
+        # Runtime policy is key membership only; declaration order is not part
+        # of the contract.
+        self.assertEqual(frozenset(workspace_fallback), frozenset(navigation))
 
     def test_recent_projection_limit_matches_server_default(self):
         frontend_limit = js_recent_limit(read("frontend/js/work-open-state.js"))
