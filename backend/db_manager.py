@@ -1776,40 +1776,27 @@ class PRKSDatabase:
             raise ValueError(msg)
 
         # Publish through the same exclusive + durable managed-PDF store as
-        # ordinary upload/create. Read the inbox once; never shutil.copy2 /
-        # overwrite an existing basename. Linearization runs inside the store
-        # *after* the durability barrier. Remove the inbox only after DB
-        # success — moving first could leave the inbox empty with no Work row.
+        # ordinary upload/create. Stream from the inbox in bounded chunks —
+        # never shutil.copy2 / overwrite, and never hold the whole PDF in RAM.
+        # Linearization runs inside the store *after* the durability barrier.
+        # Remove the inbox only after DB success — moving first could leave the
+        # inbox empty with no Work row.
         from backend.services.work_pdf_replace import (
             ManagedPdfStoreError,
             discard_unowned_managed_pdf,
-            store_new_managed_pdf_bytes,
+            store_new_managed_pdf_from_path,
         )
         from backend.work_deletion import _remove_managed_pdf
 
         pdfs_dir = self.storage.pdfs_dir
         os.makedirs(pdfs_dir, exist_ok=True)
         original_name = row.get("filename") or os.path.basename(source_abs)
-        try:
-            with open(source_abs, "rb") as fp:
-                body = fp.read()
-        except OSError as e:
-            msg = f"Could not read source PDF: {e}"
-            self.execute_query(
-                """
-                UPDATE processing_files
-                SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (msg, processing_file_id),
-            )
-            raise ValueError(msg)
 
         try:
-            local_filename = store_new_managed_pdf_bytes(
+            local_filename = store_new_managed_pdf_from_path(
                 pdfs_dir,
                 original_name,
-                body,
+                source_abs,
                 linearize_context="processing-import",
             )
         except ManagedPdfStoreError as e:

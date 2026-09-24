@@ -38,6 +38,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Optional
 
 from backend.db_manager import (
@@ -250,6 +251,105 @@ class ManagedPdfStoreError(Exception):
         self.http_status = http_status
 
 
+# Chunk size for path/stream publication. Large enough to avoid syscall thrash,
+# small enough that a Processing Inbox PDF is never held whole in RAM.
+_STORE_COPY_CHUNK = 1024 * 1024
+
+
+@contextmanager
+def managed_pdf_adoption_guard(pdfs_dir: str, file_path_value):
+    """Serialize claiming an EXISTING managed PDF with post-delete cleanup.
+
+    Yields the managed basename when ``file_path_value`` names a managed PDF, or
+    ``None`` when it does not (the caller is not adopting existing bytes — e.g.
+    a video Work or an empty path).
+
+    While yielding a basename this holds ``managed_pdf_path_lock`` and has
+    re-confirmed the contained file still exists. Cleanup that won the race
+    unlinks under the same lock, so a waiting adopter resumes only after the
+    bytes are gone and then raises ``ManagedPdfStoreError(reason="missing_pdf")``
+    instead of committing a Work that points at nothing.
+
+    Uploads that just minted an exclusive name must not use this guard — they
+    own bytes no cleanup could have claimed.
+    """
+    name = managed_pdf_filename(str(file_path_value or ""))
+    if not name:
+        yield None
+        return
+    lock = managed_pdf_path_lock(pdfs_dir, name)
+    if lock is None:
+        raise ManagedPdfStoreError(
+            "invalid_file_name",
+            "Invalid or unsafe PDF storage path",
+            http_status=400,
+        )
+    with lock:
+        path = safe_pdf_path_under_dir(pdfs_dir, name)
+        if not path or not os.path.isfile(path):
+            raise ManagedPdfStoreError(
+                "missing_pdf",
+                "Managed PDF is no longer available",
+                http_status=409,
+            )
+        yield name
+
+
+def _exclusive_managed_create_paths(
+    pdfs_dir: str, original_name: str
+) -> tuple[str, str]:
+    """Mint and contain a new managed basename; return ``(name, fullpath)``."""
+    os.makedirs(pdfs_dir, exist_ok=True)
+    filename = mint_managed_pdf_filename(original_name)
+    if not safe_pdf_path_under_dir(pdfs_dir, filename):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+    base_path = os.path.realpath(pdfs_dir)
+    # CodeQL py/path-injection documented sanitizer: build with join+normpath,
+    # then startswith the root before any FS sink.
+    name = os.path.basename(str(filename))
+    fullpath = os.path.normpath(os.path.join(base_path, name))
+    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
+        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
+    return name, fullpath
+
+
+def _finalize_exclusive_managed_create(
+    pdfs_dir: str,
+    name: str,
+    fullpath: str,
+    *,
+    linearize_context: str,
+) -> str:
+    """Parent-dir sync + optional linearize after a durable exclusive create."""
+    if not fsync_managed_pdf_parent(pdfs_dir, name):
+        # Best-effort: the file exists and its contents are durable, so a
+        # directory sync the platform refused is worth recording and not worth
+        # discarding a good upload for.
+        LOGGER.warning("pdf_upload_dir_sync_failed")
+
+    # Linearization is an optimization, and the bytes on disk are already the
+    # PDF the caller sent. It swallows its own failures but can still raise
+    # before its internal try — `tempfile.mkstemp` sits above it — and letting
+    # that escape would fail a good upload and leave it unowned. Never fail the
+    # store for it.
+    lin_ctx = str(linearize_context or "work-create-upload").strip() or "work-create-upload"
+    try:
+        changed, reason = maybe_linearize_pdf_in_place(fullpath, context=lin_ctx)
+        LOGGER.info(
+            "pdf_linearize_result context=%s changed=%s reason=%s",
+            safe_log_label(lin_ctx),
+            "true" if changed else "false",
+            safe_log_label(reason),
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "pdf_linearize_error context=%s error_type=%s",
+            safe_log_label(lin_ctx),
+            safe_error_type(exc),
+        )
+    return name
+
+
 def store_new_managed_pdf_bytes(
     pdfs_dir: str,
     original_name: str,
@@ -283,22 +383,12 @@ def store_new_managed_pdf_bytes(
 
     ``linearize_context`` is log/metadata only. Linearization runs *after* the
     durability barrier and is never what makes the first write durable.
-    Processing Inbox import uses ``processing-import``; ordinary upload keeps
-    the default ``work-create-upload``.
+    Processing Inbox import uses ``store_new_managed_pdf_from_path`` instead so
+    large inbox files are never held whole in RAM; ordinary upload keeps this
+    byte API (the request body is already in memory).
     """
-    os.makedirs(pdfs_dir, exist_ok=True)
+    name, fullpath = _exclusive_managed_create_paths(pdfs_dir, original_name)
     created = False
-    filename = mint_managed_pdf_filename(original_name)
-    if not safe_pdf_path_under_dir(pdfs_dir, filename):
-        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
-    base_path = os.path.realpath(pdfs_dir)
-    # CodeQL py/path-injection documented sanitizer: build with join+normpath,
-    # then startswith the root before any FS sink.
-    name = os.path.basename(str(filename))
-    fullpath = os.path.normpath(os.path.join(base_path, name))
-    if fullpath == base_path or not fullpath.startswith(base_path + os.sep):
-        raise ManagedPdfStoreError("invalid_file_name", "Invalid file_name", http_status=400)
-
     try:
         with open(fullpath, "xb") as fp:
             created = True
@@ -325,34 +415,59 @@ def store_new_managed_pdf_bytes(
         raise ManagedPdfStoreError(
             "write_failed", "Could not store the uploaded PDF"
         ) from exc
-    if not fsync_managed_pdf_parent(pdfs_dir, name):
-        # Best-effort, as above: the file exists and its contents are durable,
-        # so a directory sync the platform refused is worth recording and not
-        # worth discarding a good upload for.
-        LOGGER.warning("pdf_upload_dir_sync_failed")
+    return _finalize_exclusive_managed_create(
+        pdfs_dir, name, fullpath, linearize_context=linearize_context
+    )
 
-    # Linearization is an optimization, and the bytes on disk are already the
-    # PDF the caller sent. It swallows its own failures but can still raise
-    # before its internal try — `tempfile.mkstemp` sits above it — and letting
-    # that escape would fail a good upload and leave it unowned. Never fail the
-    # store for it.
-    lin_ctx = str(linearize_context or "work-create-upload").strip() or "work-create-upload"
+
+def store_new_managed_pdf_from_path(
+    pdfs_dir: str,
+    original_name: str,
+    source_path: str,
+    *,
+    linearize_context: str = "processing-import",
+) -> str:
+    """Publish a trusted on-disk PDF into managed storage without a full RAM copy.
+
+    Same exclusive-create + content/parent durability + post-barrier linearize
+    contract as ``store_new_managed_pdf_bytes``, but copies from ``source_path``
+    in bounded chunks. Callers must already have contained ``source_path``
+    (Processing Inbox via ``safe_processing_path_under_dir``); this helper does
+    not re-interpret a user basename as a path.
+    """
+    if not os.path.isfile(source_path):
+        raise ManagedPdfStoreError(
+            "source_missing",
+            "Source PDF is no longer present",
+            http_status=400,
+        )
+    name, fullpath = _exclusive_managed_create_paths(pdfs_dir, original_name)
+    created = False
     try:
-        changed, reason = maybe_linearize_pdf_in_place(fullpath, context=lin_ctx)
-        LOGGER.info(
-            "pdf_linearize_result context=%s changed=%s reason=%s",
-            safe_log_label(lin_ctx),
-            "true" if changed else "false",
-            safe_log_label(reason),
-        )
-    except Exception as exc:
-        LOGGER.warning(
-            "pdf_linearize_error context=%s error_type=%s",
-            safe_log_label(lin_ctx),
-            safe_error_type(exc),
-        )
-    return name
-
+        with open(fullpath, "xb") as fp:
+            created = True
+            with open(source_path, "rb") as src:
+                while True:
+                    chunk = src.read(_STORE_COPY_CHUNK)
+                    if not chunk:
+                        break
+                    fp.write(chunk)
+            fp.flush()
+            fsync_open_file(fp.fileno())
+    except FileExistsError as exc:
+        raise ManagedPdfStoreError(
+            "name_taken", "Could not allocate a managed PDF path", http_status=409
+        ) from exc
+    except OSError as exc:
+        if created:
+            unlink_managed_pdf_best_effort(pdfs_dir, name)
+        LOGGER.error("pdf_upload_write_failed error_type=%s", safe_error_type(exc))
+        raise ManagedPdfStoreError(
+            "write_failed", "Could not store the uploaded PDF"
+        ) from exc
+    return _finalize_exclusive_managed_create(
+        pdfs_dir, name, fullpath, linearize_context=linearize_context
+    )
 
 def discard_unowned_managed_pdf(pdfs_dir: str, stored_name: Optional[str], *, db=None) -> bool:
     """Roll back a `store_new_managed_pdf_bytes()` that never gained an owner.

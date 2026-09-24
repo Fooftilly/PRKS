@@ -7,6 +7,12 @@ rolls back with ``discard_unowned_managed_pdf`` / ``_remove_managed_pdf``.
 Import used to ``shutil.copy2`` and raw ``os.remove``, which could overwrite a
 pre-seeded basename and delete bytes a surviving Work still referenced.
 
+Import now uses ``store_new_managed_pdf_from_path`` (chunked copy, same
+barriers) so large inbox PDFs are never held whole in RAM. Adoption of an
+existing managed basename goes through ``managed_pdf_adoption_guard``
+(lock + existence check) so a late adopter after cleanup cannot land a Work
+on missing bytes.
+
 These tests pin the unified contract without sleeps: hooks and threading
 barriers drive the survivor race.
 """
@@ -119,40 +125,99 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
 
     # --- #169: durable exclusive store -----------------------------------
 
-    def test_import_goes_through_store_new_managed_pdf_bytes(self):
+    def test_import_goes_through_store_new_managed_pdf_from_path(self):
         row = self._stage()
         seen = {}
 
-        real_store = work_pdf_replace.store_new_managed_pdf_bytes
+        real_store = work_pdf_replace.store_new_managed_pdf_from_path
 
-        def wrap(pdfs_dir, original_name, body, *, linearize_context="work-create-upload"):
+        def wrap(
+            pdfs_dir, original_name, source_path, *, linearize_context="processing-import"
+        ):
             seen["called"] = True
-            seen["body"] = body
+            seen["source_path"] = source_path
             seen["context"] = linearize_context
             seen["pdfs_dir"] = pdfs_dir
+            with open(source_path, "rb") as handle:
+                seen["source_bytes"] = handle.read()
             return real_store(
-                pdfs_dir, original_name, body, linearize_context=linearize_context
+                pdfs_dir,
+                original_name,
+                source_path,
+                linearize_context=linearize_context,
             )
 
-        with patch.object(
-            work_pdf_replace, "store_new_managed_pdf_bytes", side_effect=wrap
+        with patch(
+            "backend.services.work_pdf_replace.store_new_managed_pdf_from_path",
+            side_effect=wrap,
         ):
-            # Patch the late-bound name import_processing_file resolves.
-            with patch(
-                "backend.services.work_pdf_replace.store_new_managed_pdf_bytes",
-                side_effect=wrap,
-            ):
-                out = self.db.import_processing_file(row["id"])
+            out = self.db.import_processing_file(row["id"])
 
         self.assertTrue(seen.get("called"))
-        self.assertEqual(seen.get("body"), PDF_BODY)
+        self.assertEqual(seen.get("source_bytes"), PDF_BODY)
         self.assertEqual(seen.get("context"), "processing-import")
         self.assertEqual(seen.get("pdfs_dir"), self.storage.pdfs_dir)
+        self.assertTrue(
+            os.path.realpath(seen["source_path"]).startswith(
+                os.path.realpath(self.storage.processing_dir) + os.sep
+            )
+        )
         work = self.db.get_work(out["work_id"])
         self.assertTrue(str(work.get("file_path") or "").startswith("/api/pdfs/"))
         self.assertFalse(
             os.path.exists(os.path.join(self.storage.processing_dir, "inbox.pdf"))
         )
+
+    def test_path_store_copies_in_bounded_chunks_not_one_read(self):
+        """Processing must not materialize the whole PDF via a single read()."""
+        # Body larger than one chunk so a single fread would be visible.
+        big = b"%PDF-1.4\n" + (b"X" * (work_pdf_replace._STORE_COPY_CHUNK + 50)) + b"\n%%EOF\n"
+        src = os.path.join(self.storage.processing_dir, "chunked.pdf")
+        with open(src, "wb") as handle:
+            handle.write(big)
+
+        read_sizes = []
+        real_open = open
+
+        class _CountingFile:
+            def __init__(self, fh):
+                self._fh = fh
+
+            def read(self, size=-1):
+                data = self._fh.read(size)
+                read_sizes.append(size if size is not None and size >= 0 else len(data))
+                return data
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return self._fh.__exit__(*args)
+
+            def __getattr__(self, name):
+                return getattr(self._fh, name)
+
+        def counting_open(path, mode="r", *args, **kwargs):
+            fh = real_open(path, mode, *args, **kwargs)
+            if "r" in mode and os.path.realpath(path) == os.path.realpath(src):
+                return _CountingFile(fh)
+            return fh
+
+        with patch("builtins.open", side_effect=counting_open):
+            name = work_pdf_replace.store_new_managed_pdf_from_path(
+                self.storage.pdfs_dir, "chunked.pdf", src
+            )
+
+        self.assertGreaterEqual(len(read_sizes), 2)
+        self.assertTrue(
+            all(
+                size == work_pdf_replace._STORE_COPY_CHUNK or size == 0 or size < work_pdf_replace._STORE_COPY_CHUNK
+                for size in read_sizes
+            )
+        )
+        self.assertNotIn(-1, read_sizes, "must never request an unbounded read()")
+        with open(os.path.join(self.storage.pdfs_dir, name), "rb") as handle:
+            self.assertEqual(handle.read(), big)
 
     def test_import_with_linearize_disabled_applies_durability_helpers(self):
         row = self._stage()
@@ -311,16 +376,23 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
         )
 
     def test_case_a_survivor_race_with_barriers_no_sleeps(self):
-        """Rollback holds the shared lock across settle+unlink; adopter serializes.
+        """Cleanup wins the lock → late adopter refuses; no Work on missing bytes.
 
-        Barriers only (no sleeps). The adopter observes the lock held before
-        unlink proceeds, proving it cannot commit between settle and remove.
+        Barriers only (no sleeps). The adopter observes the lock held, then
+        uses ``managed_pdf_adoption_guard`` (the same path create/PATCH take).
+        After cleanup unlinks under the lock, the guard must raise
+        ``missing_pdf`` and must not create a Work.
         """
         row = self._stage("race.pdf")
         remove_entered = threading.Event()
         adopter_observed = threading.Event()
         adopter_done = threading.Event()
-        observed = {"held": False, "adopter_saw_lock": False}
+        observed = {
+            "held": False,
+            "adopter_saw_lock": False,
+            "adopt_error": None,
+            "adopter_work_id": None,
+        }
 
         minted = {"fp": None, "name": None}
         real_add = self.db.add_work
@@ -338,7 +410,6 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
             lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
             observed["held"] = bool(lock and lock.locked())
             remove_entered.set()
-            # Do not unlink until the adopter has observed the held lock.
             self.assertTrue(adopter_observed.wait(timeout=5))
             return real_remove(path, *args, **kwargs)
 
@@ -350,8 +421,15 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
             self.assertIsNotNone(lock)
             observed["adopter_saw_lock"] = lock.locked()
             adopter_observed.set()
-            with lock:
-                self.db.add_work(title="Late adopter", file_path=minted["fp"])
+            try:
+                with work_pdf_replace.managed_pdf_adoption_guard(
+                    self.storage.pdfs_dir, minted["fp"]
+                ):
+                    observed["adopter_work_id"] = self.db.add_work(
+                        title="Late adopter", file_path=minted["fp"]
+                    )
+            except work_pdf_replace.ManagedPdfStoreError as exc:
+                observed["adopt_error"] = exc.reason
             adopter_done.set()
 
         thread = threading.Thread(target=adopter, daemon=True)
@@ -372,9 +450,41 @@ class ProcessingImportManagedPdfTests(unittest.TestCase):
 
         self.assertTrue(observed["held"])
         self.assertTrue(observed["adopter_saw_lock"])
+        self.assertEqual(observed["adopt_error"], "missing_pdf")
+        self.assertIsNone(observed["adopter_work_id"])
         self.assertFalse(
             os.path.isfile(os.path.join(self.storage.pdfs_dir, minted["name"]))
         )
+        self.assertEqual(
+            self.db.execute_query("SELECT id FROM works"),
+            [],
+            "late adopter must not leave a Work pointing at missing bytes",
+        )
+
+    def test_adoption_guard_refuses_when_file_already_gone(self):
+        name = f"gone-{uuid.uuid4().hex}.pdf"
+        fp = f"/api/pdfs/{name}"
+        with self.assertRaises(work_pdf_replace.ManagedPdfStoreError) as raised:
+            with work_pdf_replace.managed_pdf_adoption_guard(self.storage.pdfs_dir, fp):
+                self.fail("must not enter the adoption body")
+        self.assertEqual(raised.exception.reason, "missing_pdf")
+        self.assertEqual(raised.exception.http_status, 409)
+
+    def test_adoption_guard_holds_lock_while_file_present(self):
+        name = f"live-{uuid.uuid4().hex}.pdf"
+        path = os.path.join(self.storage.pdfs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(PDF_BODY)
+        lock = work_pdf_replace.managed_pdf_path_lock(self.storage.pdfs_dir, name)
+        observed = {}
+        with work_pdf_replace.managed_pdf_adoption_guard(
+            self.storage.pdfs_dir, f"/api/pdfs/{name}"
+        ) as adopted:
+            observed["held"] = lock.locked()
+            observed["name"] = adopted
+        self.assertTrue(observed["held"])
+        self.assertEqual(observed["name"], name)
+        self.assertFalse(lock.locked())
 
     def test_case_a_survivor_committed_before_cleanup_keeps_bytes(self):
         """Sibling commits (Event barrier) before rollback cleanup runs."""

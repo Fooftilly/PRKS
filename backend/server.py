@@ -424,28 +424,6 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     return config
 
 
-def _managed_adoption_lock(file_path_value) -> "threading.Lock | None":
-    """Lock for a managed basename a request would ASSIGN to a Work, or None.
-
-    Post-delete cleanup decides a basename is unreferenced and then unlinks it,
-    so every path that can point a Work at an EXISTING managed PDF has to hold
-    the same per-basename lock across the commit that claims ownership --
-    otherwise the row lands in the gap and the Work references bytes cleanup
-    has already removed.
-
-    Today that is `POST /api/works` with a caller-supplied `file_path` and
-    `PATCH /api/works/:id` (`update_work_metadata` allows `file_path`). Uploads
-    and the processing import mint their own unique names, and the COW replace
-    path takes this lock itself; `file_path` is deliberately not a synchronized
-    field, so the durable sync path cannot assign one. A new assignment path
-    belongs here too.
-    """
-    name = managed_pdf_filename(str(file_path_value or ""))
-    if not name:
-        return None
-    return work_pdf_replace.managed_pdf_path_lock(pdfs_dir, name)
-
-
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
     return safe_pdf_path_under_dir(pdfs_dir, url_last_segment)
 
@@ -1111,15 +1089,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     if body:
                         # PATCH can assign `file_path` (it is in
                         # `update_work_metadata`'s allowed set), so it is an
-                        # ownership-claiming path and takes the same lock the
-                        # create and cleanup paths do.
-                        patch_lock = (
-                            _managed_adoption_lock(body.get("file_path"))
-                            if patched_file_path else None
-                        )
+                        # ownership-claiming path: hold the cleanup lock and
+                        # prove the contained file still exists before commit.
                         try:
-                            with (patch_lock if patch_lock is not None else nullcontext()):
+                            with (
+                                work_pdf_replace.managed_pdf_adoption_guard(
+                                    pdfs_dir, body.get("file_path")
+                                )
+                                if patched_file_path
+                                else nullcontext()
+                            ):
                                 db.update_work_metadata(w_id, body)
+                        except work_pdf_replace.ManagedPdfStoreError as e:
+                            self.send_json(e.http_status, {'error': e.message})
+                            return
                         except ValueError as e:
                             # A refused length is the caller's mistake, not a
                             # server fault: say so rather than 500.
@@ -2849,11 +2832,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # creation boundary, and that refusal is a 400.
                 # A caller may point a new Work at an EXISTING managed PDF
                 # instead of uploading one, so the commit that claims ownership
-                # is held under the same per-basename lock cleanup takes. An
+                # is held under the same per-basename lock cleanup takes, and
+                # re-checks that the bytes still exist under that lock. An
                 # upload needs no guard: it minted its own unique name.
-                adopt_lock = None if stored_name else _managed_adoption_lock(file_path)
                 try:
-                    with (adopt_lock if adopt_lock is not None else nullcontext()):
+                    with (
+                        work_pdf_replace.managed_pdf_adoption_guard(
+                            pdfs_dir, file_path
+                        )
+                        if not stored_name
+                        else nullcontext()
+                    ):
                         w_id = db.add_work(
                             title=data.get('title', 'Untitled'),
                             status=data.get('status', 'Not Started'),
@@ -2883,6 +2872,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             thumb_page=data.get('thumb_page'),
                             private_notes=data.get('private_notes', ''),
                         )
+                except work_pdf_replace.ManagedPdfStoreError as e:
+                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
+                    self.send_json(e.http_status, {'error': e.message})
+                    return
                 except ValueError as e:
                     # The upload is stored before the row exists, so a refused
                     # create would otherwise leave a PDF nothing references.
