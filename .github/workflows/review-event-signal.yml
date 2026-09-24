@@ -1,0 +1,25 @@
+name: Review event signal
+
+run-name: review-${{ github.event.review.id }}-pr-${{ github.event.pull_request.number }}
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+concurrency:
+  group: review-event-signal-${{ github.event.review.id }}
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+
+    steps:
+      # This workflow deliberately checks out and executes no pull-request code.
+      # Its completed workflow_run is the trusted hand-off used by the cleanup
+      # workflow on the default branch.
+      - name: Record review event
+        run: ':'
