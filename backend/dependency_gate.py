@@ -86,6 +86,7 @@ REGISTERED_VENDOR_RUNTIME_FILES = (
     "dompurify/purify.min.js",
     "lucide/lucide.min.js",
     "cytoscape/cytoscape.min.js",
+    "idb/idb.min.js",
     "prks-pdf-viewer/prks-pdf-viewer.js",
     "prks-pdf-viewer/prks-pdf-viewer.css",
     "prks-pdf-viewer/pdfium.wasm",
@@ -107,6 +108,7 @@ _SW_REV_ANY_RE = re.compile(
 _INVENTORY_STRUCTURAL_NAMES = frozenset(
     {
         "inter",
+        "idb",
         "python",
     }
 )
@@ -1115,6 +1117,44 @@ def validate_inter_vendor(repo_root: Path | None = None) -> GateResult:
     return result
 
 
+def validate_idb_vendor(repo_root: Path | None = None) -> GateResult:
+    """Raw-vendor pin for jakearchibald/idb (disposable offline-store plumbing)."""
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    result = GateResult(ok=True)
+    version_path = root / "frontend" / "vendor" / "idb" / "VERSION"
+    js_path = root / "frontend" / "vendor" / "idb" / "idb.min.js"
+    if not version_path.is_file():
+        result.fail("missing_version", "idb VERSION missing", str(version_path))
+        return result
+    text = version_path.read_text(encoding="utf-8")
+    if "fetched:" in text.lower():
+        result.fail("nondeterministic_fetched", "idb VERSION must not contain fetched:", str(version_path))
+    meta = parse_version_file(text)
+    if not meta.get("version"):
+        result.fail("idb_missing_version", "idb VERSION missing version", str(version_path))
+    if meta.get("npm") and meta["npm"] != f"idb@{meta.get('version')}":
+        # Soft consistency: npm: idb@X should match the bare version line.
+        if not str(meta.get("npm", "")).endswith("@" + str(meta.get("version", ""))):
+            result.fail(
+                "idb_version_mismatch",
+                f"idb VERSION npm={meta.get('npm')} version={meta.get('version')}",
+                str(version_path),
+            )
+    if not js_path.is_file():
+        result.fail("missing_asset", "idb.min.js missing", str(js_path))
+        return result
+    recorded = meta.get("sha256")
+    actual = sha256_file(js_path)
+    if recorded and recorded != actual:
+        result.fail("idb_sha_mismatch", f"idb.min.js sha256 {actual} != VERSION {recorded}", str(js_path))
+    elif not recorded:
+        result.fail("idb_missing_sha", "idb VERSION missing sha256", str(version_path))
+    for marker in ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com"):
+        if marker in text.lower():
+            result.fail("cdn_in_version", f"idb VERSION contains {marker}", str(version_path))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # DEPENDENCY-MANIFEST + SW revision
 # ---------------------------------------------------------------------------
@@ -1175,6 +1215,16 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
         "inter",
         inter_meta.get("version", ""),
         ["inter/inter.css", "inter/InterVariable.woff2"],
+        "raw-vendor",
+    )
+
+    idb_meta = parse_version_file(
+        (root / "frontend" / "vendor" / "idb" / "VERSION").read_text(encoding="utf-8")
+    )
+    add(
+        "idb",
+        idb_meta.get("version", ""),
+        ["idb/idb.min.js"],
         "raw-vendor",
     )
 
@@ -1667,6 +1717,7 @@ def run_repo_gate(repo_root: Path | None = None) -> GateResult:
     result.extend(validate_pdf_viewer_vendor(root))
     result.extend(validate_frontend_vendor_island(root))
     result.extend(validate_inter_vendor(root))
+    result.extend(validate_idb_vendor(root))
     result.extend(validate_dependency_manifest(root))
     result.extend(validate_sw_revision(root))
     result.extend(validate_vendor_registration(root))

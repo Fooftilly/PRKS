@@ -1,0 +1,6 @@
+8.0.3
+source: https://github.com/jakearchibald/idb
+npm: idb@8.0.3
+asset: node_modules/idb/build/umd.js
+sha256: ff4b3763d5b8e7981f606cb3d46df37ac5b7fc1d4b4eca34da129b47219edd59
+license: ISC

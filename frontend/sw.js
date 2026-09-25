@@ -17,7 +17,7 @@
     // DEPENDENCY_REVISION is derived from frontend/vendor/DEPENDENCY-MANIFEST.json
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
     // --repo fails if it drifts. Changing vendor bytes retires old shell/static caches.
-    const DEPENDENCY_REVISION = '1633194ed7cc';
+    const DEPENDENCY_REVISION = '6cb1850db35d';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -103,6 +103,7 @@
         '/js/workspace-overview.js',
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
+        '/vendor/idb/idb.min.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
         '/js/local-store.js',

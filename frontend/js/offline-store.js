@@ -14,6 +14,13 @@
  *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision }
  *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
+ *
+ * IndexedDB Promise plumbing (#181): simple single-store get/put/delete/clear
+ * /count/getAll paths use the thin `idb` wrapper (`wrap` + `tx.done`) so
+ * request vs commit semantics stay explicit without hand-rolled onsuccess
+ * listeners. Kind sweeps (`deleteEntitiesByKind`) and database delete keep
+ * raw IDB handles -- cursor multi-request transactions and close-before-delete
+ * are PRKS-owned, not generic Promise sugar.
  */
 (function (root) {
     'use strict';
@@ -34,6 +41,11 @@
         return Date.now();
     }
 
+    function defaultIdbApi() {
+        if (root && root.idb && typeof root.idb.wrap === 'function') return root.idb;
+        return null;
+    }
+
     function approxJsonBytes(value) {
         try {
             const s = JSON.stringify(value);
@@ -48,6 +60,11 @@
         const idbFactory = Object.prototype.hasOwnProperty.call(options, 'indexedDB')
             ? options.indexedDB
             : defaultIndexedDB();
+        const idbApi = Object.prototype.hasOwnProperty.call(options, 'idb')
+            ? options.idb
+            : defaultIdbApi();
+        const wrap = idbApi && typeof idbApi.wrap === 'function' ? idbApi.wrap : null;
+        const unwrap = idbApi && typeof idbApi.unwrap === 'function' ? idbApi.unwrap : null;
         const now = options.now || defaultNow;
         const dbName = options.dbName || DB_NAME;
         const dbVersion = options.dbVersion || DB_VERSION;
@@ -61,7 +78,7 @@
 
         let dbPromise = null;
         let openDbHandle = null;
-        let unavailable = !idbFactory;
+        let unavailable = !idbFactory || !wrap;
 
         function ensureStores(db) {
             if (!db.objectStoreNames.contains(STORE_ENTITIES)) {
@@ -75,57 +92,92 @@
             }
         }
 
+        function rawDb(db) {
+            if (!db) return null;
+            if (unwrap) {
+                try {
+                    const unwrapped = unwrap(db);
+                    if (unwrapped) return unwrapped;
+                } catch (_e) {
+                    /* fall through */
+                }
+            }
+            return db;
+        }
+
         function openDb() {
             if (unavailable) return Promise.resolve(null);
             if (dbPromise) return dbPromise;
             dbPromise = new Promise(function (resolve) {
                 let req;
+                let settled = false;
+                function finish(db) {
+                    if (settled) return;
+                    settled = true;
+                    resolve(db);
+                }
                 try {
                     req = idbFactory.open(dbName, dbVersion);
                 } catch (_e) {
                     unavailable = true;
-                    resolve(null);
+                    finish(null);
                     return;
                 }
                 if (!req) {
                     unavailable = true;
-                    resolve(null);
+                    finish(null);
                     return;
                 }
-                req.onupgradeneeded = function () {
+                function onUpgrade() {
                     try {
                         ensureStores(req.result);
                     } catch (_e) {
                         /* Corrupt/blocked upgrade: fail closed, do not touch canonical data. */
                     }
-                };
-                req.onsuccess = function () {
-                    const db = req.result;
-                    if (!db) {
+                }
+                if (typeof req.addEventListener === 'function') {
+                    req.addEventListener('upgradeneeded', onUpgrade);
+                    req.addEventListener('blocked', function () {
                         unavailable = true;
-                        resolve(null);
-                        return;
-                    }
-                    openDbHandle = db;
-                    db.onversionchange = function () {
-                        try {
-                            db.close();
-                        } catch (_e) {
-                            /* ignore */
-                        }
-                        if (openDbHandle === db) openDbHandle = null;
-                        dbPromise = null;
+                        finish(null);
+                    });
+                } else {
+                    req.onupgradeneeded = onUpgrade;
+                    req.onblocked = function () {
+                        unavailable = true;
+                        finish(null);
                     };
-                    resolve(db);
-                };
-                req.onerror = function () {
-                    unavailable = true;
-                    resolve(null);
-                };
-                req.onblocked = function () {
-                    unavailable = true;
-                    resolve(null);
-                };
+                }
+                wrap(req)
+                    .then(function (db) {
+                        if (!db) {
+                            unavailable = true;
+                            finish(null);
+                            return;
+                        }
+                        const raw = rawDb(db);
+                        openDbHandle = raw;
+                        function onVersionChange() {
+                            try {
+                                if (raw) raw.close();
+                            } catch (_e) {
+                                /* ignore */
+                            }
+                            if (openDbHandle === raw) openDbHandle = null;
+                            dbPromise = null;
+                        }
+                        if (raw) {
+                            if (typeof raw.addEventListener === 'function') {
+                                raw.addEventListener('versionchange', onVersionChange);
+                            }
+                            raw.onversionchange = onVersionChange;
+                        }
+                        finish(db);
+                    })
+                    .catch(function () {
+                        unavailable = true;
+                        finish(null);
+                    });
             });
             return dbPromise;
         }
@@ -133,73 +185,55 @@
         /**
          * Runs one IDB request inside its own transaction; never rejects.
          *
-         * A request's `onsuccess` means the request ran, NOT that the database
-         * modification committed -- a transaction can still abort afterwards.
-         * Callers that act on a reported write (offline coherence unblocks a
-         * domain only once its cleanup physically completed) need the stronger
-         * boundary, so a `readwrite` transaction resolves from `oncomplete`
-         * and reports false on `onerror`/`onabort`. Reads have no commit to
-         * wait for and resolve as soon as the request produces its result.
+         * Uses `idb.wrap` so object-store methods return Promises, and waits
+         * on `tx.done` for readwrite so a request-level success that later
+         * aborts is reported as failure (same commit boundary as before).
+         * Reads resolve when the request Promise settles -- there is no
+         * durable commit to wait for.
          */
         function runRequest(storeName, mode, fn) {
             return openDb()
                 .then(function (db) {
                     if (!db) return { ok: false, value: null };
-                    return new Promise(function (resolve) {
-                        const waitsForCommit = mode === 'readwrite';
-                        let tx;
+                    let tx;
+                    try {
+                        tx = db.transaction([storeName], mode);
+                    } catch (_e) {
+                        return { ok: false, value: null };
+                    }
+                    let store;
+                    let outcome;
+                    try {
+                        store = tx.objectStore(storeName);
+                        outcome = fn(store);
+                    } catch (_e) {
                         try {
-                            tx = db.transaction([storeName], mode);
-                        } catch (_e) {
-                            resolve({ ok: false, value: null });
-                            return;
+                            tx.abort();
+                        } catch (_abortErr) {
+                            /* ignore */
                         }
-                        let settled = false;
-                        let pendingResult = null;
-                        function finish(result) {
-                            if (settled) return;
-                            settled = true;
-                            resolve(result);
-                        }
-                        tx.oncomplete = function () {
-                            finish(pendingResult || { ok: false, value: null });
-                        };
-                        tx.onerror = function () {
-                            finish({ ok: false, value: null });
-                        };
-                        tx.onabort = function () {
-                            finish({ ok: false, value: null });
-                        };
-                        let store;
-                        let request;
-                        try {
-                            store = tx.objectStore(storeName);
-                            request = fn(store);
-                        } catch (_e) {
-                            finish({ ok: false, value: null });
-                            return;
-                        }
-                        if (!request) {
-                            finish({ ok: false, value: null });
-                            return;
-                        }
-                        request.onsuccess = function () {
-                            const result = { ok: true, value: request.result };
-                            if (waitsForCommit) {
-                                pendingResult = result;
-                                return;
+                        return { ok: false, value: null };
+                    }
+                    const waitsForCommit = mode === 'readwrite';
+                    return Promise.resolve(outcome)
+                        .then(function (value) {
+                            if (!waitsForCommit) {
+                                return { ok: true, value: value };
                             }
-                            finish(result);
-                        };
-                        request.onerror = function () {
-                            try {
-                                tx.abort();
-                            } catch (_e) {
-                                /* ignore */
+                            // tx.done is provided by idb's transaction proxy.
+                            const done = tx && tx.done;
+                            if (done && typeof done.then === 'function') {
+                                return done.then(function () {
+                                    return { ok: true, value: value };
+                                });
                             }
-                            finish({ ok: false, value: null });
-                        };
-                    });
+                            // Fail closed if the wrapper did not attach done:
+                            // never report a write without a commit signal.
+                            return { ok: false, value: null };
+                        })
+                        .catch(function () {
+                            return { ok: false, value: null };
+                        });
                 })
                 .catch(function () {
                     return { ok: false, value: null };
@@ -297,11 +331,15 @@
             const wanted = String(kind);
             return openDb()
                 .then(function (db) {
-                    if (!db) return false;
+                    // Cursor multi-request sweeps stay on the raw IDB handle.
+                    // An idb-proxied store turns openCursor into a Promise, which
+                    // cannot drive the onsuccess/continue loop below.
+                    const raw = rawDb(db);
+                    if (!raw) return false;
                     return new Promise(function (resolve) {
                         let tx;
                         try {
-                            tx = db.transaction([STORE_ENTITIES], 'readwrite');
+                            tx = raw.transaction([STORE_ENTITIES], 'readwrite');
                         } catch (_e) {
                             resolve(false);
                             return;

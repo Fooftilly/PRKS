@@ -25,13 +25,25 @@ class FrontendOfflineStoreTests(unittest.TestCase):
     def test_loaded_before_api_after_request_coordinator(self):
         html = _read(_INDEX)
         coord_at = html.find('src="/js/request-coordinator.js"')
+        idb_at = html.find('src="/vendor/idb/idb.min.js"')
         store_at = html.find('src="/js/offline-store.js"')
         api_at = html.find('src="/js/api.js"')
         self.assertNotEqual(coord_at, -1)
+        self.assertNotEqual(idb_at, -1)
         self.assertNotEqual(store_at, -1)
         self.assertNotEqual(api_at, -1)
-        self.assertLess(coord_at, store_at)
+        self.assertLess(coord_at, idb_at)
+        self.assertLess(idb_at, store_at)
         self.assertLess(store_at, api_at)
+
+    def test_uses_idb_wrap_for_simple_request_path(self):
+        src = _read(_STORE)
+        self.assertIn("typeof idbApi.wrap", src)
+        self.assertIn("tx.done", src)
+        self.assertIn("function rawDb(", src)
+        self.assertIn("deleteEntitiesByKind", src)
+        # Kind sweeps must stay on the raw handle (cursor onsuccess loop).
+        self.assertIn("Cursor multi-request sweeps stay on the raw IDB handle", src)
 
     def test_persistence_boundary_kept_out_of_request_coordinator(self):
         coord = _read(_COORD)

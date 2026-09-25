@@ -12,6 +12,11 @@
  * The second is what separates "the write was reported" from "the write
  * committed", which durable local state must never confuse.
  *
+ * EventTarget-shaped requests/transactions (addEventListener) and global
+ * IDB* constructors are installed so thin Promise wrappers such as `idb`
+ * (instanceof + addEventListener) can exercise the same fake as onsuccess
+ * property handlers.
+ *
  * Used by run_offline_store_selftest.js and run_local_store_selftest.js.
  */
 'use strict';
@@ -72,21 +77,113 @@ function fireAsync(fn) {
     setTimeout(fn, 0);
 }
 
+class FakeEventTarget {
+    constructor() {
+        this._listeners = Object.create(null);
+    }
+    addEventListener(type, fn) {
+        if (typeof fn !== 'function') return;
+        const key = String(type);
+        if (!this._listeners[key]) this._listeners[key] = [];
+        this._listeners[key].push(fn);
+    }
+    removeEventListener(type, fn) {
+        const key = String(type);
+        const list = this._listeners[key];
+        if (!list) return;
+        const idx = list.indexOf(fn);
+        if (idx >= 0) list.splice(idx, 1);
+    }
+    _emit(type, event) {
+        const key = String(type);
+        const evt = event || { type: key, target: this };
+        const prop = 'on' + key;
+        if (typeof this[prop] === 'function') {
+            try {
+                this[prop](evt);
+            } catch (_e) {
+                /* ignore listener errors the way browsers often do for tests */
+            }
+        }
+        const list = (this._listeners[key] || []).slice();
+        for (let i = 0; i < list.length; i++) {
+            try {
+                list[i](evt);
+            } catch (_e) {
+                /* ignore */
+            }
+        }
+    }
+}
+
+class FakeIDBRequest extends FakeEventTarget {
+    constructor() {
+        super();
+        this.result = undefined;
+        this.error = undefined;
+        this.onsuccess = null;
+        this.onerror = null;
+        this.onupgradeneeded = null;
+        this.onblocked = null;
+    }
+}
+
+class FakeIDBTransaction extends FakeEventTarget {
+    constructor() {
+        super();
+        this.oncomplete = null;
+        this.onerror = null;
+        this.onabort = null;
+        this.error = null;
+    }
+}
+
+class FakeIDBObjectStore {
+    /* Prototype exists so idb can detect get/put/delete/clear/count/getAll. */
+}
+FakeIDBObjectStore.prototype.get = function () {};
+FakeIDBObjectStore.prototype.getKey = function () {};
+FakeIDBObjectStore.prototype.getAll = function () {};
+FakeIDBObjectStore.prototype.getAllKeys = function () {};
+FakeIDBObjectStore.prototype.count = function () {};
+FakeIDBObjectStore.prototype.put = function () {};
+FakeIDBObjectStore.prototype.add = function () {};
+FakeIDBObjectStore.prototype.delete = function () {};
+FakeIDBObjectStore.prototype.clear = function () {};
+FakeIDBObjectStore.prototype.openCursor = function () {};
+FakeIDBObjectStore.prototype.index = function () {};
+
+class FakeIDBIndex {}
+FakeIDBIndex.prototype.get = FakeIDBObjectStore.prototype.get;
+FakeIDBIndex.prototype.getKey = FakeIDBObjectStore.prototype.getKey;
+FakeIDBIndex.prototype.getAll = FakeIDBObjectStore.prototype.getAll;
+FakeIDBIndex.prototype.getAllKeys = FakeIDBObjectStore.prototype.getAllKeys;
+FakeIDBIndex.prototype.count = FakeIDBObjectStore.prototype.count;
+FakeIDBIndex.prototype.openCursor = FakeIDBObjectStore.prototype.openCursor;
+
+class FakeIDBCursor {}
+FakeIDBCursor.prototype.advance = function () {};
+FakeIDBCursor.prototype.continue = function () {};
+FakeIDBCursor.prototype.continuePrimaryKey = function () {};
+
 class FakeObjectStore {
     constructor(name, keyPath) {
         this.name = name;
         this.keyPath = keyPath;
         this.rows = [];
         this.forceError = false;
+        this.failCommit = false;
     }
 }
 
-class FakeDatabase {
+class FakeIDBDatabase extends FakeEventTarget {
     constructor(name) {
+        super();
         this.name = name;
         this.version = 0;
         this._stores = new Map();
         this.onversionchange = null;
+        this.onclose = null;
         // Real IndexedDB blocks deleteDatabase() on every OPEN connection --
         // including the deleting page's own. Modelling that is what makes a
         // "close your handle before deleting" regression meaningful.
@@ -109,59 +206,59 @@ class FakeDatabase {
     transaction(storeNames, mode) {
         const db = this;
         const names = Array.isArray(storeNames) ? storeNames : [storeNames];
-        const tx = {
-            mode: mode,
-            oncomplete: null,
-            onerror: null,
-            onabort: null,
-            _aborted: false,
-            _settled: false,
-            _pending: 0,
-            _started: false,
-            // Writes are staged the way a real transaction stages them: an
-            // abort rolls the object store back, so a caller that trusted a
-            // request-level success would be reasoning about rows that still
-            // exist.
-            _snapshots: new Map(),
-            _snapshot: function (st) {
-                if (!tx._snapshots.has(st)) tx._snapshots.set(st, st.rows.slice());
-            },
-            _rollback: function () {
-                tx._snapshots.forEach(function (rows, st) {
-                    st.rows = rows;
-                });
-                tx._snapshots.clear();
-            },
-            objectStore: function (name) {
-                const store = db._stores.get(name);
-                if (!store) throw new Error('No such object store: ' + name);
-                return makeStoreHandle(store, tx);
-            },
-            _maybeSettle: function () {
-                if (tx._settled || tx._aborted || tx._pending > 0) return;
-                const shouldFailCommit = names.some(function (n) {
-                    const st = db._stores.get(n);
-                    return !!(st && st.failCommit);
-                });
-                tx._settled = true;
-                if (shouldFailCommit) {
-                    tx._aborted = true;
-                    tx._rollback();
-                    if (tx.onabort) tx.onabort({ target: tx });
-                    return;
-                }
-                tx._snapshots.clear();
-                if (tx.oncomplete) tx.oncomplete({ target: tx });
-            },
-            abort: function () {
-                if (tx._aborted) return;
+        const tx = new FakeIDBTransaction();
+        tx.mode = mode;
+        tx._aborted = false;
+        tx._settled = false;
+        tx._pending = 0;
+        tx._started = false;
+        // Writes are staged the way a real transaction stages them: an
+        // abort rolls the object store back, so a caller that trusted a
+        // request-level success would be reasoning about rows that still
+        // exist.
+        tx._snapshots = new Map();
+        // idb's tx.store helper indexes objectStoreNames[0]/[1].
+        tx.objectStoreNames = names.slice();
+        tx._snapshot = function (st) {
+            if (!tx._snapshots.has(st)) tx._snapshots.set(st, st.rows.slice());
+        };
+        tx._rollback = function () {
+            tx._snapshots.forEach(function (rows, st) {
+                st.rows = rows;
+            });
+            tx._snapshots.clear();
+        };
+        tx.objectStore = function (name) {
+            const store = db._stores.get(name);
+            if (!store) throw new Error('No such object store: ' + name);
+            return makeStoreHandle(store, tx);
+        };
+        tx._maybeSettle = function () {
+            if (tx._settled || tx._aborted || tx._pending > 0) return;
+            const shouldFailCommit = names.some(function (n) {
+                const st = db._stores.get(n);
+                return !!(st && st.failCommit);
+            });
+            tx._settled = true;
+            if (shouldFailCommit) {
                 tx._aborted = true;
-                tx._settled = true;
                 tx._rollback();
-                fireAsync(function () {
-                    if (tx.onabort) tx.onabort({ target: tx });
-                });
-            },
+                tx.error = new Error('Simulated transaction abort');
+                tx._emit('abort', { target: tx, type: 'abort' });
+                return;
+            }
+            tx._snapshots.clear();
+            tx._emit('complete', { target: tx, type: 'complete' });
+        };
+        tx.abort = function () {
+            if (tx._aborted) return;
+            tx._aborted = true;
+            tx._settled = true;
+            tx._rollback();
+            tx.error = tx.error || new Error('Aborted');
+            fireAsync(function () {
+                tx._emit('abort', { target: tx, type: 'abort' });
+            });
         };
         // A transaction with no requests at all still completes on its own.
         fireAsync(function () {
@@ -175,8 +272,11 @@ class FakeDatabase {
     }
 }
 
+/** @deprecated alias kept for older selftest imports */
+const FakeDatabase = FakeIDBDatabase;
+
 function makeRequest() {
-    return { result: undefined, error: undefined, onsuccess: null, onerror: null };
+    return new FakeIDBRequest();
 }
 
 function makeStoreHandle(store, tx) {
@@ -193,10 +293,10 @@ function makeStoreHandle(store, tx) {
                 tx._snapshot(store);
                 const result = fn();
                 req.result = result;
-                if (req.onsuccess) req.onsuccess({ target: req });
+                req._emit('success', { target: req, type: 'success' });
             } catch (e) {
                 req.error = e;
-                if (req.onerror) req.onerror({ target: req });
+                req._emit('error', { target: req, type: 'error' });
             }
             tx._pending -= 1;
             // Only settle once the transaction has had a chance to schedule
@@ -207,120 +307,141 @@ function makeStoreHandle(store, tx) {
         });
         return req;
     }
-    return {
-        get: function (key) {
-            return op(function () {
-                return store.rows.find((r) => keyEquals(keyOf(store.keyPath, r), key));
-            });
-        },
-        put: function (value) {
-            return op(function () {
-                const key = keyOf(store.keyPath, value);
-                const idx = store.rows.findIndex((r) => keyEquals(keyOf(store.keyPath, r), key));
-                if (idx >= 0) store.rows[idx] = value;
-                else store.rows.push(value);
-                return key;
-            });
-        },
-        delete: function (key) {
-            return op(function () {
-                const idx = store.rows.findIndex((r) => keyEquals(keyOf(store.keyPath, r), key));
-                if (idx >= 0) store.rows.splice(idx, 1);
-                return undefined;
-            });
-        },
-        clear: function () {
-            return op(function () {
-                store.rows = [];
-                return undefined;
-            });
-        },
-        count: function () {
-            return op(function () {
-                return store.rows.length;
-            });
-        },
-        getAll: function (range, count) {
-            // Real `getAll` filters by the key range and yields rows in key
-            // order. A fake that returned everything unfiltered would let a
-            // broken range pass -- and code that relies on the range would
-            // then only fail in a real browser.
-            return op(function () {
-                const rows = store.rows
-                    .filter(function (r) {
-                        return !range || range.includes(keyOf(store.keyPath, r));
-                    })
-                    .sort(function (a, b) {
-                        return compareKeys(keyOf(store.keyPath, a), keyOf(store.keyPath, b));
-                    });
-                return typeof count === 'number' ? rows.slice(0, count) : rows;
-            });
-        },
-        openCursor: function (range) {
-            const req = makeRequest();
-            const keys = store.rows
-                .map(function (r) {
-                    return keyOf(store.keyPath, r);
+    const handle = Object.create(FakeIDBObjectStore.prototype);
+    handle.name = store.name;
+    handle.keyPath = store.keyPath;
+    handle.get = function (key) {
+        return op(function () {
+            return store.rows.find((r) => keyEquals(keyOf(store.keyPath, r), key));
+        });
+    };
+    handle.put = function (value) {
+        return op(function () {
+            const key = keyOf(store.keyPath, value);
+            const idx = store.rows.findIndex((r) => keyEquals(keyOf(store.keyPath, r), key));
+            if (idx >= 0) store.rows[idx] = value;
+            else store.rows.push(value);
+            return key;
+        });
+    };
+    handle.delete = function (key) {
+        return op(function () {
+            const idx = store.rows.findIndex((r) => keyEquals(keyOf(store.keyPath, r), key));
+            if (idx >= 0) store.rows.splice(idx, 1);
+            return undefined;
+        });
+    };
+    handle.clear = function () {
+        return op(function () {
+            store.rows = [];
+            return undefined;
+        });
+    };
+    handle.count = function () {
+        return op(function () {
+            return store.rows.length;
+        });
+    };
+    handle.getAll = function (range, count) {
+        // Real `getAll` filters by the key range and yields rows in key
+        // order. A fake that returned everything unfiltered would let a
+        // broken range pass -- and code that relies on the range would
+        // then only fail in a real browser.
+        return op(function () {
+            const rows = store.rows
+                .filter(function (r) {
+                    return !range || range.includes(keyOf(store.keyPath, r));
                 })
-                .filter(function (k) {
-                    return !range || range.includes(k);
-                })
-                .sort(compareKeys);
-            let idx = -1;
-            function rowFor(key) {
-                return store.rows.find(function (r) {
-                    return keyEquals(keyOf(store.keyPath, r), key);
+                .sort(function (a, b) {
+                    return compareKeys(keyOf(store.keyPath, a), keyOf(store.keyPath, b));
                 });
-            }
-            function advance() {
-                // Cursor iteration keeps its transaction alive exactly like a
-                // pending request does, so the fake must not let the
-                // transaction commit between two cursor steps.
-                tx._pending += 1;
-                fireAsync(function () {
-                    if (tx._aborted) {
-                        tx._pending -= 1;
-                        return;
-                    }
-                    idx += 1;
-                    while (idx < keys.length && !rowFor(keys[idx])) idx += 1;
-                    if (idx >= keys.length) {
-                        req.result = null;
-                        if (req.onsuccess) req.onsuccess({ target: req });
-                        tx._pending -= 1;
-                        fireAsync(function () {
-                            if (tx._started) tx._maybeSettle();
-                        });
-                        return;
-                    }
-                    const key = keys[idx];
-                    req.result = {
-                        key: key,
-                        value: rowFor(key),
-                        delete: function () {
-                            return op(function () {
-                                const i = store.rows.findIndex(function (r) {
-                                    return keyEquals(keyOf(store.keyPath, r), key);
-                                });
-                                if (i >= 0) store.rows.splice(i, 1);
-                                return undefined;
-                            });
-                        },
-                        continue: function () {
-                            advance();
-                        },
-                    };
-                    if (req.onsuccess) req.onsuccess({ target: req });
+            return typeof count === 'number' ? rows.slice(0, count) : rows;
+        });
+    };
+    handle.openCursor = function (range) {
+        const req = makeRequest();
+        const keys = store.rows
+            .map(function (r) {
+                return keyOf(store.keyPath, r);
+            })
+            .filter(function (k) {
+                return !range || range.includes(k);
+            })
+            .sort(compareKeys);
+        let idx = -1;
+        function rowFor(key) {
+            return store.rows.find(function (r) {
+                return keyEquals(keyOf(store.keyPath, r), key);
+            });
+        }
+        function advance() {
+            // Cursor iteration keeps its transaction alive exactly like a
+            // pending request does, so the fake must not let the
+            // transaction commit between two cursor steps.
+            tx._pending += 1;
+            fireAsync(function () {
+                if (tx._aborted) {
+                    tx._pending -= 1;
+                    return;
+                }
+                idx += 1;
+                while (idx < keys.length && !rowFor(keys[idx])) idx += 1;
+                if (idx >= keys.length) {
+                    req.result = null;
+                    req._emit('success', { target: req, type: 'success' });
                     tx._pending -= 1;
                     fireAsync(function () {
                         if (tx._started) tx._maybeSettle();
                     });
+                    return;
+                }
+                const key = keys[idx];
+                const cursor = Object.create(FakeIDBCursor.prototype);
+                cursor.key = key;
+                cursor.value = rowFor(key);
+                cursor.request = req;
+                cursor.delete = function () {
+                    return op(function () {
+                        const i = store.rows.findIndex(function (r) {
+                            return keyEquals(keyOf(store.keyPath, r), key);
+                        });
+                        if (i >= 0) store.rows.splice(i, 1);
+                        return undefined;
+                    });
+                };
+                cursor.continue = function () {
+                    advance();
+                };
+                req.result = cursor;
+                req._emit('success', { target: req, type: 'success' });
+                tx._pending -= 1;
+                fireAsync(function () {
+                    if (tx._started) tx._maybeSettle();
                 });
-            }
-            advance();
-            return req;
-        },
+            });
+        }
+        advance();
+        return req;
     };
+    return handle;
+}
+
+/**
+ * Installs IDB* globals required by `idb`'s instanceof / prototype checks.
+ * Safe to call more than once; overwrites prior fake globals.
+ */
+function installFakeIdbGlobals(globalObj) {
+    const g = globalObj || globalThis;
+    g.IDBRequest = FakeIDBRequest;
+    g.IDBTransaction = FakeIDBTransaction;
+    g.IDBObjectStore = FakeIDBObjectStore;
+    g.IDBIndex = FakeIDBIndex;
+    g.IDBCursor = FakeIDBCursor;
+    g.IDBDatabase = FakeIDBDatabase;
+    if (typeof g.IDBKeyRange === 'undefined') {
+        g.IDBKeyRange = FakeIDBKeyRange;
+    }
+    return g;
 }
 
 function createFakeIndexedDBFactory() {
@@ -332,18 +453,27 @@ function createFakeIndexedDBFactory() {
                 let db = databases.get(name);
                 const isNew = !db;
                 if (!db) {
-                    db = new FakeDatabase(name);
+                    db = new FakeIDBDatabase(name);
                     databases.set(name, db);
                 }
+                const oldVersion = db.version;
                 const needsUpgrade = isNew || version > db.version;
                 if (needsUpgrade) {
                     db.version = version;
                     req.result = db;
-                    if (req.onupgradeneeded) req.onupgradeneeded({ target: req });
+                    // Upgrade transactions are not fully modelled; createObjectStore
+                    // runs against the database handle during upgradeneeded.
+                    req.transaction = null;
+                    req._emit('upgradeneeded', {
+                        target: req,
+                        type: 'upgradeneeded',
+                        oldVersion: oldVersion,
+                        newVersion: version,
+                    });
                 }
                 req.result = db;
                 db._openConnections += 1;
-                if (req.onsuccess) req.onsuccess({ target: req });
+                req._emit('success', { target: req, type: 'success' });
             });
             return req;
         },
@@ -353,11 +483,11 @@ function createFakeIndexedDBFactory() {
                 const db = databases.get(name);
                 if (db && db._openConnections > 0) {
                     // A caller that never closed its own handle blocks itself.
-                    if (req.onblocked) req.onblocked({ target: req });
+                    req._emit('blocked', { target: req, type: 'blocked' });
                     return;
                 }
                 databases.delete(name);
-                if (req.onsuccess) req.onsuccess({ target: req });
+                req._emit('success', { target: req, type: 'success' });
             });
             return req;
         },
@@ -371,5 +501,10 @@ module.exports = {
     compareKeys: compareKeys,
     FakeIDBKeyRange: FakeIDBKeyRange,
     FakeDatabase: FakeDatabase,
+    FakeIDBDatabase: FakeIDBDatabase,
+    FakeIDBRequest: FakeIDBRequest,
+    FakeIDBTransaction: FakeIDBTransaction,
+    FakeIDBObjectStore: FakeIDBObjectStore,
+    installFakeIdbGlobals: installFakeIdbGlobals,
     createFakeIndexedDBFactory: createFakeIndexedDBFactory,
 };

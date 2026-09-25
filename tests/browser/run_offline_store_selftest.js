@@ -32,7 +32,12 @@ function assert(name, ok, detail) {
 const {
     FakeIDBKeyRange,
     createFakeIndexedDBFactory,
+    installFakeIdbGlobals,
 } = require(path.join(rootDir, 'tests/browser/lib/fake_indexeddb.js'));
+
+installFakeIdbGlobals(globalThis);
+
+const idbApi = require(path.join(rootDir, 'frontend/vendor/idb/idb.min.js'));
 
 /* ------------------------------------------------------------------------ */
 
@@ -44,13 +49,17 @@ function loadOfflineStoreModule() {
     return require(path.join(rootDir, 'frontend/js/offline-store.js'));
 }
 
+function withIdb(opts) {
+    return Object.assign({ idb: idbApi }, opts || {});
+}
+
 async function run() {
     const mod = loadOfflineStoreModule();
 
     /* ---- open DB / write entity / read entity ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, now: () => 1000 });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, now: () => 1000 }));
         assert('isAvailable true with working fake IndexedDB', await store.isAvailable());
         const putOk = await store.putEntity('work', 'W-1', { title: 'Ontology of X' }, 'rev-1');
         assert('putEntity resolves true on success', putOk === true);
@@ -66,7 +75,7 @@ async function run() {
     /* ---- missing item ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         const got = await store.getEntity('work', 'W-does-not-exist');
         assertEq('getEntity missing item returns null', got, null);
         const gotList = await store.getList('search:none');
@@ -77,7 +86,7 @@ async function run() {
     {
         const idb = createFakeIndexedDBFactory();
         let clock = 1;
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, now: () => clock });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, now: () => clock  }));
         await store.putEntity('work', 'W-2', { title: 'first version', tags: ['a'] }, 'rev-1');
         clock = 2;
         await store.putEntity('work', 'W-2', { title: 'second version' }, 'rev-2');
@@ -90,7 +99,7 @@ async function run() {
     /* ---- delete entity / delete list ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         await store.putEntity('person', 'P-1', { name: 'A. Researcher' }, '');
         await store.putList('works:recent', { ids: ['W-1', 'W-2'] }, '');
         assert('delete entity resolves true', (await store.deleteEntity('person', 'P-1')) === true);
@@ -102,7 +111,7 @@ async function run() {
     /* ---- clear cache ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         await store.putEntity('work', 'W-1', { title: 'x' }, '');
         await store.putEntity('work', 'W-2', { title: 'y' }, '');
         await store.putList('works:recent', { ids: ['W-1'] }, '');
@@ -119,9 +128,9 @@ async function run() {
     /* ---- schema upgrade: existing data survives a version bump ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const storeV1 = mod.createPrksOfflineStore({ indexedDB: idb, dbVersion: 1 });
+        const storeV1 = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, dbVersion: 1  }));
         await storeV1.putEntity('concept', 'C-1', { name: 'Realism' }, '');
-        const storeV2 = mod.createPrksOfflineStore({ indexedDB: idb, dbVersion: 2 });
+        const storeV2 = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, dbVersion: 2  }));
         const got = await storeV2.getEntity('concept', 'C-1');
         assert('data written under v1 is visible after opening at v2', !!got);
         assertEq('upgraded-open value survives unchanged', got.value, { name: 'Realism' });
@@ -131,7 +140,7 @@ async function run() {
 
     /* ---- IndexedDB unavailable: every call degrades to a safe result, never throws ---- */
     {
-        const store = mod.createPrksOfflineStore({ indexedDB: null });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: null  }));
         assertEq('isAvailable is false with no IndexedDB', await store.isAvailable(), false);
         assertEq('getEntity degrades to null with no IndexedDB', await store.getEntity('work', 'W-1'), null);
         assertEq('putEntity degrades to false with no IndexedDB', await store.putEntity('work', 'W-1', {}, ''), false);
@@ -149,7 +158,7 @@ async function run() {
                 throw new Error('IndexedDB is blocked by browser policy');
             },
         };
-        const store = mod.createPrksOfflineStore({ indexedDB: throwingFactory });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: throwingFactory  }));
         assertEq('getEntity degrades to null when open() throws', await store.getEntity('work', 'W-1'), null);
         assertEq('isAvailable is false when open() throws', await store.isAvailable(), false);
     }
@@ -165,14 +174,14 @@ async function run() {
                 return req;
             },
         };
-        const store = mod.createPrksOfflineStore({ indexedDB: erroringFactory });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: erroringFactory  }));
         assertEq('getEntity degrades to null on open() onerror', await store.getEntity('work', 'W-1'), null);
     }
 
     /* ---- quota/write failure never fails the online flow (store-level: put resolves false, does not throw) ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         // Force the underlying entities store to fail every write, simulating a
         // quota-exceeded/blocked write, without touching the public store API.
         const dbEntry = idb.__databases;
@@ -204,7 +213,7 @@ async function run() {
     /* ---- deleteDatabase discards only the disposable cache, resolves cleanly ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         await store.putEntity('work', 'W-1', { title: 'x' }, '');
         const ok = await store.deleteDatabase();
         assert('deleteDatabase resolves true', ok === true);
@@ -214,7 +223,7 @@ async function run() {
     /* ---- getEntitiesByKind: every cached row of one kind, and only that kind ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('folder', 'F-1', { id: 'F-1', works: [{ id: 'W-1' }] }, '');
         await store.putEntity('folder', 'F-2', { id: 'F-2', works: [] }, '');
         await store.putEntity('person', 'P-1', { id: 'P-1', works: [] }, '');
@@ -234,7 +243,7 @@ async function run() {
      * wrong kind. */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: null });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: null  }));
         await store.putEntity('folder', 'F-1', { id: 'F-1' }, '');
         await store.putEntity('person', 'P-1', { id: 'P-1' }, '');
         const rows = await store.getEntitiesByKind('folder');
@@ -247,7 +256,7 @@ async function run() {
      * succeed on the server. */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('folder', 'F-1', { id: 'F-1' }, '');
         idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME)._stores.get('entities').forceError = true;
         let threw = false;
@@ -264,7 +273,7 @@ async function run() {
     /* ---- deleteEntitiesByKind: removes one whole kind, leaves every other kind intact ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('concept', 'C-1', { id: 'C-1', name: 'Alpha' }, '');
         await store.putEntity('concept', 'C-2', { id: 'C-2', name: 'Beta' }, '');
         await store.putEntity('work', 'W-1', { id: 'W-1', title: 'Kept Work' }, '');
@@ -281,7 +290,7 @@ async function run() {
     /* ---- deleteEntitiesByKind: an empty kind is a completed sweep, not a failure ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
         assertEq('sweeping a kind with no rows resolves true', await store.deleteEntitiesByKind('concept'), true);
         assert('unrelated kind still present', !!(await store.getEntity('work', 'W-1')));
@@ -290,7 +299,7 @@ async function run() {
     /* ---- deleteEntitiesByKind: falls back to a getAll scan when no key range is available ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: null });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: null  }));
         await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
         await store.putEntity('concept', 'C-2', { id: 'C-2' }, '');
         await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
@@ -302,7 +311,7 @@ async function run() {
     /* ---- deleteEntitiesByKind: a failing sweep never throws and reports false so callers can stay conservative ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
         const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
         assert('fake db was created for the sweep-failure setup', !!db);
@@ -321,7 +330,7 @@ async function run() {
     /* ---- deleteEntitiesByKind: requests succeeding but the transaction aborting reports FALSE ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
         await store.putEntity('concept', 'C-2', { id: 'C-2' }, '');
         const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
@@ -342,7 +351,7 @@ async function run() {
     /* ---- readwrite results come from transaction commit, not merely request success ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksOfflineStore({ indexedDB: idb });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
         const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
         db._stores.get('entities').failCommit = true;
@@ -358,7 +367,7 @@ async function run() {
 
     /* ---- deleteEntitiesByKind: no IndexedDB at all degrades to false, never a throw ---- */
     {
-        const store = mod.createPrksOfflineStore({ indexedDB: null });
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: null  }));
         assertEq('kind sweep without IndexedDB resolves false', await store.deleteEntitiesByKind('concept'), false);
     }
 

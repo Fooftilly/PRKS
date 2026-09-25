@@ -15,7 +15,13 @@
 const path = require('path');
 const fs = require('fs');
 const rootDir = path.resolve(__dirname, '../..');
-const { createFakeIndexedDBFactory } = require(path.join(rootDir, 'tests/browser/lib/fake_indexeddb.js'));
+const {
+    createFakeIndexedDBFactory,
+    installFakeIdbGlobals,
+} = require(path.join(rootDir, 'tests/browser/lib/fake_indexeddb.js'));
+
+installFakeIdbGlobals(globalThis);
+const idbApi = require(path.join(rootDir, 'frontend/vendor/idb/idb.min.js'));
 
 let passed = 0;
 let failed = 0;
@@ -320,7 +326,7 @@ async function run() {
     {
         const idb = createFakeIndexedDBFactory();
         const offlineMod = require(path.join(rootDir, 'frontend/js/offline-store.js'));
-        const cache = offlineMod.createPrksOfflineStore({ indexedDB: idb });
+        const cache = offlineMod.createPrksOfflineStore({ indexedDB: idb, idb: idbApi });
         const local = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
 
         const deviceId = await local.getOrCreateDeviceId();
