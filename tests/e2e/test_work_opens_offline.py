@@ -105,26 +105,6 @@ class OfflineWorkOpenTests(unittest.TestCase):
     def canonical(self, iso):
         return work_open_sync.format_moment(datetime.fromisoformat(iso.replace('Z', '+00:00')))
 
-    def enqueue(self, page, work_id, occurred_at, independent=False):
-        """A durable open event with an exact timestamp.
-
-        `independent` forces a second event for the same Work by first marking
-        the existing one as already sent -- which is precisely when the client
-        must stop coalescing and enqueue a new one instead.
-        """
-        return page.evaluate("""async ([id, at, independent]) => {
-            if (independent) {
-                const rows = await prksSync.store.listOperations();
-                const prior = rows.find(r => r.entity_id === id && r.operation === 'MARK_WORK_OPENED');
-                if (prior) {
-                    await prksSync.store.claimOperation(prior.op_id);
-                    await prksSync.store.updateOperationSyncState(prior.op_id, { status: 'pending' });
-                }
-            }
-            const op = await prksSync.store.recordWorkOpened(id, at, null);
-            return op.op_id;
-        }""", [work_id, occurred_at, independent])
-
     # ---- offline activity ---------------------------------------------------
 
     def test_offline_open_reorders_recent_and_sends_nothing(self):
@@ -188,99 +168,11 @@ class OfflineWorkOpenTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.server_opened_at(server, work_a), self.canonical(occurred))
 
-    def test_lost_response_applies_the_event_once(self):
-        server, page, context = self.start()
-        work_a = server.ids['work_a']
-        seen = []
-
-        def lose(route):
-            seen.append(route.request.post_data_json['op_id'])
-            response = route.fetch()
-            if len(seen) == 1:
-                route.abort('failed')
-            else:
-                route.fulfill(response=response)
-
-        before = len(self.db_for(server).execute_query(
-            "SELECT op_id FROM sync_operations WHERE operation_type = 'MARK_WORK_OPENED'"))
-        page.route('**/api/sync/operations', lose)
-        self.open_work(page, work_a, WORK_A_TITLE)
-        self.pending(page, 0)
-        self.assertGreaterEqual(len(seen), 2)
-        self.assertEqual(len(set(seen)), 1, 'the retry replays the same operation id')
-        ledger = self.db_for(server).execute_query(
-            "SELECT op_id FROM sync_operations WHERE operation_type = 'MARK_WORK_OPENED'")
-        self.assertEqual(len(ledger) - before, 1, 'the server ledgered it exactly once')
-        self.assertIn(seen[0], [row['op_id'] for row in ledger])
-
-    # ---- convergence --------------------------------------------------------
-
-    def test_an_older_event_can_never_overwrite_a_newer_one(self):
-        """The max-register, in both arrival orders. An event that spent a week
-        in a pocket must not drag the Work backwards when it finally lands."""
-        server, page, context = self.start()
-        work_a, work_b = server.ids['work_a'], server.ids['work_b']
-        older, newer = '2025-03-04T12:00:00.000Z', '2025-03-04T13:00:00.000Z'
-        db = self.db_for(server)
-        # Clear the opens `start()` recorded so these two fixed instants are
-        # the only candidates; the max-register would otherwise (correctly)
-        # keep today's real open over either of them.
-        db.execute_query("UPDATE works SET last_opened_at = NULL")
-        self.offline(page, context)
-        # Work A receives the newer event first, then the older one.
-        reversed_order = [self.enqueue(page, work_a, newer),
-                          self.enqueue(page, work_a, older, independent=True)]
-        # Work B receives them the natural way round.
-        natural_order = [self.enqueue(page, work_b, older),
-                         self.enqueue(page, work_b, newer, independent=True)]
-        self.pending(page, 4)
-
-        self.reconnect(page, context)
-        self.pending(page, 0)
-        for work in (work_a, work_b):
-            self.assertEqual(self.server_opened_at(server, work), self.canonical(newer),
-                             'arrival order must not decide the canonical open time')
-        # Every event is ledgered either way; how many of them actually moved
-        # the canonical value differs, and the converged result does not.
-        def changes(op_ids):
-            rows = db.execute_query(
-                "SELECT result_json FROM sync_operations WHERE op_id IN (?, ?)", tuple(op_ids))
-            self.assertEqual(len(rows), 2, 'both events reached the ledger')
-            return sum(1 for row in rows if '"changed":true' in row['result_json'])
-
-        self.assertEqual(changes(reversed_order), 1, 'the late older event was a no-op')
-        self.assertEqual(changes(natural_order), 2)
-
-    def test_repeated_opens_of_one_work_are_one_event(self):
-        server, page, context = self.start()
-        work_a = server.ids['work_a']
-        self.offline(page, context)
-        for _ in range(3):
-            self.open_work(page, work_a, WORK_A_TITLE)
-        self.pending(page, 1)
-        rows = self.operations(page)
-        self.assertEqual(rows[0]['entity_id'], work_a)
-        self.reconnect(page, context)
-        self.pending(page, 0)
-        self.assertEqual(self.server_opened_at(server, work_a), self.canonical(rows[0]['occurred_at']))
-
-    def test_different_works_keep_their_own_events(self):
-        server, page, context = self.start()
-        work_a, work_b = server.ids['work_a'], server.ids['work_b']
-        self.offline(page, context)
-        self.open_work(page, work_a, WORK_A_TITLE)
-        self.open_work(page, work_b, WORK_B_TITLE)
-        self.open_work(page, work_a, WORK_A_TITLE)
-        self.pending(page, 2)
-        rows = {row['entity_id']: row for row in self.operations(page)}
-        self.assertEqual(sorted(rows), sorted([work_a, work_b]))
-        self.assertGreater(rows[work_a]['occurred_at'], rows[work_b]['occurred_at'])
-        self.assertEqual(self.recent_order(page), [work_a, work_b])
-        self.reconnect(page, context)
-        self.pending(page, 0)
-        self.assertGreater(self.server_opened_at(server, work_a), self.server_opened_at(server, work_b))
-
     # ---- degraded caches ----------------------------------------------------
+    # Max-register arrival order, never-sent coalescing, multi-Work events,
+    # lost-response same-op_id replay, and ENTITY_NOT_FOUND discard are owned
+    # by Node `run_work_open_sync_selftest.js` and Python `test_work_open_sync.py`
+    # (see docs/e2e-performance.md Work-Open rationalization).
 
     def test_without_a_recent_snapshot_nothing_is_fabricated(self):
         """One open event is not a Recent page. The activity is still durable
@@ -298,18 +190,3 @@ class OfflineWorkOpenTests(unittest.TestCase):
         self.reconnect(page, context)
         self.pending(page, 0)
         self.assertEqual(self.server_opened_at(server, work_a), self.canonical(occurred))
-
-    def test_an_open_event_for_a_deleted_work_is_consumed_not_parked(self):
-        """There is no such thing as "apply my open event to a Work that no
-        longer exists", so no conflict is offered and none is left pending."""
-        server, page, context = self.start()
-        work_a = server.ids['work_a']
-        self.offline(page, context)
-        self.open_work(page, work_a, WORK_A_TITLE)
-        self.pending(page, 1)
-        self.db_for(server).delete_work_record(work_a)
-        self.reconnect(page, context)
-        self.pending(page, 0)
-        self.assertEqual(page.evaluate("() => prksSync.discarded()"),
-                         [{'operation': 'MARK_WORK_OPENED', 'entity_id': work_a,
-                           'code': 'ENTITY_NOT_FOUND'}])

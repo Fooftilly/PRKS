@@ -351,6 +351,30 @@ revision/conflict arithmetic remain in `tests/test_work_source_sync.py` (and the
 frontend contract module that runs the Node selftest). They were never Chromium-
 only contracts.
 
+### Work-Open rationalization
+
+Applies the same KEEP / SPLIT / MOVE model as the Work-Tag pilot (#204) to
+`tests/e2e/test_work_opens_offline.py`.
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Lost response applies the event once | `tests/browser/run_work_open_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_open_sync.py` proves server replay of an existing `op_id` is exact/idempotent | SPLIT → fast layers |
+| Older event never overwrites a newer one (both arrival orders) | `tests/test_work_open_sync.py` `test_max_register_over_event_time` and `test_arrival_order_does_not_decide` | MOVE |
+| Repeated opens of one Work are one event | Node `recording()` in `run_work_open_sync_selftest.js` | MOVE |
+| Different Works keep their own events | Node `recording()` + `overlay()` | MOVE |
+| Open event for a deleted Work is consumed, not parked | Node `terminal()` ENTITY_NOT_FOUND discard; Python `test_missing_work_is_terminal` | MOVE |
+
+The browser module retains the integrated boundaries that still need Chromium:
+offline open reorders Recent and sends nothing, overlay survives real reload,
+reconnect records event time (not sync time) with in-place Recent reconcile,
+pending open survives a PRKS server restart, and a missing Recent snapshot stays
+honestly unavailable rather than fabricating cards.
+
+Add or confirm lower-level coverage first, then remove only the redundant
+Chromium composition. Do not batch-delete cache/routing families (folders,
+playlists, person-groups, browse, graph) without a per-contract map.
+
+
 ## Benchmark protocol
 
 For any optimization:
