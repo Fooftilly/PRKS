@@ -261,7 +261,9 @@ class NestedCgroupLimitTests(unittest.TestCase):
 
         with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_dirs):
             with mock.patch.object(sharding, "_read_first", fake_read):
-                with mock.patch.object(sharding.os, "cpu_count", return_value=8):
+                with mock.patch.object(
+                    sharding, "_available_cpu_count", return_value=8
+                ):
                     self.assertEqual(detect_cgroup_cpu_count(), 1)
 
     def test_v1_memory_uses_tightest_nested_controller_path(self):
@@ -332,8 +334,37 @@ class NestedCgroupLimitTests(unittest.TestCase):
         with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
             with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
                 with mock.patch.object(sharding, "_read_first", fake_read):
-                    with mock.patch.object(sharding.os, "cpu_count", return_value=8):
+                    with mock.patch.object(
+                        sharding, "_available_cpu_count", return_value=8
+                    ):
                         self.assertEqual(detect_cgroup_cpu_count(), 1)
+
+    def test_affinity_caps_when_quota_is_unlimited(self):
+        import tests.e2e.sharding as sharding
+
+        def fake_v2():
+            return iter(())
+
+        def fake_v1(controller, *mount_names):
+            return iter(())
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
+            with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
+                with mock.patch.object(sharding, "_read_first", return_value=None):
+                    with mock.patch.object(
+                        sharding, "_available_cpu_count", return_value=1
+                    ):
+                        self.assertEqual(detect_cgroup_cpu_count(), 1)
+                        self.assertEqual(agent_default_jobs(), 1)
+
+    def test_available_cpu_count_prefers_sched_affinity(self):
+        import tests.e2e.sharding as sharding
+
+        with mock.patch.object(
+            sharding.os, "sched_getaffinity", return_value={0}, create=True
+        ):
+            with mock.patch.object(sharding.os, "cpu_count", return_value=32):
+                self.assertEqual(sharding._available_cpu_count(), 1)
 
 
 class JobCountTests(unittest.TestCase):

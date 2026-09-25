@@ -222,9 +222,27 @@ def _parse_cfs_quota(quota_raw, period_raw):
     return None
 
 
+def _available_cpu_count() -> int:
+    """CPUs this process may actually run on (affinity/cpuset), not host size.
+
+    Python 3.12's ``os.cpu_count()`` on Linux reports the machine's CPU count.
+    Cloud containers often pin a process to a cpuset while leaving ``cpu.max``
+    unlimited; using the host count would then over-parallelize agent E2E.
+    """
+    getter = getattr(os, "sched_getaffinity", None)
+    if getter is not None:
+        try:
+            affinity = getter(0)
+        except OSError:
+            affinity = None
+        if affinity:
+            return max(1, len(affinity))
+    return max(1, int(os.cpu_count() or 1))
+
+
 def detect_cgroup_cpu_count() -> int | None:
     """Best-effort effective CPU count for Linux containers/cgroups."""
-    host = os.cpu_count() or 1
+    available = _available_cpu_count()
     quota_count = None
 
     for directory in _cgroup_v2_self_dirs():
@@ -256,8 +274,8 @@ def detect_cgroup_cpu_count() -> int | None:
         )
 
     if quota_count is None:
-        return max(1, int(host))
-    return max(1, min(int(host), quota_count))
+        return available
+    return max(1, min(available, quota_count))
 
 
 def detect_cgroup_memory_limit_bytes() -> int | None:
