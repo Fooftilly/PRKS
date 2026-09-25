@@ -1004,6 +1004,91 @@ class InferredVideoAfterMigrationTests(WorkIdentityCase):
             conn.close()
 
 
+ARTICLE = "https://example.org/article"
+
+
+class InferredUrlOwnershipTests(WorkIdentityCase):
+    """PR #202 review: a non-video URL stays a Manifestation citation URL even
+    when another value gives the Work an Asset; only a URL the parser accepts
+    makes that Asset a stream. Checked through the migration and fresh writes."""
+
+    REASONS = ("thumb_page", "annotation", "source_mime")
+
+    def _give_reason(self, conn, work_id, reason):
+        if reason == "thumb_page":
+            conn.execute("UPDATE works SET thumb_page = 2 WHERE id = ?", (work_id,))
+        elif reason == "source_mime":
+            conn.execute("UPDATE works SET source_mime = 'text/html' WHERE id = ?", (work_id,))
+        else:
+            conn.execute("INSERT INTO annotations (id, work_id, type) VALUES (?, ?, 'note')",
+                         ("ann-" + work_id, work_id))
+
+    def _owner(self, work_id):
+        asset = self._q("SELECT kind, url, storage_locator FROM assets WHERE work_id = ?",
+                        (work_id,))
+        mf_url = self._q("SELECT url FROM manifestations WHERE origin_work_id = ?",
+                         (work_id,))[0][0]
+        return asset, mf_url
+
+    def _assert_owners(self, ids):
+        for (reason, url), work_id in ids.items():
+            with self.subTest(reason=reason, url=url):
+                asset, mf_url = self._owner(work_id)
+                if url == YT:
+                    self.assertEqual(asset, [("external_stream", YT, None)])
+                    self.assertIsNone(mf_url)
+                else:
+                    self.assertEqual(asset, [("managed_file", None, None)])
+                    self.assertEqual(mf_url, ARTICLE)
+        self._assert_clean()
+
+    def test_migration(self):
+        def build(db):
+            return {(r, u): db.add_work(title=f"{r} {u}")
+                    for r in self.REASONS for u in (ARTICLE, YT)}
+
+        def raw(conn, ids):
+            for (reason, url), work_id in ids.items():
+                conn.execute("UPDATE works SET source_kind = NULL, source_url = ? WHERE id = ?",
+                             (url, work_id))
+                self._give_reason(conn, work_id, reason)
+        ids = self._v16(build, raw)
+        self._open()
+        self._assert_owners(ids)
+        for (_reason, url), work_id in ids.items():
+            if url == YT:
+                self.assertEqual(self._q("SELECT id FROM assets WHERE work_id = ?", (work_id,)),
+                                 [(work_identity.backfill_asset_id(work_id),)])
+
+    def test_fresh_writes(self):
+        db = self._open()
+        ids = {}
+        for reason in self.REASONS:
+            for url in (ARTICLE, YT):
+                work_id = db.add_work(title=f"{reason} {url}")
+                conn = _raw(self.storage.db_path)
+                conn.execute("UPDATE works SET source_kind = NULL WHERE id = ?", (work_id,))
+                self._give_reason(conn, work_id, reason)
+                conn.commit()
+                conn.close()
+                db.update_work_metadata(work_id, {"source_url": url})
+                ids[(reason, url)] = work_id
+        self._assert_owners(ids)
+
+    def test_changing_the_url_moves_ownership_both_ways(self):
+        db = self._open()
+        w = db.add_work(title="Moves", thumb_page=3)
+        conn = _raw(self.storage.db_path)
+        conn.execute("UPDATE works SET source_kind = NULL WHERE id = ?", (w,))
+        conn.commit()
+        conn.close()
+        db.update_work_metadata(w, {"source_url": YT})
+        self.assertEqual(self._owner(w), ([("external_stream", YT, None)], None))
+        db.update_work_metadata(w, {"source_url": ARTICLE})
+        self.assertEqual(self._owner(w), ([("managed_file", None, None)], ARTICLE))
+        self._assert_clean()
+
+
 class StreamAssetTests(WorkIdentityCase):
     """PR #202 review (Qodo): an external stream never claims managed bytes."""
 

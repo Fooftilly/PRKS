@@ -592,6 +592,11 @@ CREATE TABLE work_retirement (
         REFERENCES work_retirement_guard(id) DEFERRABLE INITIALLY DEFERRED
 );
 
+CREATE TABLE legacy_inferred_video_urls (
+    work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+    source_url TEXT NOT NULL
+);
+
 CREATE TABLE migration_quarantine (
     id INTEGER PRIMARY KEY,
     source_table TEXT NOT NULL,
@@ -669,7 +674,8 @@ SELECT
      OR COALESCE(s.thumb_url, '') <> ''
      OR s.thumb_page IS NOT NULL
      OR COALESCE(s.canonical_annotation_set_revision, 0) <> 0
-     OR COALESCE(s.materialized_pdf_annotation_revision, 0) <> 0) AS has_asset_value,
+     OR COALESCE(s.materialized_pdf_annotation_revision, 0) <> 0
+     OR s.is_stream) AS has_asset_value,
     CASE WHEN s.is_stream THEN 'external_stream' ELSE 'managed_file' END AS kind,
     CASE WHEN s.is_stream THEN NULL ELSE s.locator END AS storage_locator,
     s.provider AS provider,
@@ -693,7 +699,11 @@ FROM (
             WHEN 'video' THEN 1
             WHEN 'pdf' THEN 0
             ELSE (trim(COALESCE(w.file_path, ''), char(32, 9, 10, 11, 12, 13)) = ''
-                  AND trim(COALESCE(w.source_url, ''), char(32, 9, 10, 11, 12, 13)) <> '')
+                  AND trim(COALESCE(w.source_url, ''), char(32, 9, 10, 11, 12, 13)) <> ''
+                  AND (COALESCE(w.provider, '') <> ''
+                       OR COALESCE(w.provider_id, '') <> ''
+                       OR EXISTS (SELECT 1 FROM legacy_inferred_video_urls u
+                                  WHERE u.work_id = w.id AND u.source_url = w.source_url)))
         END AS is_stream,
         CASE
             WHEN substr(w.file_path, 1, 10) = '/api/pdfs/'
@@ -971,6 +981,66 @@ BEGIN
     JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
     WHERE v.work_id = json_extract(NEW.scope_id, '$[0]')
       AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = v.work_id);
+END;
+
+CREATE TRIGGER legacy_inferred_video_urls_ai
+AFTER INSERT ON legacy_inferred_video_urls
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.work_id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.work_id);
+    UPDATE assets
+    SET (kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url,
+         canonical_annotation_set_revision, materialized_pdf_annotation_revision, updated_at) =
+        (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                v.materialized_pdf_annotation_revision, CURRENT_TIMESTAMP
+         FROM legacy_work_asset_mirror v WHERE v.work_id = NEW.work_id)
+    WHERE origin_work_id = NEW.work_id AND work_id = NEW.work_id;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.work_id)
+    WHERE origin_work_id = NEW.work_id AND work_id = NEW.work_id;
+END;
+
+CREATE TRIGGER legacy_inferred_video_urls_ad
+AFTER DELETE ON legacy_inferred_video_urls
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = OLD.work_id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = OLD.work_id);
+    UPDATE assets
+    SET (kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url,
+         canonical_annotation_set_revision, materialized_pdf_annotation_revision, updated_at) =
+        (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                v.materialized_pdf_annotation_revision, CURRENT_TIMESTAMP
+         FROM legacy_work_asset_mirror v WHERE v.work_id = OLD.work_id)
+    WHERE origin_work_id = OLD.work_id AND work_id = OLD.work_id;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = OLD.work_id)
+    WHERE origin_work_id = OLD.work_id AND work_id = OLD.work_id;
 END;
 
 CREATE TRIGGER argument_sources_mirror_pin_ai

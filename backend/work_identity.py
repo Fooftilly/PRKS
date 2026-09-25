@@ -120,19 +120,81 @@ def works_with_asset_bound_revisions(conn: sqlite3.Connection) -> Set[str]:
     return found
 
 
+_WHITESPACE = " \t\n\x0b\x0c\r"
+
+
 def is_parseable_inferred_video(source_kind, source_url, file_path) -> bool:
     """A legacy inferred-video row whose URL states a video identity.
 
-    The mirror view classifies with `effective_source_kind()` but cannot run
-    the URL parser, so a row with no stored kind or provider only counts as
-    having video identity when today's parser accepts its URL. An unparseable
-    one keeps its URL on the Manifestation and gets no Asset for it (§12.2).
+    Inferred means no explicit kind and no file, only a URL -- the shape
+    `effective_source_kind()` reads as a video. Only today's URL parser can say
+    whether that URL IS video identity, and SQLite cannot run it. So the
+    verdict is made here and stored in `legacy_inferred_video_urls`, which the
+    mirror view consults. An unparseable URL (an article link) stays a
+    citation URL on the Manifestation (§12.2), even when something else gives
+    the Work an Asset.
     """
-    from backend import db_manager, work_source_sync
+    from backend import work_source_sync
 
-    if db_manager.effective_source_kind(source_kind, source_url, file_path) != "video":
+    if (source_kind or "").strip(_WHITESPACE).lower() in ("video", "pdf"):
+        return False
+    if (file_path or "").strip(_WHITESPACE) or not (source_url or "").strip(_WHITESPACE):
         return False
     return work_source_sync.canonical_source({"kind": "video", "url": source_url or ""}) is not None
+
+
+def refresh_inferred_video_url(conn: sqlite3.Connection, work_id: str) -> None:
+    """Store, or drop, the parser verdict for one Work's current URL.
+
+    The row names the exact `source_url` it was made for, so a URL changed by
+    any path that did not come back here stops matching and the view falls
+    back to "not a stream" -- the safe side. Always delete-then-insert: the
+    table's triggers refresh the mirror on each.
+    """
+    row = conn.execute(
+        "SELECT source_kind, source_url, file_path FROM works WHERE id = ?", (work_id,)
+    ).fetchone()
+    stored = conn.execute(
+        "SELECT source_url FROM legacy_inferred_video_urls WHERE work_id = ?", (work_id,)
+    ).fetchone()
+    wanted = row is not None and is_parseable_inferred_video(row[0], row[1], row[2])
+    if wanted and stored is not None and stored[0] == row[1]:
+        return
+    if stored is not None:
+        conn.execute("DELETE FROM legacy_inferred_video_urls WHERE work_id = ?", (work_id,))
+    if wanted:
+        conn.execute(
+            "INSERT INTO legacy_inferred_video_urls (work_id, source_url) VALUES (?, ?)",
+            (work_id, row[1]),
+        )
+
+
+def _inferred_video_verdicts(conn: sqlite3.Connection) -> dict:
+    """{work_id: source_url} for every Work whose URL the parser accepts now."""
+    wanted = {}
+    for work_id, source_kind, source_url, file_path in conn.execute(
+        "SELECT id, source_kind, source_url, file_path FROM works "
+        "WHERE COALESCE(source_url, '') <> ''"
+    ).fetchall():
+        if is_parseable_inferred_video(source_kind, source_url, file_path):
+            wanted[work_id] = source_url
+    return wanted
+
+
+def refresh_all_inferred_video_urls(conn: sqlite3.Connection) -> None:
+    """Bring the whole verdict table in line with the parser (backfill)."""
+    wanted = _inferred_video_verdicts(conn)
+    stored = dict(conn.execute("SELECT work_id, source_url FROM legacy_inferred_video_urls").fetchall())
+    for work_id in sorted(set(stored) | set(wanted)):
+        if stored.get(work_id) == wanted.get(work_id):
+            continue
+        if work_id in stored:
+            conn.execute("DELETE FROM legacy_inferred_video_urls WHERE work_id = ?", (work_id,))
+        if work_id in wanted:
+            conn.execute(
+                "INSERT INTO legacy_inferred_video_urls (work_id, source_url) VALUES (?, ?)",
+                (work_id, wanted[work_id]),
+            )
 
 
 def _scope_key(*parts: str) -> str:
@@ -201,13 +263,7 @@ def works_requiring_origin_asset(conn: sqlite3.Connection) -> Set[str]:
         ).fetchall()
     }
     needed |= works_with_asset_bound_revisions(conn) & live
-    for work_id, source_kind, source_url, file_path in conn.execute(
-        "SELECT w.id, w.source_kind, w.source_url, w.file_path FROM works w "
-        "JOIN legacy_work_asset_mirror v ON v.work_id = w.id "
-        "WHERE v.kind = 'external_stream' AND NOT v.has_asset_value"
-    ).fetchall():
-        if is_parseable_inferred_video(source_kind, source_url, file_path):
-            needed.add(work_id)
+    needed |= set(_inferred_video_verdicts(conn))
     return needed
 
 
@@ -220,12 +276,16 @@ def reconcile_origin_asset(conn: sqlite3.Connection, work_id: str) -> Optional[s
     write boundaries that can produce the shape -- a `source_url` field write
     and a `file_path` PATCH -- call this in the same transaction, so a Work
     reaching it after the migration gets the same deterministic Asset the
-    backfill would have given it.
+    backfill would have given it, and the same stream-or-citation decision
+    for its URL.
     """
-    existing = origin_asset_id(conn, work_id)
-    if existing is not None or not origin_asset_required(conn, work_id):
-        return existing
-    return ensure_origin_asset(conn, work_id)
+    asset_id = origin_asset_id(conn, work_id)
+    if asset_id is None and origin_asset_required(conn, work_id):
+        # Created before the verdict is stored, so the Asset gets its
+        # deterministic ID; the verdict's trigger then re-projects its kind.
+        asset_id = ensure_origin_asset(conn, work_id)
+    refresh_inferred_video_url(conn, work_id)
+    return asset_id
 
 
 def origin_asset_id(conn: sqlite3.Connection, work_id: str) -> Optional[str]:
@@ -352,4 +412,9 @@ def mirror_drift(conn: sqlite3.Connection) -> List[Tuple[str, str, str]]:
         "SELECT origin_work_id FROM assets WHERE origin_work_id IS NOT NULL").fetchall()}
     for work_id in sorted(works_requiring_origin_asset(conn) - with_asset):
         drift.append(("asset", work_id, "missing"))
+    wanted = _inferred_video_verdicts(conn)
+    stored = dict(conn.execute("SELECT work_id, source_url FROM legacy_inferred_video_urls").fetchall())
+    for work_id in sorted(set(wanted) | set(stored)):
+        if wanted.get(work_id) != stored.get(work_id):
+            drift.append(("inferred_video_url", work_id, "stale"))
     return drift

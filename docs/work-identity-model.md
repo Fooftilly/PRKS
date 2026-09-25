@@ -11,6 +11,14 @@ depend on table creation order (see the comment on `_V17_WORK_IDENTITY_SQL`).
 The behavior §4.1 specifies is unchanged: deleting a pinned Version is
 refused, and deleting a whole Work cascades.
 
+Slice A also adds one implementation table the text does not name,
+`legacy_inferred_video_urls`. §12.2 classifies a legacy inferred-video row
+(no kind, no file, a URL) by today's URL parser, which SQLite cannot run. The
+Python backfill and the `source_url`/`file_path` write boundaries store the
+parser's verdict for the exact current URL, and the mirror view reads it. A
+URL the parser refuses stays the Manifestation's citation URL, even when
+another value (for example `thumb_page`) gives the Work a placeholder Asset.
+
 The original status note follows. The three-level model has been approved in direction, and the
 maintainer decisions are recorded in [§0](#0-maintainer-decisions). This
 document does not add schema, migrations, API behavior or UI. It is the design
