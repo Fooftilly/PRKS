@@ -814,8 +814,8 @@ def build_parser():
         description=(
             "Real Chromium E2E against isolated temporary PRKS storage. "
             "Default is the full suite on one worker (deterministic). "
-            "Use --smoke / --feature / --affected / --last-failed / --dev "
-            "for the agent development feedback loop. "
+            "Use --smoke / --feature / --affected / --last-failed / --dev / --agent "
+            "for targeted development feedback. "
             "--jobs N shards individual test IDs across N processes."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1258,7 +1258,9 @@ def _main(argv=None) -> int:
         # Persist only machine-local observations; the committed bootstrap
         # baseline remains immutable input and must never be copied into .tests.
         _persist_timings(observed, test_ids if not targeted else None)
-    _print_slowest({**timings, **observed} if targeted else observed)
+    # Baseline prefix weights are scheduling hints, not measured test timings;
+    # keep them out of the human "slowest tests" report.
+    _print_slowest({**local_timings, **observed} if targeted else observed)
 
     # Persist unresolved failures from actual completions only — never treat
     # the pre-run selection as executed (fail-fast / cancelled / crashed).
