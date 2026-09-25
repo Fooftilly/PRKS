@@ -6,6 +6,7 @@
 #   scripts/e2e affected [--base origin/master]
 #   scripts/e2e last-failed
 #   scripts/e2e dev --feature tabs
+#   scripts/e2e agent [--base origin/master]
 #   scripts/e2e full [--jobs 4]
 #   scripts/e2e list-features
 set -euo pipefail
@@ -16,7 +17,7 @@ RUN=("$PY" tests/e2e/run.py)
 
 if [[ $# -lt 1 ]]; then
   cat <<'EOF' >&2
-usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|list-tests> [args...]
+usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|list-features|list-tests> [args...]
 EOF
   exit 2
 fi
@@ -55,6 +56,11 @@ case "$cmd" in
   dev)
     exec "${RUN[@]}" --dev "$@"
     ;;
+  agent)
+    # Cloud-agent fast path: changed-surface E2E only, fail-fast, no pointer
+    # capture, and resource-aware worker width (max 2 unless explicitly set).
+    exec "${RUN[@]}" --agent --affected --base origin/master "$@"
+    ;;
   full)
     # Bounded parallel full gate. Runner also enforces PRKS_E2E_FULL_TIMEOUT
     # (default 1200s). Caller may still pass --jobs / -j to override width.
@@ -72,7 +78,7 @@ case "$cmd" in
     ;;
   *)
     echo "unknown command: $cmd" >&2
-    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|list-tests>" >&2
+    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|list-features|list-tests>" >&2
     exit 2
     ;;
 esac
