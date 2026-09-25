@@ -1,0 +1,51 @@
+{
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "description": "Repository-wide PRKS engineering, safety, testing, storage, and issue-tracking rules."
+    },
+    {
+      "path": "SECURITY.md",
+      "description": "PRKS security boundaries, deployment assumptions, sensitive-data constraints, and vulnerability scope."
+    },
+    {
+      "path": "backend/AGENTS.md",
+      "description": "Backend persistence, privacy-safe logging, filesystem, backup/restore, database, indexing, durability, and cross-domain invariants.",
+      "scope": ["backend/**"]
+    },
+    {
+      "path": "frontend/AGENTS.md",
+      "description": "Frontend runtime, workspace, TabContext, navigation, offline/PWA, interaction, and cross-boundary behavior invariants.",
+      "scope": ["frontend/**"]
+    },
+    {
+      "path": "DESIGN.md",
+      "description": "Authoritative PRKS visual and interaction design contract for user-visible frontend changes.",
+      "scope": ["frontend/**"]
+    },
+    {
+      "path": "tests/AGENTS.md",
+      "description": "Test-layer routing, storage safety, and rules for loading the production-domain invariants exercised by a test.",
+      "scope": ["tests/**"]
+    },
+    {
+      "path": "tests/e2e/AGENTS.md",
+      "description": "Browser E2E isolation, synchronization, tiering, performance, and debugging policy.",
+      "scope": ["tests/e2e/**"]
+    },
+    {
+      "path": "docs/work-identity-model.md",
+      "description": "Approved-in-direction Work/Manifestation/Asset architecture design. Treat it as staged architecture: use it only when reviewing implementation that touches this model, and do not assume every proposed slice is already implemented.",
+      "scope": [
+        "backend/db_*.py",
+        "backend/**/*work*.py",
+        "backend/**/*manifestation*.py",
+        "backend/**/*asset*.py",
+        "frontend/**/*work*.js",
+        "tests/**/*work*.py",
+        "tests/**/*manifestation*.py",
+        "tests/**/*asset*.py"
+      ]
+    }
+  ]
+}
