@@ -351,6 +351,26 @@ revision/conflict arithmetic remain in `tests/test_work_source_sync.py` (and the
 frontend contract module that runs the Node selftest). They were never Chromium-
 only contracts.
 
+#### Work-Tag rationalization pilot
+
+The first coverage-based reduction applies the KEEP / SPLIT / MOVE rule to
+`tests/e2e/test_work_tags_offline.py`.
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Coalescing across reload and repeated intent | `tests/browser/run_local_store_selftest.js` opens a new store over the same fake IndexedDB, proves repeated intent coalesces, and proves opposite intent cancels across reload | MOVE |
+| Lost response replays once with the same operation identity | `tests/browser/run_work_tag_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_tag_sync.py` proves server replay of an existing `op_id` is exact/idempotent | SPLIT → fast layers |
+
+The browser module deliberately retains scenarios whose value is the integrated
+boundary itself: offline add/remove through the real Work UI, reload/restart/reconnect,
+conflict buttons and visible optimistic state, degraded Tag-catalog behavior,
+Settings-driven cache clear, online UI wiring to the durable queue, and Tag
+create/delete/merge lifecycle behavior.
+
+This is the model for later families: add or confirm the lower-level regression
+coverage first, then remove only the redundant Chromium composition. Do not batch
+large numbers of removals without a per-contract mapping.
+
 ### Work-Open rationalization
 
 Applies the same KEEP / SPLIT / MOVE model as the Work-Tag pilot (#204) to
