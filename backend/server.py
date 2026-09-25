@@ -54,7 +54,7 @@ from backend.research_index import (
 )
 from backend.research_network import ResearchError
 import backend.research_network as research_network
-from backend.api_contract.boundary import dump_response, parse_request
+from backend.api_contract.boundary import dump_response
 from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.openapi import positions_openapi_document
 from backend.api_contract.positions import (
@@ -64,6 +64,7 @@ from backend.api_contract.positions import (
     PositionSummary,
     PositionSyncState,
     PositionUpdateRequest,
+    parse_position_request,
 )
 from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
@@ -1275,7 +1276,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, item)
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
-                req, err = parse_request(PositionUpdateRequest, data)
+                req, err = parse_position_request(PositionUpdateRequest, data)
                 if err is not None:
                     self.send_json(400, err)
                     return
@@ -3085,7 +3086,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 self.send_json(201, item)
             elif path == '/api/positions':
-                req, err = parse_request(PositionCreateRequest, data)
+                req, err = parse_position_request(PositionCreateRequest, data)
                 if err is not None:
                     self.send_json(400, err)
                     return

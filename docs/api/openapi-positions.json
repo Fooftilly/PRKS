@@ -172,8 +172,8 @@
               }
             }
           },
-          "400": {
-            "description": "Domain refusal (e.g. POSITION_IN_USE).",
+          "404": {
+            "description": "Not found.",
             "content": {
               "application/json": {
                 "schema": {
@@ -182,8 +182,8 @@
               }
             }
           },
-          "404": {
-            "description": "Not found.",
+          "409": {
+            "description": "Position is still targeted by an Argument or Stance (position_in_use).",
             "content": {
               "application/json": {
                 "schema": {

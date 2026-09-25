@@ -21,7 +21,10 @@ from run_tests import apply_isolated_test_env
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.api_contract.boundary import dump_response, parse_request
+from openapi_core import OpenAPI
+from openapi_core.testing import MockRequest, MockResponse
+
+from backend.api_contract.boundary import dump_response
 from backend.api_contract.errors import ApiErrorEnvelope, validation_error_envelope
 from backend.api_contract.openapi import positions_openapi_document
 from backend.api_contract.positions import (
@@ -29,6 +32,7 @@ from backend.api_contract.positions import (
     PositionDetail,
     PositionSummary,
     PositionUpdateRequest,
+    parse_position_request,
 )
 from backend.storage.config import StorageConfig
 import backend.server as server_module
@@ -41,19 +45,65 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _openapi_api() -> OpenAPI:
+    """openapi-core is a required test dep for this module (CI installs it)."""
+    return OpenAPI.from_dict(positions_openapi_document())
+
+
+def _validate_http_against_openapi(
+    *,
+    method: str,
+    path: str,
+    status: int,
+    response_body: bytes,
+    request_body: bytes | None = None,
+    path_pattern: str | None = None,
+    view_args: dict | None = None,
+    check_request: bool = True,
+) -> None:
+    """Fail the test if openapi-core rejects the live request/response pair.
+
+    Set ``check_request=False`` for deliberately schema-invalid bodies (wrong
+    JSON types) where only the error *response* is under contract — openapi-core
+    correctly refuses those requests against the request schema.
+    """
+    api = _openapi_api()
+    req = MockRequest(
+        host_url="http://127.0.0.1",
+        method=method.lower(),
+        path=path,
+        path_pattern=path_pattern,
+        view_args=view_args,
+        data=request_body,
+    )
+    resp = MockResponse(data=response_body, status_code=status)
+    if check_request:
+        api.validate_request(req)
+    api.validate_response(req, resp)
+
+
 class PositionBoundaryUnitTests(unittest.TestCase):
     def test_create_request_rejects_non_object(self):
-        model, err = parse_request(PositionCreateRequest, ["x"])
+        model, err = parse_position_request(PositionCreateRequest, ["x"])
         self.assertIsNone(model)
         self.assertEqual(err["code"], "invalid_request")
 
-    def test_create_request_requires_string_name(self):
-        model, err = parse_request(PositionCreateRequest, {"name": 12})
+    def test_create_request_wrong_type_name_preserves_domain_code(self):
+        model, err = parse_position_request(PositionCreateRequest, {"name": 12})
         self.assertIsNone(model)
-        self.assertEqual(err["code"], "invalid_request")
+        self.assertEqual(err["code"], "invalid_name")
+        self.assertEqual(err["error"], "Name must be a string.")
+
+    def test_create_request_wrong_type_description_preserves_domain_code(self):
+        model, err = parse_position_request(
+            PositionCreateRequest, {"name": "ok", "description": 5}
+        )
+        self.assertIsNone(model)
+        self.assertEqual(err["code"], "invalid_text")
+        self.assertEqual(err["error"], "Text must be a string.")
 
     def test_create_request_passes_plain_values(self):
-        model, err = parse_request(
+        model, err = parse_position_request(
             PositionCreateRequest, {"name": "Realism", "description": "note"}
         )
         self.assertIsNone(err)
@@ -63,9 +113,15 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(type(model.name), str)
 
     def test_update_request_tracks_which_fields_were_sent(self):
-        model, err = parse_request(PositionUpdateRequest, {"name": "Only name"})
+        model, err = parse_position_request(PositionUpdateRequest, {"name": "Only name"})
         self.assertIsNone(err)
         self.assertEqual(model.domain_field_kwargs(), {"name": "Only name"})
+
+    def test_update_request_wrong_type_name_preserves_domain_code(self):
+        model, err = parse_position_request(PositionUpdateRequest, {"name": 1})
+        self.assertIsNone(model)
+        self.assertEqual(err["code"], "invalid_name")
+        self.assertEqual(err["error"], "Name must be a string.")
 
     def test_response_dump_round_trips_detail_shape(self):
         payload = {
@@ -107,6 +163,12 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             "PositionSyncState",
         ):
             self.assertIn(name, schemas)
+        delete_responses = doc["paths"]["/api/positions/{position_id}"]["delete"][
+            "responses"
+        ]
+        self.assertIn("409", delete_responses)
+        self.assertNotIn("400", delete_responses)
+        self.assertIn("position_in_use", delete_responses["409"]["description"])
 
     def test_checked_in_openapi_artifact_matches_generator(self):
         artifact = Path(_PROJECT_DIR) / "docs" / "api" / "openapi-positions.json"
@@ -115,11 +177,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(on_disk, positions_openapi_document())
 
     def test_openapi_core_accepts_positions_document(self):
-        try:
-            from openapi_core import OpenAPI
-        except ImportError:
-            self.skipTest("openapi-core not installed")
-        api = OpenAPI.from_dict(positions_openapi_document())
+        api = _openapi_api()
         self.assertIsNotNone(api)
 
 
@@ -194,16 +252,18 @@ class PositionHttpContractTests(unittest.TestCase):
         parsed = json.loads(raw.decode("utf-8")) if raw else None
         if expect_status is not None:
             self.assertEqual(status, expect_status, parsed)
-        return status, parsed
+        return status, parsed, raw, payload
 
     def test_openapi_endpoint_serves_positions_slice(self):
-        status, doc = self._json("GET", "/api/openapi.json", expect_status=200)
+        status, doc, raw, _req = self._json(
+            "GET", "/api/openapi.json", expect_status=200
+        )
         self.assertEqual(status, 200)
         self.assertEqual(doc["info"]["title"], "PRKS API — Positions slice")
         self.assertEqual(doc, positions_openapi_document())
 
     def test_create_list_get_patch_delete_round_trip(self):
-        status, created = self._json(
+        status, created, raw_created, req_body = self._json(
             "POST",
             "/api/positions",
             {"name": "  Typed   boundary  ", "description": "hello"},
@@ -214,80 +274,237 @@ class PositionHttpContractTests(unittest.TestCase):
         self.assertEqual(created["description"], "hello")
         self.assertIn("arguments", created)
         PositionDetail.model_validate(created)
+        _validate_http_against_openapi(
+            method="POST",
+            path="/api/positions",
+            status=status,
+            response_body=raw_created,
+            request_body=req_body,
+        )
 
-        status, rows = self._json("GET", "/api/positions", expect_status=200)
+        status, rows, raw_rows, _ = self._json(
+            "GET", "/api/positions", expect_status=200
+        )
         self.assertTrue(any(r["id"] == created["id"] for r in rows))
         for row in rows:
             PositionSummary.model_validate(row)
+        _validate_http_against_openapi(
+            method="GET",
+            path="/api/positions",
+            status=status,
+            response_body=raw_rows,
+        )
 
-        status, detail = self._json(
-            "GET", f"/api/positions/{created['id']}", expect_status=200
+        detail_path = f"/api/positions/{created['id']}"
+        status, detail, raw_detail, _ = self._json(
+            "GET", detail_path, expect_status=200
         )
         PositionDetail.model_validate(detail)
+        _validate_http_against_openapi(
+            method="GET",
+            path=detail_path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw_detail,
+        )
 
-        status, updated = self._json(
+        status, updated, raw_updated, patch_body = self._json(
             "PATCH",
-            f"/api/positions/{created['id']}",
+            detail_path,
             {"description": "updated"},
             expect_status=200,
         )
         self.assertEqual(updated["description"], "updated")
         self.assertEqual(updated["name"], "Typed boundary")
+        _validate_http_against_openapi(
+            method="PATCH",
+            path=detail_path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw_updated,
+            request_body=patch_body,
+        )
 
-        status, sync = self._json(
+        sync_path = f"/api/positions/{created['id']}/sync-state"
+        status, sync, raw_sync, _ = self._json(
             "GET",
-            f"/api/positions/{created['id']}/sync-state",
+            sync_path,
             expect_status=200,
         )
         self.assertEqual(sync["position_id"], created["id"])
         self.assertIn("name", sync["fields"])
         self.assertIn("description", sync["fields"])
+        _validate_http_against_openapi(
+            method="GET",
+            path=sync_path,
+            path_pattern="/api/positions/{position_id}/sync-state",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw_sync,
+        )
 
-        status, deleted = self._json(
-            "DELETE", f"/api/positions/{created['id']}", expect_status=200
+        status, deleted, raw_deleted, _ = self._json(
+            "DELETE", detail_path, expect_status=200
         )
         self.assertEqual(deleted, {"status": "deleted"})
+        _validate_http_against_openapi(
+            method="DELETE",
+            path=detail_path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw_deleted,
+        )
 
-        status, missing = self._json(
-            "GET", f"/api/positions/{created['id']}", expect_status=404
+        status, missing, _raw, _ = self._json(
+            "GET", detail_path, expect_status=404
         )
         self.assertEqual(missing["error"], "Position not found.")
 
     def test_invalid_json_object_uses_common_envelope(self):
-        status, body = self._json(
+        status, body, _raw, _ = self._json(
             "POST", "/api/positions", ["not", "an", "object"], expect_status=400
         )
         self.assertEqual(body["code"], "invalid_request")
 
     def test_domain_still_refuses_empty_name(self):
-        status, body = self._json(
+        status, body, _raw, _ = self._json(
             "POST", "/api/positions", {"name": "   "}, expect_status=400
         )
         # Domain rule, not Pydantic length/emptiness.
         self.assertEqual(body.get("code"), "invalid_name")
 
-    def test_openapi_core_validates_create_response(self):
-        try:
-            from openapi_core import OpenAPI
-            from openapi_core.templating.paths.exceptions import PathNotFound
-        except ImportError:
-            self.skipTest("openapi-core not installed")
+    def test_wrong_type_name_on_post_preserves_invalid_name(self):
+        status, body, raw, req = self._json(
+            "POST", "/api/positions", {"name": 12}, expect_status=400
+        )
+        self.assertEqual(body["code"], "invalid_name")
+        self.assertEqual(body["error"], "Name must be a string.")
+        _validate_http_against_openapi(
+            method="POST",
+            path="/api/positions",
+            status=status,
+            response_body=raw,
+            request_body=req,
+            check_request=False,
+        )
 
-        status, created = self._json(
+    def test_wrong_type_description_on_post_preserves_invalid_text(self):
+        status, body, raw, req = self._json(
             "POST",
             "/api/positions",
-            {"name": "OpenAPI core check", "description": ""},
+            {"name": "ok", "description": ["nope"]},
+            expect_status=400,
+        )
+        self.assertEqual(body["code"], "invalid_text")
+        self.assertEqual(body["error"], "Text must be a string.")
+        _validate_http_against_openapi(
+            method="POST",
+            path="/api/positions",
+            status=status,
+            response_body=raw,
+            request_body=req,
+            check_request=False,
+        )
+
+    def test_wrong_type_name_and_description_on_patch(self):
+        status, created, _raw, _ = self._json(
+            "POST",
+            "/api/positions",
+            {"name": "Patch type target", "description": ""},
             expect_status=201,
         )
-        api = OpenAPI.from_dict(positions_openapi_document())
-        # Validate response body against the PositionDetail schema component.
-        schema = api.spec["components"]["schemas"]["PositionDetail"]
-        # openapi-core 0.23: use schema validator via unmarshal if available.
+        path = f"/api/positions/{created['id']}"
+        status, body, raw, req = self._json(
+            "PATCH", path, {"name": 99}, expect_status=400
+        )
+        self.assertEqual(body["code"], "invalid_name")
+        self.assertEqual(body["error"], "Name must be a string.")
+        _validate_http_against_openapi(
+            method="PATCH",
+            path=path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw,
+            request_body=req,
+            check_request=False,
+        )
+        status, body, raw, req = self._json(
+            "PATCH", path, {"description": True}, expect_status=400
+        )
+        self.assertEqual(body["code"], "invalid_text")
+        self.assertEqual(body["error"], "Text must be a string.")
+        _validate_http_against_openapi(
+            method="PATCH",
+            path=path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw,
+            request_body=req,
+            check_request=False,
+        )
+        self._json("DELETE", path, expect_status=200)
+
+    def test_delete_in_use_returns_409_matching_openapi(self):
+        status, position, _raw, _ = self._json(
+            "POST",
+            "/api/positions",
+            {"name": "Targeted claim", "description": ""},
+            expect_status=201,
+        )
+        # Create an Argument that targets this Position so delete is refused.
+        status, argument, _raw, _ = self._json(
+            "POST",
+            "/api/arguments",
+            {
+                "name": "Uses position",
+                "kind": "argument",
+                "main_text": "body",
+                "targets": [
+                    {
+                        "type": "position",
+                        "id": position["id"],
+                        "verdict_id": "supports",
+                    }
+                ],
+            },
+            expect_status=201,
+        )
+        path = f"/api/positions/{position['id']}"
+        status, body, raw, _ = self._json("DELETE", path, expect_status=409)
+        self.assertEqual(body["code"], "position_in_use")
+        _validate_http_against_openapi(
+            method="DELETE",
+            path=path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": position["id"]},
+            status=status,
+            response_body=raw,
+        )
+        # Cleanup: delete argument then position.
+        self._json("DELETE", f"/api/arguments/{argument['id']}", expect_status=200)
+        self._json("DELETE", path, expect_status=200)
+
+    def test_openapi_core_validates_create_request_and_response(self):
+        req_payload = {"name": "OpenAPI core check", "description": ""}
+        status, created, raw, req_body = self._json(
+            "POST",
+            "/api/positions",
+            req_payload,
+            expect_status=201,
+        )
+        _validate_http_against_openapi(
+            method="POST",
+            path="/api/positions",
+            status=status,
+            response_body=raw,
+            request_body=req_body,
+        )
         PositionDetail.model_validate(created)
-        # Document path exists for POST /api/positions -> 201
-        post = positions_openapi_document()["paths"]["/api/positions"]["post"]
-        self.assertIn("201", post["responses"])
-        # Cleanup
         self._json("DELETE", f"/api/positions/{created['id']}", expect_status=200)
 
 

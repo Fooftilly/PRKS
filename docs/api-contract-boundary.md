@@ -53,18 +53,22 @@ Route extraction (#67) is a separate track; typed models do not require it.
 3. Keep domain rules in the domain module. Request models check JSON types
    (string vs object vs array). Length, emptiness, control characters, and
    uniqueness remain in the domain.
-4. Wire the HTTP handler with `parse_request` / `dump_response` /
-   `research_error_envelope`. Pass **plain** `.name`-style attributes into
-   domain functions — never the model instance as business state.
+4. Wire the HTTP handler with the family's parse helper (e.g.
+   `parse_position_request`) / `dump_response` / `research_error_envelope`.
+   Pass **plain** `.name`-style attributes into domain functions — never the
+   model instance as business state. If the domain already owned type-refusal
+   codes for a field, map them at the parse helper rather than emitting
+   generic `invalid_request`.
 5. Extend `positions_openapi_document()` (or add `*_openapi_document()` and
    merge) so paths and `components.schemas` stay generated from the same
-   models.
+   models. Document the **real** HTTP status codes the adapter returns
+   (e.g. `position_in_use` → 409, not 400).
 6. Regenerate/commit `docs/api/openapi-*.json` (see script in the Positions
    tests) so #45 has a machine-readable artifact without requiring FastAPI.
-7. Add unit tests that (a) exercise happy-path HTTP behavior unchanged and
-   (b) assert live responses validate against the OpenAPI document (and/or
-   response models). Prefer `openapi-core` for document validation when it
-   accepts the slice; do not block on Schemathesis (see below).
+7. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
+   (b) assert live responses validate through openapi-core
+   (`validate_request` / `validate_response`), and (c) cover wrong-type
+   bodies for domain-owned fields so error codes cannot drift.
 
 ## Common error shape
 
@@ -80,8 +84,10 @@ failures).
 ## Dependency policy
 
 - **Pydantic** is a **runtime** pin in `requirements.txt` (HTTP boundary).
-- **openapi-core** is a **test** pin in `requirements-dev.txt` for contract
-  checks. It is not required to run the production server.
+- **openapi-core** is a **test** pin in `requirements-dev.txt`. The Unit / API /
+  contract Test Gate job installs it alongside runtime pins so OpenAPI
+  request/response validation cannot `skipTest` in CI. It is not required to
+  run the production server.
 - Update `dependency-inventory.json` whenever either pin changes
   (`scripts/dependency_gate.py` / `python run_tests.py` preflight).
 
@@ -89,8 +95,17 @@ failures).
 
 | Tool | Role | Adoption for this slice |
 | --- | --- | --- |
-| **openapi-core** | Validate request/response against an OpenAPI document | **Adopted for unit contract tests** when the Positions document validates cleanly. |
+| **openapi-core** | Validate request/response against an OpenAPI document | **Required in the unit/API contract CI job.** Live Positions HTTP tests call `OpenAPI.validate_request` / `validate_response` (via `MockRequest` / `MockResponse`). |
 | **Schemathesis** | Property-based HTTP fuzzing from OpenAPI | **Not in default CI yet.** Needs a live PRKS server per worker, careful Origin/mutation rules, and can exercise destructive paths. Prefer targeted unit/API tests that prove schema↔impl agreement; revisit Schemathesis as an optional maintainer job once more families are documented. |
+
+## Preserving domain error codes at the typed boundary
+
+When a request field was already validated by the domain with a stable code
+(e.g. Position `invalid_name` / `invalid_text` for wrong-type values), the
+typed boundary must **not** replace that with a generic `invalid_request`.
+Map those Pydantic type/missing failures at the family parse helper (see
+`parse_position_request`) so clients keep the established codes and messages.
+Keep length, emptiness, control characters, and uniqueness in the domain.
 
 ## Compatibility with #45 / #67 / #68
 

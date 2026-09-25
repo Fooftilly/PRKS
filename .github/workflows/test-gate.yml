@@ -39,13 +39,16 @@ jobs:
           node-version: "24"
 
       - name: Install pinned runtime dependencies
-        # Keep versions in sync with requirements.txt. Explicit package== pins
-        # plus --only-binary satisfy Sonar githubactions:S8541 / S8544; -r alone
-        # is treated as an unlocked install by those rules. --isolated ignores
-        # PIP_* env / user config (PIP_REQUIREMENT, PIP_EDITABLE, …).
+        # Keep versions in sync with requirements.txt, plus openapi-core from
+        # requirements-dev.txt so Positions contract validation is non-optional
+        # in this job (#180). Explicit package== pins plus --only-binary satisfy
+        # Sonar githubactions:S8541 / S8544; -r alone is treated as an unlocked
+        # install by those rules. --isolated ignores PIP_* env / user config
+        # (PIP_REQUIREMENT, PIP_EDITABLE, …).
         run: >-
           python -m pip install --isolated --disable-pip-version-check
           "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
+          "openapi-core==0.23.1"
 
       - name: Run PRKS unit, API, structural, and Node tests
         run: python run_tests.py

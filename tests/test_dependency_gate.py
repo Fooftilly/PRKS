@@ -987,13 +987,15 @@ class RepoGateLiveTests(unittest.TestCase):
         )
 
     def test_test_gate_workflow_pins_match_requirements(self):
-        """CI install must name the same == pins as requirements.txt (Sonar
-        rejects unlocked `-r` installs; keep the two sources equal).
+        """CI install must name runtime == pins plus openapi-core (Sonar
+        rejects unlocked `-r` installs; keep the sources equal).
 
         Assert against the install step's executable `run` args only — a pin
         or `--only-binary` mention in a comment must not satisfy the check.
-        Package pins collected from that argv must equal requirements.txt;
-        bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
+        Package pins collected from that argv must equal requirements.txt
+        union the openapi-core pin from requirements-dev.txt (Positions
+        contract validation is non-optional in this job); bare names,
+        ``-r``/``-e``, wheels, and URL/VCS sources are refused.
         A literal Install body must be exactly one non-comment command — the
         approved ``python -m pip install``.
         Invert policy: exactly two ``run:`` steps (Install + ``run_tests.py``);
@@ -1002,6 +1004,14 @@ class RepoGateLiveTests(unittest.TestCase):
         (and similar) env is refused.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
+        dev_pins = parse_requirements_pins(
+            (_PROJECT / "requirements-dev.txt").read_text()
+        )
+        # Unit/API/contract job installs runtime pins plus openapi-core so
+        # OpenAPI request/response validation cannot skipTest in CI (#180).
+        self.assertIn("openapi-core", dev_pins)
+        expected_pins = dict(pins)
+        expected_pins["openapi-core"] = dev_pins["openapi-core"]
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
@@ -1017,7 +1027,7 @@ class RepoGateLiveTests(unittest.TestCase):
         # Two-way equality via fail-closed operand walk: every argv token after
         # install is an approved option or an exact name==version pin.
         install_pins = parse_test_gate_pip_install_pins(pip_args)
-        self.assertEqual(install_pins, pins)
+        self.assertEqual(install_pins, expected_pins)
 
     def _minimal_allowlisted_workflow(self, extra_step: str = "") -> str:
         """Install + run_tests skeleton; optional extra YAML step(s) appended."""

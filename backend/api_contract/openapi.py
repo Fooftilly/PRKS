@@ -158,12 +158,15 @@ def positions_openapi_document() -> dict[str, Any]:
                             {"$ref": "#/components/schemas/PositionDeleted"}
                         ),
                     },
-                    "400": {
-                        "description": "Domain refusal (e.g. POSITION_IN_USE).",
-                        "content": _json_content(error_ref),
-                    },
                     "404": {
                         "description": "Not found.",
+                        "content": _json_content(error_ref),
+                    },
+                    "409": {
+                        "description": (
+                            "Position is still targeted by an Argument or Stance "
+                            "(position_in_use)."
+                        ),
                         "content": _json_content(error_ref),
                     },
                 },
