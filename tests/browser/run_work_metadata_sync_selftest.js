@@ -279,6 +279,52 @@ async function acknowledgement() {
     assert.equal(await cache.getEntity('work', 'W-M'), null);
 }
 
+/* ---- a lost response must replay the same envelope ----
+ *
+ * A lost response is not a reason to mint a replacement operation. The server
+ * may already have committed the first envelope, so retrying must preserve the
+ * exact op_id and semantic envelope. Backend WorkMetadataSyncTests prove that
+ * replaying that op_id is exact/idempotent at the ledger boundary, and that a
+ * reused id with a different payload is OP_ID_REUSE.
+ */
+async function lostResponse() {
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const observed = resolved(base({ doi: { value: 'old', revision: 0 } }));
+    // work_id must match ack()'s hard-coded W-M so isResult accepts the reply.
+    const saved = await store.saveWorkMetadataFields('W-M', { doi: '10.1/once' }, observed);
+    const op = saved[0];
+    const sent = [];
+    let loseFirstResponse = true;
+    const runtime = metaRuntime(store, async (_path, init) => {
+        const envelope = JSON.parse(init.body);
+        sent.push(envelope);
+        if (loseFirstResponse) {
+            loseFirstResponse = false;
+            throw new TypeError('response lost after send');
+        }
+        return { ok: true, status: 200, json: async () => ack('doi', '10.1/once', 1) };
+    }, async () => true);
+
+    await runtime.wake();
+    await settle();
+    let pending = await store.getOperation(op.op_id);
+    assert.equal(pending.status, 'pending', 'lost response leaves the original operation retryable');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].op_id, op.op_id);
+
+    // Skip only the timer delay; do not replace or rewrite the operation.
+    await store.updateOperationSyncState(op.op_id, { attempt_count: 0 });
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+
+    assert.equal(sent.length, 2, 'the same operation is retried once connectivity recovers');
+    assert.equal(sent[1].op_id, op.op_id, 'retry preserves op_id for server idempotency');
+    assert.deepEqual(sent[1], sent[0], 'retry preserves the complete semantic envelope');
+    assert.equal(await store.getOperation(op.op_id), null,
+        'the acknowledged replay is reconciled and retired');
+}
+
 /* ---- a read that began before the ACK cannot publish over it ---- */
 async function staleReads() {
     const factory = createFakeIndexedDBFactory();
@@ -1844,6 +1890,7 @@ async function main() {
     await atomicity();
     await overlay();
     await acknowledgement();
+    await lostResponse();
     await staleReads();
     await conflicts();
     await isolation();
