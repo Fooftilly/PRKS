@@ -152,6 +152,28 @@ def _rewrite_backup(src: str, dest: str, mutator) -> None:
             zout.writestr(zipinfo, payload)
 
 
+def _replace_archive_db(archive: str, db_path: str) -> None:
+    """Swap the archive's database for `db_path`, keeping the manifest valid."""
+    with open(db_path, "rb") as handle:
+        payload_db = handle.read()
+
+    def mutate(info, data):
+        if info.filename == ARCHIVE_DB_PATH:
+            return info.filename, payload_db, info
+        if info.filename == MANIFEST_NAME:
+            manifest = json.loads(data.decode("utf-8"))
+            for entry in manifest["entries"]:
+                if entry["path"] == ARCHIVE_DB_PATH:
+                    entry["size"] = len(payload_db)
+                    entry["sha256"] = hashlib.sha256(payload_db).hexdigest()
+            return info.filename, json.dumps(manifest).encode("utf-8"), info
+        return info.filename, data, info
+
+    rewritten = archive + ".tmp"
+    _rewrite_backup(archive, rewritten, mutate)
+    os.replace(rewritten, archive)
+
+
 class BackupRestoreTestCase(unittest.TestCase):
     def setUp(self):
         self._prev = _capture_bind()
@@ -1324,6 +1346,29 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         self.assertTrue(any("Work identity" in w for w in staged.warnings))
         out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
         self.assertTrue(out["restored"])
+
+    def test_schema_17_without_its_identity_objects_is_refused(self):
+        """PR #202 review (CodeRabbit): a schema-17 database missing its mirror
+        view must not verify as a clean archive."""
+        lib = self._bind_library()
+        good = create_backup(lib["cfg"])
+        conn = sqlite3.connect(lib["cfg"].db_path)
+        conn.execute("DROP TRIGGER assets_mirror_read_only")
+        conn.execute("DROP TRIGGER works_mirror_asset_au")
+        conn.execute("DROP VIEW legacy_work_asset_mirror")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(BackupError) as ctx:
+            create_backup(lib["cfg"])
+        self.assertEqual(ctx.exception.reason, "schema_drift")
+        # The same archive shape, staged for restore, is refused as well.
+        staged_dir = self._tmpdir()
+        broken = _copy_backup(good.archive_path, os.path.join(staged_dir, "broken"))
+        _replace_archive_db(broken, lib["cfg"].db_path)
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        with self.assertRaises(RestoreError) as ctx:
+            stage_restore(dest, broken)
+        self.assertEqual(ctx.exception.reason, "schema_drift")
 
     def test_live_schema_ahead_of_constant_can_backup_and_restore_locally(self):
         lib = self._bind_library()
