@@ -445,6 +445,61 @@ _ADDRESS_IN_USE_MARKERS = (
 )
 
 
+# Poll interval for wait_for_async (ms). Kept at 50 to match the historical
+# Python-side loop so gates do not become arbitrarily tighter or looser.
+_ASYNC_WAIT_POLL_MS = 50
+
+# One browser-side evaluate: invoke the predicate, await a returned Promise,
+# apply Python-like truthiness to the RESOLVED value, and sleep between polls
+# without crossing the Python↔Playwright bridge each tick.
+_WAIT_FOR_ASYNC_IN_PAGE = """
+async ({ expression, arg, timeoutMs, pollMs }) => {
+    const isPyTruthy = (v) => {
+        if (v === null || v === undefined) {
+            return false;
+        }
+        switch (typeof v) {
+            case 'boolean':
+                return v;
+            case 'number':
+                // NaN !== 0 → true (matches Python bool(float('nan'))).
+                return v !== 0;
+            case 'bigint':
+                return v !== 0n;
+            case 'string':
+                return v.length > 0;
+            case 'object':
+                if (Array.isArray(v)) {
+                    return v.length > 0;
+                }
+                return Object.keys(v).length > 0;
+            default:
+                return true;
+        }
+    };
+
+    let predicate = eval('(' + expression + ')');
+    if (typeof predicate !== 'function') {
+        const constant = predicate;
+        predicate = () => constant;
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (true) {
+        last = await Promise.resolve(predicate(arg));
+        if (isPyTruthy(last)) {
+            return { ok: true, value: last };
+        }
+        if (Date.now() >= deadline) {
+            return { ok: false, value: last };
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+}
+"""
+
+
 def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: str = ""):
     """Wait until an ASYNCHRONOUS page predicate resolves to a truthy value.
 
@@ -456,26 +511,42 @@ def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: 
 
     passes on its first poll whether the queue is empty or not: it waits one
     round trip and reports success. Every durable-queue gate in this suite is
-    asynchronous, so they are polled from here instead, where `page.evaluate`
-    returns the RESOLVED value and the answer can actually be read.
+    asynchronous, so they are polled from here instead: one `page.evaluate`
+    runs a browser-side loop that awaits each poll's RESOLVED value (same
+    semantics as a Python `page.evaluate` loop) and only then tests truthiness.
+
+    Truthiness matches Python's rules for JSON-serializable results (empty
+    list/dict/string and 0/False/None are failure), so call sites that return
+    non-empty sentinels keep working.
 
     Kept API-compatible with `wait_for_function` (`arg`, `timeout` in ms) so a
     call site converts by swapping the call, not by being rewritten.
     """
     started = time.perf_counter()
-    deadline = time.monotonic() + (timeout / 1000.0)
     last = None
     try:
-        while True:
-            last = page.evaluate(expression, arg)
-            if last:
-                return last
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    (message or "condition never became true")
-                    + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
-                )
-            page.wait_for_timeout(50)
+        result = page.evaluate(
+            _WAIT_FOR_ASYNC_IN_PAGE,
+            {
+                "expression": expression,
+                "arg": arg,
+                "timeoutMs": float(timeout),
+                "pollMs": _ASYNC_WAIT_POLL_MS,
+            },
+        )
+        if not isinstance(result, dict):
+            raise AssertionError(
+                (message or "condition never became true")
+                + " after %.1fs; last value was %r\n%s"
+                % (timeout / 1000.0, result, expression)
+            )
+        last = result.get("value")
+        if result.get("ok"):
+            return last
+        raise AssertionError(
+            (message or "condition never became true")
+            + " after %.1fs; last value was %r\n%s" % (timeout / 1000.0, last, expression)
+        )
     finally:
         _profile_phase("async_wait", time.perf_counter() - started)
 

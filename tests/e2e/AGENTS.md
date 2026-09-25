@@ -337,10 +337,11 @@ the promise, not from the answer.
 Almost every durable-queue, IndexedDB and offline-store condition in this suite
 is asynchronous, so **use `wait_for_async(page, expression, arg=..., timeout=...)`
 from `tests/e2e/harness.py` for any predicate whose body contains `.then(`,
-`async` or `await`.** It polls with `page.evaluate`, which does return the
-resolved value, and raises an `AssertionError` naming the last value it saw.
-`wait_for_function` remains correct — and preferred — for a synchronous
-predicate (DOM state, a global, `location.hash`).
+`async` or `await`.** One `page.evaluate` runs a browser-side poll that awaits
+each predicate's resolved value (Python-like truthiness on that value), and
+raises an `AssertionError` naming the last value it saw. Do not replace it with
+`page.wait_for_function(() => promise)`. `wait_for_function` remains correct —
+and preferred — for a synchronous predicate (DOM state, a global, `location.hash`).
 
 This was found when a Title save appeared to reach an empty queue instantly
 while its operation was in fact still `syncing`. Forty gates across seven
