@@ -1,6 +1,6 @@
 ---
 name: Engineering / implementation task
-about: Define focused implementation work for a bug fix, feature slice, refactor, tooling, testing, or maintenance change
+about: Define focused implementation work for a feature slice, refactor, tooling, testing, maintenance, or other already-decided change
 title: ""
 labels: ""
 assignees: ""
@@ -10,6 +10,8 @@ assignees: ""
 Use this template for concrete, bounded implementation work.
 
 Use the other templates instead when appropriate:
+- Bug report: PRKS is malfunctioning or has regressed and the issue should capture reproduction/current/expected behavior.
+- Research / evaluation: the primary outcome is evidence and a decision, and implementation is not yet settled.
 - Engineering audit finding: an observation/finding that is not automatically approved implementation work.
 - UX / UI finding: a user-facing usability, accessibility, discoverability, interaction, feedback, or visual problem.
 - Roadmap / planning epic: a broader direction that should later be split into focused implementation work.
@@ -18,7 +20,7 @@ Before submitting:
 - Search both open and closed issues for overlapping work.
 - Keep one issue focused on one implementation outcome or tightly coupled change set.
 - Apply the appropriate priority:* and area:* labels.
-- Add bug or enhancement only when it accurately describes the work.
+- Add enhancement or other classification labels only when they accurately describe the work.
 -->
 
 ## Goal
@@ -27,7 +29,7 @@ Describe the concrete outcome this issue should deliver.
 
 ## Context / why
 
-Explain the current limitation, failure mode, maintenance cost, or product need that makes this work useful. Link evidence or an approved finding when relevant.
+Explain the current limitation, maintenance cost, or product need that makes this work useful. Link evidence, an approved finding, a bug report, or completed research when relevant.
 
 ## Scope
 
@@ -38,7 +40,7 @@ Explain the current limitation, failure mode, maintenance cost, or product need 
 
 - [ ] State observable conditions that must be true before this issue is complete.
 - [ ] Include compatibility, correctness, durability, UX, or performance requirements where they matter.
-- [ ] Require regression coverage for any bug or invariant being fixed.
+- [ ] Require regression coverage for any invariant or previously failing behavior being changed.
 
 ## Validation
 
