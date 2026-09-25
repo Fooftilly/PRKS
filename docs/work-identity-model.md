@@ -529,7 +529,7 @@ works.primary_manifestation_id  TEXT
 works.citation_manifestation_id TEXT
 
 -- transaction-local Work retirement marker (see "Transitions" below)
-work_retirement_guard (id INTEGER PRIMARY KEY)          -- always empty
+work_retirement_guard (id INTEGER PRIMARY KEY CHECK (0)) -- can never hold a row
 work_retirement (
     work_id    TEXT PRIMARY KEY,
     must_clear INTEGER NOT NULL DEFAULT 1
@@ -543,7 +543,9 @@ The existing single-column FKs (`roles.work_id → works`,
 | Trigger | Rule |
 | --- | --- |
 | `works_manifestation_pointers_owned` (BEFORE UPDATE OF `primary_manifestation_id`, `citation_manifestation_id` ON `works`) | A non-NULL pointer must name a Manifestation whose `work_id` is this Work (`MANIFESTATION_OWNER_MISMATCH`). The primary may not be set back to NULL (`WORK_PRIMARY_MANIFESTATION_REQUIRED`), **unless the Work is marked in `work_retirement`**, meaning the same transaction deletes or merges it (see "Transitions" below). |
-| `works_retirement_clear` (AFTER DELETE ON `works`) | Removes the Work's `work_retirement` marker when its row is deleted, which is the only way the marker can leave before COMMIT succeeds. |
+| `works_retirement_clear` (AFTER DELETE ON `works`) | Removes the Work's `work_retirement` marker when its row is deleted. |
+| `work_retirement_delete_only_after_work` (BEFORE DELETE ON `work_retirement`) | A marker cannot be deleted while its Work row still exists (`WORK_RETIREMENT_WORK_STILL_EXISTS`). The only path out is `works_retirement_clear`, which runs after the Work row is gone. |
+| `work_retirement_no_update` (BEFORE UPDATE ON `work_retirement`) and `work_retirement_guard_no_update` | Markers and the guard are immutable, so a marker cannot be renamed to a missing Work and then deleted. |
 | `works_manifestation_pointers_insert` (BEFORE INSERT ON `works`) | A Work is inserted with NULL pointers. Its Manifestation cannot exist before the Work, because `manifestations.work_id` references it. |
 | `manifestations_pointer_target_move` (BEFORE UPDATE OF `work_id` ON `manifestations`) | A Manifestation that its Work names as primary or citation cannot be moved away (`MANIFESTATION_IS_POINTER_TARGET`). The pointer must change first, in the same transaction. |
 | `manifestations_pointer_target_delete` (BEFORE DELETE ON `manifestations`) | The same rule for deletion. A whole-Work delete is unaffected: the Work row is gone before its Manifestations cascade. |
@@ -607,8 +609,16 @@ placeholder Versions or Files. The two "only child" cases:
      the marker.
 
   If step 4 never happens, the marker's guard FK makes COMMIT fail and
-  everything rolls back. So a retirement marker can never outlive its
-  transaction, and a Work can never persist without a primary.
+  everything rolls back. The machinery cannot be bypassed:
+  - the guard table has `CHECK (0)`, so no row can be inserted to satisfy the
+    FK;
+  - `must_clear` is `NOT NULL`;
+  - a marker cannot be deleted while its Work exists;
+  - a marker cannot be updated.
+
+  **No transaction can commit a live Work with a NULL
+  `primary_manifestation_id`.** A retirement marker never outlives its
+  transaction.
 
 Moving a **primary** Asset or Manifestation while siblings remain simply
 re-points the pointer to a sibling first (or, for the Asset, in either order).
@@ -652,6 +662,9 @@ upgraded DBs:
   change; moving the only Manifestation out succeeds with each supported
   outcome for the emptied Work (delete, merge); clearing a primary without
   retirement is refused; a retirement marker left behind makes COMMIT fail;
+  **the direct bypasses are refused**: inserting a guard row (`CHECK`),
+  deleting a marker while its Work exists, updating or renaming a marker, and
+  a `NULL` `must_clear`;
   and every failed transition rolls back with all pointers and owner columns
   unchanged;
 - after the backfill, `PRAGMA foreign_key_check` reports nothing for the
@@ -1877,7 +1890,7 @@ exactly right.
 
 | Slice | Content | User-visible? | Depends on |
 | --- | --- | --- | --- |
-| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners; cross-Work, mismatched-`work_id` and self `manifestation_relations`; moving one related endpoint without dropping the relation fails at COMMIT, while moving both in a merge keeps it); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced. Fixtures for a live Work, a missing Person and a role row, **with and without** an existing role revision, show `get_roles_state()` reporting that scope as absent at a strictly newer revision; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
+| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners; cross-Work, mismatched-`work_id` and self `manifestation_relations`; moving one related endpoint without dropping the relation fails at COMMIT, while moving both in a merge keeps it); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; the direct guard and marker bypasses are refused; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced. Fixtures for a live Work, a missing Person and a role row, **with and without** an existing role revision, show `get_roles_state()` reporting that scope as absent at a strictly newer revision; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
 | **B. Asset fingerprint pass + ingest hashing** | Bounded, resumable hashing pass (§12.4). Compute `ingest_sha256` on the upload/import stream **before** linearization, for new Assets. No duplicate UI yet. | No | A |
 | **C. Projection module** | `work_projection.legacy_work` / `legacy_work_summary`. Move readers family by family (detail, browse/recent, folder/person/playlist summaries, BibTeX via `citation_record`), each with JSON parity tests and a byte-identical BibTeX test. | No | A |
 | **D. Asset authority** | vN+1: locator, source aggregate, materialization revisions and `thumb_page` owned by `assets`. `annotations.asset_id` authoritative and NOT NULL. Text index keyed by Asset. Cleanup and backup audit count Asset locators. Scope and revision copies (`asset-source`, `asset-annotation`). Legacy operations mapped to `origin_AS(W)`. Browser last-page key migration. | No | C |
