@@ -7,7 +7,7 @@ The authoritative contributor/agent rules remain in [AGENTS.md](https://github.c
 ## Typed API boundary (#180 / #45)
 
 Positions is the first HTTP family with Pydantic request/response models at the
-adapter boundary only. See [docs/api-contract-boundary.md](../api-contract-boundary.md)
+adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
 for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
 Live fragment: `GET /api/openapi.json`. Checked-in artifact:
 `docs/api/openapi-positions.json`.

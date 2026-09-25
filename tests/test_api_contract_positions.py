@@ -48,7 +48,7 @@ import backend.server as server_module
 
 
 class _CaptureServer(server_module.PRKSThreadingTCPServer):
-    """Capture the live httpd so tearDownClass can shut it down."""
+    """Capture the live httpd so class cleanup can shut it down."""
 
     last = None
 
@@ -335,38 +335,11 @@ class PositionHttpContractTests(unittest.TestCase):
         raise RuntimeError(f"server not ready: {last_err}")
 
     @classmethod
-    def setUpClass(cls):
-        cls._prev_bind = _capture_server_bind()
-        cls._test_port = _find_free_port()
-        cls._tmpdir = tempfile.mkdtemp(prefix="prks-positions-contract-")
-        storage = os.path.join(cls._tmpdir, "storage")
-        processing = os.path.join(cls._tmpdir, "processing")
-        os.makedirs(storage)
-        os.makedirs(processing)
-        cfg = replace(
-            StorageConfig.for_testing(storage),
-            processing_dir=processing,
-        )
-        server_module.bind_storage(cfg)
+    def _shutdown_httpd(cls) -> None:
+        """Idempotent: shut down the live httpd (if any) and join its thread."""
+        httpd = getattr(cls, "_httpd", None) or _CaptureServer.last
+        cls._httpd = None
         _CaptureServer.last = None
-        cls._server_patch = patch.object(
-            server_module, "PRKSThreadingTCPServer", _CaptureServer
-        )
-        cls._server_patch.start()
-        cls.server_thread = threading.Thread(
-            target=server_module.run_server,
-            args=(cls._test_port,),
-            daemon=True,
-        )
-        cls.server_thread.start()
-        cls._wait_ready()
-        cls._httpd = _CaptureServer.last
-        if cls._httpd is None:
-            raise RuntimeError("contract test server did not register httpd")
-
-    @classmethod
-    def tearDownClass(cls):
-        httpd = getattr(cls, "_httpd", None)
         if httpd is not None:
             try:
                 httpd.shutdown()
@@ -386,16 +359,80 @@ class PositionHttpContractTests(unittest.TestCase):
         thread = getattr(cls, "server_thread", None)
         if thread is not None:
             thread.join(5)
+            cls.server_thread = None
+
+    @classmethod
+    def _stop_server_patch(cls) -> None:
+        """Idempotent: stop the PRKSThreadingTCPServer patch if still active."""
         patcher = getattr(cls, "_server_patch", None)
         if patcher is not None:
             patcher.stop()
+            cls._server_patch = None
+
+    @classmethod
+    def _restore_bind_if_needed(cls) -> None:
+        """Idempotent: restore pre-setup server/index bindings."""
         prev = getattr(cls, "_prev_bind", None)
         if prev is not None:
             _restore_server_bind(prev)
+            cls._prev_bind = None
+
+    @classmethod
+    def _rmtree_tmpdir(cls) -> None:
+        """Idempotent: remove the class temp storage root."""
         tmpdir = getattr(cls, "_tmpdir", None)
         if tmpdir:
             # ignore_errors already swallows filesystem races; no bare except.
             shutil.rmtree(tmpdir, ignore_errors=True)
+            cls._tmpdir = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls._prev_bind = _capture_server_bind()
+        cls.addClassCleanup(cls._restore_bind_if_needed)
+
+        cls._test_port = _find_free_port()
+        cls._tmpdir = tempfile.mkdtemp(prefix="prks-positions-contract-")
+        cls.addClassCleanup(cls._rmtree_tmpdir)
+
+        storage = os.path.join(cls._tmpdir, "storage")
+        processing = os.path.join(cls._tmpdir, "processing")
+        os.makedirs(storage)
+        os.makedirs(processing)
+        cfg = replace(
+            StorageConfig.for_testing(storage),
+            processing_dir=processing,
+        )
+        server_module.bind_storage(cfg)
+        _CaptureServer.last = None
+        cls._server_patch = patch.object(
+            server_module, "PRKSThreadingTCPServer", _CaptureServer
+        )
+        cls._server_patch.start()
+        cls.addClassCleanup(cls._stop_server_patch)
+
+        cls.server_thread = threading.Thread(
+            target=server_module.run_server,
+            args=(cls._test_port,),
+            daemon=True,
+        )
+        cls.server_thread.start()
+        # Locate ``_CaptureServer.last`` when ``_httpd`` is not yet assigned
+        # (mid-setup failure before the assignment below).
+        cls.addClassCleanup(cls._shutdown_httpd)
+        cls._wait_ready()
+        cls._httpd = _CaptureServer.last
+        if cls._httpd is None:
+            raise RuntimeError("contract test server did not register httpd")
+
+    @classmethod
+    def tearDownClass(cls):
+        # Preferred order; each helper is idempotent so addClassCleanup
+        # re-entry after tearDownClass is a no-op.
+        cls._shutdown_httpd()
+        cls._stop_server_patch()
+        cls._restore_bind_if_needed()
+        cls._rmtree_tmpdir()
 
     def _json(self, method: str, path: str, body=None, expect_status=None,
               extra_headers=None):

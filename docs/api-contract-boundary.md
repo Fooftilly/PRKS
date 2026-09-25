@@ -63,8 +63,15 @@ Route extraction (#67) is a separate track; typed models do not require it.
    merge) so paths and `components.schemas` stay generated from the same
    models. Document the **real** HTTP status codes the adapter returns
    (e.g. `position_in_use` → 409, not 400).
-6. Regenerate/commit `docs/api/openapi-*.json` (see script in the Positions
-   tests) so #45 has a machine-readable artifact without requiring FastAPI.
+6. Regenerate/commit `docs/api/openapi-*.json` so #45 has a machine-readable
+   artifact without requiring FastAPI. Positions:
+
+   ```bash
+   python -c "import json; from backend.api_contract.openapi import positions_openapi_document as d; print(json.dumps(d(), indent=2))" > docs/api/openapi-positions.json
+   ```
+
+   `test_checked_in_openapi_artifact_matches_generator` only detects drift
+   against the generator; it does not rewrite the file.
 7. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
    (b) assert live responses validate through openapi-core
    (`validate_request` / `validate_response`), and (c) cover wrong-type

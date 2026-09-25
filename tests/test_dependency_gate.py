@@ -516,6 +516,37 @@ class InstalledPinTests(unittest.TestCase):
             result.issues,
         )
 
+    def test_unit_contract_gate_missing_requirements_dev_is_missing_requirements(self):
+        """Absent requirements-dev must not raise FileNotFoundError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text(
+                "PyMuPDF==1.28.2\nPillow==12.3.0\npydantic==2.13.5\n",
+                encoding="utf-8",
+            )
+            (root / "dependency-inventory.json").write_text(
+                json.dumps({"python_min_version": [3, 12], "dependencies": []}),
+                encoding="utf-8",
+            )
+
+            def lookup(name: str) -> str | None:
+                return {
+                    "PyMuPDF": "1.28.2",
+                    "Pillow": "12.3.0",
+                    "pydantic": "2.13.5",
+                }.get(name)
+
+            result = run_unit_contract_gate(
+                repo_root=root,
+                version_lookup=lookup,
+                current_python=(3, 12, 0),
+            )
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(i.code == "missing_requirements" for i in result.issues),
+            result.issues,
+        )
+
 
 class RemediationMessageTests(unittest.TestCase):
     def test_venv_recommends_same_interpreter_pip(self):

@@ -644,6 +644,15 @@ def validate_unit_contract_python(
         current_python=current_python,
     )
     dev_path = root / "requirements-dev.txt"
+    # Check existence before reading pins so a missing file is
+    # ``missing_requirements``, not an uncaught FileNotFoundError.
+    if not dev_path.is_file():
+        result.fail(
+            "missing_requirements",
+            f"requirements file missing: {dev_path.name}",
+            str(dev_path),
+        )
+        return result
     try:
         pin = pinned_openapi_core_version(root)
     except RuntimeError as exc:
@@ -651,13 +660,6 @@ def validate_unit_contract_python(
         return result
     except RequirementsPinError as exc:
         result.fail("non_exact_requirement", str(exc), str(dev_path))
-        return result
-    if not dev_path.is_file():
-        result.fail(
-            "missing_requirements",
-            f"requirements file missing: {dev_path.name}",
-            str(dev_path),
-        )
         return result
     extra = validate_installed_pins(
         {"openapi-core": pin},
