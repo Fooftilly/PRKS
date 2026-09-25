@@ -1,0 +1,57 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax", "style"],
+  "effort": "base",
+  "ignorePatterns": "frontend/vendor/**\ndocs/screenshots/**\ndata/**\ndata_testing/**\nartifacts/**\n**/*.zip\n**/*.woff2\n**/*.wasm",
+  "instructions": "Prioritize concrete correctness bugs, regressions, security defects, data-integrity failures, broken architecture invariants, unsafe persistence/filesystem behavior, concurrency or state-lifecycle bugs, and missing regression coverage. Do not comment on generic formatting, naming, stylistic preference, speculative refactors, or optional cleanup unless it violates an explicit PRKS repository rule. When a finding is based on a repository rule, identify the governing document or invariant. Distinguish currently implemented behavior from staged, proposed, or in-transition architecture; do not require future functionality merely because a design document describes it. Prefer actionable findings with a concrete failure mode over best-practice advice.",
+  "rules": [
+    {
+      "id": "privacy-safe-logging",
+      "rule": "Backend changes must preserve PRKS privacy-safe logging. Flag code that can log user or library content, request bodies or query strings, titles, notes, annotations, names, filenames or absolute paths, user URLs, headers, raw browser messages or stacks, qpdf stderr, or unsanitized exception text.",
+      "scope": ["backend/**"],
+      "severity": "high"
+    },
+    {
+      "id": "database-migration-safety",
+      "rule": "Database and schema changes must keep fresh-database schema and migrations coherent, preserve transactional and version-order guarantees, safely upgrade supported older databases, and reject unsupported newer schemas where applicable. Flag concrete parity, atomicity, ordering, or compatibility regressions.",
+      "scope": ["backend/db_*.py", "backend/**/*.sql"],
+      "severity": "high"
+    },
+    {
+      "id": "managed-file-lifecycle",
+      "rule": "Changes that create, replace, retarget, restore, or delete managed files must preserve path containment, ownership/reference checks, crash-safe durability boundaries, cleanup recovery, and canonical-versus-derived state invariants. Flag races, orphan/leak paths, stale derived state, or deletion of still-referenced bytes.",
+      "scope": ["backend/**"],
+      "severity": "high"
+    },
+    {
+      "id": "test-storage-isolation",
+      "rule": "Tests and test helpers must never operate on production data/ or a live PRKS_STORAGE tree. Flag any path, environment, fixture, or fallback that could reach production storage during tests.",
+      "scope": ["tests/**", "run_tests.py"],
+      "severity": "high"
+    },
+    {
+      "id": "ui-design-contract",
+      "rule": "User-visible frontend changes must conform to DESIGN.md. Flag concrete conflicts with the documented component, selection, focus, accessibility, density, navigation, workspace, or interaction model; do not invent generic design preferences beyond that contract.",
+      "scope": ["frontend/**"],
+      "severity": "medium"
+    },
+    {
+      "id": "workspace-context-ownership",
+      "rule": "Workspace, split-view, tab, route, editor, PDF, and contextual-panel changes must preserve TabContext ownership and documented workspace lifecycle semantics. Flag cross-context state leaks, unintended remounts, duplicate tabs, invalid Secondary-tree mutation, lost leave guards, or focus/URL changes that contradict the scoped frontend rules.",
+      "scope": ["frontend/js/**"],
+      "severity": "high"
+    },
+    {
+      "id": "e2e-quality",
+      "rule": "E2E changes must preserve isolation and deterministic synchronization. Flag arbitrary sleeps, fixed ports, shared mutable state, weakened or vacuous assertions, hidden retries, production-storage access, and browser-level tests where the same regression can be covered adequately by a substantially faster unit, API, Node, or static test.",
+      "scope": ["tests/e2e/**"],
+      "severity": "medium"
+    },
+    {
+      "id": "workflow-safety",
+      "rule": "GitHub Actions changes must preserve least-privilege permissions, safe handling of untrusted pull-request input, pinned actions where required by repository policy, correct cache/artifact boundaries, and truthful failure propagation. Flag workflows that can accidentally report success after a failed required step.",
+      "scope": [".github/workflows/**"],
+      "severity": "high"
+    }
+  ]
+}
