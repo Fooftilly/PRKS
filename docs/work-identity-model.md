@@ -1331,7 +1331,15 @@ order, and all steps are one transaction:
    displayed and cited title and abstract therefore don't silently change to
    the target's. This is the same rule as credit names in step 4. The preview
    lists these, and the user may instead let a Version inherit the target's
-   values. Then `UPDATE manifestations SET work_id = target` for the moved
+   values. The freeze advances `manifestation-field/[MF, title|abstract]`.
+   **Accepted limitation, shown in the preview:** when the source Work's
+   value is *empty* (a NULL abstract, or an empty title if one exists) and
+   the target's is not, nothing can be frozen. `''` is forbidden and NULL
+   means "inherit", so the moved Version will show the target's value after
+   the merge. The preview shows this per Version as "will now show the
+   target's abstract", so the change is never silent. The user can accept it
+   or cancel the merge. No "explicitly empty" override state is added for
+   this rare case. Then `UPDATE manifestations SET work_id = target` for the moved
    Manifestations. The owner columns of their Assets, annotations, scoped
    roles and pinned argument sources follow by cascade.
 4. Re-point Work-level rows to the target:
@@ -1776,7 +1784,7 @@ below.
 | --- | --- | --- |
 | `work-field/[W, f]` for M-owned `f` | `manifestation-field/[MF, f]` | Copy the revision to `origin_MF(W)` in the authority migration. |
 | `work-field/[W, f]` for W-owned `f` (status, title, abstract, author_text) | unchanged | — |
-| (new) `manifestation-field/[MF, title\|abstract]` for overrides | new scope, revision 0 until first written | Overrides are created only by the Version-aware API. A **durable** legacy `SET_WORK_METADATA_FIELD(W, title\|abstract)` carries a base revision for `work-field/[W, f]`, which says nothing about the override. So while the primary Manifestation has an override for that field, the operation is **refused** with `FIELD_OVERRIDDEN_BY_VERSION` rather than routed. Online legacy `PATCH` follows §13.2 and advances the override's scope. |
+| (new) `manifestation-field/[MF, title\|abstract]` for overrides | new scope, revision 0 until first written | Overrides are created only by the Version-aware API and by `MERGE_WORKS` step 3 (freezing inherited values, §10.4). Both write paths advance `manifestation-field/[MF, title\|abstract]`. A **durable** legacy `SET_WORK_METADATA_FIELD(W, title\|abstract)` carries a base revision for `work-field/[W, f]`, which says nothing about the override. So while the primary Manifestation has an override for that field, the operation is **refused** with `FIELD_OVERRIDDEN_BY_VERSION` rather than routed. Online legacy `PATCH` follows §13.2 and advances the override's scope. |
 | `work-source/W` | `asset-source/AS` | Copy to `origin_AS(W)`. |
 | `work-field/[W, thumb_page]` | `asset-field/[AS, thumb_page]` | Copy every scope row, tombstones included, to `origin_AS(W)`. A legacy `SET_WORK_METADATA_FIELD(W, thumb_page)` maps through `origin_AS(W)` like the other legacy operations. The same rule applies to any other Work field that becomes Asset-owned. |
 | `pdf-annotation/[W, ann]` | `asset-annotation/[AS, ann]` | Copy to `origin_AS(W)`. Deletion tombstones are copied too, so resurrection protection survives. |
