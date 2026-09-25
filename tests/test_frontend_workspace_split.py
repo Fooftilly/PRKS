@@ -12,7 +12,7 @@ _TILING = os.path.join(_FRONTEND, "js", "workspace-tiling.js")
 _SPLIT = os.path.join(_FRONTEND, "js", "workspace-split.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
-_AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
+_AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 _WIKI_WORKSPACE = os.path.join(
     _PROJECT_DIR, "docs", "wiki", "Workspace-Tabs-and-Split-View.md"
 )
