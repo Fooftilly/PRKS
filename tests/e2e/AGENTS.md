@@ -209,14 +209,22 @@ retry: there is deliberately no blanket retry mechanism, because retrying
 conceals races.
 
 Sharding. Workers receive individual test IDs, not whole modules, balanced
-longest-processing-time-first from `.tests/e2e-timings.json` (gitignored runner
-metadata, written after each run). That history is an optimisation hint and
-never required state: absent, corrupt, or full of renamed tests, the runner
-still works and unknown tests take a default estimate. Each shard keeps one
-module's tests contiguous, because these modules launch Chromium in
-`setUpModule` and unittest re-runs a module fixture whenever the module changes.
-The scheduling and aggregation logic lives in `tests/e2e/sharding.py` as pure
-functions covered by `tests/test_e2e_sharding.py` — no Chromium needed.
+longest-processing-time-first from machine-local `.tests/e2e-timings.json`
+(gitignored runner metadata, written after each run) merged over the committed
+coarse bootstrap in `tests/e2e/timing-baseline.json`. Local exact IDs always
+override baseline `prefix.*` weights. The baseline is scheduling metadata only:
+it is never copied into `.tests/` and never appears in the human "slowest tests"
+report. That history is an optimisation hint and never required state: absent,
+corrupt, or full of renamed tests, the runner still works and unknown tests
+take a default estimate. Refresh the committed baseline from representative
+CI/full-gate measurement exports with
+`scripts/e2e update-timing-baseline --from PATH [--write]` (see
+`docs/e2e-performance.md`); do not treat a laptop's `.tests/e2e-timings.json` as
+authoritative. Each shard keeps one module's tests contiguous, because these
+modules launch Chromium in `setUpModule` and unittest re-runs a module fixture
+whenever the module changes. The scheduling and aggregation logic lives in
+`tests/e2e/sharding.py` as pure functions covered by `tests/test_e2e_sharding.py`
+— no Chromium needed.
 
 External CI sharding. `--shard INDEX/TOTAL` (1-based) selects one bucket from
 the same LPT partition used by `--jobs TOTAL`. The authoritative GitHub Actions

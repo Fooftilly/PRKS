@@ -218,6 +218,129 @@ def merge_timing_sources(baseline, local):
     return merged
 
 
+def is_baseline_prefix_key(key) -> bool:
+    """True for committed-baseline coarse keys (`module.*` / `module.Class.*`)."""
+    return isinstance(key, str) and key.endswith("*") and len(key) > 1
+
+
+def slowest_report_timings(local_timings, observed, targeted=False):
+    """Timings eligible for the human "slowest tests" report.
+
+    The committed bootstrap baseline is scheduling metadata only. It must never
+    appear here — only machine-local history and this run's observations.
+    Targeted/partial runs keep prior local exact rows so a debug selection does
+    not look empty; full (or non-targeted) runs report this run's observations.
+    """
+    local = dict(local_timings or {})
+    current = dict(observed or {})
+    if targeted:
+        return {**local, **current}
+    return current
+
+
+def _median(values):
+    ordered = sorted(float(v) for v in values)
+    if not ordered:
+        raise ValueError("median of empty sequence")
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _round_baseline_seconds(value: float) -> float:
+    """Whole seconds keep committed baseline diffs reviewable and stable."""
+    if value != value or value == float("inf") or value <= 0:
+        raise ValueError("baseline seconds must be a positive finite number")
+    return float(max(1, int(round(value))))
+
+
+def _module_and_class(test_id: str):
+    """Split an exact unittest id into (module, class) or None if not exact."""
+    if not isinstance(test_id, str) or is_baseline_prefix_key(test_id):
+        return None
+    parts = test_id.split(".")
+    if len(parts) < 3:
+        return None
+    return ".".join(parts[:-2]), parts[-2]
+
+
+def combine_measurement_timings(*sources):
+    """Median-merge one or more exact-timing maps from representative runs.
+
+    Prefix (`*`) keys are ignored — they are baseline hints, not measurements.
+    Invalid values are skipped the same way as ``load_timings``.
+    """
+    buckets = {}
+    for source in sources:
+        for key, raw in (source or {}).items():
+            if not isinstance(key, str) or is_baseline_prefix_key(key):
+                continue
+            value = _valid_timing_value(raw)
+            if value is None:
+                continue
+            buckets.setdefault(key, []).append(value)
+    return {key: _median(values) for key, values in sorted(buckets.items())}
+
+
+def aggregate_timing_baseline(
+    exact_timings,
+    *,
+    class_outlier_ratio=1.5,
+    min_class_samples=3,
+):
+    """Build committed coarse prefix weights from exact per-test measurements.
+
+    Output keys are always ``prefix.*`` forms (module and optional heavy-class
+    outliers). Exact unittest IDs are never written into the baseline — those
+    belong only in machine-local ``.tests/e2e-timings.json``.
+
+    Class-level prefixes are emitted when a class has enough samples and its
+    median is at least ``class_outlier_ratio`` times the module median, so the
+    committed file stays small and reviewable while still weighting known heavy
+    classes.
+    """
+    by_module = {}
+    by_class = {}
+    for key, raw in (exact_timings or {}).items():
+        split = _module_and_class(key)
+        if split is None:
+            continue
+        value = _valid_timing_value(raw)
+        if value is None:
+            continue
+        module, class_name = split
+        by_module.setdefault(module, []).append(value)
+        by_class.setdefault((module, class_name), []).append(value)
+
+    baseline = {}
+    module_medians = {}
+    for module, values in sorted(by_module.items()):
+        median = _median(values)
+        module_medians[module] = median
+        baseline["%s.*" % module] = _round_baseline_seconds(median)
+
+    ratio = float(class_outlier_ratio)
+    if ratio < 1.0:
+        raise ValueError("class_outlier_ratio must be >= 1.0, got %r" % (class_outlier_ratio,))
+    min_samples = int(min_class_samples)
+    if min_samples < 1:
+        raise ValueError("min_class_samples must be >= 1, got %r" % (min_class_samples,))
+
+    for (module, class_name), values in sorted(by_class.items()):
+        if len(values) < min_samples:
+            continue
+        class_median = _median(values)
+        module_median = module_medians.get(module)
+        if module_median is None or module_median <= 0:
+            continue
+        if class_median < ratio * module_median:
+            continue
+        baseline["%s.%s.*" % (module, class_name)] = _round_baseline_seconds(class_median)
+
+    return dict(sorted(baseline.items()))
+
+
 def _read_first(paths):
     for path in paths:
         try:
@@ -550,9 +673,17 @@ def save_timings(path, timings) -> bool:
 
 
 def format_slowest(timings, limit=25):
-    """Lines for the "Slowest E2E tests" report, slowest first."""
+    """Lines for the "Slowest E2E tests" report, slowest first.
+
+    Prefix baseline keys (``*.`` scheduling hints) are excluded even if a
+    caller accidentally includes them — observed/local exact IDs only.
+    """
     rows = sorted(
-        ((float(v), k) for k, v in (timings or {}).items()),
+        (
+            (float(v), k)
+            for k, v in (timings or {}).items()
+            if not is_baseline_prefix_key(k)
+        ),
         key=lambda pair: (-pair[0], pair[1]),
     )[: max(0, limit)]
     return ["%7.2fs  %s" % (seconds, test_id) for seconds, test_id in rows]

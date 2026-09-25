@@ -21,16 +21,20 @@ if _PROJECT_DIR not in sys.path:
 
 from tests.e2e.sharding import (
     AGENT_MEMORY_PER_JOB_BYTES,
+    BASELINE_TIMINGS_PATH,
     DEFAULT_TEST_SECONDS,
     MAX_JOBS,
     agent_default_jobs,
     aggregate_external_shard_results,
+    aggregate_timing_baseline,
     aggregate_worker_results,
     assign_shards,
+    combine_measurement_timings,
     detect_cgroup_cpu_count,
     detect_cgroup_memory_limit_bytes,
     estimate_seconds,
     format_slowest,
+    is_baseline_prefix_key,
     load_timings,
     merge_timing_sources,
     merge_timings,
@@ -42,6 +46,7 @@ from tests.e2e.sharding import (
     save_timings,
     select_external_shard,
     shard_estimates,
+    slowest_report_timings,
     worker_port_range,
 )
 
@@ -162,6 +167,126 @@ class ShardAssignmentTests(unittest.TestCase):
             estimate_seconds("tests.e2e.test_offline.Case.test_x", merged),
             2.5,
         )
+
+    def test_merge_timing_sources_keeps_unrelated_baseline_prefixes(self):
+        baseline = {
+            "tests.e2e.test_offline.*": 8.0,
+            "tests.e2e.test_app.*": 4.0,
+        }
+        local = {"tests.e2e.test_offline.Case.test_x": 2.5}
+        merged = merge_timing_sources(baseline, local)
+        self.assertEqual(estimate_seconds("tests.e2e.test_app.Other.test_y", merged), 4.0)
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.Case.test_x", merged), 2.5
+        )
+
+    def test_slowest_report_excludes_baseline_even_when_merged_for_scheduling(self):
+        baseline = {"tests.e2e.test_offline.*": 8.0}
+        local = {"tests.e2e.test_offline.Case.test_old": 3.0}
+        observed = {"tests.e2e.test_offline.Case.test_new": 11.0}
+        scheduling = merge_timing_sources(baseline, {**local, **observed})
+        self.assertIn("tests.e2e.test_offline.*", scheduling)
+        report = slowest_report_timings(local, observed, targeted=False)
+        self.assertEqual(report, observed)
+        lines = format_slowest(report)
+        self.assertTrue(any("test_new" in line for line in lines))
+        self.assertFalse(any("test_offline.*" in line for line in lines))
+
+    def test_slowest_report_targeted_keeps_prior_local_exact_ids(self):
+        local = {"tests.e2e.test_offline.Case.test_old": 3.0}
+        observed = {"tests.e2e.test_offline.Case.test_new": 5.0}
+        report = slowest_report_timings(local, observed, targeted=True)
+        self.assertEqual(
+            report,
+            {
+                "tests.e2e.test_offline.Case.test_old": 3.0,
+                "tests.e2e.test_offline.Case.test_new": 5.0,
+            },
+        )
+
+    def test_format_slowest_strips_baseline_prefix_keys(self):
+        lines = format_slowest(
+            {
+                "tests.e2e.test_offline.*": 99.0,
+                "tests.e2e.test_offline.Case.test_x": 4.0,
+            },
+            limit=5,
+        )
+        self.assertEqual(lines, ["   4.00s  tests.e2e.test_offline.Case.test_x"])
+
+    def test_is_baseline_prefix_key(self):
+        self.assertTrue(is_baseline_prefix_key("tests.e2e.test_app.*"))
+        self.assertTrue(is_baseline_prefix_key("tests.e2e.test_app.Heavy.*"))
+        self.assertFalse(is_baseline_prefix_key("tests.e2e.test_app.Heavy.test_x"))
+        self.assertFalse(is_baseline_prefix_key("*"))
+        self.assertFalse(is_baseline_prefix_key(None))
+
+    def test_combine_measurement_timings_medians_and_drops_prefixes(self):
+        a = {
+            "tests.e2e.test_app.C.test_a": 2.0,
+            "tests.e2e.test_app.C.test_b": 4.0,
+            "tests.e2e.test_app.*": 50.0,
+        }
+        b = {
+            "tests.e2e.test_app.C.test_a": 6.0,
+            "tests.e2e.test_app.C.test_b": 8.0,
+        }
+        combined = combine_measurement_timings(a, b)
+        self.assertEqual(combined["tests.e2e.test_app.C.test_a"], 4.0)
+        self.assertEqual(combined["tests.e2e.test_app.C.test_b"], 6.0)
+        self.assertNotIn("tests.e2e.test_app.*", combined)
+
+    def test_aggregate_timing_baseline_emits_module_and_outlier_class_prefixes(self):
+        exact = {}
+        for i in range(6):
+            exact["tests.e2e.test_app.Light.test_%d" % i] = 2.0
+        for i in range(3):
+            exact["tests.e2e.test_app.Heavy.test_%d" % i] = 10.0
+        # Prefix noise / exact-id pollution must not leak into the committed file.
+        exact["tests.e2e.test_app.*"] = 99.0
+        baseline = aggregate_timing_baseline(exact, class_outlier_ratio=1.5, min_class_samples=3)
+        self.assertEqual(set(baseline), {
+            "tests.e2e.test_app.*",
+            "tests.e2e.test_app.Heavy.*",
+        })
+        self.assertTrue(all(is_baseline_prefix_key(k) for k in baseline))
+        self.assertNotIn("tests.e2e.test_app.Light.test_0", baseline)
+        # Module median of six 2s + three 10s = 2.0; Heavy class median 10 → outlier.
+        self.assertEqual(baseline["tests.e2e.test_app.*"], 2.0)
+        self.assertEqual(baseline["tests.e2e.test_app.Heavy.*"], 10.0)
+
+    def test_aggregate_timing_baseline_skips_non_outlier_classes(self):
+        exact = {
+            "tests.e2e.m.A.test_1": 4.0,
+            "tests.e2e.m.A.test_2": 4.0,
+            "tests.e2e.m.A.test_3": 4.0,
+            "tests.e2e.m.B.test_1": 5.0,
+            "tests.e2e.m.B.test_2": 5.0,
+            "tests.e2e.m.B.test_3": 5.0,
+        }
+        baseline = aggregate_timing_baseline(exact, class_outlier_ratio=1.5, min_class_samples=3)
+        self.assertEqual(set(baseline), {"tests.e2e.m.*"})
+
+    def test_aggregated_baseline_still_overridden_by_local_exact(self):
+        exact = {
+            "tests.e2e.test_offline.Case.test_%d" % i: 8.0 for i in range(4)
+        }
+        baseline = aggregate_timing_baseline(exact, min_class_samples=3)
+        local = {"tests.e2e.test_offline.Case.test_0": 1.25}
+        merged = merge_timing_sources(baseline, local)
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.Case.test_0", merged), 1.25
+        )
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.Case.test_1", merged), 8.0
+        )
+
+    def test_committed_baseline_file_contains_only_prefix_keys(self):
+        repo = Path(_PROJECT_DIR)
+        baseline = load_timings(repo / BASELINE_TIMINGS_PATH)
+        self.assertTrue(baseline, "committed timing-baseline.json should not be empty")
+        for key in baseline:
+            self.assertTrue(is_baseline_prefix_key(key), key)
 
     def test_shards_keep_each_module_contiguous(self):
         # These modules launch Chromium in setUpModule; unittest re-runs a module
@@ -894,6 +1019,71 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
             self.assertIs(worker_sig.parameters["enable_watchdog"].default, False)
             self.assertIs(serial_sig.parameters["enable_watchdog"].default, False)
 
+
+
+
+class TimingBaselineUpdateTests(unittest.TestCase):
+    """CLI path for refreshing committed baseline from measurement exports."""
+
+    def test_cli_writes_reviewable_prefix_json_without_defaulting_to_local(self):
+        from tests.e2e import update_timing_baseline as cli
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            measurements = root / "ci-timings.json"
+            measurements.write_text(
+                json.dumps(
+                    {
+                        "tests.e2e.demo.Light.test_a": 2.0,
+                        "tests.e2e.demo.Light.test_b": 2.0,
+                        "tests.e2e.demo.Light.test_c": 2.0,
+                        "tests.e2e.demo.Heavy.test_a": 9.0,
+                        "tests.e2e.demo.Heavy.test_b": 9.0,
+                        "tests.e2e.demo.Heavy.test_c": 9.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out = root / "timing-baseline.json"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = cli.main(
+                    [
+                        "--from",
+                        str(measurements),
+                        "--output",
+                        str(out),
+                        "--min-class-samples",
+                        "3",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            written = json.loads(out.read_text(encoding="utf-8"))
+            self.assertTrue(all(k.endswith("*") for k in written))
+            self.assertIn("tests.e2e.demo.*", written)
+            self.assertIn("tests.e2e.demo.Heavy.*", written)
+            # Exact IDs must not land in the committed-shaped output.
+            self.assertFalse(any(not k.endswith("*") for k in written))
+
+    def test_cli_dry_run_prints_json_and_requires_from(self):
+        from tests.e2e import update_timing_baseline as cli
+
+        with tempfile.TemporaryDirectory() as raw:
+            measurements = Path(raw) / "ci.json"
+            measurements.write_text(
+                json.dumps({"tests.e2e.m.C.test_x": 3.0, "tests.e2e.m.C.test_y": 5.0}),
+                encoding="utf-8",
+            )
+            out = io.StringIO()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(["--from", str(measurements)])
+            self.assertEqual(code, 0)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload, {"tests.e2e.m.*": 4.0})
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    cli.build_parser().parse_args([])
 
 if __name__ == "__main__":
     unittest.main()

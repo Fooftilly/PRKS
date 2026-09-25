@@ -85,6 +85,7 @@ from tests.e2e.sharding import (
     save_timings,
     select_external_shard,
     shard_estimates,
+    slowest_report_timings,
     worker_port_range,
 )
 
@@ -1637,7 +1638,9 @@ def _main(argv=None) -> int:
         _persist_timings(observed, test_ids if not targeted else None)
     # Baseline prefix weights are scheduling hints, not measured test timings;
     # keep them out of the human "slowest tests" report.
-    _print_slowest({**local_timings, **observed} if targeted else observed)
+    _print_slowest(
+        slowest_report_timings(local_timings, observed, targeted=targeted)
+    )
 
     # Persist unresolved failures from actual completions only — never treat
     # the pre-run selection as executed (fail-fast / cancelled / crashed).

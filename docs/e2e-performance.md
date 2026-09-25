@@ -7,6 +7,45 @@ longest-processing-time-first sharding, per-worker Chromium reuse, targeted feat
 selection, affected-test selection, last-failed runs, and a full-gate deadline. The
 remaining target is the cost *inside one test*.
 
+## Committed timing baseline
+
+Fresh checkouts (especially cloud agents) have no machine-local timing history.
+`tests/e2e/timing-baseline.json` supplies coarse `module.*` / `module.Class.*`
+prefix weights so LPT sharding is useful on the first run. At schedule time the
+runner merges:
+
+1. committed baseline prefixes;
+2. machine-local exact timings from `.tests/e2e-timings.json`, which override the baseline.
+
+Invariants:
+
+- local exact IDs always win over baseline prefixes;
+- the baseline is never copied into `.tests/e2e-timings.json`;
+- the human "slowest tests" report uses observed/local exact timings only — never baseline prefixes.
+
+### Refreshing the baseline
+
+Do **not** hand-edit `timing-baseline.json` indefinitely, and do **not** treat a
+developer laptop's `.tests/e2e-timings.json` as the authoritative source. Refresh
+from representative CI or full-gate measurement exports (same JSON shape as the
+runner's exact timing history: unittest id → seconds):
+
+```bash
+# Dry-run (stdout JSON)
+scripts/e2e update-timing-baseline --from /tmp/ci-e2e-timings.json
+
+# Median across multiple representative runs, then write the committed file
+scripts/e2e update-timing-baseline \
+  --from /tmp/ci-run-a.json \
+  --from /tmp/ci-run-b.json \
+  --write
+```
+
+`--write` updates `tests/e2e/timing-baseline.json`. Review the result as an
+ordinary JSON diff in the PR. The generator emits only `prefix.*` keys (module
+medians, plus class-level prefixes when a class is a clear outlier), so the
+committed file stays small and does not absorb exact per-test IDs.
+
 ## Current per-test path
 
 Most real-browser tests do all of the following:
