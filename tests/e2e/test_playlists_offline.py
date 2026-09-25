@@ -988,34 +988,9 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
     # ---- Work -> Playlist coherence ----------------------------------------
 
-    def test_work_metadata_save_reconciles_playlists_rather_than_dropping_them(self):
-        """A Playlist row renders the Work's title, so a rename has to reach
-        it -- but by RECONCILIATION, not invalidation: the exact new title is
-        patched into the cached Playlist rather than the snapshot being
-        thrown away."""
-        server, page, context = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        before = self.generations(page)
-        o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
-        self.open_details_panel(page)
-        page.locator('#panel-content button', has_text='Edit metadata').click()
-        page.locator('[data-prks-work-field="title"]').fill('Playlist Video Renamed')
-        page.locator('#save-work-identity-btn').click()
-        wait_for_async(page,
-            "() => prksSync.store.listOperations().then(r => r.length === 0)")
-        # A Work Title is local-first now, so the rename RECONCILES the exact
-        # new title into every cached representation instead of invalidating
-        # four domains. The cached Playlist keeps its snapshot and gains the
-        # new title in place.
-        wait_for_async(page, '''id => window.createPrksOfflineStore()
-            .getEntity('playlist', id).then(row => {
-                if (!row) return false;
-                return (row.value.items || []).some(
-                    w => w.title === 'Playlist Video Renamed');
-            })''', arg=ids['playlist_a'])
-        self.reconciled(page, before, {'concepts', 'arguments', 'people', 'playlists'},
-                        ids, 'Playlist Video Renamed')
+    # Work-metadata ACK patches embedded playlist item titles in place rather
+    # than dropping playlists — owned by run_work_metadata_sync_selftest.js
+    # `embeddedReconciliation`. Keep the playlist inline-rename UI path below.
 
     def test_playlist_inline_rename_inherits_the_shared_title_helper(self):
         server, page, context = self.start()
