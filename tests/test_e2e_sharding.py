@@ -19,13 +19,16 @@ if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
 from tests.e2e.sharding import (
+    AGENT_MEMORY_PER_JOB_BYTES,
     DEFAULT_TEST_SECONDS,
     MAX_JOBS,
+    agent_default_jobs,
     aggregate_worker_results,
     assign_shards,
     estimate_seconds,
     format_slowest,
     load_timings,
+    merge_timing_sources,
     merge_timings,
     module_of,
     parse_jobs,
@@ -130,6 +133,29 @@ class ShardAssignmentTests(unittest.TestCase):
                 estimate_seconds("a.B.c", {"a.B.c": bad}), DEFAULT_TEST_SECONDS, bad
             )
 
+    def test_committed_baseline_prefix_weights_unknown_exact_ids(self):
+        timings = {
+            "tests.e2e.test_offline.*": 8.0,
+            "tests.e2e.test_offline.Heavy*": 12.0,
+        }
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.HeavyCase.test_x", timings),
+            12.0,
+        )
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.OtherCase.test_x", timings),
+            8.0,
+        )
+
+    def test_local_exact_timing_overrides_baseline_prefix(self):
+        baseline = {"tests.e2e.test_offline.*": 8.0}
+        local = {"tests.e2e.test_offline.Case.test_x": 2.5}
+        merged = merge_timing_sources(baseline, local)
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.Case.test_x", merged),
+            2.5,
+        )
+
     def test_shards_keep_each_module_contiguous(self):
         # These modules launch Chromium in setUpModule; unittest re-runs a module
         # fixture whenever the module changes, so interleaving would relaunch it.
@@ -148,6 +174,28 @@ class ShardAssignmentTests(unittest.TestCase):
         self.assertEqual(module_of("tests.e2e.test_app.Klass.test_x"), "tests.e2e.test_app")
         self.assertEqual(module_of("mod.Klass.test_x"), "mod")
         self.assertEqual(module_of("weird"), "weird")
+
+
+class AgentJobCountTests(unittest.TestCase):
+    def test_agent_defaults_are_capped_at_two(self):
+        self.assertEqual(agent_default_jobs(cpu_count=32, memory_limit_bytes=None), 2)
+        self.assertEqual(agent_default_jobs(cpu_count=1, memory_limit_bytes=None), 1)
+
+    def test_agent_memory_limit_can_force_serial(self):
+        self.assertEqual(
+            agent_default_jobs(
+                cpu_count=8,
+                memory_limit_bytes=AGENT_MEMORY_PER_JOB_BYTES + 512 * 1024 * 1024,
+            ),
+            1,
+        )
+        self.assertEqual(
+            agent_default_jobs(
+                cpu_count=8,
+                memory_limit_bytes=2 * AGENT_MEMORY_PER_JOB_BYTES + 512 * 1024 * 1024,
+            ),
+            2,
+        )
 
 
 class JobCountTests(unittest.TestCase):
