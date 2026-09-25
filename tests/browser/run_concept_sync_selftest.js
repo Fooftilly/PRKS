@@ -212,6 +212,11 @@ async function theParentSetIsASet() {
     const rows = await rowsFor(store, "SET_CONCEPT_PARENTS");
     assert.equal(rows.length, 1);
     assert.deepEqual(rows[0].payload.parent_ids, ["C-4"]);
+
+    /* Back to exactly the acknowledged set (any order) cancels: A → B → A
+     * never sent is ZERO operations -- same cancel contract as the definition. */
+    assert.equal(await store.setConceptParents(id, ["C-2", "C-1"], base), null);
+    assert.equal((await rowsFor(store, "SET_CONCEPT_PARENTS")).length, 0);
 }
 
 async function aConceptCannotBeItsOwnParent() {

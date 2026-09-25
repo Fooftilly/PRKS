@@ -214,18 +214,8 @@ class DurableConceptTests(unittest.TestCase):
         self.assertEqual(get_concept(self.db_for(server), child)['description'],
                          'Edited offline.')
 
-    def test_a_definition_taken_back_before_it_is_sent_leaves_no_intent(self):
-        server, page, context = self.start()
-        child = server.ids['concept_child']
-        original = get_concept(self.db_for(server), child)['description']
-        self.prepare(page, child)
-        self.offline(page, context)
-
-        page.evaluate("id => updateConcept(id, { description: 'Temporary.' })", child)
-        self.wait_for_family(page, 'SET_CONCEPT_FIELD')
-        page.evaluate("([id, text]) => updateConcept(id, { description: text })",
-                      [child, original])
-        self.drained(page, 'reverting an unsent edit must leave no operation behind')
+    # Definition A→B→A cancel is owned by Node
+    # `theDefinitionCoalescesAndCancels` in run_concept_sync_selftest.js.
 
     # ---- identity -----------------------------------------------------------
 
@@ -312,14 +302,8 @@ class DurableConceptTests(unittest.TestCase):
         stored = get_concept(self.db_for(server), child)
         self.assertEqual([p['id'] for p in stored['parents']], [unvisited])
 
-    def test_the_same_parents_in_a_different_order_leave_no_intent(self):
-        server, page, context = self.start()
-        child = server.ids['concept_child']
-        parent = server.ids['concept_parent']
-        self.prepare(page, child)
-        self.offline(page, context)
-        page.evaluate("([cid, pid]) => putConceptParents(cid, [pid])", [child, parent])
-        self.drained(page, 'the same parent set is the same decision, not a change')
+    # Parent-set equality (order-insensitive) and A→B→A cancel are owned by
+    # Node `theParentSetIsASet` in run_concept_sync_selftest.js.
 
     def test_a_cycle_comes_back_as_a_named_refusal(self):
         server, page, context = self.start()

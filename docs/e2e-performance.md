@@ -393,6 +393,26 @@ honestly unavailable rather than fabricating cards.
 Add or confirm lower-level coverage first, then remove only the redundant
 Chromium composition. Do not batch-delete cache/routing families (folders,
 playlists, person-groups, browse, graph) without a per-contract map.
+#### Concepts durable — definition cancel + parent-set
+
+Applies the KEEP / SPLIT / MOVE model to the two pure queue invariants in
+`tests/e2e/test_concepts_durable.py` that were already proven below Chromium.
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Definition taken back before send leaves no intent | Node `theDefinitionCoalescesAndCancels` in `tests/browser/run_concept_sync_selftest.js` (A→B→C coalesce + A→B→A cancel) | MOVE |
+| Same parents (order-insensitive set) leave no intent | Node `theParentSetIsASet` — reorder vs acknowledged base is null; second reparent replaces; return to acknowledged set cancels | MOVE |
+
+Retained browser boundaries in that module stay Chromium: offline create +
+reload, named refusals (`CONCEPT_EXISTS`, cycle, note-named delete), definition
+edit shows and lands, identity rename→alias / alias reload / rename+alias one
+conflict unit, reparent shows at both ends, tombstone hide + refused delete
+comes back, fold created-offline delete. Cache matrices in giant
+`test_offline.py` are out of scope (giant-modules stream).
+
+Do not expand this slice into Positions or Arguments durable modules. Stack
+doc edits carefully against other family sections in this file (#204 Work-Tag,
+Work Source, Work-Open).
 
 
 ## Benchmark protocol
