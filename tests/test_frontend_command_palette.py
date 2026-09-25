@@ -13,7 +13,7 @@ _PALETTE = os.path.join(_FRONTEND, "js", "command-palette.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_command_palette_selftest.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
-_AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
+_AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 _SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 
 
