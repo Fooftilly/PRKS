@@ -8,6 +8,7 @@ made here.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -21,6 +22,13 @@ DEFAULT_TEST_SECONDS = 3.0
 MAX_JOBS = 12
 
 TIMINGS_PATH = Path(".tests") / "e2e-timings.json"
+BASELINE_TIMINGS_PATH = Path("tests") / "e2e" / "timing-baseline.json"
+
+# Agent mode is intentionally conservative: two browser/server stacks already
+# consume substantial RAM on small cloud VMs, while four can turn nominal
+# parallelism into swap/CPU contention and intermittent Chromium stalls.
+AGENT_MAX_JOBS = 2
+AGENT_MEMORY_PER_JOB_BYTES = 3 * 1024 * 1024 * 1024
 
 
 def parse_jobs(value, env_value=None, default=1):
@@ -51,21 +59,279 @@ def module_of(test_id: str) -> str:
     return ".".join(parts[:-2])
 
 
-def estimate_seconds(test_id: str, timings, default=DEFAULT_TEST_SECONDS) -> float:
-    """Historical duration for one test, falling back to the default estimate.
+def _valid_timing_value(raw):
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    if value <= 0 or value != value or value == float("inf"):
+        return None
+    return value
 
-    Non-numeric and non-positive history entries are treated as absent: a
-    corrupt timings file must never be able to starve a worker.
+
+def estimate_seconds(test_id: str, timings, default=DEFAULT_TEST_SECONDS) -> float:
+    """Estimated duration for one test, with exact history preferred.
+
+    Machine-local timing history uses exact unittest IDs. The committed
+    bootstrap baseline may also contain prefix entries ending in an asterisk;
+    the longest matching prefix wins. This gives stateless cloud agents useful
+    first-run shard weights without pretending those coarse values are
+    measured timings for a specific machine.
     """
     if not timings:
         return default
-    raw = timings.get(test_id)
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        return default
-    value = float(raw)
-    if value <= 0 or value != value or value == float("inf"):
-        return default
+
+    exact = _valid_timing_value(timings.get(test_id))
+    if exact is not None:
+        return exact
+
+    best = None
+    best_len = -1
+    for key, raw in timings.items():
+        if not isinstance(key, str) or not key.endswith("*"):
+            continue
+        prefix = key[:-1]
+        if not test_id.startswith(prefix):
+            continue
+        value = _valid_timing_value(raw)
+        if value is None or len(prefix) <= best_len:
+            continue
+        best = value
+        best_len = len(prefix)
+    return default if best is None else best
+
+
+def merge_timing_sources(baseline, local):
+    """Return scheduling weights with local exact measurements overriding baseline."""
+    merged = dict(baseline or {})
+    merged.update(local or {})
+    return merged
+
+
+def _read_first(paths):
+    for path in paths:
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return None
+
+
+def _cgroup_v2_self_dirs():
+    """Yield mounted cgroup-v2 directories from the process leaf up to the mount root.
+
+    Nested cloud-agent containers often put finite CPU/memory ceilings on a
+    leaf or parent while the hierarchy root looks unlimited. Walking ancestors
+    lets agent sizing use the tightest visible limit.
+    """
+    try:
+        text = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return
+    rel = None
+    for line in text.splitlines():
+        parts = line.split(":")
+        # Unified hierarchy: "0::/path/to/cgroup"
+        if len(parts) >= 3 and parts[0] == "0" and parts[1] == "":
+            rel = parts[2]
+            break
+    if rel is None:
+        return
+    yield from _cgroup_ancestor_dirs(Path("/sys/fs/cgroup"), rel)
+
+
+def _cgroup_ancestor_dirs(mount: Path, rel: str):
+    """Yield `mount` joined with `rel` and every ancestor up to `mount`."""
+    rel = (rel or "/").strip() or "/"
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    parts = [p for p in rel.split("/") if p]
+    for depth in range(len(parts), -1, -1):
+        if depth == 0:
+            yield mount
+        else:
+            yield mount.joinpath(*parts[:depth])
+
+
+def _cgroup_v1_rel_for(controller: str) -> str | None:
+    """Return this process's relative path under a cgroup-v1 controller."""
+    try:
+        text = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        parts = line.split(":")
+        if len(parts) < 3 or parts[0] == "0":
+            continue
+        controllers = [c.strip() for c in parts[1].split(",") if c.strip()]
+        if controller in controllers:
+            return parts[2]
+    return None
+
+
+def _cgroup_v1_self_dirs(controller: str, *mount_names: str):
+    """Yield nested cgroup-v1 dirs for `controller` from leaf to mount root."""
+    rel = _cgroup_v1_rel_for(controller)
+    if rel is None:
+        return
+    for name in mount_names:
+        mount = Path("/sys/fs/cgroup") / name
+        # Only walk mounts that actually exist; hybrid hosts may expose one.
+        if not mount.is_dir():
+            continue
+        yield from _cgroup_ancestor_dirs(mount, rel)
+
+
+def _parse_cpu_max(raw):
+    if not raw:
+        return None
+    parts = raw.split()
+    if len(parts) < 2 or parts[0] == "max":
+        return None
+    try:
+        quota = int(parts[0])
+        period = int(parts[1])
+    except ValueError:
+        return None
+    if quota > 0 and period > 0:
+        return max(1, math.floor(quota / period))
+    return None
+
+
+def _parse_memory_max(raw):
+    if raw is None or raw == "max":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value <= 0 or value >= (1 << 60):
+        return None
     return value
+
+
+def _parse_cfs_quota(quota_raw, period_raw):
+    try:
+        if quota_raw is None or period_raw is None:
+            return None
+        quota = int(quota_raw)
+        period = int(period_raw)
+    except ValueError:
+        return None
+    if quota > 0 and period > 0:
+        return max(1, math.floor(quota / period))
+    return None
+
+
+def _available_cpu_count() -> int:
+    """CPUs this process may actually run on (affinity/cpuset), not host size.
+
+    Python 3.12's ``os.cpu_count()`` on Linux reports the machine's CPU count.
+    Cloud containers often pin a process to a cpuset while leaving ``cpu.max``
+    unlimited; using the host count would then over-parallelize agent E2E.
+    """
+    getter = getattr(os, "sched_getaffinity", None)
+    if getter is not None:
+        try:
+            affinity = getter(0)
+        except OSError:
+            affinity = None
+        if affinity:
+            return max(1, len(affinity))
+    return max(1, int(os.cpu_count() or 1))
+
+
+def detect_cgroup_cpu_count() -> int | None:
+    """Best-effort effective CPU count for Linux containers/cgroups."""
+    available = _available_cpu_count()
+    quota_count = None
+
+    for directory in _cgroup_v2_self_dirs():
+        parsed = _parse_cpu_max(_read_first((directory / "cpu.max",)))
+        if parsed is not None:
+            quota_count = parsed if quota_count is None else min(quota_count, parsed)
+
+    if quota_count is None:
+        # Nested cgroup-v1: walk the process cpu controller path, not only
+        # the hierarchy root (which can look unlimited while the leaf is not).
+        for directory in _cgroup_v1_self_dirs("cpu", "cpu", "cpu,cpuacct"):
+            parsed = _parse_cfs_quota(
+                _read_first((directory / "cpu.cfs_quota_us",)),
+                _read_first((directory / "cpu.cfs_period_us",)),
+            )
+            if parsed is not None:
+                quota_count = (
+                    parsed if quota_count is None else min(quota_count, parsed)
+                )
+
+    if quota_count is None:
+        raw = _read_first(("/sys/fs/cgroup/cpu.max",))
+        quota_count = _parse_cpu_max(raw)
+
+    if quota_count is None:
+        quota_count = _parse_cfs_quota(
+            _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",)),
+            _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_period_us",)),
+        )
+
+    if quota_count is None:
+        return available
+    return max(1, min(available, quota_count))
+
+
+def detect_cgroup_memory_limit_bytes() -> int | None:
+    """Best-effort memory ceiling for Linux containers/cgroups.
+
+    Returns None when no finite cgroup limit is visible. Very large v1
+    sentinel values are treated as unlimited. When nested cgroup-v1/v2 dirs
+    expose different ceilings, the tightest finite limit wins.
+    """
+    best = None
+    for directory in _cgroup_v2_self_dirs():
+        parsed = _parse_memory_max(_read_first((directory / "memory.max",)))
+        if parsed is None:
+            continue
+        best = parsed if best is None else min(best, parsed)
+    if best is not None:
+        return best
+
+    for directory in _cgroup_v1_self_dirs("memory", "memory"):
+        parsed = _parse_memory_max(
+            _read_first((directory / "memory.limit_in_bytes",))
+        )
+        if parsed is None:
+            continue
+        best = parsed if best is None else min(best, parsed)
+    if best is not None:
+        return best
+
+    raw = _read_first(
+        (
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        )
+    )
+    return _parse_memory_max(raw)
+
+
+def agent_resource_limits() -> dict:
+    return {
+        "cpu_count": detect_cgroup_cpu_count(),
+        "memory_limit_bytes": detect_cgroup_memory_limit_bytes(),
+    }
+
+
+def agent_default_jobs(cpu_count=None, memory_limit_bytes=None) -> int:
+    """Conservative browser-worker width for unknown cloud-agent machines."""
+    if cpu_count is None:
+        cpu_count = detect_cgroup_cpu_count()
+    if memory_limit_bytes is None:
+        memory_limit_bytes = detect_cgroup_memory_limit_bytes()
+
+    jobs = min(AGENT_MAX_JOBS, max(1, int(cpu_count or 1)))
+    if memory_limit_bytes is not None:
+        memory_jobs = max(1, int(memory_limit_bytes) // AGENT_MEMORY_PER_JOB_BYTES)
+        jobs = min(jobs, memory_jobs)
+    return max(1, jobs)
 
 
 def assign_shards(test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECONDS):

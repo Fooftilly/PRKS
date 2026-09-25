@@ -65,7 +65,7 @@ class ChangeDiscoveryError(RuntimeError):
 # Tiers
 # ---------------------------------------------------------------------------
 
-TIERS = ("targeted", "feature", "smoke", "full", "dev", "last-failed", "affected")
+TIERS = ("targeted", "feature", "smoke", "full", "dev", "agent", "last-failed", "affected")
 
 # Full regression gate hard limit (seconds). Enforced inside tests/e2e/run.py so
 # advertised entry points cannot hang unboundedly even without a shell `timeout`.
@@ -78,7 +78,8 @@ TIER_LABELS = {
     "feature": "feature/domain E2E",
     "smoke": "smoke E2E (small essential shell + critical workflows)",
     "full": "full E2E regression gate",
-    "dev": "dev/agent E2E (fail-fast, no pointer-capture)",
+    "dev": "developer E2E (fail-fast, no pointer-capture)",
+    "agent": "cloud-agent E2E (resource-aware, fail-fast, no pointer-capture)",
     "last-failed": "last-failed E2E rerun",
     "affected": "affected E2E (git-diff → feature groups)",
 }
@@ -96,8 +97,8 @@ SMOKE_TEST_IDS = (
     "tests.e2e.test_app.WorkspaceTabsTests.test_close_selects_right_neighbor_then_home",
     # New File / create control surface
     "tests.e2e.test_app.WorkCreateWorkflowTests.test_unified_create_control_and_menu",
-    # Settings shell categories
-    "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_categories_present_general_default_and_calm",
+    # Settings keyboard/focus behavior is genuinely browser-specific.
+    "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_keyboard_category_navigation",
     # Offline read cache: Work detail
     "tests.e2e.test_offline.OfflineFoundationTests.test_cached_work_renders_offline_after_reload",
     # Offline folders / default route

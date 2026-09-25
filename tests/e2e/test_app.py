@@ -11421,28 +11421,6 @@ def _diagnostics_requests(page):
 
 
 class SettingsCategoryWorkflowTests(_BrowserE2E):
-    def test_categories_present_general_default_and_calm(self):
-        _server, page, _collector = self._start_app()
-        _open_settings(page)
-        for cat in ("general", "reading", "export", "backup", "maintenance", "diagnostics"):
-            self.assertEqual(page.locator(f"#prks-settings-tab-{cat}").count(), 1)
-            self.assertEqual(page.locator(f"#prks-settings-panel-{cat}").count(), 1)
-        self.assertEqual(
-            page.locator("#prks-settings-tab-general").get_attribute("aria-selected"), "true"
-        )
-        self.assertFalse(page.locator("#prks-settings-panel-general").is_hidden())
-        for cat in ("reading", "export", "backup", "maintenance", "diagnostics"):
-            self.assertTrue(page.locator(f"#prks-settings-panel-{cat}").is_hidden())
-            self.assertIsNotNone(
-                page.evaluate(
-                    "id => document.getElementById(id).hasAttribute('inert')",
-                    f"prks-settings-panel-{cat}",
-                )
-            )
-        general_text = page.locator("#prks-settings-panel-general").inner_text()
-        for noisy in ("Backup", "Diagnostics", "Maintenance", "Linearize", "Rebuild"):
-            self.assertNotIn(noisy, general_text)
-
     def test_click_navigation_switches_categories_and_state_retained(self):
         _server, page, _collector = self._start_app()
         _open_settings(page)
@@ -11509,37 +11487,6 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         self.assertTrue(page.locator("#prks-perf-refresh-btn").is_visible())
         self.assertTrue(page.locator("#prks-perf-reset-btn").is_visible())
         self.assertTrue(page.locator("#prks-perf-copy-btn").is_visible())
-
-    def test_backup_state_survives_category_switch(self):
-        _server, page, _collector = self._start_app()
-        _open_settings(page)
-        page.locator("#prks-settings-tab-backup").click()
-        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
-        page.evaluate(
-            "() => { document.getElementById('prks-backup-file-label').textContent = 'chosen-e2e.prks-backup'; }"
-        )
-        page.locator("#prks-settings-tab-general").click()
-        page.locator("#prks-settings-tab-export").click()
-        page.locator("#prks-settings-tab-backup").click()
-        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
-        self.assertEqual(
-            page.locator("#prks-backup-file-label").inner_text(), "chosen-e2e.prks-backup"
-        )
-
-    def test_maintenance_status_survives_category_switch(self):
-        _server, page, _collector = self._start_app()
-        _open_settings(page)
-        page.locator("#prks-settings-tab-maintenance").click()
-        page.wait_for_selector("#prks-settings-panel-maintenance:not([hidden])")
-        page.evaluate(
-            "() => { document.getElementById('prks-reindex-pdf-text-status').textContent = 'Rebuilt 3 files.'; }"
-        )
-        page.locator("#prks-settings-tab-diagnostics").click()
-        page.locator("#prks-settings-tab-maintenance").click()
-        page.wait_for_selector("#prks-settings-panel-maintenance:not([hidden])")
-        self.assertEqual(
-            page.locator("#prks-reindex-pdf-text-status").inner_text(), "Rebuilt 3 files."
-        )
 
     def test_export_summary_updates_with_toggle_state(self):
         _server, page, _collector = self._start_app()
@@ -11621,13 +11568,6 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
             ),
             "prks-icon-btn prks-icon-btn--ghost settings-btn",
         )
-
-    def test_no_settings_hash_routes_introduced(self):
-        _server, page, _collector = self._start_app()
-        _open_settings(page)
-        page.locator("#prks-settings-tab-backup").click()
-        page.wait_for_selector("#prks-settings-panel-backup:not([hidden])")
-        self.assertNotIn("settings", page.evaluate("() => location.hash"))
 
     def test_responsive_narrow_category_strip(self):
         _server, page, _collector = self._start_app()

@@ -13,19 +13,25 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
 from tests.e2e.sharding import (
+    AGENT_MEMORY_PER_JOB_BYTES,
     DEFAULT_TEST_SECONDS,
     MAX_JOBS,
+    agent_default_jobs,
     aggregate_worker_results,
     assign_shards,
+    detect_cgroup_cpu_count,
+    detect_cgroup_memory_limit_bytes,
     estimate_seconds,
     format_slowest,
     load_timings,
+    merge_timing_sources,
     merge_timings,
     module_of,
     parse_jobs,
@@ -130,6 +136,29 @@ class ShardAssignmentTests(unittest.TestCase):
                 estimate_seconds("a.B.c", {"a.B.c": bad}), DEFAULT_TEST_SECONDS, bad
             )
 
+    def test_committed_baseline_prefix_weights_unknown_exact_ids(self):
+        timings = {
+            "tests.e2e.test_offline.*": 8.0,
+            "tests.e2e.test_offline.Heavy*": 12.0,
+        }
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.HeavyCase.test_x", timings),
+            12.0,
+        )
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.OtherCase.test_x", timings),
+            8.0,
+        )
+
+    def test_local_exact_timing_overrides_baseline_prefix(self):
+        baseline = {"tests.e2e.test_offline.*": 8.0}
+        local = {"tests.e2e.test_offline.Case.test_x": 2.5}
+        merged = merge_timing_sources(baseline, local)
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_offline.Case.test_x", merged),
+            2.5,
+        )
+
     def test_shards_keep_each_module_contiguous(self):
         # These modules launch Chromium in setUpModule; unittest re-runs a module
         # fixture whenever the module changes, so interleaving would relaunch it.
@@ -148,6 +177,194 @@ class ShardAssignmentTests(unittest.TestCase):
         self.assertEqual(module_of("tests.e2e.test_app.Klass.test_x"), "tests.e2e.test_app")
         self.assertEqual(module_of("mod.Klass.test_x"), "mod")
         self.assertEqual(module_of("weird"), "weird")
+
+
+class AgentJobCountTests(unittest.TestCase):
+    def test_agent_defaults_are_capped_at_two(self):
+        # Pass an explicit large memory ceiling so this assertion models
+        # "CPU-rich, memory-unlimited" rather than auto-detecting the host
+        # cgroup (which can force serial on a ~4 GiB cloud agent).
+        ample = 16 * AGENT_MEMORY_PER_JOB_BYTES
+        self.assertEqual(agent_default_jobs(cpu_count=32, memory_limit_bytes=ample), 2)
+        self.assertEqual(agent_default_jobs(cpu_count=1, memory_limit_bytes=ample), 1)
+
+    def test_agent_memory_limit_can_force_serial(self):
+        self.assertEqual(
+            agent_default_jobs(
+                cpu_count=8,
+                memory_limit_bytes=AGENT_MEMORY_PER_JOB_BYTES + 512 * 1024 * 1024,
+            ),
+            1,
+        )
+        self.assertEqual(
+            agent_default_jobs(
+                cpu_count=8,
+                memory_limit_bytes=2 * AGENT_MEMORY_PER_JOB_BYTES + 512 * 1024 * 1024,
+            ),
+            2,
+        )
+
+
+class NestedCgroupLimitTests(unittest.TestCase):
+    def test_memory_uses_tightest_finite_ancestor(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/pod/agent/workload")
+        mid = Path("/sys/fs/cgroup/pod/agent")
+        root = Path("/sys/fs/cgroup")
+        values = {
+            leaf / "memory.max": "max",
+            mid / "memory.max": str(4 * 1024 * 1024 * 1024),
+            root / "memory.max": "max",
+        }
+
+        def fake_dirs():
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_dirs):
+            with mock.patch.object(sharding, "_read_first", fake_read):
+                self.assertEqual(
+                    detect_cgroup_memory_limit_bytes(),
+                    4 * 1024 * 1024 * 1024,
+                )
+
+    def test_cpu_uses_tightest_finite_ancestor(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/pod/agent/workload")
+        mid = Path("/sys/fs/cgroup/pod/agent")
+        root = Path("/sys/fs/cgroup")
+        values = {
+            leaf / "cpu.max": "max 100000",
+            mid / "cpu.max": "100000 100000",
+            root / "cpu.max": "max 100000",
+        }
+
+        def fake_dirs():
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_dirs):
+            with mock.patch.object(sharding, "_read_first", fake_read):
+                with mock.patch.object(
+                    sharding, "_available_cpu_count", return_value=8
+                ):
+                    self.assertEqual(detect_cgroup_cpu_count(), 1)
+
+    def test_v1_memory_uses_tightest_nested_controller_path(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/memory/docker/job")
+        mid = Path("/sys/fs/cgroup/memory/docker")
+        root = Path("/sys/fs/cgroup/memory")
+        values = {
+            leaf / "memory.limit_in_bytes": str(4 * 1024 * 1024 * 1024),
+            mid / "memory.limit_in_bytes": str(1 << 63),  # v1 unlimited sentinel
+            root / "memory.limit_in_bytes": str(1 << 63),
+        }
+
+        def fake_v2():
+            return iter(())
+
+        def fake_v1(controller, *mount_names):
+            self.assertEqual(controller, "memory")
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
+            with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
+                with mock.patch.object(sharding, "_read_first", fake_read):
+                    self.assertEqual(
+                        detect_cgroup_memory_limit_bytes(),
+                        4 * 1024 * 1024 * 1024,
+                    )
+
+    def test_v1_cpu_uses_tightest_nested_controller_path(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/cpu/docker/job")
+        mid = Path("/sys/fs/cgroup/cpu/docker")
+        root = Path("/sys/fs/cgroup/cpu")
+        values = {
+            leaf / "cpu.cfs_quota_us": "100000",
+            leaf / "cpu.cfs_period_us": "100000",
+            mid / "cpu.cfs_quota_us": "-1",
+            mid / "cpu.cfs_period_us": "100000",
+            root / "cpu.cfs_quota_us": "-1",
+            root / "cpu.cfs_period_us": "100000",
+        }
+
+        def fake_v2():
+            return iter(())
+
+        def fake_v1(controller, *mount_names):
+            self.assertEqual(controller, "cpu")
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
+            with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
+                with mock.patch.object(sharding, "_read_first", fake_read):
+                    with mock.patch.object(
+                        sharding, "_available_cpu_count", return_value=8
+                    ):
+                        self.assertEqual(detect_cgroup_cpu_count(), 1)
+
+    def test_affinity_caps_when_quota_is_unlimited(self):
+        import tests.e2e.sharding as sharding
+
+        def fake_v2():
+            return iter(())
+
+        def fake_v1(controller, *mount_names):
+            return iter(())
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
+            with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
+                with mock.patch.object(sharding, "_read_first", return_value=None):
+                    with mock.patch.object(
+                        sharding, "_available_cpu_count", return_value=1
+                    ):
+                        self.assertEqual(detect_cgroup_cpu_count(), 1)
+                        self.assertEqual(agent_default_jobs(), 1)
+
+    def test_available_cpu_count_prefers_sched_affinity(self):
+        import tests.e2e.sharding as sharding
+
+        with mock.patch.object(
+            sharding.os, "sched_getaffinity", return_value={0}, create=True
+        ):
+            with mock.patch.object(sharding.os, "cpu_count", return_value=32):
+                self.assertEqual(sharding._available_cpu_count(), 1)
 
 
 class JobCountTests(unittest.TestCase):
@@ -346,6 +563,26 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
             self.assertEqual(report["tests"], 1)
             self.assertEqual(report["failures"], 1)
             self.assertIn("FailingCases", report["detail"])
+
+    def test_worker_failfast_stops_after_the_first_failure(self):
+        with _import_runner() as runner, tempfile.TemporaryDirectory(
+            prefix="prks-worker-ff-"
+        ) as raw:
+            root = Path(raw)
+            tests_file = root / "shard.json"
+            report_file = root / "report.json"
+            # Alphabetical order puts test_also_fails before test_fails.
+            ids = _ids(_CASES, "FailingCases", "test_also_fails", "test_fails")
+            tests_file.write_text(json.dumps(ids), encoding="utf-8")
+            rc = runner.run_worker(
+                0, 1, str(tests_file), str(report_file), fail_fast=True
+            )
+            self.assertEqual(rc, 1)
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(report["tests"], 1)
+            self.assertEqual(report["failures"], 1)
+            self.assertEqual(len(report["failed_ids"]), 1)
+            self.assertTrue(report["failed_ids"][0].endswith("test_also_fails"))
 
 
 class RunnerDiscoveryTests(unittest.TestCase):

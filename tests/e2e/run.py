@@ -58,11 +58,15 @@ from tests.e2e.policy import (
     select_smoke,
 )
 from tests.e2e.sharding import (
+    BASELINE_TIMINGS_PATH,
     TIMINGS_PATH,
+    agent_default_jobs,
+    agent_resource_limits,
     aggregate_worker_results,
     assign_shards,
     format_slowest,
     load_timings,
+    merge_timing_sources,
     merge_timings,
     parse_jobs,
     run_exit_code,
@@ -434,7 +438,9 @@ def _install_shutdown_handlers(index: int) -> None:
     threading.Thread(target=_watch_parent, daemon=True).start()
 
 
-def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
+def run_worker(
+    index: int, jobs: int, tests_file: str, report_file: str, fail_fast: bool = False
+) -> int:
     """Execute one shard and write a machine-readable report. Never raises."""
     _install_shutdown_handlers(index)
     with open(tests_file, encoding="utf-8") as handle:
@@ -457,7 +463,10 @@ def run_worker(index: int, jobs: int, tests_file: str, report_file: str) -> int:
         apply_e2e_playwright_env()
         started = time.perf_counter()
         runner = unittest.TextTestRunner(
-            stream=stream, verbosity=2, resultclass=_result_factory
+            stream=stream,
+            verbosity=2,
+            failfast=fail_fast,
+            resultclass=_result_factory,
         )
         result = runner.run(_suite_for(test_ids))
         report["duration"] = time.perf_counter() - started
@@ -503,7 +512,7 @@ def _failed_ids_from_result(result) -> list:
 # --- parallel parent -----------------------------------------------------
 
 
-def _spawn_worker(index, jobs, shard, workdir, browsers_path):
+def _spawn_worker(index, jobs, shard, workdir, browsers_path, fail_fast=False):
     tests_file = workdir / ("shard-%d.json" % index)
     report_file = workdir / ("report-%d.json" % index)
     log_file = workdir / ("worker-%d.log" % index)
@@ -518,19 +527,25 @@ def _spawn_worker(index, jobs, shard, workdir, browsers_path):
     env["PRKS_E2E_PORT_SPAN"] = str(span)
     env["PRKS_E2E_WORKER"] = str(index)
     handle = open(log_file, "w", encoding="utf-8")
+    cmd = [
+        python_for_subprocess(),
+        str(REPO / "tests" / "e2e" / "run.py"),
+        "--worker-index",
+        str(index),
+        "--worker-count",
+        str(jobs),
+        "--tests-file",
+        str(tests_file),
+        "--report-file",
+        str(report_file),
+    ]
+    if fail_fast:
+        # Parent fail-fast stops peer shards; this stops later tests *inside*
+        # this shard so agent/dev mode does not keep launching Chromium after
+        # the first failure on the same worker.
+        cmd.append("--fail-fast")
     proc = subprocess.Popen(
-        [
-            python_for_subprocess(),
-            str(REPO / "tests" / "e2e" / "run.py"),
-            "--worker-index",
-            str(index),
-            "--worker-count",
-            str(jobs),
-            "--tests-file",
-            str(tests_file),
-            "--report-file",
-            str(report_file),
-        ],
+        cmd,
         cwd=str(REPO),
         env=env,
         stdout=handle,
@@ -651,7 +666,11 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     "[E2E %d/%d] running %d tests (estimated %.0fs)"
                     % (index + 1, jobs, len(shard), estimates[index])
                 )
-                workers.append(_spawn_worker(index, jobs, shard, workdir, browsers_path))
+                workers.append(
+                    _spawn_worker(
+                        index, jobs, shard, workdir, browsers_path, fail_fast=fail_fast
+                    )
+                )
             sys.stdout.flush()
 
             pending = list(workers)
@@ -810,8 +829,8 @@ def build_parser():
         description=(
             "Real Chromium E2E against isolated temporary PRKS storage. "
             "Default is the full suite on one worker (deterministic). "
-            "Use --smoke / --feature / --affected / --last-failed / --dev "
-            "for the agent development feedback loop. "
+            "Use --smoke / --feature / --affected / --last-failed / --dev / --agent "
+            "for targeted development feedback. "
             "--jobs N shards individual test IDs across N processes."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -842,7 +861,10 @@ def build_parser():
     parser.add_argument(
         "--fail-fast",
         action="store_true",
-        help="Stop at the first failure; with --jobs N, terminate the remaining workers.",
+        help=(
+            "Stop at the first failure: each worker's TextTestRunner uses failfast, "
+            "and with --jobs N the parent terminates remaining workers."
+        ),
     )
     parser.add_argument(
         "--no-pointer-capture",
@@ -887,9 +909,17 @@ def build_parser():
         "--dev",
         action="store_true",
         help=(
-            "Agent/dev mode: --fail-fast + --no-pointer-capture. "
+            "Developer mode: --fail-fast + --no-pointer-capture. "
             "Requires an explicit selection (--feature/--smoke/--affected/--last-failed "
             "or positional tests)."
+        ),
+    )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        help=(
+            "Cloud-agent mode: --fail-fast + --no-pointer-capture plus a conservative "
+            "resource-aware default worker count (max 2). Requires an explicit selection."
         ),
     )
     parser.add_argument(
@@ -1066,7 +1096,11 @@ def _main(argv=None) -> int:
 
     if args.worker_index is not None:
         return run_worker(
-            args.worker_index, args.worker_count or 1, args.tests_file, args.report_file
+            args.worker_index,
+            args.worker_count or 1,
+            args.tests_file,
+            args.report_file,
+            fail_fast=args.fail_fast,
         )
 
     if args.list_features:
@@ -1093,18 +1127,19 @@ def _main(argv=None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    if args.dev:
+    if args.dev or args.agent:
         if tier == "full":
+            flag = "--agent" if args.agent else "--dev"
             print(
-                "--dev refuses the full suite; pass --smoke, --feature, --affected, "
-                "--last-failed, or positional tests",
+                "%s refuses the full suite; pass --smoke, --feature, --affected, "
+                "--last-failed, or positional tests" % flag,
                 file=sys.stderr,
             )
             return 2
         if tier not in ("affected-noop", "last-failed-stale"):
             args.fail_fast = True
             args.no_pointer_capture = True
-            tier = "dev"
+            tier = "agent" if args.agent else "dev"
             note = (note + "; fail-fast") if note else "fail-fast"
 
     if args.list_tests:
@@ -1177,16 +1212,27 @@ def _main(argv=None) -> int:
         )
 
     try:
-        # Serial-by-default so debugging stays deterministic; advertised full-gate
-        # entry points (run_tests.py --e2e, scripts/e2e full) pass --jobs 4.
-        default_jobs = 1
+        # Serial-by-default so debugging stays deterministic. Cloud-agent mode
+        # chooses a conservative width from effective cgroup CPU/memory limits;
+        # explicit --jobs / PRKS_E2E_JOBS still wins.
+        default_jobs = agent_default_jobs() if args.agent else 1
         jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=default_jobs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     jobs = min(jobs, len(test_ids))
+    if args.agent:
+        limits = agent_resource_limits()
+        mem = limits["memory_limit_bytes"]
+        mem_text = "unlimited/unknown" if mem is None else "%.1f GiB" % (mem / (1024 ** 3))
+        print(
+            "Agent resources: cpu=%s memory=%s workers=%d"
+            % (limits["cpu_count"], mem_text, jobs)
+        )
 
-    timings = load_timings(REPO / TIMINGS_PATH)
+    baseline_timings = load_timings(REPO / BASELINE_TIMINGS_PATH)
+    local_timings = load_timings(REPO / TIMINGS_PATH)
+    timings = merge_timing_sources(baseline_timings, local_timings)
     if jobs == 1:
         ok, observed, failed_ids, phase_timings = run_serial(test_ids, args.fail_fast)
     else:
@@ -1231,8 +1277,12 @@ def _main(argv=None) -> int:
             % ",".join(active_benchmark_modes)
         )
     if persist_history:
+        # Persist only machine-local observations; the committed bootstrap
+        # baseline remains immutable input and must never be copied into .tests.
         _persist_timings(observed, test_ids if not targeted else None)
-    _print_slowest({**timings, **observed} if targeted else observed)
+    # Baseline prefix weights are scheduling hints, not measured test timings;
+    # keep them out of the human "slowest tests" report.
+    _print_slowest({**local_timings, **observed} if targeted else observed)
 
     # Persist unresolved failures from actual completions only — never treat
     # the pre-run selection as executed (fail-fast / cancelled / crashed).

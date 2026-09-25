@@ -6,6 +6,7 @@
 #   scripts/e2e affected [--base origin/master]
 #   scripts/e2e last-failed
 #   scripts/e2e dev --feature tabs
+#   scripts/e2e agent [--base origin/master]
 #   scripts/e2e full [--jobs 4]
 #   scripts/e2e list-features
 set -euo pipefail
@@ -16,7 +17,7 @@ RUN=("$PY" tests/e2e/run.py)
 
 if [[ $# -lt 1 ]]; then
   cat <<'EOF' >&2
-usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|list-tests> [args...]
+usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|list-features|list-tests> [args...]
 EOF
   exit 2
 fi
@@ -27,6 +28,61 @@ _has_jobs_flag() {
     case "$arg" in
       --jobs|-j|--jobs=*|-j=*) return 0 ;;
     esac
+  done
+  return 1
+}
+
+_has_base_flag() {
+  local arg expect_value=0
+  for arg in "$@"; do
+    if [[ "$expect_value" -eq 1 ]]; then
+      return 0
+    fi
+    case "$arg" in
+      --base) expect_value=1 ;;
+      --base=*) return 0 ;;
+    esac
+  done
+  # Trailing bare --base without a value: still treat as explicit so the
+  # runner (not this wrapper) owns the argparse error.
+  [[ "$expect_value" -eq 1 ]]
+}
+
+_resolve_agent_base() {
+  # Comparison base for --affected must be a real default/base-branch tip —
+  # never HEAD. On a clean feature checkout, `git diff HEAD` only sees the
+  # working tree, so committed branch changes vanish and agent mode can
+  # silently no-op. Prefer env / remote default / common branch names; fail
+  # closed when none resolve.
+  local candidate
+  if [[ -n "${PRKS_E2E_BASE:-}" ]]; then
+    if git rev-parse --verify "${PRKS_E2E_BASE}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$PRKS_E2E_BASE"
+      return 0
+    fi
+    # Explicit operator override must not silently fall through to another tip.
+    echo "scripts/e2e agent: PRKS_E2E_BASE=${PRKS_E2E_BASE} does not resolve to a commit" >&2
+    return 1
+  fi
+  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+    for candidate in "origin/${GITHUB_BASE_REF}" "${GITHUB_BASE_REF}"; do
+      if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  fi
+  if candidate="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"; then
+    if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  for candidate in origin/master master origin/main main; do
+    if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
   done
   return 1
 }
@@ -55,6 +111,26 @@ case "$cmd" in
   dev)
     exec "${RUN[@]}" --dev "$@"
     ;;
+  agent)
+    # Cloud-agent fast path: changed-surface E2E only, fail-fast, no pointer
+    # capture, and resource-aware worker width (max 2 unless explicitly set).
+    # Discover a usable --base when the caller did not pass one. Never fall
+    # back to HEAD: that hides committed branch changes from --affected.
+    if _has_base_flag "$@"; then
+      exec "${RUN[@]}" --agent --affected "$@"
+    fi
+    base="$(_resolve_agent_base)" || {
+      cat <<'EOF' >&2
+scripts/e2e agent: could not resolve a comparison base for --affected.
+Tried PRKS_E2E_BASE, GITHUB_BASE_REF, origin/HEAD, origin/master, master,
+origin/main, and main. Pass an explicit tip with --base <ref> (for example
+--base origin/master). Refusing to compare against HEAD, which would ignore
+committed branch changes on a clean checkout.
+EOF
+      exit 2
+    }
+    exec "${RUN[@]}" --agent --affected --base "$base" "$@"
+    ;;
   full)
     # Bounded parallel full gate. Runner also enforces PRKS_E2E_FULL_TIMEOUT
     # (default 1200s). Caller may still pass --jobs / -j to override width.
@@ -72,7 +148,7 @@ case "$cmd" in
     ;;
   *)
     echo "unknown command: $cmd" >&2
-    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|full|list-features|list-tests>" >&2
+    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|list-features|list-tests>" >&2
     exit 2
     ;;
 esac

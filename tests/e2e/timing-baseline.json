@@ -1,0 +1,16 @@
+{
+  "tests.e2e.test_app.*": 4.0,
+  "tests.e2e.test_app.PdfPersistenceTests.*": 10.0,
+  "tests.e2e.test_app.ResearchGraphSplitWorkspaceTests.*": 8.0,
+  "tests.e2e.test_app.WorkspaceDragDropTests.*": 6.0,
+  "tests.e2e.test_folders_offline.*": 6.0,
+  "tests.e2e.test_local_store_durability.*": 5.0,
+  "tests.e2e.test_offline.*": 8.0,
+  "tests.e2e.test_person_groups_offline.*": 6.0,
+  "tests.e2e.test_playlists_offline.*": 6.0,
+  "tests.e2e.test_research_graph_offline.*": 7.0,
+  "tests.e2e.test_work_metadata_offline.*": 6.0,
+  "tests.e2e.test_work_notes_offline.*": 6.0,
+  "tests.e2e.test_work_people_offline.*": 6.0,
+  "tests.e2e.test_work_source_offline.*": 6.0
+}
