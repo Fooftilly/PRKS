@@ -49,10 +49,33 @@ _has_base_flag() {
 }
 
 _resolve_agent_base() {
-  # Prefer the tracked default branch when present; fall back so fresh
-  # checkouts without origin/master still get a usable comparison tip.
+  # Comparison base for --affected must be a real default/base-branch tip —
+  # never HEAD. On a clean feature checkout, `git diff HEAD` only sees the
+  # working tree, so committed branch changes vanish and agent mode can
+  # silently no-op. Prefer env / remote default / common branch names; fail
+  # closed when none resolve.
   local candidate
-  for candidate in origin/master master HEAD; do
+  if [[ -n "${PRKS_E2E_BASE:-}" ]]; then
+    if git rev-parse --verify "${PRKS_E2E_BASE}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$PRKS_E2E_BASE"
+      return 0
+    fi
+  fi
+  if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+    for candidate in "origin/${GITHUB_BASE_REF}" "${GITHUB_BASE_REF}"; do
+      if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  fi
+  if candidate="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"; then
+    if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  for candidate in origin/master master origin/main main; do
     if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
       printf '%s\n' "$candidate"
       return 0
@@ -88,13 +111,19 @@ case "$cmd" in
   agent)
     # Cloud-agent fast path: changed-surface E2E only, fail-fast, no pointer
     # capture, and resource-aware worker width (max 2 unless explicitly set).
-    # Discover a usable --base when the caller did not pass one so missing
-    # origin/master does not hard-fail before any tests run.
+    # Discover a usable --base when the caller did not pass one. Never fall
+    # back to HEAD: that hides committed branch changes from --affected.
     if _has_base_flag "$@"; then
       exec "${RUN[@]}" --agent --affected "$@"
     fi
     base="$(_resolve_agent_base)" || {
-      echo "scripts/e2e agent: could not resolve a comparison base (tried origin/master, master, HEAD)" >&2
+      cat <<'EOF' >&2
+scripts/e2e agent: could not resolve a comparison base for --affected.
+Tried PRKS_E2E_BASE, GITHUB_BASE_REF, origin/HEAD, origin/master, master,
+origin/main, and main. Pass an explicit tip with --base <ref> (for example
+--base origin/master). Refusing to compare against HEAD, which would ignore
+committed branch changes on a clean checkout.
+EOF
       exit 2
     }
     exec "${RUN[@]}" --agent --affected --base "$base" "$@"

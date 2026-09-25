@@ -264,6 +264,77 @@ class NestedCgroupLimitTests(unittest.TestCase):
                 with mock.patch.object(sharding.os, "cpu_count", return_value=8):
                     self.assertEqual(detect_cgroup_cpu_count(), 1)
 
+    def test_v1_memory_uses_tightest_nested_controller_path(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/memory/docker/job")
+        mid = Path("/sys/fs/cgroup/memory/docker")
+        root = Path("/sys/fs/cgroup/memory")
+        values = {
+            leaf / "memory.limit_in_bytes": str(4 * 1024 * 1024 * 1024),
+            mid / "memory.limit_in_bytes": str(1 << 63),  # v1 unlimited sentinel
+            root / "memory.limit_in_bytes": str(1 << 63),
+        }
+
+        def fake_v2():
+            return iter(())
+
+        def fake_v1(controller, *mount_names):
+            self.assertEqual(controller, "memory")
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
+            with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
+                with mock.patch.object(sharding, "_read_first", fake_read):
+                    self.assertEqual(
+                        detect_cgroup_memory_limit_bytes(),
+                        4 * 1024 * 1024 * 1024,
+                    )
+
+    def test_v1_cpu_uses_tightest_nested_controller_path(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/cpu/docker/job")
+        mid = Path("/sys/fs/cgroup/cpu/docker")
+        root = Path("/sys/fs/cgroup/cpu")
+        values = {
+            leaf / "cpu.cfs_quota_us": "100000",
+            leaf / "cpu.cfs_period_us": "100000",
+            mid / "cpu.cfs_quota_us": "-1",
+            mid / "cpu.cfs_period_us": "100000",
+            root / "cpu.cfs_quota_us": "-1",
+            root / "cpu.cfs_period_us": "100000",
+        }
+
+        def fake_v2():
+            return iter(())
+
+        def fake_v1(controller, *mount_names):
+            self.assertEqual(controller, "cpu")
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_v2):
+            with mock.patch.object(sharding, "_cgroup_v1_self_dirs", fake_v1):
+                with mock.patch.object(sharding, "_read_first", fake_read):
+                    with mock.patch.object(sharding.os, "cpu_count", return_value=8):
+                        self.assertEqual(detect_cgroup_cpu_count(), 1)
+
 
 class JobCountTests(unittest.TestCase):
     def test_cli_wins_over_env_and_env_wins_over_default(self):

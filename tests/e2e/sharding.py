@@ -136,17 +136,49 @@ def _cgroup_v2_self_dirs():
             break
     if rel is None:
         return
-    rel = rel.strip()
+    yield from _cgroup_ancestor_dirs(Path("/sys/fs/cgroup"), rel)
+
+
+def _cgroup_ancestor_dirs(mount: Path, rel: str):
+    """Yield `mount` joined with `rel` and every ancestor up to `mount`."""
+    rel = (rel or "/").strip() or "/"
     if not rel.startswith("/"):
         rel = "/" + rel
-    # Avoid an empty join producing /sys/fs/cgroup (still useful) while also
-    # emitting every ancestor including the mount root.
     parts = [p for p in rel.split("/") if p]
     for depth in range(len(parts), -1, -1):
         if depth == 0:
-            yield Path("/sys/fs/cgroup")
+            yield mount
         else:
-            yield Path("/sys/fs/cgroup").joinpath(*parts[:depth])
+            yield mount.joinpath(*parts[:depth])
+
+
+def _cgroup_v1_rel_for(controller: str) -> str | None:
+    """Return this process's relative path under a cgroup-v1 controller."""
+    try:
+        text = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        parts = line.split(":")
+        if len(parts) < 3 or parts[0] == "0":
+            continue
+        controllers = [c.strip() for c in parts[1].split(",") if c.strip()]
+        if controller in controllers:
+            return parts[2]
+    return None
+
+
+def _cgroup_v1_self_dirs(controller: str, *mount_names: str):
+    """Yield nested cgroup-v1 dirs for `controller` from leaf to mount root."""
+    rel = _cgroup_v1_rel_for(controller)
+    if rel is None:
+        return
+    for name in mount_names:
+        mount = Path("/sys/fs/cgroup") / name
+        # Only walk mounts that actually exist; hybrid hosts may expose one.
+        if not mount.is_dir():
+            continue
+        yield from _cgroup_ancestor_dirs(mount, rel)
 
 
 def _parse_cpu_max(raw):
@@ -177,6 +209,19 @@ def _parse_memory_max(raw):
     return value
 
 
+def _parse_cfs_quota(quota_raw, period_raw):
+    try:
+        if quota_raw is None or period_raw is None:
+            return None
+        quota = int(quota_raw)
+        period = int(period_raw)
+    except ValueError:
+        return None
+    if quota > 0 and period > 0:
+        return max(1, math.floor(quota / period))
+    return None
+
+
 def detect_cgroup_cpu_count() -> int | None:
     """Best-effort effective CPU count for Linux containers/cgroups."""
     host = os.cpu_count() or 1
@@ -188,20 +233,27 @@ def detect_cgroup_cpu_count() -> int | None:
             quota_count = parsed if quota_count is None else min(quota_count, parsed)
 
     if quota_count is None:
+        # Nested cgroup-v1: walk the process cpu controller path, not only
+        # the hierarchy root (which can look unlimited while the leaf is not).
+        for directory in _cgroup_v1_self_dirs("cpu", "cpu", "cpu,cpuacct"):
+            parsed = _parse_cfs_quota(
+                _read_first((directory / "cpu.cfs_quota_us",)),
+                _read_first((directory / "cpu.cfs_period_us",)),
+            )
+            if parsed is not None:
+                quota_count = (
+                    parsed if quota_count is None else min(quota_count, parsed)
+                )
+
+    if quota_count is None:
         raw = _read_first(("/sys/fs/cgroup/cpu.max",))
         quota_count = _parse_cpu_max(raw)
 
     if quota_count is None:
-        quota_raw = _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",))
-        period_raw = _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_period_us",))
-        try:
-            if quota_raw is not None and period_raw is not None:
-                quota = int(quota_raw)
-                period = int(period_raw)
-                if quota > 0 and period > 0:
-                    quota_count = max(1, math.floor(quota / period))
-        except ValueError:
-            pass
+        quota_count = _parse_cfs_quota(
+            _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",)),
+            _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_period_us",)),
+        )
 
     if quota_count is None:
         return max(1, int(host))
@@ -212,12 +264,22 @@ def detect_cgroup_memory_limit_bytes() -> int | None:
     """Best-effort memory ceiling for Linux containers/cgroups.
 
     Returns None when no finite cgroup limit is visible. Very large v1
-    sentinel values are treated as unlimited. When nested cgroup-v2 dirs
+    sentinel values are treated as unlimited. When nested cgroup-v1/v2 dirs
     expose different ceilings, the tightest finite limit wins.
     """
     best = None
     for directory in _cgroup_v2_self_dirs():
         parsed = _parse_memory_max(_read_first((directory / "memory.max",)))
+        if parsed is None:
+            continue
+        best = parsed if best is None else min(best, parsed)
+    if best is not None:
+        return best
+
+    for directory in _cgroup_v1_self_dirs("memory", "memory"):
+        parsed = _parse_memory_max(
+            _read_first((directory / "memory.limit_in_bytes",))
+        )
         if parsed is None:
             continue
         best = parsed if best is None else min(best, parsed)
