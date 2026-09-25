@@ -1201,9 +1201,12 @@ Asset AS-…  (one File in the UI; owns annotations, page state, thumbnails)
   (materialization, linearization, copy-on-write retarget) follows a fixed
   order:
   1. commit `content_sha256 = NULL`, `byte_size = NULL` and
-     `fingerprinted_at = NULL` (the working bytes are **pending**);
+     `fingerprinted_at = NULL`, and increment `content_generation` (the
+     working bytes are **pending**);
   2. replace the bytes durably (`fs_durability`);
-  3. hash what was written and commit the new values.
+  3. hash what was written and commit the new values, with the same
+     compare-and-set on `(storage_locator, content_generation)` that the
+     fingerprint pass uses (§12.4).
 
   A crash anywhere in between leaves NULL, meaning "unknown", never a stale
   hash that clients or backup would trust. The fingerprint pass (§12.4) treats
@@ -1303,7 +1306,7 @@ before mutation. None of them is silent.
 | --- | --- | --- |
 | `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed, and any citation-identity collision is shown in the preview (§8.5). `last_opened_at` is max. | The source `W-…` gets `sync_work_lifecycle(state = merged, target)`. Old links, tabs and `[[W-…]]` **reads** follow the redirect. **Every** pending operation naming the source is refused with `WORK_MERGED` + `target_work_id` and is never applied to the target. The client may re-apply the user's intent explicitly (§14.2). |
 | `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." One `UPDATE manifestations SET work_id` re-keys everything the Manifestation owns by cascade (§4.1): its Assets' and annotations' `work_id`, its scoped roles, and its pinned argument sources. None of these can collide, because each identity includes the unchanged `MF-…` ID. If the Manifestation is a pointer target of the old Work and siblings remain, the pointer is re-pointed to a sibling first. If it is the old Work's **only** Manifestation, the command requires an explicit `empty_source` outcome, `delete` or `merge`, and retires the old Work in the same transaction (§4.1 "Transitions"). No placeholder Version is ever created. Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. |
-| `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." It sets the Asset's `manifestation_id` and `work_id` together (the composite FK requires the pair to match). Its annotations keep their `asset_id` and follow the new `work_id` by cascade. If the Asset is its Manifestation's primary, the same transaction re-points `primary_asset_id` to a remaining active sibling, or clears it when none remains. A Manifestation with zero Assets is a valid final state. The deferred `NO ACTION` FK checks the pointer at COMMIT. | `AS-…` unchanged. |
+| `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." It sets the Asset's `manifestation_id` and `work_id` together (the composite FK requires the pair to match). Its annotations keep their `asset_id` and follow the new `work_id` by cascade. If the Asset is its Manifestation's primary, the same transaction re-points `primary_asset_id` to a remaining active sibling, or clears it when none remains. A Manifestation with zero Assets is a valid final state. **On the destination side**, if the destination Manifestation had no active Asset, which means its `primary_asset_id` is NULL, the moved active Asset becomes its primary in the same transaction. Otherwise the destination's primary is unchanged. The deferred `NO ACTION` FK and the command's final-state check verify both sides at COMMIT. | `AS-…` unchanged. |
 | `DECLINE_DUPLICATE(a, b)` | Records "not a duplicate". | `duplicate_decisions(entity_type, low_id, high_id, decision, decided_at)`. |
 
 **`MERGE_WORKS` transaction order.** The §4.1 constraints depend on this
@@ -1316,9 +1319,23 @@ order, and all steps are one transaction:
 3. `UPDATE manifestations SET work_id = target` for the moved Manifestations.
    The owner columns of their Assets, annotations, scoped roles and pinned
    argument sources follow by cascade.
-4. Re-point Work-level rows: tags, Work-scoped roles, and Work-level argument
-   sources. Only exactly identical citation rows are collapsed (§8.5), and the
-   user's choices from the preview are applied.
+4. Re-point Work-level rows to the target:
+   - tags;
+   - Work-scoped roles;
+   - Work-level argument sources;
+   - `processing_files.imported_work_id`, so that re-importing an
+     already-imported file stays idempotent and is not orphaned by the source
+     row's `ON DELETE SET NULL`.
+
+   Only exactly identical citation rows are collapsed (§8.5). **Role
+   collisions never lose a credit.** If the source and the target both have a
+   Work-scoped `(person, role_type)` with *different* `credit_name` values, the
+   target's row is kept and the source spelling is preserved as a
+   `manifestation_credit_overrides` row on each moved Manifestation. Those
+   Versions keep citing the name they were credited with. The preview shows
+   every such collision and lets the user pick a single spelling instead.
+   Identical rows are collapsed. The user's choices from the preview are
+   applied.
 5. Delete the source Work row, which also removes its retirement marker, and
    tombstone its sync scopes.
 6. Advance the revisions the merge changed, then commit. The deferred FKs are
@@ -1566,6 +1583,19 @@ fixed number of Assets per run, at startup or on demand. It streams each
 managed file through SHA-256, records `content_sha256`, `byte_size` and a
 `fingerprinted_at`, and skips missing files, which are reported, never
 treated as empty (the same rule as the text index). It never modifies bytes.
+
+The pass must never record a stale digest while PRKS rewrites the same file
+(materialization, linearization, copy-on-write retarget):
+- Each in-place rewrite increments `assets.content_generation` in the same
+  commit that NULLs the hash (§9.4).
+- The pass reads `(storage_locator, content_generation)` and hashes the bytes
+  under the basename's `managed_pdf_path_lock()`, the lock the rewrite and
+  copy-on-write paths already take.
+- It commits with a compare-and-set:
+  `UPDATE assets SET content_sha256 = ?, … WHERE id = ? AND storage_locator = ?
+  AND content_generation = ?`.
+- If the locator or generation changed in between, the update matches no row,
+  the digest is discarded, and the Asset stays pending for the next pass.
 It stores hashes in the canonical DB because they describe canonical bytes, and
 they are re-verifiable, so a restore can recompute them.
 
@@ -1629,7 +1659,8 @@ for the fixture library. The legacy dict gains only **additive** fields:
 
 | Legacy write | Routed to |
 | --- | --- |
-| `PATCH /api/works/:id` with a Work-owned field | the Work |
+| `PATCH /api/works/:id` with a Work-owned field | the Work, except `title` and `abstract`, below |
+| … with `title` or `abstract` | **the value the legacy projection is showing.** If the primary Manifestation has a non-NULL override for that field, the edit writes the override; otherwise it writes the Work's canonical value. Either way the response shows the edit, and no hidden fallback changes silently. Changing the *canonical* value while an override exists needs the Version-aware API (§13.3). |
 | … with a Manifestation-owned field | the **primary** Manifestation. The editor shows the primary, so this is what the user sees. The response names the `manifestation_id` it wrote. |
 | … with `source_url` on a **non-video** Work (provenance/citation URL, a `SET_WORK_METADATA_FIELD` value) | the primary **Manifestation**'s `url`. This works whether or not the Work has an Asset. The existing video guard stays (work-source-identity.md). |
 | `SET_WORK_SOURCE` / video source identity (`source_kind`, `provider`, `provider_id`, `source_url` on a video Work) | the primary Asset's `external_stream` aggregate (`SET_WORK_SOURCE` semantics unchanged) |
