@@ -37,7 +37,7 @@ FAKE_IDS = [
     "tests.e2e.test_work_notes_offline.WorkNotesOfflineTests.test_research",
     "tests.e2e.test_local_store_durability.LocalStoreDurabilityTests.test_a_pending_operation_survives_a_page_reload",
     "tests.e2e.test_app.WorkCreateWorkflowTests.test_unified_create_control_and_menu",
-    "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_categories_present_general_default_and_calm",
+    "tests.e2e.test_app.SettingsCategoryWorkflowTests.test_keyboard_category_navigation",
 ]
 
 
