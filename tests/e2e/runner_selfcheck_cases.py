@@ -23,6 +23,11 @@ class FailingCases(unittest.TestCase):
     def test_fails(self):
         self.assertEqual("expected", "actual")
 
+    def test_also_fails(self):
+        # Second failure in the same class: used to prove worker failfast stops
+        # the shard after the first assertion rather than running every ID.
+        self.assertEqual("also-expected", "also-actual")
+
 
 class CrashingCases(unittest.TestCase):
     def test_kills_the_worker(self):

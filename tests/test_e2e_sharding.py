@@ -462,6 +462,26 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
             self.assertEqual(report["failures"], 1)
             self.assertIn("FailingCases", report["detail"])
 
+    def test_worker_failfast_stops_after_the_first_failure(self):
+        with _import_runner() as runner, tempfile.TemporaryDirectory(
+            prefix="prks-worker-ff-"
+        ) as raw:
+            root = Path(raw)
+            tests_file = root / "shard.json"
+            report_file = root / "report.json"
+            # Alphabetical order puts test_also_fails before test_fails.
+            ids = _ids(_CASES, "FailingCases", "test_also_fails", "test_fails")
+            tests_file.write_text(json.dumps(ids), encoding="utf-8")
+            rc = runner.run_worker(
+                0, 1, str(tests_file), str(report_file), fail_fast=True
+            )
+            self.assertEqual(rc, 1)
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(report["tests"], 1)
+            self.assertEqual(report["failures"], 1)
+            self.assertEqual(len(report["failed_ids"]), 1)
+            self.assertTrue(report["failed_ids"][0].endswith("test_also_fails"))
+
 
 class RunnerDiscoveryTests(unittest.TestCase):
     def test_manifest_covers_every_e2e_module_on_disk(self):
