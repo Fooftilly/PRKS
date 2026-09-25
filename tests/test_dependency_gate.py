@@ -469,20 +469,20 @@ class InstalledPinTests(unittest.TestCase):
     def test_unit_contract_gate_requires_openapi_core_only(self):
         """Unit preflight must check openapi-core without requiring Playwright."""
         pin = pinned_openapi_core_version(_PROJECT)
-        self.assertEqual(pin, "0.23.1")
+        dev_pins = parse_requirements_pins(
+            (_PROJECT / "requirements-dev.txt").read_text()
+        )
+        self.assertEqual(pin, dev_pins["openapi-core"])
+        runtime_pins = parse_requirements_pins(
+            (_PROJECT / "requirements.txt").read_text()
+        )
         seen: list[str] = []
 
         def lookup(name: str) -> str | None:
             seen.append(name)
             if name == "openapi-core":
                 return pin
-            if name in ("PyMuPDF", "Pillow", "pydantic"):
-                return {
-                    "PyMuPDF": "1.28.2",
-                    "Pillow": "12.3.0",
-                    "pydantic": "2.13.5",
-                }[name]
-            return None
+            return runtime_pins.get(name)
 
         result = run_unit_contract_gate(
             repo_root=_PROJECT,
@@ -494,16 +494,14 @@ class InstalledPinTests(unittest.TestCase):
         self.assertNotIn("playwright", seen)
 
     def test_unit_contract_gate_fails_when_openapi_core_missing(self):
+        runtime_pins = parse_requirements_pins(
+            (_PROJECT / "requirements.txt").read_text()
+        )
+
         def lookup(name: str) -> str | None:
             if name == "openapi-core":
                 return None
-            if name in ("PyMuPDF", "Pillow", "pydantic"):
-                return {
-                    "PyMuPDF": "1.28.2",
-                    "Pillow": "12.3.0",
-                    "pydantic": "2.13.5",
-                }[name]
-            return None
+            return runtime_pins.get(name)
 
         result = run_unit_contract_gate(
             repo_root=_PROJECT,
