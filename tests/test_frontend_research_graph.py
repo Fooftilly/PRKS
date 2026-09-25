@@ -19,7 +19,7 @@ _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
 _VENDOR = os.path.join(_FRONTEND, "vendor", "cytoscape")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _WIKI_RESEARCH = os.path.join(_PROJECT_DIR, "docs", "wiki", "Research-Network.md")
-_AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
+_AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 _SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_research_graph_selftest.js")
 
