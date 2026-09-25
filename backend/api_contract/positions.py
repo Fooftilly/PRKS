@@ -54,18 +54,17 @@ class PositionUpdateRequest(BaseModel):
     def domain_field_kwargs(self) -> dict[str, Any]:
         """Pass only keys the client actually sent.
 
-        Explicit JSON ``null`` for ``description`` means clear (empty string).
-        The domain uses ``None`` as its omit sentinel, so forwarding null would
-        silently leave the old description (or raise ``nothing_to_update`` when
-        it is the only field). Absent keys stay omitted.
+        Explicit JSON ``null`` is forwarded as Python ``None``. The domain
+        treats ``None`` as the omit sentinel (``nothing_to_update`` when it is
+        the only field; otherwise that field is left unchanged). Clear-on-null
+        is deliberately **not** part of this #180 slice — see #45 if that
+        contract is approved later. Absent keys stay omitted.
         """
         out: dict[str, Any] = {}
         if "name" in self.model_fields_set:
             out["name"] = self.name
         if "description" in self.model_fields_set:
-            out["description"] = (
-                "" if self.description is None else self.description
-            )
+            out["description"] = self.description
         return out
 
 

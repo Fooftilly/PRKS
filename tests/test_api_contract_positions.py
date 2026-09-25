@@ -37,7 +37,13 @@ from backend.api_contract.positions import (
     parse_position_request,
 )
 from backend.log_safety import safe_error_type
+from backend.research_index import (
+    get_research_index,
+    replace_research_index,
+    reset_research_index,
+)
 from backend.storage.config import StorageConfig
+from backend.text_index import get_text_index, replace_text_index, reset_text_index
 import backend.server as server_module
 
 
@@ -49,6 +55,52 @@ class _CaptureServer(server_module.PRKSThreadingTCPServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         type(self).last = self
+
+
+def _capture_server_bind():
+    """Snapshot module-global storage/index bindings for teardown restore."""
+    try:
+        previous_text = get_text_index()
+    except RuntimeError:
+        previous_text = None
+    try:
+        previous_research = get_research_index()
+    except RuntimeError:
+        previous_research = None
+    return (
+        server_module._bound_storage,
+        server_module.pdfs_dir,
+        server_module.thumbs_dir,
+        server_module.processing_dir,
+        server_module.db,
+        server_module.text_index,
+        server_module.research_index,
+        previous_text,
+        previous_research,
+    )
+
+
+def _restore_server_bind(snapshot) -> None:
+    """Restore bindings published by ``bind_storage`` (incl. global indexes)."""
+    (
+        server_module._bound_storage,
+        server_module.pdfs_dir,
+        server_module.thumbs_dir,
+        server_module.processing_dir,
+        server_module.db,
+        server_module.text_index,
+        server_module.research_index,
+        previous_text,
+        previous_research,
+    ) = snapshot
+    if previous_text is None:
+        reset_text_index()
+    else:
+        replace_text_index(previous_text)
+    if previous_research is None:
+        reset_research_index()
+    else:
+        replace_research_index(previous_research)
 
 
 def _find_free_port() -> int:
@@ -134,12 +186,13 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(model.domain_field_kwargs(), {"name": "Only name"})
 
-    def test_update_explicit_null_description_maps_to_empty_clear(self):
+    def test_update_explicit_null_description_is_omit_sentinel(self):
+        """Pre-#185: JSON null description is omit, not clear."""
         model, err = parse_position_request(
             PositionUpdateRequest, {"description": None}
         )
         self.assertIsNone(err)
-        self.assertEqual(model.domain_field_kwargs(), {"description": ""})
+        self.assertEqual(model.domain_field_kwargs(), {"description": None})
 
     def test_update_omitted_description_not_in_kwargs(self):
         model, err = parse_position_request(
@@ -147,6 +200,16 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         )
         self.assertIsNone(err)
         self.assertNotIn("description", model.domain_field_kwargs())
+
+    def test_update_name_with_null_description_keeps_description_key_as_none(self):
+        model, err = parse_position_request(
+            PositionUpdateRequest, {"name": "Renamed", "description": None}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(
+            model.domain_field_kwargs(),
+            {"name": "Renamed", "description": None},
+        )
 
     def test_update_request_wrong_type_name_preserves_domain_code(self):
         model, err = parse_position_request(PositionUpdateRequest, {"name": 1})
@@ -273,6 +336,7 @@ class PositionHttpContractTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls._prev_bind = _capture_server_bind()
         cls._test_port = _find_free_port()
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-positions-contract-")
         storage = os.path.join(cls._tmpdir, "storage")
@@ -325,6 +389,9 @@ class PositionHttpContractTests(unittest.TestCase):
         patcher = getattr(cls, "_server_patch", None)
         if patcher is not None:
             patcher.stop()
+        prev = getattr(cls, "_prev_bind", None)
+        if prev is not None:
+            _restore_server_bind(prev)
         tmpdir = getattr(cls, "_tmpdir", None)
         if tmpdir:
             # ignore_errors already swallows filesystem races; no bare except.
@@ -542,43 +609,30 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         self._json("DELETE", path, expect_status=200)
 
-    def test_patch_null_description_clears_field(self):
+    def test_patch_null_description_preserves_pre_slice_omit_semantics(self):
+        """Pre-#185: null description alone → nothing_to_update; with name, omit."""
         status, created, _, _, _ = self._json(
             "POST",
             "/api/positions",
-            {"name": "Clearable", "description": "keep until null"},
+            {"name": "Null desc target", "description": "keep me"},
             expect_status=201,
         )
         path = f"/api/positions/{created['id']}"
-        status, updated, raw, req, _ = self._json(
-            "PATCH", path, {"description": None}, expect_status=200
+        status, body, _, _, _ = self._json(
+            "PATCH", path, {"description": None}, expect_status=400
         )
-        self.assertEqual(updated["description"], "")
-        self.assertEqual(updated["name"], "Clearable")
-        _validate_http_against_openapi(
-            method="PATCH",
-            path=path,
-            path_pattern="/api/positions/{position_id}",
-            view_args={"position_id": created["id"]},
-            status=status,
-            response_body=raw,
-            request_body=req,
-        )
-        # name-only patch must not wipe description when description is omitted
-        status, again, _, _, _ = self._json(
+        self.assertEqual(body.get("code"), "nothing_to_update")
+        status, detail, _, _, _ = self._json("GET", path, expect_status=200)
+        self.assertEqual(detail["description"], "keep me")
+
+        status, updated, _, _, _ = self._json(
             "PATCH",
             path,
-            {"name": "Clearable renamed", "description": "restored"},
+            {"name": "Null desc renamed", "description": None},
             expect_status=200,
         )
-        status, cleared_with_name, _, _, _ = self._json(
-            "PATCH",
-            path,
-            {"name": "Clearable final", "description": None},
-            expect_status=200,
-        )
-        self.assertEqual(cleared_with_name["name"], "Clearable final")
-        self.assertEqual(cleared_with_name["description"], "")
+        self.assertEqual(updated["name"], "Null desc renamed")
+        self.assertEqual(updated["description"], "keep me")
         self._json("DELETE", path, expect_status=200)
 
     def test_sync_state_304_when_etag_matches(self):

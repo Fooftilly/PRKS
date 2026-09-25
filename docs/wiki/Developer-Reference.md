@@ -26,7 +26,12 @@ Then open the printed origin’s `/tests/browser/design_system.html?theme=light`
 
 ## Development and tests
 
+Install both requirement files first. The unflagged unit suite always preflights
+`openapi-core` from `requirements-dev.txt` (Playwright is only needed for `--e2e`):
+
 ```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
 python run_tests.py          # unit/API/structural/Node (no Chromium)
 python run_tests.py --e2e    # real Chromium + real PRKS server (full gate)
 python run_tests.py --all    # unit suite, then E2E

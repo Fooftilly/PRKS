@@ -87,8 +87,15 @@ failures).
 - **openapi-core** is a **test** pin in `requirements-dev.txt`. The Unit / API /
   contract Test Gate job installs it alongside runtime pins, and
   `python run_tests.py` runs a **unit-contract** preflight (`openapi-core` only;
-  no Playwright) so discovery cannot hit `ModuleNotFoundError` after a
-  runtime-only install. It is not required to run the production server.
+  no Playwright) so discovery cannot hit `ModuleNotFoundError`. Contributors
+  who run the fast suite must install both requirement files:
+
+  ```bash
+  python -m pip install -r requirements.txt -r requirements-dev.txt
+  ```
+
+  A runtime-only install is enough for `prks_app.py`, not for `run_tests.py`.
+  openapi-core is not required to run the production server.
 - Update `dependency-inventory.json` whenever either pin changes
   (`scripts/dependency_gate.py` / `python run_tests.py` preflight).
 
