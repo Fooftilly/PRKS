@@ -24,6 +24,34 @@ Run-real. An instruction to run the real app or Compose authorizes normal applic
 
 Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB, or clearing production storage needs a separate explicit confirmation that names that action. Run-real is not that confirmation.
 
+## Issue taxonomy
+
+Public GitHub issues must use the checked-in issue templates; unrestricted blank issues are disabled. Choose the template by the purpose of the issue, not merely by which label seems closest:
+
+- `.github/ISSUE_TEMPLATE/bug-report.md` — a concrete malfunction, regression, or incorrect behavior that needs investigation/fixing.
+- `.github/ISSUE_TEMPLATE/engineering-task.md` — concrete, bounded implementation work whose desired outcome is already decided.
+- `.github/ISSUE_TEMPLATE/research-evaluation.md` — a bounded investigation/PoC where the primary deliverable is evidence and a decision; rejection or keeping the current approach is a valid result.
+- `.github/ISSUE_TEMPLATE/audit-finding.md` — an engineering observation from audit/review that is not automatically approved implementation work.
+- `.github/ISSUE_TEMPLATE/ux-ui-finding.md` — an observed usability, accessibility, discoverability, consistency, feedback, interaction, or visual problem.
+- `.github/ISSUE_TEMPLATE/roadmap.md` — a broader product/engineering direction that should be decomposed into focused work.
+- Suspected vulnerabilities, security-boundary bypasses, exploit details, secrets, private data, or sensitive reproductions are never public issue types; follow `SECURITY.md`.
+
+Before creating any issue, search both open and closed issues for overlapping work. Keep the original tracking issue when implementation follows from a roadmap, audit finding, UX finding, bug, or research result; link the focused implementation work instead of rewriting history or creating a duplicate.
+
+### Bug reports
+
+Use the Bug report template when PRKS behaves incorrectly. Record reproducible steps (or say when reproduction is intermittent/not yet reliable), current vs expected behavior, frequency/regression status, tested commit/environment, privacy-safe evidence, likely affected area, acceptance criteria, validation, and related work. Bug fixes require regression coverage when reasonably automatable. Do not expose real library content in logs, screenshots, paths, names, notes, search terms, or URLs.
+
+### Research / evaluation
+
+Use Research / evaluation when the question is genuinely unsettled and the useful output is evidence plus a decision. State the decision to make, current state, viable options including keeping the current approach, load-bearing constraints/invariants, evaluation criteria, deliverables, validation evidence, non-goals, and related work. A completed research issue may conclude adopt, reject, defer, or keep the current approach. A proof of concept does not authorize a broad production migration unless the maintainer explicitly approved that implementation scope.
+
+### Implementation issues
+
+Concrete, bounded implementation work uses the Engineering / implementation task template. This includes approved feature slices, refactors, tooling/CI work, test infrastructure, maintenance, and other work where the desired outcome is already actionable. Keep the task focused enough for one PR or a small coherent PR sequence. Record the goal, context, bounded scope, observable acceptance criteria, validation plan, non-goals/boundaries, related work, and load-bearing implementation notes.
+
+Apply the relevant `priority:*` and `area:*` labels to bugs and implementation/research issues when supported. Use `bug`, `enhancement`, or other classification labels only when appropriate. Do not apply the maintainer-controlled `candidate`/`accepted` lifecycle labels to ordinary bug, research, or implementation issues; those labels belong to roadmap, audit-finding, and UX-finding tracking flows.
+
 ## Engineering audit findings
 
 Engineering/audit findings are tracked canonically as GitHub Issues with the `audit-finding` label, titles starting with `[Audit Finding]`, and a stable `EF-xxx` ID in the issue body. The label is the primary search key; the title prefix remains a human-readable taxonomy and fallback. Audit findings are separate from roadmap issues. Roadmap issues use the `roadmap` label as their primary search key, with the `[Roadmap]` title prefix as a human-readable fallback. The taxonomy label does not imply maintainer approval.
