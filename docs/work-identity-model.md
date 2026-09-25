@@ -1323,9 +1323,17 @@ order, and all steps are one transaction:
    `work_retirement(source)` (§4.1 "Transitions").
 2. Release the source Work's primary and citation pointers. The trigger allows
    this only because of the retirement marker.
-3. `UPDATE manifestations SET work_id = target` for the moved Manifestations.
-   The owner columns of their Assets, annotations, scoped roles and pinned
-   argument sources follow by cascade.
+3. **Freeze inherited values, then move.** Before the move, each moved
+   Manifestation whose `title` or `abstract` override is NULL, and so
+   inherits from the source Work, gets the **source Work's current value**
+   written as an explicit override. This happens only where that value
+   differs from the target Work's, and never as `''`. The Version's
+   displayed and cited title and abstract therefore don't silently change to
+   the target's. This is the same rule as credit names in step 4. The preview
+   lists these, and the user may instead let a Version inherit the target's
+   values. Then `UPDATE manifestations SET work_id = target` for the moved
+   Manifestations. The owner columns of their Assets, annotations, scoped
+   roles and pinned argument sources follow by cascade.
 4. Re-point Work-level rows to the target:
    - tags;
    - Work-scoped roles;
@@ -1691,7 +1699,7 @@ for the fixture library. The legacy dict gains only **additive** fields:
 | … with a Manifestation-owned field | the **primary** Manifestation. The editor shows the primary, so this is what the user sees. The response names the `manifestation_id` it wrote. |
 | … with `source_url` on a **non-video** Work (provenance/citation URL, a `SET_WORK_METADATA_FIELD` value) | the primary **Manifestation**'s `url`. This works whether or not the Work has an Asset. The existing video guard stays (work-source-identity.md). |
 | `SET_WORK_SOURCE` / video source identity (`source_kind`, `provider`, `provider_id`, `source_url` on a video Work) | the primary Asset's `external_stream` aggregate (`SET_WORK_SOURCE` semantics unchanged) |
-| `POST /api/works` | creates Work + Manifestation + Asset in one transaction |
+| `POST /api/works` | creates Work + Manifestation in one transaction, plus an Asset **only when the §12.2 Asset-creation predicate holds** (a file, video identity, `source_mime`, `thumb_*`, …). A notes-only or metadata-only Work gets zero Assets, matching §4 and the backfill, so `asset_count` never reports a File or Source that doesn't exist. |
 | `POST /api/works/:id/pdf` (materialization) | the **working slot** of the primary Asset (§9.4). The client must send `asset_id` once more than one exists. Without it the request is refused (`ASSET_AMBIGUOUS`) rather than guessed. |
 | Annotation endpoints | the annotation's own Asset. A new annotation needs the displayed `asset_id`, which defaults to the primary only while exactly one PDF Asset exists. |
 | `/api/bibtex/:id` | `citation_record(citation_target(work))`, which is the primary while `citation_manifestation_id` is NULL (§8.3, §8.6) |
