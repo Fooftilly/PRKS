@@ -504,7 +504,9 @@ assets:         UNIQUE (id, manifestation_id), UNIQUE (id, work_id)
 assets         FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
                    ON UPDATE CASCADE ON DELETE CASCADE
 manifestations FOREIGN KEY (primary_asset_id, id) REFERENCES assets(id, manifestation_id)
-                   ON UPDATE RESTRICT ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+                   ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED
+                   -- NO ACTION, not RESTRICT: SQLite applies RESTRICT immediately even
+                   -- on a deferred FK, which would deadlock moving an only child
 -- leaf tables, rebuilt in the same migration (SQLite cannot add a table constraint in place)
 annotations    FOREIGN KEY (asset_id, work_id)         REFERENCES assets(id, work_id)
                    ON UPDATE CASCADE ON DELETE CASCADE
@@ -517,6 +519,14 @@ argument_sources
 -- works pointers: ALTER TABLE ADD COLUMN + triggers
 works.primary_manifestation_id  TEXT
 works.citation_manifestation_id TEXT
+
+-- transaction-local Work retirement marker (see "Transitions" below)
+work_retirement_guard (id INTEGER PRIMARY KEY)          -- always empty
+work_retirement (
+    work_id    TEXT PRIMARY KEY,
+    must_clear INTEGER NOT NULL DEFAULT 1
+        REFERENCES work_retirement_guard(id) DEFERRABLE INITIALLY DEFERRED
+)   -- any row still present at COMMIT violates the FK, so the commit fails
 ```
 
 The existing single-column FKs (`roles.work_id → works`,
@@ -524,12 +534,12 @@ The existing single-column FKs (`roles.work_id → works`,
 
 | Trigger | Rule |
 | --- | --- |
-| `works_manifestation_pointers_owned` (BEFORE UPDATE OF `primary_manifestation_id`, `citation_manifestation_id` ON `works`) | A non-NULL pointer must name a Manifestation whose `work_id` is this Work (`MANIFESTATION_OWNER_MISMATCH`). The primary may not be set back to NULL (`WORK_PRIMARY_MANIFESTATION_REQUIRED`). The one exception is a Work already recorded in `sync_work_lifecycle` as `merged`, whose row the same merge transaction is about to delete (§10.4). |
+| `works_manifestation_pointers_owned` (BEFORE UPDATE OF `primary_manifestation_id`, `citation_manifestation_id` ON `works`) | A non-NULL pointer must name a Manifestation whose `work_id` is this Work (`MANIFESTATION_OWNER_MISMATCH`). The primary may not be set back to NULL (`WORK_PRIMARY_MANIFESTATION_REQUIRED`), **unless the Work is marked in `work_retirement`**, meaning the same transaction deletes or merges it (see "Transitions" below). |
+| `works_retirement_clear` (AFTER DELETE ON `works`) | Removes the Work's `work_retirement` marker when its row is deleted, which is the only way the marker can leave before COMMIT succeeds. |
 | `works_manifestation_pointers_insert` (BEFORE INSERT ON `works`) | A Work is inserted with NULL pointers. Its Manifestation cannot exist before the Work, because `manifestations.work_id` references it. |
 | `manifestations_pointer_target_move` (BEFORE UPDATE OF `work_id` ON `manifestations`) | A Manifestation that its Work names as primary or citation cannot be moved away (`MANIFESTATION_IS_POINTER_TARGET`). The pointer must change first, in the same transaction. |
 | `manifestations_pointer_target_delete` (BEFORE DELETE ON `manifestations`) | The same rule for deletion. A whole-Work delete is unaffected: the Work row is gone before its Manifestations cascade. |
 | `manifestation_origin_immutable`, `asset_origin_immutable` (BEFORE UPDATE OF `origin_work_id`) | The legacy-operation mapping (§11.2) can never be rewritten. |
-| `manifestation_primary_asset_kept` (BEFORE UPDATE OF `primary_asset_id` ON `manifestations`, BEFORE UPDATE OF `state` ON `assets`) | `primary_asset_id` may not be cleared while the Manifestation still has an `active` Asset, and the primary Asset may not be trashed until the pointer has moved. Deleting it is already refused by the deferred FK. |
 
 What each required invariant maps to:
 
@@ -552,23 +562,63 @@ What each required invariant maps to:
   re-copy owner columns.
 - **A pointer target cannot leave silently.** A Manifestation that is its
   Work's primary or citation Version cannot be moved away or deleted until the
-  pointer changes. The same holds for a primary Asset (deferred FK, checked at
-  commit).
+  pointer changes (triggers, immediate). A primary Asset may be moved or
+  deleted inside a transaction, but that transaction cannot commit unless the
+  pointer has also changed (the deferred `NO ACTION` FK).
 - **A pinned citation blocks deleting a Version.** Deleting a Manifestation that
   an Argument pins is refused (`RESTRICT`). The canonical command reports it as
   in use, like `ARGUMENT_IN_USE` today. Deleting a whole Work still cascades
   cleanly: every child row goes with it.
 
+**Transitions: every legal final state has a legal path.** Pointer rules must
+not deadlock a move whose *result* is valid, and they must not need transient
+placeholder Versions or Files. The two "only child" cases:
+
+- **Moving the only (primary) Asset out of a Manifestation.** The final state,
+  a Manifestation with zero Assets and a NULL `primary_asset_id`, is valid. In
+  one transaction: `UPDATE assets SET manifestation_id, work_id`, then
+  `UPDATE manifestations SET primary_asset_id = NULL` (either order works). The
+  deferred `NO ACTION` FK is satisfied at COMMIT. There is no "may not clear
+  while an Asset is active" trigger, because that rule deadlocked this case.
+  The final-state rule it expressed now lives in the canonical command's
+  final-state check and in the integrity query (below).
+- **Moving the only Manifestation out of a Work.** A Work with zero Versions is
+  **not** a valid final state, so the emptied source Work has to be retired in
+  the same transaction. There are exactly two supported outcomes:
+  - **delete** the empty Work (`MOVE_MANIFESTATION` with
+    `empty_source = delete`);
+  - **merge** it into the target (`MERGE_WORKS`, §10.4).
+
+  Both use the same explicit transition, which the triggers recognize:
+  1. `INSERT INTO work_retirement (work_id)`. For a merge, the durable
+     `sync_work_lifecycle(merged)` row is also inserted.
+  2. Clear the Work's pointers. The trigger allows this only because of step 1.
+  3. Move the Manifestation(s). The owner columns follow by cascade.
+  4. `DELETE FROM works` for the retired Work. `works_retirement_clear` removes
+     the marker.
+
+  If step 4 never happens, the marker's guard FK makes COMMIT fail and
+  everything rolls back. So a retirement marker can never outlive its
+  transaction, and a Work can never persist without a primary.
+
+Moving a **primary** Asset or Manifestation while siblings remain simply
+re-points the pointer to a sibling first (or, for the Asset, in either order).
+Moving a non-primary child needs no pointer change at all.
+
 **What SQLite cannot enforce at commit.** SQLite has no deferred triggers or
-CHECKs, so "every Work *has* a primary Manifestation" and "a Manifestation with
-an active Asset *has* a primary Asset" cannot be required at the moment a row
-is inserted. Both are set by the single statement or canonical command that
+CHECKs. So "every Work *has* a primary Manifestation" (at creation) and "a
+Manifestation with an active Asset *has* a primary Asset, and it is active"
+cannot be required as database constraints at commit. Both are set by the single statement or canonical command that
 creates the rows. In Slice A the mirror trigger does it: it inserts the
 Manifestation (and Asset) and sets the pointers inside the Work's own INSERT.
-The triggers above then make sure a pointer, once set, can never be cleared,
-moved or pointed at a foreign row. An **integrity query** (Works with a NULL
-primary, Manifestations with active Assets but no primary Asset) runs in the
-schema tests, after the backfill, and in backup verification.
+The triggers above then make sure a Work's primary, once set, can only be
+cleared by retiring the Work, and that no pointer ever names a foreign row.
+Every canonical command that touches Versions or Files runs a **final-state
+check** on the rows it touched before committing, and refuses the command if
+the check fails. The same check exists as an **integrity query** (Works with a
+NULL primary; Manifestations with active Assets but no primary Asset, or whose
+primary Asset is not active), which runs in the schema tests, after the
+backfill, and in backup verification.
 
 All of the above was prototyped against SQLite 3.45 (the version used in
 development). Contradictory rows for each invariant were refused, and legal
@@ -584,7 +634,17 @@ upgraded DBs:
 
 - each invariant's contradictory insert or update is refused;
 - legal moves cascade their owner columns;
-- a pointer target cannot be deleted or moved away while referenced;
+- a pointer target cannot be deleted or moved away while referenced, and a
+  transaction that moves a primary Asset without changing the pointer fails at
+  COMMIT;
+- **transition tests** (Slice A for the schema, Slice K for the commands):
+  moving the only primary Asset out leaves the source Manifestation with zero
+  Assets and a NULL primary; moving a non-primary Asset needs no pointer
+  change; moving the only Manifestation out succeeds with each supported
+  outcome for the emptied Work (delete, merge); clearing a primary without
+  retirement is refused; a retirement marker left behind makes COMMIT fail;
+  and every failed transition rolls back with all pointers and owner columns
+  unchanged;
 - after the backfill, `PRAGMA foreign_key_check` reports nothing for the
   rebuilt tables, and the integrity query returns no rows;
 - a fixture with legacy orphaned annotations, roles and argument sources
@@ -1220,23 +1280,25 @@ before mutation. None of them is silent.
 | Operation | Effect | IDs |
 | --- | --- | --- |
 | `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed, and any citation-identity collision is shown in the preview (§8.5). `last_opened_at` is max. | The source `W-…` gets `sync_work_lifecycle(state = merged, target)`. Old links, tabs and `[[W-…]]` **reads** follow the redirect. **Every** pending operation naming the source is refused with `WORK_MERGED` + `target_work_id` and is never applied to the target. The client may re-apply the user's intent explicitly (§14.2). |
-| `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." One `UPDATE manifestations SET work_id` re-keys everything the Manifestation owns by cascade (§4.1): its Assets' and annotations' `work_id`, its scoped roles, and its pinned argument sources. None of these can collide, because each identity includes the unchanged `MF-…` ID. If the Manifestation is a pointer target of the old Work, the pointer must move first. Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. If the old Work is left with no Manifestation, it is merged into the target or deleted, and the user chooses. |
-| `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." It sets the Asset's `manifestation_id` and `work_id` together (the composite FK requires the pair to match). Its annotations keep their `asset_id` and follow the new `work_id` by cascade. If the Asset is its Manifestation's primary, the pointer must move first. | `AS-…` unchanged. |
+| `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." One `UPDATE manifestations SET work_id` re-keys everything the Manifestation owns by cascade (§4.1): its Assets' and annotations' `work_id`, its scoped roles, and its pinned argument sources. None of these can collide, because each identity includes the unchanged `MF-…` ID. If the Manifestation is a pointer target of the old Work and siblings remain, the pointer is re-pointed to a sibling first. If it is the old Work's **only** Manifestation, the command requires an explicit `empty_source` outcome, `delete` or `merge`, and retires the old Work in the same transaction (§4.1 "Transitions"). No placeholder Version is ever created. Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. |
+| `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." It sets the Asset's `manifestation_id` and `work_id` together (the composite FK requires the pair to match). Its annotations keep their `asset_id` and follow the new `work_id` by cascade. If the Asset is its Manifestation's primary, the same transaction re-points `primary_asset_id` to a remaining active sibling, or clears it when none remains. A Manifestation with zero Assets is a valid final state. The deferred `NO ACTION` FK checks the pointer at COMMIT. | `AS-…` unchanged. |
 | `DECLINE_DUPLICATE(a, b)` | Records "not a duplicate". | `duplicate_decisions(entity_type, low_id, high_id, decision, decided_at)`. |
 
 **`MERGE_WORKS` transaction order.** The §4.1 constraints depend on this
 order, and all steps are one transaction:
 
-1. Insert `sync_work_lifecycle(source, 'merged', target)`.
+1. Insert `sync_work_lifecycle(source, 'merged', target)` and
+   `work_retirement(source)` (§4.1 "Transitions").
 2. Release the source Work's primary and citation pointers. The trigger allows
-   this only because step 1 exists.
+   this only because of the retirement marker.
 3. `UPDATE manifestations SET work_id = target` for the moved Manifestations.
    The owner columns of their Assets, annotations, scoped roles and pinned
    argument sources follow by cascade.
 4. Re-point Work-level rows: tags, Work-scoped roles, and Work-level argument
    sources. Only exactly identical citation rows are collapsed (§8.5), and the
    user's choices from the preview are applied.
-5. Delete the source Work row, and tombstone its sync scopes.
+5. Delete the source Work row, which also removes its retirement marker, and
+   tombstone its sync scopes.
 6. Advance the revisions the merge changed, then commit. The deferred FKs are
    checked at this point.
 
@@ -1795,7 +1857,7 @@ exactly right.
 
 | Slice | Content | User-visible? | Depends on |
 | --- | --- | --- | --- |
-| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests; (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
+| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
 | **B. Asset fingerprint pass + ingest hashing** | Bounded, resumable hashing pass (§12.4). Compute `ingest_sha256` on the upload/import stream **before** linearization, for new Assets. No duplicate UI yet. | No | A |
 | **C. Projection module** | `work_projection.legacy_work` / `legacy_work_summary`. Move readers family by family (detail, browse/recent, folder/person/playlist summaries, BibTeX via `citation_record`), each with JSON parity tests and a byte-identical BibTeX test. | No | A |
 | **D. Asset authority** | vN+1: locator, source aggregate, materialization revisions and `thumb_page` owned by `assets`. `annotations.asset_id` authoritative and NOT NULL. Text index keyed by Asset. Cleanup and backup audit count Asset locators. Scope and revision copies (`asset-source`, `asset-annotation`). Legacy operations mapped to `origin_AS(W)`. Browser last-page key migration. | No | C |
@@ -1805,7 +1867,7 @@ exactly right.
 | **H. Versions UI** | "Add another version / file", set primary, open a specific Version or File, and a version picker for Copy citation, all behind §13.4's progressive disclosure. Follow `DESIGN.md` for Work detail composition. #61's secondary view builds on this. | **Yes** | G |
 | **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256` (and `content_sha256` for legacy files). Offers the four choices in §10.2. | Yes | B, H |
 | **J. Identifier candidates + decline** | Normalized DOI/ISBN/arXiv candidates, a review list, and `duplicate_decisions`. | Yes | E, I |
-| **K. Merge / move workflow** | `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
+| **K. Merge / move workflow** | Command-level versions of the §4.1 transition tests, including each `empty_source` outcome. `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
 | **L. RapidFuzz evaluation** | A separate research/evaluation issue (dependency review, ranking quality on synthetic data). It only ranks; it never decides. | — | J |
 
 A, B and C can proceed in parallel after A's migration merges. D and E are
