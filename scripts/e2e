@@ -60,6 +60,9 @@ _resolve_agent_base() {
       printf '%s\n' "$PRKS_E2E_BASE"
       return 0
     fi
+    # Explicit operator override must not silently fall through to another tip.
+    echo "scripts/e2e agent: PRKS_E2E_BASE=${PRKS_E2E_BASE} does not resolve to a commit" >&2
+    return 1
   fi
   if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
     for candidate in "origin/${GITHUB_BASE_REF}" "${GITHUB_BASE_REF}"; do
