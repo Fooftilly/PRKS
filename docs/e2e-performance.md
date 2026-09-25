@@ -358,14 +358,14 @@ The first coverage-based reduction applies the KEEP / SPLIT / MOVE rule to
 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
-| Coalescing across reload and repeated intent | `tests/browser/run_local_store_selftest.js` opens a new store over the same fake IndexedDB, proves repeated intent coalesces, and proves opposite intent cancels across reload | MOVE |
+| Coalescing across reload and repeated intent | `tests/browser/run_local_store_selftest.js` owns repeated intent and opposite cancel across a reopened store; `test_post_reload_opposite_edit_cancels_pending` keeps the thin remount → Manage tags → opposite click boundary | SPLIT |
 | Lost response replays once with the same operation identity | `tests/browser/run_work_tag_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_tag_sync.py` proves server replay of an existing `op_id` is exact/idempotent | SPLIT → fast layers |
 
 The browser module deliberately retains scenarios whose value is the integrated
 boundary itself: offline add/remove through the real Work UI, reload/restart/reconnect,
-conflict buttons and visible optimistic state, degraded Tag-catalog behavior,
-Settings-driven cache clear, online UI wiring to the durable queue, and Tag
-create/delete/merge lifecycle behavior.
+post-reload opposite edit through the remounted tag editor, conflict buttons and
+visible optimistic state, degraded Tag-catalog behavior, Settings-driven cache clear,
+online UI wiring to the durable queue, and Tag create/delete/merge lifecycle behavior.
 
 This is the model for later families: add or confirm the lower-level regression
 coverage first, then remove only the redundant Chromium composition. Do not batch

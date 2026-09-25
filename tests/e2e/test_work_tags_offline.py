@@ -130,6 +130,18 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
 
+    def test_post_reload_opposite_edit_cancels_pending(self):
+        """Thin browser boundary for SPLIT coalescing: after reload, a freshly
+        mounted work-tag-editor must reload options, overlay the pending row,
+        and route the opposite click through coalesceWorkTag. Deterministic
+        repeated-intent / reopened-store branches stay in the Node local-store
+        selftest; this only proves the remount → edit path."""
+        server, page, context = self.start(); self.offline(page, context)
+        self.add(page); self.pending(page, 1)
+        page.reload(); self.manage(page)
+        self.remove(page, 'Offline Existing'); self.pending(page, 0)
+        self.assertEqual(self.tag_operations(page), [])
+
     def test_revision_conflict_retains_intent_and_apply_creates_new_operation(self):
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
