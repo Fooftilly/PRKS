@@ -2334,22 +2334,35 @@ class PRKSDatabase:
         return [by_id[i] for i in ordered_ids if i in by_id]
 
     def delete_empty_folder(self, folder_id: str):
-        exists = self.execute_query("SELECT 1 FROM folders WHERE id = ?", (folder_id,))
-        if not exists:
+        """Destroy an empty Folder. Relationships cascade; Tag identity does not.
+
+        Opens a transaction and delegates destruction to
+        ``folder_sync.delete_folder_on_conn`` — the same primitive
+        ``DELETE_FOLDER`` uses. Sync must not call this wrapper (nested txn /
+        HTTP-shaped errors); call the conn-scoped helper instead.
+
+        Deleting a folder removes the folder and its ``folder_tags`` rows (via
+        ON DELETE CASCADE). It deliberately does NOT touch Tag identity — see
+        ``delete_tag()``.
+        """
+        fid = (folder_id or "").strip()
+        if not fid:
             raise ValueError("Folder not found.")
-        count = self.execute_query("SELECT COUNT(*) as c FROM folder_files WHERE folder_id = ?", (folder_id,))
-        if count and count[0]['c'] > 0:
-            raise ValueError("Cannot delete folder: Folder is not empty. Please remove all files first.")
-        child_count = self.execute_query(
-            "SELECT COUNT(*) as c FROM folders WHERE parent_id = ?",
-            (folder_id,),
-        )
-        if child_count and child_count[0]["c"] > 0:
-            raise ValueError("Cannot delete folder: Folder has subfolders. Please move or delete them first.")
-        # Deleting a folder removes the folder and its folder_tags rows (via
-        # ON DELETE CASCADE). It deliberately does NOT touch Tag identity --
-        # see delete_tag(). One statement, so atomic by autocommit.
-        self.execute_query("DELETE FROM folders WHERE id = ?", (folder_id,))
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            deleted, refusal = folder_sync.delete_folder_on_conn(conn, fid)
+            if refusal == "FOLDER_NOT_EMPTY":
+                raise ValueError(
+                    "Cannot delete folder: Folder is not empty. "
+                    "Please remove all files first."
+                )
+            if refusal == "FOLDER_HAS_SUBFOLDERS":
+                raise ValueError(
+                    "Cannot delete folder: Folder has subfolders. "
+                    "Please move or delete them first."
+                )
+            if not deleted:
+                raise ValueError("Folder not found.")
 
     def _search_works_fts_tokens(self, tokens: List[str]) -> List[dict]:
         clause = _prks_fts_prefix_clause(tokens)
