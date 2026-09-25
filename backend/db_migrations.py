@@ -12,6 +12,7 @@ Migrations may modify SQLite state only — never managed filesystem data.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -24,7 +25,7 @@ from backend.log_safety import safe_error_type, safe_log_label
 
 LOGGER = logging.getLogger("prks.db")
 
-LATEST_SCHEMA_VERSION = 16
+LATEST_SCHEMA_VERSION = 17
 LEGACY_BASELINE_VERSION = 9
 
 # Unversioned files count as PRKS only with works plus another established table.
@@ -111,6 +112,15 @@ REQUIRED_TABLES = (
     "sync_entity_revisions",
     "sync_tag_lifecycle",
     "pending_pdf_cleanup",
+    # #60 Slice A (schema 17): Work -> Manifestation -> Asset identity layer.
+    "manifestations",
+    "assets",
+    "manifestation_relations",
+    "manifestation_identifiers",
+    "sync_work_lifecycle",
+    "work_retirement_guard",
+    "work_retirement",
+    "migration_quarantine",
 )
 
 REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
@@ -156,6 +166,8 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
         "updated_at",
         "canonical_annotation_set_revision",
         "materialized_pdf_annotation_revision",
+        "primary_manifestation_id",
+        "citation_manifestation_id",
     ),
     "persons": (
         "id",
@@ -183,7 +195,7 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
         "updated_at",
     ),
     "playlists": ("id", "title", "description", "original_url", "created_at", "updated_at"),
-    "roles": ("person_id", "work_id", "role_type", "order_index", "credit_name"),
+    "roles": ("person_id", "work_id", "role_type", "order_index", "credit_name", "manifestation_id"),
     "processing_files": (
         "id",
         "rel_path",
@@ -239,7 +251,9 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "positions": ("id", "name", "description", "created_at", "updated_at"),
     "arguments": ("id", "name", "kind", "main_text", "created_at", "updated_at"),
     "argument_verdicts": ("id", "label", "sort_order", "enabled"),
-    "argument_sources": ("argument_id", "work_id", "pages", "order_index", "created_at"),
+    "argument_sources": (
+        "argument_id", "order_index", "work_id", "manifestation_id", "pages", "created_at",
+    ),
     "argument_target_positions": (
         "argument_id",
         "position_id",
@@ -605,6 +619,50 @@ _TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
 }
 
 _POST_V13_TABLES = frozenset({"sync_operations", "sync_entity_revisions", "sync_tag_lifecycle"})
+# Created only by the v17 migration; the pre-v10 bridge must not create them early.
+_POST_V16_TABLES = frozenset(
+    {
+        "manifestations",
+        "assets",
+        "manifestation_relations",
+        "manifestation_identifiers",
+        "sync_work_lifecycle",
+        "work_retirement_guard",
+        "work_retirement",
+        "migration_quarantine",
+    }
+)
+# The pre-v17 shape of the leaf tables v17 rebuilds. The pre-v10 bridge creates
+# a missing one in this shape (the current db_schema.sql shape references
+# tables that do not exist yet), and v17 then rebuilds it like any other.
+_LEGACY_LEAF_TABLE_SQL = {
+    "roles": """
+CREATE TABLE roles (
+    person_id TEXT NOT NULL,
+    work_id TEXT NOT NULL,
+    role_type TEXT NOT NULL,
+    order_index INTEGER DEFAULT 0,
+    credit_name TEXT,
+    PRIMARY KEY (person_id, work_id, role_type, order_index),
+    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+)
+""",
+    "annotations": """
+CREATE TABLE annotations (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL,
+    type TEXT,
+    content TEXT,
+    page_index INTEGER,
+    color TEXT,
+    geometry_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
+)
+""",
+}
 _POST_V10_TABLES = frozenset({"saved_views"})
 _POST_V11_TABLES = frozenset(
     {
@@ -646,7 +704,7 @@ _CURRENT_TABLE_PKS: Dict[str, Tuple[str, ...]] = {
     "positions": ("id",),
     "arguments": ("id",),
     "argument_verdicts": ("id",),
-    "argument_sources": ("argument_id", "work_id"),
+    "argument_sources": ("argument_id", "order_index"),
     "argument_target_positions": ("argument_id", "position_id"),
     "argument_target_arguments": ("argument_id", "target_argument_id"),
 }
@@ -661,10 +719,6 @@ _CURRENT_TABLE_FKS: Dict[str, Tuple[Tuple[str, str, str, str], ...]] = {
     "concept_parents": (
         ("child_concept_id", "concepts", "id", "CASCADE"),
         ("parent_concept_id", "concepts", "id", "CASCADE"),
-    ),
-    "argument_sources": (
-        ("argument_id", "arguments", "id", "CASCADE"),
-        ("work_id", "works", "id", "CASCADE"),
     ),
     "argument_target_positions": (
         ("argument_id", "arguments", "id", "CASCADE"),
@@ -972,6 +1026,7 @@ def validate_current_schema(conn: sqlite3.Connection) -> None:
                 "Required schema object is missing or has the wrong definition.",
                 object=table,
             )
+    _validate_work_identity_objects(conn)
 
 
 def application_schema_signature(conn: sqlite3.Connection) -> dict:
@@ -995,11 +1050,18 @@ def application_schema_signature(conn: sqlite3.Connection) -> dict:
             "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IS NOT NULL"
         )
     )
+    views = sorted(
+        _row_field(row, 0, "name")
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'view' AND name IS NOT NULL"
+        )
+    )
     return {
         "tables": tables,
         "columns": columns,
         "indexes": indexes,
         "triggers": triggers,
+        "views": views,
         "fts_columns": sorted(_fts_column_names(conn)) if table_exists(conn, "works_fts") else [],
     }
 
@@ -1399,7 +1461,16 @@ def _ensure_missing_tables(conn: sqlite3.Connection, schema_sql: str) -> None:
             continue
         if name == "works_fts":
             continue
-        if name in _POST_V10_TABLES or name in _POST_V11_TABLES or name in _POST_V13_TABLES:
+        if (
+            name in _POST_V10_TABLES
+            or name in _POST_V11_TABLES
+            or name in _POST_V13_TABLES
+            or name in _POST_V16_TABLES
+        ):
+            continue
+        if name in _LEGACY_LEAF_TABLE_SQL:
+            if not table_exists(conn, name):
+                conn.execute(_LEGACY_LEAF_TABLE_SQL[name])
             continue
         if name == "arguments":
             if not table_exists(conn, "arguments"):
@@ -2115,6 +2186,834 @@ def _ensure_roles_person_work_role_unique(conn: sqlite3.Connection) -> None:
     conn.execute(_INDEX_SQL[spec.name])
 
 
+# ---------------------------------------------------------------------------
+# Schema 17: #60 Slice A -- Work -> Manifestation -> Asset identity layer.
+# See docs/work-identity-model.md (§4.1, §8.5, §12.2, §12.3 step 1).
+#
+# FROZEN: this is the v17 shape the migration creates. `db_schema.sql` carries
+# the same statements, and `validate_current_schema` compares each object's
+# stored SQL against them, so fresh and upgraded libraries cannot drift. A
+# later slice that changes one of these objects adds its own migration and
+# moves the validator to that shape; it never edits this text.
+#
+# Authority at schema 17: `works` is the ONLY authority for every field. The
+# `legacy_work_*_mirror` views define the projection, the `*_mirror_*`
+# triggers keep `manifestations`/`assets` equal to it in the same statement
+# (works -> new rows only; nothing writes back), and the `*_mirror_read_only`
+# triggers refuse any other write to a mirrored column.
+#
+# One deliberate deviation from the design text: the pinned-citation FK on
+# `argument_sources` is `ON DELETE NO ACTION` (immediate), not `RESTRICT`.
+# SQLite applies RESTRICT at the moment the parent row goes, so a whole-Work
+# delete -- which cascades both the Manifestation and the citation rows --
+# failed or succeeded depending on which child table SQLite happened to
+# process first (creation order). Immediate NO ACTION checks at the end of the
+# statement: deleting a pinned Version alone is still refused, and deleting the
+# whole Work cascades cleanly whatever the table order.
+# ---------------------------------------------------------------------------
+_V17_WORK_IDENTITY_SQL = """
+CREATE TABLE manifestations (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+    origin_work_id TEXT UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'unspecified' CHECK (kind IN ('unspecified', 'preprint', 'accepted_manuscript', 'published', 'edition', 'translation', 'reprint', 'web_page', 'video', 'other')),
+    title TEXT CHECK (title IS NULL OR title <> ''),
+    subtitle TEXT,
+    abstract TEXT CHECK (abstract IS NULL OR abstract <> ''),
+    language TEXT,
+    doc_type TEXT,
+    year TEXT,
+    published_date TEXT,
+    edition TEXT,
+    publisher TEXT,
+    location TEXT,
+    journal TEXT,
+    volume TEXT,
+    issue TEXT,
+    pages TEXT,
+    isbn TEXT,
+    doi TEXT,
+    url TEXT,
+    urldate TEXT,
+    primary_asset_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (id, work_id),
+    FOREIGN KEY (primary_asset_id, id) REFERENCES assets(id, manifestation_id)
+        ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE assets (
+    id TEXT PRIMARY KEY,
+    manifestation_id TEXT NOT NULL,
+    work_id TEXT NOT NULL,
+    origin_work_id TEXT UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('managed_file', 'external_stream')),
+    role TEXT NOT NULL DEFAULT 'document' CHECK (role IN ('document', 'snapshot', 'readable_text', 'attachment', 'other')),
+    storage_locator TEXT,
+    source_locator TEXT,
+    provider TEXT,
+    provider_id TEXT,
+    url TEXT,
+    media_type TEXT,
+    byte_size INTEGER,
+    ingest_sha256 TEXT,
+    content_sha256 TEXT,
+    content_generation INTEGER NOT NULL DEFAULT 0,
+    fingerprinted_at TIMESTAMP,
+    origin TEXT NOT NULL CHECK (origin IN ('upload', 'processing_import', 'adopted', 'web_capture', 'legacy')),
+    origin_url TEXT,
+    origin_ref TEXT,
+    derived_from_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    supersedes_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'trashed')),
+    thumb_page INTEGER,
+    thumb_url TEXT,
+    canonical_annotation_set_revision INTEGER NOT NULL DEFAULT 0,
+    materialized_pdf_annotation_revision INTEGER NOT NULL DEFAULT 0,
+    captured_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (id, manifestation_id),
+    UNIQUE (id, work_id),
+    FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE manifestation_relations (
+    work_id TEXT NOT NULL,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    relation TEXT NOT NULL CHECK (relation IN ('revision_of', 'published_version_of', 'new_edition_of', 'translation_of', 'reprint_of')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (from_id, to_id, relation),
+    CHECK (from_id <> to_id),
+    FOREIGN KEY (from_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (to_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE manifestation_identifiers (
+    manifestation_id TEXT NOT NULL REFERENCES manifestations(id) ON DELETE CASCADE,
+    scheme TEXT NOT NULL CHECK (scheme <> ''),
+    value TEXT NOT NULL,
+    normalized TEXT NOT NULL CHECK (normalized <> ''),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (manifestation_id, scheme, normalized)
+);
+
+CREATE TABLE sync_work_lifecycle (
+    work_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('active', 'merged', 'deleted')),
+    target_work_id TEXT,
+    changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((state = 'merged' AND target_work_id IS NOT NULL) OR
+           (state != 'merged' AND target_work_id IS NULL))
+);
+
+CREATE TABLE work_retirement_guard (
+    id INTEGER PRIMARY KEY CHECK (0)
+);
+
+CREATE TABLE work_retirement (
+    work_id TEXT PRIMARY KEY,
+    must_clear INTEGER NOT NULL DEFAULT 1
+        REFERENCES work_retirement_guard(id) DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE migration_quarantine (
+    id INTEGER PRIMARY KEY,
+    source_table TEXT NOT NULL,
+    source_rowid INTEGER,
+    row_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    quarantined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE annotations (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL,
+    type TEXT,
+    content TEXT,
+    page_index INTEGER,
+    color TEXT,
+    geometry_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    asset_id TEXT,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+    FOREIGN KEY (asset_id, work_id) REFERENCES assets(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE roles (
+    person_id TEXT NOT NULL,
+    work_id TEXT NOT NULL,
+    role_type TEXT NOT NULL,
+    order_index INTEGER DEFAULT 0,
+    credit_name TEXT,
+    manifestation_id TEXT,
+    PRIMARY KEY (person_id, work_id, role_type, order_index),
+    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+    FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE argument_sources (
+    argument_id TEXT NOT NULL,
+    order_index INTEGER NOT NULL,
+    work_id TEXT NOT NULL,
+    manifestation_id TEXT,
+    pages TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (argument_id, order_index),
+    FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+    FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE NO ACTION
+);
+
+CREATE INDEX idx_manifestations_work_id ON manifestations(work_id);
+CREATE INDEX idx_manifestations_primary_asset ON manifestations(primary_asset_id, id);
+CREATE INDEX idx_assets_manifestation ON assets(manifestation_id, work_id);
+CREATE INDEX idx_assets_derived_from ON assets(derived_from_asset_id);
+CREATE INDEX idx_assets_supersedes ON assets(supersedes_asset_id);
+CREATE INDEX idx_manifestation_relations_from ON manifestation_relations(from_id, work_id);
+CREATE INDEX idx_manifestation_relations_to ON manifestation_relations(to_id, work_id);
+CREATE INDEX idx_manifestation_identifiers_lookup ON manifestation_identifiers(scheme, normalized);
+CREATE INDEX idx_annotations_asset ON annotations(asset_id, work_id);
+CREATE INDEX idx_roles_manifestation ON roles(manifestation_id, work_id);
+CREATE INDEX idx_argument_sources_manifestation ON argument_sources(manifestation_id, work_id);
+CREATE UNIQUE INDEX idx_argument_sources_citation ON argument_sources(argument_id, work_id, COALESCE(manifestation_id, ''), pages);
+
+CREATE VIEW legacy_work_asset_mirror AS
+SELECT
+    s.id AS work_id,
+    (COALESCE(s.file_path, '') <> ''
+     OR s.kind_norm = 'video'
+     OR COALESCE(s.provider, '') <> ''
+     OR COALESCE(s.provider_id, '') <> ''
+     OR COALESCE(s.source_mime, '') <> ''
+     OR COALESCE(s.thumb_url, '') <> ''
+     OR s.thumb_page IS NOT NULL
+     OR COALESCE(s.canonical_annotation_set_revision, 0) <> 0
+     OR COALESCE(s.materialized_pdf_annotation_revision, 0) <> 0) AS has_asset_value,
+    CASE WHEN s.is_stream THEN 'external_stream' ELSE 'managed_file' END AS kind,
+    s.locator AS storage_locator,
+    s.provider AS provider,
+    s.provider_id AS provider_id,
+    CASE WHEN s.is_stream THEN s.source_url END AS url,
+    CASE
+        WHEN COALESCE(s.source_mime, '') <> '' THEN s.source_mime
+        WHEN NOT s.is_stream AND s.locator IS NOT NULL THEN 'application/pdf'
+    END AS media_type,
+    s.thumb_page AS thumb_page,
+    s.thumb_url AS thumb_url,
+    s.canonical_annotation_set_revision AS canonical_annotation_set_revision,
+    s.materialized_pdf_annotation_revision AS materialized_pdf_annotation_revision
+FROM (
+    SELECT
+        w.id, w.file_path, w.source_url, w.source_mime, w.thumb_url, w.thumb_page,
+        w.provider, w.provider_id, w.canonical_annotation_set_revision,
+        w.materialized_pdf_annotation_revision,
+        lower(trim(COALESCE(w.source_kind, ''), char(32, 9, 10, 11, 12, 13))) AS kind_norm,
+        CASE lower(trim(COALESCE(w.source_kind, ''), char(32, 9, 10, 11, 12, 13)))
+            WHEN 'video' THEN 1
+            WHEN 'pdf' THEN 0
+            ELSE (trim(COALESCE(w.file_path, ''), char(32, 9, 10, 11, 12, 13)) = ''
+                  AND trim(COALESCE(w.source_url, ''), char(32, 9, 10, 11, 12, 13)) <> '')
+        END AS is_stream,
+        CASE
+            WHEN substr(w.file_path, 1, 10) = '/api/pdfs/'
+             AND length(w.file_path) > 10
+             AND instr(substr(w.file_path, 11), '/') = 0
+             AND instr(substr(w.file_path, 11), char(92)) = 0
+             AND substr(w.file_path, 11) NOT IN ('.', '..')
+             AND substr(w.file_path, 11) = trim(substr(w.file_path, 11), char(32, 9, 10, 11, 12, 13))
+             AND NOT (substr(w.file_path, 11) GLOB '*%[0-9A-Fa-f][0-9A-Fa-f]*')
+            THEN substr(w.file_path, 11)
+        END AS locator
+    FROM works w
+) s;
+
+CREATE VIEW legacy_work_manifestation_mirror AS
+SELECT
+    w.id AS work_id,
+    w.doc_type AS doc_type,
+    w.year AS year,
+    w.published_date AS published_date,
+    w.edition AS edition,
+    w.publisher AS publisher,
+    w.location AS location,
+    w.journal AS journal,
+    w.volume AS volume,
+    w.issue AS issue,
+    w.pages AS pages,
+    w.isbn AS isbn,
+    w.doi AS doi,
+    CASE
+        WHEN a.kind = 'external_stream' THEN NULL
+        ELSE w.source_url
+    END AS url,
+    w.urldate AS urldate
+FROM works w
+LEFT JOIN assets a ON a.origin_work_id = w.id AND a.work_id = w.id;
+
+CREATE TRIGGER works_au
+AFTER UPDATE OF title, abstract, text_content, author_text ON works
+BEGIN
+  INSERT INTO works_fts(works_fts, rowid, title, abstract, text_content, author_text)
+  VALUES ('delete', old.rowid, old.title, old.abstract, old.text_content, COALESCE(old.author_text, ''));
+  INSERT INTO works_fts(rowid, title, abstract, text_content, author_text)
+  VALUES (new.rowid, new.title, new.abstract, new.text_content, COALESCE(new.author_text, ''));
+END;
+
+CREATE TRIGGER works_manifestation_pointers_insert
+BEFORE INSERT ON works
+WHEN NEW.primary_manifestation_id IS NOT NULL OR NEW.citation_manifestation_id IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_POINTERS_START_NULL');
+END;
+
+CREATE TRIGGER works_manifestation_pointers_owned
+BEFORE UPDATE OF primary_manifestation_id, citation_manifestation_id ON works
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_PRIMARY_MANIFESTATION_REQUIRED')
+    WHERE NEW.primary_manifestation_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM work_retirement r WHERE r.work_id = NEW.id);
+    SELECT RAISE(ABORT, 'MANIFESTATION_OWNER_MISMATCH')
+    WHERE NEW.primary_manifestation_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM manifestations m
+                      WHERE m.id = NEW.primary_manifestation_id AND m.work_id = NEW.id);
+    SELECT RAISE(ABORT, 'MANIFESTATION_OWNER_MISMATCH')
+    WHERE NEW.citation_manifestation_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM manifestations m
+                      WHERE m.id = NEW.citation_manifestation_id AND m.work_id = NEW.id);
+END;
+
+CREATE TRIGGER works_retirement_clear
+AFTER DELETE ON works
+BEGIN
+    DELETE FROM work_retirement WHERE work_id = OLD.id;
+END;
+
+CREATE TRIGGER work_retirement_delete_only_after_work
+BEFORE DELETE ON work_retirement
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_RETIREMENT_WORK_STILL_EXISTS')
+    WHERE EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id);
+END;
+
+CREATE TRIGGER work_retirement_no_update
+BEFORE UPDATE ON work_retirement
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_RETIREMENT_IMMUTABLE');
+END;
+
+CREATE TRIGGER work_retirement_guard_no_update
+BEFORE UPDATE ON work_retirement_guard
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_RETIREMENT_IMMUTABLE');
+END;
+
+CREATE TRIGGER manifestations_pointer_target_move
+BEFORE UPDATE OF id, work_id ON manifestations
+WHEN NEW.id IS NOT OLD.id OR NEW.work_id IS NOT OLD.work_id
+BEGIN
+    SELECT RAISE(ABORT, 'MANIFESTATION_IS_POINTER_TARGET')
+    WHERE EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id
+                  AND (w.primary_manifestation_id = OLD.id OR w.citation_manifestation_id = OLD.id));
+END;
+
+CREATE TRIGGER manifestations_pointer_target_delete
+BEFORE DELETE ON manifestations
+BEGIN
+    SELECT RAISE(ABORT, 'MANIFESTATION_IS_POINTER_TARGET')
+    WHERE EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id
+                  AND (w.primary_manifestation_id = OLD.id OR w.citation_manifestation_id = OLD.id));
+END;
+
+CREATE TRIGGER manifestation_origin_immutable
+BEFORE UPDATE OF origin_work_id ON manifestations
+WHEN NEW.origin_work_id IS NOT OLD.origin_work_id
+BEGIN
+    SELECT RAISE(ABORT, 'ORIGIN_WORK_IMMUTABLE');
+END;
+
+CREATE TRIGGER asset_origin_immutable
+BEFORE UPDATE OF origin_work_id ON assets
+WHEN NEW.origin_work_id IS NOT OLD.origin_work_id
+BEGIN
+    SELECT RAISE(ABORT, 'ORIGIN_WORK_IMMUTABLE');
+END;
+
+CREATE TRIGGER manifestations_mirror_read_only
+BEFORE UPDATE OF doc_type, year, published_date, edition, publisher, location, journal, volume, issue, pages, isbn, doi, url, urldate ON manifestations
+WHEN NEW.origin_work_id IS NOT NULL AND NEW.work_id = NEW.origin_work_id
+ AND (NEW.doc_type, NEW.year, NEW.published_date, NEW.edition, NEW.publisher, NEW.location,
+      NEW.journal, NEW.volume, NEW.issue, NEW.pages, NEW.isbn, NEW.doi, NEW.url, NEW.urldate)
+     IS NOT (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location,
+                    v.journal, v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate
+             FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.work_id)
+BEGIN
+    SELECT RAISE(ABORT, 'MIRRORED_FIELD_READ_ONLY');
+END;
+
+CREATE TRIGGER assets_mirror_read_only
+BEFORE UPDATE OF kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url, canonical_annotation_set_revision, materialized_pdf_annotation_revision ON assets
+WHEN NEW.origin_work_id IS NOT NULL AND NEW.work_id = NEW.origin_work_id
+ AND (NEW.kind, NEW.storage_locator, NEW.provider, NEW.provider_id, NEW.url, NEW.media_type,
+      NEW.thumb_page, NEW.thumb_url, NEW.canonical_annotation_set_revision,
+      NEW.materialized_pdf_annotation_revision)
+     IS NOT (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                    v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                    v.materialized_pdf_annotation_revision
+             FROM legacy_work_asset_mirror v WHERE v.work_id = NEW.work_id)
+BEGIN
+    SELECT RAISE(ABORT, 'MIRRORED_FIELD_READ_ONLY');
+END;
+
+CREATE TRIGGER works_mirror_ai
+AFTER INSERT ON works
+BEGIN
+    INSERT INTO manifestations (id, work_id, origin_work_id, doc_type, year, published_date, edition,
+                                publisher, location, journal, volume, issue, pages, isbn, doi, url, urldate)
+    SELECT 'MF-' || hex(randomblob(16)), v.work_id, v.work_id, v.doc_type, v.year, v.published_date,
+           v.edition, v.publisher, v.location, v.journal, v.volume, v.issue, v.pages, v.isbn, v.doi,
+           v.url, v.urldate
+    FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.id;
+    UPDATE works SET primary_manifestation_id =
+        (SELECT m.id FROM manifestations m WHERE m.origin_work_id = NEW.id)
+    WHERE id = NEW.id;
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.id);
+END;
+
+CREATE TRIGGER works_mirror_manifestation_au
+AFTER UPDATE OF doc_type, year, published_date, edition, publisher, location, journal, volume, issue, pages, isbn, doi, urldate, source_url ON works
+BEGIN
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.id)
+    WHERE origin_work_id = NEW.id AND work_id = NEW.id;
+END;
+
+CREATE TRIGGER works_mirror_asset_au
+AFTER UPDATE OF file_path, source_kind, source_url, source_mime, thumb_url, thumb_page, provider, provider_id, canonical_annotation_set_revision, materialized_pdf_annotation_revision ON works
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.id);
+    UPDATE assets
+    SET (kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url,
+         canonical_annotation_set_revision, materialized_pdf_annotation_revision, updated_at) =
+        (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                v.materialized_pdf_annotation_revision, CURRENT_TIMESTAMP
+         FROM legacy_work_asset_mirror v WHERE v.work_id = NEW.id)
+    WHERE origin_work_id = NEW.id AND work_id = NEW.id;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.id)
+    WHERE origin_work_id = NEW.id AND work_id = NEW.id;
+END;
+
+CREATE TRIGGER assets_mirror_ai
+AFTER INSERT ON assets
+WHEN NEW.origin_work_id IS NOT NULL AND NEW.origin_work_id = NEW.work_id
+BEGIN
+    UPDATE manifestations SET primary_asset_id = NEW.id
+    WHERE id = NEW.manifestation_id AND primary_asset_id IS NULL;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.work_id)
+    WHERE origin_work_id = NEW.work_id AND work_id = NEW.work_id;
+END;
+
+CREATE TRIGGER annotations_mirror_asset_ai
+AFTER INSERT ON annotations
+WHEN NEW.asset_id IS NULL
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.work_id
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.work_id);
+    UPDATE annotations SET asset_id =
+        (SELECT a.id FROM assets a WHERE a.origin_work_id = NEW.work_id AND a.work_id = NEW.work_id)
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER sync_revisions_mirror_asset_ai
+AFTER INSERT ON sync_entity_revisions
+WHEN NEW.scope_type IN ('work-source', 'pdf-annotation', 'work-field')
+ AND json_valid(NEW.scope_id)
+ AND json_type(NEW.scope_id) = 'array'
+ AND (NEW.scope_type <> 'work-field' OR json_extract(NEW.scope_id, '$[1]') IS 'thumb_page')
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = json_extract(NEW.scope_id, '$[0]')
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = v.work_id);
+END;
+
+CREATE TRIGGER argument_sources_mirror_pin_ai
+AFTER INSERT ON argument_sources
+WHEN NEW.manifestation_id IS NULL AND NEW.pages <> ''
+BEGIN
+    UPDATE argument_sources
+    SET manifestation_id = (SELECT w.primary_manifestation_id FROM works w WHERE w.id = NEW.work_id)
+    WHERE argument_id = NEW.argument_id AND order_index = NEW.order_index;
+END;
+"""
+
+# The three leaf tables v17 rebuilds (create new, copy, drop old, rename).
+_V17_REBUILT_TABLES = ("annotations", "roles", "argument_sources")
+# Existing indexes on the rebuilt tables, recreated after the rebuild.
+_V17_RECREATED_INDEXES = (
+    "idx_annotations_work_id",
+    "idx_roles_work_id",
+    "idx_roles_person_id",
+    "idx_roles_person_work_role_unique",
+    "idx_argument_sources_work_id",
+)
+
+
+def _v17_objects() -> List[Tuple[str, str, str]]:
+    """(kind, name, sql) for every Slice A object, in creation order."""
+    out: List[Tuple[str, str, str]] = []
+    for stmt in iter_sql_statements(_V17_WORK_IDENTITY_SQL):
+        compact = _leading_sql(stmt)
+        kind, name = _classify_ddl(compact)
+        if kind == "other":
+            match = re.match(r"^CREATE\s+VIEW\s+([A-Za-z_][A-Za-z0-9_]*)", compact, re.IGNORECASE)
+            if match:
+                kind, name = "view", match.group(1)
+        if kind not in ("table", "index", "trigger", "view") or name is None:
+            raise MigrationError("internal", "Unexpected statement in the v17 schema.")
+        out.append((kind, name, compact))
+    return out
+
+
+def _normalize_ddl(sql: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    text = re.sub(r"--[^\n]*", "", text)
+    text = re.sub(r"\bIF\s+NOT\s+EXISTS\b", "", text, flags=re.IGNORECASE)
+    text = text.replace('"', "").replace("`", "")
+    return re.sub(r"\s+", "", text).upper().rstrip(";")
+
+
+def _validate_work_identity_objects(conn: sqlite3.Connection) -> None:
+    """Every Slice A table, index, view and trigger, compared by definition.
+
+    Column and FK-tuple checks alone cannot see what these objects exist for:
+    `DEFERRABLE INITIALLY DEFERRED`, the guard's `CHECK (0)`, the self-relation
+    CHECK, composite FK column pairing, and every trigger body. So the stored
+    SQL of each is compared with the canonical statement.
+    """
+    for kind, name, sql in _v17_objects():
+        stored = _master_sql(conn, kind, name)
+        if stored is None:
+            raise MigrationError("schema_drift", "Required schema object is missing.", object=name)
+        if _normalize_ddl(stored) != _normalize_ddl(sql):
+            raise MigrationError(
+                "schema_drift",
+                "Required schema object is missing or has the wrong definition.",
+                object=name,
+            )
+
+
+def _fk_violations(conn: sqlite3.Connection) -> set[Tuple[str, int, str]]:
+    found: set[Tuple[str, int, str]] = set()
+    for row in conn.execute("PRAGMA foreign_key_check").fetchall():
+        found.add((str(row[0]), row[1], str(row[2])))
+    return found
+
+
+def _advance_revision(conn: sqlite3.Connection, scope_type: str, scope_id: str) -> None:
+    conn.execute(
+        """INSERT INTO sync_entity_revisions (scope_type, scope_id, revision)
+           VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id)
+           DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
+        (scope_type, scope_id),
+    )
+
+
+def _v17_quarantine(conn: sqlite3.Connection, table: str) -> int:
+    """Move a leaf table's pre-existing FK orphans into `migration_quarantine`.
+
+    The rebuilt table keeps its immediate single-column FKs, so these rows
+    cannot be copied. They are kept verbatim instead of dropped, and every live
+    aggregate whose state endpoint reported them advances its revision, so the
+    absence is strictly newer than the presence a device may hold (§12.3 1.1).
+    """
+    from backend import argument_sync, work_role_sync
+
+    parents: Dict[int, set] = defaultdict(set)
+    for row in conn.execute(f"PRAGMA foreign_key_check({_ident(table)})").fetchall():
+        parents[int(row[1])].add(str(row[2]))
+    if not parents:
+        return 0
+    columns = _table_column_names(conn, table)
+    json_args = ", ".join("'%s', %s" % (c, _ident(c)) for c in columns)
+    advanced_arguments: set = set()
+    for rowid in sorted(parents):
+        row = conn.execute(
+            f"SELECT json_object({json_args}) FROM {_ident(table)} WHERE rowid = ?", (rowid,)
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO migration_quarantine (source_table, source_rowid, row_json, reason) "
+            "VALUES (?, ?, ?, ?)",
+            (table, rowid, row[0], "missing_parent:" + ",".join(sorted(parents[rowid]))),
+        )
+        data = json.loads(row[0])
+        if table == "roles":
+            live_work = conn.execute(
+                "SELECT 1 FROM works WHERE id = ?", (data.get("work_id"),)
+            ).fetchone()
+            if live_work is not None:
+                _advance_revision(
+                    conn,
+                    work_role_sync.SCOPE_TYPE,
+                    work_role_sync.scope_key(data["work_id"], data["person_id"], data["role_type"]),
+                )
+        elif table == "argument_sources":
+            argument_id = data.get("argument_id")
+            live_argument = conn.execute(
+                "SELECT 1 FROM arguments WHERE id = ?", (argument_id,)
+            ).fetchone()
+            if live_argument is not None and argument_id not in advanced_arguments:
+                advanced_arguments.add(argument_id)
+                _advance_revision(conn, argument_sync.SOURCES_SCOPE_TYPE, argument_id)
+        # annotations: only a missing Work can orphan one, so no live scope
+        # ever reported it and none is created.
+    LOGGER.info("db_migration_quarantine table=%s rows=%s", safe_log_label(table), len(parents))
+    return len(parents)
+
+
+def _v17_backfill(conn: sqlite3.Connection) -> None:
+    """Deterministic Work -> 1 Manifestation -> 0..1 Asset (§12.2)."""
+    from backend import work_identity
+
+    mirror_cols = work_identity.MANIFESTATION_MIRROR_COLUMNS
+    work_ids = [r[0] for r in conn.execute("SELECT id FROM works ORDER BY id").fetchall()]
+    insert_mf = (
+        "INSERT INTO manifestations (id, work_id, origin_work_id, %s, created_at, updated_at) "
+        "SELECT ?, v.work_id, v.work_id, %s, w.created_at, w.updated_at "
+        "FROM legacy_work_manifestation_mirror v JOIN works w ON w.id = v.work_id "
+        "WHERE v.work_id = ?"
+        % (", ".join(mirror_cols), ", ".join("v." + c for c in mirror_cols))
+    )
+    for work_id in work_ids:
+        conn.execute(insert_mf, (work_identity.backfill_manifestation_id(work_id), work_id))
+    conn.execute(
+        "UPDATE works SET primary_manifestation_id = "
+        "(SELECT m.id FROM manifestations m WHERE m.origin_work_id = works.id)"
+    )
+
+    live = set(work_ids)
+    needs_asset = {
+        r[0] for r in conn.execute(
+            "SELECT work_id FROM legacy_work_asset_mirror WHERE has_asset_value"
+        ).fetchall()
+    }
+    needs_asset |= {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT a.work_id FROM annotations a JOIN works w ON w.id = a.work_id"
+        ).fetchall()
+    }
+    needs_asset |= work_identity.works_with_asset_bound_revisions(conn) & live
+    for work_id, source_kind, source_url, file_path in conn.execute(
+        "SELECT w.id, w.source_kind, w.source_url, w.file_path FROM works w "
+        "JOIN legacy_work_asset_mirror v ON v.work_id = w.id "
+        "WHERE v.kind = 'external_stream' AND NOT v.has_asset_value"
+    ).fetchall():
+        if work_identity.is_parseable_inferred_video(source_kind, source_url, file_path):
+            needs_asset.add(work_id)
+    for work_id in sorted(needs_asset):
+        if work_identity.ensure_origin_asset(conn, work_id) is None:
+            raise MigrationError("backfill_unmapped", "A Work could not be backfilled.")
+
+
+def _v17_rebuild_leaf_tables(conn: sqlite3.Connection, ddl: Dict[str, str]) -> None:
+    def create_new(table: str) -> str:
+        new_name = table + "_v17_rebuild"
+        sql, count = re.subn(
+            r"^CREATE\s+TABLE\s+%s\s*\(" % table, "CREATE TABLE %s (" % new_name, ddl[table], count=1
+        )
+        if count != 1:
+            raise MigrationError("internal", "Unexpected v17 table definition.", object=table)
+        conn.execute(sql)
+        return new_name
+
+    def swap(table: str, new_name: str) -> None:
+        conn.execute(f"DROP TABLE {_ident(table)}")
+        conn.execute(f"ALTER TABLE {_ident(new_name)} RENAME TO {_ident(table)}")
+
+    skip = "rowid NOT IN (SELECT source_rowid FROM migration_quarantine WHERE source_table = ?)"
+
+    # annotations: same rows and rowids, each bound to its Work's origin Asset.
+    new_name = create_new("annotations")
+    common = [c for c in _table_column_names(conn, "annotations") if c in set(
+        ("id", "work_id", "type", "content", "page_index", "color", "geometry_json",
+         "created_at", "updated_at"))]
+    cols = ", ".join(common)
+    conn.execute(
+        f"INSERT INTO {new_name} (rowid, {cols}, asset_id) "
+        f"SELECT t.rowid, {', '.join('t.' + c for c in common)}, "
+        "(SELECT a.id FROM assets a WHERE a.origin_work_id = t.work_id AND a.work_id = t.work_id) "
+        f"FROM annotations t WHERE t.{skip}",
+        ("annotations",),
+    )
+    swap("annotations", new_name)
+
+    # roles: same rows and rowids (readers order ties by rowid); every role
+    # stays Work-scoped until the role-scope slice (§7.3).
+    new_name = create_new("roles")
+    common = [c for c in _table_column_names(conn, "roles") if c in set(
+        ("person_id", "work_id", "role_type", "order_index", "credit_name"))]
+    cols = ", ".join(common)
+    conn.execute(
+        f"INSERT INTO {new_name} (rowid, {cols}) SELECT rowid, {cols} FROM roles WHERE {skip}",
+        ("roles",),
+    )
+    swap("roles", new_name)
+
+    # argument_sources: copied in the canonical read order (order_index,
+    # work_id), renumbered 0..n-1, rows with a pinpoint pinned to the Work's
+    # backfilled Manifestation (§8.5).
+    new_name = create_new("argument_sources")
+    rows = conn.execute(
+        "SELECT s.argument_id, s.work_id, s.pages, s.created_at, w.primary_manifestation_id "
+        "FROM argument_sources s LEFT JOIN works w ON w.id = s.work_id "
+        f"WHERE s.{skip} ORDER BY s.argument_id, s.order_index, s.work_id",
+        ("argument_sources",),
+    ).fetchall()
+    position: Dict[str, int] = defaultdict(int)
+    for argument_id, work_id, pages, created_at, manifestation_id in rows:
+        pages = "" if pages is None else pages
+        order = position[argument_id]
+        position[argument_id] += 1
+        conn.execute(
+            f"INSERT INTO {new_name} (argument_id, order_index, work_id, manifestation_id, "
+            "pages, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (argument_id, order, work_id, manifestation_id if pages != "" else None,
+             pages, created_at),
+        )
+    swap("argument_sources", new_name)
+
+
+def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
+    """#60 Slice A: Work -> Manifestation -> Asset entities and integrity layer.
+
+    SQLite only: no managed file is read, written, listed or hashed, and no
+    backup is made (I10, D2). One transaction (the runner's), so any failed
+    check below rolls the library back to schema 16 untouched.
+    """
+    from backend import work_identity
+
+    objects = _v17_objects()
+    ddl = {name: sql for kind, name, sql in objects if kind == "table"}
+    new_tables = [
+        name for kind, name, _sql in objects
+        if kind == "table" and name not in _V17_REBUILT_TABLES
+    ]
+    triggers_by_name = {name: sql for kind, name, sql in objects if kind == "trigger"}
+    before = _fk_violations(conn)
+
+    # 1. Preflight and quarantine of rows that already violate a leaf FK.
+    conn.execute(ddl["migration_quarantine"])
+    for table in _V17_REBUILT_TABLES:
+        _v17_quarantine(conn, table)
+
+    # 2-3. New entities, the two Work pointers, and the projection views.
+    for name in new_tables:
+        if name != "migration_quarantine":
+            conn.execute(ddl[name])
+    # The FTS update trigger becomes column-scoped. Unscoped, it re-indexed a
+    # row on every UPDATE -- including the pointer write the Work-insert mirror
+    # makes, which can run before `works_ai` has indexed the new row and would
+    # then delete an FTS entry that does not exist yet.
+    conn.execute("DROP TRIGGER IF EXISTS works_au")
+    conn.execute(triggers_by_name["works_au"])
+    conn.execute("ALTER TABLE works ADD COLUMN primary_manifestation_id TEXT")
+    conn.execute("ALTER TABLE works ADD COLUMN citation_manifestation_id TEXT")
+    for kind, _name, sql in objects:
+        if kind == "view":
+            conn.execute(sql)
+
+    # 5 before 4: the rebuilt leaf tables copy the backfilled IDs.
+    _v17_backfill(conn)
+    _v17_rebuild_leaf_tables(conn, ddl)
+
+    for name in _V17_RECREATED_INDEXES:
+        conn.execute(_INDEX_SQL[name])
+    for kind, _name, sql in objects:
+        if kind == "index":
+            conn.execute(sql)
+    # 6. Integrity and mirror triggers, installed after the backfill.
+    for kind, name, sql in objects:
+        if kind == "trigger" and name != "works_au":
+            conn.execute(sql)
+
+    # 7. Nothing may be left that the preflight did not see.
+    slice_tables = {name for kind, name, _sql in objects if kind == "table"}
+    for table, _rowid, _parent in _fk_violations(conn) - before:
+        raise MigrationError(
+            "unmapped_legacy_row",
+            "The work identity migration left a foreign key violation.",
+            object=table,
+        )
+    for table, _rowid, _parent in _fk_violations(conn):
+        if table in slice_tables:
+            raise MigrationError(
+                "unmapped_legacy_row",
+                "The work identity migration left a foreign key violation.",
+                object=table,
+            )
+    if work_identity.integrity_violations(conn):
+        raise MigrationError("integrity_violation", "Work identity integrity check failed.")
+    if work_identity.mirror_drift(conn):
+        raise MigrationError("integrity_violation", "Work identity mirror check failed.")
+
+
 MIGRATIONS: Tuple[Migration, ...] = (
     Migration(
         target_version=10,
@@ -2146,6 +3045,11 @@ MIGRATIONS: Tuple[Migration, ...] = (
         target_version=16,
         name="pending_pdf_cleanup",
         apply=migrate_v15_to_v16,
+    ),
+    Migration(
+        target_version=17,
+        name="work_identity_slice_a",
+        apply=migrate_v16_to_v17,
     ),
 )
 

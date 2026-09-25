@@ -207,6 +207,14 @@ Any schema/data change needed by an existing database requires:
 4. add fresh-DB and upgraded-DB tests.
 
 Never change schema only in `db_schema.sql`.
+
+Work identity (#60, schema 17, `docs/work-identity-model.md`): `works` is
+still the only authority for every field. `manifestations`/`assets` are a
+trigger-maintained projection of it (`legacy_work_*_mirror` views, one
+direction only); never write their mirrored columns, and never add readers of
+them outside the slice that moves authority. `validate_current_schema`
+compares every Slice A object by definition, so changing one needs a new
+migration, not an edit of `_V17_WORK_IDENTITY_SQL`.
 Never ALTER/CREATE/DROP schema objects from feature/request code.
 Never swallow migration DDL failures.
 Never manually bump `schema_version` before migration success.

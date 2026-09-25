@@ -28,7 +28,7 @@ from backend.pdf_annotations import (
     reconstruct_annotation,
     round_trip_annotation,
 )
-from backend import pdf_annotation_sync
+from backend import pdf_annotation_sync, work_identity
 from backend.performance import (
     classify_sql_write,
     clock_ns,
@@ -2660,7 +2660,9 @@ class PRKSDatabase:
     def get_work(self, work_id: str) -> Optional[dict]:
         res = self.execute_query("SELECT * FROM works WHERE id = ?", (work_id,))
         if not res: return None
-        work = res[0]
+        # Schema 17's identity pointers are not part of the Work shape until
+        # the projection slice (#60 Slice C) exposes them deliberately.
+        work = work_identity.strip_pointer_columns(res[0])
         work['roles'] = self.get_work_roles(work_id)
         work['arguments'] = []
         work['research_refs'] = {"concepts": [], "arguments": []}
@@ -4045,7 +4047,10 @@ class PRKSDatabase:
         WHERE r.person_id = ?
         ORDER BY r.order_index ASC, r.rowid ASC
         """
-        person["works"] = list(self.execute_query(query, (person_id,)))
+        person["works"] = [
+            work_identity.strip_pointer_columns(row)
+            for row in self.execute_query(query, (person_id,))
+        ]
         finish_work_summary_rows(person["works"], self.storage.pdfs_dir)
         person["groups"] = self.get_groups_for_person(person_id)
         return person

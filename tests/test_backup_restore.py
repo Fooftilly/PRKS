@@ -54,6 +54,7 @@ from backend.server import bind_storage
 from backend.storage.config import StorageConfig
 from backend.text_index import get_text_index, reset_text_index
 from backend.work_deletion import delete_work
+from tests.work_identity_fixtures import revert_to_v16_schema
 import backend.backup_restore as backup_module
 import backend.server as server_module
 
@@ -1331,6 +1332,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
     def test_schema_9_backup_migrates_on_restore(self):
         source = self._bind_library(title="Incoming V9", pdf_name="v9.pdf")
         conn = sqlite3.connect(source["cfg"].db_path)
+        revert_to_v16_schema(conn)
         conn.execute("DROP INDEX IF EXISTS idx_saved_views_name_nocase")
         conn.execute("DROP TABLE IF EXISTS saved_views")
         conn.execute("DROP TABLE IF EXISTS argument_target_arguments")
@@ -1370,6 +1372,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         source = self._bind_library(title="Incoming V12", pdf_name="v12.pdf")
         work_id = source["work_id"]
         conn = sqlite3.connect(source["cfg"].db_path)
+        revert_to_v16_schema(conn)
         conn.execute(
             """
             CREATE TABLE work_annotations (
@@ -1400,7 +1403,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         live = server_module.db
         versions = live.execute_query("SELECT version FROM schema_version")
         self.assertEqual([row["version"] for row in versions], [PRKS_SCHEMA_VERSION])
-        self.assertEqual(PRKS_SCHEMA_VERSION, 16)
+        self.assertEqual(PRKS_SCHEMA_VERSION, 17)
         titles = [row["title"] for row in live.execute_query("SELECT title FROM works")]
         self.assertEqual(titles, ["Incoming V12"])
         canonical = live.execute_query(
@@ -1443,6 +1446,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
     def test_v10_backup_migrates_saved_views_on_restore(self):
         source = self._bind_library(title="Incoming V10", pdf_name="v10.pdf")
         conn = sqlite3.connect(source["cfg"].db_path)
+        revert_to_v16_schema(conn)
         conn.execute("DROP INDEX IF EXISTS idx_saved_views_name_nocase")
         conn.execute("DROP TABLE IF EXISTS saved_views")
         conn.execute("DROP TABLE IF EXISTS argument_target_arguments")
@@ -1488,6 +1492,7 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
             person_bytes=b"NEW-PORTRAIT",
         )
         conn = sqlite3.connect(source["cfg"].db_path)
+        revert_to_v16_schema(conn)
         conn.execute("UPDATE schema_version SET version = 9")
         conn.commit()
         conn.close()

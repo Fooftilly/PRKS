@@ -1,7 +1,17 @@
 # Work identity, editions, versions and Assets: design (#60)
 
-**Status: design proposal, revised after maintainer review. Nothing here is
-implemented.** The three-level model has been approved in direction, and the
+**Status: approved design (#201). Slice A is implemented at schema 17**
+(`migrate_v16_to_v17`, `backend/work_identity.py`): entities, integrity
+layer, deterministic backfill and the `works` -> new-rows mirror. No reader,
+API or UI uses the new rows yet. One mechanism differs from the text below:
+the pinned-citation FK on `argument_sources` is `ON DELETE NO ACTION`
+(immediate) rather than `RESTRICT`, because SQLite applies RESTRICT before a
+whole-Work delete has cascaded the citation rows, which made that delete
+depend on table creation order (see the comment on `_V17_WORK_IDENTITY_SQL`).
+The behavior §4.1 specifies is unchanged: deleting a pinned Version is
+refused, and deleting a whole Work cascades.
+
+The original status note follows. The three-level model has been approved in direction, and the
 maintainer decisions are recorded in [§0](#0-maintainer-decisions). This
 document does not add schema, migrations, API behavior or UI. It is the design
 gate that #60 requires before large schema changes, and it follows the

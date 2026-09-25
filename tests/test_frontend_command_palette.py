@@ -143,7 +143,7 @@ class FrontendCommandPaletteTests(unittest.TestCase):
 
     def test_no_schema_bump(self):
         schema = _read(_SCHEMA)
-        self.assertIn("LATEST_SCHEMA_VERSION = 16", schema)
+        self.assertIn("LATEST_SCHEMA_VERSION = 17", schema)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)

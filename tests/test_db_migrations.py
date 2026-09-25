@@ -40,6 +40,7 @@ from backend.db_migrations import (
 )
 from backend.log_safety import PrivacySafeFormatter
 from backend.storage.config import StorageConfig
+from tests.work_identity_fixtures import revert_to_v16_schema
 
 _SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
 _SECRET_TITLE = "PRIVATE_MIGRATION_TITLE_X9Q7"
@@ -278,7 +279,7 @@ class MigrationTestCase(unittest.TestCase):
 
 class TestRegistry(unittest.TestCase):
     def test_production_registry_is_contiguous(self):
-        self.assertEqual(LATEST_SCHEMA_VERSION, 16)
+        self.assertEqual(LATEST_SCHEMA_VERSION, 17)
         self.assertEqual(PRKS_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
         self.assertEqual(LEGACY_BASELINE_VERSION, 9)
         validate_migration_registry()
@@ -462,6 +463,7 @@ class TestSavedViewsMigration(MigrationTestCase):
         db = self._open()
         work_id = db.add_work(title=title)
         conn = _raw(db_path)
+        revert_to_v16_schema(conn)
         conn.execute("DROP INDEX IF EXISTS idx_saved_views_name_nocase")
         conn.execute("DROP TABLE IF EXISTS saved_views")
         conn.execute("DROP TABLE IF EXISTS argument_target_arguments")
@@ -554,6 +556,7 @@ class TestResearchNetworkMigration(MigrationTestCase):
         )
         arg_id = "A-LEGACY01"
         conn = _raw(self.storage.db_path)
+        revert_to_v16_schema(conn)
         conn.execute("DROP TABLE IF EXISTS argument_target_arguments")
         conn.execute("DROP TABLE IF EXISTS argument_target_positions")
         conn.execute("DROP TABLE IF EXISTS argument_sources")
@@ -692,6 +695,7 @@ class TestResearchNetworkMigration(MigrationTestCase):
 class TestRemoveWorkAnnotationsMigration(MigrationTestCase):
     def _install_v12_blob(self, work_id, payload):
         conn = _raw(self.storage.db_path)
+        revert_to_v16_schema(conn)
         conn.execute(_LEGACY_WORK_ANNOTATIONS_DDL)
         conn.execute(
             "INSERT INTO work_annotations (work_id, annotations_json) VALUES (?, ?)",
@@ -1399,6 +1403,7 @@ class TestPdfMaterializationMigration(MigrationTestCase):
         person_id = db.add_person("Ada", "Lovelace")
         db.add_role(person_id, work_id, "Author")
         conn = _raw(self.storage.db_path)
+        revert_to_v16_schema(conn)
         conn.execute("DROP INDEX IF EXISTS idx_roles_person_work_role_unique")
         for column in (
             "canonical_annotation_set_revision",
@@ -1500,6 +1505,7 @@ class TestPendingPdfCleanupMigration(MigrationTestCase):
         db = self._open()
         work_id = db.add_work(title=title, file_path="/api/pdfs/keep-v15.pdf")
         conn = _raw(self.storage.db_path)
+        revert_to_v16_schema(conn)
         conn.execute("DROP TABLE IF EXISTS pending_pdf_cleanup")
         conn.execute("UPDATE schema_version SET version = 15")
         conn.commit()
