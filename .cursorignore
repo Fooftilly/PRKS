@@ -1,0 +1,5 @@
+# Generated / vendored distributions. Editable source and build tooling remain searchable.
+frontend/vendor/**/*.js
+frontend/vendor/**/*.css
+frontend/vendor/**/*.wasm
+frontend/vendor/**/*.woff2
