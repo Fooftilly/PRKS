@@ -298,6 +298,72 @@ class FolderSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.db.delete_empty_folder(fid)
 
+    def test_ordinary_delete_shares_the_destruction_boundary(self):
+        """DELETE /api/folders/:id and DELETE_FOLDER must not maintain two
+        empty-only bodies. The HTTP wrapper only opens a txn and maps refusals."""
+        fid, _, _ = self.create("Drafts")
+        self.db.delete_empty_folder(fid)
+        self.assertIsNone(self.stored(fid))
+
+    def test_http_and_sync_delete_leave_equivalent_canonical_state(self):
+        """Same Folder destroyed by either path ends gone from the catalogue."""
+        http_id = self.db.add_folder("ViaHTTP")
+        sync_id, _, _ = self.create("ViaSync")
+
+        self.db.delete_empty_folder(http_id)
+        status, sync_out = self.send("DELETE_FOLDER", "folder", sync_id, {}, None)
+
+        self.assertIsNone(self.stored(http_id))
+        self.assertEqual((status, sync_out["code"], sync_out["changed"]),
+                         (200, "ACKNOWLEDGED", True))
+        self.assertIsNone(self.stored(sync_id))
+
+    def test_delete_folder_on_conn_is_a_no_op_when_the_row_is_already_gone(self):
+        fid, _, _ = self.create("Drafts")
+        self.db.delete_empty_folder(fid)
+        with self.db.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            deleted, refusal = folders.delete_folder_on_conn(conn, fid)
+            self.assertFalse(deleted)
+            self.assertIsNone(refusal)
+
+    def test_http_delete_of_missing_folder_still_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.db.delete_empty_folder("F-" + "0" * 32)
+        self.assertIn("not found", str(ctx.exception).lower())
+
+    def test_http_delete_maps_not_empty_and_subfolder_refusals(self):
+        parent, _, _ = self.create("Parent")
+        self.create("Child", parent_id=parent)
+        with self.assertRaises(ValueError) as sub_ctx:
+            self.db.delete_empty_folder(parent)
+        self.assertIn("subfolders", str(sub_ctx.exception).lower())
+
+        filled, _, _ = self.create("Filled")
+        self.db.move_work_to_folder(self.work(), filled)
+        with self.assertRaises(ValueError) as empty_ctx:
+            self.db.delete_empty_folder(filled)
+        self.assertIn("not empty", str(empty_ctx.exception).lower())
+        self.assertIsNotNone(self.stored(parent))
+        self.assertIsNotNone(self.stored(filled))
+
+    def test_delete_folder_on_conn_rolls_back_with_the_callers_transaction(self):
+        """Conn-scoped mutation must not commit on its own — a failed outer
+        txn must restore the Folder."""
+        fid, _, _ = self.create("Drafts")
+
+        class _Abort(Exception):
+            pass
+
+        with self.assertRaises(_Abort):
+            with self.db.connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                deleted, refusal = folders.delete_folder_on_conn(conn, fid)
+                self.assertTrue(deleted)
+                self.assertIsNone(refusal)
+                raise _Abort()
+        self.assertIsNotNone(self.stored(fid))
+
     # ---- projections -------------------------------------------------------
 
     def test_the_folder_state_projection_reports_revisions_only(self):

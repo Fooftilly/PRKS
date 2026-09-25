@@ -237,9 +237,11 @@ def set_work_folder_on_conn(conn, work_id, folder_id):
 def delete_folder_on_conn(conn, folder_id):
     """Remove a folder, but only an EMPTY one.
 
-    The canonical rule is unchanged: a folder holding files or subfolders is
-    refused rather than cascading something the ordinary endpoint would reject.
-    Returns (deleted, code) where code names the refusal.
+    Shared by ``DELETE /api/folders/:id`` (via ``PRKSDatabase.delete_empty_folder``)
+    and ``DELETE_FOLDER``. The caller's transaction owns commit/rollback; this
+    helper never opens its own. A folder holding files or subfolders is refused
+    rather than cascading something the ordinary endpoint would reject.
+    Returns ``(deleted, code)`` where code names the refusal (or ``None``).
     """
     if conn.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone() is None:
         return False, None
@@ -454,6 +456,9 @@ def validate_delete(op):
 
 
 def apply_delete(db, conn, op, received_at):
+    # Lifecycle/envelope outcomes stay here; the empty-only DELETE itself is
+    # ``delete_folder_on_conn`` — never ``PRKSDatabase.delete_empty_folder``
+    # (would nest a txn / re-enter HTTP-shaped errors).
     folder_id = op["entity_id"]
     existed = conn.execute(
         "SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone() is not None
