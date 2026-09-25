@@ -18,6 +18,18 @@ class AgentContextBudgetTests(unittest.TestCase):
             "Root AGENTS.md is ambient context; move specialized rules into scoped AGENTS.md files.",
         )
 
+    def test_root_documents_cursor_nested_precedence(self):
+        """Cursor nested AGENTS.md takes precedence over parent when both apply.
+
+        Do not reintroduce \"root remains authoritative when scopes overlap\".
+        """
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "root rules remain authoritative when scopes overlap",
+            text.lower(),
+        )
+        self.assertIn("more-specific nested instructions take precedence", text)
+
     def test_claude_bridge_stays_small(self):
         self.assertLessEqual(
             line_count(ROOT / "CLAUDE.md"),
