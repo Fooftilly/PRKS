@@ -414,6 +414,27 @@ Do not expand this slice into Positions or Arguments durable modules. Stack
 doc edits carefully against other family sections in this file (#204 Work-Tag,
 Work Source, Work-Open).
 
+#### Work-Notes rationalization
+
+Applies the same KEEP / SPLIT / MOVE model as the Work-Tag pilot (#204) and
+Work-Open rationalization (#211) to `tests/e2e/test_work_notes_offline.py`.
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Editing back to the acknowledged body cancels the pending op | Node `coalescingFor(RESEARCH)` A→B→A cancel plus `mutationTestAtoBtoA` in `tests/browser/run_work_note_sync_selftest.js`; static `tests/test_frontend_work_note_sync.py` mutation pin | MOVE |
+| Private ACK does not fence Concepts | Node `reconciliation()` Private ACK must not advance Concepts/Arguments/Graph generations (and patches only `private_notes`) | MOVE |
+| Stale research revision is a conflict (compact body privacy) | Node `handlerContract` rejects body-carrying conflicts; Python `test_a_stale_research_base_against_a_different_value_conflicts` and `test_compact_conflict_results_omit_note_bodies` | SPLIT → fast layers for shape; thin Chromium retains reconnect park |
+
+The browser module retains the integrated boundaries that still need Chromium:
+offline research note survives CodeMirror remount and creates a Concept on ACK,
+and research + private editors remain independent across reload (private markup
+must not create Concepts). The stale-revision scenario keeps only the real
+reconnect conflict park; field-level compact-result privacy is not re-asserted
+in Chromium.
+
+Add or confirm lower-level coverage first, then remove only the redundant
+Chromium composition. Do not batch-delete cache/routing families without a
+per-contract map.
 
 ## Benchmark protocol
 
