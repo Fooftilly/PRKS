@@ -1,4 +1,5 @@
 """Non-browser regression tests for E2E performance helpers."""
+import json
 import os
 import tempfile
 import unittest
@@ -237,8 +238,12 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
         self._recycle = os.environ.get("PRKS_E2E_CHROMIUM_RECYCLE_EVERY")
         os.environ.pop("PRKS_E2E_DIAGNOSTIC", None)
         os.environ.pop("PRKS_E2E_CHROMIUM_RECYCLE_EVERY", None)
+        harness.clear_e2e_heartbeat()
+        harness.set_heartbeat_file(None)
 
     def tearDown(self):
+        harness.clear_e2e_heartbeat()
+        harness.set_heartbeat_file(None)
         if self._diag is None:
             os.environ.pop("PRKS_E2E_DIAGNOSTIC", None)
         else:
@@ -262,6 +267,42 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
         with redirect_stdout(buf):
             harness.e2e_diag("SERVER_READY", "tests.e2e.fake.T.test_x")
         self.assertIn("[e2e-diag] SERVER_READY tests.e2e.fake.T.test_x", buf.getvalue())
+
+    def test_heartbeat_tracks_stage_without_printing(self):
+        import io
+        from contextlib import redirect_stdout
+
+        harness.clear_e2e_heartbeat()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            harness.e2e_heartbeat("START", "tests.e2e.fake.T.test_hang", begin_test=True)
+            harness.e2e_heartbeat("SERVER_READY")
+        self.assertEqual(buf.getvalue(), "")
+        snap = harness.get_e2e_heartbeat()
+        self.assertEqual(snap["test_id"], "tests.e2e.fake.T.test_hang")
+        self.assertEqual(snap["stage"], "SERVER_READY")
+        self.assertGreater(snap["test_started_mono"], 0)
+        harness.e2e_heartbeat("STOP", "tests.e2e.fake.T.test_hang", end_test=True)
+        cleared = harness.get_e2e_heartbeat()
+        self.assertEqual(cleared["test_id"], "")
+        self.assertEqual(cleared["stage"], "")
+
+    def test_heartbeat_file_is_written_for_parent_poll(self):
+        with tempfile.TemporaryDirectory(prefix="prks-hb-") as raw:
+            path = Path(raw) / "heartbeat.json"
+            harness.set_heartbeat_file(path)
+            try:
+                harness.e2e_heartbeat(
+                    "START", "tests.e2e.fake.T.test_file", begin_test=True
+                )
+                harness.e2e_heartbeat("APP_READY")
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(data["test_id"], "tests.e2e.fake.T.test_file")
+                self.assertEqual(data["stage"], "APP_READY")
+                self.assertGreater(data["test_started_wall"], 0)
+            finally:
+                harness.clear_e2e_heartbeat()
+                harness.set_heartbeat_file(None)
 
     def test_chromium_recycle_every_env_and_default(self):
         self.assertEqual(harness.chromium_recycle_every(default=20), 20)

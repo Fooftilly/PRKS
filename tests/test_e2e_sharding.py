@@ -548,6 +548,38 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         ok, _ = self._run(ids, 2)
         self.assertFalse(ok)
 
+    def test_per_test_watchdog_kills_hanging_worker_and_names_stage(self):
+        """Short watchdog must terminate a sleeping selfcheck without retry."""
+        hang_id = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        pass_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        sink = io.StringIO()
+        previous = os.environ.get("PRKS_E2E_TEST_WATCHDOG")
+        os.environ["PRKS_E2E_TEST_WATCHDOG"] = "2"
+        try:
+            with _import_runner() as runner:
+                with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                    started = __import__("time").perf_counter()
+                    ok, _observed, failed, _phases = runner.run_parallel(
+                        [pass_id, hang_id], 2, {}, False
+                    )
+                    elapsed = __import__("time").perf_counter() - started
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E_TEST_WATCHDOG", None)
+            else:
+                os.environ["PRKS_E2E_TEST_WATCHDOG"] = previous
+        self.assertFalse(ok)
+        self.assertLess(elapsed, 30.0)
+        self.assertTrue(
+            any(fid.endswith("test_never_finishes") for fid in failed),
+            "failed_ids=%r output=%r" % (failed, sink.getvalue()[-2000:]),
+        )
+        out = sink.getvalue()
+        self.assertIn("per-test watchdog", out)
+        self.assertIn("test_never_finishes", out)
+        self.assertIn("stage=", out)
+        self.assertIn("no automatic retry", out.lower())
+
     def test_worker_mode_writes_a_report_for_a_failing_shard(self):
         with _import_runner() as runner, tempfile.TemporaryDirectory(
             prefix="prks-worker-"
@@ -662,6 +694,36 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.assertEqual(runner._last_started_test(chatter_only), "")
+
+    def test_hang_attribution_prefers_heartbeat_file(self):
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hb-attr-") as raw:
+                root = Path(raw)
+                log = root / "worker.log"
+                hb = root / "heartbeat.json"
+                log.write_text(
+                    "tests.e2e.test_app.A.test_old\n"
+                    "[e2e-diag] CONTEXT_READY tests.e2e.test_app.A.test_old\n",
+                    encoding="utf-8",
+                )
+                hb.write_text(
+                    json.dumps(
+                        {
+                            "test_id": "tests.e2e.test_app.A.test_current",
+                            "stage": "APP_READY",
+                            "test_started_wall": 1.0,
+                            "heartbeat_wall": 2.0,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                worker = {"log_file": log, "heartbeat_file": hb}
+                tid, stage = runner._hang_attribution(worker)
+                self.assertEqual(tid, "tests.e2e.test_app.A.test_current")
+                self.assertEqual(stage, "APP_READY")
+                stage_only, tid_from_diag = runner._last_diag_stage(log)
+                self.assertEqual(stage_only, "CONTEXT_READY")
+                self.assertTrue(tid_from_diag.endswith("test_old"))
 
 
 if __name__ == "__main__":

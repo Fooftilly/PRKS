@@ -73,6 +73,12 @@ TIERS = ("targeted", "feature", "smoke", "full", "dev", "agent", "last-failed", 
 FULL_GATE_TIMEOUT_S = 1200
 FULL_GATE_DEFAULT_JOBS = 4
 
+# Per-test hang watchdog (seconds). Separate from Playwright assertion timeouts
+# and from the full-suite PRKS_E2E_FULL_TIMEOUT. Generous so slow-but-valid tests
+# are not killed; override with PRKS_E2E_TEST_WATCHDOG; set 0 to disable.
+TEST_WATCHDOG_TIMEOUT_S = 300
+TEST_WATCHDOG_ENV = "PRKS_E2E_TEST_WATCHDOG"
+
 TIER_LABELS = {
     "targeted": "targeted E2E (explicit test/module selection)",
     "feature": "feature/domain E2E",
@@ -1052,6 +1058,23 @@ def full_gate_timeout_s(environ=None) -> int:
         return max(0, int(raw))
     except ValueError:
         return FULL_GATE_TIMEOUT_S
+
+
+def per_test_watchdog_s(environ=None) -> int:
+    """Seconds a single E2E test may run before the worker hang watchdog fires.
+
+    ``0`` disables. Distinct from Playwright ``timeout=`` on assertions and from
+    ``full_gate_timeout_s``: this names the stuck test+stage early so CI does
+    not wait for the full-suite hard limit. Does not retry.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(TEST_WATCHDOG_ENV)
+    if raw is None or raw == "":
+        return TEST_WATCHDOG_TIMEOUT_S
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return TEST_WATCHDOG_TIMEOUT_S
 
 
 def is_full_gate(tier: str, targeted: bool) -> bool:
