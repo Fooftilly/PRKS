@@ -1103,6 +1103,7 @@ not a #60 concern.
 | `byte_size` | Size of the current bytes. Filled at write time, or by the fingerprint pass. |
 | `ingest_sha256` | SHA-256 of the source bytes **as first ingested**, before linearization or materialization. Immutable once set. It is the content identity of the lineage. NULL for legacy Assets (§9.4). |
 | `content_sha256` | SHA-256 of the **working** bytes at `storage_locator`. Updated whenever PRKS rewrites them. Serves integrity checks and client cache validation. |
+| `content_generation` | An integer incremented by every in-place rewrite of the working bytes. Hash writers commit only if it is unchanged since they read it (§9.4, §12.4). |
 | `origin` | `upload` \| `processing_import` \| `adopted` \| `web_capture` \| `legacy`. |
 | `origin_url`, `origin_ref` | Where the bytes came from (a download URL, or a Processing File ID). This is provenance, not a citation. |
 | `derived_from_asset_id` | A user-visible relation between **separate** Assets, for example a copy annotated in another tool that the user brought in. It is never used for PRKS's own materialization. |
