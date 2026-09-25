@@ -1237,6 +1237,40 @@ def sqlite_foreign_key_violation_count(db_path: str) -> int:
         conn.close()
 
 
+def work_identity_issue_count(db_path: str) -> int:
+    """Work identity integrity and mirror-parity findings (#60, schema 17).
+
+    The v17 migration refuses to commit with any; an archive that already
+    declares schema 17 never went through that migration here, so backup and
+    restore verification run the same checks (docs/work-identity-model.md
+    §4.1). Older archives are migrated on open and checked there. Reported
+    like foreign-key issues: a warning, never a silent pass.
+    """
+    from backend import work_identity
+
+    conn = sqlite3.connect(os.path.abspath(db_path))
+    try:
+        has_layer = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'view' "
+            "AND name = 'legacy_work_asset_mirror'"
+        ).fetchone()
+        if has_layer is None:
+            return 0
+        return len(work_identity.integrity_violations(conn)) + len(
+            work_identity.mirror_drift(conn)
+        )
+    finally:
+        conn.close()
+
+
+def _work_identity_warning(count: int, *, during_restore: bool) -> str:
+    n = int(count)
+    unit = "Work identity issue" if n == 1 else "Work identity issues"
+    if during_restore:
+        return f"This backup was created while the database had {n} {unit}."
+    return f"Backup created successfully, but the database has {n} {unit}."
+
+
 def _foreign_key_warning(count: int, *, during_restore: bool) -> str:
     n = int(count)
     unit = "foreign-key issue" if n == 1 else "foreign-key issues"
@@ -1587,6 +1621,9 @@ def create_backup(
         fk_violations = sqlite_foreign_key_violation_count(snapshot_path)
         if fk_violations:
             warnings.append(_foreign_key_warning(fk_violations, during_restore=False))
+        identity_issues = work_identity_issue_count(snapshot_path)
+        if identity_issues:
+            warnings.append(_work_identity_warning(identity_issues, during_restore=False))
         db_schema = read_schema_version(snapshot_path)
         summary = library_summary_from_db(snapshot_path)
         pdf_basenames = {os.path.basename(rel) for rel, _ in pdf_files if "/" not in rel}
@@ -1979,6 +2016,9 @@ def _verify_backup_inner(
             warnings: list[str] = []
             if fk_violations:
                 warnings.append(_foreign_key_warning(fk_violations, during_restore=True))
+            identity_issues = work_identity_issue_count(db_path)
+            if identity_issues:
+                warnings.append(_work_identity_warning(identity_issues, during_restore=True))
             if not processing_allowed:
                 warnings.append(
                     "Processing queue files were not included because they are stored outside PRKS storage."

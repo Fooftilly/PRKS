@@ -1302,6 +1302,29 @@ class TestBackupRoundTrip(BackupRestoreTestCase):
         self.assertTrue(out["restored"])
         self.assertTrue(any("foreign-key" in w for w in staged.warnings))
 
+    def test_work_identity_drift_is_a_backup_and_restore_warning(self):
+        """#60 §4.1: an archive already at schema 17 never ran the migration's
+        integrity checks here, so backup and restore verification report them."""
+        lib = self._bind_library()
+        conn = sqlite3.connect(lib["cfg"].db_path)
+        work_id = conn.execute("SELECT id FROM works LIMIT 1").fetchone()[0]
+        clean = create_backup(lib["cfg"])
+        self.assertFalse(any("Work identity" in w for w in clean.warnings))
+        # Direct SQL bypasses the Python boundary that would give this
+        # inferred video its origin Asset: a required Asset is now missing.
+        conn.execute("DELETE FROM assets WHERE work_id = ?", (work_id,))
+        conn.execute("UPDATE manifestations SET primary_asset_id = NULL")
+        conn.commit()
+        conn.close()
+        backup = create_backup(lib["cfg"])
+        self.assertTrue(backup.verified)
+        self.assertTrue(any("Work identity" in w for w in backup.warnings))
+        dest = bind_storage(self._cfg(self._tmpdir()))
+        staged = self._stage_copy(dest, backup.archive_path)
+        self.assertTrue(any("Work identity" in w for w in staged.warnings))
+        out = apply_restore(dest, staged.token, "RESTORE", rebind=bind_storage)
+        self.assertTrue(out["restored"])
+
     def test_live_schema_ahead_of_constant_can_backup_and_restore_locally(self):
         lib = self._bind_library()
         ahead = PRKS_SCHEMA_VERSION + 1
