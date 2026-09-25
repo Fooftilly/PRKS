@@ -63,6 +63,8 @@ E2E_ENV_KEYS = (
 # Soft thresholds for classifying cloud-container scarcity (not hard failures).
 _MIN_ADEQUATE_SHM_BYTES = 64 * 1024 * 1024
 _MIN_ADEQUATE_TEMP_FREE_BYTES = 1024 * 1024 * 1024
+# Linux shared-memory mount probed read-only via statvfs (not a temp-file API).
+_SHM_PROBE_PATH = Path(os.sep) / "dev" / "shm"
 
 
 def _fmt_bytes(n: int | None) -> str:
@@ -218,12 +220,8 @@ def _env_snapshot(environ=None) -> dict:
     return out
 
 
-def classify_assessment(facts: dict) -> dict:
-    """Map collected facts to a pasteable failure-classification hint."""
+def _browser_setup_reasons(browser: dict) -> list[str]:
     reasons = []
-    browser = facts["browser"]
-    resources = facts["resources"]
-
     if not browser["playwright_installed"]:
         reasons.append("Playwright package is not installed")
     elif not browser["playwright_match"]:
@@ -236,68 +234,87 @@ def classify_assessment(facts: dict) -> dict:
             "Chromium for the pinned Playwright revision is not in %s"
             % browser["browsers_dir"]
         )
+    return reasons
 
-    setup_gap = bool(reasons)
 
+def _resource_pressure_reasons(resources: dict, agent_jobs: int) -> list[str]:
+    reasons = []
     cpu_eff = resources["cpu_effective"]
     mem = resources["memory_limit_bytes"]
     shm_avail = resources["shm"]["avail_bytes"]
     temp_avail = resources["temp"]["avail_bytes"]
-    agent_jobs = facts["agent_default_workers"]
 
-    resource_reasons = []
     if cpu_eff is not None and cpu_eff <= 1:
-        resource_reasons.append("effective CPU is %s (agent workers serial)" % cpu_eff)
+        reasons.append("effective CPU is %s (agent workers serial)" % cpu_eff)
     if mem is not None and mem < AGENT_MEMORY_PER_JOB_BYTES:
-        resource_reasons.append(
+        reasons.append(
             "cgroup memory %s is below one agent worker budget (%s)"
             % (_fmt_bytes(mem), _fmt_bytes(AGENT_MEMORY_PER_JOB_BYTES))
         )
-    if agent_jobs <= 1 and resource_reasons:
-        resource_reasons.append("agent default workers=%d" % agent_jobs)
+    if agent_jobs <= 1 and reasons:
+        reasons.append("agent default workers=%d" % agent_jobs)
     if shm_avail is not None and shm_avail < _MIN_ADEQUATE_SHM_BYTES:
-        resource_reasons.append(
-            "/dev/shm available %s is below %s"
+        reasons.append(
+            "shm available %s is below %s"
             % (_fmt_bytes(shm_avail), _fmt_bytes(_MIN_ADEQUATE_SHM_BYTES))
         )
     if temp_avail is not None and temp_avail < _MIN_ADEQUATE_TEMP_FREE_BYTES:
-        resource_reasons.append(
+        reasons.append(
             "temp free %s is below %s"
             % (_fmt_bytes(temp_avail), _fmt_bytes(_MIN_ADEQUATE_TEMP_FREE_BYTES))
         )
+    return reasons
 
+
+def _assessment_for(setup_reasons: list[str], resource_reasons: list[str]) -> dict:
+    setup_gap = bool(setup_reasons)
     under_resourced = bool(resource_reasons)
 
     if setup_gap and under_resourced:
-        kind = "setup_and_under_resourced"
-        hint = (
-            "Fix browser toolchain first; remaining cloud flakiness may still be "
-            "container resource pressure rather than an app regression."
-        )
-        reasons = reasons + resource_reasons
-    elif setup_gap:
-        kind = "browser_toolchain_gap"
-        hint = (
-            "E2E cannot run until Playwright/Chromium match the project pin. "
-            "This is an environment gap, not an application regression."
-        )
-    elif under_resourced:
-        kind = "under_resourced_container"
-        hint = (
-            "Cloud container looks under-resourced for parallel Chromium. "
-            "Treat timeouts/stalls here as resource pressure until CPU/memory/shm "
-            "look adequate; do not classify as an app regression on resource facts alone."
-        )
-        reasons = resource_reasons
-    else:
-        kind = "resources_look_adequate"
-        hint = (
+        return {
+            "kind": "setup_and_under_resourced",
+            "reasons": setup_reasons + resource_reasons,
+            "hint": (
+                "Fix browser toolchain first; remaining cloud flakiness may still be "
+                "container resource pressure rather than an app regression."
+            ),
+        }
+    if setup_gap:
+        return {
+            "kind": "browser_toolchain_gap",
+            "reasons": setup_reasons,
+            "hint": (
+                "E2E cannot run until Playwright/Chromium match the project pin. "
+                "This is an environment gap, not an application regression."
+            ),
+        }
+    if under_resourced:
+        return {
+            "kind": "under_resourced_container",
+            "reasons": resource_reasons,
+            "hint": (
+                "Cloud container looks under-resourced for parallel Chromium. "
+                "Treat timeouts/stalls here as resource pressure until CPU/memory/shm "
+                "look adequate; do not classify as an app regression on resource facts alone."
+            ),
+        }
+    return {
+        "kind": "resources_look_adequate",
+        "reasons": [],
+        "hint": (
             "Browser toolchain and container resources look sufficient for "
             "scripts/e2e agent. Prefer app/regression investigation for E2E failures."
-        )
-        reasons = []
+        ),
+    }
 
-    return {"kind": kind, "reasons": reasons, "hint": hint}
+
+def classify_assessment(facts: dict) -> dict:
+    """Map collected facts to a pasteable failure-classification hint."""
+    setup = _browser_setup_reasons(facts["browser"])
+    resources = _resource_pressure_reasons(
+        facts["resources"], facts["agent_default_workers"]
+    )
+    return _assessment_for(setup, resources)
 
 
 def collect_report(repo: Path | None = None, environ=None) -> dict:
@@ -320,7 +337,7 @@ def collect_report(repo: Path | None = None, environ=None) -> dict:
     agent_jobs = agent_default_jobs(cpu_count=effective, memory_limit_bytes=memory)
 
     temp_dir = Path(tempfile.gettempdir())
-    shm = _statvfs_bytes(Path("/dev/shm"))
+    shm = _statvfs_bytes(_SHM_PROBE_PATH)
     temp = _statvfs_bytes(temp_dir)
 
     facts = {

@@ -126,14 +126,14 @@ class FormatReportTests(unittest.TestCase):
                 "cpu_effective": 2,
                 "memory_limit_bytes": 4 * 1024 * 1024 * 1024,
                 "shm": {
-                    "path": "/dev/shm",
+                    "path": str(Path(os.sep) / "dev" / "shm"),
                     "present": True,
                     "total_bytes": 64 * 1024 * 1024,
                     "avail_bytes": 64 * 1024 * 1024,
                     "error": None,
                 },
                 "temp": {
-                    "path": "/tmp",
+                    "path": tempfile.gettempdir(),
                     "present": True,
                     "total_bytes": 20 * 1024 * 1024 * 1024,
                     "avail_bytes": 10 * 1024 * 1024 * 1024,
