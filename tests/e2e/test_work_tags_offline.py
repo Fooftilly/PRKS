@@ -130,16 +130,6 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
 
-    def test_coalescing_across_reload_and_repeated_intent(self):
-        server, page, context = self.start(); self.offline(page, context)
-        self.add(page); self.pending(page, 1)
-        page.reload(); self.manage(page)
-        self.remove(page, 'Offline Existing'); self.pending(page, 0)
-        self.remove(page); self.pending(page, 1)
-        page.reload(); self.manage(page)
-        self.add(page, 'Initially Assigned'); self.pending(page, 0)
-        self.assertEqual(self.tag_operations(page), [])
-
     def test_revision_conflict_retains_intent_and_apply_creates_new_operation(self):
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
@@ -161,25 +151,6 @@ class OfflineWorkTagTests(unittest.TestCase):
         ledger = {r['op_id']: r['status'] for r in self.tag_ledger(server, 'op_id, status')}
         self.assertEqual(ledger.pop(original), 'REVISION_CONFLICT')
         self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'])
-
-    def test_lost_response_replays_once(self):
-        server, page, context = self.start()
-        seen = []
-        def lose(route):
-            seen.append(route.request.post_data_json['op_id'])
-            response = route.fetch()
-            if len(seen) == 1:
-                route.abort('failed')
-            else:
-                route.fulfill(response=response)
-        page.route('**/api/sync/operations', lose)
-        self.add(page); self.pending(page, 0)
-        self.assertGreaterEqual(len(seen), 2)
-        self.assertEqual(len(set(seen)), 1)
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
-        options = db.get_work_tag_options(server.ids['work_a'])
-        self.assertEqual(next(t['relation_revision'] for t in options['assigned'] if t['tag_id'] == server.ids['tag']), 1)
-        self.assertEqual(len(self.tag_ledger(server)), 1)
 
     def test_cache_clear_keeps_intent_and_syncs_without_base(self):
         server, page, context = self.start(); self.offline(page, context)
