@@ -403,8 +403,8 @@ enough (D8).
 | `manifestation_relations(from_id, to_id, relation)` | Typed links between Manifestations of the **same** Work: `revision_of`, `published_version_of`, `new_edition_of`, `translation_of`, `reprint_of`. These carry "arXiv v2 revises v1", "journal version of the accepted manuscript", and "Serbian translation of the Greek text". They carry no page correspondence (#61 owns assisted correspondence). |
 | `manifestation_identifiers(manifestation_id, scheme, value, normalized)` | DOI, ISBN, arXiv ID (versioned and versionless), PMID, and similar. `works.doi`/`isbn` backfill into these later. This is the entity duplicate detection keys on. |
 | `roles` gaining a nullable `manifestation_id` | Edition-scoped credit (§7). The owner is enforced by a composite FK (§4.1). |
-| `argument_sources` rebuilt with key `(argument_id, order_index)` plus a nullable `manifestation_id` | One Argument can cite the Work in general **and** several Versions of it, each with its own pinpoint (§8.5). |
-| `work_lifecycle(work_id, state, target_work_id)` | Merge record, modeled like `sync_tag_lifecycle`: it redirects **reads** and refuses **every pending operation** naming the merged Work with `WORK_MERGED` (§10.4, §14.2). |
+| `argument_sources` rebuilt with `PRIMARY KEY (argument_id, order_index)`, a nullable `manifestation_id`, and citation identity `UNIQUE (argument_id, work_id, COALESCE(manifestation_id, ''), pages)` | One Argument can cite the Work in general **and** several Versions of it, each with its own pinpoint (§8.5). |
+| `sync_work_lifecycle(work_id, state, target_work_id)` | Merge record, named and modeled like `sync_tag_lifecycle`. It is distinct from the existing `work_lifecycle_sync` module (`CREATE_WORK`/`DELETE_WORK`). The table it redirects **reads** and refuses **every pending operation** naming the merged Work with `WORK_MERGED` (§10.4, §14.2). |
 | `duplicate_decisions` | Durable record of "not a duplicate" answers, so a declined suggestion does not return (§10.5). |
 | Metadata provenance | A per-field record of detected, retrieved or user-edited origin on Manifestation fields (#42). This design only reserves the ownership: provenance belongs to the Manifestation field it describes, never to the Work. |
 
@@ -524,7 +524,7 @@ The existing single-column FKs (`roles.work_id → works`,
 
 | Trigger | Rule |
 | --- | --- |
-| `works_manifestation_pointers_owned` (BEFORE UPDATE OF `primary_manifestation_id`, `citation_manifestation_id` ON `works`) | A non-NULL pointer must name a Manifestation whose `work_id` is this Work (`MANIFESTATION_OWNER_MISMATCH`). The primary may not be set back to NULL (`WORK_PRIMARY_MANIFESTATION_REQUIRED`). The one exception is a Work already recorded in `work_lifecycle` as `merged`, whose row the same merge transaction is about to delete (§10.4). |
+| `works_manifestation_pointers_owned` (BEFORE UPDATE OF `primary_manifestation_id`, `citation_manifestation_id` ON `works`) | A non-NULL pointer must name a Manifestation whose `work_id` is this Work (`MANIFESTATION_OWNER_MISMATCH`). The primary may not be set back to NULL (`WORK_PRIMARY_MANIFESTATION_REQUIRED`). The one exception is a Work already recorded in `sync_work_lifecycle` as `merged`, whose row the same merge transaction is about to delete (§10.4). |
 | `works_manifestation_pointers_insert` (BEFORE INSERT ON `works`) | A Work is inserted with NULL pointers. Its Manifestation cannot exist before the Work, because `manifestations.work_id` references it. |
 | `manifestations_pointer_target_move` (BEFORE UPDATE OF `work_id` ON `manifestations`) | A Manifestation that its Work names as primary or citation cannot be moved away (`MANIFESTATION_IS_POINTER_TARGET`). The pointer must change first, in the same transaction. |
 | `manifestations_pointer_target_delete` (BEFORE DELETE ON `manifestations`) | The same rule for deletion. A whole-Work delete is unaffected: the Work row is gone before its Manifestations cascade. |
@@ -684,7 +684,7 @@ coordinate space is identical. Anything else is an explicit, reviewed action.
 | Replace with a **newer revision** (arXiv v2) | A **new Manifestation** (`revision_of`) with a new Asset. The old Asset and all its annotations remain, still readable. v2 may become primary. | The pagination changed. Moving coordinates would silently point highlights at the wrong text. |
 | Preprint → publisher version | The same: a new M (`published_version_of`) and a new A. The preprint annotations stay on the preprint. | The same reason. The PDFs are completely different. |
 | **Another scan** of the same edition | A new Asset in the **same** Manifestation. Annotations stay on the scan they were drawn on. | Same edition, but the scans differ in page offsets, cropping and rotation. |
-| **Merging** duplicate Works | Assets move **whole** with their Manifestation, and their annotations go with them unchanged. | An annotation's Asset never changes, so its coordinates stay valid. |
+| **Merging** duplicate Works | Assets move **whole** with their Manifestation. Each annotation keeps its ID, content, coordinates and `asset_id`. Only its denormalized `work_id` changes, rewritten by `ON UPDATE CASCADE` from the Manifestation move (§4.1). | An annotation's Asset never changes, so its coordinates stay valid, and the database keeps the owner columns consistent. |
 | Merging two Assets that are **exact duplicates** (same `ingest_sha256`) | The user chooses: keep one Asset and **union** the annotation sets (the coordinates are provably identical), or keep both. | Content identity proves the coordinates are compatible. It is still never automatic. |
 | Replacing a file **in place** (a "correct scan" in the same M) | A new Asset that `supersedes` the old one. The old Asset's annotations stay on it, and the UI offers "copy annotations to the new file" only as an assisted action (below). | |
 
@@ -1011,7 +1011,7 @@ not a #60 concern.
 | `supersedes_asset_id` | "This file replaces that one" within one Manifestation. |
 | `state` | `active` \| `trashed` (reserved for #57). Deletion removes the row (§9.2). |
 | `thumb_page`, `thumb_url` | Presentation (from `works`). |
-| `canonical_annotation_set_revision`, `materialized_annotation_revision` | From `works` (§6.1). |
+| `canonical_annotation_set_revision`, `materialized_pdf_annotation_revision` | Copied from `works` **under the same column names** (§6.1), so there is no third spelling. |
 | `captured_at` | For snapshots (Web Works). |
 | `created_at`, `updated_at` | |
 
@@ -1098,6 +1098,21 @@ Asset AS-…  (one File in the UI; owns annotations, page state, thumbnails)
     already got this file?".
   - `content_sha256` identifies the current working bytes. It is used for
     integrity, backup verification, and client cache validation (#52, #58).
+- **Hash updates are crash-safe.** Replacing bytes on disk and updating the
+  hash in SQLite cannot be one atomic step, so every in-place rewrite
+  (materialization, linearization, copy-on-write retarget) follows a fixed
+  order:
+  1. commit `content_sha256 = NULL`, `byte_size = NULL` and
+     `fingerprinted_at = NULL` (the working bytes are **pending**);
+  2. replace the bytes durably (`fs_durability`);
+  3. hash what was written and commit the new values.
+
+  A crash anywhere in between leaves NULL, meaning "unknown", never a stale
+  hash that clients or backup would trust. The fingerprint pass (§12.4) treats
+  NULL as work to do and fills it on the next start. Backup verification and
+  client cache validation skip, and never trust, an Asset whose hash is NULL.
+  `ingest_sha256` is written once, before the first working copy exists, and
+  it never changes.
 - **Legacy Assets** never had their original bytes preserved, so their
   `ingest_sha256` stays **NULL**. PRKS must not invent it from bytes that have
   since been materialized. Exact-duplicate detection against legacy files uses
@@ -1188,15 +1203,15 @@ before mutation. None of them is silent.
 
 | Operation | Effect | IDs |
 | --- | --- | --- |
-| `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed, and any citation-identity collision is shown in the preview (§8.5). `last_opened_at` is max. | The source `W-…` gets `work_lifecycle(state = merged, target)`. Old links, tabs and `[[W-…]]` **reads** follow the redirect. **Every** pending operation naming the source is refused with `WORK_MERGED` + `target_work_id` and is never applied to the target. The client may re-apply the user's intent explicitly (§14.2). |
-| `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. If the old Work is left with no Manifestation, it is merged into the target or deleted, and the user chooses. |
-| `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." Annotations stay with the Asset. | `AS-…` unchanged. |
+| `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed, and any citation-identity collision is shown in the preview (§8.5). `last_opened_at` is max. | The source `W-…` gets `sync_work_lifecycle(state = merged, target)`. Old links, tabs and `[[W-…]]` **reads** follow the redirect. **Every** pending operation naming the source is refused with `WORK_MERGED` + `target_work_id` and is never applied to the target. The client may re-apply the user's intent explicitly (§14.2). |
+| `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." One `UPDATE manifestations SET work_id` re-keys everything the Manifestation owns by cascade (§4.1): its Assets' and annotations' `work_id`, its scoped roles, and its pinned argument sources. None of these can collide, because each identity includes the unchanged `MF-…` ID. If the Manifestation is a pointer target of the old Work, the pointer must move first. Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. If the old Work is left with no Manifestation, it is merged into the target or deleted, and the user chooses. |
+| `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." It sets the Asset's `manifestation_id` and `work_id` together (the composite FK requires the pair to match). Its annotations keep their `asset_id` and follow the new `work_id` by cascade. If the Asset is its Manifestation's primary, the pointer must move first. | `AS-…` unchanged. |
 | `DECLINE_DUPLICATE(a, b)` | Records "not a duplicate". | `duplicate_decisions(entity_type, low_id, high_id, decision, decided_at)`. |
 
 **`MERGE_WORKS` transaction order.** The §4.1 constraints depend on this
 order, and all steps are one transaction:
 
-1. Insert `work_lifecycle(source, 'merged', target)`.
+1. Insert `sync_work_lifecycle(source, 'merged', target)`.
 2. Release the source Work's primary and citation pointers. The trigger allows
    this only because step 1 exists.
 3. `UPDATE manifestations SET work_id = target` for the moved Manifestations.
@@ -1476,7 +1491,8 @@ for the fixture library. The legacy dict gains only **additive** fields:
 | --- | --- |
 | `PATCH /api/works/:id` with a Work-owned field | the Work |
 | … with a Manifestation-owned field | the **primary** Manifestation. The editor shows the primary, so this is what the user sees. The response names the `manifestation_id` it wrote. |
-| … with a source field | the primary Asset's source aggregate (`SET_WORK_SOURCE` semantics unchanged) |
+| … with `source_url` on a **non-video** Work (provenance/citation URL, a `SET_WORK_METADATA_FIELD` value) | the primary **Manifestation**'s `url`. This works whether or not the Work has an Asset. The existing video guard stays (work-source-identity.md). |
+| `SET_WORK_SOURCE` / video source identity (`source_kind`, `provider`, `provider_id`, `source_url` on a video Work) | the primary Asset's `external_stream` aggregate (`SET_WORK_SOURCE` semantics unchanged) |
 | `POST /api/works` | creates Work + Manifestation + Asset in one transaction |
 | `POST /api/works/:id/pdf` (materialization) | the **working slot** of the primary Asset (§9.4). The client must send `asset_id` once more than one exists. Without it the request is refused (`ASSET_AMBIGUOUS`) rather than guessed. |
 | Annotation endpoints | the annotation's own Asset. A new annotation needs the displayed `asset_id`, which defaults to the primary only while exactly one PDF Asset exists. |
@@ -1628,7 +1644,7 @@ its own identity or asset model.
 | --- | --- |
 | **#41 Citation V2** | Cite a **Manifestation**. Default to `citation_target(work)` = `COALESCE(citation_manifestation_id, primary_manifestation_id)`, and own the UI for choosing the citation Version (D4). Batch export resolves each Work to exactly one Manifestation. Build CSL-JSON from `citation_record(manifestation_id)` (§8.6), not from `works` columns. Decide cite-key persistence (§8.4) and the `urldate` quirk. Do not add citation fields to `works`. |
 | **#42 Ingestion / Web Works** | Every ingest creates, or attaches to, Work → Manifestation → Asset through one canonical command. Web Work = Manifestation(`web_page`) + snapshot Asset(s) under a new managed area, classified as canonical in the backup inventory. Duplicate warnings use §10 (hash, then identifiers, then optional RapidFuzz ranking). Provenance attaches to Manifestation fields and Asset origin. BibTeX/RIS import creates Manifestations and uses identifier normalization. |
-| **#57 History / Trash** | Trash granularity is Work, Manifestation, or Asset. Asset `state = trashed` keeps bytes until purge, and purge uses the `pending_pdf_cleanup` rules. Merge and move are history events with previews. `work_lifecycle` redirects are the durable record of merges. |
+| **#57 History / Trash** | Trash granularity is Work, Manifestation, or Asset. Asset `state = trashed` keeps bytes until purge, and purge uses the `pending_pdf_cleanup` rules. Merge and move are history events with previews. `sync_work_lifecycle` redirects are the durable record of merges. |
 | **#58 Offline UX** | "Available offline" is a property of **Assets** (bytes) plus the Work's metadata. Default to the primary Asset. Validate cached bytes with `content_sha256`. Pending edits stay keyed to the entity they were made on (§14.2). |
 | **#59 Capture** | Capture sends intent (URL, selection, snapshot) to the same ingestion command as #42. Dedup by normalized canonical URL, then the snapshot hash. No capture-specific Work shape. |
 | **#61 Reading Workflow** | The Secondary Reading View opens **another Asset**, of the same Manifestation or of another Manifestation of the same Work, and reads `manifestation_relations` for labels. Reading location is per Asset. Each pane shows its own Asset's annotations. "Open corresponding passage" and annotation transfer are assisted, reviewed actions (§6.2). Never assume page correspondence. |
@@ -1738,7 +1754,7 @@ exactly right.
 | **H. Versions UI** | "Add another version / file", set primary, open a specific Version or File, and a version picker for Copy citation, all behind §13.4's progressive disclosure. Follow `DESIGN.md` for Work detail composition. #61's secondary view builds on this. | **Yes** | G |
 | **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256` (and `content_sha256` for legacy files). Offers the four choices in §10.2. | Yes | B, H |
 | **J. Identifier candidates + decline** | Normalized DOI/ISBN/arXiv candidates, a review list, and `duplicate_decisions`. | Yes | E, I |
-| **K. Merge / move workflow** | `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
+| **K. Merge / move workflow** | `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
 | **L. RapidFuzz evaluation** | A separate research/evaluation issue (dependency review, ranking quality on synthetic data). It only ranks; it never decides. | — | J |
 
 A, B and C can proceed in parallel after A's migration merges. D and E are
