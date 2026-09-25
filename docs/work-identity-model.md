@@ -585,11 +585,12 @@ upgraded DBs:
 - each invariant's contradictory insert or update is refused;
 - legal moves cascade their owner columns;
 - a pointer target cannot be deleted or moved away while referenced;
-- after the backfill, `PRAGMA foreign_key_check` reports nothing beyond
-  the legacy violations counted by the preflight (on clean fixtures, nothing at
-  all), and the integrity query returns no rows;
-- the backfill preflight (§12.3) reports rows it cannot map rather than
-  inserting them.
+- after the backfill, `PRAGMA foreign_key_check` reports nothing for the
+  rebuilt tables, and the integrity query returns no rows;
+- a fixture with legacy orphaned annotations, roles and argument sources
+  upgrades successfully. Its orphans end up in `migration_quarantine`,
+  byte-for-byte equal to the originals, and are absent from the rebuilt
+  tables.
 
 ---
 
@@ -1346,12 +1347,19 @@ The backfill rules:
 
 - A **video** Work gets an `external_stream` Asset carrying `provider`,
   `provider_id`, `source_url` and `thumb_url`.
-- A Work with **no file, no video and no annotations** gets a Manifestation and
-  **no** Asset.
-- A Work that has **annotations but no usable file reference** (a legacy
-  inconsistency) still gets a `managed_file` Asset, with a NULL
-  `storage_locator`, which reads as missing. Its annotations are never dropped
-  or left without an owner.
+- **Asset-creation predicate.** A Work gets an Asset when it has **any**
+  Asset-owned value: a `file_path`, video identity, annotations, a non-empty
+  `source_mime`, `thumb_url` or `thumb_page`, or a non-zero materialization
+  revision. `POST /api/works` / `add_work()` accept `source_mime`,
+  `thumb_url` and `thumb_page` without a file, so metadata-only rows can
+  carry them. Those values need a canonical home when Asset authority lands,
+  or JSON parity would break.
+- A Work that meets the predicate but has **no usable file or stream
+  reference** gets a `managed_file` Asset with a NULL `storage_locator`. It
+  is a placeholder that owns those values. The projection shows it exactly as
+  today (`file_path` empty: "No file attached"), and none of its values or
+  annotations are dropped or left without an owner.
+- A Work with **none** of these values gets a Manifestation and **no** Asset.
 - A non-video `source_url` goes to `manifestations.url`.
 - **MIME type:** if `works.source_mime` is non-empty, `assets.media_type` gets
   **that exact value**. `application/pdf` is inferred only when it is absent
@@ -1370,16 +1378,29 @@ The versions below are illustrative. Each is one migration in one PR (see
 
 1. **vN (Slice A): create the entities and the integrity layer.** In one
    transaction:
-   1. **Preflight.** Classify rows the backfill cannot map. Some legacy DBs
-      contain rows that already violate their existing `work_id` FK, such as
-      annotations or roles whose Work no longer exists; backup already warns
-      about these as `fk_violations`. Such rows are **carried over unchanged
-      with NULL new columns**: no owner is invented for them, and they do not
-      block the upgrade. A NULL child column exempts them from the composite
-      FKs, so the existing violation is neither repaired nor worsened. Only
-      their count is logged, which is privacy-safe. Anything else that cannot
-      be mapped **aborts** the migration with a precise reason code, and the
-      transaction rolls back.
+   1. **Preflight and quarantine.** Some legacy DBs contain rows in the three
+      leaf tables that already violate one of their FKs: for example an
+      annotation or role whose Work no longer exists, or a role whose Person
+      does not. Backup already warns about these as `fk_violations`. They
+      **cannot be copied** into the rebuilt tables, because with
+      `foreign_keys = ON` the retained single-column FKs (`work_id → works`,
+      `person_id → persons`, …) are immediate constraints. Making only the new
+      columns NULL does not exempt a row, and deferring the check would only
+      move the failure to commit. So these rows are **quarantined**, never
+      dropped:
+      - They are identified with `PRAGMA foreign_key_check(<table>)` before
+        the rebuild.
+      - Each one is written verbatim, as `json_object(...)` of all its columns,
+        into a new FK-free canonical table `migration_quarantine(id,
+        source_table, source_rowid, row_json, reason, quarantined_at)`.
+      - The rebuild copy then skips them.
+      - Only per-table counts are logged, which is privacy-safe.
+
+      The table lives in `prks_data.db`, so it is backed up with the library.
+      No owner is invented and the upgrade is not blocked. A later repair or
+      "reattach" tool can restore a row if its owner reappears. Any other row
+      that cannot be mapped (none are expected) **aborts** the migration with
+      a precise reason code, and the transaction rolls back.
    2. Create `manifestations`, `assets`, `manifestation_relations` and
       `manifestation_identifiers`, with the parent pairs and composite FKs of
       §4.1.
@@ -1396,9 +1417,10 @@ The versions below are illustrative. Each is one migration in one PR (see
       `annotations.asset_id` and pin `argument_sources` rows with pages when
       legacy code writes them without the new columns, reproducing the
       backfill rules. The child FKs cascade on DELETE.
-   7. Run the integrity query, and compare `PRAGMA foreign_key_check` with the
-      preflight: **no new** violation may appear. Either check failing aborts
-      the migration.
+   7. Run the integrity query and `PRAGMA foreign_key_check`. The rebuilt
+      tables must report **no** violations, because their orphans were
+      quarantined. The other tables must report no violation that the
+      preflight did not see. Either check failing aborts the migration.
 
    **No reader changes.** No filesystem work. D2 applies: no automatic
    full-library backup is made or required.
@@ -1412,10 +1434,14 @@ The versions below are illustrative. Each is one migration in one PR (see
 3. **vN+2: Manifestation authority.** The same move for bibliographic fields.
    The migration **copies revision counters** from `work-field/[W, f]` to
    `manifestation-field/[origin_MF(W), f]` (§14.2).
-4. **vN+3: Role scope.** Set role scope by role type (§7.3), swap the
-   uniqueness index to include `manifestation_id`, and copy role revisions to
-   `manifestation-person-role` scopes for the rows that became
-   Manifestation-scoped.
+4. **vN+3: Role scope.** Set role scope by role type (§7.3), and swap the
+   uniqueness index to include `manifestation_id`. Then copy **every**
+   `work-person-role/[W, P, r]` revision scope whose role type is
+   edition-scoped (Editor, Translator, Introduction, Foreword, Afterword) to
+   `manifestation-person-role/[origin_MF(W), P, r]`. This includes
+   **tombstones**, meaning scopes with a revision but no live row, which
+   `work_role_sync.get_roles_state()` deliberately keeps. Without them, an
+   offline add based on revision 0 could resurrect a deleted role.
 5. **Later: retire legacy columns.** This is decided later (D10). Until then the
    columns stay as the maintained projection.
 
@@ -1558,7 +1584,13 @@ The architecture must not assume a permanent local-first target (#179), but the
 existing durable-operation guarantees (I7, I12) are compatibility constraints
 and are kept.
 
-**Scopes follow ownership, and revisions are carried, not reset.**
+**Scopes follow ownership, and revisions are carried, not reset.** Every
+copy iterates over the **`sync_entity_revisions` scope rows**, never over live
+entity rows. Tombstones (a revision with no live row: a deleted annotation, a
+removed role, a cleared field) are copied like any other scope, so a stale
+device cannot resurrect what was deleted. The old scope row is kept, and legacy
+operations keyed by it map through `origin_MF(W)`/`origin_AS(W)` as described
+below.
 
 | Current scope | Future scope | Migration |
 | --- | --- | --- |
@@ -1566,7 +1598,7 @@ and are kept.
 | `work-field/[W, f]` for W-owned `f` (status, title, abstract, author_text) | unchanged | — |
 | `work-source/W` | `asset-source/AS` | Copy to `origin_AS(W)`. |
 | `pdf-annotation/[W, ann]` | `asset-annotation/[AS, ann]` | Copy to `origin_AS(W)`. Deletion tombstones are copied too, so resurrection protection survives. |
-| `work-person-role/[W, P, r]` | unchanged for W-scope; `manifestation-person-role/[MF, P, r]` for M-scope | Copy for backfilled M-scoped roles. |
+| `work-person-role/[W, P, r]` | unchanged for W-scope; `manifestation-person-role/[MF, P, r]` for M-scope | Copy every scope row of an edition-scoped role type to `origin_MF(W)`, **tombstones included**. |
 | notes, tags, folder, playlist, open | unchanged | — |
 
 **Legacy operations after the move.** A pending `SET_WORK_METADATA_FIELD(W,
@@ -1744,7 +1776,7 @@ exactly right.
 
 | Slice | Content | User-visible? | Depends on |
 | --- | --- | --- | --- |
-| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests; (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins pages rows; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename and legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
+| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests; (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins pages rows; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
 | **B. Asset fingerprint pass + ingest hashing** | Bounded, resumable hashing pass (§12.4). Compute `ingest_sha256` on the upload/import stream **before** linearization, for new Assets. No duplicate UI yet. | No | A |
 | **C. Projection module** | `work_projection.legacy_work` / `legacy_work_summary`. Move readers family by family (detail, browse/recent, folder/person/playlist summaries, BibTeX via `citation_record`), each with JSON parity tests and a byte-identical BibTeX test. | No | A |
 | **D. Asset authority** | vN+1: locator, source aggregate, materialization revisions and `thumb_page` owned by `assets`. `annotations.asset_id` authoritative and NOT NULL. Text index keyed by Asset. Cleanup and backup audit count Asset locators. Scope and revision copies (`asset-source`, `asset-annotation`). Legacy operations mapped to `origin_AS(W)`. Browser last-page key migration. | No | C |
@@ -1775,9 +1807,10 @@ review.
    why citation identity includes `pages`. The alternative, "pages always pins
    a Version", is simpler, but it would force classical locators onto one
    edition.
-2. **Legacy FK-orphan rows are carried, not blocking** (§12.3 step 1.1). Rows
-   that already violate their `work_id` FK keep NULL new columns and are
-   counted. The alternative is to make the upgrade refuse to run on such a DB.
+2. **Legacy FK-orphan rows are quarantined, not blocking** (§12.3 step 1.1).
+   Rows that already violate an FK cannot be copied into a rebuilt table, so
+   they are kept verbatim in `migration_quarantine`. The alternative is to
+   make the upgrade refuse to run on such a DB.
 3. **Slice A rebuilds `roles` and `annotations`** as well as
    `argument_sources`, so the composite FKs exist from the first migration. The
    alternative is to add the columns without FKs in Slice A and rebuild later,
