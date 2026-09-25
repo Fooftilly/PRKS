@@ -51,6 +51,117 @@ def parse_jobs(value, env_value=None, default=1):
     return jobs
 
 
+def parse_shard(value, env_value=None):
+    """Parse external shard spec ``INDEX/TOTAL`` (1-based index).
+
+    Returns ``(index_0based, total)`` or ``None`` when unset. Used by CI matrix
+    runners so each GitHub Actions job owns a disjoint slice of the full gate
+    while still sharing the same LPT partitioner as ``--jobs N``.
+    """
+    raw = value if value is not None else env_value
+    if raw is None or raw == "":
+        return None
+    text = str(raw).strip()
+    if "/" not in text:
+        raise ValueError(
+            "shard must look like INDEX/TOTAL (1-based), got %r" % (raw,)
+        )
+    left, right = text.split("/", 1)
+    if "/" in right:
+        raise ValueError(
+            "shard must look like INDEX/TOTAL (1-based), got %r" % (raw,)
+        )
+    try:
+        index = int(left.strip())
+        total = int(right.strip())
+    except (TypeError, ValueError):
+        raise ValueError(
+            "shard INDEX and TOTAL must be integers, got %r" % (raw,)
+        ) from None
+    if total < 1:
+        raise ValueError("shard TOTAL must be >= 1, got %d" % total)
+    if total > MAX_JOBS:
+        # Same ceiling as local --jobs: keeps port-window math and matrix size
+        # honest rather than inventing a second, larger limit.
+        raise ValueError("shard TOTAL must be <= %d, got %d" % (MAX_JOBS, total))
+    if index < 1 or index > total:
+        raise ValueError(
+            "shard INDEX must be in 1..%d inclusive, got %d" % (total, index)
+        )
+    return index - 1, total
+
+
+def select_external_shard(test_ids, shard_index, shard_total, timings=None, default=DEFAULT_TEST_SECONDS):
+    """Return the test IDs owned by one external shard.
+
+    ``shard_index`` is 0-based. Assignment is the same LPT partition used by
+    ``--jobs``: every discovered ID lands in exactly one shard, timing-aware
+    when history/baseline weights exist, and deterministic for equal costs.
+    """
+    if shard_total < 1:
+        raise ValueError("shard total must be >= 1, got %d" % shard_total)
+    if shard_index < 0 or shard_index >= shard_total:
+        raise ValueError(
+            "shard index %d out of range for %d shards" % (shard_index, shard_total)
+        )
+    buckets = assign_shards(test_ids, shard_total, timings, default=default)
+    return buckets[shard_index]
+
+
+def partition_external_shards(test_ids, shard_total, timings=None, default=DEFAULT_TEST_SECONDS):
+    """Return all external-shard buckets (convenience for coverage / CI plan)."""
+    return assign_shards(test_ids, shard_total, timings, default=default)
+
+
+def aggregate_external_shard_results(reports):
+    """Decide a multi-runner full-gate outcome from per-shard result dicts.
+
+    Each report should include ``shard`` (1-based label like ``2/4``),
+    ``returncode``, ``reported``, and optional ``failures`` / ``errors`` /
+    ``failed_ids``. A shard that never reported is a failure. Used by unit
+    tests and as the contract the GitHub Actions aggregator mirrors.
+    """
+    problems = []
+    failed_ids = []
+    seen = set()
+    totals = {"shards": 0, "reported": 0, "failures": 0, "errors": 0}
+    for report in reports:
+        totals["shards"] += 1
+        label = report.get("shard") or report.get("index")
+        failures = report.get("failures") or 0
+        errors = report.get("errors") or 0
+        if isinstance(failures, (int, float)) and not isinstance(failures, bool):
+            totals["failures"] += int(failures)
+        else:
+            failures = 0
+        if isinstance(errors, (int, float)) and not isinstance(errors, bool):
+            totals["errors"] += int(errors)
+        else:
+            errors = 0
+        for test_id in report.get("failed_ids") or []:
+            if test_id not in seen:
+                seen.add(test_id)
+                failed_ids.append(test_id)
+        if not report.get("reported"):
+            problems.append(
+                "shard %s produced no result (exit code %s)"
+                % (label, report.get("returncode"))
+            )
+            continue
+        totals["reported"] += 1
+        if report.get("returncode") != 0:
+            problems.append(
+                "shard %s exited %s" % (label, report.get("returncode"))
+            )
+            continue
+        if failures or errors:
+            problems.append(
+                "shard %s reported %s failure(s), %s error(s)"
+                % (label, failures, errors)
+            )
+    return (not problems), totals, problems, failed_ids
+
+
 def module_of(test_id: str) -> str:
     """`tests.e2e.test_app.SomeClass.test_x` -> `tests.e2e.test_app`."""
     parts = test_id.split(".")

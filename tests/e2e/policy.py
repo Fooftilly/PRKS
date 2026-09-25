@@ -72,6 +72,9 @@ TIERS = ("targeted", "feature", "smoke", "full", "dev", "agent", "last-failed", 
 # Override with PRKS_E2E_FULL_TIMEOUT; set 0 to disable.
 FULL_GATE_TIMEOUT_S = 1200
 FULL_GATE_DEFAULT_JOBS = 4
+# Authoritative GitHub Actions full E2E matrix width. Prefer this many runners
+# each with --jobs 1 over one runner with FULL_GATE_DEFAULT_JOBS local workers.
+FULL_GATE_EXTERNAL_SHARDS = 4
 
 # Per-test hang watchdog (seconds). Separate from Playwright assertion timeouts
 # and from the full-suite PRKS_E2E_FULL_TIMEOUT. Generous so slow-but-valid tests
@@ -318,13 +321,15 @@ AFFECTED_RULES = (
             "tests/e2e/policy.py",
             "tests/e2e/install_browser.py",
             "tests/e2e/fixtures.py",
+            "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
             "tests/browser/pointer_capture.py",
             "scripts/e2e",
+            ".github/workflows/test-gate.yml",
         ),
         "features": ("smoke", "wait-async"),
         "fallback": "smoke",
-        "note": "E2E runner/harness change → smoke + wait_for_async parity",
+        "note": "E2E runner/harness/CI gate change → smoke + wait_for_async parity (not silent skip)",
     },
     # Central shared infrastructure → broader than one domain
     {
@@ -768,6 +773,27 @@ def match_affected_path(rel: str):
                 "unmapped production path → smoke (not full suite)",
             )
     return "ignored", (), True, "outside production/E2E tree → skip"
+
+
+def full_e2e_ci_needed(changed_paths):
+    """Whether the authoritative full E2E CI gate should run for this diff.
+
+    Reuses the same docs/unit/ignored skip rules as ``--affected``: when every
+    changed path is guidance-only or non-E2E tests, skip the expensive matrix.
+    An empty path list fails closed (run) so a shallow/misconfigured checkout
+    cannot silently drop the gate.
+
+    Path classification only — does not resolve feature → test IDs (that would
+    require a full discovery pass and is unnecessary for the CI skip decision).
+    """
+    paths = list(changed_paths or [])
+    if not paths:
+        return True, "no changed paths reported — running full E2E (fail closed)"
+    for raw in paths:
+        _rule, _feats, skip, _note = match_affected_path(raw)
+        if not skip:
+            return True, "E2E-relevant changes detected — running full E2E"
+    return False, "docs/unit/ignored-only changes — skipping full E2E"
 
 
 def select_affected(all_ids, changed_paths):

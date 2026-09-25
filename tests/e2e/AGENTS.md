@@ -19,6 +19,7 @@ PRKS E2E is Python unittest + Playwright Chromium via `tests/e2e/run.py`
 | Last-failed | `python tests/e2e/run.py --last-failed` | unresolved failures from prior runs |
 | Dev | `python tests/e2e/run.py --dev --feature tabs` | Fail-fast + no pointer-capture |
 | Full | `python tests/e2e/run.py --jobs 4` | Complete regression gate (runner hard-limits at 1200s; `timeout 1200 …` still fine) |
+| Full (CI shard) | `python tests/e2e/run.py --jobs 1 --shard INDEX/TOTAL` | One external slice of the full gate (GitHub Actions matrix; TOTAL defaults to 4) |
 
 Convenience wrapper: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
 Catalog: `python tests/e2e/run.py --list-features`. Mapping lives in
@@ -216,6 +217,15 @@ module's tests contiguous, because these modules launch Chromium in
 `setUpModule` and unittest re-runs a module fixture whenever the module changes.
 The scheduling and aggregation logic lives in `tests/e2e/sharding.py` as pure
 functions covered by `tests/test_e2e_sharding.py` — no Chromium needed.
+
+External CI sharding. `--shard INDEX/TOTAL` (1-based) selects one bucket from
+the same LPT partition used by `--jobs TOTAL`. The authoritative GitHub Actions
+full E2E gate prefers about four runners each with `--jobs 1` over one runner
+with four local Chromium stacks (`FULL_GATE_EXTERNAL_SHARDS` in
+`tests/e2e/policy.py`). Pointer capture runs once after every matrix shard
+passes (dedicated CI job), not once per shard. Docs/unit/ignored-only diffs
+skip the matrix via `python tests/e2e/run.py --ci-plan --base <ref>` (same
+noop policy as `--affected`).
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer

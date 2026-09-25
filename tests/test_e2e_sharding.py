@@ -24,6 +24,7 @@ from tests.e2e.sharding import (
     DEFAULT_TEST_SECONDS,
     MAX_JOBS,
     agent_default_jobs,
+    aggregate_external_shard_results,
     aggregate_worker_results,
     assign_shards,
     detect_cgroup_cpu_count,
@@ -35,8 +36,11 @@ from tests.e2e.sharding import (
     merge_timings,
     module_of,
     parse_jobs,
+    parse_shard,
+    partition_external_shards,
     run_exit_code,
     save_timings,
+    select_external_shard,
     shard_estimates,
     worker_port_range,
 )
@@ -177,6 +181,111 @@ class ShardAssignmentTests(unittest.TestCase):
         self.assertEqual(module_of("tests.e2e.test_app.Klass.test_x"), "tests.e2e.test_app")
         self.assertEqual(module_of("mod.Klass.test_x"), "mod")
         self.assertEqual(module_of("weird"), "weird")
+
+
+class ExternalShardPartitionerTests(unittest.TestCase):
+    """External --shard INDEX/TOTAL uses the same LPT buckets as --jobs TOTAL."""
+
+    def test_parse_shard_accepts_1_based_index(self):
+        self.assertEqual(parse_shard("1/4"), (0, 4))
+        self.assertEqual(parse_shard("4/4"), (3, 4))
+        self.assertIsNone(parse_shard(None))
+        self.assertIsNone(parse_shard(""))
+        self.assertEqual(parse_shard(None, "2/3"), (1, 3))
+        self.assertEqual(parse_shard("1/4", "9/9"), (0, 4))  # CLI wins
+
+    def test_parse_shard_rejects_invalid_specs(self):
+        for bad in ("0/4", "5/4", "1", "1/0", "a/b", "1/2/3", "1/-2", "-1/4"):
+            with self.assertRaises(ValueError):
+                parse_shard(bad)
+        with self.assertRaises(ValueError):
+            parse_shard("1/%d" % (MAX_JOBS + 1))
+
+    def test_external_shards_cover_every_test_exactly_once(self):
+        ids = ["tests.e2e.test_app.C.test_%02d" % i for i in range(37)]
+        timings = {t: (i % 5) + 1.5 for i, t in enumerate(ids)}
+        for total in (1, 2, 3, 4, 8):
+            buckets = partition_external_shards(ids, total, timings)
+            self.assertEqual(len(buckets), total)
+            flat = [t for bucket in buckets for t in bucket]
+            self.assertEqual(len(flat), len(ids), total)
+            self.assertEqual(len(set(flat)), len(ids), total)
+            self.assertEqual(sorted(flat), sorted(ids), total)
+            for index in range(total):
+                self.assertEqual(
+                    select_external_shard(ids, index, total, timings),
+                    buckets[index],
+                )
+
+    def test_external_partition_matches_assign_shards(self):
+        ids = _ids("tests.e2e.test_offline", "C", "a", "b", "c", "d", "e", "f")
+        timings = {
+            "tests.e2e.test_offline.C.a": 40.0,
+            "tests.e2e.test_offline.C.b": 10.0,
+            "tests.e2e.test_offline.C.c": 10.0,
+            "tests.e2e.test_offline.C.d": 10.0,
+            "tests.e2e.test_offline.C.e": 10.0,
+            "tests.e2e.test_offline.C.f": 10.0,
+        }
+        self.assertEqual(
+            partition_external_shards(ids, 2, timings),
+            assign_shards(ids, 2, timings),
+        )
+
+    def test_external_partition_is_deterministic_for_equal_costs(self):
+        ids = ["tests.e2e.test_app.C.test_%02d" % i for i in range(20)]
+        first = partition_external_shards(ids, 4)
+        second = partition_external_shards(list(reversed(ids)), 4)
+        self.assertEqual(first, second)
+
+    def test_select_external_shard_rejects_out_of_range_index(self):
+        with self.assertRaises(ValueError):
+            select_external_shard(["a.B.c"], -1, 2)
+        with self.assertRaises(ValueError):
+            select_external_shard(["a.B.c"], 2, 2)
+
+
+class ExternalShardAggregationTests(unittest.TestCase):
+    def test_all_shards_pass(self):
+        ok, totals, problems, failed = aggregate_external_shard_results(
+            [
+                {"shard": "1/4", "reported": True, "returncode": 0},
+                {"shard": "2/4", "reported": True, "returncode": 0},
+            ]
+        )
+        self.assertTrue(ok)
+        self.assertEqual(problems, [])
+        self.assertEqual(failed, [])
+        self.assertEqual(totals["shards"], 2)
+        self.assertEqual(totals["reported"], 2)
+
+    def test_failed_shard_surfaces_clearly(self):
+        ok, totals, problems, failed = aggregate_external_shard_results(
+            [
+                {"shard": "1/4", "reported": True, "returncode": 0},
+                {
+                    "shard": "3/4",
+                    "reported": True,
+                    "returncode": 1,
+                    "failures": 2,
+                    "failed_ids": ["tests.e2e.test_app.C.test_x"],
+                },
+            ]
+        )
+        self.assertFalse(ok)
+        self.assertEqual(totals["failures"], 2)
+        self.assertEqual(failed, ["tests.e2e.test_app.C.test_x"])
+        self.assertTrue(any("shard 3/4" in p for p in problems))
+
+    def test_missing_shard_report_is_never_a_pass(self):
+        ok, _, problems, _failed = aggregate_external_shard_results(
+            [
+                {"shard": "1/4", "reported": True, "returncode": 0},
+                {"shard": "2/4", "reported": False, "returncode": -9},
+            ]
+        )
+        self.assertFalse(ok)
+        self.assertIn("no result", problems[0])
 
 
 class AgentJobCountTests(unittest.TestCase):

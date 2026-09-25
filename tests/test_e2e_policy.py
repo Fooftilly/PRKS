@@ -219,6 +219,40 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertTrue(plan["noop_ok"])
         self.assertEqual(plan["test_ids"], [])
 
+    def test_full_e2e_ci_skips_docs_only(self):
+        needed, reason = policy.full_e2e_ci_needed(
+            ["docs/wiki/Testing.md", "AGENTS.md", "README.md"]
+        )
+        self.assertFalse(needed)
+        self.assertIn("skipping", reason)
+
+    def test_full_e2e_ci_skips_unit_only(self):
+        needed, reason = policy.full_e2e_ci_needed(["tests/test_e2e_sharding.py"])
+        self.assertFalse(needed)
+        self.assertIn("skipping", reason)
+
+    def test_full_e2e_ci_runs_for_production_and_gate_workflow(self):
+        needed, reason = policy.full_e2e_ci_needed(["frontend/js/app.js"])
+        self.assertTrue(needed)
+        self.assertIn("running", reason)
+        needed_wf, _reason = policy.full_e2e_ci_needed(
+            [".github/workflows/test-gate.yml"]
+        )
+        self.assertTrue(needed_wf)
+
+    def test_full_e2e_ci_empty_paths_fail_closed_to_run(self):
+        needed, reason = policy.full_e2e_ci_needed([])
+        self.assertTrue(needed)
+        self.assertIn("fail closed", reason)
+
+    def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
+        rule, feats, skip, _note = policy.match_affected_path(
+            ".github/workflows/test-gate.yml"
+        )
+        self.assertEqual(rule, "e2e-framework")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("smoke",))
+
     def test_select_affected_broken_feature_selection_is_not_noop(self):
         # Features mapped, but none of the known IDs match → fail, not noop.
         plan = policy.select_affected(
