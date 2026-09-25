@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
@@ -25,6 +26,8 @@ from tests.e2e.sharding import (
     agent_default_jobs,
     aggregate_worker_results,
     assign_shards,
+    detect_cgroup_cpu_count,
+    detect_cgroup_memory_limit_bytes,
     estimate_seconds,
     format_slowest,
     load_timings,
@@ -178,8 +181,12 @@ class ShardAssignmentTests(unittest.TestCase):
 
 class AgentJobCountTests(unittest.TestCase):
     def test_agent_defaults_are_capped_at_two(self):
-        self.assertEqual(agent_default_jobs(cpu_count=32, memory_limit_bytes=None), 2)
-        self.assertEqual(agent_default_jobs(cpu_count=1, memory_limit_bytes=None), 1)
+        # Pass an explicit large memory ceiling so this assertion models
+        # "CPU-rich, memory-unlimited" rather than auto-detecting the host
+        # cgroup (which can force serial on a ~4 GiB cloud agent).
+        ample = 16 * AGENT_MEMORY_PER_JOB_BYTES
+        self.assertEqual(agent_default_jobs(cpu_count=32, memory_limit_bytes=ample), 2)
+        self.assertEqual(agent_default_jobs(cpu_count=1, memory_limit_bytes=ample), 1)
 
     def test_agent_memory_limit_can_force_serial(self):
         self.assertEqual(
@@ -196,6 +203,66 @@ class AgentJobCountTests(unittest.TestCase):
             ),
             2,
         )
+
+
+class NestedCgroupLimitTests(unittest.TestCase):
+    def test_memory_uses_tightest_finite_ancestor(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/pod/agent/workload")
+        mid = Path("/sys/fs/cgroup/pod/agent")
+        root = Path("/sys/fs/cgroup")
+        values = {
+            leaf / "memory.max": "max",
+            mid / "memory.max": str(4 * 1024 * 1024 * 1024),
+            root / "memory.max": "max",
+        }
+
+        def fake_dirs():
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_dirs):
+            with mock.patch.object(sharding, "_read_first", fake_read):
+                self.assertEqual(
+                    detect_cgroup_memory_limit_bytes(),
+                    4 * 1024 * 1024 * 1024,
+                )
+
+    def test_cpu_uses_tightest_finite_ancestor(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/pod/agent/workload")
+        mid = Path("/sys/fs/cgroup/pod/agent")
+        root = Path("/sys/fs/cgroup")
+        values = {
+            leaf / "cpu.max": "max 100000",
+            mid / "cpu.max": "100000 100000",
+            root / "cpu.max": "max 100000",
+        }
+
+        def fake_dirs():
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_dirs):
+            with mock.patch.object(sharding, "_read_first", fake_read):
+                with mock.patch.object(sharding.os, "cpu_count", return_value=8):
+                    self.assertEqual(detect_cgroup_cpu_count(), 1)
 
 
 class JobCountTests(unittest.TestCase):

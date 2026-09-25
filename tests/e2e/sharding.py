@@ -116,23 +116,82 @@ def _read_first(paths):
     return None
 
 
+def _cgroup_v2_self_dirs():
+    """Yield mounted cgroup-v2 directories from the process leaf up to the mount root.
+
+    Nested cloud-agent containers often put finite CPU/memory ceilings on a
+    leaf or parent while the hierarchy root looks unlimited. Walking ancestors
+    lets agent sizing use the tightest visible limit.
+    """
+    try:
+        text = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return
+    rel = None
+    for line in text.splitlines():
+        parts = line.split(":")
+        # Unified hierarchy: "0::/path/to/cgroup"
+        if len(parts) >= 3 and parts[0] == "0" and parts[1] == "":
+            rel = parts[2]
+            break
+    if rel is None:
+        return
+    rel = rel.strip()
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    # Avoid an empty join producing /sys/fs/cgroup (still useful) while also
+    # emitting every ancestor including the mount root.
+    parts = [p for p in rel.split("/") if p]
+    for depth in range(len(parts), -1, -1):
+        if depth == 0:
+            yield Path("/sys/fs/cgroup")
+        else:
+            yield Path("/sys/fs/cgroup").joinpath(*parts[:depth])
+
+
+def _parse_cpu_max(raw):
+    if not raw:
+        return None
+    parts = raw.split()
+    if len(parts) < 2 or parts[0] == "max":
+        return None
+    try:
+        quota = int(parts[0])
+        period = int(parts[1])
+    except ValueError:
+        return None
+    if quota > 0 and period > 0:
+        return max(1, math.floor(quota / period))
+    return None
+
+
+def _parse_memory_max(raw):
+    if raw is None or raw == "max":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value <= 0 or value >= (1 << 60):
+        return None
+    return value
+
+
 def detect_cgroup_cpu_count() -> int | None:
     """Best-effort effective CPU count for Linux containers/cgroups."""
     host = os.cpu_count() or 1
     quota_count = None
 
-    raw = _read_first(("/sys/fs/cgroup/cpu.max",))
-    if raw:
-        parts = raw.split()
-        if len(parts) >= 2 and parts[0] != "max":
-            try:
-                quota = int(parts[0])
-                period = int(parts[1])
-                if quota > 0 and period > 0:
-                    quota_count = max(1, math.floor(quota / period))
-            except ValueError:
-                pass
-    else:
+    for directory in _cgroup_v2_self_dirs():
+        parsed = _parse_cpu_max(_read_first((directory / "cpu.max",)))
+        if parsed is not None:
+            quota_count = parsed if quota_count is None else min(quota_count, parsed)
+
+    if quota_count is None:
+        raw = _read_first(("/sys/fs/cgroup/cpu.max",))
+        quota_count = _parse_cpu_max(raw)
+
+    if quota_count is None:
         quota_raw = _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",))
         period_raw = _read_first(("/sys/fs/cgroup/cpu/cpu.cfs_period_us",))
         try:
@@ -153,23 +212,25 @@ def detect_cgroup_memory_limit_bytes() -> int | None:
     """Best-effort memory ceiling for Linux containers/cgroups.
 
     Returns None when no finite cgroup limit is visible. Very large v1
-    sentinel values are treated as unlimited.
+    sentinel values are treated as unlimited. When nested cgroup-v2 dirs
+    expose different ceilings, the tightest finite limit wins.
     """
+    best = None
+    for directory in _cgroup_v2_self_dirs():
+        parsed = _parse_memory_max(_read_first((directory / "memory.max",)))
+        if parsed is None:
+            continue
+        best = parsed if best is None else min(best, parsed)
+    if best is not None:
+        return best
+
     raw = _read_first(
         (
             "/sys/fs/cgroup/memory.max",
             "/sys/fs/cgroup/memory/memory.limit_in_bytes",
         )
     )
-    if raw is None or raw == "max":
-        return None
-    try:
-        value = int(raw)
-    except ValueError:
-        return None
-    if value <= 0 or value >= (1 << 60):
-        return None
-    return value
+    return _parse_memory_max(raw)
 
 
 def agent_resource_limits() -> dict:

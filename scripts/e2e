@@ -32,6 +32,35 @@ _has_jobs_flag() {
   return 1
 }
 
+_has_base_flag() {
+  local arg expect_value=0
+  for arg in "$@"; do
+    if [[ "$expect_value" -eq 1 ]]; then
+      return 0
+    fi
+    case "$arg" in
+      --base) expect_value=1 ;;
+      --base=*) return 0 ;;
+    esac
+  done
+  # Trailing bare --base without a value: still treat as explicit so the
+  # runner (not this wrapper) owns the argparse error.
+  [[ "$expect_value" -eq 1 ]]
+}
+
+_resolve_agent_base() {
+  # Prefer the tracked default branch when present; fall back so fresh
+  # checkouts without origin/master still get a usable comparison tip.
+  local candidate
+  for candidate in origin/master master HEAD; do
+    if git rev-parse --verify "${candidate}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 cmd="$1"
 shift
 case "$cmd" in
@@ -59,7 +88,16 @@ case "$cmd" in
   agent)
     # Cloud-agent fast path: changed-surface E2E only, fail-fast, no pointer
     # capture, and resource-aware worker width (max 2 unless explicitly set).
-    exec "${RUN[@]}" --agent --affected --base origin/master "$@"
+    # Discover a usable --base when the caller did not pass one so missing
+    # origin/master does not hard-fail before any tests run.
+    if _has_base_flag "$@"; then
+      exec "${RUN[@]}" --agent --affected "$@"
+    fi
+    base="$(_resolve_agent_base)" || {
+      echo "scripts/e2e agent: could not resolve a comparison base (tried origin/master, master, HEAD)" >&2
+      exit 2
+    }
+    exec "${RUN[@]}" --agent --affected --base "$base" "$@"
     ;;
   full)
     # Bounded parallel full gate. Runner also enforces PRKS_E2E_FULL_TIMEOUT
