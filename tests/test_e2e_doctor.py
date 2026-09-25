@@ -1,0 +1,267 @@
+"""Unit/selfcheck coverage for ``scripts/e2e doctor`` / ``tests.e2e.doctor``."""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from tests.e2e import doctor
+from tests.e2e.sharding import AGENT_MEMORY_PER_JOB_BYTES, BASELINE_TIMINGS_PATH, TIMINGS_PATH
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+class FormatBytesTests(unittest.TestCase):
+    def test_formats_are_stable(self):
+        self.assertEqual(doctor._fmt_bytes(None), "unknown")
+        self.assertEqual(doctor._fmt_bytes(512), "512 B")
+        self.assertEqual(doctor._fmt_bytes(2048), "2 KiB")
+        self.assertEqual(doctor._fmt_bytes(3 * 1024 * 1024 * 1024), "3 GiB")
+
+
+class AssessmentClassificationTests(unittest.TestCase):
+    def _facts(
+        self,
+        *,
+        playwright_installed="1.63.0",
+        playwright_pinned="1.63.0",
+        chromium_available=True,
+        cpu_effective=4,
+        memory_limit_bytes=16 * AGENT_MEMORY_PER_JOB_BYTES,
+        shm_avail=2 * 1024 * 1024 * 1024,
+        temp_avail=8 * 1024 * 1024 * 1024,
+        agent_default_workers=2,
+    ):
+        return {
+            "browser": {
+                "playwright_installed": playwright_installed,
+                "playwright_pinned": playwright_pinned,
+                "playwright_match": bool(
+                    playwright_installed
+                    and playwright_pinned
+                    and playwright_installed == playwright_pinned
+                ),
+                "chromium_available": chromium_available,
+                "browsers_dir": "/repo/.playwright-browsers",
+            },
+            "resources": {
+                "cpu_effective": cpu_effective,
+                "memory_limit_bytes": memory_limit_bytes,
+                "shm": {"avail_bytes": shm_avail},
+                "temp": {"avail_bytes": temp_avail},
+            },
+            "agent_default_workers": agent_default_workers,
+        }
+
+    def test_adequate_points_at_app_regression(self):
+        result = doctor.classify_assessment(self._facts())
+        self.assertEqual(result["kind"], "resources_look_adequate")
+        self.assertIn("app/regression", result["hint"])
+
+    def test_under_resourced_cpu(self):
+        result = doctor.classify_assessment(
+            self._facts(cpu_effective=1, agent_default_workers=1)
+        )
+        self.assertEqual(result["kind"], "under_resourced_container")
+        self.assertTrue(any("effective CPU" in r for r in result["reasons"]))
+        self.assertIn("resource pressure", result["hint"])
+
+    def test_under_resourced_memory(self):
+        result = doctor.classify_assessment(
+            self._facts(
+                memory_limit_bytes=AGENT_MEMORY_PER_JOB_BYTES // 2,
+                agent_default_workers=1,
+            )
+        )
+        self.assertEqual(result["kind"], "under_resourced_container")
+        self.assertTrue(any("cgroup memory" in r for r in result["reasons"]))
+
+    def test_browser_toolchain_gap(self):
+        result = doctor.classify_assessment(
+            self._facts(playwright_installed=None, chromium_available=False)
+        )
+        self.assertEqual(result["kind"], "browser_toolchain_gap")
+        self.assertIn("environment gap", result["hint"])
+
+    def test_combined_setup_and_resources(self):
+        result = doctor.classify_assessment(
+            self._facts(
+                playwright_installed="1.0.0",
+                playwright_pinned="1.63.0",
+                chromium_available=False,
+                cpu_effective=1,
+                agent_default_workers=1,
+            )
+        )
+        self.assertEqual(result["kind"], "setup_and_under_resourced")
+
+
+class FormatReportTests(unittest.TestCase):
+    def test_format_is_deterministic_and_pasteable(self):
+        facts = {
+            "python": {
+                "version": "3.12.3",
+                "implementation": "CPython",
+                "executable": "/usr/bin/python3",
+            },
+            "browser": {
+                "playwright_installed": "1.63.0",
+                "playwright_pinned": "1.63.0",
+                "playwright_pin_error": None,
+                "playwright_match": True,
+                "chromium_revision": "1200",
+                "chromium_revision_error": None,
+                "chromium_available": True,
+                "chromium_path": "/repo/.playwright-browsers/chromium-1200/chrome-linux/chrome",
+                "chromium_version": "Chromium 120.0.0",
+                "browsers_dir": "/repo/.playwright-browsers",
+            },
+            "resources": {
+                "cpu_affinity": 4,
+                "cpu_cgroup_quota": 2,
+                "cpu_effective": 2,
+                "memory_limit_bytes": 4 * 1024 * 1024 * 1024,
+                "shm": {
+                    "path": "/dev/shm",
+                    "present": True,
+                    "total_bytes": 64 * 1024 * 1024,
+                    "avail_bytes": 64 * 1024 * 1024,
+                    "error": None,
+                },
+                "temp": {
+                    "path": "/tmp",
+                    "present": True,
+                    "total_bytes": 20 * 1024 * 1024 * 1024,
+                    "avail_bytes": 10 * 1024 * 1024 * 1024,
+                    "error": None,
+                },
+            },
+            "agent_default_workers": 1,
+            "timing_history_local": {
+                "path": str(TIMINGS_PATH).replace("\\", "/"),
+                "present": False,
+                "entries": 0,
+            },
+            "timing_baseline_committed": {
+                "path": str(BASELINE_TIMINGS_PATH).replace("\\", "/"),
+                "present": True,
+                "entries": 14,
+            },
+            "env": {key: None for key in doctor.E2E_ENV_KEYS},
+            "assessment": {
+                "kind": "under_resourced_container",
+                "reasons": ["effective CPU is 2"],
+                "hint": "resource pressure hint",
+            },
+        }
+        text = doctor.format_report(facts)
+        again = doctor.format_report(facts)
+        self.assertEqual(text, again)
+        self.assertTrue(text.startswith("PRKS E2E doctor (read-only)\n"))
+        self.assertIn("python: 3.12.3 (CPython)", text)
+        self.assertIn("playwright: installed=1.63.0 pinned=1.63.0 match=yes", text)
+        self.assertIn("cpu: affinity_or_cpuset=4 cgroup_quota=2 effective=2", text)
+        self.assertIn("memory_cgroup: 4 GiB", text)
+        self.assertIn("agent_default_workers: 1", text)
+        self.assertIn("timing_history_local: present=no", text)
+        self.assertIn("timing_baseline_committed: present=yes", text)
+        self.assertIn("assessment: under_resourced_container", text)
+        self.assertIn("PRKS_E2E_JOBS=(unset)", text)
+        # Env keys appear in sorted declaration order.
+        idx_jobs = text.index("PRKS_E2E_JOBS=")
+        idx_profile = text.index("PRKS_E2E_PROFILE=")
+        self.assertLess(idx_jobs, idx_profile)
+
+
+class CollectReportTests(unittest.TestCase):
+    def test_collect_uses_injected_environ_and_repo_timings(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            baseline = root / BASELINE_TIMINGS_PATH
+            baseline.parent.mkdir(parents=True)
+            baseline.write_text('{"tests.e2e.test_app.C.test_x": 1.5}\n', encoding="utf-8")
+            env = {
+                "PRKS_E2E_JOBS": "2",
+                "TMPDIR": str(root / "tmp"),
+            }
+            (root / "tmp").mkdir()
+            with mock.patch.object(doctor, "_chromium_probe") as probe:
+                probe.return_value = {
+                    "playwright_installed": None,
+                    "playwright_pinned": "1.63.0",
+                    "playwright_pin_error": None,
+                    "playwright_match": False,
+                    "chromium_revision": None,
+                    "chromium_revision_error": None,
+                    "chromium_available": False,
+                    "chromium_path": None,
+                    "chromium_version": None,
+                    "browsers_dir": str(root / ".playwright-browsers"),
+                }
+                with mock.patch.object(doctor, "detect_cgroup_cpu_count", return_value=1):
+                    with mock.patch.object(
+                        doctor, "detect_cgroup_memory_limit_bytes", return_value=512 * 1024 * 1024
+                    ):
+                        with mock.patch.object(doctor, "_cpu_affinity_count", return_value=1):
+                            with mock.patch.object(
+                                doctor, "_cgroup_cpu_quota_count", return_value=1
+                            ):
+                                facts = doctor.collect_report(repo=root, environ=env)
+            self.assertEqual(facts["env"]["PRKS_E2E_JOBS"], "2")
+            self.assertIsNone(facts["env"]["PRKS_E2E_PROFILE"])
+            self.assertEqual(facts["timing_baseline_committed"]["present"], True)
+            self.assertEqual(facts["timing_baseline_committed"]["entries"], 1)
+            self.assertEqual(facts["timing_history_local"]["present"], False)
+            self.assertEqual(facts["agent_default_workers"], 1)
+            self.assertIn(
+                facts["assessment"]["kind"],
+                ("browser_toolchain_gap", "setup_and_under_resourced"),
+            )
+
+
+class ScriptsE2EDoctorSelfcheckTests(unittest.TestCase):
+    def test_wrapper_lists_doctor_and_runs_read_only(self):
+        wrapper = (REPO / "scripts" / "e2e").read_text(encoding="utf-8")
+        self.assertIn("doctor", wrapper)
+        self.assertIn("tests/e2e/doctor.py", wrapper)
+
+        # Live smoke: must exit 0, print the banner, and not create browser cache.
+        browsers = REPO / ".playwright-browsers"
+        existed = browsers.exists()
+        completed = subprocess.run(
+            ["bash", str(REPO / "scripts" / "e2e"), "doctor"],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHON": sys.executable, "PYTHONPATH": str(REPO)},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("PRKS E2E doctor (read-only)", completed.stdout)
+        self.assertIn("assessment:", completed.stdout)
+        self.assertIn("agent_default_workers:", completed.stdout)
+        if not existed:
+            self.assertFalse(
+                browsers.exists(),
+                "doctor must not install Chromium / create .playwright-browsers",
+            )
+
+    def test_module_main_is_read_only(self):
+        completed = subprocess.run(
+            [sys.executable, str(REPO / "tests" / "e2e" / "doctor.py")],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": str(REPO)},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(completed.stdout.startswith("PRKS E2E doctor (read-only)"))
+
+
+if __name__ == "__main__":
+    unittest.main()
