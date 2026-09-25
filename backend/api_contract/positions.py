@@ -8,14 +8,14 @@ Wrong-type ``name`` / ``description`` map to the established domain codes
 (``invalid_name`` / ``invalid_text``) so the typed boundary does not change
 existing Position API error semantics for those fields.
 
-Malformed non-string descriptions (``false``, ``0``, ``[]``, …) are refused
-as ``invalid_text``. Accidental pre-slice falsy coercions
-(``data.get('description', '') or ''``) are **not** restored — #180 keeps
-stricter typed validation (#45 may tighten further families the same way).
+Malformed non-string descriptions (``false``, ``0``, ``[]``, …) and explicit
+JSON ``null`` on request fields are refused as ``invalid_text`` /
+``invalid_name``. Accidental pre-slice falsy coercions and omit-via-null
+quirks are **not** restored — #180 defines a clean typed contract.
 """
 from __future__ import annotations
 
-from typing import Any, Optional, TypeVar
+from typing import Annotated, Any, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -31,19 +31,55 @@ T = TypeVar("T", bound=BaseModel)
 _NAME_MUST_BE_STRING = "Name must be a string."
 _TEXT_MUST_BE_STRING = "Text must be a string."
 
+# PATCH: omitted → leave unchanged; present → must be a string (not null).
+# OpenAPI stays ``type: string`` without nullable/default null; JSON null →
+# string_type. ``default=None`` is Python-only (omit sentinel); strip it from
+# the published schema so openapi-core accepts the document.
+def _strip_null_default(schema: dict[str, Any]) -> None:
+    if schema.get("default") is None:
+        schema.pop("default", None)
+
+
+_OmitableName = Annotated[
+    str,
+    Field(
+        default=None,
+        description=(
+            "When present, must be a string. Omit to leave unchanged. "
+            "Explicit JSON null is invalid."
+        ),
+        json_schema_extra=_strip_null_default,
+    ),
+]
+_OmitableDescription = Annotated[
+    str,
+    Field(
+        default=None,
+        description=(
+            "When present, must be a string (empty string clears). "
+            "Omit to leave unchanged. Explicit JSON null is invalid."
+        ),
+        json_schema_extra=_strip_null_default,
+    ),
+]
+
 
 class PositionCreateRequest(BaseModel):
-    """POST /api/positions body."""
+    """POST /api/positions body.
+
+    Omitted ``description`` defaults to empty string. Supplied values must be
+    strings — JSON null and other non-strings are ``invalid_text``.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     name: str = Field(..., description="Position claim name (domain-normalized).")
-    description: Optional[str] = Field(
-        default=None,
+    description: str = Field(
+        default="",
         description=(
-            "Optional markdown description; must be a string or null when "
-            "supplied. Domain enforces length/control rules. Non-string JSON "
-            "values are refused (no falsy coercion)."
+            "Optional markdown description. Omitted → empty string. "
+            "When supplied must be a string (not null). Domain enforces "
+            "length/control rules."
         ),
     )
 
@@ -51,24 +87,24 @@ class PositionCreateRequest(BaseModel):
 class PositionUpdateRequest(BaseModel):
     """PATCH /api/positions/{id} body.
 
-    Omitted fields are not updated. Whether at least one field is supplied is a
-    domain rule (``nothing_to_update``), not enforced here.
+    Intentional contract (#180):
+
+    - omitted field → do not modify;
+    - ``name`` when present must be a string; explicit null is invalid;
+    - ``description`` when present must be a string (empty string clears);
+      explicit null is invalid.
+
+    Whether at least one field is supplied is a domain rule
+    (``nothing_to_update``), not enforced here.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: _OmitableName
+    description: _OmitableDescription
 
     def domain_field_kwargs(self) -> dict[str, Any]:
-        """Pass only keys the client actually sent.
-
-        Explicit JSON ``null`` is forwarded as Python ``None``. The domain
-        treats ``None`` as the omit sentinel (``nothing_to_update`` when it is
-        the only field; otherwise that field is left unchanged). Clear-on-null
-        is deliberately **not** part of this #180 slice — see #45 if that
-        contract is approved later. Absent keys stay omitted.
-        """
+        """Pass only keys the client actually sent (always strings when set)."""
         out: dict[str, Any] = {}
         if "name" in self.model_fields_set:
             out["name"] = self.name
@@ -134,13 +170,22 @@ class PositionSyncFieldState(BaseModel):
     revision: int = Field(..., ge=0)
 
 
+class PositionSyncFields(BaseModel):
+    """Exact Position revision map — always ``name`` and ``description``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: PositionSyncFieldState
+    description: PositionSyncFieldState
+
+
 class PositionSyncState(BaseModel):
     """GET /api/positions/{id}/sync-state — revisions only."""
 
     model_config = ConfigDict(extra="forbid")
 
     position_id: str
-    fields: dict[str, PositionSyncFieldState]
+    fields: PositionSyncFields
 
 
 def position_validation_error_envelope(exc: ValidationError) -> dict[str, Any]:

@@ -3094,7 +3094,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 try:
                     item = research_network.create_position(
-                        db, req.name, req.description or ''
+                        db, req.name, req.description
                     )
                 except ResearchError as e:
                     self.send_json(

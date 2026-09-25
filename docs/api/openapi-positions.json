@@ -339,7 +339,7 @@
         "type": "object"
       },
       "PositionCreateRequest": {
-        "description": "POST /api/positions body.",
+        "description": "POST /api/positions body.\n\nOmitted ``description`` defaults to empty string. Supplied values must be\nstrings \u2014 JSON null and other non-strings are ``invalid_text``.",
         "properties": {
           "name": {
             "description": "Position claim name (domain-normalized).",
@@ -347,17 +347,10 @@
             "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Optional markdown description; must be a string or null when supplied. Domain enforces length/control rules. Non-string JSON values are refused (no falsy coercion).",
-            "title": "Description"
+            "default": "",
+            "description": "Optional markdown description. Omitted \u2192 empty string. When supplied must be a string (not null). Domain enforces length/control rules.",
+            "title": "Description",
+            "type": "string"
           }
         },
         "required": [
@@ -366,31 +359,17 @@
         "type": "object"
       },
       "PositionUpdateRequest": {
-        "description": "PATCH /api/positions/{id} body.\n\nOmitted fields are not updated. Whether at least one field is supplied is a\ndomain rule (``nothing_to_update``), not enforced here.",
+        "description": "PATCH /api/positions/{id} body.\n\nIntentional contract (#180):\n\n- omitted field \u2192 do not modify;\n- ``name`` when present must be a string; explicit null is invalid;\n- ``description`` when present must be a string (empty string clears);\n  explicit null is invalid.\n\nWhether at least one field is supplied is a domain rule\n(``nothing_to_update``), not enforced here.",
         "properties": {
           "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Name"
+            "description": "When present, must be a string. Omit to leave unchanged. Explicit JSON null is invalid.",
+            "title": "Name",
+            "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Description"
+            "description": "When present, must be a string (empty string clears). Omit to leave unchanged. Explicit JSON null is invalid.",
+            "title": "Description",
+            "type": "string"
           }
         },
         "type": "object"
@@ -577,6 +556,23 @@
         "title": "PositionSyncFieldState",
         "type": "object"
       },
+      "PositionSyncFields": {
+        "additionalProperties": false,
+        "description": "Exact Position revision map \u2014 always ``name`` and ``description``.",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/PositionSyncFieldState"
+          },
+          "description": {
+            "$ref": "#/components/schemas/PositionSyncFieldState"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
       "PositionSyncState": {
         "additionalProperties": false,
         "description": "GET /api/positions/{id}/sync-state \u2014 revisions only.",
@@ -586,11 +582,7 @@
             "type": "string"
           },
           "fields": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/PositionSyncFieldState"
-            },
-            "title": "Fields",
-            "type": "object"
+            "$ref": "#/components/schemas/PositionSyncFields"
           }
         },
         "required": [

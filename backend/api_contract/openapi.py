@@ -14,6 +14,7 @@ from backend.api_contract.positions import (
     PositionDeleted,
     PositionDetail,
     PositionSummary,
+    PositionSyncFields,
     PositionSyncState,
     PositionUpdateRequest,
 )
@@ -45,6 +46,7 @@ def positions_openapi_document() -> dict[str, Any]:
         PositionSummary,
         PositionDetail,
         PositionDeleted,
+        PositionSyncFields,
         PositionSyncState,
     ):
         raw = _schema(model)

@@ -67,7 +67,11 @@ Route extraction (#67) is a separate track; typed models do not require it.
    `extra="forbid"` and require established wire keys — nullable values may
    stay `T | None`, but without defaults that omit the key from OpenAPI —
    so the schema matches the production payload and `dump_response` cannot
-   silently synthesize or drop fields.
+   silently synthesize or drop fields. Prefer intentional request null
+   contracts (omit vs string; empty string to clear) over publishing
+   nullable fields solely to mirror accidental legacy omit-via-null quirks.
+   Fixed sync-state field maps should be named models (`extra="forbid"`),
+   not open-ended `dict[str, …]`.
 3. Keep domain rules in the domain module. Request models check JSON types
    (string vs object vs array). Length, emptiness, control characters, and
    uniqueness remain in the domain.

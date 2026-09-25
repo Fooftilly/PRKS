@@ -35,6 +35,7 @@ from backend.api_contract.positions import (
     PositionCreateRequest,
     PositionDetail,
     PositionSummary,
+    PositionSyncFields,
     PositionSyncState,
     PositionUpdateRequest,
     parse_position_request,
@@ -192,12 +193,21 @@ class PositionBoundaryUnitTests(unittest.TestCase):
                 self.assertEqual(err["code"], "invalid_text")
                 self.assertEqual(err["error"], "Text must be a string.")
 
-    def test_create_request_null_description_is_optional_empty(self):
+    def test_create_request_null_description_is_invalid_text(self):
+        """POST description must be a string when supplied — null is not empty."""
         model, err = parse_position_request(
             PositionCreateRequest, {"name": "Null desc", "description": None}
         )
+        self.assertIsNone(model)
+        self.assertEqual(err["code"], "invalid_text")
+        self.assertEqual(err["error"], "Text must be a string.")
+
+    def test_create_request_omitted_description_defaults_to_empty_string(self):
+        model, err = parse_position_request(
+            PositionCreateRequest, {"name": "No desc"}
+        )
         self.assertIsNone(err)
-        self.assertIsNone(model.description)
+        self.assertEqual(model.description, "")
 
     def test_create_request_passes_plain_values(self):
         model, err = parse_position_request(
@@ -214,13 +224,20 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(model.domain_field_kwargs(), {"name": "Only name"})
 
-    def test_update_explicit_null_description_is_omit_sentinel(self):
-        """Pre-#185: JSON null description is omit, not clear."""
+    def test_update_explicit_null_description_is_invalid_text(self):
+        """Intentional PATCH: explicit null is invalid; empty string clears."""
         model, err = parse_position_request(
             PositionUpdateRequest, {"description": None}
         )
-        self.assertIsNone(err)
-        self.assertEqual(model.domain_field_kwargs(), {"description": None})
+        self.assertIsNone(model)
+        self.assertEqual(err["code"], "invalid_text")
+        self.assertEqual(err["error"], "Text must be a string.")
+
+    def test_update_explicit_null_name_is_invalid_name(self):
+        model, err = parse_position_request(PositionUpdateRequest, {"name": None})
+        self.assertIsNone(model)
+        self.assertEqual(err["code"], "invalid_name")
+        self.assertEqual(err["error"], "Name must be a string.")
 
     def test_update_omitted_description_not_in_kwargs(self):
         model, err = parse_position_request(
@@ -229,15 +246,20 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertIsNone(err)
         self.assertNotIn("description", model.domain_field_kwargs())
 
-    def test_update_name_with_null_description_keeps_description_key_as_none(self):
+    def test_update_empty_description_clears(self):
+        model, err = parse_position_request(
+            PositionUpdateRequest, {"description": ""}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(model.domain_field_kwargs(), {"description": ""})
+
+    def test_update_name_with_null_description_is_invalid_text(self):
         model, err = parse_position_request(
             PositionUpdateRequest, {"name": "Renamed", "description": None}
         )
-        self.assertIsNone(err)
-        self.assertEqual(
-            model.domain_field_kwargs(),
-            {"name": "Renamed", "description": None},
-        )
+        self.assertIsNone(model)
+        self.assertEqual(err["code"], "invalid_text")
+        self.assertEqual(err["error"], "Text must be a string.")
 
     def test_update_request_wrong_type_name_preserves_domain_code(self):
         model, err = parse_position_request(PositionUpdateRequest, {"name": 1})
@@ -331,10 +353,57 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionSyncState.model_validate(
                 {
                     "position_id": "P-TEST",
-                    "fields": {"name": {"revision": 0}},
+                    "fields": {
+                        "name": {"revision": 0},
+                        "description": {"revision": 0},
+                    },
                     "values": {"name": "x"},
                 }
             )
+
+    def test_sync_state_fields_require_name_and_description_only(self):
+        """Sync-state fields is a fixed map matching position_sync.FIELDS."""
+        ok = {
+            "position_id": "P-TEST",
+            "fields": {
+                "name": {"revision": 0},
+                "description": {"revision": 1},
+            },
+        }
+        PositionSyncState.model_validate(ok)
+        PositionSyncFields.model_validate(ok["fields"])
+
+        missing_description = {
+            "position_id": "P-TEST",
+            "fields": {"name": {"revision": 0}},
+        }
+        with self.assertRaises(ValidationError):
+            PositionSyncState.model_validate(missing_description)
+
+        missing_name = {
+            "position_id": "P-TEST",
+            "fields": {"description": {"revision": 0}},
+        }
+        with self.assertRaises(ValidationError):
+            PositionSyncState.model_validate(missing_name)
+
+        unexpected_field = {
+            "position_id": "P-TEST",
+            "fields": {
+                "name": {"revision": 0},
+                "description": {"revision": 0},
+                "unexpected": {"revision": 0},
+            },
+        }
+        with self.assertRaises(ValidationError):
+            PositionSyncState.model_validate(unexpected_field)
+
+        only_unexpected = {
+            "position_id": "P-TEST",
+            "fields": {"unexpected": {"revision": 0}},
+        }
+        with self.assertRaises(ValidationError):
+            PositionSyncState.model_validate(only_unexpected)
 
     def test_openapi_response_schemas_require_established_keys(self):
         schemas = positions_openapi_document()["components"]["schemas"]
@@ -368,6 +437,23 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(
             schemas["PositionSyncState"].get("additionalProperties"), False
         )
+        sync_fields = schemas["PositionSyncFields"]
+        self.assertEqual(
+            set(sync_fields["required"]), {"name", "description"}
+        )
+        self.assertEqual(sync_fields.get("additionalProperties"), False)
+        self.assertIn("name", sync_fields["properties"])
+        self.assertIn("description", sync_fields["properties"])
+        # Request null is not part of the published create/update schemas.
+        create_desc = schemas["PositionCreateRequest"]["properties"]["description"]
+        self.assertEqual(create_desc.get("type"), "string")
+        self.assertNotIn("anyOf", create_desc)
+        update_name = schemas["PositionUpdateRequest"]["properties"]["name"]
+        self.assertEqual(update_name.get("type"), "string")
+        self.assertNotIn("anyOf", update_name)
+        update_desc = schemas["PositionUpdateRequest"]["properties"]["description"]
+        self.assertEqual(update_desc.get("type"), "string")
+        self.assertNotIn("anyOf", update_desc)
 
     def test_error_envelope_omits_null_code(self):
         body = ApiErrorEnvelope(error="Position not found.").as_dict()
@@ -393,6 +479,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             "PositionSummary",
             "ApiErrorEnvelope",
             "PositionDeleted",
+            "PositionSyncFields",
             "PositionSyncState",
         ):
             self.assertIn(name, schemas)
@@ -791,8 +878,8 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         self._json("DELETE", path, expect_status=200)
 
-    def test_patch_null_description_preserves_pre_slice_omit_semantics(self):
-        """Pre-#185: null description alone → nothing_to_update; with name, omit."""
+    def test_patch_null_fields_rejected_empty_description_clears(self):
+        """Intentional PATCH: null invalid; empty string clears description."""
         status, created, _, _, _ = self._json(
             "POST",
             "/api/positions",
@@ -800,22 +887,39 @@ class PositionHttpContractTests(unittest.TestCase):
             expect_status=201,
         )
         path = f"/api/positions/{created['id']}"
-        status, body, _, _, _ = self._json(
+        status, body, raw, _, _ = self._json(
             "PATCH", path, {"description": None}, expect_status=400
         )
-        self.assertEqual(body.get("code"), "nothing_to_update")
+        self.assertEqual(body.get("code"), "invalid_text")
         status, detail, _, _, _ = self._json("GET", path, expect_status=200)
         self.assertEqual(detail["description"], "keep me")
+
+        status, body, _, _, _ = self._json(
+            "PATCH",
+            path,
+            {"name": None},
+            expect_status=400,
+        )
+        self.assertEqual(body.get("code"), "invalid_name")
 
         status, updated, _, _, _ = self._json(
             "PATCH",
             path,
-            {"name": "Null desc renamed", "description": None},
+            {"name": "Null desc renamed", "description": ""},
             expect_status=200,
         )
         self.assertEqual(updated["name"], "Null desc renamed")
-        self.assertEqual(updated["description"], "keep me")
+        self.assertEqual(updated["description"], "")
         self._json("DELETE", path, expect_status=200)
+
+    def test_post_null_description_rejected(self):
+        status, body, _, _, _ = self._json(
+            "POST",
+            "/api/positions",
+            {"name": "Null create", "description": None},
+            expect_status=400,
+        )
+        self.assertEqual(body.get("code"), "invalid_text")
 
     def test_sync_state_304_when_etag_matches(self):
         status, created, _, _, _ = self._json(
