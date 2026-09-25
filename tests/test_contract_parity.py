@@ -14,7 +14,7 @@ from pathlib import Path
 
 from backend.db_manager import PRKSDatabase, PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import WORK_STATUSES
-from backend.work_role_sync import PEOPLE_ROLE_TYPES, ROLE_TYPES
+from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE_TYPES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -580,6 +580,12 @@ class ContractParityTests(unittest.TestCase):
         )
         self.assertNotIn("Mentioned", PEOPLE_ROLE_TYPES)
         self.assertIn("Mentioned", ROLE_TYPES)
+        # Identity pin: a future hard-coded set equal in content would still pass
+        # assertEqual; assertIs fails unless Processing reuses the named registry.
+        self.assertIs(
+            PRKSDatabase._PROCESSING_ROLE_TYPES,
+            PEOPLE_ROLE_TYPE_SET,
+        )
 
         people = js_string_array(
             read("frontend/js/navigation.js"), "PRKS_PEOPLE_ROLES"
