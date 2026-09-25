@@ -160,10 +160,12 @@ class AgentGuidanceTests(unittest.TestCase):
                          "durable family explicitly")
 
     def test_agents_md_routes_to_offline_pwa_contract(self):
-        """Root AGENTS.md keeps the Offline/PWA heading and points agents at
-        the scoped contract before offline work."""
-        self.assertIn("## Offline / PWA", self.agents)
-        self.assertIn("docs/agent-rules/offline-pwa.md", self.agents)
+        """Root routes frontend work to the scoped policy, which then routes
+        offline/PWA work to the detailed domain contract."""
+        self.assertIn("frontend/AGENTS.md", self.agents)
+        frontend_agents = (ROOT / "frontend" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("## Offline / PWA", frontend_agents)
+        self.assertIn("docs/agent-rules/offline-pwa.md", frontend_agents)
 
     def test_agents_md_points_at_the_running_score(self):
         self.assertIn("docs/local-first-rollout-status.md", self.agents)
