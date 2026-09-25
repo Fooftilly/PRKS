@@ -15,7 +15,7 @@ _APP = os.path.join(_FRONTEND, "js", "app.js")
 _COORD = os.path.join(_FRONTEND, "js", "request-coordinator.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
-_AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
+_AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 _WIKI_WORKSPACE = os.path.join(
     _PROJECT_DIR, "docs", "wiki", "Workspace-Tabs-and-Split-View.md"
 )
