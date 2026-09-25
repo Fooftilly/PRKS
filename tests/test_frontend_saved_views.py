@@ -13,7 +13,7 @@ _SV = os.path.join(_FRONTEND, "js", "saved-views.js")
 _SEARCH = os.path.join(_FRONTEND, "js", "components", "search.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
-_AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
+_AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_saved_views_selftest.js")
 
 

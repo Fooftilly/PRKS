@@ -8,9 +8,9 @@ guidance still said "read-only offline", and the next change re-added a
 connectivity guard in front of an operation that no longer needed one.
 
 The detailed Offline/PWA contract lives in `docs/agent-rules/offline-pwa.md`,
-routed from the root `AGENTS.md` stub. Obsolete-phrase and durable-family
-assertions therefore cover the files agents are expected to read for that
-domain, not root `AGENTS.md` alone.
+routed from `frontend/AGENTS.md` (and the root `AGENTS.md` stub). Obsolete-phrase
+and durable-family assertions therefore cover the files agents are expected to
+read for that domain, not root `AGENTS.md` alone.
 
 These are deliberately *phrase* assertions rather than a general style check.
 They fail loudly when a specific obsolete claim returns, and they say what is
@@ -86,8 +86,12 @@ class AgentGuidanceTests(unittest.TestCase):
     def setUp(self):
         self.agents = AGENTS.read_text()
         self.offline_pwa = OFFLINE_PWA.read_text()
+        self.frontend_agents = (ROOT / "frontend" / "AGENTS.md").read_text(
+            encoding="utf-8")
         # Combined corpus agents read for offline/local-first guidance.
-        self.guidance = self.agents + "\n" + self.offline_pwa
+        self.guidance = (
+            self.agents + "\n" + self.frontend_agents + "\n" + self.offline_pwa
+        )
         self.status = STATUS.read_text()
 
     # ---- obsolete phrases that must never come back ------------------------
@@ -160,10 +164,31 @@ class AgentGuidanceTests(unittest.TestCase):
                          "durable family explicitly")
 
     def test_agents_md_routes_to_offline_pwa_contract(self):
-        """Root AGENTS.md keeps the Offline/PWA heading and points agents at
-        the scoped contract before offline work."""
-        self.assertIn("## Offline / PWA", self.agents)
-        self.assertIn("docs/agent-rules/offline-pwa.md", self.agents)
+        """Root routes frontend work to the scoped policy, which then routes
+        offline/PWA work to the detailed domain contract."""
+        self.assertIn("frontend/AGENTS.md", self.agents)
+        frontend_agents = (ROOT / "frontend" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("## Offline / PWA", frontend_agents)
+        self.assertIn("docs/agent-rules/offline-pwa.md", frontend_agents)
+
+    def test_backend_agents_routes_cross_domain_contracts(self):
+        """Backend-only workers must still be told to load shared domain
+        contracts that live outside backend/AGENTS.md (sync/offline, research,
+        Saved Views)."""
+        backend = (ROOT / "backend" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("## Cross-domain contracts", backend)
+        self.assertIn("docs/agent-context/sync-map.md", backend)
+        self.assertIn("docs/agent-rules/offline-pwa.md", backend)
+        self.assertIn("completely", backend)
+        self.assertIn("frontend/AGENTS.md", backend)
+        for phrase in (
+            "Research network",
+            "Research Graph",
+            "Saved Views",
+            "Offline / PWA",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, backend)
 
     def test_agents_md_points_at_the_running_score(self):
         self.assertIn("docs/local-first-rollout-status.md", self.agents)

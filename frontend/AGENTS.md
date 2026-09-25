@@ -1,0 +1,389 @@
+# PRKS frontend agent instructions
+
+These rules apply to frontend work in addition to the repository-root `AGENTS.md`. `DESIGN.md` remains authoritative for UI and interaction decisions; read the sections relevant to the component being changed.
+
+## Cross-boundary bulk mutations
+
+Frontend bulk operations must use a transactional backend bulk operation when one exists. Do not implement bulk UI behavior as one HTTP mutation per selected Work; preserve server-side validation and atomicity across the selection.
+
+## Command palette
+
+Command palette commands must use explicit allowlisted actions. Never execute
+user query text as JavaScript or dynamic method names.
+
+Navigation commands must use prksNavigate() and existing canonical hash routes.
+
+Do not introduce duplicate CRUD forms solely for command-palette actions; reuse
+existing modals and route handlers.
+
+Global command shortcuts must not steal keyboard shortcuts while the user is
+typing/editing or while another modal owns focus.
+
+Palette queries are ephemeral UI state and must not be persisted or logged.
+
+Any command that depends on transient command-palette operation state (e.g.
+`state.splitPlacement`, set by a pane menu's explicit Split right/down request)
+must snapshot that state before calling `closePalette()`, because closing the
+palette clears it. Read the snapshot afterward, never the live state.
+
+## Workspace navigation
+
+Internal PRKS navigation uses prksNavigate.
+
+Do not write window.location.hash directly from feature code.
+
+Do not use window.open for ordinary internal PRKS routes.
+
+Normal navigation targets the originating workspace context (the TabContext that owns the link, or the focused context for palette/global commands). Sidebar chrome navigates Main.
+
+Ctrl/Cmd-click and middle-click target a background PRKS tab.
+
+The shared link layer intercepts anchor clicks in the capture phase, so
+`handleNavEvent` must bow out entirely — no `preventDefault`, no
+`stopPropagation` — for a destination the owning component has explicitly
+marked `aria-disabled="true"`, in every intent (same tab, background tab,
+tile). That component then refuses the activation and explains why, from an
+ordinary bubble-phase `click`/`auxclick` handler; a middle click only ever
+arrives as `auxclick`. Offline pages rely on this to keep a relationship's real
+`href` inspectable while saying the destination is not cached; without it the
+capture-phase handler would navigate first and swallow the explanation.
+`onMiddleMouseDown` is deliberately *not* part of that contract: it only
+suppresses the middle-button mousedown default (autoscroll) and never
+navigates, so it has nothing to bow out of.
+
+Alt-click and `prksNavigate(..., { target: "tile" })` open a Secondary leaf when the route is tile-capable.
+
+User-facing copy says "Split view", "Split right", "Split down", "Make main", "Hide from split", "Hide split" / "Show split". Internal APIs stay `tile`, `secondaryTree`, split-node IDs, and `target: "tile"` — never user-facing.
+
+Existing parked tabs should be tiled through `prksWorkspaceTileTab(tabId)`, not duplicated through `navigate(... { target: "tile" })`. Split right/down onto a specific focused leaf go through `prksWorkspaceSplitLeaf(targetLeafTabId, axis, options)`, reusing an existing tab (`options.tabId`) or creating one (`options.hash`) — never duplicating.
+
+Main never recursively splits; it is permanently the single root pane. Secondary is `workspace-tree.js`'s recursive `leaf`/`split` tree (`secondaryTree`): `null` (no Secondary), a bare `{ type: "leaf", tabId }` (the common single-Secondary case — do not wrap it in a pointless split node), or a `{ type: "split", id, axis, ratio, first, second }` node whose children are themselves leaves or splits. A tab occurs at most once in `secondaryTree`, and Main's own tab never appears inside it. Split-node IDs are stable per-runtime keys (never array index, DOM position, or a child's tab ID) used for DOM reuse, resize ownership, and targeted mutation; they are in-memory only, never persisted. Route capability for a Secondary leaf covers works, people, concepts, positions, arguments, playlists, and folder detail (`folder-detail`); the Folder library index (`#/folders`) stays main-only. Do not add further route types as an incidental follow-on to recursive splitting.
+
+Tree mutation goes only through `workspace-tree.js`'s pure helpers (`findLeafByTabId`, `replaceLeaf`, `splitLeaf`, `removeLeaf`, `replaceTabId`, `setSplitRatio`, `normalizeTree`, `validateTree`, `collectLeafTabIds`, `containsTab`, …); routes and UI code must never mutate `secondaryTree` structure directly. Removing a leaf always normalizes the tree afterward: a split node left with one child collapses into that child, repeated upward, so the tree never carries a redundant single-child split node; if the last leaf disappears, `secondaryTree` becomes `null` and the view returns to stacked.
+
+At most `PRKS_MAX_VISIBLE_TABS` (4: 1 Main + 3 Secondary) TabContexts are ever mounted at once. Split right/down are disabled with an explanation once the cap is reached; ordinary New Tab is unaffected and still creates a parked tab.
+
+Generic `target:'tile'` navigation and "Open in split view" are additive: they never evict an existing Secondary leaf. There is no user-facing "Replace split pane" operation. Default placement is unambiguous only when there is no Secondary tree (new bare leaf), exactly one Secondary leaf (split it), or a focused Secondary leaf in a recursive tree (split that one); otherwise placement is ambiguous and the operation is fail-closed — no new logical tab, no tree mutation, no mount, no paint, no leave check, just the ambiguity/cap announcement and `false`. The same fail-closed rule applies at the pane cap. New Tab is the only fallback that intentionally creates a parked logical tab regardless of ambiguity or the cap.
+
+Close: parked closes only that tab. A Secondary leaf's close removes and normalizes the tree — it must never remount or otherwise touch any other leaf's TabContext — and prefers focusing the closest surviving sibling in the collapsed subtree, else the nearest remaining leaf in deterministic depth-first tree order, else Main. Main close promotes the first surviving Secondary leaf in that same deterministic order, else the right tab-strip neighbor, then left, then Home. Do not flash Home while a successor exists. Keep leave guards. Batch close (other tabs / tabs to the right) preflights every mounted tab being closed and aborts entirely on reject.
+
+Hide/park is two distinct operations. Global "Hide split" (the shell Split button) parks every currently-visible Secondary leaf at once, atomically (depth-first preflight, stop at first rejection, no partial parking), but preserves the whole `secondaryTree` logically for "Show split" to remount unchanged. Local "Hide from split" (per-leaf, context-menu only) removes just that one leaf from the tree and normalizes it, while keeping its logical tab open and parked — distinct from Close, which destroys the tab. Neither ever duplicates a tab: reopening a parked leaf reuses its existing tab ID.
+
+Make main is an in-place role swap, valid from any Secondary leaf at any tree depth: the promoted leaf becomes `mainTabId`, and the old Main takes over that exact leaf position (`replaceTabId`) — never a tree rebuild, a move to the root, or a sibling reorder. Every leaf's TabContext identity (including the promoted and demoted ones) survives untouched; only DOM placement/role and Main-owned chrome (URL, History, title) change.
+
+Promoting a Secondary leaf to Main (`makeMain`, a Secondary navigating to a non-tile-capable route, or a visible Secondary's popstate promotion) is `Promise<boolean>` and preflights the old Main through the shared `preflightMainPromotion()` helper before any state mutation. If the old Main supports tiling it is only demoted into the promoted leaf's exact old position (the role swap above) and never leaves, so no leave prompt runs. If the old Main does not support tiling, promotion would cold-park/unmount it, so it must pass `awaitLeave(oldMain.id, oldMain.route)` first — the old Main's own current route, not the incoming target's, so autosave/owned-draft guards run without a false route-change read. A rejected preflight is an atomic no-op: no tab/tree/URL/mount mutation, and (for popstate) the URL is restored. `promoteSecondaryToMain()` itself stays the synchronous, unchecked state-mutation primitive; it is only ever called after that preflight succeeds. Pure startup reconciliation has no mounted dirty runtime and may keep using the primitive directly.
+
+Focusing a tile must not promote Main, change the URL, remount, or reset PDF/editor. Clicking a *visible* Secondary leaf's global tab-strip entry focuses it in place; it does not promote it — that is reserved for parked tabs and explicit Make main. After close, hide (global or local), split, Make main, or narrow fallback, restore focus to the resulting focused tile or its workspace tab control.
+
+User-facing menu copy is Split view / Split right / Split down / Make main / Hide from split / Hide split / Show split. Do not expose `tileTab`, `secondaryTree`, split-node IDs, or `mainTabId`.
+
+Secondary tiled headers keep grip, icon, title, a **Pane actions** control, and Close. Infrequent pane actions (Make main, Split right/down, Hide from split, move) must open the existing `prksWorkspaceOpenTabMenu` from `workspace-tab-menu.js` — do not add a second tile-header action list or Split dropdown in `workspace-tiling.js`.
+
+Parked tabs use two lifecycles. Cold-parked tabs perform no API requests and own no live
+DOM/resources. Ordinary global-tab
+switching may warm-suspend an actual PDF Work (`ctx.getResource('pdf')`) by reparenting its
+existing root into `#prks-tab-warm-parking`; warm resume reparents that same root and requests
+only a container resize, never a route render, Work/PDF fetch, viewer init, fit, reload, or
+layout. A Work with active metadata editing is never warm-parked: after leave approval it
+cold-unmounts so normal TabContext teardown discards the draft. Warm parking is a three-context
+LRU. Eviction, Close, batch close, application teardown,
+Hide split / Hide from split, and narrow fallback cold-unmount and destroy normally. Non-PDF
+routes always cold-park. Warm-cache state is runtime-only and never persisted.
+
+Stacked mode mounts one TabContext (Main). Tiled mounts Main plus every visible Secondary leaf in the tree, up to the visible-pane cap. Do not introduce a fifth mounted context.
+
+URL always represents Main, no matter how deep the focused Secondary leaf is nested. Secondary routes never mutate browser History. Make Main uses replaceState.
+
+The right panel always follows the focused TabContext. Feature navigation uses the originating TabContext when it is known; do not use focused context as a substitute for an originating element/context. Because the shared `#panel-content` lives outside every tile's DOM, a click originating inside it resolves its owning tab from `panel.dataset.prksOwnerTabId` (verified against a live TabContext), never from current Main, the focused tab, or `location.hash`. Main remains a fallback only for genuinely shell-global links that have no TabContext or right-panel owner at all.
+
+Do not add route-level global runtime state.
+
+Tab switching must not create contextual Back origins.
+
+Workspace logical state is persistent; workspace runtime state is ephemeral. `frontend/js/workspace-persistence.js` owns all workspace `localStorage` behavior (schema, validation, debounce, restore, corrupt-snapshot cleanup). Do not write workspace storage from `workspace-tabs.js`, `workspace-tree.js`, `workspace-tiling.js`, `workspace-split.js`, `workspace-drag.js`, or `tab-context.js`. Never persist TabContext/runtime objects, editor drafts, effective constrained ratios, `narrowFallback`, or split-node runtime IDs. Restore happens before first normal mount. Parked restored tabs must not fetch. The current startup URL outranks a persisted Main route. Persistence failures must not break app startup.
+
+If a live workspace's serialized snapshot ever fails persistence validation (e.g. a tab parked on an unknown route via the router's "Section In Development" fallback), the writer invalidates/removes the previously-stored snapshot rather than leaving it behind looking authoritative for a workspace that no longer matches it, and resets its own change-tracking so the next persistable snapshot still writes normally. This never touches the running in-memory workspace and never globally disables persistence — it resumes as soon as the user returns to a persistable/known route.
+
+Root Main/Secondary width is workspace-owned: one normalized ratio (`mainSplitRatio`,
+default `0.58`) lives in workspace-tabs.js state, alongside `mainTabId` /
+`focusedTabId` / `secondaryTree`. Every internal Secondary split node owns its own
+local `ratio` (default `0.5`) inside its own tree node — never on either child tab,
+never inherited from the root ratio or from a sibling split. Routes must never
+store, read, or modify any of these ratios. Canonical preferred ratios persist
+through `workspace-persistence.js` only; do not write them from feature code, and
+do not persist constrained/effective ratios.
+
+Main/Secondary ratio follows roles, not tab IDs. Make Main, adding/removing
+Secondary panes, Hide/Show split, and the narrow responsive fallback must never
+invert or reset the root ratio or any nested split's ratio.
+
+The Main/Secondary divider and every nested Secondary split divider
+(`workspace-split.js`, class `.prks-splitter`) share the one separator
+implementation, keyed by split-node ID for nested separators. Do not implement
+independent divider drag, keyboard-resize, or ARIA logic in `works.js`,
+`works-pdf.js`, other route components, or a second implementation inside
+`workspace-tiling.js` for nested splits. `workspace-tiling.js` only calls into
+`workspace-split.js`; it does not own pointer, keyboard, ARIA, or persistence
+logic itself.
+
+Divider resizing (root or nested) is layout-only and must not remount
+TabContexts, unmount/mount a route, re-render a route, or trigger a leave guard.
+It must not run a full workspace paint on every pointer-move; the canonical
+ratio updates via `prksWorkspaceSetMainSplitRatio(ratio, { paint: false })` (root)
+or `prksWorkspaceSetNestedSplitRatio(splitId, ratio, { paint: false })` (nested),
+and the DOM applies the resulting pixel width/height through a CSS custom
+property. A nested split's minimum sizes are measured against that split's own
+container only, never the window or workspace root; if its container is too
+small for both children's minimums, its ratio clamps safely to that split's own
+midpoint rather than producing a negative/overflowing pane.
+
+Tile-local components (PDF viewer, EasyMDE, other detail routes) respond to
+divider resizing through their own existing container-aware sizing /
+ResizeObserver lifecycle. Do not use `window.dispatchEvent(new Event('resize'))`
+as a substitute for tile-local container sizing.
+
+TabContext owns route runtime:
+
+- route state → TabContext (`ctx.navigation`, `ctx.lastResolvedRoute`, `ctx.entity`)
+- route DOM → `ctx.root`
+- page-local lookup → `ctx.query` / `data-prks-role` (`ctx.domId` only for ARIA)
+- async lifetime → `ctx.beginRoute()` / `ctx.isCurrent(generation)`
+- live resources → `ctx.resources` / `ctx.setTimer`
+- shell → main/focused context (`prksGetMainTabContext`, `prksGetFocusedTabContext`)
+
+People-library search runtime belongs to rendered `.prks-people-library` root
+(`root.__prksPeopleLibraryState`), never a `window` singleton or tab-ID global map.
+Rerender only that root. SessionStorage preserves shared query preference; it is not
+workspace persistence or route state.
+
+Group-library runtime likewise belongs to rendered `.prks-group-library` root, never
+a route-scoped `window` singleton. `personGroupEditing` and
+`personGroupMembersEditing` are mutually exclusive TabContext UI modes: metadata
+editing owns the right panel; membership management owns the Members section.
+
+Person profile edit state, including selected Person Groups, belongs to the Person's
+TabContext. Never store Person-editor selections or drafts in a window-global
+singleton. Right-panel reconstruction must render from the owning TabContext draft.
+
+Person profile and Work metadata drafts are TabContext-owned runtime state. Never
+persist them through workspace persistence. Merely focusing another mounted pane is
+non-destructive and must not prompt. Any operation that will replace a route, unmount,
+park, or destroy a context with a dirty editable draft must preflight through
+`prksCanLeaveTabContext`; rejection is an atomic no-op that preserves route, tab order,
+tree topology, focus, draft, and editor DOM. Batch operations preflight all affected
+mounted contexts before mutating any of them.
+
+Stacked mode: one mounted context. Tiled mode: Main + every visible Secondary leaf (up to the visible-pane cap), each with an independent TabContext. Do not store route-scoped state on `window`. The Research Graph
+is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
+
+### Workspace drag and drop
+
+`workspace-drag.js` is an alternate input path for existing canonical workflows, never a
+parallel layout model. Drag state (`active`, `source`, `origin`, `pointerId`, `target`) is
+transient and lives only in that module's own closure; it is never canonical/persisted and
+never written to `localStorage`, `sessionStorage`, or IndexedDB.
+
+`workspace-tree.js` owns recursive tree transformations (including drag-driven pane moves, via
+`moveLeafRelativeToTarget`); `workspace-tabs.js` owns global tab ordering (via
+`prksWorkspaceReorderTab`). `workspace-drag.js` only computes/previews user intent and invokes
+those same canonical APIs on drop — it must never mutate `secondaryTree` or `state.tabs`
+directly, and must never mutate either while the pointer is merely moving/hovering (preview
+only; the DOM insertion marker/edge overlay are pure visual feedback with no state effect).
+
+A pane move is one atomic tree transaction. Moving a visible pane is spatial repositioning, not
+a leave operation — it must not run PDF leave confirmation, must not flush-for-unmount Research
+Notes, and must not remount the moved pane or any unrelated pane. Parking a pane (grip → tab
+strip) is equivalent to "Hide from split" and does require leave preflight; a rejected leave
+must leave the tree, tab order, and focus completely unchanged.
+
+Parked-tab insertion into the Secondary tree always reuses that tab's existing logical tab ID —
+never a duplicate tab, never a second mount. Main can never be inserted into `secondaryTree` by
+drag; only the existing "Make main" action changes Main ownership. The pane cap
+(`PRKS_MAX_VISIBLE_TABS`) blocks new visible leaves being added by drag, not existing panes
+being moved.
+
+Drag cancellation (Escape, `pointercancel`, `lostpointercapture`, window blur, responsive
+transition, external tile removal) must run through one idempotent cleanup that removes every
+transient listener, the preview element, every overlay/marker, the autoscroll animation frame,
+source styling, and the body drag class, and must leave canonical workspace state completely
+untouched. `prksWorkspaceCancelActiveDrag` exists specifically so `workspace-tiling.js` can
+defensively end an active drag before a real narrow/wide transition and before pruning any
+stale tile that could contain the live drag source — it is always safe to call when nothing is
+active. `workspace-drag.js` must never itself mutate responsive/narrow-fallback state.
+
+## Settings
+
+Settings category navigation is presentation state; it must not create another
+settings persistence model. The active category lives only in an in-memory module
+variable, never `localStorage`, never `/api/settings`, never a URL hash.
+
+Inactive Settings category panels are hidden and inert, never removed/recreated.
+Switching categories must not reset a running Backup/Maintenance operation, a
+chosen restore file, or any control's in-progress value.
+
+Diagnostics data loads only on first activation of the Diagnostics category, not
+whenever Settings opens. Revisiting Diagnostics reuses the retained snapshot;
+only the explicit Refresh action re-fetches.
+
+## Saved Views
+
+Saved Views store search definitions, never cached work membership.
+
+Executing a Saved View must reuse the normal PRKS search implementation; do not
+create a parallel search engine for Saved Views.
+
+Saved View names and search definitions are private canonical user data. Never
+include them in logs or performance diagnostics.
+
+Any future Saved View definition expansion requires an explicit schema/search
+contract rather than arbitrary executable rules.
+
+Do not add per-view polling or background notifications as an incidental Saved
+Views feature.
+
+## Research network
+
+Concepts, Positions, and Arguments/Stances are persistent canonical records in
+`prks_data.db`. Work↔Concept membership is never stored as Work metadata.
+
+The Work→Concept relation exists only because `works.text_content` contains
+explicit `[[concept:Name]]`. `private_notes` must not participate. Ordinary
+prose never auto-links. Unknown valid Concept names are created on note save in
+the same transaction as the note. Removing every note reference does not delete
+the Concept.
+
+Concept aliases/search keys resolve note references. A Concept identity
+rename preserves the old name as an alias. Capitalization or spacing-only
+display changes update `concepts.name` without a new alias; existing notes
+still resolve through the same normalized identity. Multi-parent hierarchy
+is allowed; cycles are rejected. Do not add Glossaries/Concept Senses or
+Debates/Theories as an incidental follow-on.
+
+Arguments/Stances use stable IDs in notes (`[[argument:A-id|Label]]`) and do not
+auto-create from unknown markup. Every target requires a verdict. Incoming
+Counter/Response Arguments are reverse queries of target relations, not a
+separate stored list.
+
+`prks_research_index.db` is derived, never canonical. Mention offsets may be
+stored; surrounding note prose must not be. Unknown/corrupt derived schema may
+be deleted and recreated. Never touch `prks_data.db` because the research index
+is corrupt. Derived indexing failure must not roll back a valid canonical note
+save. Do not add research-index files to backups. Concept and Argument deletion
+must inspect canonical `works.text_content` with `parse_research_markup()`;
+the derived index is never the sole authority for those destructive checks.
+
+Concept, Position, and Argument names, definitions, aliases, main text, verdict
+labels, page ranges, markup, and backlink snippets are private. Never log them.
+
+## Research Graph
+
+The Research Graph is a read-only derived projection. It is never canonical
+relationship storage and must never authorize a destructive mutation.
+
+Graph node IDs must be namespaced by entity type; raw PRKS IDs are not globally
+unique across record types.
+
+Work→Concept and Work→Argument graph edges represent explicit research-note
+semantic references only. Never infer graph relations from plain prose, PDF
+text, tags or search similarity.
+
+Argument source edges and note-mention edges have different semantics and must
+remain distinguishable.
+
+Do not add canonical graph persistence or a main-DB schema migration merely to
+render the Research Graph. Disposable server projection snapshots may be cached
+by the offline runtime; graph UI/layout state is never persisted.
+
+The research graph and research-reference index are read-only projections. Their
+presence or absence must never authorize deletion or other canonical mutation.
+
+The global right panel on the Research Graph route is selection-aware, not
+route-aware: it follows the focused Graph runtime's own `hasSelection()`
+(`ctx.getResource('researchGraph')`), never DOM markup and never an unfocused
+Graph tile. Graph filter state (which node/relation types are visible) is
+runtime-only; do not persist it to `localStorage`, workspace persistence,
+`/api/settings`, or the URL. Toggling the graph inspector must never call
+`fit()` or rerun the Cytoscape layout — only a container `resize()`.
+
+## Client request coordinator
+
+Ordinary first-party `/api` traffic from `frontend/js` uses `prksRequest()`. Do not
+call `fetch()` for those requests. Raw `fetch()` is a reviewed bypass only:
+`POST /api/client-errors` keepalive, backup progress/stage/restore, and external
+YouTube oEmbed. The coordinator does not assign or replace `window.fetch`.
+
+Reads are bounded (foreground 4, background 1). Mutations are serialized (max 1)
+and never automatically retried. Safe GET retry covers network errors and
+502/503/504 only, up to the initial attempt plus two retries.
+
+Only complete-value autosaves may set `coalesceKey` (research notes and private
+notes). Creates, deletes, relationships, bulk, reorder, PDF, and backup must not.
+
+`window.__prksRouteAbortController` is for route reads. Canonical writes survive
+navigation. Route generation (`window.__prksRouteGen` / `prksRouteStale`) still
+guards paint after abort.
+
+Coordinator diagnostics are aggregate counters and occupancy only. They must never
+contain private URL, query, body, Work ID, search text, or coalesce-key content.
+
+Persistent cache, IndexedDB, outbox, and offline synchronization do not belong in
+`frontend/js/request-coordinator.js`. The burst catalog cache is memory-only and
+short-lived. It is not offline support. The coordinator may make a best-effort
+reachability signal (dynamic lookup of `prksOfflineNoteRequestSuccess` /
+`prksOfflineNoteRequestFailure`) at the real `fetch` boundary only: a resolved
+`Response` of any HTTP status means PRKS answered; a non-abort transport
+rejection after retries are exhausted means it did not. Managed PDF GETs
+(`/api/pdfs/...`) are excluded: the service worker may resolve those from Cache
+Storage without the PRKS process answering. Memory-cache hits,
+deduped completed responses, `AbortError` / route cancellation, `response.clone()`
+failure, and JSON/domain errors must not be treated as a connectivity change.
+Do not add another probe timer in the coordinator — recovery stays in
+`offline-runtime.js`.
+
+## Offline / PWA
+
+Offline/local-first work has a large, load-bearing domain contract that is
+intentionally scoped out of this global file. **Before changing offline,
+local-first, synchronization, service-worker, conflict/revision, or client-cache
+behavior — or tests that encode those contracts — read
+`docs/agent-rules/offline-pwa.md` completely.**
+
+Global rules still apply, especially:
+
+- disposable read cache state belongs in `offline-store.js`; durable
+  unsynchronized user intent belongs in `local-store.js`;
+- never make disposable cache state authoritative for unsynchronized user work;
+- online and offline mutation paths must converge on the same domain semantics;
+- preserve revision/conflict and acknowledgement contracts rather than adding a
+  second ad-hoc sync path;
+- update the detailed domain contract and its regression tests when intentionally
+  changing an offline/local-first invariant;
+- current rollout status remains in `docs/local-first-rollout-status.md`.
+
+The detailed operation families, projection rules, dependency ordering,
+conflict semantics, service-worker behavior, test contracts, and historical
+load-bearing constraints are maintained in
+`docs/agent-rules/offline-pwa.md`.
+
+## Interaction feedback
+
+Do not replace the synchronous pending-annotation-sync navigation guard
+(`prksCanLeaveTabContext` and the mirrored check inside `prksRenderTabRoute`,
+both in `frontend/js/app.js`) with `prksConfirmDialog`/`prksConfirmDestructive`
+without redesigning the navigation contract. It must stay a native
+`window.confirm`; this synchronous PDF safety decision must complete before any
+async editable-draft confirmation begins. This is the sole native-confirm exception.
+Person profile and Work metadata dirty-draft leave guards use the styled async
+confirmation and are awaited by workspace `awaitLeave()` before mutation.
+
+Every other confirmation, including both PDF annotation-delete entry points
+(the annotation editor's Delete button and the annotation-list row's Delete
+button), goes through the shared `prksConfirmDeletePdfAnnotation()` helper in
+`frontend/js/ui.js`, which wraps `prksConfirmDestructive`. Keep both entry
+points on that one helper rather than duplicating the confirmation copy.
+
+`prksSetButtonBusy(button, busy, { busyLabel })` (`frontend/js/ui.js`) is the
+shared busy-button helper for async mutations with meaningful latency. It
+snapshots and restores exact button contents (icon markup included), so
+callers must restore it from a `finally` rather than only on the success or
+failure path.

@@ -143,13 +143,15 @@ class TestRunTests(unittest.TestCase):
         instruction from being quietly dropped or softened, which is what would
         actually cause the behaviour to drift back.
         """
-        agents = os.path.join(_PROJECT_DIR, "AGENTS.md")
+        agents = os.path.join(_PROJECT_DIR, "tests", "e2e", "AGENTS.md")
         with open(agents, encoding="utf-8") as handle:
             text = handle.read()
+        root_agents = os.path.join(_PROJECT_DIR, "AGENTS.md")
+        with open(root_agents, encoding="utf-8") as handle:
+            root_text = handle.read()
         for phrase in (
             "do not run browser E2E tests at all",
             "neither the full suite nor an entire module",
-            "Never run browser E2E tests while iterating",
             "run the relevant targeted E2E feature/module once",
             "If an E2E test fails, stop running the full suite",
             "--jobs 4 --no-pointer-capture",
@@ -159,9 +161,10 @@ class TestRunTests(unittest.TestCase):
             "python tests/e2e/run.py --jobs 4",
         ):
             self.assertIn(phrase, text, phrase)
-        # Stated where an agent starts reading, not only 1500 lines in.
-        self.assertLess(text.index("Never run browser E2E tests while iterating"),
-                        text.index("## Storage"))
+        # Root Commands keeps the ambient iterate-cheap phrase and routes to
+        # the scoped cadence policy (exact wording lives in tests/e2e/AGENTS.md).
+        self.assertIn("Never run browser E2E tests while iterating", root_text)
+        self.assertIn("tests/e2e/AGENTS.md", root_text)
 
 
 if __name__ == "__main__":

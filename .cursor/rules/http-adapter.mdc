@@ -1,6 +1,9 @@
 ---
 description: Keep server.py as HTTP adapter. Put domain work in focused modules.
-alwaysApply: true
+globs:
+  - "backend/server.py"
+  - "backend/api/**/*.py"
+alwaysApply: false
 ---
 
 # HTTP adapter

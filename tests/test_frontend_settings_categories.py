@@ -12,7 +12,7 @@ _UI = os.path.join(_FRONTEND, "js", "ui.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
-_AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
+_AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 
 _CATEGORIES = ["general", "reading", "export", "backup", "maintenance", "diagnostics"]
 
