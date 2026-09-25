@@ -368,8 +368,8 @@ positions and page thumbnails.
 | `manifestation_relations(from_id, to_id, relation)` | Typed links between Manifestations of the **same** Work: `revision_of`, `published_version_of`, `new_edition_of`, `translation_of`, `reprint_of`. These carry "arXiv v2 revises v1", "journal version of the accepted manuscript", and "Serbian translation of the Greek text". They carry no page correspondence (#61 owns assisted correspondence). |
 | `manifestation_identifiers(manifestation_id, scheme, value, normalized)` | DOI, ISBN, arXiv ID (versioned and versionless), PMID, and similar. `works.doi`/`isbn` backfill into these later. This is the entity duplicate detection keys on. |
 | `roles` gaining a nullable `manifestation_id` | Edition-scoped credit (§7). |
-| `argument_sources` gaining a nullable `manifestation_id` | A pinpoint citation is pinned to a pagination (§8.5). |
-| `work_lifecycle(work_id, state, target_work_id)` | Redirects left by merges, modeled exactly like `sync_tag_lifecycle` (§10.4). |
+| `argument_sources` gaining a nullable `manifestation_id`, with row identity `(argument_id, work_id, manifestation_id)` | A pinpoint citation is pinned to a pagination, and one Argument can cite several Versions of one Work (§8.5). |
+| `work_lifecycle(work_id, state, target_work_id)` | Merge record, modeled like `sync_tag_lifecycle`: it redirects **reads** and refuses **writes** with `WORK_MERGED` (§10.4, §14.2). |
 | `duplicate_decisions` | Durable record of "not a duplicate" answers, so a declined suggestion does not return (§10.5). |
 | Metadata provenance | A per-field record of detected, retrieved or user-edited origin on Manifestation fields (#42). This design only reserves the ownership: provenance belongs to the Manifestation field it describes, never to the Work. |
 
@@ -474,7 +474,7 @@ describes where today's value goes; §12 covers how.
 | Citation / cite key | **M** (a stored `cite_key` is optional future) | none (it is computed today) | §8. |
 | Source / provenance | **A** for bytes (`origin`, `origin_url`, `imported_from_processing_file_id`). **M** field provenance for metadata. | `origin = 'legacy'` | Bytes and metadata have different provenance. |
 | File path (`file_path`) | **A** (`storage_locator`) | copied | The Work projection keeps `file_path` (§13). |
-| MIME / media type (`source_mime`) | **A** (`media_type`) | `application/pdf` for managed PDFs, NULL otherwise. `source_mime` is never populated today. | |
+| MIME / media type (`source_mime`) | **A** (`media_type`) | Copy `source_mime` when it is non-empty. Otherwise infer `application/pdf` for managed PDFs, and leave it NULL for everything else. | `POST /api/works` accepts and stores a caller-supplied `source_mime`, so a user database may hold values even though the audited library had none. The backfill must never overwrite them. |
 | Byte size | **A** (`byte_size`) | filled by the fingerprint pass (§12.4) | It replaces the per-row `stat()` in `finish_work_summary_rows` once trusted. |
 | Content hash | **A** (`ingest_sha256`, `content_sha256`) | NULL until the fingerprint pass | §9.4 and §10.2. |
 | Derived text / OCR / thumbnails | **A**, derived | the rebuilt index is keyed by `asset_id` | They stay derived and are never backed up (I4). |
@@ -692,6 +692,19 @@ gains a nullable `manifestation_id`:
   pinned to the Manifestation the user is looking at. Changing the primary
   Manifestation later never moves an existing pinpoint.
 
+**Row identity must change with it.** Today the primary key is
+`(argument_id, work_id)`, so a nullable column alone would still stop one
+Argument from citing two Manifestations of the same Work (for example, a
+passage in the Greek text and the same passage in a translation). It would also
+make `MERGE_WORKS` collide when an Argument already cites both the source and
+the target Work. The citation identity becomes
+`(argument_id, work_id, COALESCE(manifestation_id, ''))`, enforced by a unique
+index. The table is rebuilt in the same migration that adds the column (SQLite
+cannot alter a primary key). The `argument-sources` durable scope is the whole
+source list of one Argument, so it is unaffected. On merge, if re-pointing
+would produce two rows with the same identity, the preview shows both and the
+user keeps one or both pinpoints. Neither is dropped silently.
+
 ### 8.6 BibTeX compatibility projection
 
 During the migration `/api/bibtex/:id` keeps its URL, which takes a Work ID,
@@ -880,7 +893,7 @@ before mutation. None of them is silent.
 
 | Operation | Effect | IDs |
 | --- | --- | --- |
-| `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed. `last_opened_at` is max. | The source `W-…` gets `work_lifecycle(state = merged, target)`. Old links, tabs, `[[W-…]]` and pending operations resolve through the redirect, like `sync_tag_lifecycle`. |
+| `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed, and any citation-identity collision is shown in the preview (§8.5). `last_opened_at` is max. | The source `W-…` gets `work_lifecycle(state = merged, target)`. Old links, tabs and `[[W-…]]` **reads** follow the redirect. Pending **writes** to the source are refused with `WORK_MERGED` + `target_work_id`, like `TAG_MERGED`, and are never retargeted (§14.2). |
 | `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. If the old Work is left with no Manifestation, it is merged into the target or deleted, and the user chooses. |
 | `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." Annotations stay with the Asset. | `AS-…` unchanged. |
 | `DECLINE_DUPLICATE(a, b)` | Records "not a duplicate". | `duplicate_decisions(entity_type, low_id, high_id, decision, decided_at)`. |
@@ -989,6 +1002,8 @@ The backfill rules:
   `provider_id`, `source_url` and `thumb_url`.
 - A Work with **no file and no video** gets a Manifestation and **no** Asset.
 - A non-video `source_url` goes to `manifestations.url`.
+- `assets.media_type` takes the stored `source_mime` when one is present, and
+  is inferred only when it is absent.
 - A **legacy inferred-video row** (kind NULL, no file, a URL) is classified with
   `effective_source_kind()`, the same rule every reader uses. When the URL
   cannot be parsed, the row gets no Asset and keeps its URL on the
@@ -1002,7 +1017,8 @@ The versions below are illustrative. Each is one migration in one PR (see
 1. **vN: create the entities.** Create `manifestations`, `assets`,
    `manifestation_relations`, and `manifestation_identifiers`. Add
    `works.primary_manifestation_id`, `annotations.asset_id`,
-   `roles.manifestation_id`, and `argument_sources.manifestation_id`. Backfill
+   `roles.manifestation_id`, and `argument_sources.manifestation_id` (a table
+   rebuild that widens its key, §8.5). Backfill
    deterministically, then validate (every Work has exactly one primary
    Manifestation that belongs to it, and so on). Install **mirror triggers**
    so that `works` (still authoritative for everything) keeps the default
@@ -1183,11 +1199,29 @@ Asset. The `prks.pdf.lastPage.<workId>` key becomes
 `prks.pdf.lastPage.asset.<assetId>`. The default Asset reads the legacy key
 once as a fallback.
 
-**Merges and durable operations.** A pending operation that names a merged
-`W-…` resolves through `work_lifecycle` for Work-owned state, the same way
-`sync_tag_lifecycle` redirects Tags. Operations on the source Work's
-Manifestations and Assets need no redirect, because those IDs survived the
-merge.
+**Merges and durable operations.** A pending operation's `base_revision`
+belongs to a scope keyed by the **source** Work. It says nothing about the
+target Work's scope, so retargeting the operation would either accept a stale
+write when the counters happen to match, or report a false conflict when they
+do not. The rule therefore follows what `TAG_MERGED` already does:
+
+- A pending write to Work-owned state (notes, status, tags, folder, playlist,
+  Work-scoped roles, Work fields) that names a merged `W-…` is **refused**
+  with `409 WORK_MERGED` and `target_work_id`. It is never retargeted. The
+  client keeps the user's intended value and presents it as an explicit merge
+  conflict against the target ("apply to the merged Work?"). If the user
+  accepts, the client sends a **new** operation based on the target's current
+  revision.
+- The merge itself does not rebase or combine revision counters. Source scopes
+  are tombstoned, so a stale device cannot resurrect them, and target scopes
+  advance normally for whatever the merge changed.
+- `MARK_WORK_OPENED` is a max-register with no base revision (I7), so it may be
+  applied to the target without conflict.
+- Operations on the source Work's Manifestations and Assets are unaffected.
+  Their scopes are keyed by `MF-…`/`AS-…` IDs, which survive the merge, so their
+  base revisions are still meaningful.
+- **Reads** (links, tabs, `[[W-…]]`, cached detail requests) follow the redirect
+  to the target.
 
 ---
 
