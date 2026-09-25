@@ -600,6 +600,16 @@ class ContractParityTests(unittest.TestCase):
             "Processing must not keep a second hard-coded role array",
         )
 
+        upload_ui = read("frontend/js/ui.js")
+        self.assertIn("window.PRKS_PEOPLE_ROLES", upload_ui)
+        self.assertIn("function prksUploadRoleLabels", upload_ui)
+        self.assertNotIn("PRKS_UPLOAD_ROLE_LABELS", upload_ui)
+        self.assertNotRegex(
+            upload_ui,
+            r"const\s+PRKS_UPLOAD_ROLE_LABELS\s*=\s*\[",
+            "Upload picker must not declare another bibliographic role list",
+        )
+
     def test_people_role_sidebar_and_palette_match_navigation_registry(self):
         people = js_string_array(
             read("frontend/js/navigation.js"), "PRKS_PEOPLE_ROLES"

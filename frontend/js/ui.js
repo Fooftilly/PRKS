@@ -4111,15 +4111,16 @@ function renderFolderTagsChipsHtml(folder) {
 
 window.renderFolderTagsChipsHtml = renderFolderTagsChipsHtml;
 
+const PRKS_WORK_STATUS_LABELS = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
+/* Full Work-role vocabulary including Mentioned — Link Person modal only.
+ * Upload / meta bibliographic pickers use PRKS_PEOPLE_ROLES via prksUploadRoleLabels(). */
+const PRKS_LINK_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Mentioned', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
+
 function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-
-const PRKS_WORK_STATUS_LABELS = ['Not Started', 'Planned', 'In Progress', 'Completed', 'Paused'];
-const PRKS_UPLOAD_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
-const PRKS_LINK_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Mentioned', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
 
 function prksEscapeAttr(s) {
     if (s == null || s === '') return '';
@@ -4132,9 +4133,7 @@ function prksMountRoleSegmented(mountId, hiddenId, selectedValue, labels, ariaLa
     const labelsArr =
         Array.isArray(labels) && labels.length
             ? labels
-            : Array.isArray(PRKS_UPLOAD_ROLE_LABELS)
-              ? PRKS_UPLOAD_ROLE_LABELS
-              : [];
+            : prksUploadRoleLabels();
     const fallback = labelsArr[0] || 'Author';
     const selRaw = selectedValue != null ? String(selectedValue) : '';
     const sel = labelsArr.includes(selRaw) ? selRaw : fallback;
@@ -6266,9 +6265,13 @@ async function quickCreateFolder() {
  * links anything: `uploadRoles` is sent with the one canonical create. */
 
 function prksUploadRoleLabels() {
-    return Array.isArray(PRKS_UPLOAD_ROLE_LABELS) && PRKS_UPLOAD_ROLE_LABELS.length
-        ? PRKS_UPLOAD_ROLE_LABELS
-        : ['Author'];
+    /* Bibliographic picker subset: navigation.js owns PRKS_PEOPLE_ROLES
+     * (excludes Mentioned). Fail closed to Author-only if the registry is absent. */
+    const shared =
+        typeof window !== 'undefined' && Array.isArray(window.PRKS_PEOPLE_ROLES)
+            ? window.PRKS_PEOPLE_ROLES
+            : null;
+    return shared && shared.length ? shared : ['Author'];
 }
 
 function prksShowUploadPeopleError(message) {
