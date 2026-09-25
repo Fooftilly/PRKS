@@ -32,11 +32,11 @@ Install both requirement files first. The unflagged unit suite always preflights
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
-python run_tests.py          # unit/API/structural/Node (no Chromium)
-python run_tests.py --e2e    # real Chromium + real PRKS server (full gate)
-python run_tests.py --all    # unit suite, then E2E
-python run_tests.py --ux-tour                    # UX interaction tour (see below)
-PRKS_UX_RECORD=1 python run_tests.py --ux-tour   # record every scenario for review
+./.venv/bin/python run_tests.py          # unit/API/structural/Node (no Chromium)
+./.venv/bin/python run_tests.py --e2e    # real Chromium + real PRKS server (full gate)
+./.venv/bin/python run_tests.py --all    # unit suite, then E2E
+./.venv/bin/python run_tests.py --ux-tour                    # UX interaction tour (see below)
+PRKS_UX_RECORD=1 ./.venv/bin/python run_tests.py --ux-tour   # record every scenario for review
 ```
 
 ### Optional SonarQube CLI (Claude Code)
