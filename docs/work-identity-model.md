@@ -685,7 +685,7 @@ describes where today's value goes; §12 covers how.
 | Concept (current column/table) | Owner | Backfill of current value | Rationale / tradeoff |
 | --- | --- | --- | --- |
 | Canonical title (`title`) | **W** | stays on `works.title` | The name the user files the work under. |
-| Publication title | **M** (`manifestations.title`, NULL = inherit Work title) | NULL (inherit) | For one version, editing the title changes both, as today. A translation sets its own. Inheritance avoids copying every title. |
+| Publication title | **M** (`manifestations.title`, NULL = inherit Work title; never `''`, enforced by `CHECK (title IS NULL OR title <> '')`, and the same for the `abstract` override) | NULL (inherit) | For one version, editing the title changes both, as today. A translation sets its own. Inheritance avoids copying every title. |
 | Subtitle | **M** (new `subtitle`) | NULL | Differs by edition. There is no current column. |
 | Document type (`doc_type`) | **M** | copied | This is a BibTeX/CSL entry type: a preprint is `misc`/`online`, a journal version is `article`. The Types page derives from the primary M. **Tradeoff:** the Types page may later want a Work-level "kind of intellectual work" (monograph, paper, lecture). It is not needed now. |
 | Year / date (`year`, `published_date`) | **M** | copied | Publication date of this form. An optional Work-level `original_date` (for example "c. 375 BC") is a future addition. |
@@ -1106,7 +1106,7 @@ not a #60 concern.
 | `byte_size` | Size of the current bytes. Filled at write time, or by the fingerprint pass. |
 | `ingest_sha256` | SHA-256 of the source bytes **as first ingested**, before linearization or materialization. Immutable once set. It is the content identity of the lineage. NULL for legacy Assets (§9.4). |
 | `content_sha256` | SHA-256 of the **working** bytes at `storage_locator`. Updated whenever PRKS rewrites them. Serves integrity checks and client cache validation. |
-| `content_generation` | An integer incremented by every in-place rewrite of the working bytes. Hash writers commit only if it is unchanged since they read it (§9.4, §12.4). |
+| `content_generation` | `INTEGER NOT NULL DEFAULT 0`, set to 0 on creation and by the backfill. It is incremented (`content_generation + 1`) by every in-place rewrite of the working bytes. Because it is never NULL, the compare-and-set can always match. Otherwise `NULL = ?` never matches and `NULL + 1` stays NULL. Hash writers commit only if it is unchanged since they read it (§9.4, §12.4). |
 | `origin` | `upload` \| `processing_import` \| `adopted` \| `web_capture` \| `legacy`. |
 | `origin_url`, `origin_ref` | Where the bytes came from (a download URL, or a Processing File ID). This is provenance, not a citation. |
 | `derived_from_asset_id` | A user-visible relation between **separate** Assets, for example a copy annotated in another tool that the user brought in. It is never used for PRKS's own materialization. |
@@ -1459,6 +1459,7 @@ argument_sources(A, W-1, '45')          doi, publisher, year, … (copied)
                                         media_type=COALESCE(source_mime, 'application/pdf'),
                                         origin='legacy', ingest_sha256=NULL,
                                         content_sha256=NULL (fingerprint pass fills),
+                                        content_generation=0,
                                         materialization revisions (copied), thumb_page (copied)
                                       annotations(…, asset_id = AS-uuid5(W-1))      rebuilt
                                       roles(…, manifestation_id = NULL)             rebuilt;
@@ -1667,7 +1668,7 @@ for the fixture library. The legacy dict gains only **additive** fields:
 | Legacy write | Routed to |
 | --- | --- |
 | `PATCH /api/works/:id` with a Work-owned field | the Work, except `title` and `abstract`, below |
-| … with `title` or `abstract` | **the value the legacy projection is showing.** If the primary Manifestation has a non-NULL override for that field, the edit writes the override; otherwise it writes the Work's canonical value. Either way the response shows the edit, and no hidden fallback changes silently. Changing the *canonical* value while an override exists needs the Version-aware API (§13.3). |
+| … with `title` or `abstract` | **the value the legacy projection is showing.** If the primary Manifestation has an override for that field (never `''`, by CHECK), the edit writes the override and advances `manifestation-field/[MF, f]`; otherwise it writes the Work's canonical value and advances `work-field/[W, f]`. The response shows the edit, and no hidden fallback changes silently. **An empty value on the override path clears the override back to inherit (NULL).** The legacy shape has no other way to say "inherit", and storing `''` would make a blank Version title. Changing the *canonical* value while an override exists, or choosing inherit versus value explicitly, needs the Version-aware API (§13.3). |
 | … with a Manifestation-owned field | the **primary** Manifestation. The editor shows the primary, so this is what the user sees. The response names the `manifestation_id` it wrote. |
 | … with `source_url` on a **non-video** Work (provenance/citation URL, a `SET_WORK_METADATA_FIELD` value) | the primary **Manifestation**'s `url`. This works whether or not the Work has an Asset. The existing video guard stays (work-source-identity.md). |
 | `SET_WORK_SOURCE` / video source identity (`source_kind`, `provider`, `provider_id`, `source_url` on a video Work) | the primary Asset's `external_stream` aggregate (`SET_WORK_SOURCE` semantics unchanged) |
@@ -1748,6 +1749,7 @@ below.
 | --- | --- | --- |
 | `work-field/[W, f]` for M-owned `f` | `manifestation-field/[MF, f]` | Copy the revision to `origin_MF(W)` in the authority migration. |
 | `work-field/[W, f]` for W-owned `f` (status, title, abstract, author_text) | unchanged | — |
+| (new) `manifestation-field/[MF, title\|abstract]` for overrides | new scope, revision 0 until first written | Overrides are created only by the Version-aware API. A **durable** legacy `SET_WORK_METADATA_FIELD(W, title\|abstract)` carries a base revision for `work-field/[W, f]`, which says nothing about the override. So while the primary Manifestation has an override for that field, the operation is **refused** with `FIELD_OVERRIDDEN_BY_VERSION` rather than routed. Online legacy `PATCH` follows §13.2 and advances the override's scope. |
 | `work-source/W` | `asset-source/AS` | Copy to `origin_AS(W)`. |
 | `pdf-annotation/[W, ann]` | `asset-annotation/[AS, ann]` | Copy to `origin_AS(W)`. Deletion tombstones are copied too, so resurrection protection survives. |
 | `work-person-role/[W, P, r]` | unchanged for W-scope; `manifestation-person-role/[MF, P, r]` for M-scope | Copy every scope row of an edition-scoped role type to `origin_MF(W)`, **tombstones included**. |
