@@ -63,7 +63,7 @@ Work source fields are not independent metadata. For video Works, source kind/pr
 
 ## Planned: Work identity, versions and files
 
-Today one Work row represents the intellectual work, one citeable publication, and at most one file. The proposed separation into Work → Version (manifestation) → File (asset) — covering editions, translations, revisions, duplicate detection and citation targets — is a design under review, not current behavior. See [docs/work-identity-model.md](https://github.com/Fooftilly/PRKS/blob/master/docs/work-identity-model.md).
+Today one Work row represents the intellectual work, one citeable publication, and at most one file. The proposed separation into Work → Version (manifestation) → File or Source (asset) — covering editions, translations, revisions, duplicate detection and citation targets — is a design under review, not current behavior. See [docs/work-identity-model.md](https://github.com/Fooftilly/PRKS/blob/master/docs/work-identity-model.md).
 
 ## IDs and offline creation
 
