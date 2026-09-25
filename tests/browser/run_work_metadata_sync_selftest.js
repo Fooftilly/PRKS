@@ -1815,10 +1815,11 @@ async function abstracts() {
     assert.equal(limit, 1024 * 1024);
     assert.equal(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit)), null);
     assert(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)));
-    // Same user-facing refusal the editor paints into the bib sync status.
+    // Same user-facing refusal the editor paints into the bib sync status
+    // (Abstract adds the Research Notes redirect; Author does not).
     assert.match(
         globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)),
-        /^Abstract is too long to save \(1025 KB of 1024 KB allowed\)\.$/);
+        /^Abstract is too long to save \(1025 KB of 1024 KB allowed\)\. Shorten it, or keep long material in Research Notes\.$/);
     const multibyte = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
     assert(multibyte.length < limit, 'under the limit by character count');
     assert(globalThis.prksWorkFieldUtf8Bytes(multibyte) > limit, '...but over it in bytes');
