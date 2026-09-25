@@ -140,6 +140,12 @@ def _apply(row: dict, ctx) -> None:
             for field in ("provider", "provider_id", "thumb_page", "thumb_url"):
                 if field in row:
                     row[field] = None
+            for field in (
+                "canonical_annotation_set_revision",
+                "materialized_pdf_annotation_revision",
+            ):
+                if field in row:
+                    row[field] = 0
 
 
 def legacy_work_summary(conn: sqlite3.Connection, rows: Optional[List[dict]]) -> List[dict]:
