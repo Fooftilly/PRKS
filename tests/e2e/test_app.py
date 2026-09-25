@@ -5052,6 +5052,38 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertTrue(stacked["side"])
         self.assertFalse(stacked["drawer"])
 
+        exact = page.evaluate(
+            """() => {
+                const ctx = window.prksGetFocusedTabContext();
+                const ws = ctx && ctx.root && ctx.root.querySelector('.work-workspace');
+                if (!ws) return null;
+                const descriptor = Object.getOwnPropertyDescriptor(ws, 'clientWidth');
+                Object.defineProperty(ws, 'clientWidth', { configurable: true, value: 720 });
+                try {
+                    if (typeof window.prksGetMobileWorkNotesRightEnabled === 'function') {
+                        window.__prksPrevMobileWorkNotesRight = window.prksGetMobileWorkNotesRightEnabled;
+                        window.prksGetMobileWorkNotesRightEnabled = () => false;
+                    }
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                    return {
+                        side: ws.classList.contains('work-workspace--side'),
+                        drawer: ws.classList.contains('work-workspace--notes-drawer'),
+                    };
+                } finally {
+                    if (window.__prksPrevMobileWorkNotesRight) {
+                        window.prksGetMobileWorkNotesRightEnabled = window.__prksPrevMobileWorkNotesRight;
+                        delete window.__prksPrevMobileWorkNotesRight;
+                    }
+                    if (descriptor) Object.defineProperty(ws, 'clientWidth', descriptor);
+                    else delete ws.clientWidth;
+                    window.prksReapplyWorkNotesSplitLayout(ctx);
+                }
+            }"""
+        )
+        self.assertIsNotNone(exact)
+        self.assertFalse(exact["side"], "exact 720px must match CSS max-width (narrow → drawer)")
+        self.assertTrue(exact["drawer"])
+
         _work_a, _work_b, ids = _open_work_work_split(page, server)
         page.wait_for_function("() => document.getElementById('app-container').classList.contains('app-container--tiled')")
         page.evaluate(

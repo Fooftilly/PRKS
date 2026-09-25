@@ -239,6 +239,21 @@ function runLayoutModeMatrix() {
     assert('stacked wide uses side sidecar', wsL._classes.has('work-workspace--side'));
     assert('stacked wide does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
 
+    /* CSS @container (max-width: 720px) includes 720 — JS consumer must match. */
+    wsL.clientWidth = 720;
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('exact 720px stacked uses drawer', wsL._classes.has('work-workspace--notes-drawer'));
+    assert('exact 720px stacked is not side', !wsL._classes.has('work-workspace--side'));
+
+    wsL.clientWidth = 721;
+    wsL._classes.delete('work-workspace--side');
+    wsL._classes.delete('work-workspace--notes-drawer');
+    sandbox.prksReapplyWorkNotesSplitLayout(ctxL);
+    assert('721px stacked uses side sidecar', wsL._classes.has('work-workspace--side'));
+    assert('721px stacked does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
+
     wsL._setTiled(true);
     wsL._classes.delete('work-workspace--side');
     wsL._classes.delete('work-workspace--notes-drawer');
