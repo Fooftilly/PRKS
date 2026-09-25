@@ -31,6 +31,7 @@ function assert(name, ok, detail) {
 
 const {
     FakeIDBKeyRange,
+    FakeIDBRequest,
     createFakeIndexedDBFactory,
     installFakeIdbGlobals,
 } = require(path.join(rootDir, 'tests/browser/lib/fake_indexeddb.js'));
@@ -167,14 +168,17 @@ async function run() {
     {
         const erroringFactory = {
             open: function () {
-                const req = makeRequest();
-                fireAsync(function () {
-                    if (req.onerror) req.onerror({ target: req });
-                });
+                const req = new FakeIDBRequest();
+                // idb.wrap() listens via addEventListener('error'), not only
+                // the onerror property — dispatch through the fake EventTarget.
+                setTimeout(function () {
+                    req.error = new Error('Simulated open failure');
+                    req._emit('error', { target: req, type: 'error' });
+                }, 0);
                 return req;
             },
         };
-        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: erroringFactory  }));
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: erroringFactory }));
         assertEq('getEntity degrades to null on open() onerror', await store.getEntity('work', 'W-1'), null);
     }
 
