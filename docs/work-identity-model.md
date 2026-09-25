@@ -1477,13 +1477,29 @@ The backfill rules:
 - **Asset-creation predicate.** A Work gets an Asset when it has **any**
   Asset-owned value: a `file_path`, video identity, annotations, a non-empty
   `source_mime`, `thumb_url` or `thumb_page`, or a non-zero materialization
-  revision. `POST /api/works` / `add_work()` accept `source_mime`,
+  revision. It also gets one when it has **any durable revision state in a
+  scope that will become Asset-owned**, even if every current Asset-owned
+  value is empty:
+  - a `sync_entity_revisions` row for `work-field/[W, thumb_page]` (and any
+    other Work field scheduled to become Asset-owned);
+  - a `pdf-annotation/[W, …]` row, including tombstones of deleted
+    annotations;
+  - a `work-source/W` row.
+
+  Tombstones and queued legacy operations must always be able to map to a
+  stable `origin_AS(W)`, and minting that Asset late in Slice D would make the
+  mapping appear late and lose deterministic identity. `POST /api/works` / `add_work()` accept `source_mime`,
   `thumb_url` and `thumb_page` without a file, so metadata-only rows can
   carry them. Those values need a canonical home when Asset authority lands,
   or JSON parity would break.
 - A Work that meets the predicate but has **no usable file or stream
   reference** gets a `managed_file` Asset with a NULL `storage_locator`. It
-  is a placeholder that owns those values. The projection shows it exactly as
+  is a placeholder that owns those values **and those revision scopes**.
+- **After Slice A the rule keeps holding.** The mirror triggers create
+  `origin_AS(W)` the first time a Work without one gains any Asset-owned value
+  or annotation. That is necessarily before any Asset-bound revision or
+  tombstone can exist for it, because a tombstone can only follow a value.
+  Clearing values later never deletes the Asset. The projection shows it exactly as
   today (`file_path` empty: "No file attached"), and none of its values or
   annotations are dropped or left without an owner.
 - A Work with **none** of these values gets a Manifestation and **no** Asset.
@@ -1934,7 +1950,7 @@ exactly right.
 
 | Slice | Content | User-visible? | Depends on |
 | --- | --- | --- | --- |
-| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners; cross-Work, mismatched-`work_id` and self `manifestation_relations`; moving one related endpoint without dropping the relation fails at COMMIT, while moving both in a merge keeps it); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; the direct guard and marker bypasses are refused; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced. Fixtures for a live Work, a missing Person and a role row, **with and without** an existing role revision, show `get_roles_state()` reporting that scope as absent at a strictly newer revision; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
+| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners; cross-Work, mismatched-`work_id` and self `manifestation_relations`; moving one related endpoint without dropping the relation fails at COMMIT, while moving both in a merge keeps it); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; the direct guard and marker bypasses are refused; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6a) Works whose only Asset-bound state is durable revision state get exactly one deterministic placeholder `origin_AS(W)`: `thumb_page` set and then cleared (only the revision tombstone remains), and an annotation deleted with no live annotation left. A Slice D test then copies those tombstones to the Asset scopes, and a queued legacy operation maps to that same Asset ID; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced. Fixtures for a live Work, a missing Person and a role row, **with and without** an existing role revision, show `get_roles_state()` reporting that scope as absent at a strictly newer revision; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
 | **B. Asset fingerprint pass + ingest hashing** | Bounded, resumable hashing pass (§12.4). Compute `ingest_sha256` on the upload/import stream **before** linearization, for new Assets. No duplicate UI yet. | No | A |
 | **C. Projection module** | `work_projection.legacy_work` / `legacy_work_summary`. Move readers family by family (detail, browse/recent, folder/person/playlist summaries, BibTeX via `citation_record`), each with JSON parity tests and a byte-identical BibTeX test. | No | A |
 | **D. Asset authority** | vN+1: locator, source aggregate, materialization revisions and `thumb_page` owned by `assets`. `annotations.asset_id` authoritative and NOT NULL. Text index keyed by Asset. Cleanup and backup audit count Asset locators. Scope and revision copies (`asset-source`, `asset-annotation`, `asset-field/[AS, thumb_page]`), tombstones included. Legacy operations mapped to `origin_AS(W)`. Browser last-page key migration. | No | C |
