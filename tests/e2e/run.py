@@ -58,11 +58,15 @@ from tests.e2e.policy import (
     select_smoke,
 )
 from tests.e2e.sharding import (
+    BASELINE_TIMINGS_PATH,
     TIMINGS_PATH,
+    agent_default_jobs,
+    agent_resource_limits,
     aggregate_worker_results,
     assign_shards,
     format_slowest,
     load_timings,
+    merge_timing_sources,
     merge_timings,
     parse_jobs,
     run_exit_code,
@@ -887,9 +891,17 @@ def build_parser():
         "--dev",
         action="store_true",
         help=(
-            "Agent/dev mode: --fail-fast + --no-pointer-capture. "
+            "Developer mode: --fail-fast + --no-pointer-capture. "
             "Requires an explicit selection (--feature/--smoke/--affected/--last-failed "
             "or positional tests)."
+        ),
+    )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        help=(
+            "Cloud-agent mode: --fail-fast + --no-pointer-capture plus a conservative "
+            "resource-aware default worker count (max 2). Requires an explicit selection."
         ),
     )
     parser.add_argument(
@@ -1093,18 +1105,19 @@ def _main(argv=None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    if args.dev:
+    if args.dev or args.agent:
         if tier == "full":
+            flag = "--agent" if args.agent else "--dev"
             print(
-                "--dev refuses the full suite; pass --smoke, --feature, --affected, "
-                "--last-failed, or positional tests",
+                "%s refuses the full suite; pass --smoke, --feature, --affected, "
+                "--last-failed, or positional tests" % flag,
                 file=sys.stderr,
             )
             return 2
         if tier not in ("affected-noop", "last-failed-stale"):
             args.fail_fast = True
             args.no_pointer_capture = True
-            tier = "dev"
+            tier = "agent" if args.agent else "dev"
             note = (note + "; fail-fast") if note else "fail-fast"
 
     if args.list_tests:
@@ -1177,16 +1190,27 @@ def _main(argv=None) -> int:
         )
 
     try:
-        # Serial-by-default so debugging stays deterministic; advertised full-gate
-        # entry points (run_tests.py --e2e, scripts/e2e full) pass --jobs 4.
-        default_jobs = 1
+        # Serial-by-default so debugging stays deterministic. Cloud-agent mode
+        # chooses a conservative width from effective cgroup CPU/memory limits;
+        # explicit --jobs / PRKS_E2E_JOBS still wins.
+        default_jobs = agent_default_jobs() if args.agent else 1
         jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=default_jobs)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     jobs = min(jobs, len(test_ids))
+    if args.agent:
+        limits = agent_resource_limits()
+        mem = limits["memory_limit_bytes"]
+        mem_text = "unlimited/unknown" if mem is None else "%.1f GiB" % (mem / (1024 ** 3))
+        print(
+            "Agent resources: cpu=%s memory=%s workers=%d"
+            % (limits["cpu_count"], mem_text, jobs)
+        )
 
-    timings = load_timings(REPO / TIMINGS_PATH)
+    baseline_timings = load_timings(REPO / BASELINE_TIMINGS_PATH)
+    local_timings = load_timings(REPO / TIMINGS_PATH)
+    timings = merge_timing_sources(baseline_timings, local_timings)
     if jobs == 1:
         ok, observed, failed_ids, phase_timings = run_serial(test_ids, args.fail_fast)
     else:
@@ -1231,6 +1255,8 @@ def _main(argv=None) -> int:
             % ",".join(active_benchmark_modes)
         )
     if persist_history:
+        # Persist only machine-local observations; the committed bootstrap
+        # baseline remains immutable input and must never be copied into .tests.
         _persist_timings(observed, test_ids if not targeted else None)
     _print_slowest({**timings, **observed} if targeted else observed)
 
