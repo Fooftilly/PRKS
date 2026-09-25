@@ -2940,69 +2940,51 @@ def _v17_rebuild_leaf_tables(conn: sqlite3.Connection, ddl: Dict[str, str]) -> N
     swap("argument_sources", new_name)
 
 
-def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
-    """#60 Slice A: Work -> Manifestation -> Asset entities and integrity layer.
+def _v17_sql(objects: List[Tuple[str, str, str]], kind: str) -> Dict[str, str]:
+    return {name: sql for obj_kind, name, sql in objects if obj_kind == kind}
 
-    SQLite only: no managed file is read, written, listed or hashed, and no
-    backup is made (I10, D2). One transaction (the runner's), so any failed
-    check below rolls the library back to schema 16 untouched.
-    """
-    from backend import work_identity
 
-    objects = _v17_objects()
-    ddl = {name: sql for kind, name, sql in objects if kind == "table"}
-    new_tables = [
-        name for kind, name, _sql in objects
-        if kind == "table" and name not in _V17_REBUILT_TABLES
-    ]
-    triggers_by_name = {name: sql for kind, name, sql in objects if kind == "trigger"}
-    before = _fk_violations(conn)
-
-    # 1. Preflight and quarantine of rows that already violate a leaf FK.
-    conn.execute(ddl["migration_quarantine"])
-    for table in _V17_REBUILT_TABLES:
-        _v17_quarantine(conn, table)
-
-    # 2-3. New entities, the two Work pointers, and the projection views.
-    for name in new_tables:
-        if name != "migration_quarantine":
-            conn.execute(ddl[name])
+def _v17_create_entities(conn: sqlite3.Connection, objects: List[Tuple[str, str, str]]) -> None:
+    """New entities, the two Work pointers, the scoped FTS trigger, the views."""
+    for name, sql in _v17_sql(objects, "table").items():
+        if name not in _V17_REBUILT_TABLES and name != "migration_quarantine":
+            conn.execute(sql)
     # The FTS update trigger becomes column-scoped. Unscoped, it re-indexed a
     # row on every UPDATE -- including the pointer write the Work-insert mirror
     # makes, which can run before `works_ai` has indexed the new row and would
     # then delete an FTS entry that does not exist yet.
     conn.execute("DROP TRIGGER IF EXISTS works_au")
-    conn.execute(triggers_by_name["works_au"])
+    conn.execute(_v17_sql(objects, "trigger")["works_au"])
     conn.execute("ALTER TABLE works ADD COLUMN primary_manifestation_id TEXT")
     conn.execute("ALTER TABLE works ADD COLUMN citation_manifestation_id TEXT")
-    for kind, _name, sql in objects:
-        if kind == "view":
-            conn.execute(sql)
+    for sql in _v17_sql(objects, "view").values():
+        conn.execute(sql)
 
-    # 5 before 4: the rebuilt leaf tables copy the backfilled IDs.
-    _v17_backfill(conn)
-    _v17_rebuild_leaf_tables(conn, ddl)
 
+def _v17_install_indexes_and_triggers(
+    conn: sqlite3.Connection, objects: List[Tuple[str, str, str]]
+) -> None:
     for name in _V17_RECREATED_INDEXES:
         conn.execute(_INDEX_SQL[name])
-    for kind, _name, sql in objects:
-        if kind == "index":
-            conn.execute(sql)
-    # 6. Integrity and mirror triggers, installed after the backfill.
-    for kind, name, sql in objects:
-        if kind == "trigger" and name != "works_au":
+    for sql in _v17_sql(objects, "index").values():
+        conn.execute(sql)
+    for name, sql in _v17_sql(objects, "trigger").items():
+        if name != "works_au":
             conn.execute(sql)
 
-    # 7. Nothing may be left that the preflight did not see.
-    slice_tables = {name for kind, name, _sql in objects if kind == "table"}
-    for table, _rowid, _parent in _fk_violations(conn) - before:
-        raise MigrationError(
-            "unmapped_legacy_row",
-            "The work identity migration left a foreign key violation.",
-            object=table,
-        )
-    for table, _rowid, _parent in _fk_violations(conn):
-        if table in slice_tables:
+
+def _v17_verify(
+    conn: sqlite3.Connection,
+    objects: List[Tuple[str, str, str]],
+    before: set[Tuple[str, int, str]],
+) -> None:
+    """Nothing may be left that the preflight did not see (§12.3 step 7)."""
+    from backend import work_identity
+
+    slice_tables = set(_v17_sql(objects, "table"))
+    for violation in _fk_violations(conn):
+        table = violation[0]
+        if table in slice_tables or violation not in before:
             raise MigrationError(
                 "unmapped_legacy_row",
                 "The work identity migration left a foreign key violation.",
@@ -3013,6 +2995,31 @@ def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
     if work_identity.mirror_drift(conn):
         raise MigrationError("integrity_violation", "Work identity mirror check failed.")
 
+
+def migrate_v16_to_v17(conn: sqlite3.Connection) -> None:
+    """#60 Slice A: Work -> Manifestation -> Asset entities and integrity layer.
+
+    SQLite only: no managed file is read, written, listed or hashed, and no
+    backup is made (I10, D2). One transaction (the runner's), so any failed
+    check below rolls the library back to schema 16 untouched.
+    """
+    objects = _v17_objects()
+    ddl = _v17_sql(objects, "table")
+    before = _fk_violations(conn)
+
+    # 1. Preflight and quarantine of rows that already violate a leaf FK.
+    conn.execute(ddl["migration_quarantine"])
+    for table in _V17_REBUILT_TABLES:
+        _v17_quarantine(conn, table)
+    # 2-3. New entities, the Work pointers, the projection views.
+    _v17_create_entities(conn, objects)
+    # 5 before 4: the rebuilt leaf tables copy the backfilled IDs.
+    _v17_backfill(conn)
+    _v17_rebuild_leaf_tables(conn, ddl)
+    # 6. Integrity and mirror triggers, installed after the backfill.
+    _v17_install_indexes_and_triggers(conn, objects)
+    # 7.
+    _v17_verify(conn, objects, before)
 
 MIGRATIONS: Tuple[Migration, ...] = (
     Migration(
