@@ -61,6 +61,10 @@ These records power the Research Graph and related detail/index views.
 
 Work source fields are not independent metadata. For video Works, source kind/provider/provider ID and URL semantics form an identity aggregate. The canonical reasoning and transition model are documented in [docs/work-source-identity.md](https://github.com/Fooftilly/PRKS/blob/master/docs/work-source-identity.md).
 
+## Planned: Work identity, versions and files
+
+Today one Work row represents the intellectual work, one citeable publication, and at most one file. The proposed separation into Work → Version (manifestation) → File or Source (asset) — covering editions, translations, revisions, duplicate detection and citation targets — is a design under review, not current behavior. See [docs/work-identity-model.md](https://github.com/Fooftilly/PRKS/blob/master/docs/work-identity-model.md).
+
 ## IDs and offline creation
 
 Durable local-first creation requires IDs that can safely exist before a server round-trip. Domain-specific synchronization modules and `backend/entity_ids.py` handle the relevant boundaries.
