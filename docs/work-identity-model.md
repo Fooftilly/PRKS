@@ -861,8 +861,11 @@ stored per row, so a user can override a default.
 - **Credit-name override:** the credit on a Work-scoped Author row is the
   default. A Manifestation may override how that person is credited on it
   through `manifestation_credit_overrides(manifestation_id, person_id,
-  role_type, credit_name)`. This is optional and ships only when a UI needs it.
-  Backfill writes none.
+  role_type, credit_name)`. `credits(M)` (§7.5) applies these overrides. The
+  backfill writes none, and no UI for editing them is needed early. **The
+  table is nevertheless required by the time `MERGE_WORKS` ships (Slice K)**,
+  because a merge preserves colliding credit spellings there (§10.4, step 4).
+  Without it, a merge would have to drop a credit.
 
 ### 7.3 Backfill rule
 
@@ -1197,10 +1200,13 @@ Asset AS-…  (one File in the UI; owns annotations, page state, thumbnails)
     already got this file?".
   - `content_sha256` identifies the current working bytes. It is used for
     integrity, backup verification, and client cache validation (#52, #58).
-- **Hash updates are crash-safe.** Replacing bytes on disk and updating the
-  hash in SQLite cannot be one atomic step, so every in-place rewrite
-  (materialization, linearization, copy-on-write retarget) follows a fixed
-  order:
+- **Hash updates are crash-safe and race-free.** Replacing bytes on disk and
+  updating the hash in SQLite cannot be one atomic step, so every in-place
+  rewrite (materialization, linearization, copy-on-write retarget) follows a
+  fixed order, **holding the basename's `managed_pdf_path_lock()` for all
+  three steps**. The current COW and replace paths already take that lock. The
+  fingerprint pass takes the same lock, so it can never hash between step 1
+  and step 3:
   1. commit `content_sha256 = NULL`, `byte_size = NULL` and
      `fingerprinted_at = NULL`, and increment `content_generation` (the
      working bytes are **pending**);
@@ -1932,7 +1938,7 @@ exactly right.
 | **H. Versions UI** | "Add another version / file", set primary, open a specific Version or File, and a version picker for Copy citation, all behind §13.4's progressive disclosure. Follow `DESIGN.md` for Work detail composition. #61's secondary view builds on this. | **Yes** | G |
 | **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256` (and `content_sha256` for legacy files). Offers the four choices in §10.2. | Yes | B, H |
 | **J. Identifier candidates + decline** | Normalized DOI/ISBN/arXiv candidates, a review list, and `duplicate_decisions`. | Yes | E, I |
-| **K. Merge / move workflow** | Command-level versions of the §4.1 transition tests, including each `empty_source` outcome. `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
+| **K. Merge / move workflow** | Command-level versions of the §4.1 transition tests, including each `empty_source` outcome. Ships `manifestation_credit_overrides` (§7.2) if it does not exist yet, and tests a credit-spelling collision. `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
 | **L. RapidFuzz evaluation** | A separate research/evaluation issue (dependency review, ranking quality on synthetic data). It only ranks; it never decides. | — | J |
 
 A, B and C can proceed in parallel after A's migration merges. D and E are
