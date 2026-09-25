@@ -1470,11 +1470,22 @@ The versions below are illustrative. Each is one migration in one PR (see
       - Each one is written verbatim, as `json_object(...)` of all its columns,
         into a new FK-free canonical table `migration_quarantine(id,
         source_table, source_rowid, row_json, reason, quarantined_at)`.
-      - The rebuild copy then skips them. Quarantining an `argument_sources`
-        row changes that Argument's synced list, so its `argument-sources/<A>`
-        revision is advanced (§8.5). Quarantined annotations and roles
-        already belong to a Work that no longer exists, so no live scope
-        reports them.
+      - The rebuild copy then skips them.
+      - **Revisions follow the live aggregate that changes, not the table
+        type.** For each quarantined row, PRKS advances the revision of every
+        scope whose state endpoint reported that row as present:
+        - an `argument_sources` row whose Argument still exists: advance
+          `argument-sources/<A>` (§8.5);
+        - a `roles` row whose **Work still exists** (for example only its
+          Person is missing): `work_role_sync.get_roles_state()` builds
+          `present` from `roles` without joining `persons`, so that row was
+          reported as `present: true`. Insert or advance the
+          `work-person-role/[W, P, role]` revision, leaving a tombstone. After
+          the migration the scope reports absence at a strictly newer
+          revision;
+        - a row whose owning Work or Argument no longer exists (annotations
+          can only be orphaned this way): no live scope reported it, so no
+          scope is created.
       - Only per-table counts are logged, which is privacy-safe.
 
       The table lives in `prks_data.db`, so it is backed up with the library.
@@ -1857,7 +1868,7 @@ exactly right.
 
 | Slice | Content | User-visible? | Depends on |
 | --- | --- | --- | --- |
-| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
+| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests, plus the §4.1 transition tests (move the only primary Asset out; move a non-primary Asset; move the only Manifestation out with the emptied Work deleted or merged; a leftover retirement marker fails COMMIT; rollback leaves all pointers and owner columns unchanged); (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced. Fixtures for a live Work, a missing Person and a role row, **with and without** an existing role revision, show `get_roles_state()` reporting that scope as absent at a strictly newer revision; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
 | **B. Asset fingerprint pass + ingest hashing** | Bounded, resumable hashing pass (§12.4). Compute `ingest_sha256` on the upload/import stream **before** linearization, for new Assets. No duplicate UI yet. | No | A |
 | **C. Projection module** | `work_projection.legacy_work` / `legacy_work_summary`. Move readers family by family (detail, browse/recent, folder/person/playlist summaries, BibTeX via `citation_record`), each with JSON parity tests and a byte-identical BibTeX test. | No | A |
 | **D. Asset authority** | vN+1: locator, source aggregate, materialization revisions and `thumb_page` owned by `assets`. `annotations.asset_id` authoritative and NOT NULL. Text index keyed by Asset. Cleanup and backup audit count Asset locators. Scope and revision copies (`asset-source`, `asset-annotation`). Legacy operations mapped to `origin_AS(W)`. Browser last-page key migration. | No | C |
