@@ -313,10 +313,19 @@ class BackfillTests(WorkIdentityCase):
             ("ann-pdf", self.ids["pdf"], work_identity.backfill_asset_id(self.ids["pdf"])),
         ])
 
-    def test_work_shape_is_unchanged(self):
+    def test_work_projection_keeps_legacy_fields_and_adds_identity(self):
         work = self.db.get_work(self.ids["pdf"])
-        for column in work_identity.WORK_POINTER_COLUMNS:
-            self.assertNotIn(column, work)
+        self.assertEqual(
+            work["primary_manifestation_id"],
+            self._primary_mf(self.ids["pdf"]),
+        )
+        self.assertNotIn("citation_manifestation_id", work)
+        self.assertEqual(
+            work["primary_asset_id"],
+            work_identity.backfill_asset_id(self.ids["pdf"]),
+        )
+        self.assertEqual(work["manifestation_count"], 1)
+        self.assertEqual(work["asset_count"], 1)
         self.assertEqual(work["file_path"], "/api/pdfs/paper.pdf")
 
 
@@ -926,11 +935,14 @@ class MirrorTests(WorkIdentityCase):
             self.assertEqual(self._q(f"SELECT COUNT(*) FROM {table}")[0][0], 0, table)
         self._assert_clean()
 
-    def test_get_work_keys_are_unchanged(self):
+    def test_get_work_exposes_slice_c_identity_fields(self):
         w = self.db.add_work(title="Shape")
         work = self.db.get_work(w)
-        for column in work_identity.WORK_POINTER_COLUMNS:
-            self.assertNotIn(column, work)
+        self.assertEqual(work["primary_manifestation_id"], self._primary_mf(w))
+        self.assertNotIn("citation_manifestation_id", work)
+        self.assertIsNone(work["primary_asset_id"])
+        self.assertEqual(work["manifestation_count"], 1)
+        self.assertEqual(work["asset_count"], 0)
 
     def test_ensure_origin_asset_is_deterministic_and_idempotent(self):
         w = self.db.add_work(title="Lazy")

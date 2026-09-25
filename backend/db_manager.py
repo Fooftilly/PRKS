@@ -28,7 +28,7 @@ from backend.pdf_annotations import (
     reconstruct_annotation,
     round_trip_annotation,
 )
-from backend import pdf_annotation_sync, work_identity
+from backend import pdf_annotation_sync, work_identity, work_projection
 from backend.performance import (
     classify_sql_write,
     clock_ns,
@@ -1188,6 +1188,15 @@ class PRKSDatabase:
             except Exception:
                 pass
 
+    def _finish_projected_work_rows(self, rows, *, conn=None) -> None:
+        """Apply the Slice-C Work projection, then existing row finishing."""
+        if conn is None:
+            with self.connection() as projection_conn:
+                work_projection.legacy_work_summary(projection_conn, rows)
+        else:
+            work_projection.legacy_work_summary(conn, rows)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+
     # --- App settings (shared across all clients of this database) ---
     _PRKS_APP_SETTING_MAX_LEN = 500
 
@@ -2142,7 +2151,7 @@ class PRKSDatabase:
         rows = list(self.execute_query(
             f"SELECT {sel}, {pex} FROM works ORDER BY works.created_at DESC, works.id ASC"
         ))
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     def etag_works_catalog(self, rows: List[dict]) -> str:
@@ -2177,7 +2186,7 @@ class PRKSDatabase:
                 "ORDER BY works.title COLLATE NOCASE ASC, works.id ASC"
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     def get_recent_browse(self, limit: int = 30) -> List[dict]:
@@ -2203,7 +2212,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
@@ -2225,7 +2234,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     @staticmethod
@@ -2329,7 +2338,7 @@ class PRKSDatabase:
                 tuple(ordered_ids),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -2569,7 +2578,7 @@ class PRKSDatabase:
                     tuple(id_list),
                 )
             )
-            finish_work_summary_rows(rows, self.storage.pdfs_dir)
+            self._finish_projected_work_rows(rows)
             return rows
 
         if not ordered_ids:
@@ -2583,7 +2592,7 @@ class PRKSDatabase:
                 tuple(ordered_ids),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -2633,7 +2642,7 @@ class PRKSDatabase:
                 tuple(id_list),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         ordered.extend(rows)
         return ordered
 
@@ -2654,15 +2663,14 @@ class PRKSDatabase:
         ORDER BY w.created_at DESC
         """
         rows = list(self.execute_query(query, (tid,)))
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     def get_work(self, work_id: str) -> Optional[dict]:
-        res = self.execute_query("SELECT * FROM works WHERE id = ?", (work_id,))
-        if not res: return None
-        # Schema 17's identity pointers are not part of the Work shape until
-        # the projection slice (#60 Slice C) exposes them deliberately.
-        work = work_identity.strip_pointer_columns(res[0])
+        with self.connection() as conn:
+            work = work_projection.legacy_work(conn, work_id)
+        if work is None:
+            return None
         work['roles'] = self.get_work_roles(work_id)
         work['arguments'] = []
         work['research_refs'] = {"concepts": [], "arguments": []}
@@ -2760,7 +2768,7 @@ class PRKSDatabase:
         ]
         if not rows:
             return None
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows, conn=conn)
         return rows[0]
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
@@ -2772,7 +2780,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     def get_recently_added_works(self, limit: int = 50) -> List[dict]:
@@ -2784,7 +2792,7 @@ class PRKSDatabase:
                 (limit,),
             )
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows)
         return rows
 
     def update_work_metadata(self, work_id: str, fields: dict):
@@ -3036,7 +3044,7 @@ class PRKSDatabase:
             """.format(wsel=wsel, pex=pex),
             (playlist_id,),
         )
-        finish_work_summary_rows(p["items"], self.storage.pdfs_dir)
+        self._finish_projected_work_rows(p["items"])
         return p
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
@@ -3594,7 +3602,7 @@ class PRKSDatabase:
         ORDER BY w.created_at DESC
         """
         folder["works"] = list(self.execute_query(query, (folder_id,)))
-        finish_work_summary_rows(folder["works"], self.storage.pdfs_dir)
+        self._finish_projected_work_rows(folder["works"])
         folder['tags'] = self.get_folder_tags(folder_id)
         return folder
 
@@ -4054,7 +4062,7 @@ class PRKSDatabase:
             work_identity.strip_pointer_columns(row)
             for row in self.execute_query(query, (person_id,))
         ]
-        finish_work_summary_rows(person["works"], self.storage.pdfs_dir)
+        self._finish_projected_work_rows(person["works"])
         person["groups"] = self.get_groups_for_person(person_id)
         return person
 
@@ -5099,9 +5107,11 @@ class PRKSDatabase:
         return s
 
     def generate_bibtex(self, work_id: str) -> str:
-        work_res = self.execute_query("SELECT * FROM works WHERE id = ?", (work_id,))
-        if not work_res: return ""
-        work = work_res[0]
+        with self.connection() as conn:
+            target = work_projection.citation_target(conn, work_id)
+            work = work_projection.citation_record(conn, target) if target else None
+        if not work:
+            return ""
 
         roles = self.get_work_roles(work_id)
         # Roles sorted by order_index, then rowid (stable order when order_index ties).
