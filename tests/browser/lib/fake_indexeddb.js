@@ -445,6 +445,10 @@ function installFakeIdbGlobals(globalObj) {
 }
 
 function createFakeIndexedDBFactory() {
+    // Thin Promise wrappers (idb) need IDB* constructors + addEventListener.
+    // Install once per process so every selftest that builds a fake factory
+    // can createPrksOfflineStore without repeating the polyfill.
+    installFakeIdbGlobals(globalThis);
     const databases = new Map();
     return {
         open: function (name, version) {

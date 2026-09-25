@@ -43,6 +43,15 @@
 
     function defaultIdbApi() {
         if (root && root.idb && typeof root.idb.wrap === 'function') return root.idb;
+        // Node selftests load the vendored UMD without a script tag.
+        if (typeof module !== 'undefined' && module.exports && typeof require === 'function') {
+            try {
+                const loaded = require('../vendor/idb/idb.min.js');
+                if (loaded && typeof loaded.wrap === 'function') return loaded;
+            } catch (_e) {
+                /* browser / missing vendor */
+            }
+        }
         return null;
     }
 
