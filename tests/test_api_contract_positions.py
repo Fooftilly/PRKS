@@ -21,6 +21,8 @@ from run_tests import apply_isolated_test_env
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 apply_isolated_test_env(_PROJECT_DIR)
 
+from unittest.mock import patch
+
 from openapi_core import OpenAPI
 from openapi_core.testing import MockRequest, MockResponse
 
@@ -36,6 +38,16 @@ from backend.api_contract.positions import (
 )
 from backend.storage.config import StorageConfig
 import backend.server as server_module
+
+
+class _CaptureServer(server_module.PRKSThreadingTCPServer):
+    """Capture the live httpd so tearDownClass can shut it down."""
+
+    last = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        type(self).last = self
 
 
 def _find_free_port() -> int:
@@ -76,7 +88,11 @@ def _validate_http_against_openapi(
         view_args=view_args,
         data=request_body,
     )
-    resp = MockResponse(data=response_body, status_code=status)
+    # Bodyless 304 must not claim application/json content.
+    content_type = "" if status == 304 else "application/json"
+    resp = MockResponse(
+        data=response_body, status_code=status, content_type=content_type
+    )
     if check_request:
         api.validate_request(req)
     api.validate_response(req, resp)
@@ -116,6 +132,20 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         model, err = parse_position_request(PositionUpdateRequest, {"name": "Only name"})
         self.assertIsNone(err)
         self.assertEqual(model.domain_field_kwargs(), {"name": "Only name"})
+
+    def test_update_explicit_null_description_maps_to_empty_clear(self):
+        model, err = parse_position_request(
+            PositionUpdateRequest, {"description": None}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(model.domain_field_kwargs(), {"description": ""})
+
+    def test_update_omitted_description_not_in_kwargs(self):
+        model, err = parse_position_request(
+            PositionUpdateRequest, {"name": "Keep desc"}
+        )
+        self.assertIsNone(err)
+        self.assertNotIn("description", model.domain_field_kwargs())
 
     def test_update_request_wrong_type_name_preserves_domain_code(self):
         model, err = parse_position_request(PositionUpdateRequest, {"name": 1})
@@ -169,6 +199,17 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertIn("409", delete_responses)
         self.assertNotIn("400", delete_responses)
         self.assertIn("position_in_use", delete_responses["409"]["description"])
+        sync_responses = doc["paths"]["/api/positions/{position_id}/sync-state"]["get"][
+            "responses"
+        ]
+        self.assertIn("304", sync_responses)
+        post_responses = doc["paths"]["/api/positions"]["post"]["responses"]
+        patch_responses = doc["paths"]["/api/positions/{position_id}"]["patch"][
+            "responses"
+        ]
+        for responses in (post_responses, patch_responses):
+            self.assertIn("413", responses)
+            self.assertIn("415", responses)
 
     def test_checked_in_openapi_artifact_matches_generator(self):
         artifact = Path(_PROJECT_DIR) / "docs" / "api" / "openapi-positions.json"
@@ -189,16 +230,31 @@ class PositionHttpContractTests(unittest.TestCase):
     """
 
     @classmethod
-    def _request(cls, method: str, path: str, body: bytes | None = None,
-                 headers: dict | None = None, timeout: float = 5.0):
+    def _request_full(
+        cls,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        headers: dict | None = None,
+        timeout: float = 5.0,
+    ):
         conn = http.client.HTTPConnection("127.0.0.1", cls._test_port, timeout=timeout)
         try:
             conn.request(method, path, body=body, headers=headers or {})
             res = conn.getresponse()
             raw = res.read()
-            return res.status, raw
+            hdrs = {k.lower(): v for k, v in res.getheaders()}
+            return res.status, raw, hdrs
         finally:
             conn.close()
+
+    @classmethod
+    def _request(cls, method: str, path: str, body: bytes | None = None,
+                 headers: dict | None = None, timeout: float = 5.0):
+        status, raw, _hdrs = cls._request_full(
+            method, path, body=body, headers=headers, timeout=timeout
+        )
+        return status, raw
 
     @classmethod
     def _wait_ready(cls, timeout_seconds=8.0):
@@ -227,6 +283,11 @@ class PositionHttpContractTests(unittest.TestCase):
             processing_dir=processing,
         )
         server_module.bind_storage(cfg)
+        _CaptureServer.last = None
+        cls._server_patch = patch.object(
+            server_module, "PRKSThreadingTCPServer", _CaptureServer
+        )
+        cls._server_patch.start()
         cls.server_thread = threading.Thread(
             target=server_module.run_server,
             args=(cls._test_port,),
@@ -234,28 +295,52 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         cls.server_thread.start()
         cls._wait_ready()
+        cls._httpd = _CaptureServer.last
+        if cls._httpd is None:
+            raise RuntimeError("contract test server did not register httpd")
 
     @classmethod
     def tearDownClass(cls):
+        httpd = getattr(cls, "_httpd", None)
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
+            try:
+                httpd.server_close()
+            except OSError:
+                pass
+        thread = getattr(cls, "server_thread", None)
+        if thread is not None:
+            thread.join(5)
+        patcher = getattr(cls, "_server_patch", None)
+        if patcher is not None:
+            patcher.stop()
         tmpdir = getattr(cls, "_tmpdir", None)
         if tmpdir:
             # ignore_errors already swallows filesystem races; no bare except.
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    def _json(self, method: str, path: str, body=None, expect_status=None):
+    def _json(self, method: str, path: str, body=None, expect_status=None,
+              extra_headers=None):
         headers = {"Accept": "application/json"}
+        if extra_headers:
+            headers.update(extra_headers)
         payload = None
         if body is not None:
             payload = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        status, raw = self._request(method, path, body=payload, headers=headers)
+            headers.setdefault("Content-Type", "application/json")
+        status, raw, hdrs = self._request_full(
+            method, path, body=payload, headers=headers
+        )
         parsed = json.loads(raw.decode("utf-8")) if raw else None
         if expect_status is not None:
             self.assertEqual(status, expect_status, parsed)
-        return status, parsed, raw, payload
+        return status, parsed, raw, payload, hdrs
 
     def test_openapi_endpoint_serves_positions_slice(self):
-        status, doc, raw, _req = self._json(
+        status, doc, raw, _req, _hdrs = self._json(
             "GET", "/api/openapi.json", expect_status=200
         )
         self.assertEqual(status, 200)
@@ -263,7 +348,7 @@ class PositionHttpContractTests(unittest.TestCase):
         self.assertEqual(doc, positions_openapi_document())
 
     def test_create_list_get_patch_delete_round_trip(self):
-        status, created, raw_created, req_body = self._json(
+        status, created, raw_created, req_body, _ = self._json(
             "POST",
             "/api/positions",
             {"name": "  Typed   boundary  ", "description": "hello"},
@@ -282,7 +367,7 @@ class PositionHttpContractTests(unittest.TestCase):
             request_body=req_body,
         )
 
-        status, rows, raw_rows, _ = self._json(
+        status, rows, raw_rows, _, _ = self._json(
             "GET", "/api/positions", expect_status=200
         )
         self.assertTrue(any(r["id"] == created["id"] for r in rows))
@@ -296,7 +381,7 @@ class PositionHttpContractTests(unittest.TestCase):
         )
 
         detail_path = f"/api/positions/{created['id']}"
-        status, detail, raw_detail, _ = self._json(
+        status, detail, raw_detail, _, _ = self._json(
             "GET", detail_path, expect_status=200
         )
         PositionDetail.model_validate(detail)
@@ -309,7 +394,7 @@ class PositionHttpContractTests(unittest.TestCase):
             response_body=raw_detail,
         )
 
-        status, updated, raw_updated, patch_body = self._json(
+        status, updated, raw_updated, patch_body, _ = self._json(
             "PATCH",
             detail_path,
             {"description": "updated"},
@@ -328,7 +413,7 @@ class PositionHttpContractTests(unittest.TestCase):
         )
 
         sync_path = f"/api/positions/{created['id']}/sync-state"
-        status, sync, raw_sync, _ = self._json(
+        status, sync, raw_sync, _, _ = self._json(
             "GET",
             sync_path,
             expect_status=200,
@@ -345,7 +430,7 @@ class PositionHttpContractTests(unittest.TestCase):
             response_body=raw_sync,
         )
 
-        status, deleted, raw_deleted, _ = self._json(
+        status, deleted, raw_deleted, _, _ = self._json(
             "DELETE", detail_path, expect_status=200
         )
         self.assertEqual(deleted, {"status": "deleted"})
@@ -358,26 +443,26 @@ class PositionHttpContractTests(unittest.TestCase):
             response_body=raw_deleted,
         )
 
-        status, missing, _raw, _ = self._json(
+        status, missing, _raw, _, _ = self._json(
             "GET", detail_path, expect_status=404
         )
         self.assertEqual(missing["error"], "Position not found.")
 
     def test_invalid_json_object_uses_common_envelope(self):
-        status, body, _raw, _ = self._json(
+        status, body, _raw, _, _ = self._json(
             "POST", "/api/positions", ["not", "an", "object"], expect_status=400
         )
         self.assertEqual(body["code"], "invalid_request")
 
     def test_domain_still_refuses_empty_name(self):
-        status, body, _raw, _ = self._json(
+        status, body, _raw, _, _ = self._json(
             "POST", "/api/positions", {"name": "   "}, expect_status=400
         )
         # Domain rule, not Pydantic length/emptiness.
         self.assertEqual(body.get("code"), "invalid_name")
 
     def test_wrong_type_name_on_post_preserves_invalid_name(self):
-        status, body, raw, req = self._json(
+        status, body, raw, req, _ = self._json(
             "POST", "/api/positions", {"name": 12}, expect_status=400
         )
         self.assertEqual(body["code"], "invalid_name")
@@ -392,7 +477,7 @@ class PositionHttpContractTests(unittest.TestCase):
         )
 
     def test_wrong_type_description_on_post_preserves_invalid_text(self):
-        status, body, raw, req = self._json(
+        status, body, raw, req, _ = self._json(
             "POST",
             "/api/positions",
             {"name": "ok", "description": ["nope"]},
@@ -410,14 +495,14 @@ class PositionHttpContractTests(unittest.TestCase):
         )
 
     def test_wrong_type_name_and_description_on_patch(self):
-        status, created, _raw, _ = self._json(
+        status, created, _raw, _, _ = self._json(
             "POST",
             "/api/positions",
             {"name": "Patch type target", "description": ""},
             expect_status=201,
         )
         path = f"/api/positions/{created['id']}"
-        status, body, raw, req = self._json(
+        status, body, raw, req, _ = self._json(
             "PATCH", path, {"name": 99}, expect_status=400
         )
         self.assertEqual(body["code"], "invalid_name")
@@ -432,7 +517,7 @@ class PositionHttpContractTests(unittest.TestCase):
             request_body=req,
             check_request=False,
         )
-        status, body, raw, req = self._json(
+        status, body, raw, req, _ = self._json(
             "PATCH", path, {"description": True}, expect_status=400
         )
         self.assertEqual(body["code"], "invalid_text")
@@ -449,15 +534,182 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         self._json("DELETE", path, expect_status=200)
 
+    def test_patch_null_description_clears_field(self):
+        status, created, _, _, _ = self._json(
+            "POST",
+            "/api/positions",
+            {"name": "Clearable", "description": "keep until null"},
+            expect_status=201,
+        )
+        path = f"/api/positions/{created['id']}"
+        status, updated, raw, req, _ = self._json(
+            "PATCH", path, {"description": None}, expect_status=200
+        )
+        self.assertEqual(updated["description"], "")
+        self.assertEqual(updated["name"], "Clearable")
+        _validate_http_against_openapi(
+            method="PATCH",
+            path=path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=status,
+            response_body=raw,
+            request_body=req,
+        )
+        # name-only patch must not wipe description when description is omitted
+        status, again, _, _, _ = self._json(
+            "PATCH",
+            path,
+            {"name": "Clearable renamed", "description": "restored"},
+            expect_status=200,
+        )
+        status, cleared_with_name, _, _, _ = self._json(
+            "PATCH",
+            path,
+            {"name": "Clearable final", "description": None},
+            expect_status=200,
+        )
+        self.assertEqual(cleared_with_name["name"], "Clearable final")
+        self.assertEqual(cleared_with_name["description"], "")
+        self._json("DELETE", path, expect_status=200)
+
+    def test_sync_state_304_when_etag_matches(self):
+        status, created, _, _, _ = self._json(
+            "POST",
+            "/api/positions",
+            {"name": "ETag position", "description": ""},
+            expect_status=201,
+        )
+        sync_path = f"/api/positions/{created['id']}/sync-state"
+        status, sync, raw, _, hdrs = self._json(
+            "GET", sync_path, expect_status=200
+        )
+        etag = hdrs.get("etag")
+        self.assertTrue(etag, hdrs)
+        status, body, raw304, _, _ = self._json(
+            "GET",
+            sync_path,
+            expect_status=304,
+            extra_headers={"If-None-Match": etag},
+        )
+        self.assertIsNone(body)
+        self.assertEqual(raw304, b"")
+        _validate_http_against_openapi(
+            method="GET",
+            path=sync_path,
+            path_pattern="/api/positions/{position_id}/sync-state",
+            view_args={"position_id": created["id"]},
+            status=304,
+            response_body=raw304,
+        )
+        self._json("DELETE", f"/api/positions/{created['id']}", expect_status=200)
+
+    def test_post_and_patch_415_and_413_documented(self):
+        # 415: wrong Content-Type
+        status, raw, hdrs = self._request_full(
+            "POST",
+            "/api/positions",
+            body=b'{"name":"x"}',
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "text/plain",
+            },
+        )
+        self.assertEqual(status, 415, raw)
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(payload["error"], "unsupported_media_type")
+        _validate_http_against_openapi(
+            method="POST",
+            path="/api/positions",
+            status=415,
+            response_body=raw,
+            request_body=b'{"name":"x"}',
+            check_request=False,
+        )
+
+        status, created, _, _, _ = self._json(
+            "POST",
+            "/api/positions",
+            {"name": "Body read limits", "description": ""},
+            expect_status=201,
+        )
+        path = f"/api/positions/{created['id']}"
+        status, raw, _ = self._request_full(
+            "PATCH",
+            path,
+            body=b'{"description":"x"}',
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "text/plain",
+            },
+        )
+        self.assertEqual(status, 415, raw)
+        _validate_http_against_openapi(
+            method="PATCH",
+            path=path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=415,
+            response_body=raw,
+            request_body=b'{"description":"x"}',
+            check_request=False,
+        )
+
+        # 413: oversized Content-Length (limit patched down so we need not send 50MiB).
+        oversized = json.dumps({"name": "overflow-body-name"}).encode("utf-8")
+        with patch.object(server_module, "_PRKS_MAX_JSON_BODY_BYTES", 8):
+            status, raw, _ = self._request_full(
+                "POST",
+                "/api/positions",
+                body=oversized,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+        self.assertEqual(status, 413, raw)
+        payload = json.loads(raw.decode("utf-8"))
+        self.assertEqual(payload["error"], "request_too_large")
+        _validate_http_against_openapi(
+            method="POST",
+            path="/api/positions",
+            status=413,
+            response_body=raw,
+            request_body=oversized,
+            check_request=False,
+        )
+        with patch.object(server_module, "_PRKS_MAX_JSON_BODY_BYTES", 8):
+            status, raw, _ = self._request_full(
+                "PATCH",
+                path,
+                body=oversized,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+        self.assertEqual(status, 413, raw)
+        _validate_http_against_openapi(
+            method="PATCH",
+            path=path,
+            path_pattern="/api/positions/{position_id}",
+            view_args={"position_id": created["id"]},
+            status=413,
+            response_body=raw,
+            request_body=oversized,
+            check_request=False,
+        )
+        self._json("DELETE", path, expect_status=200)
+
     def test_delete_in_use_returns_409_matching_openapi(self):
-        status, position, _raw, _ = self._json(
+        status, position, _raw, _, _ = self._json(
             "POST",
             "/api/positions",
             {"name": "Targeted claim", "description": ""},
             expect_status=201,
         )
         # Create an Argument that targets this Position so delete is refused.
-        status, argument, _raw, _ = self._json(
+        status, argument, _raw, _, _ = self._json(
             "POST",
             "/api/arguments",
             {
@@ -475,7 +727,7 @@ class PositionHttpContractTests(unittest.TestCase):
             expect_status=201,
         )
         path = f"/api/positions/{position['id']}"
-        status, body, raw, _ = self._json("DELETE", path, expect_status=409)
+        status, body, raw, _, _ = self._json("DELETE", path, expect_status=409)
         self.assertEqual(body["code"], "position_in_use")
         _validate_http_against_openapi(
             method="DELETE",
@@ -491,7 +743,7 @@ class PositionHttpContractTests(unittest.TestCase):
 
     def test_openapi_core_validates_create_request_and_response(self):
         req_payload = {"name": "OpenAPI core check", "description": ""}
-        status, created, raw, req_body = self._json(
+        status, created, raw, req_body, _ = self._json(
             "POST",
             "/api/positions",
             req_payload,

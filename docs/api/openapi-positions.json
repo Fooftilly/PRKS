@@ -62,6 +62,26 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -152,6 +172,26 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Request body larger than the JSON body limit (request_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Missing or unsupported Content-Type (unsupported_media_type).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -222,6 +262,9 @@
                 }
               }
             }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless."
           },
           "404": {
             "description": "Not found.",

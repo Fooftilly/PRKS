@@ -2,9 +2,10 @@
 """PRKS dependency consistency gate (CLI).
 
 Modes:
-  --runtime   Validate the Python environment needed to start PRKS.
-  --test      Runtime + Playwright (and other requirements-dev pins).
-  --repo      Manifests, locks, vendor hashes, SW revision (offline; no npm install required).
+  --runtime         Validate the Python environment needed to start PRKS.
+  --unit-contract   Runtime + openapi-core only (unit suite; no Playwright).
+  --test            Runtime + Playwright (and other requirements-dev pins).
+  --repo            Manifests, locks, vendor hashes, SW revision (offline; no npm install required).
 
 Optional:
   --check-latest   Network freshness probe (never used by startup/tests/--repo).
@@ -28,6 +29,7 @@ from backend.dependency_gate import (  # noqa: E402
     run_repo_gate,
     run_runtime_gate,
     run_test_gate,
+    run_unit_contract_gate,
     write_dependency_manifest,
     write_sw_dependency_revision,
 )
@@ -37,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--runtime", action="store_true", help="Python runtime pins for starting PRKS")
+    mode.add_argument(
+        "--unit-contract",
+        action="store_true",
+        help="Runtime + openapi-core (unit/API contract tests; no Playwright)",
+    )
     mode.add_argument("--test", action="store_true", help="Runtime + test (Playwright) pins")
     mode.add_argument(
         "--repo",
@@ -121,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.runtime:
         result = run_runtime_gate(repo_root=root)
+    elif args.unit_contract:
+        result = run_unit_contract_gate(repo_root=root)
     elif args.test:
         result = run_test_gate(repo_root=root)
     else:

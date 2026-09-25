@@ -240,6 +240,16 @@ def pinned_playwright_version(repo_root: Path | None = None) -> str:
     return pin
 
 
+def pinned_openapi_core_version(repo_root: Path | None = None) -> str:
+    """Exact openapi-core pin from requirements-dev (unit-contract preflight)."""
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    pins = read_requirements_pins(root / "requirements-dev.txt")
+    pin = pins.get("openapi-core")
+    if not pin:
+        raise RuntimeError("requirements-dev.txt has no openapi-core== pin")
+    return pin
+
+
 def python_min_version(repo_root: Path | None = None) -> tuple[int, ...]:
     inv = load_inventory(repo_root)
     raw = inv.get("python_min_version") or [3, 12]
@@ -610,6 +620,70 @@ def validate_runtime_python(
             )
             assert_remediation_is_safe(msg)
             result.details.append(msg)
+    return result
+
+
+def validate_unit_contract_python(
+    *,
+    repo_root: Path | None = None,
+    ctx: PlatformContext | None = None,
+    version_lookup: Callable[[str], str | None] | None = None,
+    current_python: tuple[int, ...] | None = None,
+) -> GateResult:
+    """Runtime pins plus openapi-core only (no Playwright / browser deps).
+
+    Unit discovery imports ``openapi_core`` from the Positions contract tests;
+    the default unit preflight must refuse a runtime-only install before
+    discovery raises ``ModuleNotFoundError``.
+    """
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    result = validate_runtime_python(
+        repo_root=root,
+        ctx=ctx,
+        version_lookup=version_lookup,
+        current_python=current_python,
+    )
+    dev_path = root / "requirements-dev.txt"
+    try:
+        pin = pinned_openapi_core_version(root)
+    except RuntimeError as exc:
+        result.fail("missing_openapi_core_pin", str(exc), str(dev_path))
+        return result
+    except RequirementsPinError as exc:
+        result.fail("non_exact_requirement", str(exc), str(dev_path))
+        return result
+    if not dev_path.is_file():
+        result.fail(
+            "missing_requirements",
+            f"requirements file missing: {dev_path.name}",
+            str(dev_path),
+        )
+        return result
+    extra = validate_installed_pins(
+        {"openapi-core": pin},
+        version_lookup=version_lookup,
+    )
+    if not extra.ok and result.ok:
+        missing = [
+            i.message.split(" ", 1)[0]
+            for i in extra.issues
+            if i.code == "missing_package"
+        ]
+        mismatched = []
+        for i in extra.issues:
+            if i.code == "version_mismatch":
+                parts = i.message.split()
+                if len(parts) >= 6:
+                    mismatched.append((parts[0], parts[2], parts[5]))
+        msg = remediation_message(
+            missing=missing or None,
+            mismatched=mismatched or None,
+            ctx=ctx or detect_platform_context(),
+            requirements_file=str(dev_path),
+        )
+        assert_remediation_is_safe(msg)
+        extra.details.append(msg)
+    result.extend(extra)
     return result
 
 
@@ -1571,6 +1645,10 @@ def validate_inventory(repo_root: Path | None = None) -> GateResult:
 
 def run_runtime_gate(**kwargs: Any) -> GateResult:
     return validate_runtime_python(**kwargs)
+
+
+def run_unit_contract_gate(**kwargs: Any) -> GateResult:
+    return validate_unit_contract_python(**kwargs)
 
 
 def run_test_gate(**kwargs: Any) -> GateResult:

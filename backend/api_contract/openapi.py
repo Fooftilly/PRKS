@@ -63,6 +63,22 @@ def positions_openapi_document() -> dict[str, Any]:
     def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
         return {"application/json": {"schema": schema_ref}}
 
+    def _json_error(description: str) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": _json_content(error_ref),
+        }
+
+    # Shared body-read refusals from PRKSHandler._read_json_body (POST/PATCH).
+    mutation_body_read_errors = {
+        "413": _json_error(
+            "Request body larger than the JSON body limit (request_too_large)."
+        ),
+        "415": _json_error(
+            "Missing or unsupported Content-Type (unsupported_media_type)."
+        ),
+    }
+
     paths: dict[str, Any] = {
         "/api/positions": {
             "get": {
@@ -91,10 +107,8 @@ def positions_openapi_document() -> dict[str, Any]:
                         "description": "Created Position detail.",
                         "content": _json_content(detail_ref),
                     },
-                    "400": {
-                        "description": "Validation or domain refusal.",
-                        "content": _json_content(error_ref),
-                    },
+                    "400": _json_error("Validation or domain refusal."),
+                    **mutation_body_read_errors,
                 },
             },
         },
@@ -116,10 +130,7 @@ def positions_openapi_document() -> dict[str, Any]:
                         "description": "Position detail with targeting Arguments.",
                         "content": _json_content(detail_ref),
                     },
-                    "404": {
-                        "description": "Not found.",
-                        "content": _json_content(error_ref),
-                    },
+                    "404": _json_error("Not found."),
                 },
             },
             "patch": {
@@ -137,14 +148,9 @@ def positions_openapi_document() -> dict[str, Any]:
                         "description": "Updated Position detail.",
                         "content": _json_content(detail_ref),
                     },
-                    "400": {
-                        "description": "Validation or domain refusal.",
-                        "content": _json_content(error_ref),
-                    },
-                    "404": {
-                        "description": "Not found.",
-                        "content": _json_content(error_ref),
-                    },
+                    "400": _json_error("Validation or domain refusal."),
+                    "404": _json_error("Not found."),
+                    **mutation_body_read_errors,
                 },
             },
             "delete": {
@@ -158,17 +164,11 @@ def positions_openapi_document() -> dict[str, Any]:
                             {"$ref": "#/components/schemas/PositionDeleted"}
                         ),
                     },
-                    "404": {
-                        "description": "Not found.",
-                        "content": _json_content(error_ref),
-                    },
-                    "409": {
-                        "description": (
-                            "Position is still targeted by an Argument or Stance "
-                            "(position_in_use)."
-                        ),
-                        "content": _json_content(error_ref),
-                    },
+                    "404": _json_error("Not found."),
+                    "409": _json_error(
+                        "Position is still targeted by an Argument or Stance "
+                        "(position_in_use)."
+                    ),
                 },
             },
         },
@@ -192,10 +192,13 @@ def positions_openapi_document() -> dict[str, Any]:
                             {"$ref": "#/components/schemas/PositionSyncState"}
                         ),
                     },
-                    "404": {
-                        "description": "Not found.",
-                        "content": _json_content(error_ref),
+                    "304": {
+                        "description": (
+                            "Not modified: If-None-Match matched the current "
+                            "ETag. Bodyless."
+                        ),
                     },
+                    "404": _json_error("Not found."),
                 },
             },
         },

@@ -85,9 +85,10 @@ failures).
 
 - **Pydantic** is a **runtime** pin in `requirements.txt` (HTTP boundary).
 - **openapi-core** is a **test** pin in `requirements-dev.txt`. The Unit / API /
-  contract Test Gate job installs it alongside runtime pins so OpenAPI
-  request/response validation cannot `skipTest` in CI. It is not required to
-  run the production server.
+  contract Test Gate job installs it alongside runtime pins, and
+  `python run_tests.py` runs a **unit-contract** preflight (`openapi-core` only;
+  no Playwright) so discovery cannot hit `ModuleNotFoundError` after a
+  runtime-only install. It is not required to run the production server.
 - Update `dependency-inventory.json` whenever either pin changes
   (`scripts/dependency_gate.py` / `python run_tests.py` preflight).
 

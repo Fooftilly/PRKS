@@ -25,11 +25,13 @@ from backend.dependency_gate import (
     format_pip_install_command,
     format_venv_create_commands,
     parse_requirements_pins,
+    pinned_openapi_core_version,
     pinned_playwright_version,
     python_min_version,
     remediation_message,
     run_repo_gate,
     run_runtime_gate,
+    run_unit_contract_gate,
     validate_dockerfile,
     validate_installed_pins,
     validate_inventory,
@@ -463,6 +465,56 @@ class InstalledPinTests(unittest.TestCase):
             version_lookup=lambda n: {"PyMuPDF": "1.28.2", "Pillow": "12.3.0"}[n],
         )
         self.assertTrue(result.ok)
+
+    def test_unit_contract_gate_requires_openapi_core_only(self):
+        """Unit preflight must check openapi-core without requiring Playwright."""
+        pin = pinned_openapi_core_version(_PROJECT)
+        self.assertEqual(pin, "0.23.1")
+        seen: list[str] = []
+
+        def lookup(name: str) -> str | None:
+            seen.append(name)
+            if name == "openapi-core":
+                return pin
+            if name in ("PyMuPDF", "Pillow", "pydantic"):
+                return {
+                    "PyMuPDF": "1.28.2",
+                    "Pillow": "12.3.0",
+                    "pydantic": "2.13.5",
+                }[name]
+            return None
+
+        result = run_unit_contract_gate(
+            repo_root=_PROJECT,
+            version_lookup=lookup,
+            current_python=(3, 12, 0),
+        )
+        self.assertTrue(result.ok, result.issues)
+        self.assertIn("openapi-core", seen)
+        self.assertNotIn("playwright", seen)
+
+    def test_unit_contract_gate_fails_when_openapi_core_missing(self):
+        def lookup(name: str) -> str | None:
+            if name == "openapi-core":
+                return None
+            if name in ("PyMuPDF", "Pillow", "pydantic"):
+                return {
+                    "PyMuPDF": "1.28.2",
+                    "Pillow": "12.3.0",
+                    "pydantic": "2.13.5",
+                }[name]
+            return None
+
+        result = run_unit_contract_gate(
+            repo_root=_PROJECT,
+            version_lookup=lookup,
+            current_python=(3, 12, 0),
+        )
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(i.code == "missing_package" for i in result.issues),
+            result.issues,
+        )
 
 
 class RemediationMessageTests(unittest.TestCase):
