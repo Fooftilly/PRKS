@@ -928,6 +928,13 @@ primary key in place, so the migration rebuilds the table:
   renumbers `order_index` as `0..n-1` for each Argument. This fixes the legacy
   `0, 0, 0` rows **without changing the order any reader sees**, so the
   `argument-sources` list value, and therefore its revision, is unchanged.
+  **Exception:** an Argument that lost a row to quarantine (§12.3 step 1.1,
+  for example a citation of a Work that no longer exists). `current_sources()`
+  reads rows without joining `works`, so such orphans are part of today's
+  synced list. That Argument's surviving rows are renumbered, and its
+  `argument-sources/<A>` revision is **advanced** in the same transaction, so
+  an offline replace based on the old list conflicts instead of silently
+  succeeding.
 - It **pins** each row with non-empty `pages` to the Work's backfilled
   Manifestation, because that pinpoint was written against that pagination.
   It leaves rows with empty `pages` at Work level. A user can later unpin a
@@ -1401,7 +1408,11 @@ The versions below are illustrative. Each is one migration in one PR (see
       - Each one is written verbatim, as `json_object(...)` of all its columns,
         into a new FK-free canonical table `migration_quarantine(id,
         source_table, source_rowid, row_json, reason, quarantined_at)`.
-      - The rebuild copy then skips them.
+      - The rebuild copy then skips them. Quarantining an `argument_sources`
+        row changes that Argument's synced list, so its `argument-sources/<A>`
+        revision is advanced (§8.5). Quarantined annotations and roles
+        already belong to a Work that no longer exists, so no live scope
+        reports them.
       - Only per-table counts are logged, which is privacy-safe.
 
       The table lives in `prks_data.db`, so it is backed up with the library.
@@ -1784,7 +1795,7 @@ exactly right.
 
 | Slice | Content | User-visible? | Depends on |
 | --- | --- | --- | --- |
-| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests; (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins pages rows; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
+| **A. Entities + integrity layer + deterministic backfill + mirror triggers** | Migration vN (§12.3 step 1), with `db_schema.sql` updated to match. **Acceptance criteria:** (1) fresh and upgraded DBs have the same schema, including the composite FKs and triggers of §4.1, and `validate_current_schema` checks them; (2) a negative test for each §4.1 invariant (`works` primary and citation pointers; Manifestation primary Asset; roles, argument sources and annotations owners); (3) legal-move cascade and pointer-target restrict tests; (4) the integrity query is empty, and `PRAGMA foreign_key_check` adds no new violations after the backfill; (5) `source_mime` preserved; (6) for Arguments with no quarantined row, the `argument_sources` rebuild renumbers without changing the observed list or its revision, and pins rows that have pages. A fixture that loses an orphan citation shows the survivors renumbered and the `argument-sources` revision advanced; (7) a parity test (legacy columns = the new rows) over fixture libraries covering video, inferred-video, no-file, annotations-without-file, shared-basename rows, metadata-only rows with `source_mime`/`thumb_*`, and quarantined legacy FK-orphan rows; (8) no filesystem access and no backup creation. No readers change. | No | this design |
 | **B. Asset fingerprint pass + ingest hashing** | Bounded, resumable hashing pass (§12.4). Compute `ingest_sha256` on the upload/import stream **before** linearization, for new Assets. No duplicate UI yet. | No | A |
 | **C. Projection module** | `work_projection.legacy_work` / `legacy_work_summary`. Move readers family by family (detail, browse/recent, folder/person/playlist summaries, BibTeX via `citation_record`), each with JSON parity tests and a byte-identical BibTeX test. | No | A |
 | **D. Asset authority** | vN+1: locator, source aggregate, materialization revisions and `thumb_page` owned by `assets`. `annotations.asset_id` authoritative and NOT NULL. Text index keyed by Asset. Cleanup and backup audit count Asset locators. Scope and revision copies (`asset-source`, `asset-annotation`). Legacy operations mapped to `origin_AS(W)`. Browser last-page key migration. | No | C |
