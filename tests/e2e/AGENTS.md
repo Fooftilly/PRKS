@@ -51,13 +51,14 @@ the real UI/offline/service-worker boundary.
 
 The first rationalized family is Work Tags. Transactional coalescing across a fresh
 store instance is owned by `tests/browser/run_local_store_selftest.js`, with one thin
-browser assertion that a remounted `work-tag-editor` still routes a post-reload
-opposite click through coalescing (`test_post_reload_opposite_edit_cancels_pending`).
-Lost-response retry identity is owned by `tests/browser/run_work_tag_sync_selftest.js`
-plus backend op-id replay/idempotency coverage. The Work-Tag E2Es therefore keep the
-user-visible offline/reload/reconnect, conflict-resolution UI, degraded catalog,
-cache-clear, durable-queue wiring, and Tag lifecycle flows rather than re-testing
-pure state-machine branches in Chromium.
+browser assertion that a remounted `work-tag-editor` still routes post-reload opposite
+clicks through coalescing in both UI directions — chip remove and search/picker
+re-add (`test_post_reload_opposite_edit_cancels_pending`). Lost-response retry
+identity is owned by `tests/browser/run_work_tag_sync_selftest.js` plus backend
+op-id replay/idempotency coverage. The Work-Tag E2Es therefore keep the user-visible
+offline/reload/reconnect, conflict-resolution UI, degraded catalog, cache-clear,
+durable-queue wiring, and Tag lifecycle flows rather than re-testing pure
+state-machine branches in Chromium.
 
 ### During implementation
 
