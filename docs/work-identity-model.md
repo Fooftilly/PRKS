@@ -1224,18 +1224,26 @@ Asset AS-…  (one File in the UI; owns annotations, page state, thumbnails)
   it never changes.
 - **Legacy Assets** never had their original bytes preserved, so their
   `ingest_sha256` stays **NULL**. PRKS must not invent it from bytes that have
-  since been materialized. **Legacy fallback compares like with like.**
-  Legacy `content_sha256` describes *working* bytes, which ingestion has
-  already linearized (`store_new_managed_pdf_*` →
-  `_finalize_exclusive_managed_create`). Comparing it with a new file's
-  pre-linearization `ingest_sha256` would miss even an identical upload. So
-  the fallback compares a legacy `content_sha256` with the new upload's
-  **post-linearization, pre-annotation** hash, which is the new Asset's
-  initial `content_sha256`, computed in the same ingestion step. This is
-  documented as weaker. It matches an unannotated legacy file only if the
-  linearizer produces the same bytes for the same input (same qpdf version
-  and deterministic IDs). It misses any file whose bytes PRKS has since
-  rewritten.
+  since been materialized. **Legacy Assets do not take part reliably in
+  exact-byte duplicate detection.** Their only hash, `content_sha256`,
+  describes working bytes that ingestion has already linearized.
+  `backend/pdf_linearize.py` runs `qpdf --linearize <in> <out>` **without**
+  `--deterministic-id`, and qpdf documents that such output is not
+  byte-for-byte reproducible (its document IDs have a random element). So the
+  same original PDF can produce different working bytes on every ingestion. A
+  "post-linearization hash" of a new upload therefore cannot be matched
+  against a legacy file. Adding `--deterministic-id` for future uploads would
+  not help either, because historical files were linearized under the old
+  invocation. The design therefore makes only one, no-false-positive, check:
+  - **Opportunistic legacy match.** If a legacy `content_sha256` equals a new
+    upload's raw `ingest_sha256`, the stored legacy bytes *are* the uploaded
+    bytes. This happens when linearization was skipped or disabled and the
+    file was never annotated. It is reported as an exact duplicate, because
+    equal hashes cannot be wrong.
+  - **Otherwise** a legacy file is found only through identifier and
+    metadata candidates (§10.3), which are suggestions, not exact matches.
+  - New Assets always carry `ingest_sha256`, computed on the raw incoming
+    stream, which is deterministic by definition. They take part fully.
 - **When a separate Asset is correct:** a different file the user brings in
   (another scan, another download, a copy annotated elsewhere, a re-captured
   snapshot). Such Assets have their own annotations and page state, and the
@@ -1285,7 +1293,7 @@ of them merges anything by itself**.
 
 | Level | Evidence | Confidence | Allowed automation |
 | --- | --- | --- | --- |
-| Exact Asset duplicate | equal `ingest_sha256`. For legacy files, the legacy `content_sha256` is compared with the new upload's post-linearization hash (§9.4) | Certain for the content | **Warn before import**, showing the existing Work. Never auto-link or auto-delete. |
+| Exact Asset duplicate | equal `ingest_sha256`. For legacy files there is only an opportunistic match: legacy `content_sha256` equal to the upload's raw `ingest_sha256`, which has no false positives. Legacy files otherwise have no reliable exact-match coverage (§9.4) | Certain for the content | **Warn before import**, showing the existing Work. Never auto-link or auto-delete. |
 | Identifier match | equal normalized DOI, ISBN-13, or arXiv ID (versionless → same work, versioned → same revision) | Strong for "same publication", but **not** proof of "same Work" (a DOI identifies one form) | Suggest. The user decides. |
 | Metadata similarity | normalized title, creator family names, year, publisher/journal | Weak | Suggest in a review list only. RapidFuzz may rank candidates (#42/#179). **Never decides.** |
 
@@ -1996,7 +2004,7 @@ exactly right.
 | **F. Role scope** | vN+3: role-type scope defaults, the uniqueness swap, `credits(M)`, and the role-sync scope for M-scoped roles. | No | E |
 | **G. Typed Version/File/Source API** | §13.3 read endpoints first, then mutations as canonical domain commands (#182/#199 pattern) with OpenAPI and openapi-core tests. New durable families declared per the sync guide. | API only | D, E, F |
 | **H. Versions UI** | "Add another version / file", set primary, open a specific Version or File, and a version picker for Copy citation, all behind §13.4's progressive disclosure. Follow `DESIGN.md` for Work detail composition. #61's secondary view builds on this. | **Yes** | G |
-| **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256`. For legacy files it compares `content_sha256` with the upload's post-linearization hash (§9.4). Offers the four choices in §10.2. | Yes | B, H |
+| **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256`, plus the opportunistic legacy match (legacy `content_sha256` = upload `ingest_sha256`, §9.4). **Stability test:** the same source PDF ingested several times, with linearization on, yields the same `ingest_sha256` every time while the working bytes and `content_sha256` differ. That proves the comparison key does not depend on qpdf's nondeterminism. A test also checks that an unlinearized, unannotated legacy file matches opportunistically, and that a linearized one is not claimed as an exact match. Offers the four choices in §10.2. | Yes | B, H |
 | **J. Identifier candidates + decline** | Normalized DOI/ISBN/arXiv candidates, a review list, and `duplicate_decisions`. | Yes | E, I |
 | **K. Merge / move workflow** | Command-level versions of the §4.1 transition tests, including each `empty_source` outcome. Ships `manifestation_credit_overrides` (§7.2) if it does not exist yet, and tests a credit-spelling collision. `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
 | **L. RapidFuzz evaluation** | A separate research/evaluation issue (dependency review, ranking quality on synthetic data). It only ranks; it never decides. | — | J |
