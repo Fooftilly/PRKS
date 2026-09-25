@@ -238,6 +238,21 @@
       "freshness": "raw-vendor: tracked in VERSION (GitHub release rsms/inter); Dependabot cannot manage font zip assets without altering the CSS/woff2 contract"
     },
     {
+      "name": "idb",
+      "scope": "vendor",
+      "authoritative_source": "frontend/vendor/idb/VERSION",
+      "manifest": "frontend/vendor/idb/VERSION",
+      "lockfile": null,
+      "generated_assets": [
+        "frontend/vendor/idb/idb.min.js",
+        "frontend/vendor/idb/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/idb/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": false,
+      "freshness": "raw-vendor: pinned idb@8.0.3 UMD build (jakearchibald/idb); #181 PoC for disposable offline-store Promise plumbing"
+    },
+    {
       "name": "python",
       "scope": "runtime",
       "authoritative_source": "dependency-inventory.json -> python_min_version",
