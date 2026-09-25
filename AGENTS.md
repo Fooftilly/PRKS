@@ -10,19 +10,23 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 
 - `backend/AGENTS.md`: backend architecture, privacy/logging, performance, persistence, backup/restore, indexing, schema, and mutation rules.
 - `frontend/AGENTS.md`: UI/runtime behavior, workspace navigation, settings, Saved Views, research surfaces, offline/PWA, and interaction feedback.
-- `tests/e2e/AGENTS.md`: browser E2E workflow, isolation, assertions/waits, debugging, and UX Interaction Tour policy.
+- `tests/AGENTS.md`: test-only routing to the production-domain instructions the test exercises.
+- `tests/e2e/AGENTS.md`: browser E2E workflow, isolation, assertions/waits, and debugging policy.
+- `tests/ux_tour/AGENTS.md`: UX Interaction Tour safety, interaction, artifact, and isolation policy.
 - `DESIGN.md`: canonical UI/interaction design authority. For UI work, read the relevant sections for the affected component rather than loading the whole document by default.
 - `docs/agent-context/sync-map.md`: routing map for the large local-first/offline specifications.
 - `docs/agent-workflows/cursor-projects.md`: recommended Cursor Projects delegation workflow; reference it for project/coordinator operation rather than treating it as an always-on engineering rule.
 
 Nested `AGENTS.md` files refine these root rules for their directory scope. The root rules remain authoritative when scopes overlap.
 
+For test-only changes, follow `tests/AGENTS.md` and load the scoped production-domain instructions for the behavior under test. Backend persistence/migration tests use `backend/AGENTS.md`; frontend/offline/sync tests use `frontend/AGENTS.md`; mixed-domain tests use both.
+
 ## Commands
 
 - Tests: `python run_tests.py` (unit). Browser E2E: `python run_tests.py --e2e` (installs Chromium into `.playwright-browsers/` if missing). Both: `python run_tests.py --all`. UX Interaction Tour (separate, opt-in, artifact-producing): `python run_tests.py --ux-tour`.
-- Full E2E gate: `python tests/e2e/run.py --jobs 4` (or `python run_tests.py --e2e` / `scripts/e2e full`). Runner enforces a 1200s hard limit (`PRKS_E2E_FULL_TIMEOUT`; expected ~7-10 min; over ~15 min is a hang to investigate). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See "E2E test workflow" / "E2E TESTING POLICY".
+- Full E2E gate: `python tests/e2e/run.py --jobs 4` (or `python run_tests.py --e2e` / `scripts/e2e full`). Runner enforces a 1200s hard limit (`PRKS_E2E_FULL_TIMEOUT`; expected ~7-10 min; over ~15 min is a hang to investigate). Debugging one failure: `python tests/e2e/run.py --jobs 1 <test id>`. See `tests/e2e/AGENTS.md` sections "E2E test workflow" / "E2E TESTING POLICY".
 - Agent/dev E2E loop (preferred): `python tests/e2e/run.py --smoke`, `--feature <group>`, `--affected`, `--last-failed`, or `--dev --feature <group>` — never iterate on the full suite. Convenience: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
-- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E feature/module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture --feature <group>` or a module path; never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>` or `--last-failed`, never by rerunning the suite. See "E2E TESTING POLICY".
+- **Never run browser E2E tests while iterating** — not the full suite, not a whole module — unless the behavior can only be verified in a browser. Use unit tests, Node selftests, static contracts and API tests instead. Run the relevant E2E feature/module once a vertical slice or the milestone implementation is finished (`python tests/e2e/run.py --jobs 4 --no-pointer-capture --feature <group>` or a module path; never raw `python -m unittest`, which is serial), and the full parallel suite once after that. Debug any failure with `--jobs 1 <test id>` or `--last-failed`, never by rerunning the suite. See `tests/e2e/AGENTS.md` section "E2E TESTING POLICY".
 - App, default for agents: `python prks_app.py --testing`
 - Real app or Compose: only with run-real authorization from the user
 - Git hooks: after clone, `./scripts/setup-git-hooks.sh` (sets local `core.hooksPath` to `.githooks`). Successful commits overwrite gitignored `prks-latest.zip` at the repo root with `git archive` of the new `HEAD`. Verify with `git config --get core.hooksPath` (expected: `.githooks`).
@@ -108,9 +112,9 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
 - `frontend/` UI (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs, `frontend/js/workspace-persistence.js` workspace localStorage, `frontend/js/ribbon-create.js` unified New File split button)
-- `frontend/js/offline-store.js` disposable IndexedDB client cache (see "Offline / PWA")
-- `frontend/js/offline-runtime.js` online/offline state, read-through/mutation-guard policy (see "Offline / PWA")
-- `frontend/sw.js` app-shell/static + managed-PDF service worker (see "Offline / PWA")
+- `frontend/js/offline-store.js` disposable IndexedDB client cache (see `frontend/AGENTS.md` section "Offline / PWA")
+- `frontend/js/offline-runtime.js` online/offline state, read-through/mutation-guard policy (see `frontend/AGENTS.md` section "Offline / PWA")
+- `frontend/sw.js` app-shell/static + managed-PDF service worker (see `frontend/AGENTS.md` section "Offline / PWA")
 - `tests/` unittest
 
 New File UI must use the canonical Work creation path (`#work-modal` / `POST /api/works`) rather than duplicate creation APIs.
