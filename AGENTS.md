@@ -17,7 +17,11 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 - `docs/agent-context/sync-map.md`: routing map for the large local-first/offline specifications.
 - `docs/agent-workflows/cursor-projects.md`: recommended Cursor Projects delegation workflow; reference it for project/coordinator operation rather than treating it as an always-on engineering rule.
 
-Nested `AGENTS.md` files refine these root rules for their directory scope. The root rules remain authoritative when scopes overlap.
+Nested `AGENTS.md` files refine these root rules for their directory scope.
+When both apply, Cursor's more-specific nested instructions take precedence.
+Do not encode conflicting overrides of load-bearing root invariants (storage
+safety, privacy/logging, issue taxonomy, etc.); keep nested files additive
+refinements and routers instead of relying on root precedence to win a conflict.
 
 For test-only changes, follow `tests/AGENTS.md` and load the scoped production-domain instructions for the behavior under test. Backend persistence/migration tests use `backend/AGENTS.md`; frontend/offline/sync tests use `frontend/AGENTS.md`; mixed-domain tests use both.
 
