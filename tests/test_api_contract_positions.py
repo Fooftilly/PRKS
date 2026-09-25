@@ -25,14 +25,17 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from openapi_core import OpenAPI
 from openapi_core.testing import MockRequest, MockResponse
+from pydantic import ValidationError
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.errors import ApiErrorEnvelope, validation_error_envelope
 from backend.api_contract.openapi import positions_openapi_document
 from backend.api_contract.positions import (
+    PositionArgumentSummary,
     PositionCreateRequest,
     PositionDetail,
     PositionSummary,
+    PositionSyncState,
     PositionUpdateRequest,
     parse_position_request,
 )
@@ -254,6 +257,117 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         out = dump_response(PositionDetail, payload)
         self.assertEqual(out["id"], "P-TEST")
         self.assertEqual(out["arguments"], [])
+        self.assertIn("description", out)
+        self.assertIn("created_at", out)
+        self.assertIn("updated_at", out)
+
+    def test_response_detail_requires_established_keys(self):
+        """Missing established response fields must fail — not silently default."""
+        base = {
+            "id": "P-TEST",
+            "name": "A",
+            "description": "",
+            "created_at": "2026-01-01 00:00:00",
+            "updated_at": "2026-01-01 00:00:00",
+            "arguments": [],
+        }
+        for key in (
+            "description",
+            "created_at",
+            "updated_at",
+            "arguments",
+        ):
+            incomplete = {k: v for k, v in base.items() if k != key}
+            with self.assertRaises(ValidationError):
+                PositionDetail.model_validate(incomplete)
+
+    def test_response_summary_requires_established_keys(self):
+        base = {
+            "id": "P-TEST",
+            "name": "A",
+            "description": None,
+            "created_at": "2026-01-01 00:00:00",
+            "updated_at": "2026-01-01 00:00:00",
+        }
+        for key in ("description", "created_at", "updated_at"):
+            incomplete = {k: v for k, v in base.items() if k != key}
+            with self.assertRaises(ValidationError):
+                PositionSummary.model_validate(incomplete)
+
+    def test_response_models_forbid_unexpected_fields(self):
+        detail = {
+            "id": "P-TEST",
+            "name": "A",
+            "description": "",
+            "created_at": "2026-01-01 00:00:00",
+            "updated_at": "2026-01-01 00:00:00",
+            "arguments": [],
+            "extra_field": "nope",
+        }
+        with self.assertRaises(ValidationError):
+            PositionDetail.model_validate(detail)
+        summary = {
+            "id": "P-TEST",
+            "name": "A",
+            "description": "",
+            "created_at": "2026-01-01 00:00:00",
+            "updated_at": "2026-01-01 00:00:00",
+            "sneaky": True,
+        }
+        with self.assertRaises(ValidationError):
+            PositionSummary.model_validate(summary)
+        with self.assertRaises(ValidationError):
+            PositionArgumentSummary.model_validate(
+                {
+                    "id": "A-1",
+                    "name": "n",
+                    "kind": "argument",
+                    "verdict_id": "V-1",
+                    "verdict_label": "Supports",
+                    "noise": 1,
+                }
+            )
+        with self.assertRaises(ValidationError):
+            PositionSyncState.model_validate(
+                {
+                    "position_id": "P-TEST",
+                    "fields": {"name": {"revision": 0}},
+                    "values": {"name": "x"},
+                }
+            )
+
+    def test_openapi_response_schemas_require_established_keys(self):
+        schemas = positions_openapi_document()["components"]["schemas"]
+        summary_required = set(schemas["PositionSummary"]["required"])
+        self.assertTrue(
+            {"id", "name", "description", "created_at", "updated_at"}
+            <= summary_required
+        )
+        detail_required = set(schemas["PositionDetail"]["required"])
+        self.assertTrue(
+            {
+                "id",
+                "name",
+                "description",
+                "created_at",
+                "updated_at",
+                "arguments",
+            }
+            <= detail_required
+        )
+        self.assertEqual(
+            schemas["PositionSummary"].get("additionalProperties"), False
+        )
+        self.assertEqual(
+            schemas["PositionDetail"].get("additionalProperties"), False
+        )
+        self.assertEqual(
+            schemas["PositionArgumentSummary"].get("additionalProperties"),
+            False,
+        )
+        self.assertEqual(
+            schemas["PositionSyncState"].get("additionalProperties"), False
+        )
 
     def test_error_envelope_omits_null_code(self):
         body = ApiErrorEnvelope(error="Position not found.").as_dict()

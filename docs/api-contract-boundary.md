@@ -62,8 +62,12 @@ Route extraction (#67) is a separate track; typed models do not require it.
    mutation** shared by ordinary HTTP and durable sync. Do not duplicate SQL
    inside the Pydantic model or a new adapter-only path.
 2. Add request/response models under `backend/api_contract/`. Prefer
-   `extra="ignore"` on requests to preserve today’s loose clients; forbid
-   unknown keys only when the product already rejects them.
+   `extra="ignore"` on **requests** to preserve today’s loose clients.
+   **Response** DTOs (and nested response records) should use
+   `extra="forbid"` and require established wire keys — nullable values may
+   stay `T | None`, but without defaults that omit the key from OpenAPI —
+   so the schema matches the production payload and `dump_response` cannot
+   silently synthesize or drop fields.
 3. Keep domain rules in the domain module. Request models check JSON types
    (string vs object vs array). Length, emptiness, control characters, and
    uniqueness remain in the domain.

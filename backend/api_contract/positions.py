@@ -80,7 +80,7 @@ class PositionUpdateRequest(BaseModel):
 class PositionArgumentSummary(BaseModel):
     """Argument/Stance row embedded on Position detail."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     name: str
@@ -90,28 +90,36 @@ class PositionArgumentSummary(BaseModel):
 
 
 class PositionSummary(BaseModel):
-    """Index row from GET /api/positions (no embedded arguments)."""
+    """Index row from GET /api/positions (no embedded arguments).
 
-    model_config = ConfigDict(extra="ignore")
+    Exact wire contract: established keys are required (nullable where the
+    DB allows null). Unknown keys are forbidden so GET dump_response cannot
+    silently drop or invent fields.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     name: str
-    description: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    description: Optional[str]
+    created_at: Optional[str]
+    updated_at: Optional[str]
 
 
 class PositionDetail(BaseModel):
-    """Detail / create / update response including Arguments targeting this Position."""
+    """Detail / create / update response including Arguments targeting this Position.
 
-    model_config = ConfigDict(extra="ignore")
+    Exact wire contract: ``arguments`` is always present (may be empty).
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     name: str
-    description: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    arguments: list[PositionArgumentSummary] = Field(default_factory=list)
+    description: Optional[str]
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    arguments: list[PositionArgumentSummary]
 
 
 class PositionDeleted(BaseModel):
@@ -129,7 +137,7 @@ class PositionSyncFieldState(BaseModel):
 class PositionSyncState(BaseModel):
     """GET /api/positions/{id}/sync-state — revisions only."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     position_id: str
     fields: dict[str, PositionSyncFieldState]

@@ -396,7 +396,8 @@
         "type": "object"
       },
       "PositionSummary": {
-        "description": "Index row from GET /api/positions (no embedded arguments).",
+        "additionalProperties": false,
+        "description": "Index row from GET /api/positions (no embedded arguments).\n\nExact wire contract: established keys are required (nullable where the\nDB allows null). Unknown keys are forbidden so GET dump_response cannot\nsilently drop or invent fields.",
         "properties": {
           "id": {
             "title": "Id",
@@ -415,7 +416,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Description"
           },
           "created_at": {
@@ -427,7 +427,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Created At"
           },
           "updated_at": {
@@ -439,17 +438,20 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Updated At"
           }
         },
         "required": [
           "id",
-          "name"
+          "name",
+          "description",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
       "PositionArgumentSummary": {
+        "additionalProperties": false,
         "description": "Argument/Stance row embedded on Position detail.",
         "properties": {
           "id": {
@@ -484,7 +486,8 @@
         "type": "object"
       },
       "PositionDetail": {
-        "description": "Detail / create / update response including Arguments targeting this Position.",
+        "additionalProperties": false,
+        "description": "Detail / create / update response including Arguments targeting this Position.\n\nExact wire contract: ``arguments`` is always present (may be empty).",
         "properties": {
           "id": {
             "title": "Id",
@@ -503,7 +506,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Description"
           },
           "created_at": {
@@ -515,7 +517,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Created At"
           },
           "updated_at": {
@@ -527,7 +528,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Updated At"
           },
           "arguments": {
@@ -540,7 +540,11 @@
         },
         "required": [
           "id",
-          "name"
+          "name",
+          "description",
+          "created_at",
+          "updated_at",
+          "arguments"
         ],
         "type": "object"
       },
@@ -574,6 +578,7 @@
         "type": "object"
       },
       "PositionSyncState": {
+        "additionalProperties": false,
         "description": "GET /api/positions/{id}/sync-state \u2014 revisions only.",
         "properties": {
           "position_id": {
