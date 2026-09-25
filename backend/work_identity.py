@@ -135,10 +135,40 @@ def is_parseable_inferred_video(source_kind, source_url, file_path) -> bool:
     return work_source_sync.canonical_source({"kind": "video", "url": source_url or ""}) is not None
 
 
+def _scope_key(*parts: str) -> str:
+    return json.dumps(list(parts), ensure_ascii=True, separators=(",", ":"))
+
+
+def _has_asset_bound_revision(conn: sqlite3.Connection, work_id: str) -> bool:
+    """Targeted form of `works_with_asset_bound_revisions` for one Work."""
+    exact = conn.execute(
+        "SELECT 1 FROM sync_entity_revisions WHERE (scope_type = ? AND scope_id = ?) "
+        "OR (scope_type = ? AND scope_id = ?) LIMIT 1",
+        (WORK_SOURCE_SCOPE_TYPE, _scope_key(work_id),
+         WORK_FIELD_SCOPE_TYPE, _scope_key(work_id, "thumb_page")),
+    ).fetchone()
+    if exact is not None:
+        return True
+    # pdf-annotation scopes are [W, annotation]; range-scan the W prefix on
+    # the primary key, the same way the annotation snapshot does.
+    prefix = _scope_key(work_id)[:-1] + ","
+    for (scope_id,) in conn.execute(
+        "SELECT scope_id FROM sync_entity_revisions WHERE scope_type = ? "
+        "AND scope_id >= ? AND scope_id < ?",
+        (PDF_ANNOTATION_SCOPE_TYPE, prefix, prefix + "\uffff"),
+    ).fetchall():
+        parts = _scope_work(scope_id, 2)
+        if parts and parts[0] == work_id:
+            return True
+    return False
+
+
 def origin_asset_required(conn: sqlite3.Connection, work_id: str) -> bool:
     """The full §12.2 Asset-creation predicate for one Work."""
     row = conn.execute(
-        "SELECT has_asset_value FROM legacy_work_asset_mirror WHERE work_id = ?", (work_id,)
+        "SELECT v.has_asset_value, w.source_kind, w.source_url, w.file_path "
+        "FROM legacy_work_asset_mirror v JOIN works w ON w.id = v.work_id "
+        "WHERE v.work_id = ?", (work_id,)
     ).fetchone()
     if row is None:
         return False
@@ -146,12 +176,56 @@ def origin_asset_required(conn: sqlite3.Connection, work_id: str) -> bool:
         return True
     if conn.execute("SELECT 1 FROM annotations WHERE work_id = ? LIMIT 1", (work_id,)).fetchone():
         return True
-    if work_id in works_with_asset_bound_revisions(conn):
+    if _has_asset_bound_revision(conn, work_id):
         return True
-    src = conn.execute(
-        "SELECT source_kind, source_url, file_path FROM works WHERE id = ?", (work_id,)
-    ).fetchone()
-    return bool(src) and is_parseable_inferred_video(src[0], src[1], src[2])
+    return is_parseable_inferred_video(row[1], row[2], row[3])
+
+
+def works_requiring_origin_asset(conn: sqlite3.Connection) -> Set[str]:
+    """Every live Work the full §12.2 predicate says needs `origin_AS(W)`.
+
+    Set-based twin of `origin_asset_required`, for the backfill and for
+    `mirror_drift`. The SQL view covers stored values; annotations, durable
+    revision scopes and the URL parser are added here because SQL cannot
+    express the last one and a trigger cannot see a Work's history.
+    """
+    live = {r[0] for r in conn.execute("SELECT id FROM works").fetchall()}
+    needed = {
+        r[0] for r in conn.execute(
+            "SELECT work_id FROM legacy_work_asset_mirror WHERE has_asset_value"
+        ).fetchall()
+    }
+    needed |= {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT a.work_id FROM annotations a JOIN works w ON w.id = a.work_id"
+        ).fetchall()
+    }
+    needed |= works_with_asset_bound_revisions(conn) & live
+    for work_id, source_kind, source_url, file_path in conn.execute(
+        "SELECT w.id, w.source_kind, w.source_url, w.file_path FROM works w "
+        "JOIN legacy_work_asset_mirror v ON v.work_id = w.id "
+        "WHERE v.kind = 'external_stream' AND NOT v.has_asset_value"
+    ).fetchall():
+        if is_parseable_inferred_video(source_kind, source_url, file_path):
+            needed.add(work_id)
+    return needed
+
+
+def reconcile_origin_asset(conn: sqlite3.Connection, work_id: str) -> Optional[str]:
+    """Keep the §12.2 rule holding after an ordinary Work write.
+
+    The mirror triggers cover every stored-value case, but a legacy
+    inferred-video Work (no kind, no file, a URL) only has video identity when
+    the URL parser accepts it, and SQLite cannot run that parser. The Python
+    write boundaries that can produce the shape -- a `source_url` field write
+    and a `file_path` PATCH -- call this in the same transaction, so a Work
+    reaching it after the migration gets the same deterministic Asset the
+    backfill would have given it.
+    """
+    existing = origin_asset_id(conn, work_id)
+    if existing is not None or not origin_asset_required(conn, work_id):
+        return existing
+    return ensure_origin_asset(conn, work_id)
 
 
 def origin_asset_id(conn: sqlite3.Connection, work_id: str) -> Optional[str]:
@@ -248,6 +322,8 @@ def mirror_drift(conn: sqlite3.Connection) -> List[Tuple[str, str, str]]:
     """Mirror parity: `(entity, work id, column)` where a mirrored copy differs.
 
     At schema 17 `works` is authoritative, so any difference is a mirror bug.
+    A Work the full §12.2 predicate says needs `origin_AS(W)` but has none is
+    reported as `("asset", W, "missing")`.
     Only rows still owned by their origin Work are compared -- a row a later
     command moved away no longer mirrors that Work.
     """
@@ -272,4 +348,8 @@ def mirror_drift(conn: sqlite3.Connection) -> List[Tuple[str, str, str]]:
         "(SELECT 1 FROM manifestations m WHERE m.origin_work_id = w.id)"
     ).fetchall():
         drift.append(("manifestation", work_id, "missing"))
+    with_asset = {r[0] for r in conn.execute(
+        "SELECT origin_work_id FROM assets WHERE origin_work_id IS NOT NULL").fetchall()}
+    for work_id in sorted(works_requiring_origin_asset(conn) - with_asset):
+        drift.append(("asset", work_id, "missing"))
     return drift

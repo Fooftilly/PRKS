@@ -932,6 +932,135 @@ class MirrorTests(WorkIdentityCase):
         self._assert_clean()
 
 
+class InferredVideoAfterMigrationTests(WorkIdentityCase):
+    """PR #202 review: the same inferred-video shape must get the same Asset
+    whether it existed before v17 or is produced by an ordinary write after."""
+
+    def setUp(self):
+        super().setUp()
+        self.db = self._open()
+
+    def _inferred_candidate(self):
+        w = self.db.add_work(title="Plain")
+        # A Work with no stored kind: the shape legacy and API-created rows have.
+        conn = _raw(self.storage.db_path)
+        conn.execute("UPDATE works SET source_kind = NULL WHERE id = ?", (w,))
+        conn.commit()
+        conn.close()
+        self.assertEqual(self._q("SELECT COUNT(*) FROM assets WHERE work_id = ?", (w,)), [(0,)])
+        return w
+
+    def _mf_url(self, w):
+        return self._q("SELECT url FROM manifestations WHERE origin_work_id = ?", (w,))[0][0]
+
+    def test_patching_a_video_url_creates_the_deterministic_stream_asset(self):
+        w = self._inferred_candidate()
+        self.db.update_work_metadata(w, {"source_url": YT})
+        self.assertEqual(
+            self._q("SELECT id, kind, url, storage_locator FROM assets WHERE work_id = ?", (w,)),
+            [(work_identity.backfill_asset_id(w), "external_stream", YT, None)])
+        self.assertIsNone(self._mf_url(w))
+        self._assert_clean()
+
+    def test_the_durable_field_write_takes_the_same_path(self):
+        from backend import work_metadata_sync
+        w = self._inferred_candidate()
+        conn = _raw(self.storage.db_path)
+        work_metadata_sync.set_field_on_conn(conn, w, "source_url", YT)
+        conn.commit()
+        conn.close()
+        self.assertEqual(self._q("SELECT kind FROM assets WHERE work_id = ?", (w,)),
+                         [("external_stream",)])
+        self._assert_clean()
+
+    def test_a_non_video_url_creates_no_asset_and_stays_on_the_manifestation(self):
+        w = self._inferred_candidate()
+        self.db.update_work_metadata(w, {"source_url": "https://example.org/article"})
+        self.assertEqual(self._q("SELECT COUNT(*) FROM assets WHERE work_id = ?", (w,)), [(0,)])
+        self.assertEqual(self._mf_url(w), "https://example.org/article")
+        self._assert_clean()
+
+    def test_removing_the_file_can_expose_an_inferred_video(self):
+        w = self.db.add_work(title="Was a PDF", file_path="/api/pdfs/w.pdf")
+        conn = _raw(self.storage.db_path)
+        conn.execute("UPDATE works SET source_kind = NULL, source_url = ? WHERE id = ?", (YT, w))
+        conn.commit()
+        conn.close()
+        self.db.update_work_metadata(w, {"file_path": ""})
+        self.assertEqual(self._q("SELECT kind, url FROM assets WHERE work_id = ?", (w,)),
+                         [("external_stream", YT)])
+        self._assert_clean()
+
+    def test_mirror_drift_reports_a_required_but_missing_asset(self):
+        w = self._inferred_candidate()
+        conn = _raw(self.storage.db_path)
+        try:
+            # Direct SQL bypasses the Python boundary: the check must see it.
+            conn.execute("UPDATE works SET source_url = ? WHERE id = ?", (YT, w))
+            self.assertIn(("asset", w, "missing"), work_identity.mirror_drift(conn))
+            work_identity.reconcile_origin_asset(conn, w)
+            self.assertEqual(work_identity.mirror_drift(conn), [])
+        finally:
+            conn.close()
+
+
+class StreamAssetTests(WorkIdentityCase):
+    """PR #202 review (Qodo): an external stream never claims managed bytes."""
+
+    def test_video_with_a_managed_path_projects_no_locator(self):
+        db = self._open()
+        w = db.add_work(title="Clip", source_kind="video", source_url=YT)
+        db.update_work_metadata(w, {"file_path": "/api/pdfs/stray.pdf"})
+        self.assertEqual(
+            self._q("SELECT kind, storage_locator, media_type FROM assets WHERE work_id = ?", (w,)),
+            [("external_stream", None, None)])
+        self._assert_clean()
+
+    def test_video_with_a_managed_path_after_migration(self):
+        def raw(conn, ids):
+            conn.execute("UPDATE works SET source_kind = 'video', source_url = ?, "
+                         "file_path = '/api/pdfs/stray.pdf' WHERE id = ?", (YT, ids["w"]))
+        ids = self._v16(lambda db: {"w": db.add_work(title="Clip")}, raw)
+        self._open()
+        self.assertEqual(
+            self._q("SELECT kind, storage_locator FROM assets WHERE work_id = ?", (ids["w"],)),
+            [("external_stream", None)])
+        self._assert_clean()
+
+
+class RevisionScopeShapeTests(WorkIdentityCase):
+    """PR #202 review (Qodo): only well-formed Asset-bound scopes create Assets."""
+
+    def test_malformed_scopes_create_no_asset(self):
+        db = self._open()
+        w = db.add_work(title="Plain")
+        bad = [
+            ("work-source", _scope(w, "extra")),
+            ("work-source", json.dumps([1])),
+            ("pdf-annotation", _scope(w)),
+            ("pdf-annotation", json.dumps([w, 7])),
+            ("pdf-annotation", _scope(w, "a", "b")),
+            ("work-field", _scope(w, "thumb_page", "x")),
+            ("work-field", json.dumps([w, None])),
+            ("work-field", json.dumps({"0": w, "1": "thumb_page"})),
+            ("work-source", "not json"),
+        ]
+        conn = _raw(self.storage.db_path)
+        try:
+            for scope_type, scope_id in bad:
+                conn.execute("INSERT INTO sync_entity_revisions (scope_type, scope_id, revision) "
+                             "VALUES (?, ?, 1)", (scope_type, scope_id))
+            conn.commit()
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0], 0)
+            conn.execute("INSERT INTO sync_entity_revisions (scope_type, scope_id, revision) "
+                         "VALUES ('pdf-annotation', ?, 1)", (_scope(w, "ann-1"),))
+            conn.commit()
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0], 1)
+        finally:
+            conn.close()
+        self._assert_clean()
+
+
 # ---------------------------------------------------------------------------
 # I10 / D2: the migration never touches the filesystem
 # ---------------------------------------------------------------------------

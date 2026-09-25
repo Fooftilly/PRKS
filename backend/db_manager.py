@@ -2919,6 +2919,9 @@ class PRKSDatabase:
                     raise ValueError(str(exc)) from exc
             for field, value in synced.items():
                 work_metadata_sync.set_field_on_conn(conn, work_id, field, value)
+            if "file_path" in plain:
+                # Removing a file can leave a URL-only inferred video (#60).
+                work_identity.reconcile_origin_asset(conn, work_id)
             if old_file_path is not None:
                 new_file_path = (
                     "" if plain.get("file_path") is None

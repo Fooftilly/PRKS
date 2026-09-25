@@ -2401,7 +2401,7 @@ SELECT
      OR COALESCE(s.canonical_annotation_set_revision, 0) <> 0
      OR COALESCE(s.materialized_pdf_annotation_revision, 0) <> 0) AS has_asset_value,
     CASE WHEN s.is_stream THEN 'external_stream' ELSE 'managed_file' END AS kind,
-    s.locator AS storage_locator,
+    CASE WHEN s.is_stream THEN NULL ELSE s.locator END AS storage_locator,
     s.provider AS provider,
     s.provider_id AS provider_id,
     CASE WHEN s.is_stream THEN s.source_url END AS url,
@@ -2678,9 +2678,18 @@ END;
 CREATE TRIGGER sync_revisions_mirror_asset_ai
 AFTER INSERT ON sync_entity_revisions
 WHEN NEW.scope_type IN ('work-source', 'pdf-annotation', 'work-field')
- AND json_valid(NEW.scope_id)
- AND json_type(NEW.scope_id) = 'array'
- AND (NEW.scope_type <> 'work-field' OR json_extract(NEW.scope_id, '$[1]') IS 'thumb_page')
+ AND CASE WHEN json_valid(NEW.scope_id) AND json_type(NEW.scope_id) = 'array'
+          THEN json_type(NEW.scope_id, '$[0]') IS 'text'
+           AND CASE NEW.scope_type
+                   WHEN 'work-source' THEN json_array_length(NEW.scope_id) = 1
+                   WHEN 'pdf-annotation' THEN json_array_length(NEW.scope_id) = 2
+                        AND json_type(NEW.scope_id, '$[1]') IS 'text'
+                   ELSE json_array_length(NEW.scope_id) = 2
+                        AND json_type(NEW.scope_id, '$[1]') IS 'text'
+                        AND json_extract(NEW.scope_id, '$[1]') IS 'thumb_page'
+               END
+          ELSE 0
+     END
 BEGIN
     INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
                         provider, provider_id, url, media_type, thumb_page, thumb_url,
@@ -2848,25 +2857,7 @@ def _v17_backfill(conn: sqlite3.Connection) -> None:
         "(SELECT m.id FROM manifestations m WHERE m.origin_work_id = works.id)"
     )
 
-    live = set(work_ids)
-    needs_asset = {
-        r[0] for r in conn.execute(
-            "SELECT work_id FROM legacy_work_asset_mirror WHERE has_asset_value"
-        ).fetchall()
-    }
-    needs_asset |= {
-        r[0] for r in conn.execute(
-            "SELECT DISTINCT a.work_id FROM annotations a JOIN works w ON w.id = a.work_id"
-        ).fetchall()
-    }
-    needs_asset |= work_identity.works_with_asset_bound_revisions(conn) & live
-    for work_id, source_kind, source_url, file_path in conn.execute(
-        "SELECT w.id, w.source_kind, w.source_url, w.file_path FROM works w "
-        "JOIN legacy_work_asset_mirror v ON v.work_id = w.id "
-        "WHERE v.kind = 'external_stream' AND NOT v.has_asset_value"
-    ).fetchall():
-        if work_identity.is_parseable_inferred_video(source_kind, source_url, file_path):
-            needs_asset.add(work_id)
+    needs_asset = work_identity.works_requiring_origin_asset(conn)
     for work_id in sorted(needs_asset):
         if work_identity.ensure_origin_asset(conn, work_id) is None:
             raise MigrationError("backfill_unmapped", "A Work could not be backfilled.")

@@ -671,7 +671,7 @@ SELECT
      OR COALESCE(s.canonical_annotation_set_revision, 0) <> 0
      OR COALESCE(s.materialized_pdf_annotation_revision, 0) <> 0) AS has_asset_value,
     CASE WHEN s.is_stream THEN 'external_stream' ELSE 'managed_file' END AS kind,
-    s.locator AS storage_locator,
+    CASE WHEN s.is_stream THEN NULL ELSE s.locator END AS storage_locator,
     s.provider AS provider,
     s.provider_id AS provider_id,
     CASE WHEN s.is_stream THEN s.source_url END AS url,
@@ -948,9 +948,18 @@ END;
 CREATE TRIGGER sync_revisions_mirror_asset_ai
 AFTER INSERT ON sync_entity_revisions
 WHEN NEW.scope_type IN ('work-source', 'pdf-annotation', 'work-field')
- AND json_valid(NEW.scope_id)
- AND json_type(NEW.scope_id) = 'array'
- AND (NEW.scope_type <> 'work-field' OR json_extract(NEW.scope_id, '$[1]') IS 'thumb_page')
+ AND CASE WHEN json_valid(NEW.scope_id) AND json_type(NEW.scope_id) = 'array'
+          THEN json_type(NEW.scope_id, '$[0]') IS 'text'
+           AND CASE NEW.scope_type
+                   WHEN 'work-source' THEN json_array_length(NEW.scope_id) = 1
+                   WHEN 'pdf-annotation' THEN json_array_length(NEW.scope_id) = 2
+                        AND json_type(NEW.scope_id, '$[1]') IS 'text'
+                   ELSE json_array_length(NEW.scope_id) = 2
+                        AND json_type(NEW.scope_id, '$[1]') IS 'text'
+                        AND json_extract(NEW.scope_id, '$[1]') IS 'thumb_page'
+               END
+          ELSE 0
+     END
 BEGIN
     INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
                         provider, provider_id, url, media_type, thumb_page, thumb_url,
