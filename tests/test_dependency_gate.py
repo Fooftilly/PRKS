@@ -25,11 +25,13 @@ from backend.dependency_gate import (
     format_pip_install_command,
     format_venv_create_commands,
     parse_requirements_pins,
+    pinned_openapi_core_version,
     pinned_playwright_version,
     python_min_version,
     remediation_message,
     run_repo_gate,
     run_runtime_gate,
+    run_unit_contract_gate,
     validate_dockerfile,
     validate_installed_pins,
     validate_inventory,
@@ -463,6 +465,85 @@ class InstalledPinTests(unittest.TestCase):
             version_lookup=lambda n: {"PyMuPDF": "1.28.2", "Pillow": "12.3.0"}[n],
         )
         self.assertTrue(result.ok)
+
+    def test_unit_contract_gate_requires_openapi_core_only(self):
+        """Unit preflight must check openapi-core without requiring Playwright."""
+        pin = pinned_openapi_core_version(_PROJECT)
+        dev_pins = parse_requirements_pins(
+            (_PROJECT / "requirements-dev.txt").read_text()
+        )
+        self.assertEqual(pin, dev_pins["openapi-core"])
+        runtime_pins = parse_requirements_pins(
+            (_PROJECT / "requirements.txt").read_text()
+        )
+        seen: list[str] = []
+
+        def lookup(name: str) -> str | None:
+            seen.append(name)
+            if name == "openapi-core":
+                return pin
+            return runtime_pins.get(name)
+
+        result = run_unit_contract_gate(
+            repo_root=_PROJECT,
+            version_lookup=lookup,
+            current_python=(3, 12, 0),
+        )
+        self.assertTrue(result.ok, result.issues)
+        self.assertIn("openapi-core", seen)
+        self.assertNotIn("playwright", seen)
+
+    def test_unit_contract_gate_fails_when_openapi_core_missing(self):
+        runtime_pins = parse_requirements_pins(
+            (_PROJECT / "requirements.txt").read_text()
+        )
+
+        def lookup(name: str) -> str | None:
+            if name == "openapi-core":
+                return None
+            return runtime_pins.get(name)
+
+        result = run_unit_contract_gate(
+            repo_root=_PROJECT,
+            version_lookup=lookup,
+            current_python=(3, 12, 0),
+        )
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(i.code == "missing_package" for i in result.issues),
+            result.issues,
+        )
+
+    def test_unit_contract_gate_missing_requirements_dev_is_missing_requirements(self):
+        """Absent requirements-dev must not raise FileNotFoundError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text(
+                "PyMuPDF==1.28.2\nPillow==12.3.0\npydantic==2.13.5\n",
+                encoding="utf-8",
+            )
+            (root / "dependency-inventory.json").write_text(
+                json.dumps({"python_min_version": [3, 12], "dependencies": []}),
+                encoding="utf-8",
+            )
+
+            def lookup(name: str) -> str | None:
+                return {
+                    "PyMuPDF": "1.28.2",
+                    "Pillow": "12.3.0",
+                    "pydantic": "2.13.5",
+                }.get(name)
+
+            result = run_unit_contract_gate(
+                repo_root=root,
+                version_lookup=lookup,
+                current_python=(3, 12, 0),
+            )
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(i.code == "missing_requirements" for i in result.issues),
+            result.issues,
+        )
 
 
 class RemediationMessageTests(unittest.TestCase):
@@ -987,13 +1068,15 @@ class RepoGateLiveTests(unittest.TestCase):
         )
 
     def test_test_gate_workflow_pins_match_requirements(self):
-        """CI install must name the same == pins as requirements.txt (Sonar
-        rejects unlocked `-r` installs; keep the two sources equal).
+        """CI install must name runtime == pins plus openapi-core (Sonar
+        rejects unlocked `-r` installs; keep the sources equal).
 
         Assert against the install step's executable `run` args only — a pin
         or `--only-binary` mention in a comment must not satisfy the check.
-        Package pins collected from that argv must equal requirements.txt;
-        bare names, ``-r``/``-e``, wheels, and URL/VCS sources are refused.
+        Package pins collected from that argv must equal requirements.txt
+        union the openapi-core pin from requirements-dev.txt (Positions
+        contract validation is non-optional in this job); bare names,
+        ``-r``/``-e``, wheels, and URL/VCS sources are refused.
         A literal Install body must be exactly one non-comment command — the
         approved ``python -m pip install``.
         Invert policy: exactly two ``run:`` steps (Install + ``run_tests.py``);
@@ -1002,6 +1085,14 @@ class RepoGateLiveTests(unittest.TestCase):
         (and similar) env is refused.
         """
         pins = parse_requirements_pins((_PROJECT / "requirements.txt").read_text())
+        dev_pins = parse_requirements_pins(
+            (_PROJECT / "requirements-dev.txt").read_text()
+        )
+        # Unit/API/contract job installs runtime pins plus openapi-core so
+        # OpenAPI request/response validation cannot skipTest in CI (#180).
+        self.assertIn("openapi-core", dev_pins)
+        expected_pins = dict(pins)
+        expected_pins["openapi-core"] = dev_pins["openapi-core"]
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
         )
@@ -1017,7 +1108,7 @@ class RepoGateLiveTests(unittest.TestCase):
         # Two-way equality via fail-closed operand walk: every argv token after
         # install is an approved option or an exact name==version pin.
         install_pins = parse_test_gate_pip_install_pins(pip_args)
-        self.assertEqual(install_pins, pins)
+        self.assertEqual(install_pins, expected_pins)
 
     def _minimal_allowlisted_workflow(self, extra_step: str = "") -> str:
         """Install + run_tests skeleton; optional extra YAML step(s) appended."""

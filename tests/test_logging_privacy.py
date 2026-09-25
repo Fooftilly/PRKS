@@ -162,6 +162,11 @@ class TestSafeRoute(unittest.TestCase):
         self.assertEqual(safe_route("/api/concepts/C-ABC/parents"), "/api/concepts/:id/parents")
         self.assertEqual(safe_route("/api/arguments/A-ABC/targets"), "/api/arguments/:id/targets")
         self.assertEqual(safe_route("/api/positions/P-ABC"), "/api/positions/:id")
+        self.assertEqual(safe_route("/api/openapi.json"), "/api/openapi.json")
+        self.assertEqual(
+            safe_route("/api/openapi/positions.json"),
+            "/api/openapi/positions.json",
+        )
         self.assertEqual(safe_route("/api/argument-verdicts"), "/api/argument-verdicts")
         self.assertEqual(safe_route("/api/research-graph"), "/api/research-graph")
         self.assertEqual(safe_route("/api/research-graph?people=1"), "/api/research-graph")

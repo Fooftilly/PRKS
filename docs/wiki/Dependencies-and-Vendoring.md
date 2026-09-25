@@ -6,7 +6,7 @@ PRKS deliberately keeps its runtime dependency surface small and makes dependenc
 
 Exact runtime package pins live in `requirements.txt`. PRKS validates the running Python version and installed package versions before normal startup work.
 
-Development-only Python tooling is declared separately in `requirements-dev.txt`.
+Development-only Python tooling is declared separately in `requirements-dev.txt` (Playwright for E2E, `openapi-core` for the unit-contract preflight). Contributors who run `python run_tests.py` must install both files; a runtime-only install is enough to run the app, not the fast suite.
 
 The application must not silently install or upgrade packages at runtime.
 

@@ -26,7 +26,29 @@
       "dependabot_monitored": true
     },
     {
+      "name": "pydantic",
+      "scope": "runtime",
+      "authoritative_source": "requirements.txt",
+      "manifest": "requirements.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
       "name": "playwright",
+      "scope": "test",
+      "authoritative_source": "requirements-dev.txt",
+      "manifest": "requirements-dev.txt",
+      "lockfile": null,
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": true,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "openapi-core",
       "scope": "test",
       "authoritative_source": "requirements-dev.txt",
       "manifest": "requirements-dev.txt",

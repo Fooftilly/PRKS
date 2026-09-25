@@ -159,17 +159,26 @@ See [Storage, Backup, and Restore](docs/wiki/Storage-Backup-and-Restore.md) befo
 
 ## Development
 
-Fast test suite:
+Install runtime pins plus development/test tooling (includes `openapi-core` for the unit-contract preflight that `python run_tests.py` always runs):
 
 ```bash
-python run_tests.py
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Full browser E2E gate:
+Fast test suite (no Chromium):
 
 ```bash
-python run_tests.py --e2e
+./.venv/bin/python run_tests.py
 ```
+
+Full browser E2E gate (Playwright; Chromium installs into `.playwright-browsers/` if missing):
+
+```bash
+./.venv/bin/python run_tests.py --e2e
+```
+
+A runtime-only install (`requirements.txt` alone) is enough to run `prks_app.py`, but not enough for `run_tests.py`: the unit suite preflights `openapi-core` from `requirements-dev.txt`.
 
 Use [Developer Reference](docs/wiki/Developer-Reference.md) for targeted E2E modes, UX tours, browser fixtures, Sonar tooling, project layout, and the local post-commit archive. Contributor/agent rules are authoritative in [AGENTS.md](AGENTS.md).
 

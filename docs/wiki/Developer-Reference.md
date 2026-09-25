@@ -4,6 +4,14 @@ This page collects detailed contributor commands that are useful to humans worki
 
 The authoritative contributor/agent rules remain in [AGENTS.md](https://github.com/Fooftilly/PRKS/blob/master/AGENTS.md). UI rules remain in [DESIGN.md](https://github.com/Fooftilly/PRKS/blob/master/DESIGN.md).
 
+## Typed API boundary (#180 / #45)
+
+Positions is the first HTTP family with Pydantic request/response models at the
+adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
+for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
+Live fragment: `GET /api/openapi.json`. Checked-in artifact:
+`docs/api/openapi-positions.json`.
+
 ## UI design
 
 `DESIGN.md` is authoritative for PRKS visual and interaction work. New UI primitives must be specified there and shown in `tests/browser/design_system.html` before they are used in production. Do not treat a generic design skill as a license to replace Inter, round the chrome, or add decorative surfaces.
@@ -18,12 +26,17 @@ Then open the printed origin’s `/tests/browser/design_system.html?theme=light`
 
 ## Development and tests
 
+Install both requirement files first. The unflagged unit suite always preflights
+`openapi-core` from `requirements-dev.txt` (Playwright is only needed for `--e2e`):
+
 ```bash
-python run_tests.py          # unit/API/structural/Node (no Chromium)
-python run_tests.py --e2e    # real Chromium + real PRKS server (full gate)
-python run_tests.py --all    # unit suite, then E2E
-python run_tests.py --ux-tour                    # UX interaction tour (see below)
-PRKS_UX_RECORD=1 python run_tests.py --ux-tour   # record every scenario for review
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+./.venv/bin/python run_tests.py          # unit/API/structural/Node (no Chromium)
+./.venv/bin/python run_tests.py --e2e    # real Chromium + real PRKS server (full gate)
+./.venv/bin/python run_tests.py --all    # unit suite, then E2E
+./.venv/bin/python run_tests.py --ux-tour                    # UX interaction tour (see below)
+PRKS_UX_RECORD=1 ./.venv/bin/python run_tests.py --ux-tour   # record every scenario for review
 ```
 
 ### Optional SonarQube CLI (Claude Code)
@@ -123,10 +136,11 @@ PRKS separates **freshness discovery** (Dependabot / optional `python scripts/de
 | Mode | What it checks |
 | ---- | -------------- |
 | `--runtime` | Python min version + exact `requirements.txt` pins (used at `prks_app.py` startup) |
-| `--test` | Runtime + `requirements-dev.txt` (Playwright) |
+| `--unit-contract` | Runtime + pinned `openapi-core` only (unit/API contract discovery; no Playwright) |
+| `--test` | Runtime + `requirements-dev.txt` (Playwright and openapi-core) |
 | `--repo` | Inventory, npm package.json↔lockfile, vendor VERSION/SHA-256, PDF BUILD-MANIFEST hashes, `DEPENDENCY-MANIFEST.json`, SW cache revision, no CDN loaders |
 
-`python run_tests.py` preflights `--repo` + `--runtime` before unit tests; `--e2e` preflights `--test`.
+`python run_tests.py` preflights `--repo` + `--runtime` + `--unit-contract` before unit tests; `--e2e` preflights `--test`.
 
 Authoritative pins live in `requirements*.txt`, `tools/*/package.json`, the `Dockerfile` (`FROM python:X.Y` and direct `apt-get install` packages), and (for Inter) `frontend/vendor/inter/VERSION`. `dependency-inventory.json` references those sources — it does not duplicate version literals when an authoritative file already exists.
 

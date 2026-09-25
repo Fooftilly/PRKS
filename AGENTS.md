@@ -53,6 +53,7 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `prks_app.py` CLI (the only process entry)
 - `backend/server.py` HTTP adapter lifecycle: host/origin checks, request-size limits, library access gate, method dispatch, status/headers, JSON/ETags, static files
 - `backend/api/` optional domain HTTP controllers extracted from `server.py` (parse/validate request shape, invoke domain, map errors to status/bodies). First family: `backend/api/saved_views.py`
+- `backend/api_contract/` typed HTTP request/response DTOs + OpenAPI fragment (#180); domain still receives plain values
 - `backend/storage/config.py` frozen storage snapshot and env parser
 - `backend/storage/paths.py` storage-path derivation and testing-mode containment
 - `backend/db_manager.py` SQLite

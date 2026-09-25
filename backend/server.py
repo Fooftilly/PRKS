@@ -54,6 +54,18 @@ from backend.research_index import (
 )
 from backend.research_network import ResearchError
 import backend.research_network as research_network
+from backend.api_contract.boundary import dump_response
+from backend.api_contract.errors import research_error_envelope
+from backend.api_contract.openapi import positions_openapi_document
+from backend.api_contract.positions import (
+    PositionCreateRequest,
+    PositionDeleted,
+    PositionDetail,
+    PositionSummary,
+    PositionSyncState,
+    PositionUpdateRequest,
+    parse_position_request,
+)
 from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
@@ -1264,19 +1276,24 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, item)
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
+                req, err = parse_position_request(PositionUpdateRequest, data)
+                if err is not None:
+                    self.send_json(400, err)
                     return
                 try:
                     item = research_network.update_position(
                         db,
                         pid,
-                        name=data.get('name') if 'name' in data else None,
-                        description=data.get('description') if 'description' in data else None,
+                        **req.domain_field_kwargs(),
                     )
                 except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    self.send_json(
+                        e.http_status,
+                        research_error_envelope(message=str(e), code=e.code),
+                    )
                     return
+                # Domain already committed; do not dump_response here (see
+                # docs/api-contract-boundary.md — post-commit response validation).
                 self.send_json(200, item)
             elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
                 aid = unquote(path.split('/')[-1])
@@ -1564,9 +1581,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 try:
                     research_network.delete_position(db, pid)
                 except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    self.send_json(
+                        e.http_status,
+                        research_error_envelope(message=str(e), code=e.code),
+                    )
                     return
-                self.send_json(200, {'status': 'deleted'})
+                self.send_json(200, dump_response(PositionDeleted, {'status': 'deleted'}))
             elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
                 aid = unquote(path.split('/')[-1])
                 try:
@@ -2269,15 +2289,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 item['mention_count'] = research_index.mention_count_for_concept(cid)
                 item['mentions'] = research_index.concept_backlinks(cid, db)
                 self.send_json(200, item)
+            elif path == '/api/openapi.json' or path == '/api/openapi/positions.json':
+                # Vertical-slice OpenAPI for Positions (#180 / #45). Additive;
+                # not yet the full PRKS surface.
+                self.send_json(200, positions_openapi_document())
             elif path == '/api/positions':
-                self.send_json(200, research_network.list_positions(db))
+                rows = research_network.list_positions(db)
+                self.send_json(200, dump_response(PositionSummary, rows))
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
                 item = research_network.get_position(db, pid)
                 if item:
-                    self.send_json(200, item)
+                    self.send_json(200, dump_response(PositionDetail, item))
                 else:
-                    self.send_json(404, {'error': 'Position not found.'})
+                    self.send_json(
+                        404,
+                        research_error_envelope(message='Position not found.'),
+                    )
             elif path == '/api/argument-verdicts':
                 self.send_json(200, research_network.list_verdicts(db))
             elif path == '/api/arguments':
@@ -2343,13 +2371,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # true.
                 data = db.get_position_sync_state(unquote(path.split('/')[3]))
                 if data is None:
-                    self.send_json(404, {"error": "Position not found"})
+                    self.send_json(
+                        404,
+                        research_error_envelope(message="Position not found"),
+                    )
                 else:
-                    etag = db.etag_for_representation("position-state", data)
+                    body = dump_response(PositionSyncState, data)
+                    etag = db.etag_for_representation("position-state", body)
                     if self._prks_if_none_match(etag):
                         self._send_json_not_modified(etag)
                         return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+                    self.send_json(200, body, etag=etag, precondition_checked=True)
             elif path.startswith('/api/arguments/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
                 # REVISIONS ONLY, aggregates included: the Argument detail
                 # already carries its sources and its targets, and a second
@@ -3056,16 +3088,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 self.send_json(201, item)
             elif path == '/api/positions':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
+                req, err = parse_position_request(PositionCreateRequest, data)
+                if err is not None:
+                    self.send_json(400, err)
                     return
                 try:
                     item = research_network.create_position(
-                        db, data.get('name'), data.get('description', '') or ''
+                        db, req.name, req.description
                     )
                 except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
+                    self.send_json(
+                        e.http_status,
+                        research_error_envelope(message=str(e), code=e.code),
+                    )
                     return
+                # Domain already committed; do not dump_response here (see
+                # docs/api-contract-boundary.md — post-commit response validation).
                 self.send_json(201, item)
             elif path == '/api/arguments':
                 if not isinstance(data, dict):

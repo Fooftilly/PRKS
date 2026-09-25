@@ -2,6 +2,17 @@
 
 PRKS uses layered tests. Contributors should run the cheapest test that proves a change while iterating, then use browser E2E for behaviors that truly require a real browser.
 
+## Setup
+
+Install runtime pins **and** development/test tooling before the fast suite. `python run_tests.py` preflights `openapi-core` (from `requirements-dev.txt`) even when Chromium/Playwright is not needed:
+
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+```
+
+A runtime-only install is enough to run the app, not enough to run the unit suite.
+
 ## Main runner
 
 ```bash
