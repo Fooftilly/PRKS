@@ -24,6 +24,16 @@ Run-real. An instruction to run the real app or Compose authorizes normal applic
 
 Destructive. Deleting PDFs, deleting, resetting, or replacing the production DB, or clearing production storage needs a separate explicit confirmation that names that action. Run-real is not that confirmation.
 
+## Implementation issues
+
+Concrete, bounded implementation work uses `.github/ISSUE_TEMPLATE/engineering-task.md`. This includes approved feature slices, bug fixes, refactors, tooling/CI work, test infrastructure, maintenance, and other work where the desired outcome is already actionable. Do not open an unstructured blank issue for this work.
+
+The implementation-task template is distinct from the tracking templates: use an Engineering Audit Finding for an engineering observation that is not automatically approved work, a UX/UI Finding for user-facing UX/UI observations, and a Roadmap issue for broader planning/direction that should later be decomposed. When implementation follows from a finding or roadmap item, keep the original tracking issue and link it from the implementation task rather than rewriting the tracking issue into a task.
+
+Before creating an implementation issue, search both open and closed issues for overlapping work. Keep the task focused enough for one PR or a small coherent PR sequence. Record the goal, context, bounded scope, observable acceptance criteria, validation plan, non-goals/boundaries, and related work. Bug fixes and invariant changes require regression coverage in the acceptance criteria.
+
+Apply the relevant `priority:*` and `area:*` labels, and use `bug` or `enhancement` only when appropriate. Do not apply the maintainer-controlled `candidate`/`accepted` lifecycle labels to ordinary implementation tasks; those labels belong to roadmap, audit-finding, and UX-finding tracking flows.
+
 ## Engineering audit findings
 
 Engineering/audit findings are tracked canonically as GitHub Issues with the `audit-finding` label, titles starting with `[Audit Finding]`, and a stable `EF-xxx` ID in the issue body. The label is the primary search key; the title prefix remains a human-readable taxonomy and fallback. Audit findings are separate from roadmap issues. Roadmap issues use the `roadmap` label as their primary search key, with the `[Roadmap]` title prefix as a human-readable fallback. The taxonomy label does not imply maintainer approval.
