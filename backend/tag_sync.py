@@ -22,6 +22,8 @@ name the id this device minted, and silently redirecting them to a different
 Tag is exactly what the Work-Tag family refuses to do when a Tag turns out to
 have been merged.
 """
+import json
+
 from backend.entity_ids import is_distributed
 
 MAX_NAME_BYTES = 200
@@ -107,6 +109,86 @@ def apply_create(db, conn, op, received_at):
                  "tag": _row(conn, tag_id)}
 
 
+def entities_linked_to_tag_on_conn(conn, tag_id):
+    """Works and folders whose rendered tag list contains this tag.
+
+    Offline coherence needs these from the canonical boundary: a cached Work
+    detail embeds `work.tags[]` and a cached Folder detail `folder.tags[]`, so
+    deleting or merging a tag stales exactly these entities. Collected here so
+    the answer is right regardless of which route, tab or UI initiated the
+    mutation -- and right even when the client never loaded those relationships.
+
+    Must run BEFORE the delete/merge destroys the link rows.
+    """
+    works = [
+        r["work_id"]
+        for r in conn.execute(
+            "SELECT work_id FROM work_tags WHERE tag_id = ?", (tag_id,)
+        ).fetchall()
+        if r["work_id"]
+    ]
+    folders = [
+        r["folder_id"]
+        for r in conn.execute(
+            "SELECT folder_id FROM folder_tags WHERE tag_id = ?", (tag_id,)
+        ).fetchall()
+        if r["folder_id"]
+    ]
+    option_works = set(works)
+    for row in conn.execute(
+            "SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'work-tag'"):
+        pair = json.loads(row["scope_id"])
+        if pair[1] == tag_id:
+            option_works.add(pair[0])
+    option_folders = set(folders)
+    for row in conn.execute(
+            "SELECT scope_id FROM sync_entity_revisions WHERE scope_type = 'folder-tag'"):
+        pair = json.loads(row["scope_id"])
+        if pair[1] == tag_id:
+            option_folders.add(pair[0])
+    return {
+        "affected_work_ids": works,
+        "affected_folder_ids": folders,
+        "affected_tag_options_work_ids": sorted(option_works),
+        "affected_tag_options_folder_ids": sorted(option_folders),
+    }
+
+
+_EMPTY_AFFECTED = {
+    "affected_work_ids": [],
+    "affected_folder_ids": [],
+    "affected_tag_options_work_ids": [],
+    "affected_tag_options_folder_ids": [],
+}
+
+
+def delete_tag_on_conn(conn, tag_id):
+    """ONE Tag-destruction primitive. HTTP and DELETE_TAG both go through it.
+
+    Returns `(deleted, affected)`. `deleted` is False when no live `tags` row
+    exists -- callers map that to HTTP 404 or sync ACK `changed=False`. When
+    True, relationships were cleared through the revision-aware Work-Tag /
+    Folder-Tag writers, lifecycle is `deleted`, and the catalogue row is gone.
+
+    Conn-scoped only: the caller owns the transaction (HTTP wrapper or
+    sync_protocol ledger txn). Never call `PRKSDatabase.delete_tag` from sync.
+    """
+    from backend import folder_tag_sync, work_tag_sync
+
+    if conn.execute("SELECT 1 FROM tags WHERE id = ?", (tag_id,)).fetchone() is None:
+        return False, dict(_EMPTY_AFFECTED)
+    affected = entities_linked_to_tag_on_conn(conn, tag_id)
+    for work_id in affected["affected_work_ids"]:
+        work_tag_sync.set_state(conn, work_id, tag_id, False)
+    for folder_id in affected["affected_folder_ids"]:
+        folder_tag_sync.set_state(conn, folder_id, tag_id, False)
+    conn.execute(
+        "UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, "
+        "changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tag_id,))
+    conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+    return True, affected
+
+
 def validate_delete(op):
     if op["payload"] != {}:
         raise ValueError("INVALID_ENVELOPE")
@@ -116,7 +198,7 @@ def validate_delete(op):
 
 
 def apply_delete(db, conn, op, received_at):
-    from backend import folder_tag_sync, work_tag_sync
+    from backend import work_tag_sync
 
     tag_id = op["entity_id"]
     lifecycle = work_tag_sync.resolve_lifecycle(conn, tag_id)
@@ -125,25 +207,17 @@ def apply_delete(db, conn, op, received_at):
         # Deleting a Tag that is already gone is CONVERGENCE: the user asked
         # for its absence and it is absent.
         return 200, {"code": "ACKNOWLEDGED", "tag_id": tag_id, "changed": False,
-                     "affected_work_ids": [], "affected_folder_ids": [],
-                     "affected_tag_options_work_ids": [],
-                     "affected_tag_options_folder_ids": []}
+                     **dict(_EMPTY_AFFECTED)}
     if state == "MERGED":
         # It is not there to delete, and it is not gone either -- it became
         # another Tag. Silently deleting the target would destroy a Tag the
         # user never named.
         return 409, {"code": "TAG_MERGED", "tag_id": tag_id,
                      "target_tag_id": lifecycle["target_tag_id"]}
-    affected = db._entities_linked_to_tag_on_conn(conn, tag_id)
-    for work_id in affected["affected_work_ids"]:
-        work_tag_sync.set_state(conn, work_id, tag_id, False)
-    for folder_id in affected["affected_folder_ids"]:
-        folder_tag_sync.set_state(conn, folder_id, tag_id, False)
-    conn.execute(
-        "UPDATE sync_tag_lifecycle SET state = 'deleted', target_tag_id = NULL, "
-        "changed_at = CURRENT_TIMESTAMP WHERE tag_id = ?", (tag_id,))
-    conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
-    return 200, {"code": "ACKNOWLEDGED", "tag_id": tag_id, "changed": True,
+    deleted, affected = delete_tag_on_conn(conn, tag_id)
+    # ACTIVE lifecycle with a missing row is a corrupt catalogue; treat as
+    # convergence rather than inventing a second destruction path.
+    return 200, {"code": "ACKNOWLEDGED", "tag_id": tag_id, "changed": bool(deleted),
                  **affected}
 
 
