@@ -236,7 +236,7 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertTrue(needed)
         self.assertIn("running", reason)
         needed_wf, _reason = policy.full_e2e_ci_needed(
-            [".github/workflows/test-gate.yml"]
+            [".github/workflows/e2e-gate.yml"]
         )
         self.assertTrue(needed_wf)
 
@@ -246,12 +246,15 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertIn("fail closed", reason)
 
     def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
-        rule, feats, skip, _note = policy.match_affected_path(
-            ".github/workflows/test-gate.yml"
-        )
-        self.assertEqual(rule, "e2e-framework")
-        self.assertFalse(skip)
-        self.assertEqual(feats, ("smoke",))
+        for path in (
+            ".github/workflows/test-gate.yml",
+            ".github/workflows/e2e-gate.yml",
+        ):
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "e2e-framework")
+                self.assertFalse(skip)
+                self.assertEqual(feats, ("smoke",))
 
     def test_select_affected_broken_feature_selection_is_not_noop(self):
         # Features mapped, but none of the known IDs match → fail, not noop.

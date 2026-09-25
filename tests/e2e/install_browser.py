@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    # Standalone `python tests/e2e/install_browser.py` needs the repo root on
+    # sys.path so dependency_gate can load (run.py already inserts it).
+    sys.path.insert(0, str(REPO))
 BROWSERS_DIR = REPO / ".playwright-browsers"
 INSTALL_HINT = "python tests/e2e/install_browser.py"
 

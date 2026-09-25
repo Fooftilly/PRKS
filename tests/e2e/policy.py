@@ -326,6 +326,7 @@ AFFECTED_RULES = (
             "tests/browser/pointer_capture.py",
             "scripts/e2e",
             ".github/workflows/test-gate.yml",
+            ".github/workflows/e2e-gate.yml",
         ),
         "features": ("smoke", "wait-async"),
         "fallback": "smoke",

@@ -220,12 +220,13 @@ functions covered by `tests/test_e2e_sharding.py` — no Chromium needed.
 
 External CI sharding. `--shard INDEX/TOTAL` (1-based) selects one bucket from
 the same LPT partition used by `--jobs TOTAL`. The authoritative GitHub Actions
-full E2E gate prefers about four runners each with `--jobs 1` over one runner
-with four local Chromium stacks (`FULL_GATE_EXTERNAL_SHARDS` in
-`tests/e2e/policy.py`). Pointer capture runs once after every matrix shard
-passes (dedicated CI job), not once per shard. Docs/unit/ignored-only diffs
-skip the matrix via `python tests/e2e/run.py --ci-plan --base <ref>` (same
-noop policy as `--affected`).
+full E2E gate (`.github/workflows/e2e-gate.yml`) prefers about four runners
+each with `--jobs 1` over one runner with four local Chromium stacks
+(`FULL_GATE_EXTERNAL_SHARDS` in `tests/e2e/policy.py`). Pointer capture runs
+once after every matrix shard passes (dedicated CI job), not once per shard.
+Docs/unit/ignored-only diffs skip the matrix via
+`python tests/e2e/run.py --ci-plan --base <ref>` (same noop policy as
+`--affected`).
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer
