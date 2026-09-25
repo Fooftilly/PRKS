@@ -938,8 +938,16 @@ primary key in place, so the migration rebuilds the table:
 **Legacy wire compatibility.** Clients that send `[{work_id, pages}]` keep
 working:
 
-- An entry that matches an existing row's `(work_id, pages)` keeps that row's
-  `manifestation_id`.
+- An entry that matches **exactly one** existing row's `(work_id, pages)`
+  keeps that row's `manifestation_id`.
+- **Ambiguous match is refused.** If a `(work_id, pages)` key matches **more
+  than one** existing row (a Work-level locator and a pinned row with the same
+  pages, or pins to two Versions), the whole legacy list is refused with
+  `ARGUMENT_SOURCE_VERSION_REQUIRED`. The legacy shape cannot say which row it
+  means, so PRKS does not prefer either one. Only a Version-aware client can
+  create such rows, so only a Version-aware client can edit that list. A legacy
+  list containing the same `(work_id, pages)` twice is refused as a duplicate,
+  as today.
 - A new entry with empty `pages` is Work-level.
 - A new entry with `pages` is pinned to the Work's only Manifestation when it
   has exactly one. When it has several, the entry is **refused** with
