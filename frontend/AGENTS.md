@@ -2,6 +2,10 @@
 
 These rules apply to frontend work in addition to the repository-root `AGENTS.md`. `DESIGN.md` remains authoritative for UI and interaction decisions; read the sections relevant to the component being changed.
 
+## Cross-boundary bulk mutations
+
+Frontend bulk operations must use a transactional backend bulk operation when one exists. Do not implement bulk UI behavior as one HTTP mutation per selected Work; preserve server-side validation and atomicity across the selection.
+
 ## Command palette
 
 Command palette commands must use explicit allowlisted actions. Never execute
