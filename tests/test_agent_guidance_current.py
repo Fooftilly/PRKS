@@ -171,6 +171,25 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("## Offline / PWA", frontend_agents)
         self.assertIn("docs/agent-rules/offline-pwa.md", frontend_agents)
 
+    def test_backend_agents_routes_cross_domain_contracts(self):
+        """Backend-only workers must still be told to load shared domain
+        contracts that live outside backend/AGENTS.md (sync/offline, research,
+        Saved Views)."""
+        backend = (ROOT / "backend" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("## Cross-domain contracts", backend)
+        self.assertIn("docs/agent-context/sync-map.md", backend)
+        self.assertIn("docs/agent-rules/offline-pwa.md", backend)
+        self.assertIn("completely", backend)
+        self.assertIn("frontend/AGENTS.md", backend)
+        for phrase in (
+            "Research network",
+            "Research Graph",
+            "Saved Views",
+            "Offline / PWA",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, backend)
+
     def test_agents_md_points_at_the_running_score(self):
         self.assertIn("docs/local-first-rollout-status.md", self.agents)
 

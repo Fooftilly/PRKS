@@ -2,6 +2,26 @@
 
 These rules apply to backend work in addition to the repository-root `AGENTS.md`. The text below is scoped from the former root policy so backend workers receive the invariants they need without unrelated frontend/E2E context.
 
+## Cross-domain contracts
+
+Nested `AGENTS.md` applies only within this directory tree. Several backend modules still share load-bearing invariants whose full text currently lives under `frontend/AGENTS.md` (and the docs it routes to). **Do not omit those contracts on a backend-only change** — Cursor will not inject `frontend/AGENTS.md` automatically. Load the smallest applicable route below instead of copying the large sections here.
+
+### Offline / sync / local-first
+
+Before changing `*_sync.py`, `sync_protocol.py`, durable-operation handlers, conflict/revision semantics, acknowledgement/ledger behavior, or other offline/local-first backend surfaces:
+
+1. read `docs/agent-context/sync-map.md` for the smallest relevant map entry;
+2. **read `docs/agent-rules/offline-pwa.md` completely**;
+3. also follow the Offline / PWA section in `frontend/AGENTS.md` for the shared durable-intent / disposable-cache / online↔offline convergence invariants that apply across HTTP and sync.
+
+### Research network / Research Graph
+
+Before changing `research_network.py`, `research_index.py`, `research_graph.py`, `research_markup.py`, or related research API/controllers, read the **Research network** and **Research Graph** sections in `frontend/AGENTS.md` (canonical DB/index/deletion/privacy invariants). Do not treat the derived research index or graph projection as authority for destructive mutation.
+
+### Saved Views
+
+Before changing Saved Views HTTP/API or search-definition persistence (`api/saved_views.py` and related DB/search paths), read the **Saved Views** section in `frontend/AGENTS.md` (definitions vs membership, reuse of normal search, privacy of names/definitions, no executable arbitrary rules).
+
 ## Logging privacy
 
 Logs are metadata-only. Never log user/library content, request bodies/query strings,

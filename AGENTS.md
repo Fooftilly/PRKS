@@ -8,7 +8,7 @@ Documentation map: `docs/wiki/` is the reviewed source for the GitHub Wiki and f
 
 PRKS keeps detailed rules close to the code they govern so agents do not need unrelated context for every task.
 
-- `backend/AGENTS.md`: backend architecture, privacy/logging, performance, persistence, backup/restore, indexing, schema, and mutation rules.
+- `backend/AGENTS.md`: backend architecture, privacy/logging, performance, persistence, backup/restore, indexing, schema, and mutation rules. Also routes backend sync/offline, research, and Saved Views work to the shared cross-domain contracts (see its "Cross-domain contracts" section).
 - `frontend/AGENTS.md`: UI/runtime behavior, workspace navigation, settings, Saved Views, research surfaces, offline/PWA, and interaction feedback.
 - `tests/AGENTS.md`: test-only routing to the production-domain instructions the test exercises.
 - `tests/e2e/AGENTS.md`: browser E2E workflow, isolation, assertions/waits, and debugging policy.
