@@ -911,6 +911,21 @@ class MirrorTests(WorkIdentityCase):
             self.assertEqual(self._q(f"SELECT COUNT(*) FROM {table}")[0][0], 0)
         self._assert_clean()
 
+    def test_deleting_a_verified_inferred_video_work(self):
+        """PR #202 review: the verdict row cascades with the Work; its delete
+        trigger must not re-project a Work that no longer exists."""
+        w = self.db.add_work(title="Inferred", thumb_page=1)
+        conn = _raw(self.storage.db_path)
+        conn.execute("UPDATE works SET source_kind = NULL WHERE id = ?", (w,))
+        conn.commit()
+        conn.close()
+        self.db.update_work_metadata(w, {"source_url": YT})
+        self.assertEqual(self._q("SELECT COUNT(*) FROM legacy_inferred_video_urls"), [(1,)])
+        self.db.delete_work_record(w)
+        for table in ("works", "manifestations", "assets", "legacy_inferred_video_urls"):
+            self.assertEqual(self._q(f"SELECT COUNT(*) FROM {table}")[0][0], 0, table)
+        self._assert_clean()
+
     def test_get_work_keys_are_unchanged(self):
         w = self.db.add_work(title="Shape")
         work = self.db.get_work(w)

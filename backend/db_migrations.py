@@ -2747,6 +2747,7 @@ END;
 
 CREATE TRIGGER legacy_inferred_video_urls_ad
 AFTER DELETE ON legacy_inferred_video_urls
+WHEN EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id)
 BEGIN
     INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
                         provider, provider_id, url, media_type, thumb_page, thumb_url,
