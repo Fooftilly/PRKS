@@ -11,10 +11,16 @@
     'use strict';
 
     const NARROW_PX = 720;
-    /* Shared with works.js notes layout and CSS @container max-width: 720px.
+    /* Shared with works.js notes layout and CSS @container (max-width: 720px).
+     * CSS max-width is inclusive: 720px is narrow. JS must use <=, not <.
      * workspace-tabs.js prefers prksWorkspaceCanvasIsNarrow(); this named
-     * export is the single JS authority for the pixel value. */
+     * export is the single JS authority for the pixel value and predicate. */
     root.PRKS_WORKSPACE_NARROW_PX = NARROW_PX;
+
+    /** True when width is in the CSS max-width:NARROW_PX band (inclusive). */
+    function prksWorkspaceWidthIsNarrow(width) {
+        return typeof width === 'number' && width > 0 && width <= NARROW_PX;
+    }
     let bound = false;
     let resizeObserver = null;
     let observedCanvas = null;
@@ -642,7 +648,7 @@
     function applyNarrow(canvas) {
         if (!canvas) return;
         if (canvas.clientWidth <= 0) return;
-        const narrow = canvas.clientWidth < NARROW_PX;
+        const narrow = prksWorkspaceWidthIsNarrow(canvas.clientWidth);
         if (narrow === lastNarrow && pendingNarrow === null) return;
         if (pendingNarrow === narrow) return;
         if (typeof root.prksWorkspaceSetNarrowFallback !== 'function') {
@@ -706,8 +712,7 @@
                 : null;
         const measured = canvas && canvas.clientWidth > 0 ? canvas.clientWidth : 0;
         const width = measured || (typeof root.innerWidth === 'number' ? root.innerWidth : 0);
-        if (!(width > 0)) return false;
-        return width < NARROW_PX;
+        return prksWorkspaceWidthIsNarrow(width);
     }
 
     function prksWorkspaceInitTiles() {
@@ -730,6 +735,7 @@
         prksWorkspaceInitTiles: prksWorkspaceInitTiles,
         prksWorkspaceEnsureTileHost: ensureTile,
         prksWorkspaceCanvasIsNarrow: prksWorkspaceCanvasIsNarrow,
+        prksWorkspaceWidthIsNarrow: prksWorkspaceWidthIsNarrow,
         PRKS_WORKSPACE_NARROW_PX: NARROW_PX,
     };
 

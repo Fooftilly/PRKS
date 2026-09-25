@@ -359,12 +359,19 @@
                 typeof root.PRKS_WORKSPACE_NARROW_PX === 'number' && root.PRKS_WORKSPACE_NARROW_PX > 0
                     ? root.PRKS_WORKSPACE_NARROW_PX
                     : 720;
+            function widthIsNarrow(width) {
+                if (typeof root.prksWorkspaceWidthIsNarrow === 'function') {
+                    return !!root.prksWorkspaceWidthIsNarrow(width);
+                }
+                /* CSS max-width:N includes N — keep the emergency fallback inclusive. */
+                return typeof width === 'number' && width > 0 && width <= narrowPx;
+            }
             if (typeof document !== 'undefined' && document.querySelector) {
                 const canvas = document.querySelector('.prks-workspace-canvas');
-                if (canvas && canvas.clientWidth > 0) return canvas.clientWidth < narrowPx;
+                if (canvas && canvas.clientWidth > 0) return widthIsNarrow(canvas.clientWidth);
             }
             if (typeof root.innerWidth === 'number' && root.innerWidth > 0) {
-                return root.innerWidth < narrowPx;
+                return widthIsNarrow(root.innerWidth);
             }
             return false;
         }

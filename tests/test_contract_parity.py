@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -624,7 +625,9 @@ class ContractParityTests(unittest.TestCase):
         narrow_px = int(match.group(1))
         self.assertEqual(narrow_px, 720)
         self.assertIn("PRKS_WORKSPACE_NARROW_PX", tiling)
+        self.assertIn("prksWorkspaceWidthIsNarrow", tiling)
         self.assertIn("PRKS_WORKSPACE_NARROW_PX", read("frontend/js/components/works.js"))
+        self.assertIn("prksWorkspaceWidthIsNarrow", read("frontend/js/components/works.js"))
 
         css = read("frontend/css/style.css")
         for container in ("prks-main", "prks-work-main"):
@@ -637,6 +640,71 @@ class ContractParityTests(unittest.TestCase):
                 pattern,
                 f"CSS @container {container} must use the same {narrow_px}px boundary",
             )
+
+    def test_workspace_narrow_threshold_is_inclusive_like_css_max_width(self):
+        """CSS max-width:N includes N; JS must treat N as narrow and N+1 as wide.
+
+        Literal parity alone is not enough — see PR #184 review on the 720px
+        boundary drift between `@container (max-width: 720px)` and `width < 720`.
+        """
+        tiling = active_js_source(read("frontend/js/workspace-tiling.js"))
+        self.assertRegex(
+            tiling,
+            r"width\s*>\s*0\s*&&\s*width\s*<=\s*NARROW_PX",
+            "prksWorkspaceWidthIsNarrow must use inclusive <= to match CSS max-width",
+        )
+        # No remaining strict `< NARROW_PX` / `>= NARROW_PX` width predicates in
+        # the shared workspace narrow path (emergency fallbacks included).
+        for rel in (
+            "frontend/js/workspace-tiling.js",
+            "frontend/js/workspace-tabs.js",
+            "frontend/js/components/works.js",
+        ):
+            active = active_js_source(read(rel))
+            with self.subTest(file=rel):
+                self.assertNotRegex(
+                    active,
+                    r"(?:clientWidth|innerWidth|width)\s*<\s*(?:NARROW_PX|narrowPx)\b",
+                    f"{rel} still uses exclusive < for the workspace narrow boundary",
+                )
+                self.assertNotRegex(
+                    active,
+                    r"(?:clientWidth|innerWidth|width)\s*>=\s*(?:NARROW_PX|narrowPx)\b",
+                    f"{rel} still treats the threshold as wide (>=) instead of narrow",
+                )
+
+        script = (
+            "const api = require('./frontend/js/workspace-tiling.js');\n"
+            "const n = api.PRKS_WORKSPACE_NARROW_PX;\n"
+            "const isN = api.prksWorkspaceWidthIsNarrow;\n"
+            "const rows = [\n"
+            "  ['zero', isN(0), false],\n"
+            "  ['neg', isN(-1), false],\n"
+            "  ['below', isN(n - 1), true],\n"
+            "  ['exact', isN(n), true],\n"
+            "  ['above', isN(n + 1), false],\n"
+            "];\n"
+            "for (const [label, got, want] of rows) {\n"
+            "  if (got !== want) {\n"
+            "    console.error(label + ': got ' + got + ' want ' + want + ' at N=' + n);\n"
+            "    process.exit(1);\n"
+            "  }\n"
+            "}\n"
+            "console.log('threshold-ok N=' + n);\n"
+        )
+        proc = subprocess.run(
+            ["node", "-e", script],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            proc.stdout + proc.stderr,
+        )
+        self.assertIn("threshold-ok", proc.stdout)
 
     def test_small_screen_mq_matches_css_media_query(self):
         ui = read("frontend/js/ui.js")

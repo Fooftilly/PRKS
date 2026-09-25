@@ -219,14 +219,16 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("!inTiled &&", layout)
         self.assertIn("Settings cannot override", layout)
         self.assertNotIn(
-            "(mobileForceSide && width > 0 && width < narrowPx)",
+            "mobileForceSide &&",
             layout.replace(
-                "!inTiled && (width >= narrowPx || (mobileForceSide && width > 0 && width < narrowPx))",
+                "!inTiled && width > 0 && (!isNarrowWidth || mobileForceSide)",
                 "",
             ),
             "force-side must not apply outside the !inTiled gate",
         )
         self.assertIn("PRKS_WORKSPACE_NARROW_PX", layout)
+        self.assertIn("prksWorkspaceWidthIsNarrow", layout)
+        self.assertIn("isNarrowWidth", layout)
 
         self.assertIn("Research notes beside PDF when narrow", index)
         self.assertNotIn("Research notes beside PDF on mobile", index)
