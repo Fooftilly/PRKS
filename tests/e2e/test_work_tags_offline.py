@@ -87,16 +87,15 @@ class OfflineWorkTagTests(unittest.TestCase):
         chip.wait_for(state='detached')
 
     def pending(self, page, count):
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 20000;
-            while (Date.now() < deadline) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation));
-                if (rows.filter(r => r.status !== 'acknowledged').length === n) return;
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            throw new Error('Sync state did not settle');
-        }""", count)
+        wait_for_async(
+            page,
+            """n => prksSync.store.listOperations().then(rows =>
+                rows
+                    .filter(r => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation))
+                    .filter(r => r.status !== 'acknowledged').length === n)""",
+            arg=count,
+            timeout=20000,
+            message='Sync state did not settle')
 
     def clear_offline_cache(self, page):
         """Clear the disposable cache through the real Settings surface,
