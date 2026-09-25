@@ -29,6 +29,34 @@ Catalog: `python tests/e2e/run.py --list-features`. On-demand counts/timing:
 Reports always name the tier. A PASS on targeted/feature/smoke/affected/dev
 is **not** equivalent to a full E2E gate. Say which tier ran.
 
+### Coverage-layer rule: KEEP / SPLIT / MOVE
+
+Before adding or retaining a browser E2E, classify the contract:
+
+- **KEEP** — the assertion inherently needs a real browser/app lifecycle: DOM focus,
+  layout/scroll, navigation/history, service worker behavior, actual IndexedDB across
+  page teardown, browser offline mode, renderer integration, or a user-visible flow
+  that can only be proven end to end.
+- **SPLIT** — keep one thin browser boundary, but move protocol/state-machine,
+  validation, coalescing, idempotency, revision arithmetic, serialization, retry,
+  projection, and other deterministic branches to Node/API/Python tests.
+- **MOVE** — when the entire invariant is already provable below the browser layer,
+  replace it with fast coverage before deleting the E2E.
+
+Do not keep Chromium coverage merely because it already exists. Conversely, never
+delete an E2E just because a similarly named unit test exists: identify the exact
+contract and prove the replacement covers it. For durable sync families, prefer
+testing local queue mechanics in Node and server semantics in Python; retain E2E for
+the real UI/offline/service-worker boundary.
+
+The first rationalized family is Work Tags. Transactional coalescing across a fresh
+store instance is owned by `tests/browser/run_local_store_selftest.js`; lost-response
+retry identity is owned by `tests/browser/run_work_tag_sync_selftest.js` plus backend
+op-id replay/idempotency coverage. The Work-Tag E2Es therefore keep the user-visible
+offline/reload/reconnect, conflict-resolution UI, degraded catalog, cache-clear,
+durable-queue wiring, and Tag lifecycle flows rather than re-testing those pure
+state-machine branches in Chromium.
+
 ### During implementation
 
 1. Run the relevant unit/self-tests first.
