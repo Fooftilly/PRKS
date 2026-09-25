@@ -22,7 +22,8 @@ PRKS E2E is Python unittest + Playwright Chromium via `tests/e2e/run.py`
 | Full (CI shard) | `python tests/e2e/run.py --jobs 1 --shard INDEX/TOTAL` | One external slice of the full gate (GitHub Actions matrix; TOTAL defaults to 4) |
 
 Convenience wrapper: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
-Catalog: `python tests/e2e/run.py --list-features`. Mapping lives in
+Catalog: `python tests/e2e/run.py --list-features`. On-demand counts/timing:
+`scripts/e2e inventory` (or `--inventory` / `--inventory-json`). Mapping lives in
 `tests/e2e/policy.py` (declarative, edit there).
 
 Reports always name the tier. A PASS on targeted/feature/smoke/affected/dev

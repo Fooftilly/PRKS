@@ -1191,6 +1191,20 @@ def build_parser():
         help="Print the E2E feature-group catalog and exit.",
     )
     parser.add_argument(
+        "--inventory",
+        action="store_true",
+        help=(
+            "Print on-demand suite inventory (E2E by feature/module, timing "
+            "weights, Node selftest runners, Python unit/API discovery) and exit. "
+            "Not a coverage gate — see coverage-boundary note in the report."
+        ),
+    )
+    parser.add_argument(
+        "--inventory-json",
+        action="store_true",
+        help="Same as --inventory but emit machine-readable JSON.",
+    )
+    parser.add_argument(
         "--profile",
         action="store_true",
         help=(
@@ -1364,6 +1378,23 @@ def _main(argv=None) -> int:
 
     if args.list_features:
         print(format_feature_catalog())
+        return 0
+
+    if args.inventory or args.inventory_json:
+        # Inventory needs E2E discovery + optional unit discovery; no Chromium.
+        from tests.e2e.inventory import (
+            build_inventory,
+            format_inventory_json,
+            format_inventory_text,
+        )
+
+        apply_e2e_playwright_env()
+        all_ids = discover_test_ids()
+        inventory = build_inventory(all_ids, repo=REPO)
+        if args.inventory_json:
+            print(format_inventory_json(inventory), end="")
+        else:
+            print(format_inventory_text(inventory))
         return 0
 
     if args.ci_plan:

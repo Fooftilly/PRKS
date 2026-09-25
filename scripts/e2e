@@ -11,6 +11,7 @@
 #   scripts/e2e doctor
 #   scripts/e2e list-features
 #   scripts/e2e update-timing-baseline --from PATH [--write]
+#   scripts/e2e inventory [--json]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -19,7 +20,7 @@ RUN=("$PY" tests/e2e/run.py)
 
 if [[ $# -lt 1 ]]; then
   cat <<'EOF' >&2
-usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|doctor|list-features|list-tests|update-timing-baseline> [args...]
+usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|doctor|list-features|list-tests|update-timing-baseline|inventory> [args...]
 EOF
   exit 2
 fi
@@ -157,9 +158,26 @@ EOF
     # Read-only environment facts. Never installs browsers or writes timings.
     exec "$PY" tests/e2e/doctor.py "$@"
     ;;
+  inventory)
+    # On-demand suite inventory / timing metrics (no Chromium). Additive
+    # subcommand — keep edits here minimal if doctor/sharding also touch this
+    # wrapper.
+    json=0
+    passthrough=()
+    for arg in "$@"; do
+      case "$arg" in
+        --json) json=1 ;;
+        *) passthrough+=("$arg") ;;
+      esac
+    done
+    if [[ "$json" -eq 1 ]]; then
+      exec "${RUN[@]}" --inventory-json "${passthrough[@]}"
+    fi
+    exec "${RUN[@]}" --inventory "${passthrough[@]}"
+    ;;
   *)
     echo "unknown command: $cmd" >&2
-    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|doctor|list-features|list-tests|update-timing-baseline>" >&2
+    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|doctor|list-features|list-tests|update-timing-baseline|inventory>" >&2
     exit 2
     ;;
 esac
