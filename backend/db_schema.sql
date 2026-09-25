@@ -566,9 +566,9 @@ CREATE TABLE manifestation_relations (
 
 CREATE TABLE manifestation_identifiers (
     manifestation_id TEXT NOT NULL REFERENCES manifestations(id) ON DELETE CASCADE,
-    scheme TEXT NOT NULL CHECK (scheme <> ''),
+    scheme TEXT NOT NULL CHECK (length(scheme) > 0),
     value TEXT NOT NULL,
-    normalized TEXT NOT NULL CHECK (normalized <> ''),
+    normalized TEXT NOT NULL CHECK (length(normalized) > 0),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (manifestation_id, scheme, normalized)
 );
