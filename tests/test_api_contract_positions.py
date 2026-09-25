@@ -170,7 +170,6 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(err["error"], "Name must be a string.")
 
     def test_create_request_wrong_type_description_preserves_domain_code(self):
-        # Truthy non-string still refuses (pre-#185 passed it to the domain).
         model, err = parse_position_request(
             PositionCreateRequest, {"name": "ok", "description": 5}
         )
@@ -178,16 +177,24 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(err["code"], "invalid_text")
         self.assertEqual(err["error"], "Text must be a string.")
 
-    def test_create_request_falsy_description_normalizes_to_empty(self):
-        """Pre-#185 POST: ``description or ''`` before the domain."""
-        for falsy in (False, 0, [], None, ""):
+    def test_create_request_falsy_non_string_description_is_invalid_text(self):
+        """Stricter typed contract: no pre-slice falsy coercion on POST."""
+        for falsy in (False, 0, []):
             with self.subTest(description=falsy):
                 model, err = parse_position_request(
                     PositionCreateRequest,
                     {"name": "Falsy desc", "description": falsy},
                 )
-                self.assertIsNone(err)
-                self.assertEqual(model.description, "")
+                self.assertIsNone(model)
+                self.assertEqual(err["code"], "invalid_text")
+                self.assertEqual(err["error"], "Text must be a string.")
+
+    def test_create_request_null_description_is_optional_empty(self):
+        model, err = parse_position_request(
+            PositionCreateRequest, {"name": "Null desc", "description": None}
+        )
+        self.assertIsNone(err)
+        self.assertIsNone(model.description)
 
     def test_create_request_passes_plain_values(self):
         model, err = parse_position_request(
@@ -740,18 +747,18 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         self._json("DELETE", f"/api/positions/{created['id']}", expect_status=200)
 
-    def test_post_falsy_description_normalizes_to_empty(self):
-        """Pre-#185: JSON false/0 descriptions become empty string on create."""
+    def test_post_falsy_non_string_description_rejected(self):
+        """Stricter typed contract: JSON false/0 descriptions → invalid_text."""
         for falsy, label in ((False, "false"), (0, "zero")):
             with self.subTest(description=falsy):
-                status, created, raw, req, _ = self._json(
+                status, body, raw, req, _ = self._json(
                     "POST",
                     "/api/positions",
                     {"name": f"Falsy {label}", "description": falsy},
-                    expect_status=201,
+                    expect_status=400,
                 )
-                self.assertEqual(created["description"], "")
-                PositionDetail.model_validate(created)
+                self.assertEqual(body.get("code"), "invalid_text")
+                self.assertEqual(body.get("error"), "Text must be a string.")
                 _validate_http_against_openapi(
                     method="POST",
                     path="/api/positions",
@@ -759,11 +766,6 @@ class PositionHttpContractTests(unittest.TestCase):
                     response_body=raw,
                     request_body=req,
                     check_request=False,
-                )
-                self._json(
-                    "DELETE",
-                    f"/api/positions/{created['id']}",
-                    expect_status=200,
                 )
 
     def test_post_and_patch_415_and_413_documented(self):

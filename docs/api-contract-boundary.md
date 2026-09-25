@@ -9,10 +9,24 @@ typed request/response models after the Positions vertical slice.
 HTTP request
     → Pydantic request model (shape / JSON types only)
     → PRKS canonical domain / application function (plain values)
-    → transaction / storage
-    → Pydantic response model (serialize / verify shape)
-    → HTTP response
+    → transaction / storage (commits)
+    → HTTP response body from the domain result
 ```
+
+**Request** models run **before** the domain mutation. **Response** DTOs are
+the OpenAPI / test contract for the wire shape. Until a transactional
+application boundary can validate the response **while the write txn is still
+open**, mutating Positions handlers (POST create / PATCH update) must **not**
+call `dump_response` after the domain returns: a Pydantic failure there would
+surface as HTTP 500 after a durable commit, leaving the client unsure whether
+the write stuck. GET (and other non-mutating) paths may still use
+`dump_response` — a read-time shape error does not create that ambiguity.
+DELETE’s static `{status: deleted}` dump is likewise not a post-write shape
+risk from domain payload drift.
+
+Enforce response DTOs in unit/HTTP/openapi-core tests instead. When #67/#68 (or
+a later app-service layer) own the txn across “mutate + build response”, move
+response validation back inside that boundary before commit.
 
 Pydantic **must not** own:
 
@@ -54,11 +68,13 @@ Route extraction (#67) is a separate track; typed models do not require it.
    (string vs object vs array). Length, emptiness, control characters, and
    uniqueness remain in the domain.
 4. Wire the HTTP handler with the family's parse helper (e.g.
-   `parse_position_request`) / `dump_response` / `research_error_envelope`.
-   Pass **plain** `.name`-style attributes into domain functions — never the
-   model instance as business state. If the domain already owned type-refusal
-   codes for a field, map them at the parse helper rather than emitting
-   generic `invalid_request`.
+   `parse_position_request`) / `research_error_envelope`. Pass **plain**
+   `.name`-style attributes into domain functions — never the model instance
+   as business state. If the domain already owned type-refusal codes for a
+   field, map them at the parse helper rather than emitting generic
+   `invalid_request`. For **mutating** routes, send the domain result dict
+   after commit without `dump_response` (see Boundary rule above); use
+   `dump_response` on safe GETs if desired.
 5. Extend `positions_openapi_document()` (or add `*_openapi_document()` and
    merge) so paths and `components.schemas` stay generated from the same
    models. Document the **real** HTTP status codes the adapter returns
@@ -74,7 +90,8 @@ Route extraction (#67) is a separate track; typed models do not require it.
    against the generator; it does not rewrite the file.
 7. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
    (b) assert live responses validate through openapi-core
-   (`validate_request` / `validate_response`), and (c) cover wrong-type
+   (`validate_request` / `validate_response`) and response DTOs
+   (`PositionDetail.model_validate`, …), and (c) cover wrong-type
    bodies for domain-owned fields so error codes cannot drift.
 
 ## Common error shape

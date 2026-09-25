@@ -356,7 +356,7 @@
               }
             ],
             "default": null,
-            "description": "Optional markdown description; domain enforces limits. Falsy JSON values (null, false, 0, [], \"\") normalize to empty string for pre-#185 POST compatibility.",
+            "description": "Optional markdown description; must be a string or null when supplied. Domain enforces length/control rules. Non-string JSON values are refused (no falsy coercion).",
             "title": "Description"
           }
         },

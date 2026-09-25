@@ -1292,7 +1292,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         research_error_envelope(message=str(e), code=e.code),
                     )
                     return
-                self.send_json(200, dump_response(PositionDetail, item))
+                # Domain already committed; do not dump_response here (see
+                # docs/api-contract-boundary.md — post-commit response validation).
+                self.send_json(200, item)
             elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
                 aid = unquote(path.split('/')[-1])
                 if not isinstance(data, dict):
@@ -3100,7 +3102,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         research_error_envelope(message=str(e), code=e.code),
                     )
                     return
-                self.send_json(201, dump_response(PositionDetail, item))
+                # Domain already committed; do not dump_response here (see
+                # docs/api-contract-boundary.md — post-commit response validation).
+                self.send_json(201, item)
             elif path == '/api/arguments':
                 if not isinstance(data, dict):
                     self.send_json(400, {'error': 'JSON object body required'})

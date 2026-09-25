@@ -6,18 +6,18 @@ POSITION_IN_USE, and revision rules stay in ``research_network`` /
 
 Wrong-type ``name`` / ``description`` map to the established domain codes
 (``invalid_name`` / ``invalid_text``) so the typed boundary does not change
-existing Position API error semantics.
+existing Position API error semantics for those fields.
 
-POST ``description`` preserves pre-#185 falsy normalization
-(``data.get('description', '') or ''``): supplied falsy non-strings become
-``""`` before the domain sees them. Truthy non-strings still refuse as
-``invalid_text``. PATCH does **not** use that rule (null remains omit).
+Malformed non-string descriptions (``false``, ``0``, ``[]``, …) are refused
+as ``invalid_text``. Accidental pre-slice falsy coercions
+(``data.get('description', '') or ''``) are **not** restored — #180 keeps
+stricter typed validation (#45 may tighten further families the same way).
 """
 from __future__ import annotations
 
 from typing import Any, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.api_contract.errors import (
     research_error_envelope,
@@ -41,19 +41,11 @@ class PositionCreateRequest(BaseModel):
     description: Optional[str] = Field(
         default=None,
         description=(
-            "Optional markdown description; domain enforces limits. "
-            "Falsy JSON values (null, false, 0, [], \"\") normalize to empty "
-            "string for pre-#185 POST compatibility."
+            "Optional markdown description; must be a string or null when "
+            "supplied. Domain enforces length/control rules. Non-string JSON "
+            "values are refused (no falsy coercion)."
         ),
     )
-
-    @field_validator("description", mode="before")
-    @classmethod
-    def coerce_falsy_description(cls, value: Any) -> Any:
-        """Match pre-slice ``data.get('description', '') or ''`` for POST."""
-        if not value:
-            return ""
-        return value
 
 
 class PositionUpdateRequest(BaseModel):
