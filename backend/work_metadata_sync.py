@@ -37,6 +37,8 @@ Nothing in this module imports the database layer; the handler is handed the
 """
 import json
 
+from backend import work_identity
+
 # Field -> maximum accepted length. The bound is the only validation this layer
 # adds: synchronization is not a licence to start normalizing values PRKS never
 # normalized. A DOI keeps its case, an ISBN keeps its punctuation, and a page
@@ -563,6 +565,11 @@ def set_field_on_conn(conn, work_id, field, value):
                     VALUES ('work-field', ?, 1) ON CONFLICT (scope_type, scope_id)
                     DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
                  (scope_key(work_id, field),))
+    if field == "source_url":
+        # A URL on a Work with no kind and no file makes it an inferred video.
+        # Whether that is video identity needs the URL parser, which the SQL
+        # mirror cannot run, so the §12.2 Asset rule is applied here (#60).
+        work_identity.reconcile_origin_asset(conn, work_id)
     return True, revision + 1
 
 

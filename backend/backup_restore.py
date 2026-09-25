@@ -1237,6 +1237,51 @@ def sqlite_foreign_key_violation_count(db_path: str) -> int:
         conn.close()
 
 
+class WorkIdentitySchemaDrift(Exception):
+    """A schema-17+ database whose identity layer is missing or altered."""
+
+
+def work_identity_issue_count(db_path: str) -> int:
+    """Work identity integrity and mirror-parity findings (#60, schema 17).
+
+    The v17 migration refuses to commit with any; an archive that already
+    declares schema 17 never went through that migration here, so backup and
+    restore verification run the same checks (docs/work-identity-model.md
+    §4.1). Older archives are migrated on open and checked there. Reported
+    like foreign-key issues: a warning, never a silent pass.
+
+    Raises `WorkIdentitySchemaDrift` when the database declares schema 17 or
+    newer but its identity objects are missing or not their canonical
+    definitions: without them the checks below would have nothing to run on,
+    and a zero would claim a clean archive.
+    """
+    from backend import work_identity
+    from backend.db_migrations import MigrationError, _validate_work_identity_objects
+
+    conn = sqlite3.connect(os.path.abspath(db_path))
+    try:
+        row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        if row is None or int(row[0]) < 17:
+            return 0
+        try:
+            _validate_work_identity_objects(conn)
+        except MigrationError as exc:
+            raise WorkIdentitySchemaDrift() from exc
+        return len(work_identity.integrity_violations(conn)) + len(
+            work_identity.mirror_drift(conn)
+        )
+    finally:
+        conn.close()
+
+
+def _work_identity_warning(count: int, *, during_restore: bool) -> str:
+    n = int(count)
+    unit = "Work identity issue" if n == 1 else "Work identity issues"
+    if during_restore:
+        return f"This backup was created while the database had {n} {unit}."
+    return f"Backup created successfully, but the database has {n} {unit}."
+
+
 def _foreign_key_warning(count: int, *, during_restore: bool) -> str:
     n = int(count)
     unit = "foreign-key issue" if n == 1 else "foreign-key issues"
@@ -1587,6 +1632,16 @@ def create_backup(
         fk_violations = sqlite_foreign_key_violation_count(snapshot_path)
         if fk_violations:
             warnings.append(_foreign_key_warning(fk_violations, during_restore=False))
+        try:
+            identity_issues = work_identity_issue_count(snapshot_path)
+        except WorkIdentitySchemaDrift as exc:
+            raise BackupError(
+                "schema_drift",
+                "Backup could not be verified.",
+                http_status=500,
+            ) from exc
+        if identity_issues:
+            warnings.append(_work_identity_warning(identity_issues, during_restore=False))
         db_schema = read_schema_version(snapshot_path)
         summary = library_summary_from_db(snapshot_path)
         pdf_basenames = {os.path.basename(rel) for rel, _ in pdf_files if "/" not in rel}
@@ -1979,6 +2034,15 @@ def _verify_backup_inner(
             warnings: list[str] = []
             if fk_violations:
                 warnings.append(_foreign_key_warning(fk_violations, during_restore=True))
+            try:
+                identity_issues = work_identity_issue_count(db_path)
+            except WorkIdentitySchemaDrift as exc:
+                raise RestoreError(
+                    "schema_drift",
+                    "Backup database failed integrity verification.",
+                ) from exc
+            if identity_issues:
+                warnings.append(_work_identity_warning(identity_issues, during_restore=True))
             if not processing_allowed:
                 warnings.append(
                     "Processing queue files were not included because they are stored outside PRKS storage."

@@ -9,10 +9,11 @@ import uuid
 from unittest.mock import patch
 
 from tests.test_db_migrations import MigrationTestCase, _raw, _version
+from tests.work_identity_fixtures import revert_to_v16_schema
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from backend import sync_protocol, work_tag_sync as sync
-from backend.db_migrations import application_schema_signature
+from backend.db_migrations import LATEST_SCHEMA_VERSION, application_schema_signature
 
 
 class WorkTagSyncTests(unittest.TestCase):
@@ -220,11 +221,15 @@ class SyncMigrationTests(MigrationTestCase):
         db.add_tag_to_work(work, tag)
         with db.connection() as conn:
             signature = application_schema_signature(conn)
+        raw = sqlite3.connect(db.db_path)
+        revert_to_v16_schema(raw)
+        raw.close()
+        with db.connection() as conn:
             for table in ("sync_operations", "sync_entity_revisions", "sync_tag_lifecycle"):
                 conn.execute("DROP TABLE " + table)
             conn.execute("UPDATE schema_version SET version=13")
         db = self._open()
-        self.assertEqual(_version(db.db_path), 16)
+        self.assertEqual(_version(db.db_path), LATEST_SCHEMA_VERSION)
         self.assertEqual(db.get_work_tag_options(work)["assigned"], [{"tag_id": tag, "relation_revision": 0}])
         with db.connection() as conn:
             self.assertEqual(application_schema_signature(conn), signature)

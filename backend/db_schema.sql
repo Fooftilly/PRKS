@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT NOT NULL DEFAULT ''
 );
 
--- Works: Metadata for documents and notes
+-- Works: Metadata for documents and notes.
+-- primary_manifestation_id / citation_manifestation_id (#60, schema 17) are
+-- guarded by triggers, not FKs: see the Work identity section at the end.
 CREATE TABLE IF NOT EXISTS works (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -51,7 +53,9 @@ CREATE TABLE IF NOT EXISTS works (
     materialized_pdf_annotation_revision INTEGER NOT NULL DEFAULT 0,
     last_opened_at TIMESTAMP, -- For Recent page
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    primary_manifestation_id TEXT,
+    citation_manifestation_id TEXT
 );
 
 -- Video playlists (ordered collections of works)
@@ -160,20 +164,6 @@ INSERT OR IGNORE INTO argument_verdicts (id, label, sort_order, enabled) VALUES
     ('qualifies', 'Qualifies', 3, 1),
     ('holds', 'Holds', 4, 1);
 
-CREATE TABLE IF NOT EXISTS argument_sources (
-    argument_id TEXT NOT NULL,
-    work_id TEXT NOT NULL,
-    pages TEXT NOT NULL DEFAULT '',
-    order_index INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (argument_id, work_id),
-    FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
-    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_argument_sources_work_id
-    ON argument_sources(work_id);
-
 CREATE TABLE IF NOT EXISTS argument_target_positions (
     argument_id TEXT NOT NULL,
     position_id TEXT NOT NULL,
@@ -204,32 +194,6 @@ CREATE INDEX IF NOT EXISTS idx_argument_target_arguments_target
 
 CREATE INDEX IF NOT EXISTS idx_argument_target_positions_position
     ON argument_target_positions(position_id);
-
--- Roles: Bridge between Persons and Works
-CREATE TABLE IF NOT EXISTS roles (
-    person_id TEXT NOT NULL,
-    work_id TEXT NOT NULL,
-    role_type TEXT NOT NULL,
-    order_index INTEGER DEFAULT 0,
-    credit_name TEXT,
-    PRIMARY KEY (person_id, work_id, role_type, order_index),
-    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE,
-    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
-);
-
--- Canonical PRKS annotation metadata (sidebar/comments). PDF bytes hold rendered markup.
-CREATE TABLE IF NOT EXISTS annotations (
-    id TEXT PRIMARY KEY,
-    work_id TEXT NOT NULL,
-    type TEXT,
-    content TEXT,
-    page_index INTEGER,
-    color TEXT,
-    geometry_json TEXT, -- Remaining JSON fields for EmbedPDF round-trip
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
-);
 
 -- Staging inbox for files discovered under /data/for_processing.
 -- Rows here are isolated from library/search until explicitly imported.
@@ -305,12 +269,8 @@ CREATE TRIGGER IF NOT EXISTS works_ad AFTER DELETE ON works BEGIN
   VALUES ('delete', old.rowid, old.title, old.abstract, old.text_content, COALESCE(old.author_text, ''));
 END;
 
-CREATE TRIGGER IF NOT EXISTS works_au AFTER UPDATE ON works BEGIN
-  INSERT INTO works_fts(works_fts, rowid, title, abstract, text_content, author_text)
-  VALUES ('delete', old.rowid, old.title, old.abstract, old.text_content, COALESCE(old.author_text, ''));
-  INSERT INTO works_fts(rowid, title, abstract, text_content, author_text)
-  VALUES (new.rowid, new.title, new.abstract, new.text_content, COALESCE(new.author_text, ''));
-END;
+-- works_au (the UPDATE half) is defined in the Work identity section below:
+-- schema 17 scopes it to the indexed columns.
 
 -- Folders: Organizational containers for works/files
 CREATE TABLE IF NOT EXISTS folders (
@@ -461,15 +421,6 @@ CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_parent_title_nocase
     ON folders(COALESCE(parent_id, ''), LOWER(TRIM(title)));
 
--- Performance indexes for frequently queried FK columns
--- One relationship per (person, work, role): the identity the sync
--- protocol scopes a revision by. The table's PK includes order_index,
--- so without this the database would permit two rows for one scope.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_person_work_role_unique
-    ON roles(person_id, work_id, role_type);
-CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id);
-CREATE INDEX IF NOT EXISTS idx_roles_person_id ON roles(person_id);
-CREATE INDEX IF NOT EXISTS idx_annotations_work_id ON annotations(work_id);
 CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist_id ON playlist_items(playlist_id);
 CREATE INDEX IF NOT EXISTS idx_works_last_opened_at ON works(last_opened_at);
 
@@ -516,3 +467,600 @@ CREATE TABLE pending_pdf_cleanup (
     -- consuming the bounded pass forever.
     last_attempt_at TIMESTAMP
 );
+
+-- ---------------------------------------------------------------------------
+-- Work identity (#60 Slice A, schema 17): Work -> Manifestation -> Asset.
+-- See docs/work-identity-model.md. Must stay statement-for-statement equal to
+-- _V17_WORK_IDENTITY_SQL in backend/db_migrations.py; validate_current_schema
+-- compares every object below by definition.
+--
+-- At schema 17 `works` is the only authority for every field. The
+-- legacy_work_*_mirror views define the projection; the *_mirror_* triggers
+-- keep manifestations/assets equal to it (works -> new rows, one direction);
+-- the *_mirror_read_only triggers refuse any other write to a mirrored column.
+-- roles, annotations and argument_sources are the leaf tables the migration
+-- rebuilds with composite ownership FKs.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE manifestations (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+    origin_work_id TEXT UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'unspecified' CHECK (kind IN ('unspecified', 'preprint', 'accepted_manuscript', 'published', 'edition', 'translation', 'reprint', 'web_page', 'video', 'other')),
+    title TEXT CHECK (title IS NULL OR title <> ''),
+    subtitle TEXT,
+    abstract TEXT CHECK (abstract IS NULL OR abstract <> ''),
+    language TEXT,
+    doc_type TEXT,
+    year TEXT,
+    published_date TEXT,
+    edition TEXT,
+    publisher TEXT,
+    location TEXT,
+    journal TEXT,
+    volume TEXT,
+    issue TEXT,
+    pages TEXT,
+    isbn TEXT,
+    doi TEXT,
+    url TEXT,
+    urldate TEXT,
+    primary_asset_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (id, work_id),
+    FOREIGN KEY (primary_asset_id, id) REFERENCES assets(id, manifestation_id)
+        ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE assets (
+    id TEXT PRIMARY KEY,
+    manifestation_id TEXT NOT NULL,
+    work_id TEXT NOT NULL,
+    origin_work_id TEXT UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('managed_file', 'external_stream')),
+    role TEXT NOT NULL DEFAULT 'document' CHECK (role IN ('document', 'snapshot', 'readable_text', 'attachment', 'other')),
+    storage_locator TEXT,
+    source_locator TEXT,
+    provider TEXT,
+    provider_id TEXT,
+    url TEXT,
+    media_type TEXT,
+    byte_size INTEGER,
+    ingest_sha256 TEXT,
+    content_sha256 TEXT,
+    content_generation INTEGER NOT NULL DEFAULT 0,
+    fingerprinted_at TIMESTAMP,
+    origin TEXT NOT NULL CHECK (origin IN ('upload', 'processing_import', 'adopted', 'web_capture', 'legacy')),
+    origin_url TEXT,
+    origin_ref TEXT,
+    derived_from_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    supersedes_asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'trashed')),
+    thumb_page INTEGER,
+    thumb_url TEXT,
+    canonical_annotation_set_revision INTEGER NOT NULL DEFAULT 0,
+    materialized_pdf_annotation_revision INTEGER NOT NULL DEFAULT 0,
+    captured_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (id, manifestation_id),
+    UNIQUE (id, work_id),
+    FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE manifestation_relations (
+    work_id TEXT NOT NULL,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    relation TEXT NOT NULL CHECK (relation IN ('revision_of', 'published_version_of', 'new_edition_of', 'translation_of', 'reprint_of')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (from_id, to_id, relation),
+    CHECK (from_id <> to_id),
+    FOREIGN KEY (from_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (to_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE manifestation_identifiers (
+    manifestation_id TEXT NOT NULL REFERENCES manifestations(id) ON DELETE CASCADE,
+    scheme TEXT NOT NULL CHECK (length(scheme) > 0),
+    value TEXT NOT NULL,
+    normalized TEXT NOT NULL CHECK (length(normalized) > 0),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (manifestation_id, scheme, normalized)
+);
+
+CREATE TABLE sync_work_lifecycle (
+    work_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('active', 'merged', 'deleted')),
+    target_work_id TEXT,
+    changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((state = 'merged' AND target_work_id IS NOT NULL) OR
+           (state != 'merged' AND target_work_id IS NULL))
+);
+
+CREATE TABLE work_retirement_guard (
+    id INTEGER PRIMARY KEY CHECK (0)
+);
+
+CREATE TABLE work_retirement (
+    work_id TEXT PRIMARY KEY,
+    must_clear INTEGER NOT NULL DEFAULT 1
+        REFERENCES work_retirement_guard(id) DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE TABLE legacy_inferred_video_urls (
+    work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+    source_url TEXT NOT NULL
+);
+
+CREATE TABLE migration_quarantine (
+    id INTEGER PRIMARY KEY,
+    source_table TEXT NOT NULL,
+    source_rowid INTEGER,
+    row_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    quarantined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE annotations (
+    id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL,
+    type TEXT,
+    content TEXT,
+    page_index INTEGER,
+    color TEXT,
+    geometry_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    asset_id TEXT,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+    FOREIGN KEY (asset_id, work_id) REFERENCES assets(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE roles (
+    person_id TEXT NOT NULL,
+    work_id TEXT NOT NULL,
+    role_type TEXT NOT NULL,
+    order_index INTEGER DEFAULT 0,
+    credit_name TEXT,
+    manifestation_id TEXT,
+    PRIMARY KEY (person_id, work_id, role_type, order_index),
+    FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+    FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE argument_sources (
+    argument_id TEXT NOT NULL,
+    order_index INTEGER NOT NULL,
+    work_id TEXT NOT NULL,
+    manifestation_id TEXT,
+    pages TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (argument_id, order_index),
+    FOREIGN KEY (argument_id) REFERENCES arguments(id) ON DELETE CASCADE,
+    FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+    FOREIGN KEY (manifestation_id, work_id) REFERENCES manifestations(id, work_id)
+        ON UPDATE CASCADE ON DELETE NO ACTION
+);
+
+CREATE INDEX idx_manifestations_work_id ON manifestations(work_id);
+CREATE INDEX idx_manifestations_primary_asset ON manifestations(primary_asset_id, id);
+CREATE INDEX idx_assets_manifestation ON assets(manifestation_id, work_id);
+CREATE INDEX idx_assets_derived_from ON assets(derived_from_asset_id);
+CREATE INDEX idx_assets_supersedes ON assets(supersedes_asset_id);
+CREATE INDEX idx_manifestation_relations_from ON manifestation_relations(from_id, work_id);
+CREATE INDEX idx_manifestation_relations_to ON manifestation_relations(to_id, work_id);
+CREATE INDEX idx_manifestation_identifiers_lookup ON manifestation_identifiers(scheme, normalized);
+CREATE INDEX idx_annotations_asset ON annotations(asset_id, work_id);
+CREATE INDEX idx_roles_manifestation ON roles(manifestation_id, work_id);
+CREATE INDEX idx_argument_sources_manifestation ON argument_sources(manifestation_id, work_id);
+CREATE UNIQUE INDEX idx_argument_sources_citation ON argument_sources(argument_id, work_id, COALESCE(manifestation_id, ''), pages);
+
+CREATE VIEW legacy_work_asset_mirror AS
+SELECT
+    s.id AS work_id,
+    (COALESCE(s.file_path, '') <> ''
+     OR s.kind_norm = 'video'
+     OR COALESCE(s.provider, '') <> ''
+     OR COALESCE(s.provider_id, '') <> ''
+     OR COALESCE(s.source_mime, '') <> ''
+     OR COALESCE(s.thumb_url, '') <> ''
+     OR s.thumb_page IS NOT NULL
+     OR COALESCE(s.canonical_annotation_set_revision, 0) <> 0
+     OR COALESCE(s.materialized_pdf_annotation_revision, 0) <> 0
+     OR s.is_stream) AS has_asset_value,
+    CASE WHEN s.is_stream THEN 'external_stream' ELSE 'managed_file' END AS kind,
+    CASE WHEN s.is_stream THEN NULL ELSE s.locator END AS storage_locator,
+    s.provider AS provider,
+    s.provider_id AS provider_id,
+    CASE WHEN s.is_stream THEN s.source_url END AS url,
+    CASE
+        WHEN COALESCE(s.source_mime, '') <> '' THEN s.source_mime
+        WHEN NOT s.is_stream AND s.locator IS NOT NULL THEN 'application/pdf'
+    END AS media_type,
+    s.thumb_page AS thumb_page,
+    s.thumb_url AS thumb_url,
+    s.canonical_annotation_set_revision AS canonical_annotation_set_revision,
+    s.materialized_pdf_annotation_revision AS materialized_pdf_annotation_revision
+FROM (
+    SELECT
+        w.id, w.file_path, w.source_url, w.source_mime, w.thumb_url, w.thumb_page,
+        w.provider, w.provider_id, w.canonical_annotation_set_revision,
+        w.materialized_pdf_annotation_revision,
+        lower(trim(COALESCE(w.source_kind, ''), char(32, 9, 10, 11, 12, 13))) AS kind_norm,
+        CASE lower(trim(COALESCE(w.source_kind, ''), char(32, 9, 10, 11, 12, 13)))
+            WHEN 'video' THEN 1
+            WHEN 'pdf' THEN 0
+            ELSE (trim(COALESCE(w.file_path, ''), char(32, 9, 10, 11, 12, 13)) = ''
+                  AND trim(COALESCE(w.source_url, ''), char(32, 9, 10, 11, 12, 13)) <> ''
+                  AND (COALESCE(w.provider, '') <> ''
+                       OR COALESCE(w.provider_id, '') <> ''
+                       OR EXISTS (SELECT 1 FROM legacy_inferred_video_urls u
+                                  WHERE u.work_id = w.id AND u.source_url = w.source_url)))
+        END AS is_stream,
+        CASE
+            WHEN substr(w.file_path, 1, 10) = '/api/pdfs/'
+             AND length(w.file_path) > 10
+             AND instr(substr(w.file_path, 11), '/') = 0
+             AND instr(substr(w.file_path, 11), char(92)) = 0
+             AND substr(w.file_path, 11) NOT IN ('.', '..')
+             AND substr(w.file_path, 11) = trim(substr(w.file_path, 11), char(32, 9, 10, 11, 12, 13))
+             AND NOT (substr(w.file_path, 11) GLOB '*%[0-9A-Fa-f][0-9A-Fa-f]*')
+            THEN substr(w.file_path, 11)
+        END AS locator
+    FROM works w
+) s;
+
+CREATE VIEW legacy_work_manifestation_mirror AS
+SELECT
+    w.id AS work_id,
+    w.doc_type AS doc_type,
+    w.year AS year,
+    w.published_date AS published_date,
+    w.edition AS edition,
+    w.publisher AS publisher,
+    w.location AS location,
+    w.journal AS journal,
+    w.volume AS volume,
+    w.issue AS issue,
+    w.pages AS pages,
+    w.isbn AS isbn,
+    w.doi AS doi,
+    CASE
+        WHEN a.kind = 'external_stream' THEN NULL
+        ELSE w.source_url
+    END AS url,
+    w.urldate AS urldate
+FROM works w
+LEFT JOIN assets a ON a.origin_work_id = w.id AND a.work_id = w.id;
+
+CREATE TRIGGER works_au
+AFTER UPDATE OF title, abstract, text_content, author_text ON works
+BEGIN
+  INSERT INTO works_fts(works_fts, rowid, title, abstract, text_content, author_text)
+  VALUES ('delete', old.rowid, old.title, old.abstract, old.text_content, COALESCE(old.author_text, ''));
+  INSERT INTO works_fts(rowid, title, abstract, text_content, author_text)
+  VALUES (new.rowid, new.title, new.abstract, new.text_content, COALESCE(new.author_text, ''));
+END;
+
+CREATE TRIGGER works_manifestation_pointers_insert
+BEFORE INSERT ON works
+WHEN NEW.primary_manifestation_id IS NOT NULL OR NEW.citation_manifestation_id IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_POINTERS_START_NULL');
+END;
+
+CREATE TRIGGER works_manifestation_pointers_owned
+BEFORE UPDATE OF primary_manifestation_id, citation_manifestation_id ON works
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_PRIMARY_MANIFESTATION_REQUIRED')
+    WHERE NEW.primary_manifestation_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM work_retirement r WHERE r.work_id = NEW.id);
+    SELECT RAISE(ABORT, 'MANIFESTATION_OWNER_MISMATCH')
+    WHERE NEW.primary_manifestation_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM manifestations m
+                      WHERE m.id = NEW.primary_manifestation_id AND m.work_id = NEW.id);
+    SELECT RAISE(ABORT, 'MANIFESTATION_OWNER_MISMATCH')
+    WHERE NEW.citation_manifestation_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM manifestations m
+                      WHERE m.id = NEW.citation_manifestation_id AND m.work_id = NEW.id);
+END;
+
+CREATE TRIGGER works_retirement_clear
+AFTER DELETE ON works
+BEGIN
+    DELETE FROM work_retirement WHERE work_id = OLD.id;
+END;
+
+CREATE TRIGGER work_retirement_delete_only_after_work
+BEFORE DELETE ON work_retirement
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_RETIREMENT_WORK_STILL_EXISTS')
+    WHERE EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id);
+END;
+
+CREATE TRIGGER work_retirement_no_update
+BEFORE UPDATE ON work_retirement
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_RETIREMENT_IMMUTABLE');
+END;
+
+CREATE TRIGGER work_retirement_guard_no_update
+BEFORE UPDATE ON work_retirement_guard
+BEGIN
+    SELECT RAISE(ABORT, 'WORK_RETIREMENT_IMMUTABLE');
+END;
+
+CREATE TRIGGER manifestations_pointer_target_move
+BEFORE UPDATE OF id, work_id ON manifestations
+WHEN NEW.id IS NOT OLD.id OR NEW.work_id IS NOT OLD.work_id
+BEGIN
+    SELECT RAISE(ABORT, 'MANIFESTATION_IS_POINTER_TARGET')
+    WHERE EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id
+                  AND (w.primary_manifestation_id = OLD.id OR w.citation_manifestation_id = OLD.id));
+END;
+
+CREATE TRIGGER manifestations_pointer_target_delete
+BEFORE DELETE ON manifestations
+BEGIN
+    SELECT RAISE(ABORT, 'MANIFESTATION_IS_POINTER_TARGET')
+    WHERE EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id
+                  AND (w.primary_manifestation_id = OLD.id OR w.citation_manifestation_id = OLD.id));
+END;
+
+CREATE TRIGGER manifestation_origin_immutable
+BEFORE UPDATE OF origin_work_id ON manifestations
+WHEN NEW.origin_work_id IS NOT OLD.origin_work_id
+BEGIN
+    SELECT RAISE(ABORT, 'ORIGIN_WORK_IMMUTABLE');
+END;
+
+CREATE TRIGGER asset_origin_immutable
+BEFORE UPDATE OF origin_work_id ON assets
+WHEN NEW.origin_work_id IS NOT OLD.origin_work_id
+BEGIN
+    SELECT RAISE(ABORT, 'ORIGIN_WORK_IMMUTABLE');
+END;
+
+CREATE TRIGGER manifestations_mirror_read_only
+BEFORE UPDATE OF doc_type, year, published_date, edition, publisher, location, journal, volume, issue, pages, isbn, doi, url, urldate ON manifestations
+WHEN NEW.origin_work_id IS NOT NULL AND NEW.work_id = NEW.origin_work_id
+ AND (NEW.doc_type, NEW.year, NEW.published_date, NEW.edition, NEW.publisher, NEW.location,
+      NEW.journal, NEW.volume, NEW.issue, NEW.pages, NEW.isbn, NEW.doi, NEW.url, NEW.urldate)
+     IS NOT (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location,
+                    v.journal, v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate
+             FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.work_id)
+BEGIN
+    SELECT RAISE(ABORT, 'MIRRORED_FIELD_READ_ONLY');
+END;
+
+CREATE TRIGGER assets_mirror_read_only
+BEFORE UPDATE OF kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url, canonical_annotation_set_revision, materialized_pdf_annotation_revision ON assets
+WHEN NEW.origin_work_id IS NOT NULL AND NEW.work_id = NEW.origin_work_id
+ AND (NEW.kind, NEW.storage_locator, NEW.provider, NEW.provider_id, NEW.url, NEW.media_type,
+      NEW.thumb_page, NEW.thumb_url, NEW.canonical_annotation_set_revision,
+      NEW.materialized_pdf_annotation_revision)
+     IS NOT (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                    v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                    v.materialized_pdf_annotation_revision
+             FROM legacy_work_asset_mirror v WHERE v.work_id = NEW.work_id)
+BEGIN
+    SELECT RAISE(ABORT, 'MIRRORED_FIELD_READ_ONLY');
+END;
+
+CREATE TRIGGER works_mirror_ai
+AFTER INSERT ON works
+BEGIN
+    INSERT INTO manifestations (id, work_id, origin_work_id, doc_type, year, published_date, edition,
+                                publisher, location, journal, volume, issue, pages, isbn, doi, url, urldate)
+    SELECT 'MF-' || hex(randomblob(16)), v.work_id, v.work_id, v.doc_type, v.year, v.published_date,
+           v.edition, v.publisher, v.location, v.journal, v.volume, v.issue, v.pages, v.isbn, v.doi,
+           v.url, v.urldate
+    FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.id;
+    UPDATE works SET primary_manifestation_id =
+        (SELECT m.id FROM manifestations m WHERE m.origin_work_id = NEW.id)
+    WHERE id = NEW.id;
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.id);
+END;
+
+CREATE TRIGGER works_mirror_manifestation_au
+AFTER UPDATE OF doc_type, year, published_date, edition, publisher, location, journal, volume, issue, pages, isbn, doi, urldate, source_url ON works
+BEGIN
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.id)
+    WHERE origin_work_id = NEW.id AND work_id = NEW.id;
+END;
+
+CREATE TRIGGER works_mirror_asset_au
+AFTER UPDATE OF file_path, source_kind, source_url, source_mime, thumb_url, thumb_page, provider, provider_id, canonical_annotation_set_revision, materialized_pdf_annotation_revision ON works
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.id);
+    UPDATE assets
+    SET (kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url,
+         canonical_annotation_set_revision, materialized_pdf_annotation_revision, updated_at) =
+        (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                v.materialized_pdf_annotation_revision, CURRENT_TIMESTAMP
+         FROM legacy_work_asset_mirror v WHERE v.work_id = NEW.id)
+    WHERE origin_work_id = NEW.id AND work_id = NEW.id;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.id)
+    WHERE origin_work_id = NEW.id AND work_id = NEW.id;
+END;
+
+CREATE TRIGGER assets_mirror_ai
+AFTER INSERT ON assets
+WHEN NEW.origin_work_id IS NOT NULL AND NEW.origin_work_id = NEW.work_id
+BEGIN
+    UPDATE manifestations SET primary_asset_id = NEW.id
+    WHERE id = NEW.manifestation_id AND primary_asset_id IS NULL;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.work_id)
+    WHERE origin_work_id = NEW.work_id AND work_id = NEW.work_id;
+END;
+
+CREATE TRIGGER annotations_mirror_asset_ai
+AFTER INSERT ON annotations
+WHEN NEW.asset_id IS NULL
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.work_id
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.work_id);
+    UPDATE annotations SET asset_id =
+        (SELECT a.id FROM assets a WHERE a.origin_work_id = NEW.work_id AND a.work_id = NEW.work_id)
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER sync_revisions_mirror_asset_ai
+AFTER INSERT ON sync_entity_revisions
+WHEN NEW.scope_type IN ('work-source', 'pdf-annotation', 'work-field')
+ AND CASE WHEN json_valid(NEW.scope_id) AND json_type(NEW.scope_id) = 'array'
+          THEN json_type(NEW.scope_id, '$[0]') IS 'text'
+           AND CASE NEW.scope_type
+                   WHEN 'work-source' THEN json_array_length(NEW.scope_id) = 1
+                   WHEN 'pdf-annotation' THEN json_array_length(NEW.scope_id) = 2
+                        AND json_type(NEW.scope_id, '$[1]') IS 'text'
+                   ELSE json_array_length(NEW.scope_id) = 2
+                        AND json_type(NEW.scope_id, '$[1]') IS 'text'
+                        AND json_extract(NEW.scope_id, '$[1]') IS 'thumb_page'
+               END
+          ELSE 0
+     END
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = json_extract(NEW.scope_id, '$[0]')
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = v.work_id);
+END;
+
+CREATE TRIGGER legacy_inferred_video_urls_ai
+AFTER INSERT ON legacy_inferred_video_urls
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = NEW.work_id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = NEW.work_id);
+    UPDATE assets
+    SET (kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url,
+         canonical_annotation_set_revision, materialized_pdf_annotation_revision, updated_at) =
+        (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                v.materialized_pdf_annotation_revision, CURRENT_TIMESTAMP
+         FROM legacy_work_asset_mirror v WHERE v.work_id = NEW.work_id)
+    WHERE origin_work_id = NEW.work_id AND work_id = NEW.work_id;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = NEW.work_id)
+    WHERE origin_work_id = NEW.work_id AND work_id = NEW.work_id;
+END;
+
+CREATE TRIGGER legacy_inferred_video_urls_ad
+AFTER DELETE ON legacy_inferred_video_urls
+WHEN EXISTS (SELECT 1 FROM works w WHERE w.id = OLD.work_id)
+BEGIN
+    INSERT INTO assets (id, manifestation_id, work_id, origin_work_id, kind, role, storage_locator,
+                        provider, provider_id, url, media_type, thumb_page, thumb_url,
+                        canonical_annotation_set_revision, materialized_pdf_annotation_revision, origin)
+    SELECT 'AS-' || hex(randomblob(16)), m.id, m.work_id, v.work_id, v.kind, 'document', v.storage_locator,
+           v.provider, v.provider_id, v.url, v.media_type, v.thumb_page, v.thumb_url,
+           v.canonical_annotation_set_revision, v.materialized_pdf_annotation_revision, 'legacy'
+    FROM legacy_work_asset_mirror v
+    JOIN manifestations m ON m.origin_work_id = v.work_id AND m.work_id = v.work_id
+    WHERE v.work_id = OLD.work_id AND v.has_asset_value
+      AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.origin_work_id = OLD.work_id);
+    UPDATE assets
+    SET (kind, storage_locator, provider, provider_id, url, media_type, thumb_page, thumb_url,
+         canonical_annotation_set_revision, materialized_pdf_annotation_revision, updated_at) =
+        (SELECT v.kind, v.storage_locator, v.provider, v.provider_id, v.url, v.media_type,
+                v.thumb_page, v.thumb_url, v.canonical_annotation_set_revision,
+                v.materialized_pdf_annotation_revision, CURRENT_TIMESTAMP
+         FROM legacy_work_asset_mirror v WHERE v.work_id = OLD.work_id)
+    WHERE origin_work_id = OLD.work_id AND work_id = OLD.work_id;
+    UPDATE manifestations
+    SET (doc_type, year, published_date, edition, publisher, location, journal, volume, issue,
+         pages, isbn, doi, url, urldate, updated_at) =
+        (SELECT v.doc_type, v.year, v.published_date, v.edition, v.publisher, v.location, v.journal,
+                v.volume, v.issue, v.pages, v.isbn, v.doi, v.url, v.urldate, CURRENT_TIMESTAMP
+         FROM legacy_work_manifestation_mirror v WHERE v.work_id = OLD.work_id)
+    WHERE origin_work_id = OLD.work_id AND work_id = OLD.work_id;
+END;
+
+CREATE TRIGGER argument_sources_mirror_pin_ai
+AFTER INSERT ON argument_sources
+WHEN NEW.manifestation_id IS NULL AND NEW.pages <> ''
+BEGIN
+    UPDATE argument_sources
+    SET manifestation_id = (SELECT w.primary_manifestation_id FROM works w WHERE w.id = NEW.work_id)
+    WHERE argument_id = NEW.argument_id AND order_index = NEW.order_index;
+END;
+
+-- Pre-existing indexes on the rebuilt leaf tables.
+-- One relationship per (person, work, role): the identity the sync
+-- protocol scopes a revision by. The table's PK includes order_index,
+-- so without this the database would permit two rows for one scope.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_person_work_role_unique
+    ON roles(person_id, work_id, role_type);
+CREATE INDEX IF NOT EXISTS idx_roles_work_id ON roles(work_id);
+CREATE INDEX IF NOT EXISTS idx_roles_person_id ON roles(person_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_work_id ON annotations(work_id);
+CREATE INDEX IF NOT EXISTS idx_argument_sources_work_id
+    ON argument_sources(work_id);
