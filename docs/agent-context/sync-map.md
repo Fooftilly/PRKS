@@ -1,6 +1,11 @@
 # Agent context map: local-first and sync
 
-Use this map before loading the large local-first specifications. Start with the smallest relevant section and expand only when the task crosses additional synchronization domains.
+Use this map before loading the large local-first specifications. For
+`docs/local-first-sync.md`, start with the smallest relevant section and expand
+only when the task crosses additional synchronization domains. Before changing
+offline, local-first, synchronization, service-worker, conflict/revision, or
+client-cache behavior, read `docs/agent-rules/offline-pwa.md` completely as
+required by `frontend/AGENTS.md`.
 
 Canonical references:
 - `docs/local-first-sync.md`: synchronization semantics and domain invariants.

@@ -1,6 +1,9 @@
 # PRKS browser E2E agent instructions
 
-These rules apply to browser E2E and UX-tour work in addition to the repository-root `AGENTS.md`. They are intentionally scoped here so ordinary implementation workers do not carry the full Playwright policy in every task.
+These rules apply to browser E2E work in addition to the repository-root
+`AGENTS.md`. UX Interaction Tour policy lives in `tests/ux_tour/AGENTS.md`.
+They are intentionally scoped here so ordinary implementation workers do not
+carry the full Playwright policy in every task.
 
 ## E2E TESTING POLICY
 
@@ -27,14 +30,18 @@ is **not** equivalent to a full E2E gate. Say which tier ran.
 ### During implementation
 
 1. Run the relevant unit/self-tests first.
-2. Run only E2E tests for the changed feature (`--feature` or a test id).
-3. Prefer `--affected` when the working-tree diff is the right scope.
+2. Prefer fast targeted tests (unit, Node selftests, static contracts, API).
+   Run browser E2E for the changed feature (`--feature` or a test id) **only**
+   when the behavior can only be verified in a browser.
+3. Prefer `--affected` when the working-tree diff is the right scope and browser
+   verification is needed.
 4. Use `--dev` (fail-fast, no pointer-capture) while debugging. Retries are
    already off; do not add retries that hide failures.
 5. Stop quickly on failures (`--fail-fast` / `--dev`).
 6. If an E2E test fails, reproduce that specific failure before any broader run.
 7. After fixing, rerun the failed test (`--last-failed` or the test id).
-8. Then rerun the affected feature group.
+8. After a coherent vertical slice (or after browser-required debugging), rerun
+   the affected feature group if E2E was in scope.
 9. Then run `--smoke` if the change touches shell/navigation/shared paths.
 10. Run the complete E2E suite **only** when the implementation is otherwise
     ready for final validation.

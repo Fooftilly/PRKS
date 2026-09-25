@@ -45,11 +45,11 @@ class AgentContextBudgetTests(unittest.TestCase):
         oversized = []
         always_apply_lines = 0
 
-        for path in sorted(rules_dir.glob("*.mdc")):
+        for path in sorted(rules_dir.rglob("*.mdc")):
             text = path.read_text(encoding="utf-8")
             lines = len(text.splitlines())
             if lines > 500:
-                oversized.append(f"{path.name}: {lines} lines")
+                oversized.append(f"{path.relative_to(ROOT)}: {lines} lines")
             if re.search(r"(?m)^alwaysApply:\s*true\s*$", text):
                 always_apply_lines += lines
 

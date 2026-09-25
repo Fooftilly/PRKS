@@ -8,9 +8,9 @@ guidance still said "read-only offline", and the next change re-added a
 connectivity guard in front of an operation that no longer needed one.
 
 The detailed Offline/PWA contract lives in `docs/agent-rules/offline-pwa.md`,
-routed from the root `AGENTS.md` stub. Obsolete-phrase and durable-family
-assertions therefore cover the files agents are expected to read for that
-domain, not root `AGENTS.md` alone.
+routed from `frontend/AGENTS.md` (and the root `AGENTS.md` stub). Obsolete-phrase
+and durable-family assertions therefore cover the files agents are expected to
+read for that domain, not root `AGENTS.md` alone.
 
 These are deliberately *phrase* assertions rather than a general style check.
 They fail loudly when a specific obsolete claim returns, and they say what is
@@ -86,8 +86,12 @@ class AgentGuidanceTests(unittest.TestCase):
     def setUp(self):
         self.agents = AGENTS.read_text()
         self.offline_pwa = OFFLINE_PWA.read_text()
+        self.frontend_agents = (ROOT / "frontend" / "AGENTS.md").read_text(
+            encoding="utf-8")
         # Combined corpus agents read for offline/local-first guidance.
-        self.guidance = self.agents + "\n" + self.offline_pwa
+        self.guidance = (
+            self.agents + "\n" + self.frontend_agents + "\n" + self.offline_pwa
+        )
         self.status = STATUS.read_text()
 
     # ---- obsolete phrases that must never come back ------------------------

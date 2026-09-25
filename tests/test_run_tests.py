@@ -152,7 +152,6 @@ class TestRunTests(unittest.TestCase):
         for phrase in (
             "do not run browser E2E tests at all",
             "neither the full suite nor an entire module",
-            "Never run browser E2E tests while iterating",
             "run the relevant targeted E2E feature/module once",
             "If an E2E test fails, stop running the full suite",
             "--jobs 4 --no-pointer-capture",
@@ -162,7 +161,9 @@ class TestRunTests(unittest.TestCase):
             "python tests/e2e/run.py --jobs 4",
         ):
             self.assertIn(phrase, text, phrase)
-        # Root context must route browser-test work to the scoped cadence policy.
+        # Root Commands keeps the ambient iterate-cheap phrase and routes to
+        # the scoped cadence policy (exact wording lives in tests/e2e/AGENTS.md).
+        self.assertIn("Never run browser E2E tests while iterating", root_text)
         self.assertIn("tests/e2e/AGENTS.md", root_text)
 
 
