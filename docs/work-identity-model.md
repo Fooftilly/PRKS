@@ -1223,9 +1223,18 @@ Asset AS-…  (one File in the UI; owns annotations, page state, thumbnails)
   it never changes.
 - **Legacy Assets** never had their original bytes preserved, so their
   `ingest_sha256` stays **NULL**. PRKS must not invent it from bytes that have
-  since been materialized. Exact-duplicate detection against legacy files uses
-  `content_sha256` and is documented as weaker: it matches an unannotated legacy
-  file, and misses one whose bytes PRKS has rewritten.
+  since been materialized. **Legacy fallback compares like with like.**
+  Legacy `content_sha256` describes *working* bytes, which ingestion has
+  already linearized (`store_new_managed_pdf_*` →
+  `_finalize_exclusive_managed_create`). Comparing it with a new file's
+  pre-linearization `ingest_sha256` would miss even an identical upload. So
+  the fallback compares a legacy `content_sha256` with the new upload's
+  **post-linearization, pre-annotation** hash, which is the new Asset's
+  initial `content_sha256`, computed in the same ingestion step. This is
+  documented as weaker. It matches an unannotated legacy file only if the
+  linearizer produces the same bytes for the same input (same qpdf version
+  and deterministic IDs). It misses any file whose bytes PRKS has since
+  rewritten.
 - **When a separate Asset is correct:** a different file the user brings in
   (another scan, another download, a copy annotated elsewhere, a re-captured
   snapshot). Such Assets have their own annotations and page state, and the
@@ -1275,7 +1284,7 @@ of them merges anything by itself**.
 
 | Level | Evidence | Confidence | Allowed automation |
 | --- | --- | --- | --- |
-| Exact Asset duplicate | equal `ingest_sha256` (or `content_sha256` for legacy files) | Certain for the content | **Warn before import**, showing the existing Work. Never auto-link or auto-delete. |
+| Exact Asset duplicate | equal `ingest_sha256`. For legacy files, the legacy `content_sha256` is compared with the new upload's post-linearization hash (§9.4) | Certain for the content | **Warn before import**, showing the existing Work. Never auto-link or auto-delete. |
 | Identifier match | equal normalized DOI, ISBN-13, or arXiv ID (versionless → same work, versioned → same revision) | Strong for "same publication", but **not** proof of "same Work" (a DOI identifies one form) | Suggest. The user decides. |
 | Metadata similarity | normalized title, creator family names, year, publisher/journal | Weak | Suggest in a review list only. RapidFuzz may rank candidates (#42/#179). **Never decides.** |
 
@@ -1312,7 +1321,7 @@ before mutation. None of them is silent.
 | Operation | Effect | IDs |
 | --- | --- | --- |
 | `MERGE_WORKS(source → target)` | Moves all source Manifestations (with their Assets and annotations) under the target. Unions tags. Folder, playlist and status: target wins unless the user picks. Research/Private Notes: **the user chooses** (keep target, keep source, or concatenate with a visible separator); never silently concatenated. Roles are unioned, with duplicates collapsed. Argument sources and research mentions are re-pointed, and any citation-identity collision is shown in the preview (§8.5). `last_opened_at` is max. | The source `W-…` gets `sync_work_lifecycle(state = merged, target)`. Old links, tabs and `[[W-…]]` **reads** follow the redirect. **Every** pending operation naming the source is refused with `WORK_MERGED` + `target_work_id` and is never applied to the target. The client may re-apply the user's intent explicitly (§14.2). |
-| `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." One `UPDATE manifestations SET work_id` re-keys everything the Manifestation owns by cascade (§4.1): its Assets' and annotations' `work_id`, its scoped roles, and its pinned argument sources. None of these can collide, because each identity includes the unchanged `MF-…` ID. If the Manifestation is a pointer target of the old Work and siblings remain, the pointer is re-pointed to a sibling first. If it is the old Work's **only** Manifestation, the command requires an explicit `empty_source` outcome, `delete` or `merge`, and retires the old Work in the same transaction (§4.1 "Transitions"). No placeholder Version is ever created. Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. |
+| `MOVE_MANIFESTATION(M → Work)` | "This is really a Version of that Work." One `UPDATE manifestations SET work_id` re-keys everything the Manifestation owns by cascade (§4.1): its Assets' and annotations' `work_id`, its scoped roles, and its pinned argument sources. None of these can collide, because each identity includes the unchanged `MF-…` ID. If the Manifestation is a pointer target of the old Work and siblings remain, the pointer is re-pointed to a sibling first. If it is the old Work's **only** Manifestation, the command requires an explicit `empty_source` outcome, `delete` or `merge`, and retires the old Work in the same transaction (§4.1 "Transitions"). No placeholder Version is ever created. **Inherited metadata is frozen before the move**, by the same rule as `MERGE_WORKS` step 3. A NULL `title` or `abstract` override whose old-Work value differs from the destination's is written as an explicit override. The empty-source case is shown in the preview. The Version's displayed and cited metadata therefore never changes silently, and the preview lists these along with the dropped relations. Relations to Manifestations of the old Work are dropped, with a preview. | `MF-…` unchanged. |
 | `MOVE_ASSET(A → Manifestation)` | "This file is another scan of that edition." It sets the Asset's `manifestation_id` and `work_id` together (the composite FK requires the pair to match). Its annotations keep their `asset_id` and follow the new `work_id` by cascade. If the Asset is its Manifestation's primary, the same transaction re-points `primary_asset_id` to a remaining active sibling, or clears it when none remains. A Manifestation with zero Assets is a valid final state. **On the destination side**, if the destination Manifestation had no active Asset, which means its `primary_asset_id` is NULL, the moved active Asset becomes its primary in the same transaction. Otherwise the destination's primary is unchanged. The deferred `NO ACTION` FK and the command's final-state check verify both sides at COMMIT. | `AS-…` unchanged. |
 | `DECLINE_DUPLICATE(a, b)` | Records "not a duplicate". | `duplicate_decisions(entity_type, low_id, high_id, decision, decided_at)`. |
 
@@ -1974,7 +1983,7 @@ exactly right.
 | **F. Role scope** | vN+3: role-type scope defaults, the uniqueness swap, `credits(M)`, and the role-sync scope for M-scoped roles. | No | E |
 | **G. Typed Version/File/Source API** | §13.3 read endpoints first, then mutations as canonical domain commands (#182/#199 pattern) with OpenAPI and openapi-core tests. New durable families declared per the sync guide. | API only | D, E, F |
 | **H. Versions UI** | "Add another version / file", set primary, open a specific Version or File, and a version picker for Copy citation, all behind §13.4's progressive disclosure. Follow `DESIGN.md` for Work detail composition. #61's secondary view builds on this. | **Yes** | G |
-| **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256` (and `content_sha256` for legacy files). Offers the four choices in §10.2. | Yes | B, H |
+| **I. Exact-duplicate warning at ingestion** | Uses `ingest_sha256`. For legacy files it compares `content_sha256` with the upload's post-linearization hash (§9.4). Offers the four choices in §10.2. | Yes | B, H |
 | **J. Identifier candidates + decline** | Normalized DOI/ISBN/arXiv candidates, a review list, and `duplicate_decisions`. | Yes | E, I |
 | **K. Merge / move workflow** | Command-level versions of the §4.1 transition tests, including each `empty_source` outcome. Ships `manifestation_credit_overrides` (§7.2) if it does not exist yet, and tests a credit-spelling collision. `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
 | **L. RapidFuzz evaluation** | A separate research/evaluation issue (dependency review, ranking quality on synthetic data). It only ranks; it never decides. | — | J |
