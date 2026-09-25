@@ -219,10 +219,32 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("!inTiled &&", layout)
         self.assertIn("Settings cannot override", layout)
         self.assertNotIn(
-            "(mobileForceSide && width > 0 && width < 720)",
-            layout.replace("!inTiled && (width >= 720 || (mobileForceSide && width > 0 && width < 720))", ""),
+            "mobileForceSide &&",
+            layout.replace(
+                "!inTiled && width > 0 && (!isNarrowWidth || mobileForceSide)",
+                "",
+            ),
             "force-side must not apply outside the !inTiled gate",
         )
+        self.assertIn("PRKS_WORKSPACE_NARROW_PX", layout)
+        self.assertIn("prksWorkspaceWidthIsNarrow", layout)
+        self.assertIn("isNarrowWidth", layout)
+
+        # Works consumer: exact 720px must be narrow (drawer, not side), matching CSS
+        # max-width inclusive semantics. Node selftest overrides clientWidth and restores it.
+        notes_layout = os.path.join(
+            _PROJECT_DIR, "tests", "browser", "run_work_notes_layout_selftest.js"
+        )
+        proc = subprocess.run(
+            ["node", notes_layout],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=_PROJECT_DIR,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("exact 720px stacked uses drawer", proc.stdout)
+        self.assertIn("exact 720px stacked is not side", proc.stdout)
 
         self.assertIn("Research notes beside PDF when narrow", index)
         self.assertNotIn("Research notes beside PDF on mobile", index)

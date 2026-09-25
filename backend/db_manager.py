@@ -1395,15 +1395,8 @@ class PRKSDatabase:
 
     # --- Files for processing (staging inbox) ---
     _PROCESSING_STATUSES_ORDER = {"pending": 0, "missing": 1, "error": 2, "imported": 3}
-    _PROCESSING_ROLE_TYPES = {
-        "Author",
-        "Editor",
-        "Reviewer",
-        "Translator",
-        "Introduction",
-        "Foreword",
-        "Afterword",
-    }
+    # Same intentional subset as People navigation (excludes Mentioned).
+    _PROCESSING_ROLE_TYPES = work_role_sync.PEOPLE_ROLE_TYPE_SET
 
     def _processing_role_public(self, row: dict) -> dict:
         first = (row.get("first_name") or "").strip()

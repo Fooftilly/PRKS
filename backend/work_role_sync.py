@@ -46,6 +46,14 @@ ROLE_TYPES = ("Author", "Editor", "Reviewer", "Mentioned", "Translator",
               "Introduction", "Foreword", "Afterword")
 ROLE_TYPE_SET = frozenset(ROLE_TYPES)
 
+# People-navigation / Processing / bibliographic picker subset. `Mentioned` is
+# a real Work-Person role (annotation-derived) but is intentionally not a
+# navigable People filter and is not offered when staging a Processing File.
+# Derived from ROLE_TYPES so a future role addition cannot silently omit the
+# subset unless Mentioned is the only exclusion named here.
+PEOPLE_ROLE_TYPES = tuple(role for role in ROLE_TYPES if role != "Mentioned")
+PEOPLE_ROLE_TYPE_SET = frozenset(PEOPLE_ROLE_TYPES)
+
 # A credit override is a person's name as printed on one work. Bounded so the
 # field has a contract rather than inheriting whichever layer refuses first,
 # and small enough that a terminal result carrying two of them still fits the

@@ -1642,11 +1642,20 @@ function prksReapplyWorkNotesSplitLayout(ctx) {
     const mobileForceSide =
         typeof prksGetMobileWorkNotesRightEnabled === 'function' && prksGetMobileWorkNotesRightEnabled();
     const inTiled = !!(ws.closest && ws.closest('.prks-workspace-canvas--tiled'));
+    const narrowPx =
+        typeof window.PRKS_WORKSPACE_NARROW_PX === 'number' && window.PRKS_WORKSPACE_NARROW_PX > 0
+            ? window.PRKS_WORKSPACE_NARROW_PX
+            : 720;
+    const isNarrowWidth =
+        typeof window.prksWorkspaceWidthIsNarrow === 'function'
+            ? !!window.prksWorkspaceWidthIsNarrow(width)
+            : width > 0 && width <= narrowPx;
     /* Stacked wide → sidecar. Tiled expanded → always drawer (never a side strip against
      * the Main/Secondary separator — Settings cannot override that). Narrow stacked →
-     * drawer unless Settings forces a sidecar. */
+     * drawer unless Settings forces a sidecar. Narrow matches CSS max-width:NARROW_PX
+     * (inclusive at the threshold). */
     const wantSide =
-        !inTiled && (width >= 720 || (mobileForceSide && width > 0 && width < 720));
+        !inTiled && width > 0 && (!isNarrowWidth || mobileForceSide);
     const collapsed = ws.classList.contains('work-workspace--notes-collapsed');
     const wantDrawer = !wantSide && !collapsed && width > 0;
     ws.classList.toggle('work-workspace--side', wantSide);
@@ -1885,7 +1894,14 @@ function setupWorkNotesSplitResize(ctx, workId) {
         const hostRect = host.getBoundingClientRect();
         const isOutOfViewport = nRect.bottom > hostRect.bottom + 1 || nRect.top < hostRect.top - 1;
         const collapsed = ws.classList.contains('work-workspace--notes-collapsed');
-        const isSmall = ws.clientWidth > 0 && ws.clientWidth < 720;
+        const narrowPx =
+            typeof window.PRKS_WORKSPACE_NARROW_PX === 'number' && window.PRKS_WORKSPACE_NARROW_PX > 0
+                ? window.PRKS_WORKSPACE_NARROW_PX
+                : 720;
+        const isSmall =
+            typeof window.prksWorkspaceWidthIsNarrow === 'function'
+                ? !!window.prksWorkspaceWidthIsNarrow(ws.clientWidth)
+                : ws.clientWidth > 0 && ws.clientWidth <= narrowPx;
         if (collapsed && isOutOfViewport && isSmall) {
             ws.classList.remove('work-workspace--notes-collapsed');
             try {
