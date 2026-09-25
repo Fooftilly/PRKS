@@ -474,6 +474,18 @@ Module count after this slice: **55** Chromium scenarios (from 57). Conflict UI
 buttons, offline reload+reconnect, diagnostics, hydration, and all projection
 families remain in the browser module.
 
+#### Work metadata rationalization — Slice B (abstract oversize refuse)
+
+Non-projection bounds check. Independent of Work read-projection work (#207).
+Progress / `abstract_excerpt` overlay E2Es remain deferred.
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Oversize Abstract refused without touching durable state or the server | Selftest asserts the exact `Abstract is too long to save (…) ` message and byte-vs-character limit; `test_the_editor_refuses_an_oversize_value_before_enqueueing` pins the editor abort; Python `test_abstract_limit_is_the_same_contract_on_both_paths` covers server refuse | MOVE |
+
+Module count after this slice alone on master: **56** Chromium scenarios (from 57).
+Combined with Slice A (core protocol): **54**.
+
 ## Benchmark protocol
 
 For any optimization:

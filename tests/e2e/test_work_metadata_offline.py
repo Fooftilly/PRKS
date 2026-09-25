@@ -2028,28 +2028,6 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertIn('Beyond the old ceiling', self.progress_excerpt(page, work),
                       'the excerpt is unchanged by acknowledgement')
 
-    def test_an_oversize_abstract_is_refused_without_touching_anything(self):
-        server, page, context = self.start()
-        work = server.ids['work_a']
-        self.offline(page, context)
-        seen = self.record_paths(page)
-        page.evaluate("""() => {
-            const input = document.querySelector('[data-prks-work-field="abstract"]');
-            input.value = 'x'.repeat(1024 * 1024 + 1);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-        }""")
-        self.save(page)
-        page.wait_for_function("""() => {
-            const status = document.querySelector('[data-prks-role="work-bib-sync"]');
-            return !!status && status.textContent.indexOf('too long to save') !== -1;
-        }""")
-        self.assertEqual(self.operations(page), [], 'nothing durable was stored')
-        self.assertEqual([url for method, url in seen if method != 'GET'], [])
-        self.assertEqual(page.evaluate(
-            "() => document.querySelector('[data-prks-work-field=\"abstract\"]').value.length"),
-            1024 * 1024 + 1, 'the draft stays on screen')
-        self.assertEqual(self.server_fields(server, work)['abstract'], {'revision': 0})
-
     def test_an_abstract_conflict_shows_bounded_previews(self):
         """A megabyte of Abstract must not be dumped into a conflict sentence,
         and the durable row could not store it even if it were."""

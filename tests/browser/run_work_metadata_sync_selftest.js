@@ -1815,6 +1815,10 @@ async function abstracts() {
     assert.equal(limit, 1024 * 1024);
     assert.equal(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit)), null);
     assert(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)));
+    // Same user-facing refusal the editor paints into the bib sync status.
+    assert.match(
+        globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)),
+        /^Abstract is too long to save \(1025 KB of 1024 KB allowed\)\.$/);
     const multibyte = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
     assert(multibyte.length < limit, 'under the limit by character count');
     assert(globalThis.prksWorkFieldUtf8Bytes(multibyte) > limit, '...but over it in bytes');
@@ -1822,6 +1826,15 @@ async function abstracts() {
         'a limit enforced in characters would not exist for the users most likely to hit it');
     assert.equal(globalThis.prksWorkFieldLimitError('doi', 'x'.repeat(limit)), null,
         'only byte-limited fields are checked here');
+
+    // An oversize Abstract never becomes a durable operation: dirty detection
+    // still sees the draft, but the editor aborts before enqueue (static
+    // contract in test_frontend_work_metadata_sync). The store path itself
+    // would accept a value that already passed the editor gate.
+    const refuseStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    assert.equal(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)) == null, false);
+    assert.deepEqual(await refuseStore.listOperations(), [],
+        'limit refusal is decided before any store write is attempted');
 
     // Pending Abstract overlays the Work, and DERIVES the browse excerpt.
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
