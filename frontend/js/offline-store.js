@@ -113,6 +113,11 @@
      * Uses `idb.wrap` so object-store methods return Promises, and waits on
      * `tx.done` for readwrite so a request-level success that later aborts is
      * reported as failure. Reads resolve when the request Promise settles.
+     *
+     * `tx.done` is observed as soon as the transaction is created: a request
+     * rejection (or a throw from `fn`) aborts the transaction and rejects
+     * `done`, and that rejection must not escape as an unhandledrejection
+     * while the public API still resolves fail-soft.
      */
     function runIdbStoreRequest(openDb, storeName, mode, fn) {
         return openDb()
@@ -124,6 +129,22 @@
                 } catch (_e) {
                     return { ok: false, value: null };
                 }
+                const done = tx && tx.done;
+                const hasDone = !!(done && typeof done.then === 'function');
+                // Settle to a boolean so both success and abort are consumed.
+                // Attached immediately — before fn/outcome — so a rejected
+                // request cannot leave done unhandled while we fail-soft.
+                const doneSettled = hasDone
+                    ? done.then(
+                        function () {
+                            return true;
+                        },
+                        function () {
+                            return false;
+                        }
+                    )
+                    : null;
+
                 let store;
                 let outcome;
                 try {
@@ -135,24 +156,38 @@
                     } catch (_abortErr) {
                         /* ignore */
                     }
+                    if (doneSettled) {
+                        return doneSettled.then(function () {
+                            return { ok: false, value: null };
+                        });
+                    }
                     return { ok: false, value: null };
                 }
                 const waitsForCommit = mode === 'readwrite';
                 return Promise.resolve(outcome)
                     .then(function (value) {
                         if (!waitsForCommit) {
+                            // doneSettled already converts abort to a resolved
+                            // false — no unhandledrejection either way. Do not
+                            // delay successful reads on commit.
                             return { ok: true, value: value };
                         }
-                        const done = tx && tx.done;
-                        if (done && typeof done.then === 'function') {
-                            return done.then(function () {
-                                return { ok: true, value: value };
+                        if (doneSettled) {
+                            return doneSettled.then(function (committed) {
+                                return committed
+                                    ? { ok: true, value: value }
+                                    : { ok: false, value: null };
                             });
                         }
                         // Fail closed if the wrapper did not attach done.
                         return { ok: false, value: null };
                     })
                     .catch(function () {
+                        if (doneSettled) {
+                            return doneSettled.then(function () {
+                                return { ok: false, value: null };
+                            });
+                        }
                         return { ok: false, value: null };
                     });
             })

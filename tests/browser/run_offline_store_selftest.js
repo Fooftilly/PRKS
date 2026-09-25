@@ -210,6 +210,40 @@ async function run() {
         assert('a failed write does not poison later reads (still no throw)', !readThrew);
     }
 
+    /* ---- request failure must not leave idb tx.done as an unhandled rejection ----
+     * Codex/Qodo #200: catching the request Promise while only awaiting tx.done
+     * on success left done's abort rejection unhandled → spurious client-errors. */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb }));
+        await store.isAvailable();
+        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        assert('fake db created for unhandled-rejection regression', !!db);
+        db._stores.get('entities').forceError = true;
+
+        let unhandled = 0;
+        function onUnhandled(_reason) {
+            unhandled += 1;
+        }
+        process.on('unhandledRejection', onUnhandled);
+        let putResult;
+        let threw = false;
+        try {
+            putResult = await store.putEntity('work', 'W-urej', { title: 'x' }, '');
+            // Let the abort/done microtasks finish after the public Promise settles.
+            await new Promise(function (resolve) {
+                setTimeout(resolve, 20);
+            });
+        } catch (_e) {
+            threw = true;
+        } finally {
+            process.removeListener('unhandledRejection', onUnhandled);
+        }
+        assert('forceError put still never throws', !threw);
+        assertEq('forceError put still resolves false', putResult, false);
+        assertEq('forceError put leaves no unhandled rejection from tx.done', unhandled, 0);
+    }
+
     /* ---- deleteDatabase discards only the disposable cache, resolves cleanly ---- */
     {
         const idb = createFakeIndexedDBFactory();

@@ -297,6 +297,16 @@ function makeStoreHandle(store, tx) {
             } catch (e) {
                 req.error = e;
                 req._emit('error', { target: req, type: 'error' });
+                tx._pending -= 1;
+                // Real IndexedDB aborts the transaction when a request errors
+                // without preventDefault. Completing instead would hide the
+                // idb `tx.done` rejection path that production must consume.
+                try {
+                    tx.abort();
+                } catch (_abortErr) {
+                    /* ignore */
+                }
+                return;
             }
             tx._pending -= 1;
             // Only settle once the transaction has had a chance to schedule
