@@ -7,12 +7,17 @@ POSITION_IN_USE, and revision rules stay in ``research_network`` /
 Wrong-type ``name`` / ``description`` map to the established domain codes
 (``invalid_name`` / ``invalid_text``) so the typed boundary does not change
 existing Position API error semantics.
+
+POST ``description`` preserves pre-#185 falsy normalization
+(``data.get('description', '') or ''``): supplied falsy non-strings become
+``""`` before the domain sees them. Truthy non-strings still refuse as
+``invalid_text``. PATCH does **not** use that rule (null remains omit).
 """
 from __future__ import annotations
 
 from typing import Any, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from backend.api_contract.errors import (
     research_error_envelope,
@@ -35,8 +40,20 @@ class PositionCreateRequest(BaseModel):
     name: str = Field(..., description="Position claim name (domain-normalized).")
     description: Optional[str] = Field(
         default=None,
-        description="Optional markdown description; domain enforces limits.",
+        description=(
+            "Optional markdown description; domain enforces limits. "
+            "Falsy JSON values (null, false, 0, [], \"\") normalize to empty "
+            "string for pre-#185 POST compatibility."
+        ),
     )
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def coerce_falsy_description(cls, value: Any) -> Any:
+        """Match pre-slice ``data.get('description', '') or ''`` for POST."""
+        if not value:
+            return ""
+        return value
 
 
 class PositionUpdateRequest(BaseModel):

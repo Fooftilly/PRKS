@@ -185,9 +185,29 @@ def positions_openapi_document() -> dict[str, Any]:
                 "operationId": "getPositionSyncState",
                 "summary": "Position field revisions (sync-state)",
                 "tags": ["positions"],
+                "parameters": [
+                    {
+                        "name": "If-None-Match",
+                        "in": "header",
+                        "required": False,
+                        "schema": {"type": "string"},
+                        "description": (
+                            "Conditional read: when equal to the current ETag, "
+                            "responds 304 Not Modified (bodyless)."
+                        ),
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "Revisions only.",
+                        "headers": {
+                            "ETag": {
+                                "description": (
+                                    "Opaque revision token for conditional GETs."
+                                ),
+                                "schema": {"type": "string"},
+                            }
+                        },
                         "content": _json_content(
                             {"$ref": "#/components/schemas/PositionSyncState"}
                         ),
@@ -197,6 +217,15 @@ def positions_openapi_document() -> dict[str, Any]:
                             "Not modified: If-None-Match matched the current "
                             "ETag. Bodyless."
                         ),
+                        "headers": {
+                            "ETag": {
+                                "description": (
+                                    "Current revision token (same as a matching "
+                                    "200)."
+                                ),
+                                "schema": {"type": "string"},
+                            }
+                        },
                     },
                     "404": _json_error("Not found."),
                 },

@@ -252,9 +252,28 @@
         "tags": [
           "positions"
         ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Revisions only.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque revision token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -264,7 +283,15 @@
             }
           },
           "304": {
-            "description": "Not modified: If-None-Match matched the current ETag. Bodyless."
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Current revision token (same as a matching 200).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "description": "Not found.",
@@ -329,7 +356,7 @@
               }
             ],
             "default": null,
-            "description": "Optional markdown description; domain enforces limits.",
+            "description": "Optional markdown description; domain enforces limits. Falsy JSON values (null, false, 0, [], \"\") normalize to empty string for pre-#185 POST compatibility.",
             "title": "Description"
           }
         },

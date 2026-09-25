@@ -125,6 +125,8 @@ def _validate_http_against_openapi(
     path_pattern: str | None = None,
     view_args: dict | None = None,
     check_request: bool = True,
+    request_headers: dict | None = None,
+    response_headers: dict | None = None,
 ) -> None:
     """Fail the test if openapi-core rejects the live request/response pair.
 
@@ -139,12 +141,16 @@ def _validate_http_against_openapi(
         path=path,
         path_pattern=path_pattern,
         view_args=view_args,
+        headers=request_headers,
         data=request_body,
     )
     # Bodyless 304 must not claim application/json content.
     content_type = "" if status == 304 else "application/json"
     resp = MockResponse(
-        data=response_body, status_code=status, content_type=content_type
+        data=response_body,
+        status_code=status,
+        content_type=content_type,
+        headers=response_headers,
     )
     if check_request:
         api.validate_request(req)
@@ -164,12 +170,24 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(err["error"], "Name must be a string.")
 
     def test_create_request_wrong_type_description_preserves_domain_code(self):
+        # Truthy non-string still refuses (pre-#185 passed it to the domain).
         model, err = parse_position_request(
             PositionCreateRequest, {"name": "ok", "description": 5}
         )
         self.assertIsNone(model)
         self.assertEqual(err["code"], "invalid_text")
         self.assertEqual(err["error"], "Text must be a string.")
+
+    def test_create_request_falsy_description_normalizes_to_empty(self):
+        """Pre-#185 POST: ``description or ''`` before the domain."""
+        for falsy in (False, 0, [], None, ""):
+            with self.subTest(description=falsy):
+                model, err = parse_position_request(
+                    PositionCreateRequest,
+                    {"name": "Falsy desc", "description": falsy},
+                )
+                self.assertIsNone(err)
+                self.assertEqual(model.description, "")
 
     def test_create_request_passes_plain_values(self):
         model, err = parse_position_request(
@@ -267,6 +285,12 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             "responses"
         ]
         self.assertIn("304", sync_responses)
+        sync_get = doc["paths"]["/api/positions/{position_id}/sync-state"]["get"]
+        sync_params = {p["name"]: p for p in sync_get.get("parameters", [])}
+        self.assertIn("If-None-Match", sync_params)
+        self.assertEqual(sync_params["If-None-Match"]["in"], "header")
+        self.assertIn("ETag", sync_responses["200"].get("headers", {}))
+        self.assertIn("ETag", sync_responses["304"].get("headers", {}))
         post_responses = doc["paths"]["/api/positions"]["post"]["responses"]
         patch_responses = doc["paths"]["/api/positions/{position_id}"]["patch"][
             "responses"
@@ -685,7 +709,16 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         etag = hdrs.get("etag")
         self.assertTrue(etag, hdrs)
-        status, body, raw304, _, _ = self._json(
+        _validate_http_against_openapi(
+            method="GET",
+            path=sync_path,
+            path_pattern="/api/positions/{position_id}/sync-state",
+            view_args={"position_id": created["id"]},
+            status=200,
+            response_body=raw,
+            response_headers={"ETag": etag},
+        )
+        status, body, raw304, _, hdrs304 = self._json(
             "GET",
             sync_path,
             expect_status=304,
@@ -693,6 +726,8 @@ class PositionHttpContractTests(unittest.TestCase):
         )
         self.assertIsNone(body)
         self.assertEqual(raw304, b"")
+        etag304 = hdrs304.get("etag")
+        self.assertTrue(etag304, hdrs304)
         _validate_http_against_openapi(
             method="GET",
             path=sync_path,
@@ -700,8 +735,36 @@ class PositionHttpContractTests(unittest.TestCase):
             view_args={"position_id": created["id"]},
             status=304,
             response_body=raw304,
+            request_headers={"If-None-Match": etag},
+            response_headers={"ETag": etag304},
         )
         self._json("DELETE", f"/api/positions/{created['id']}", expect_status=200)
+
+    def test_post_falsy_description_normalizes_to_empty(self):
+        """Pre-#185: JSON false/0 descriptions become empty string on create."""
+        for falsy, label in ((False, "false"), (0, "zero")):
+            with self.subTest(description=falsy):
+                status, created, raw, req, _ = self._json(
+                    "POST",
+                    "/api/positions",
+                    {"name": f"Falsy {label}", "description": falsy},
+                    expect_status=201,
+                )
+                self.assertEqual(created["description"], "")
+                PositionDetail.model_validate(created)
+                _validate_http_against_openapi(
+                    method="POST",
+                    path="/api/positions",
+                    status=status,
+                    response_body=raw,
+                    request_body=req,
+                    check_request=False,
+                )
+                self._json(
+                    "DELETE",
+                    f"/api/positions/{created['id']}",
+                    expect_status=200,
+                )
 
     def test_post_and_patch_415_and_413_documented(self):
         # 415: wrong Content-Type
