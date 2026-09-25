@@ -4926,6 +4926,7 @@ class TestServerAPI(unittest.TestCase):
         handler = _H()
         loggers = [
             logging.getLogger("prks.server"),
+            logging.getLogger("prks.api.saved_views"),
             logging.getLogger("prks.db"),
             logging.getLogger("prks.performance"),
         ]

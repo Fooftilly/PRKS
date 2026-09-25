@@ -51,7 +51,8 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 ## Layout
 
 - `prks_app.py` CLI (the only process entry)
-- `backend/server.py` HTTP adapter: parsing, dispatch, status/headers, JSON, ETags, static files
+- `backend/server.py` HTTP adapter lifecycle: host/origin checks, request-size limits, library access gate, method dispatch, status/headers, JSON/ETags, static files
+- `backend/api/` optional domain HTTP controllers extracted from `server.py` (parse/validate request shape, invoke domain, map errors to status/bodies). First family: `backend/api/saved_views.py`
 - `backend/storage/config.py` frozen storage snapshot and env parser
 - `backend/storage/paths.py` storage-path derivation and testing-mode containment
 - `backend/db_manager.py` SQLite
@@ -77,9 +78,17 @@ New substantial behavior, in order:
 1. Extend an existing focused module when the behavior belongs there (`text_index` for indexing, `pdf_linearize` for linearization, `storage.paths` only for storage-path resolution).
 2. Otherwise create a focused feature or domain module.
 3. Use `backend/services/` when an operation coordinates multiple concerns such as DB + filesystem + PDF + indexing.
-4. Do not create `routes/`, `services/`, or other layers ahead of real behavior.
+4. Prefer `backend/api/<domain>.py` when extracting a cohesive HTTP route family from `server.py` (see "HTTP adapter decomposition" below). Do not invent `routes/`, extra service layers, or frameworks ahead of real behavior.
 
-`server.py` keeps HTTP concerns. Substantial SQL, filesystem mutation, PDF processing, indexing, imports, and domain workflows live outside the handler. Do not split `server.py` or introduce a framework.
+### HTTP adapter decomposition
+
+`server.py` remains the stdlib HTTP adapter entry (no Starlette / framework migration as an incidental follow-on). Incremental decomposition is allowed: move one cohesive `/api/...` family at a time into `backend/api/<domain>.py`.
+
+Controller responsibility: parse path/query/body shape, call existing domain modules (`db_manager`, `research_network`, `*_sync`, `services/`, …), map domain errors to HTTP status and JSON bodies. Domain SQL, filesystem mutation, indexing, and sync semantics stay outside the controller.
+
+`server.py` keeps lifecycle and shared transport: host/origin validation, JSON body size limits, library access gate, response encoding/ETags/cache headers, static files, and method-level dispatch into controllers.
+
+Do not move unrelated helpers solely to shrink `server.py`. Do not introduce enterprise indirection (generic registries, DI containers, parallel route frameworks). Preserve routes, status codes, error bodies, ETags, cache headers, security checks, and request-size limits when extracting.
 
 ## Logging privacy
 
