@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import os
 import shutil
 import socket
@@ -13,6 +14,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -20,8 +22,6 @@ from run_tests import apply_isolated_test_env
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 apply_isolated_test_env(_PROJECT_DIR)
-
-from unittest.mock import patch
 
 from openapi_core import OpenAPI
 from openapi_core.testing import MockRequest, MockResponse
@@ -36,6 +36,7 @@ from backend.api_contract.positions import (
     PositionUpdateRequest,
     parse_position_request,
 )
+from backend.log_safety import safe_error_type
 from backend.storage.config import StorageConfig
 import backend.server as server_module
 
@@ -305,12 +306,19 @@ class PositionHttpContractTests(unittest.TestCase):
         if httpd is not None:
             try:
                 httpd.shutdown()
-            except Exception:
-                pass
+            except OSError as e:
+                # Best-effort teardown: keep going so storage cleanup still runs.
+                logging.getLogger(__name__).warning(
+                    "contract_httpd_shutdown_failed error_type=%s",
+                    safe_error_type(e),
+                )
             try:
                 httpd.server_close()
-            except OSError:
-                pass
+            except OSError as e:
+                logging.getLogger(__name__).warning(
+                    "contract_httpd_close_failed error_type=%s",
+                    safe_error_type(e),
+                )
         thread = getattr(cls, "server_thread", None)
         if thread is not None:
             thread.join(5)
