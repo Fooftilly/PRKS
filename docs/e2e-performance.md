@@ -306,6 +306,41 @@ true duplication.
 
 The decision must be coverage-based, not duration-based.
 
+Classify each contract before deleting Chromium coverage:
+
+- **KEEP** — DOM, focus, real UI wiring, reload/remount, offline browser state,
+  user-visible conflict controls, cache-visible projections Node cannot prove.
+- **SPLIT** — thin browser boundary + move protocol/state-machine branches lower.
+- **MOVE** — prove the invariant in Node/API/Python first, then drop the redundant E2E.
+
+Hard constraints: no retries to hide flakes; no fake E2E backend; no weakened
+assertions; no shared browser/server state without proven isolation; do not delete
+an E2E merely because a similarly named unit exists — map the contract first and
+land the replacement fast coverage before removing the browser scenario.
+
+### Work Source family (applied)
+
+`tests/e2e/test_work_source_offline.py` retains **10** Chromium scenarios for the
+browser boundaries above (offline edit + reload, conflict UI, non-video editor
+absence, invalid-URL editor refusal, open-editor remount base, cache-visible
+thumbnail, Apply/Use-server projections including offline recovery).
+
+Moved out of Chromium after replacement coverage existed:
+
+| Removed E2E | Replacement |
+| --- | --- |
+| four-column pending identity | Node `effectiveSourceOverlay` in `run_work_source_sync_selftest.js` |
+| respelling same video not a conflict | Python `test_a_stale_but_convergent_choice_is_not_a_conflict` |
+| A→B→C before send is one operation | Node `coalescing` |
+| return to acknowledged leaves no intent | Node `coalescing` (A→B→A) |
+| after Apply choosing server video cancels | Node `conflictResolution` cancel-on-server-identity |
+| convergent ack never publishes unstored URL | Python convergent acknowledgement + Node reconciliation (stored spelling / server revision) |
+
+Op-id replay, protocol bounds, thumbnail invalidation on the server write, and
+revision/conflict arithmetic remain in `tests/test_work_source_sync.py` (and the
+frontend contract module that runs the Node selftest). They were never Chromium-
+only contracts.
+
 ## Benchmark protocol
 
 For any optimization:
