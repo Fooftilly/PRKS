@@ -55,6 +55,14 @@
         return null;
     }
 
+    function defaultKeyRangeApi(options) {
+        if (Object.prototype.hasOwnProperty.call(options, 'idbKeyRange')) {
+            return options.idbKeyRange;
+        }
+        if (typeof IDBKeyRange !== 'undefined') return IDBKeyRange;
+        return root && root.IDBKeyRange ? root.IDBKeyRange : null;
+    }
+
     function approxJsonBytes(value) {
         try {
             const s = JSON.stringify(value);
@@ -62,6 +70,243 @@
         } catch (_e) {
             return 0;
         }
+    }
+
+    function ensureOfflineStores(db) {
+        if (!db.objectStoreNames.contains(STORE_ENTITIES)) {
+            db.createObjectStore(STORE_ENTITIES, { keyPath: ['kind', 'id'] });
+        }
+        if (!db.objectStoreNames.contains(STORE_LISTS)) {
+            db.createObjectStore(STORE_LISTS, { keyPath: 'listKey' });
+        }
+        if (!db.objectStoreNames.contains(STORE_METADATA)) {
+            db.createObjectStore(STORE_METADATA, { keyPath: 'key' });
+        }
+    }
+
+    function unwrapRawDb(db, unwrap) {
+        if (!db) return null;
+        if (unwrap) {
+            try {
+                const unwrapped = unwrap(db);
+                if (unwrapped) return unwrapped;
+            } catch (_e) {
+                /* fall through */
+            }
+        }
+        return db;
+    }
+
+    /** Bounded compound-key range covering every ["kind", *] row. */
+    function kindKeyRangeFor(keyRangeApi, kind) {
+        if (!keyRangeApi || typeof keyRangeApi.bound !== 'function') return null;
+        try {
+            return keyRangeApi.bound([kind], [kind, []], false, false);
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    /**
+     * Runs one IDB request inside its own transaction; never rejects.
+     *
+     * Uses `idb.wrap` so object-store methods return Promises, and waits on
+     * `tx.done` for readwrite so a request-level success that later aborts is
+     * reported as failure. Reads resolve when the request Promise settles.
+     */
+    function runIdbStoreRequest(openDb, storeName, mode, fn) {
+        return openDb()
+            .then(function (db) {
+                if (!db) return { ok: false, value: null };
+                let tx;
+                try {
+                    tx = db.transaction([storeName], mode);
+                } catch (_e) {
+                    return { ok: false, value: null };
+                }
+                let store;
+                let outcome;
+                try {
+                    store = tx.objectStore(storeName);
+                    outcome = fn(store);
+                } catch (_e) {
+                    try {
+                        tx.abort();
+                    } catch (_abortErr) {
+                        /* ignore */
+                    }
+                    return { ok: false, value: null };
+                }
+                const waitsForCommit = mode === 'readwrite';
+                return Promise.resolve(outcome)
+                    .then(function (value) {
+                        if (!waitsForCommit) {
+                            return { ok: true, value: value };
+                        }
+                        const done = tx && tx.done;
+                        if (done && typeof done.then === 'function') {
+                            return done.then(function () {
+                                return { ok: true, value: value };
+                            });
+                        }
+                        // Fail closed if the wrapper did not attach done.
+                        return { ok: false, value: null };
+                    })
+                    .catch(function () {
+                        return { ok: false, value: null };
+                    });
+            })
+            .catch(function () {
+                return { ok: false, value: null };
+            });
+    }
+
+    function sweepKindViaCursor(store, range, finish, markSwept) {
+        let cursorReq;
+        try {
+            cursorReq = store.openCursor(range);
+        } catch (_e) {
+            return false;
+        }
+        cursorReq.onerror = function () {
+            finish(false);
+        };
+        cursorReq.onsuccess = function () {
+            const cursor = cursorReq.result;
+            if (!cursor) {
+                markSwept();
+                return;
+            }
+            let del;
+            try {
+                del = cursor.delete();
+            } catch (_e) {
+                finish(false);
+                return;
+            }
+            del.onerror = function () {
+                finish(false);
+            };
+            del.onsuccess = function () {
+                try {
+                    cursor.continue();
+                } catch (_e) {
+                    finish(false);
+                }
+            };
+        };
+        return true;
+    }
+
+    function sweepKindViaGetAll(store, wanted, finish, markSwept) {
+        let allReq;
+        try {
+            allReq = store.getAll ? store.getAll() : null;
+        } catch (_e) {
+            allReq = null;
+        }
+        if (!allReq) {
+            finish(false);
+            return;
+        }
+        allReq.onerror = function () {
+            finish(false);
+        };
+        allReq.onsuccess = function () {
+            const rows = Array.isArray(allReq.result) ? allReq.result : [];
+            const keys = rows
+                .filter(function (row) {
+                    return row && String(row.kind) === wanted;
+                })
+                .map(function (row) {
+                    return [String(row.kind), String(row.id)];
+                });
+            let i = 0;
+            function step() {
+                if (i >= keys.length) {
+                    markSwept();
+                    return;
+                }
+                let req;
+                try {
+                    req = store.delete(keys[i]);
+                } catch (_e) {
+                    finish(false);
+                    return;
+                }
+                i += 1;
+                req.onerror = function () {
+                    finish(false);
+                };
+                req.onsuccess = step;
+            }
+            step();
+        };
+    }
+
+    /**
+     * Cursor multi-request kind sweep on a raw IDB database handle.
+     * Resolves true only after the transaction commits with a completed sweep.
+     */
+    function deleteEntitiesByKindOnRawDb(raw, wanted, range) {
+        return new Promise(function (resolve) {
+            let tx;
+            try {
+                tx = raw.transaction([STORE_ENTITIES], 'readwrite');
+            } catch (_e) {
+                resolve(false);
+                return;
+            }
+            let settled = false;
+            function finish(ok) {
+                if (settled) return;
+                settled = true;
+                resolve(ok);
+            }
+            // The sweep is only "done" once the transaction COMMITS.
+            let swept = false;
+            function markSwept() {
+                swept = true;
+            }
+            tx.oncomplete = function () {
+                finish(swept);
+            };
+            tx.onerror = function () {
+                finish(false);
+            };
+            tx.onabort = function () {
+                finish(false);
+            };
+            let store;
+            try {
+                store = tx.objectStore(STORE_ENTITIES);
+            } catch (_e) {
+                finish(false);
+                return;
+            }
+            if (range && typeof store.openCursor === 'function') {
+                if (sweepKindViaCursor(store, range, finish, markSwept)) return;
+            }
+            sweepKindViaGetAll(store, wanted, finish, markSwept);
+        });
+    }
+
+    function bindOpenRequestLifecycle(req, onUpgrade, onBlocked) {
+        if (typeof req.addEventListener === 'function') {
+            req.addEventListener('upgradeneeded', onUpgrade);
+            req.addEventListener('blocked', onBlocked);
+            return;
+        }
+        req.onupgradeneeded = onUpgrade;
+        req.onblocked = onBlocked;
+    }
+
+    function attachVersionChange(raw, onVersionChange) {
+        if (!raw) return;
+        if (typeof raw.addEventListener === 'function') {
+            raw.addEventListener('versionchange', onVersionChange);
+        }
+        raw.onversionchange = onVersionChange;
     }
 
     function createPrksOfflineStore(deps) {
@@ -77,41 +322,14 @@
         const now = options.now || defaultNow;
         const dbName = options.dbName || DB_NAME;
         const dbVersion = options.dbVersion || DB_VERSION;
-        const keyRangeApi = Object.prototype.hasOwnProperty.call(options, 'idbKeyRange')
-            ? options.idbKeyRange
-            : typeof IDBKeyRange !== 'undefined'
-              ? IDBKeyRange
-              : root && root.IDBKeyRange
-                ? root.IDBKeyRange
-                : null;
+        const keyRangeApi = defaultKeyRangeApi(options);
 
         let dbPromise = null;
         let openDbHandle = null;
         let unavailable = !idbFactory || !wrap;
 
-        function ensureStores(db) {
-            if (!db.objectStoreNames.contains(STORE_ENTITIES)) {
-                db.createObjectStore(STORE_ENTITIES, { keyPath: ['kind', 'id'] });
-            }
-            if (!db.objectStoreNames.contains(STORE_LISTS)) {
-                db.createObjectStore(STORE_LISTS, { keyPath: 'listKey' });
-            }
-            if (!db.objectStoreNames.contains(STORE_METADATA)) {
-                db.createObjectStore(STORE_METADATA, { keyPath: 'key' });
-            }
-        }
-
         function rawDb(db) {
-            if (!db) return null;
-            if (unwrap) {
-                try {
-                    const unwrapped = unwrap(db);
-                    if (unwrapped) return unwrapped;
-                } catch (_e) {
-                    /* fall through */
-                }
-            }
-            return db;
+            return unwrapRawDb(db, unwrap);
         }
 
         function openDb() {
@@ -125,48 +343,37 @@
                     settled = true;
                     resolve(db);
                 }
+                function markUnavailable() {
+                    unavailable = true;
+                    finish(null);
+                }
                 try {
                     req = idbFactory.open(dbName, dbVersion);
                 } catch (_e) {
-                    unavailable = true;
-                    finish(null);
+                    markUnavailable();
                     return;
                 }
                 if (!req) {
-                    unavailable = true;
-                    finish(null);
+                    markUnavailable();
                     return;
                 }
                 function onUpgrade() {
                     try {
-                        ensureStores(req.result);
+                        ensureOfflineStores(req.result);
                     } catch (_e) {
-                        /* Corrupt/blocked upgrade: fail closed, do not touch canonical data. */
+                        /* Corrupt/blocked upgrade: fail closed. */
                     }
                 }
-                if (typeof req.addEventListener === 'function') {
-                    req.addEventListener('upgradeneeded', onUpgrade);
-                    req.addEventListener('blocked', function () {
-                        unavailable = true;
-                        finish(null);
-                    });
-                } else {
-                    req.onupgradeneeded = onUpgrade;
-                    req.onblocked = function () {
-                        unavailable = true;
-                        finish(null);
-                    };
-                }
+                bindOpenRequestLifecycle(req, onUpgrade, markUnavailable);
                 wrap(req)
                     .then(function (db) {
                         if (!db) {
-                            unavailable = true;
-                            finish(null);
+                            markUnavailable();
                             return;
                         }
                         const raw = rawDb(db);
                         openDbHandle = raw;
-                        function onVersionChange() {
+                        attachVersionChange(raw, function onVersionChange() {
                             try {
                                 if (raw) raw.close();
                             } catch (_e) {
@@ -174,79 +381,16 @@
                             }
                             if (openDbHandle === raw) openDbHandle = null;
                             dbPromise = null;
-                        }
-                        if (raw) {
-                            if (typeof raw.addEventListener === 'function') {
-                                raw.addEventListener('versionchange', onVersionChange);
-                            }
-                            raw.onversionchange = onVersionChange;
-                        }
+                        });
                         finish(db);
                     })
-                    .catch(function () {
-                        unavailable = true;
-                        finish(null);
-                    });
+                    .catch(markUnavailable);
             });
             return dbPromise;
         }
 
-        /**
-         * Runs one IDB request inside its own transaction; never rejects.
-         *
-         * Uses `idb.wrap` so object-store methods return Promises, and waits
-         * on `tx.done` for readwrite so a request-level success that later
-         * aborts is reported as failure (same commit boundary as before).
-         * Reads resolve when the request Promise settles -- there is no
-         * durable commit to wait for.
-         */
         function runRequest(storeName, mode, fn) {
-            return openDb()
-                .then(function (db) {
-                    if (!db) return { ok: false, value: null };
-                    let tx;
-                    try {
-                        tx = db.transaction([storeName], mode);
-                    } catch (_e) {
-                        return { ok: false, value: null };
-                    }
-                    let store;
-                    let outcome;
-                    try {
-                        store = tx.objectStore(storeName);
-                        outcome = fn(store);
-                    } catch (_e) {
-                        try {
-                            tx.abort();
-                        } catch (_abortErr) {
-                            /* ignore */
-                        }
-                        return { ok: false, value: null };
-                    }
-                    const waitsForCommit = mode === 'readwrite';
-                    return Promise.resolve(outcome)
-                        .then(function (value) {
-                            if (!waitsForCommit) {
-                                return { ok: true, value: value };
-                            }
-                            // tx.done is provided by idb's transaction proxy.
-                            const done = tx && tx.done;
-                            if (done && typeof done.then === 'function') {
-                                return done.then(function () {
-                                    return { ok: true, value: value };
-                                });
-                            }
-                            // Fail closed if the wrapper did not attach done:
-                            // never report a write without a commit signal.
-                            return { ok: false, value: null };
-                        })
-                        .catch(function () {
-                            return { ok: false, value: null };
-                        });
-                })
-                .catch(function () {
-                    return { ok: false, value: null };
-                });
+            return runIdbStoreRequest(openDb, storeName, mode, fn);
         }
 
         function putEntity(kind, id, value, sourceRevision) {
@@ -280,45 +424,20 @@
             });
         }
 
-        /** Bounded compound-key range covering every ["kind", *] row, so a
-         * whole-kind sweep needs no schema/index change. IndexedDB array-key
-         * ordering puts ["kind"] before every ["kind", <string id>], and
-         * ["kind", []] after every one of them (arrays sort after strings). */
         function kindKeyRange(kind) {
-            if (!keyRangeApi || typeof keyRangeApi.bound !== 'function') return null;
-            try {
-                return keyRangeApi.bound([kind], [kind, []], false, false);
-            } catch (_e) {
-                return null;
-            }
+            return kindKeyRangeFor(keyRangeApi, kind);
         }
 
         /**
          * Every cached entity of one kind, as stored envelopes.
-         *
-         * Persistence only: no domain knowledge, no DOM, no synchronization
-         * logic. A caller that must patch one field inside many cached
-         * snapshots -- a Work summary embedded in every cached Folder, say --
-         * cannot know which ids to ask for, and guessing would mean either
-         * dropping whole domains or leaving stale rows behind.
-         *
-         * Reuses the same bounded compound-key range as the whole-kind sweep,
-         * so no index or schema change is needed. Fail-soft like the rest of
-         * this store: an unreadable cache yields an empty list.
+         * Fail-soft: an unreadable cache yields null (failed) vs [] (empty).
          */
         function getEntitiesByKind(kind) {
             const range = kindKeyRange(String(kind));
             return runRequest(STORE_ENTITIES, 'readonly', function (store) {
                 return range ? store.getAll(range) : store.getAll();
             }).then(function (r) {
-                /* null for a FAILED read, [] for a kind with nothing cached.
-                 * The caller reconciles acknowledgements into these rows and
-                 * must not retire an operation believing it patched every
-                 * cached copy when it could not even read them -- so the two
-                 * outcomes cannot share a spelling. Still fail-soft: this
-                 * resolves, it never throws to the caller. */
                 if (!r.ok || !Array.isArray(r.value)) return null;
-                // Without a usable key range every row comes back, so filter.
                 return range ? r.value : r.value.filter(function (row) {
                     return row && String(row.kind) === String(kind);
                 });
@@ -328,144 +447,17 @@
         }
 
         /**
-         * Removes every cached entity of one kind. Used by domain-level offline
-         * coherence (see offline-runtime.js): some cached read models span many
-         * canonical records, so one canonical change can stale a whole kind
-         * rather than a single row. Follows the store contract -- always
-         * resolves, never throws to the caller -- and resolves true only when
-         * the physical cleanup actually completed, so a caller may keep a
-         * domain conservatively blocked when it did not.
+         * Removes every cached entity of one kind. Resolves true only when the
+         * physical cleanup committed (see offline-runtime coherence).
          */
         function deleteEntitiesByKind(kind) {
             const wanted = String(kind);
             return openDb()
                 .then(function (db) {
                     // Cursor multi-request sweeps stay on the raw IDB handle.
-                    // An idb-proxied store turns openCursor into a Promise, which
-                    // cannot drive the onsuccess/continue loop below.
                     const raw = rawDb(db);
                     if (!raw) return false;
-                    return new Promise(function (resolve) {
-                        let tx;
-                        try {
-                            tx = raw.transaction([STORE_ENTITIES], 'readwrite');
-                        } catch (_e) {
-                            resolve(false);
-                            return;
-                        }
-                        let settled = false;
-                        function finish(ok) {
-                            if (settled) return;
-                            settled = true;
-                            resolve(ok);
-                        }
-                        // The sweep is only "done" once the transaction
-                        // COMMITS: individual delete requests succeeding does
-                        // not guarantee the rows are gone, and a caller that
-                        // unblocks a coherence domain on a sweep that later
-                        // aborted would republish known-stale rows.
-                        let swept = false;
-                        tx.oncomplete = function () {
-                            finish(swept);
-                        };
-                        tx.onerror = function () {
-                            finish(false);
-                        };
-                        tx.onabort = function () {
-                            finish(false);
-                        };
-                        let store;
-                        try {
-                            store = tx.objectStore(STORE_ENTITIES);
-                        } catch (_e) {
-                            finish(false);
-                            return;
-                        }
-                        const range = kindKeyRange(wanted);
-                        let cursorReq = null;
-                        if (range && typeof store.openCursor === 'function') {
-                            try {
-                                cursorReq = store.openCursor(range);
-                            } catch (_e) {
-                                cursorReq = null;
-                            }
-                        }
-                        if (cursorReq) {
-                            cursorReq.onerror = function () {
-                                finish(false);
-                            };
-                            cursorReq.onsuccess = function () {
-                                const cursor = cursorReq.result;
-                                if (!cursor) {
-                                    swept = true;
-                                    return;
-                                }
-                                let del;
-                                try {
-                                    del = cursor.delete();
-                                } catch (_e) {
-                                    finish(false);
-                                    return;
-                                }
-                                del.onerror = function () {
-                                    finish(false);
-                                };
-                                del.onsuccess = function () {
-                                    try {
-                                        cursor.continue();
-                                    } catch (_e) {
-                                        finish(false);
-                                    }
-                                };
-                            };
-                            return;
-                        }
-                        /* Engines without a usable key range/cursor: read the
-                         * rows once, then delete the matching keys in order. */
-                        let allReq;
-                        try {
-                            allReq = store.getAll ? store.getAll() : null;
-                        } catch (_e) {
-                            allReq = null;
-                        }
-                        if (!allReq) {
-                            finish(false);
-                            return;
-                        }
-                        allReq.onerror = function () {
-                            finish(false);
-                        };
-                        allReq.onsuccess = function () {
-                            const rows = Array.isArray(allReq.result) ? allReq.result : [];
-                            const keys = rows
-                                .filter(function (row) {
-                                    return row && String(row.kind) === wanted;
-                                })
-                                .map(function (row) {
-                                    return [String(row.kind), String(row.id)];
-                                });
-                            let i = 0;
-                            function step() {
-                                if (i >= keys.length) {
-                                    swept = true;
-                                    return;
-                                }
-                                let req;
-                                try {
-                                    req = store.delete(keys[i]);
-                                } catch (_e) {
-                                    finish(false);
-                                    return;
-                                }
-                                i += 1;
-                                req.onerror = function () {
-                                    finish(false);
-                                };
-                                req.onsuccess = step;
-                            }
-                            step();
-                        };
-                    });
+                    return deleteEntitiesByKindOnRawDb(raw, wanted, kindKeyRange(wanted));
                 })
                 .catch(function () {
                     return false;
@@ -528,9 +520,6 @@
 
         /** Discards only the disposable offline cache. Canonical PRKS data is never touched. */
         function deleteDatabase() {
-            // Close this store's own connection first: IndexedDB blocks a
-            // delete on every open connection, including ours. Another tab's
-            // connection is still a legitimate `blocked`.
             if (openDbHandle) {
                 try {
                     openDbHandle.close();
