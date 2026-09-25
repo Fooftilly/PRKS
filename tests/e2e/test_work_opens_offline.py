@@ -8,7 +8,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, WORK_B_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -66,15 +66,12 @@ class OfflineWorkOpenTests(unittest.TestCase):
         }""")
 
     def pending(self, page, count):
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = await prksSync.store.listOperations();
-                if (rows.length === n) return;
-                if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", count)
+        wait_for_async(
+            page,
+            """n => prksSync.store.listOperations().then(rows => rows.length === n)""",
+            arg=count,
+            timeout=25000,
+            message='Sync did not settle')
 
     def operations(self, page):
         return page.evaluate("() => prksSync.store.listOperations()")
