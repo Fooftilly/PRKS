@@ -7,6 +7,7 @@ const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
 const tc = require(path.join(rootDir, 'frontend/js/tab-context.js'));
+const tilingApi = require(path.join(rootDir, 'frontend/js/workspace-tiling.js'));
 const worksSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/components/works.js'), 'utf8');
 
 const {
@@ -201,6 +202,9 @@ const sandbox = {
     },
     prksForEachLiveTabContext: prksForEachLiveTabContext,
     prksForEachMountedTabContext: prksForEachMountedTabContext,
+    /* Shared narrow predicate (CSS max-width inclusive) — production path works.js uses. */
+    PRKS_WORKSPACE_NARROW_PX: tilingApi.PRKS_WORKSPACE_NARROW_PX,
+    prksWorkspaceWidthIsNarrow: tilingApi.prksWorkspaceWidthIsNarrow,
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
@@ -239,7 +243,10 @@ function runLayoutModeMatrix() {
     assert('stacked wide uses side sidecar', wsL._classes.has('work-workspace--side'));
     assert('stacked wide does not use drawer', !wsL._classes.has('work-workspace--notes-drawer'));
 
-    /* CSS @container (max-width: 720px) includes 720 — JS consumer must match. */
+    /* CSS @container (max-width: 720px) includes 720 — JS consumer must match via
+     * shared prksWorkspaceWidthIsNarrow (not an E2E clientWidth override). */
+    assertEq('shared helper treats 720 as narrow', sandbox.prksWorkspaceWidthIsNarrow(720), true);
+    assertEq('shared helper treats 721 as wide', sandbox.prksWorkspaceWidthIsNarrow(721), false);
     wsL.clientWidth = 720;
     wsL._classes.delete('work-workspace--side');
     wsL._classes.delete('work-workspace--notes-drawer');
