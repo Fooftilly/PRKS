@@ -123,9 +123,7 @@ class WaitForAsyncParityTests(unittest.TestCase):
                 };
             }"""
         )
-        helper = OfflineWorkMetadataTests(
-            "test_offline_metadata_pending_fails_promptly_on_never_settling_store"
-        )
+        helper = object.__new__(OfflineWorkMetadataTests)
         started = time.perf_counter()
         with self.assertRaises(AssertionError) as cm:
             helper.pending(self.page, 1, timeout=400)
@@ -144,9 +142,7 @@ class WaitForAsyncParityTests(unittest.TestCase):
                 };
             }"""
         )
-        helper = OfflineWorkMetadataTests(
-            "test_offline_metadata_settled_conflicts_fails_promptly_on_never_settling_store"
-        )
+        helper = object.__new__(OfflineWorkMetadataTests)
         started = time.perf_counter()
         with self.assertRaises(AssertionError) as cm:
             helper.settled_conflicts(self.page, 1, timeout=400)
@@ -165,9 +161,7 @@ class WaitForAsyncParityTests(unittest.TestCase):
                 };
             }"""
         )
-        helper = OfflineWorkMetadataTests(
-            "test_offline_metadata_operations_fails_promptly_on_never_settling_store"
-        )
+        helper = object.__new__(OfflineWorkMetadataTests)
         started = time.perf_counter()
         with self.assertRaises(AssertionError) as cm:
             helper.operations(self.page, timeout=400)
@@ -187,9 +181,7 @@ class WaitForAsyncParityTests(unittest.TestCase):
                 };
             }"""
         )
-        helper = OfflineWorkMetadataTests(
-            "test_offline_metadata_operations_returns_empty_rows"
-        )
+        helper = object.__new__(OfflineWorkMetadataTests)
         self.assertEqual(helper.operations(self.page, timeout=1000), [])
 
     def test_direct_expression_re_evaluates_each_poll(self):
