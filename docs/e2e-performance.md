@@ -110,6 +110,13 @@ does for `--profile`. Those exports last for the one runner invocation.
 `SERVER_STOPPED`, plus runner `STOP`) so a hang can be attributed to a lifecycle
 stage rather than only "last started test".
 
+The runner always tracks the current test id + latest stage in-process (and in
+a per-worker heartbeat file under parallel jobs). A **per-test watchdog**
+(`PRKS_E2E_TEST_WATCHDOG`, default 300s, `0` disables) kills a stuck worker and
+reports that test id + stage without waiting for the full-suite
+`PRKS_E2E_FULL_TIMEOUT` (default 1200s). It does not retry. Playwright assertion
+timeouts remain independent.
+
 Heavy service-worker modules (starting with Offline Work metadata) may relaunch
 Chromium after every N closed BrowserContexts. Default for that module is **1**
 (fresh Chromium per test); override with `PRKS_E2E_CHROMIUM_RECYCLE_EVERY`

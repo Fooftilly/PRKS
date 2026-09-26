@@ -7,6 +7,7 @@ assertions fail.
 from __future__ import annotations
 
 import copy
+import json
 import os
 import random
 import shutil
@@ -14,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +45,18 @@ STOP_TIMEOUT_S = 8.0
 _ACTIVE_PROFILE = None
 _SEED_CACHE_TMP = None
 _SEED_SNAPSHOTS = {}
+
+# Per-test hang diagnosis: always updated (printing remains opt-in via DIAGNOSTIC).
+_HEARTBEAT_LOCK = threading.Lock()
+_HEARTBEAT = {
+    "test_id": "",
+    "stage": "",
+    "test_started_mono": 0.0,
+    "heartbeat_mono": 0.0,
+    "test_started_wall": 0.0,
+    "heartbeat_wall": 0.0,
+}
+_HEARTBEAT_FILE = None
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -91,19 +105,117 @@ def diagnostic_enabled() -> bool:
     return _env_enabled("PRKS_E2E_DIAGNOSTIC")
 
 
+def set_heartbeat_file(path) -> None:
+    """Optional JSON status file the parent polls for hung-worker attribution."""
+    global _HEARTBEAT_FILE
+    _HEARTBEAT_FILE = str(path) if path else None
+
+
+def clear_e2e_heartbeat() -> None:
+    """Clear in-flight test tracking (between tests / after STOP)."""
+    with _HEARTBEAT_LOCK:
+        _HEARTBEAT["test_id"] = ""
+        _HEARTBEAT["stage"] = ""
+        _HEARTBEAT["test_started_mono"] = 0.0
+        _HEARTBEAT["heartbeat_mono"] = 0.0
+        _HEARTBEAT["test_started_wall"] = 0.0
+        _HEARTBEAT["heartbeat_wall"] = 0.0
+        _write_heartbeat_file_locked()
+
+
+def get_e2e_heartbeat() -> dict:
+    """Snapshot of the current test id + stage for hang diagnosis."""
+    with _HEARTBEAT_LOCK:
+        return dict(_HEARTBEAT)
+
+
+def _write_heartbeat_file_locked() -> None:
+    path = _HEARTBEAT_FILE
+    if not path:
+        return
+    payload = {
+        "test_id": _HEARTBEAT["test_id"],
+        "stage": _HEARTBEAT["stage"],
+        "test_started_wall": _HEARTBEAT["test_started_wall"],
+        "heartbeat_wall": _HEARTBEAT["heartbeat_wall"],
+    }
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def e2e_heartbeat(
+    stage: str,
+    test_id: str = "",
+    *,
+    begin_test: bool = False,
+    end_test: bool = False,
+) -> None:
+    """Update hang-diagnosis state; print only when ``PRKS_E2E_DIAGNOSTIC=1``.
+
+    Always tracks the current unittest id and latest lifecycle stage so a
+    per-test watchdog can name what a hung worker was doing. Printing stays
+    opt-in so ordinary runs stay quiet.
+
+    Only ``begin_test=True`` replaces the tracked unittest id and resets the
+    hang clock for a new test. Ordinary diagnostics (including Chromium
+    recycle labels) update the stage only — they must not steal the id or
+    restart the timer. Module fixtures arm an activity clock without an id.
+    """
+    stage_s = str(stage or "").strip() or "?"
+    tid_arg = str(test_id or "").strip()
+    now_mono = time.monotonic()
+    now_wall = time.time()
+    print_tid = tid_arg
+    with _HEARTBEAT_LOCK:
+        if end_test:
+            if not print_tid:
+                print_tid = _HEARTBEAT["test_id"]
+            # Drop the unittest id but keep an activity clock so setUpModule /
+            # tearDownModule hangs after stopTest are still watchdog-covered.
+            _HEARTBEAT["test_id"] = ""
+            _HEARTBEAT["stage"] = "BETWEEN_TESTS"
+            _HEARTBEAT["test_started_mono"] = now_mono
+            _HEARTBEAT["test_started_wall"] = now_wall
+            _HEARTBEAT["heartbeat_mono"] = now_mono
+            _HEARTBEAT["heartbeat_wall"] = now_wall
+        else:
+            if begin_test:
+                _HEARTBEAT["test_id"] = tid_arg
+                _HEARTBEAT["test_started_mono"] = now_mono
+                _HEARTBEAT["test_started_wall"] = now_wall
+            elif _HEARTBEAT["test_started_mono"] <= 0:
+                # Pre-test fixture activity (e.g. require_chromium in
+                # setUpModule): arm the hang clock without inventing an id
+                # from diagnostic labels like ``after_N_contexts``.
+                _HEARTBEAT["test_started_mono"] = now_mono
+                _HEARTBEAT["test_started_wall"] = now_wall
+            _HEARTBEAT["stage"] = stage_s
+            _HEARTBEAT["heartbeat_mono"] = now_mono
+            _HEARTBEAT["heartbeat_wall"] = now_wall
+            if not print_tid:
+                print_tid = _HEARTBEAT["test_id"]
+        _write_heartbeat_file_locked()
+    if diagnostic_enabled():
+        if print_tid:
+            print("[e2e-diag] %s %s" % (stage_s, print_tid), flush=True)
+        else:
+            print("[e2e-diag] %s" % stage_s, flush=True)
+
+
 def e2e_diag(stage: str, test_id: str = "") -> None:
-    """Print a privacy-safe stage marker when diagnostic mode is on.
+    """Privacy-safe stage marker: always heartbeats; prints when diagnostic is on.
 
     Only stage names and unittest ids — never storage paths, titles, or bodies.
     """
-    if not diagnostic_enabled():
-        return
-    stage_s = str(stage or "").strip() or "?"
-    tid = str(test_id or "").strip()
-    if tid:
-        print("[e2e-diag] %s %s" % (stage_s, tid), flush=True)
-    else:
-        print("[e2e-diag] %s" % stage_s, flush=True)
+    e2e_heartbeat(stage, test_id)
 
 
 def chromium_recycle_every(default: int = 0) -> int:
@@ -151,10 +263,9 @@ class ChromiumHolder:
             self._needs_recycle = True
 
     def recycle(self) -> None:
-        e2e_diag(
-            "CHROMIUM_RECYCLE",
-            "after_%d_contexts" % self._contexts_since_launch,
-        )
+        # Stage-only: never pass the recycle label as a test_id (that reset
+        # the hang clock and poisoned --last-failed attribution).
+        e2e_diag("CHROMIUM_RECYCLE after_%d_contexts" % self._contexts_since_launch)
         # Stop the old process, then drop refs *before* relaunch so a failed
         # require_chromium cannot leave get_browser() serving closed instances.
         # Only clear _needs_recycle after a successful relaunch — otherwise the
@@ -184,6 +295,7 @@ class ChromiumHolder:
 
     def close(self) -> None:
         """Stop Chromium without relaunching, even if a recycle was pending."""
+        e2e_heartbeat("CHROMIUM_CLOSE")
         self._needs_recycle = False
         try:
             if self.browser is not None:
@@ -411,6 +523,9 @@ def assert_chromium_installed() -> None:
 
 def require_chromium():
     """Return (playwright, browser). Installs Chromium into the repo cache if needed."""
+    # Arm the hang clock before launch so setUpModule Chromium hangs are
+    # covered even though unittest has not called startTest yet.
+    e2e_heartbeat("CHROMIUM_LAUNCH")
     ensure_chromium_installed()
     apply_e2e_playwright_env()
     from playwright.sync_api import sync_playwright
@@ -926,6 +1041,7 @@ class AppServer:
             try:
                 wait_http(self.origin + "/api/works")
                 _profile_phase("server_start", time.perf_counter() - started)
+                e2e_heartbeat("SERVER_READY")
                 return self
             except Exception:
                 # Read the captured output *before* teardown: the log files live
@@ -1083,6 +1199,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     page = context.new_page()
     collector = PageCollector(page, origin)
     _profile_phase("browser_context", time.perf_counter() - started)
+    e2e_heartbeat("CONTEXT_READY")
 
     started = time.perf_counter()
     page.goto(origin + "/", wait_until="domcontentloaded")
@@ -1093,6 +1210,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     page.locator('#sidebar a.nav-link[href="#/folders"]').click()
     page.wait_for_function("() => location.hash === '#/folders'")
     _profile_phase("app_ready", time.perf_counter() - started)
+    e2e_heartbeat("APP_READY")
     return page, context, collector
 
 

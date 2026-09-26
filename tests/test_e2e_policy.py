@@ -389,6 +389,22 @@ class LastFailedPersistenceTests(unittest.TestCase):
             policy.FULL_GATE_TIMEOUT_S,
         )
 
+    def test_per_test_watchdog_helper(self):
+        self.assertEqual(
+            policy.per_test_watchdog_s({}), policy.TEST_WATCHDOG_TIMEOUT_S
+        )
+        self.assertEqual(policy.per_test_watchdog_s({"PRKS_E2E_TEST_WATCHDOG": "90"}), 90)
+        self.assertEqual(policy.per_test_watchdog_s({"PRKS_E2E_TEST_WATCHDOG": "0"}), 0)
+        self.assertEqual(
+            policy.per_test_watchdog_s({"PRKS_E2E_TEST_WATCHDOG": "nope"}),
+            policy.TEST_WATCHDOG_TIMEOUT_S,
+        )
+        # Distinct from the full-suite deadline.
+        self.assertNotEqual(
+            policy.TEST_WATCHDOG_TIMEOUT_S, policy.FULL_GATE_TIMEOUT_S
+        )
+        self.assertLess(policy.TEST_WATCHDOG_TIMEOUT_S, policy.FULL_GATE_TIMEOUT_S)
+
 
 class PathMatchTests(unittest.TestCase):
     def test_glob_double_star(self):

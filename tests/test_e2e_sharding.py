@@ -548,6 +548,38 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         ok, _ = self._run(ids, 2)
         self.assertFalse(ok)
 
+    def test_per_test_watchdog_kills_hanging_worker_and_names_stage(self):
+        """Short watchdog must terminate a sleeping selfcheck without retry."""
+        hang_id = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        pass_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        sink = io.StringIO()
+        previous = os.environ.get("PRKS_E2E_TEST_WATCHDOG")
+        os.environ["PRKS_E2E_TEST_WATCHDOG"] = "2"
+        try:
+            with _import_runner() as runner:
+                with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                    started = __import__("time").perf_counter()
+                    ok, _observed, failed, _phases = runner.run_parallel(
+                        [pass_id, hang_id], 2, {}, False
+                    )
+                    elapsed = __import__("time").perf_counter() - started
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E_TEST_WATCHDOG", None)
+            else:
+                os.environ["PRKS_E2E_TEST_WATCHDOG"] = previous
+        self.assertFalse(ok)
+        self.assertLess(elapsed, 30.0)
+        self.assertTrue(
+            any(fid.endswith("test_never_finishes") for fid in failed),
+            "failed_ids=%r output=%r" % (failed, sink.getvalue()[-2000:]),
+        )
+        out = sink.getvalue()
+        self.assertIn("per-test watchdog", out)
+        self.assertIn("test_never_finishes", out)
+        self.assertIn("stage=", out)
+        self.assertIn("no automatic retry", out.lower())
+
     def test_worker_mode_writes_a_report_for_a_failing_shard(self):
         with _import_runner() as runner, tempfile.TemporaryDirectory(
             prefix="prks-worker-"
@@ -662,6 +694,96 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.assertEqual(runner._last_started_test(chatter_only), "")
+
+    def test_hang_attribution_prefers_heartbeat_file(self):
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hb-attr-") as raw:
+                root = Path(raw)
+                log = root / "worker.log"
+                hb = root / "heartbeat.json"
+                log.write_text(
+                    "tests.e2e.test_app.A.test_old\n"
+                    "[e2e-diag] CONTEXT_READY tests.e2e.test_app.A.test_old\n",
+                    encoding="utf-8",
+                )
+                hb.write_text(
+                    json.dumps(
+                        {
+                            "test_id": "tests.e2e.test_app.A.test_current",
+                            "stage": "APP_READY",
+                            "test_started_wall": 1.0,
+                            "heartbeat_wall": 2.0,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                worker = {"log_file": log, "heartbeat_file": hb}
+                tid, stage = runner._hang_attribution(worker)
+                self.assertEqual(tid, "tests.e2e.test_app.A.test_current")
+                self.assertEqual(stage, "APP_READY")
+                stage_only, tid_from_diag = runner._last_diag_stage(log)
+                self.assertEqual(stage_only, "CONTEXT_READY")
+                self.assertTrue(tid_from_diag.endswith("test_old"))
+
+    def test_worker_exceeded_watchdog_without_test_id(self):
+        """Module-fixture heartbeats (no unittest id) still trip the parent poll."""
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hb-fixture-") as raw:
+                hb = Path(raw) / "heartbeat.json"
+                now = __import__("time").time()
+                hb.write_text(
+                    json.dumps(
+                        {
+                            "test_id": "",
+                            "stage": "CHROMIUM_LAUNCH",
+                            "test_started_wall": now - 10.0,
+                            "heartbeat_wall": now,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                worker = {"heartbeat_file": hb}
+                exceeded, data, age = runner._worker_exceeded_watchdog(worker, 5)
+                self.assertTrue(exceeded)
+                self.assertEqual(data.get("stage"), "CHROMIUM_LAUNCH")
+                self.assertGreaterEqual(age, 5.0)
+
+    def test_persist_watchdog_last_failed_merges_hung_id(self):
+        """Serial watchdog must write last-failed before os._exit."""
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-wd-lf-") as raw:
+                root = Path(raw)
+                path = root / "e2e-last-failed.json"
+                from tests.e2e import policy
+
+                policy.save_last_failed(
+                    path, ["tests.e2e.old.T.test_prior"], meta={}
+                )
+                with mock.patch.object(runner, "REPO", root), mock.patch(
+                    "tests.e2e.run.LAST_FAILED_PATH",
+                    Path("e2e-last-failed.json"),
+                ), mock.patch(
+                    "tests.e2e.run.benchmark_modes", return_value=()
+                ):
+                    runner._persist_watchdog_last_failed(
+                        "tests.e2e.fake.T.test_hung"
+                    )
+                loaded = policy.load_last_failed(path)
+                self.assertIsNotNone(loaded)
+                self.assertIn("tests.e2e.fake.T.test_hung", loaded["test_ids"])
+                self.assertIn("tests.e2e.old.T.test_prior", loaded["test_ids"])
+
+    def test_run_worker_and_run_serial_watchdog_default_off(self):
+        """CodeRabbit: helpers default enable_watchdog=False."""
+        import inspect
+
+        with _import_runner() as runner:
+            worker_sig = inspect.signature(runner.run_worker)
+            serial_sig = inspect.signature(runner.run_serial)
+            self.assertIn("enable_watchdog", worker_sig.parameters)
+            self.assertIn("enable_watchdog", serial_sig.parameters)
+            self.assertIs(worker_sig.parameters["enable_watchdog"].default, False)
+            self.assertIs(serial_sig.parameters["enable_watchdog"].default, False)
 
 
 if __name__ == "__main__":
