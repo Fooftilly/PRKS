@@ -308,11 +308,48 @@ def _is_allowed_typed_slice_exclude(entry: object) -> bool:
     )
 
 
+def _pyright_glob_match(path: str, pattern: str) -> bool:
+    """Match ``path`` against a Pyright/gitignore-style glob.
+
+    ``**`` matches zero or more directories (unlike stdlib ``fnmatch``, where
+    mid-path ``**`` does not consume an empty directory span).
+    ``*`` and ``?`` match within a single path segment.
+    """
+    path = path.replace("\\", "/").strip("/")
+    pattern = pattern.replace("\\", "/").strip("/")
+    if pattern in {"", "**"}:
+        return True
+    path_parts = path.split("/") if path else []
+    pat_parts = pattern.split("/") if pattern else []
+
+    def match_from(pi: int, pti: int) -> bool:
+        while pti < len(pat_parts):
+            token = pat_parts[pti]
+            if token == "**":
+                # Zero-or-more directories: try consuming nothing, then 1..N parts.
+                if pti == len(pat_parts) - 1:
+                    return True
+                for skip in range(pi, len(path_parts) + 1):
+                    if match_from(skip, pti + 1):
+                        return True
+                return False
+            if pi >= len(path_parts):
+                return False
+            if not fnmatch.fnmatchcase(path_parts[pi], token):
+                return False
+            pi += 1
+            pti += 1
+        return pi == len(path_parts)
+
+    return match_from(0, 0)
+
+
 def _path_covers_typed_slice(entry: object) -> bool:
     """True when ignore/exclude would suppress analysis of backend/storage.
 
-    Handles parent paths and common recursive/one-level globs such as
-    ``backend/**``, ``**/backend/**``, ``backend/*``, and ``**/storage/**``.
+    Handles parent paths and recursive globs including nested ``**`` forms such
+    as ``backend/**``, ``**/backend/**``, ``backend/*``, ``**/storage/**``,
+    ``backend/**/storage/**``, and ``**/storage/**/*``.
     """
     if _is_allowed_typed_slice_exclude(entry):
         return False
@@ -323,55 +360,23 @@ def _path_covers_typed_slice(entry: object) -> bool:
         return True
 
     # Exact target, nested path under the slice, or literal parent of the slice.
-    if pattern == target or pattern.startswith(target + "/"):
-        return True
-    if target.startswith(pattern + "/"):
-        return True
-    if pattern in {"storage", "**/storage"} or pattern.endswith("/storage"):
-        return True
-    if "backend/storage" in pattern:
-        return True
-
-    # Strip a single trailing recursive / one-level glob suffix.
-    base = pattern
-    one_level = False
-    if base.endswith("/**"):
-        base = base[:-3].rstrip("/")
-    elif base.endswith("/*"):
-        one_level = True
-        base = base[:-2].rstrip("/")
-
-    anywhere = False
-    if base.startswith("**/"):
-        anywhere = True
-        base = base[3:].rstrip("/")
-
-    if base and _is_allowed_typed_slice_exclude(base):
-        return False
-
-    if base == target or (base and target.startswith(base + "/")):
-        # backend, backend/**, backend/*, **/backend, **/backend/**
-        if one_level:
-            rest = target[len(base) + 1 :]
-            return bool(rest) and "/" not in rest
-        return True
-
-    if anywhere and base:
-        # **/storage, **/storage/**, **/backend/storage
-        if target == base or target.endswith("/" + base):
+    if "*" not in pattern and "?" not in pattern:
+        if pattern == target or pattern.startswith(target + "/"):
             return True
-        if f"/{base}/" in f"/{target}/":
-            return True
-        if target.startswith(base + "/"):
+        if target.startswith(pattern + "/"):
             return True
 
-    # fnmatch covers mixed globs (* matches across '/', enough for Pyright path patterns).
-    probe_paths = [target, f"{target}/x.py"]
+    # Probe the slice root, files under it, and each ancestor directory.
+    # A hit on any of these means the exclude/ignore would silence (part of)
+    # the typed slice — including patterns that only match descendants
+    # (e.g. ``**/storage/**/*``).
+    probes = [target, f"{target}/x.py", f"{target}/pkg/x.py"]
     parts = target.split("/")
     for i in range(len(parts)):
-        probe_paths.append("/".join(parts[: i + 1]))
-    for probe in probe_paths:
-        if fnmatch.fnmatch(probe, pattern) or fnmatch.fnmatch(probe, raw):
+        probes.append("/".join(parts[: i + 1]))
+
+    for probe in probes:
+        if _pyright_glob_match(probe, pattern) or _pyright_glob_match(probe, raw):
             if (
                 probe == target
                 or target.startswith(probe + "/")
