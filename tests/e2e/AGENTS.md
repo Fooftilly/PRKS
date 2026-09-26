@@ -102,9 +102,12 @@ without narrowing a failure to targeted tests and investigating it.
 
 Compares the working tree (+ relevant untracked production/E2E paths) to
 `HEAD`, or to `--base <ref>` when given. Prints every changed path, the rule
-that matched, and the selected features. Unmapped production files fall back
-to **smoke** (not the full suite). Shared core (`app.js`, `server.py`,
-`db_manager.py`, …) selects smoke + shell/tabs/offline/sync. Docs/unit-only
+that matched, and the selected features. Per path, **every matching non-skip
+rule contributes features** (union; prefer over-test). Skip rules apply only
+when no take rule matches. Unmapped production files fall back to **smoke**
+(not the full suite) locally; CI fails closed to **full**. Shared core
+(`app.js`, `server.py`, `db_manager.py`, …) and other `ci_mode: "full"` rules
+(for example `backend/research_network.py`) force full in CI. Docs/unit-only
 paths select nothing. Add new production areas by editing `AFFECTED_RULES`
 and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E module by adding
 its module/class prefix to the right feature's `selectors`.
@@ -279,14 +282,16 @@ E2E gate (`.github/workflows/e2e-gate.yml`) plans via
 Pointer capture runs **in parallel** with the matrix (both need only the plan
 job) when mode is `full`, or when affected features intersect tiling /
 workspace-drag / pdf-annotations. Chromium installs share a GHA cache keyed on
-`requirements-dev.txt` + `install_browser.py`. An unresolvable comparison base
-fails closed to **full**. Rename/copy discovery keeps both path images so a
-production→docs move cannot look docs-only.
+`requirements-dev.txt` + `install_browser.py`. Plan `reason` / features reach
+the aggregator via `env:` (`PLAN_REASON`, …), not Bash string interpolation in
+`run:` scripts. An unresolvable comparison base fails closed to **full**.
+Rename/copy discovery keeps both path images so a production→docs move cannot
+look docs-only.
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer
-capture (`tests/browser/pointer_capture.py`) runs exactly once, in the parent,
-after every shard has passed — never once per worker.
+capture (`tests/browser/pointer_capture.py`) runs exactly once per gate, in
+parallel with the matrix when required — never once per worker.
 
 ## E2E isolation invariant
 

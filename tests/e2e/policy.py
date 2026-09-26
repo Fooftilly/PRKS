@@ -330,8 +330,9 @@ FEATURES = {
 # Affected-file mapping
 # ---------------------------------------------------------------------------
 # Patterns are matched with Path.match against repo-relative POSIX paths.
-# First matching rule wins per path; features from all changed paths are
-# unioned into the final selection (not first-match across the whole diff).
+# Per path: every matching non-skip rule contributes features (union). Skip
+# rules win only when no non-skip rule matches. Features from all changed
+# paths are then unioned into the final selection.
 
 AFFECTED_RULES = (
     # E2E framework itself → smoke + runner unit coverage signal locally;
@@ -389,13 +390,21 @@ AFFECTED_RULES = (
         ),
         "features": ("graph",),
     },
+    # Shared Concepts/Positions/Arguments domain module — CI always full so
+    # Position/Argument suites cannot be dropped by a concepts-only mapping.
+    {
+        "name": "research-network-core",
+        "paths": ("backend/research_network.py",),
+        "features": ("concepts", "positions", "arguments", "graph", "notes"),
+        "ci_mode": "full",
+        "note": "research_network.py owns Concepts/Positions/Arguments (CI: full)",
+    },
     {
         "name": "concepts",
         "paths": (
             "frontend/js/components/concepts.js",
             "frontend/js/concept-state.js",
             "backend/concept_sync.py",
-            "backend/research_network.py",
             "backend/research_markup.py",
             "backend/research_index.py",
         ),
@@ -770,45 +779,138 @@ def features_for_e2e_module_path(rel: str):
     return hits
 
 
-def match_affected_path(rel: str):
-    """Return (rule_name, features, skip, note) for one changed path."""
+def classify_affected_path(rel: str) -> dict:
+    """Classify one path: union features from every matching non-skip rule.
+
+    Returns dict with keys:
+      rules (list[str]), features (list[str]), skip (bool), note (str),
+      ci_full (bool), unmapped (bool)
+
+    Skip rules apply only when no non-skip rule matches. ``ci_mode: "full"`` on
+    any matching take rule sets ``ci_full``.
+    """
     rel = _posix(rel)
+    take_rules = []
+    skip_rule = None
     for rule in AFFECTED_RULES:
-        for pattern in rule["paths"]:
-            if not _path_matches(rel, pattern):
-                continue
-            if rule.get("skip"):
-                return rule["name"], (), True, rule.get("note") or ""
-            if rule.get("resolve_e2e_module"):
-                feats = tuple(features_for_e2e_module_path(rel))
-                if not feats:
-                    # Unknown E2E module file → smoke
-                    return rule["name"], ("smoke",), False, "unmapped E2E module → smoke"
-                return rule["name"], feats, False, rule.get("note") or ""
-            return (
-                rule["name"],
-                tuple(rule.get("features") or ()),
-                False,
-                rule.get("note") or "",
-            )
-    # Conservative fallback
-    for prefix in CONSERVATIVE_SMOKE_PREFIXES:
-        if rel == prefix or rel.startswith(prefix):
-            return (
-                "unmapped-production",
-                ("smoke",),
-                False,
-                "unmapped production path → smoke (not full suite)",
-            )
-    return "ignored", (), True, "outside production/E2E tree → skip"
+        if not any(_path_matches(rel, pattern) for pattern in rule["paths"]):
+            continue
+        if rule.get("skip"):
+            if skip_rule is None:
+                skip_rule = rule
+            continue
+        take_rules.append(rule)
+
+    if not take_rules:
+        if skip_rule is not None:
+            return {
+                "rules": [skip_rule["name"]],
+                "features": [],
+                "skip": True,
+                "note": skip_rule.get("note") or "",
+                "ci_full": False,
+                "unmapped": False,
+            }
+        for prefix in CONSERVATIVE_SMOKE_PREFIXES:
+            if rel == prefix or rel.startswith(prefix):
+                return {
+                    "rules": ["unmapped-production"],
+                    "features": ["smoke"],
+                    "skip": False,
+                    "note": "unmapped production path → smoke (not full suite)",
+                    "ci_full": False,
+                    "unmapped": True,
+                }
+        return {
+            "rules": ["ignored"],
+            "features": [],
+            "skip": True,
+            "note": "outside production/E2E tree → skip",
+            "ci_full": False,
+            "unmapped": False,
+        }
+
+    features = []
+    seen_f = set()
+    names = []
+    notes = []
+    ci_full = False
+    for rule in take_rules:
+        names.append(rule["name"])
+        if rule.get("ci_mode") == "full":
+            ci_full = True
+        if rule.get("resolve_e2e_module"):
+            feats = list(features_for_e2e_module_path(rel) or ())
+            if not feats:
+                feats = ["smoke"]
+                notes.append("unmapped E2E module → smoke")
+        else:
+            feats = list(rule.get("features") or ())
+        for feat in feats:
+            if feat not in seen_f:
+                seen_f.add(feat)
+                features.append(feat)
+        if rule.get("note"):
+            notes.append(rule["note"])
+    return {
+        "rules": names,
+        "features": features,
+        "skip": False,
+        "note": "; ".join(notes),
+        "ci_full": ci_full,
+        "unmapped": False,
+    }
+
+
+def match_affected_path(rel: str):
+    """Return (rule_name, features, skip, note) for one changed path.
+
+    Multiple non-skip rule hits are joined as ``browse+work-create`` with the
+    union of their features (prefer over-test over first-match under-test).
+    """
+    classified = classify_affected_path(rel)
+    if classified["skip"]:
+        name = classified["rules"][0] if classified["rules"] else "ignored"
+        return name, (), True, classified["note"]
+    rules = classified["rules"]
+    if classified["unmapped"]:
+        name = "unmapped-production"
+    elif len(rules) == 1:
+        name = rules[0]
+    else:
+        name = "+".join(rules)
+    return name, tuple(classified["features"]), False, classified["note"]
 
 
 def _affected_rule(name: str):
-    """Return the AFFECTED_RULES entry for ``name``, or None."""
+    """Return the AFFECTED_RULES entry for ``name``, or None.
+
+    Compound names from multi-rule matches (``browse+work-create``) return None;
+    callers that need ``ci_mode`` should use ``classify_affected_path``.
+    """
     for rule in AFFECTED_RULES:
         if rule["name"] == name:
             return rule
     return None
+
+
+def ci_reason_path_token(path: str) -> str:
+    """Sanitize a path for inclusion in CI plan ``reason`` strings.
+
+    Strips characters that would break shell/YAML interpolation if a consumer
+    ever embeds the reason in a double-quoted script (defense in depth; the
+    workflow must still pass reason via ``env:``, not ``run:`` interpolation).
+    """
+    text = _posix(path)
+    out = []
+    for ch in text:
+        o = ord(ch)
+        if o < 32 or ch in '"\'`$\\!\n\r':
+            out.append("?")
+        else:
+            out.append(ch)
+    token = "".join(out).strip() or "?"
+    return token[:200]
 
 
 def _ensure_smoke(features):
@@ -973,23 +1075,20 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
 
     for raw in paths:
         rel = _posix(raw)
-        rule_name, feats, skip, note = match_affected_path(rel)
-        if skip:
+        classified = classify_affected_path(rel)
+        if classified["skip"]:
             continue
         any_relevant = True
-        rule = _affected_rule(rule_name)
-        if rule is not None and rule.get("ci_mode") == "full":
-            full_reasons.append(
-                "%s (%s)" % (rel, rule_name)
-            )
+        token = ci_reason_path_token(rel)
+        rule_label = "+".join(classified["rules"]) or "?"
+        if classified["ci_full"]:
+            full_reasons.append("%s (%s)" % (token, rule_label))
             continue
-        if rule_name == "unmapped-production":
+        if classified["unmapped"]:
             # Local --affected keeps smoke; CI fails closed to full.
-            full_reasons.append("%s (unmapped production → CI full)" % rel)
+            full_reasons.append("%s (unmapped production → CI full)" % token)
             continue
-        # requirements* and similar conservative prefixes already hit
-        # unmapped-production above when they match CONSERVATIVE_SMOKE_PREFIXES.
-        for feat in feats:
+        for feat in classified["features"]:
             if feat not in seen_f:
                 seen_f.add(feat)
                 features.append(feat)
@@ -1167,10 +1266,10 @@ def select_affected(all_ids, changed_paths):
         )
         if skip:
             continue
-        for f in feats:
-            if f not in seen_f:
-                seen_f.add(f)
-                features.append(f)
+        for feat in feats:
+            if feat not in seen_f:
+                seen_f.add(feat)
+                features.append(feat)
     if not features:
         # Docs/unit/ignored-only (or empty changed list) → successful no-op.
         return {

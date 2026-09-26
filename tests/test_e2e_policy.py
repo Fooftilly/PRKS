@@ -286,6 +286,55 @@ class AffectedMappingTests(unittest.TestCase):
         for name in ("folders", "browse", "playlists", "smoke"):
             self.assertIn(name, plan["features"])
 
+    def test_work_cards_unions_browse_work_create_shell_and_smoke(self):
+        # First-match would keep only browse; shared work-cards.js also owns
+        # work-create (+ shell). Prefer over-test via multi-rule feature union.
+        path = "frontend/js/components/work-cards.js"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["browse", "work-create"])
+        self.assertEqual(
+            classified["features"], ["browse", "work-create", "shell"]
+        )
+        rule, feats, skip, _note = policy.match_affected_path(path)
+        self.assertEqual(rule, "browse+work-create")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("browse", "work-create", "shell"))
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertEqual(
+            plan["features"], ["browse", "work-create", "shell", "smoke"]
+        )
+
+    def test_research_network_core_is_ci_full(self):
+        # Shared Concepts/Positions/Arguments domain — do not under-test as
+        # concepts-only; CI fail-closed to full.
+        path = "backend/research_network.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["research-network-core"])
+        self.assertTrue(classified["ci_full"])
+        for feat in ("concepts", "positions", "arguments", "graph", "notes"):
+            self.assertIn(feat, classified["features"])
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
+        self.assertIn("research_network.py", plan["reason"])
+        self.assertIn("research-network-core", plan["reason"])
+
+    def test_ci_reason_path_token_strips_shell_metacharacters(self):
+        nasty = 'frontend/js/evil"`$(id)`.js'
+        token = policy.ci_reason_path_token(nasty)
+        self.assertNotIn('"', token)
+        self.assertNotIn("`", token)
+        self.assertNotIn("$", token)
+        self.assertNotIn("\\", token)
+        self.assertIn("frontend/js/evil", token)
+        plan = policy.plan_ci_e2e([nasty])
+        self.assertEqual(plan["mode"], "full")
+        self.assertNotIn('"', plan["reason"])
+        self.assertNotIn("`", plan["reason"])
+        self.assertNotIn("$(", plan["reason"])
+        self.assertIn("unmapped", plan["reason"])
+
     def test_plan_ci_shared_frontend_and_harness_and_requirements_are_full(self):
         for path in (
             "frontend/js/app.js",
