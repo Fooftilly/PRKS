@@ -386,6 +386,8 @@ AFFECTED_RULES = (
     # Vue foundation only. index.html/sw.js stay on shared-frontend-core.
     # New screens under frontend-app/src/ are not listed, so they stay
     # unmapped production (local smoke, CI full) until a feature rule names them.
+    # package.json, the lockfile, and frontend/vue/** also match
+    # settings-performance-diagnostics: the committed bundle ships that surface.
     {
         "name": "vue-frontend",
         "paths": (
@@ -598,9 +600,12 @@ AFFECTED_RULES = (
             "frontend-app/src/api/performance-diagnostics.ts",
             "frontend-app/src/api/performance-diagnostics.test.ts",
             "frontend-app/src/query/**",
+            "frontend-app/package.json",
+            "frontend-app/package-lock.json",
+            "frontend/vue/**",
         ),
         "features": ("settings",),
-        "note": "Vue performance diagnostics (#232) → settings. Other frontend-app/src files stay unmapped.",
+        "note": "Vue performance diagnostics (#232) → settings, including the committed bundle and Vue dependency pins. Other frontend-app/src files stay unmapped.",
     },
     {
         "name": "offline-runtime",

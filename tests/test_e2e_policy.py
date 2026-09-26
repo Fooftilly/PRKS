@@ -93,9 +93,6 @@ class AffectedMappingTests(unittest.TestCase):
         for path in (
             "frontend-app/vite.config.ts",
             "frontend-app/scripts/build.mjs",
-            "frontend-app/package.json",
-            "frontend/vue/prks-vue.js",
-            "frontend/vue/BUILD-MANIFEST.json",
         ):
             with self.subTest(path=path):
                 rule, feats, skip, _note = policy.match_affected_path(path)
@@ -104,7 +101,23 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertFalse(skip)
                 plan = policy.plan_ci_e2e([path])
                 self.assertEqual(plan["mode"], "affected")
-                self.assertIn("smoke", plan["features"])
+                self.assertEqual(plan["features"], ["smoke"])
+
+    def test_vue_bundle_and_dependency_inputs_include_settings(self):
+        for path in (
+            "frontend-app/package.json",
+            "frontend-app/package-lock.json",
+            "frontend/vue/prks-vue.js",
+            "frontend/vue/BUILD-MANIFEST.json",
+        ):
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertFalse(skip)
+                self.assertEqual(rule, "vue-frontend+settings-performance-diagnostics")
+                self.assertEqual(feats, ("smoke", "settings"))
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "affected")
+                self.assertEqual(plan["features"], ["smoke", "settings"])
 
     def test_performance_diagnostics_vue_maps_to_settings(self):
         paths = (
@@ -145,6 +158,9 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(rule, "unmapped-production")
         self.assertEqual(feats, ("smoke",))
         self.assertFalse(skip)
+        alone = policy.plan_ci_e2e([screen])
+        self.assertEqual(alone["mode"], "full")
+        self.assertTrue(alone["run"])
         plan = policy.plan_ci_e2e([screen, "frontend/vue/prks-vue.js"])
         self.assertEqual(plan["mode"], "full")
         self.assertTrue(plan["run"])
