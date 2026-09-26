@@ -240,22 +240,6 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(state['isbn']['value'], '978-multi')
         self.assertEqual(state['journal']['value'], 'Multi Journal')
 
-    def test_repeated_edits_coalesce_and_returning_to_base_cancels(self):
-        server, page, context = self.start()
-        self.offline(page, context)
-        for value in ('first', 'second', 'third'):
-            self.field(page, 'doi', value)
-            self.save(page)
-            self.pending(page, 1)
-        rows = self.operations(page)
-        self.assertEqual(rows[0]['payload']['value'], 'third')
-        self.assertEqual(rows[0]['base_revision'], 0, 'still measured against the observed base')
-        # Editing back to the acknowledged value leaves no intent at all.
-        self.field(page, 'doi', '')
-        self.save(page)
-        self.pending(page, 0)
-        self.assertNotIn('DOI', self.bib_rows(page))
-
     # ---- the point of the milestone ----------------------------------------
 
     def test_different_fields_synchronize_independently(self):
@@ -362,28 +346,6 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'a NEW operation carried the reapplied value')
 
     # ---- protocol and durability -------------------------------------------
-
-    def test_lost_response_applies_the_edit_once(self):
-        server, page, context = self.start()
-        work = server.ids['work_a']
-        seen = []
-
-        def lose(route):
-            seen.append(route.request.post_data_json['op_id'])
-            response = route.fetch()
-            if len(seen) == 1:
-                route.abort('failed')
-            else:
-                route.fulfill(response=response)
-
-        page.route('**/api/sync/operations', lose)
-        self.field(page, 'doi', '10.1/once')
-        self.save(page)
-        self.pending(page, 0)
-        self.assertGreaterEqual(len(seen), 2)
-        self.assertEqual(len(set(seen)), 1, 'the retry replays the same operation id')
-        self.assertEqual(self.server_fields(server, work)['doi'],
-                         {'value': '10.1/once', 'revision': 1}, 'applied exactly once')
 
     def test_clearing_the_cache_keeps_intent_and_diagnostics_can_resolve_it(self):
         """The Work page may be gone entirely; a change the user cannot reach

@@ -159,6 +159,27 @@ class WorkMetadataSyncTests(unittest.TestCase):
         self.assertEqual(conflict["requested_value"], "third")
         self.assertEqual(conflict["current_revision"], 2)
 
+    def test_idempotency_normalization_and_reuse(self):
+        """A lost-response retry must replay the ledgered outcome; a reused
+        op_id with a different payload must not mutate the field again."""
+        op_id = str(uuid.uuid4())
+        device_id = str(uuid.uuid4())
+        first = sync_protocol.process_operation(
+            self.db, self.op("doi", "10.1/once", op_id=op_id, device_id=device_id))
+        self.assertEqual(first[0], 200)
+        self.assertEqual(first[1]["code"], "ACKNOWLEDGED")
+        # Exact same envelope identity (same op_id + device_id + payload)
+        # replays the ledgered answer without advancing the field again.
+        second = sync_protocol.process_operation(
+            self.db, self.op("doi", "10.1/once", op_id=op_id, device_id=device_id))
+        self.assertEqual(second, first)
+        self.assertEqual(self.state()["doi"]["revision"], 1)
+        reused = sync_protocol.process_operation(
+            self.db, self.op("doi", "10.1/other", op_id=op_id, device_id=device_id))
+        self.assertEqual(reused, (409, {"code": "OP_ID_REUSE"}))
+        self.assertEqual(self.value("doi"), "10.1/once")
+        self.assertEqual(self.state()["doi"]["revision"], 1)
+
     def test_a_stale_but_convergent_edit_is_not_a_conflict(self):
         """Two people typing the same DOI have converged, not collided."""
         self.send("doi", "10.1/agreed")
