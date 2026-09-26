@@ -297,6 +297,19 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
             "content": _json_content(error_ref),
         }
 
+    # Same body-read refusals as Positions POST/PATCH: PRKSHandler._read_json_body.
+    mutation_body_read_errors = {
+        "400": _json_error(
+            "JSON body gate refusal (invalid Content-Length, unreadable body, or invalid JSON)."
+        ),
+        "413": _json_error(
+            "Request body larger than the JSON body limit (request_too_large)."
+        ),
+        "415": _json_error(
+            "Missing or unsupported Content-Type (unsupported_media_type)."
+        ),
+    }
+
     paths: dict[str, Any] = {
         "/api/diagnostics/performance": {
             "get": {
@@ -316,15 +329,25 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
                 "operationId": "resetPerformanceDiagnostics",
                 "summary": "Clear the in-process performance window",
                 "tags": ["diagnostics"],
+                "requestBody": {
+                    "required": True,
+                    "description": (
+                        "Empty JSON object. The handler does not read fields; "
+                        "the body exists so the request passes the JSON body gate."
+                    ),
+                    "content": _json_content(
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                        }
+                    ),
+                },
                 "responses": {
                     "200": {
                         "description": "Measurements were reset.",
                         "content": _json_content(reset_ref),
                     },
-                    "415": _json_error(
-                        "Missing or unsupported Content-Type "
-                        "(unsupported_media_type)."
-                    ),
+                    **mutation_body_read_errors,
                 },
             },
         },

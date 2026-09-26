@@ -100,6 +100,41 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         api.validate_request(request)
         api.validate_response(request, response)
 
+    def test_reset_operation_requires_json(self):
+        document = performance_diagnostics_openapi_document()
+        operation = document["paths"]["/api/diagnostics/performance/reset"]["post"]
+        request_body = operation["requestBody"]
+        self.assertTrue(request_body["required"])
+        schema = request_body["content"]["application/json"]["schema"]
+        self.assertEqual(schema["type"], "object")
+        self.assertIs(schema["additionalProperties"], False)
+        error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
+        for status in ("400", "413", "415"):
+            response = operation["responses"][status]
+            self.assertEqual(
+                response["content"]["application/json"]["schema"],
+                error_ref,
+            )
+        api = OpenAPI.from_dict(document)
+        api.validate_request(
+            MockRequest(
+                host_url="http://127.0.0.1",
+                method="post",
+                path="/api/diagnostics/performance/reset",
+                data=b"{}",
+            )
+        )
+        with self.assertRaises(Exception):
+            api.validate_request(
+                MockRequest(
+                    host_url="http://127.0.0.1",
+                    method="post",
+                    path="/api/diagnostics/performance/reset",
+                    data=b"{}",
+                    content_type="text/plain",
+                )
+            )
+
     def test_vue_slice_does_not_persist_queries_or_add_other_frameworks(self):
         text = "\n".join(
             path.read_text(encoding="utf-8")
