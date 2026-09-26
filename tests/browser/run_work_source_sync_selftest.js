@@ -360,7 +360,13 @@ async function payloadAllowance() {
     }), e => e.prksLocalStoreCode === 'payload_too_large');
 }
 
-/* ---- acknowledgement reaches every cached representation, coherently ---- */
+/* ---- acknowledgement reaches every cached representation, coherently ----
+ *
+ * Direct reconciliation: callers pass an already-shaped ACK into
+ * `reconcileWorkSource`. That is not the open-editor acceptAck path (Chromium
+ * KEEP: submit SHORT, receive WATCH, assert cache + `#meta-video-url`). The
+ * trailing convergent block below stages SHORT→WATCH through the sync handler.
+ */
 async function reconciliation() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
     /* A cached video row carries the identity AND the presentation the server
