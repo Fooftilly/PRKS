@@ -139,7 +139,7 @@ the state that makes a path meaningful.
 
 `wait_for_async()` runs one browser-side async polling loop inside a single
 `page.evaluate`, preserving resolved-value semantics and the diagnostic last
-value (see `tests/test_wait_for_async.py`). Do not replace it with ordinary
+value (see `tests/e2e/test_wait_for_async.py`). Do not replace it with ordinary
 `page.wait_for_function(() => promise)`, which remains incorrect for these
 predicates. Re-measure `async_wait` when changing the poll interval or the
 in-page helper.

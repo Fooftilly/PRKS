@@ -478,11 +478,17 @@ async ({ expression, arg, timeoutMs, pollMs }) => {
         }
     };
 
-    let predicate = eval('(' + expression + ')');
-    if (typeof predicate !== 'function') {
-        const constant = predicate;
-        predicate = () => constant;
-    }
+    // Function-shaped predicates are compiled once. Non-function expressions
+    // (e.g. `window.__ready`) are re-evaluated every poll — same as the old
+    // Python `page.evaluate(expression)` loop — so a later truthy value is seen.
+    const compiled = eval('(' + expression + ')');
+    const predicateIsFunction = typeof compiled === 'function';
+    const invoke = (pollArg) => {
+        if (predicateIsFunction) {
+            return compiled(pollArg);
+        }
+        return eval('(' + expression + ')');
+    };
 
     const deadline = Date.now() + timeoutMs;
     let last = null;
@@ -496,7 +502,7 @@ async ({ expression, arg, timeoutMs, pollMs }) => {
         // settles must not block the loop past the caller's deadline (Qodo on
         // #220 / #222). Resolved falsey values still poll as before.
         let settled = null;
-        const predicatePromise = Promise.resolve(predicate(arg)).then(
+        const predicatePromise = Promise.resolve(invoke(arg)).then(
             (value) => {
                 settled = { kind: 'value', value: value };
                 return settled;

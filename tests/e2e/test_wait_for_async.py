@@ -1,7 +1,8 @@
 """Parity tests for browser-side wait_for_async (resolved-value semantics).
 
 Uses a blank Chromium page — no PRKS server — so the harness contract can be
-checked without paying full E2E startup. Skips when Chromium is unavailable.
+checked without paying full AppServer startup. Gated on PRKS_E2E so the default
+unit path never downloads or launches Chromium.
 """
 from __future__ import annotations
 
@@ -12,17 +13,16 @@ import unittest
 from tests.e2e import harness
 
 
-def _chromium_or_skip(test_case: unittest.TestCase):
-    try:
-        return harness.require_chromium()
-    except Exception as exc:
-        raise unittest.SkipTest("Chromium unavailable: %s" % exc) from exc
+def load_tests(loader, standard_tests, pattern):
+    if os.environ.get("PRKS_E2E") != "1":
+        return unittest.TestSuite()
+    return standard_tests
 
 
 class WaitForAsyncParityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._pw, cls._browser = _chromium_or_skip(cls)
+        cls._pw, cls._browser = harness.require_chromium()
 
     @classmethod
     def tearDownClass(cls):
@@ -111,6 +111,21 @@ class WaitForAsyncParityTests(unittest.TestCase):
         text = str(cm.exception)
         self.assertIn("hung-promise after 0.4s", text)
         self.assertIn("last value was None", text)
+
+    def test_direct_expression_re_evaluates_each_poll(self):
+        """Non-function expressions must not freeze the first eval's value."""
+        self.page.evaluate(
+            "() => { window.__ready = false; setTimeout(() => { window.__ready = 'yes'; }, 120); }"
+        )
+        started = time.perf_counter()
+        result = harness.wait_for_async(
+            self.page,
+            "window.__ready",
+            timeout=2000,
+        )
+        elapsed = time.perf_counter() - started
+        self.assertEqual(result, "yes")
+        self.assertGreaterEqual(elapsed, 0.10)
 
     def test_profiles_async_wait_phase(self):
         previous = os.environ.get("PRKS_E2E_PROFILE")
