@@ -468,12 +468,38 @@ def _write_watchdog_report(report_file: str, detail: str, test_id: str) -> None:
         pass
 
 
-def _install_test_watchdog(index: int, report_file: str | None = None) -> None:
+def _persist_watchdog_last_failed(test_id: str) -> None:
+    """Best-effort last-failed write before serial ``os._exit`` (main never returns)."""
+    tid = str(test_id or "").strip()
+    if not tid:
+        return
+    if benchmark_modes():
+        return
+    path = REPO / LAST_FAILED_PATH
+    previous = load_last_failed(path)
+    previous_ids = (previous or {}).get("test_ids") or []
+    unresolved = merge_last_failed(previous_ids, [], [tid])
+    save_last_failed(
+        path,
+        unresolved,
+        meta={"source": "per-test-watchdog"},
+    )
+
+
+def _install_test_watchdog(
+    index: int,
+    report_file: str | None = None,
+    *,
+    persist_last_failed: bool = False,
+) -> None:
     """Kill this worker if one test exceeds the generous hang threshold.
 
     Separate from Playwright assertion timeouts and from the full-suite
     PRKS_E2E_FULL_TIMEOUT. Names the stuck test id + latest diagnostic stage,
     tears down PRKS servers, and exits without retrying.
+
+    Fires on an armed activity clock even when there is no unittest id yet
+    (setUpModule / tearDownModule Chromium fixtures).
     """
     threshold = per_test_watchdog_s()
     if threshold <= 0:
@@ -486,7 +512,7 @@ def _install_test_watchdog(index: int, report_file: str | None = None) -> None:
             hb = get_e2e_heartbeat()
             tid = hb.get("test_id") or ""
             started = float(hb.get("test_started_mono") or 0.0)
-            if not tid or started <= 0:
+            if started <= 0:
                 continue
             age = time.monotonic() - started
             if age < threshold:
@@ -502,6 +528,11 @@ def _install_test_watchdog(index: int, report_file: str | None = None) -> None:
             except Exception:
                 pass
             _write_watchdog_report(report_file or "", detail, tid)
+            if persist_last_failed:
+                try:
+                    _persist_watchdog_last_failed(tid)
+                except Exception:
+                    pass
             clear_e2e_heartbeat()
             os._exit(124)
 
@@ -509,12 +540,24 @@ def _install_test_watchdog(index: int, report_file: str | None = None) -> None:
 
 
 def run_worker(
-    index: int, jobs: int, tests_file: str, report_file: str, fail_fast: bool = False
+    index: int,
+    jobs: int,
+    tests_file: str,
+    report_file: str,
+    fail_fast: bool = False,
+    *,
+    enable_watchdog: bool = False,
 ) -> int:
-    """Execute one shard and write a machine-readable report. Never raises."""
+    """Execute one shard and write a machine-readable report. Never raises.
+
+    Watchdog installation is opt-in (``enable_watchdog=True``) so direct helper
+    calls from unit tests do not leave a daemon monitoring later work. The CLI
+    worker dispatch path opts in.
+    """
     set_heartbeat_file(os.environ.get("PRKS_E2E_HEARTBEAT_FILE"))
     _install_shutdown_handlers(index)
-    _install_test_watchdog(index, report_file)
+    if enable_watchdog:
+        _install_test_watchdog(index, report_file)
     with open(tests_file, encoding="utf-8") as handle:
         test_ids = json.load(handle)
     stream = StringIO()
@@ -619,13 +662,19 @@ def _spawn_worker(index, jobs, shard, workdir, browsers_path, fail_fast=False):
         # this shard so agent/dev mode does not keep launching Chromium after
         # the first failure on the same worker.
         cmd.append("--fail-fast")
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(REPO),
-        env=env,
-        stdout=handle,
-        stderr=subprocess.STDOUT,
-    )
+    popen_kwargs = {
+        "cwd": str(REPO),
+        "env": env,
+        "stdout": handle,
+        "stderr": subprocess.STDOUT,
+    }
+    # Own process group/session so parent tree-kill reaps PRKS servers and
+    # Chromium descendants when the worker is force-stopped on timeout.
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    proc = subprocess.Popen(cmd, **popen_kwargs)
     return {
         "index": index,
         "proc": proc,
@@ -642,15 +691,7 @@ def _stop_worker(worker):
     proc = worker["proc"]
     if proc.poll() is not None:
         return
-    proc.terminate()
-    try:
-        proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        try:
-            proc.wait(timeout=WORKER_STOP_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            pass
+    _terminate_process_tree(proc)
 
 
 def _read_report(worker):
@@ -728,15 +769,14 @@ def _hang_attribution(worker) -> tuple[str, str]:
 
 
 def _worker_exceeded_watchdog(worker, threshold_s: int) -> tuple[bool, dict | None, float]:
-    """True when the worker's in-flight test wall age exceeds the threshold."""
+    """True when the worker's in-flight activity wall age exceeds the threshold."""
     if threshold_s <= 0:
         return False, None, 0.0
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if not hb:
         return False, None, 0.0
-    tid = str(hb.get("test_id") or "")
     started = float(hb.get("test_started_wall") or 0.0)
-    if not tid or started <= 0:
+    if started <= 0:
         return False, hb, 0.0
     age = time.time() - started
     return age >= threshold_s, hb, age
@@ -973,8 +1013,13 @@ def _print_worker_failure(worker, jobs, report):
 # --- serial parent -------------------------------------------------------
 
 
-def run_serial(test_ids, fail_fast) -> tuple[bool, dict, list, dict]:
-    _install_test_watchdog(0, report_file=None)
+def run_serial(
+    test_ids, fail_fast, *, enable_watchdog: bool = False
+) -> tuple[bool, dict, list, dict]:
+    """Run selected tests in-process. Watchdog is opt-in (CLI serial path)."""
+    if enable_watchdog:
+        # persist_last_failed: os._exit skips main's merge/save path.
+        _install_test_watchdog(0, report_file=None, persist_last_failed=True)
     runner = unittest.TextTestRunner(
         verbosity=2, failfast=fail_fast, resultclass=_result_factory
     )
@@ -1281,6 +1326,7 @@ def _main(argv=None) -> int:
             args.tests_file,
             args.report_file,
             fail_fast=args.fail_fast,
+            enable_watchdog=True,
         )
 
     if args.list_features:
@@ -1414,7 +1460,9 @@ def _main(argv=None) -> int:
     local_timings = load_timings(REPO / TIMINGS_PATH)
     timings = merge_timing_sources(baseline_timings, local_timings)
     if jobs == 1:
-        ok, observed, failed_ids, phase_timings = run_serial(test_ids, args.fail_fast)
+        ok, observed, failed_ids, phase_timings = run_serial(
+            test_ids, args.fail_fast, enable_watchdog=True
+        )
     else:
         ok, observed, failed_ids, phase_timings = run_parallel(
             test_ids, jobs, timings, args.fail_fast

@@ -282,10 +282,38 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
         self.assertEqual(snap["test_id"], "tests.e2e.fake.T.test_hang")
         self.assertEqual(snap["stage"], "SERVER_READY")
         self.assertGreater(snap["test_started_mono"], 0)
+        started = snap["test_started_mono"]
         harness.e2e_heartbeat("STOP", "tests.e2e.fake.T.test_hang", end_test=True)
-        cleared = harness.get_e2e_heartbeat()
-        self.assertEqual(cleared["test_id"], "")
-        self.assertEqual(cleared["stage"], "")
+        after_stop = harness.get_e2e_heartbeat()
+        self.assertEqual(after_stop["test_id"], "")
+        self.assertEqual(after_stop["stage"], "BETWEEN_TESTS")
+        self.assertGreater(after_stop["test_started_mono"], 0)
+        self.assertGreaterEqual(after_stop["test_started_mono"], started)
+
+    def test_recycle_diag_does_not_replace_test_id_or_reset_timer(self):
+        """Codex/Qodo: only begin_test replaces the tracked unittest id."""
+        harness.clear_e2e_heartbeat()
+        harness.e2e_heartbeat(
+            "START", "tests.e2e.fake.T.test_meta", begin_test=True
+        )
+        before = harness.get_e2e_heartbeat()
+        # Simulate ChromiumHolder.recycle stage-only diagnostic.
+        harness.e2e_diag("CHROMIUM_RECYCLE after_1_contexts")
+        # Also the old mistaken shape: synthetic label as second arg.
+        harness.e2e_diag("CHROMIUM_RECYCLE", "after_1_contexts")
+        after = harness.get_e2e_heartbeat()
+        self.assertEqual(after["test_id"], "tests.e2e.fake.T.test_meta")
+        self.assertEqual(after["test_started_mono"], before["test_started_mono"])
+        self.assertEqual(after["test_started_wall"], before["test_started_wall"])
+        self.assertIn("CHROMIUM_RECYCLE", after["stage"])
+
+    def test_module_fixture_arms_watchdog_clock_without_test_id(self):
+        harness.clear_e2e_heartbeat()
+        harness.e2e_heartbeat("CHROMIUM_LAUNCH")
+        snap = harness.get_e2e_heartbeat()
+        self.assertEqual(snap["test_id"], "")
+        self.assertEqual(snap["stage"], "CHROMIUM_LAUNCH")
+        self.assertGreater(snap["test_started_mono"], 0)
 
     def test_heartbeat_file_is_written_for_parent_poll(self):
         with tempfile.TemporaryDirectory(prefix="prks-hb-") as raw:

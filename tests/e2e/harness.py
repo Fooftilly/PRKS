@@ -163,6 +163,11 @@ def e2e_heartbeat(
     Always tracks the current unittest id and latest lifecycle stage so a
     per-test watchdog can name what a hung worker was doing. Printing stays
     opt-in so ordinary runs stay quiet.
+
+    Only ``begin_test=True`` replaces the tracked unittest id and resets the
+    hang clock for a new test. Ordinary diagnostics (including Chromium
+    recycle labels) update the stage only — they must not steal the id or
+    restart the timer. Module fixtures arm an activity clock without an id.
     """
     stage_s = str(stage or "").strip() or "?"
     tid_arg = str(test_id or "").strip()
@@ -173,22 +178,25 @@ def e2e_heartbeat(
         if end_test:
             if not print_tid:
                 print_tid = _HEARTBEAT["test_id"]
+            # Drop the unittest id but keep an activity clock so setUpModule /
+            # tearDownModule hangs after stopTest are still watchdog-covered.
             _HEARTBEAT["test_id"] = ""
-            _HEARTBEAT["stage"] = ""
-            _HEARTBEAT["test_started_mono"] = 0.0
-            _HEARTBEAT["heartbeat_mono"] = 0.0
-            _HEARTBEAT["test_started_wall"] = 0.0
-            _HEARTBEAT["heartbeat_wall"] = 0.0
+            _HEARTBEAT["stage"] = "BETWEEN_TESTS"
+            _HEARTBEAT["test_started_mono"] = now_mono
+            _HEARTBEAT["test_started_wall"] = now_wall
+            _HEARTBEAT["heartbeat_mono"] = now_mono
+            _HEARTBEAT["heartbeat_wall"] = now_wall
         else:
-            tid = tid_arg or _HEARTBEAT["test_id"]
-            if begin_test or not _HEARTBEAT["test_id"] or (
-                tid and tid != _HEARTBEAT["test_id"]
-            ):
-                _HEARTBEAT["test_id"] = tid
+            if begin_test:
+                _HEARTBEAT["test_id"] = tid_arg
                 _HEARTBEAT["test_started_mono"] = now_mono
                 _HEARTBEAT["test_started_wall"] = now_wall
-            elif tid:
-                _HEARTBEAT["test_id"] = tid
+            elif _HEARTBEAT["test_started_mono"] <= 0:
+                # Pre-test fixture activity (e.g. require_chromium in
+                # setUpModule): arm the hang clock without inventing an id
+                # from diagnostic labels like ``after_N_contexts``.
+                _HEARTBEAT["test_started_mono"] = now_mono
+                _HEARTBEAT["test_started_wall"] = now_wall
             _HEARTBEAT["stage"] = stage_s
             _HEARTBEAT["heartbeat_mono"] = now_mono
             _HEARTBEAT["heartbeat_wall"] = now_wall
@@ -255,10 +263,9 @@ class ChromiumHolder:
             self._needs_recycle = True
 
     def recycle(self) -> None:
-        e2e_diag(
-            "CHROMIUM_RECYCLE",
-            "after_%d_contexts" % self._contexts_since_launch,
-        )
+        # Stage-only: never pass the recycle label as a test_id (that reset
+        # the hang clock and poisoned --last-failed attribution).
+        e2e_diag("CHROMIUM_RECYCLE after_%d_contexts" % self._contexts_since_launch)
         # Stop the old process, then drop refs *before* relaunch so a failed
         # require_chromium cannot leave get_browser() serving closed instances.
         # Only clear _needs_recycle after a successful relaunch — otherwise the
@@ -288,6 +295,7 @@ class ChromiumHolder:
 
     def close(self) -> None:
         """Stop Chromium without relaunching, even if a recycle was pending."""
+        e2e_heartbeat("CHROMIUM_CLOSE")
         self._needs_recycle = False
         try:
             if self.browser is not None:
@@ -515,6 +523,9 @@ def assert_chromium_installed() -> None:
 
 def require_chromium():
     """Return (playwright, browser). Installs Chromium into the repo cache if needed."""
+    # Arm the hang clock before launch so setUpModule Chromium hangs are
+    # covered even though unittest has not called startTest yet.
+    e2e_heartbeat("CHROMIUM_LAUNCH")
     ensure_chromium_installed()
     apply_e2e_playwright_env()
     from playwright.sync_api import sync_playwright
