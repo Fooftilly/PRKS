@@ -95,6 +95,23 @@ class WaitForAsyncParityTests(unittest.TestCase):
         self.assertIn("last value was False", text)
         self.assertIn("() => Promise.resolve(false)", text)
 
+    def test_never_settling_promise_times_out_instead_of_hanging(self):
+        """Predicate Promise that never settles must hit the caller timeout."""
+        started = time.perf_counter()
+        with self.assertRaises(AssertionError) as cm:
+            harness.wait_for_async(
+                self.page,
+                "() => new Promise(() => {})",
+                timeout=400,
+                message="hung-promise",
+            )
+        elapsed = time.perf_counter() - started
+        self.assertGreaterEqual(elapsed, 0.35)
+        self.assertLess(elapsed, 2.0, "evaluate must not hang past the deadline")
+        text = str(cm.exception)
+        self.assertIn("hung-promise after 0.4s", text)
+        self.assertIn("last value was None", text)
+
     def test_profiles_async_wait_phase(self):
         previous = os.environ.get("PRKS_E2E_PROFILE")
         os.environ["PRKS_E2E_PROFILE"] = "1"

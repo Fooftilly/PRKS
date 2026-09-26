@@ -487,14 +487,49 @@ async ({ expression, arg, timeoutMs, pollMs }) => {
     const deadline = Date.now() + timeoutMs;
     let last = null;
     while (true) {
-        last = await Promise.resolve(predicate(arg));
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+            return { ok: false, value: last };
+        }
+
+        // Bound each predicate await by remaining timeout. A Promise that never
+        // settles must not block the loop past the caller's deadline (Qodo on
+        // #220 / #222). Resolved falsey values still poll as before.
+        let settled = null;
+        const predicatePromise = Promise.resolve(predicate(arg)).then(
+            (value) => {
+                settled = { kind: 'value', value: value };
+                return settled;
+            },
+            (err) => {
+                settled = { kind: 'error', err: err };
+                return settled;
+            }
+        );
+        const timedOut = await Promise.race([
+            predicatePromise.then(() => false),
+            new Promise((resolve) => setTimeout(() => resolve(true), remaining)),
+        ]);
+        if (!settled) {
+            // Late settle/reject after we leave evaluate: avoid unhandled rejection.
+            predicatePromise.catch(() => {});
+            return { ok: false, value: last };
+        }
+        if (settled.kind === 'error') {
+            throw settled.err;
+        }
+        last = settled.value;
         if (isPyTruthy(last)) {
             return { ok: true, value: last };
         }
-        if (Date.now() >= deadline) {
+        if (timedOut || Date.now() >= deadline) {
             return { ok: false, value: last };
         }
-        await new Promise((resolve) => setTimeout(resolve, pollMs));
+        const sleepMs = Math.min(pollMs, Math.max(0, deadline - Date.now()));
+        if (sleepMs <= 0) {
+            return { ok: false, value: last };
+        }
+        await new Promise((resolve) => setTimeout(resolve, sleepMs));
     }
 }
 """
@@ -514,6 +549,8 @@ def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: 
     asynchronous, so they are polled from here instead: one `page.evaluate`
     runs a browser-side loop that awaits each poll's RESOLVED value (same
     semantics as a Python `page.evaluate` loop) and only then tests truthiness.
+    Each await is raced against the remaining timeout so a Promise that never
+    settles fails with the usual diagnostic instead of hanging the evaluate.
 
     Truthiness matches Python's rules for JSON-serializable results (empty
     list/dict/string and 0/False/None are failure), so call sites that return
