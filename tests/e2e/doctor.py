@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -63,7 +64,7 @@ E2E_ENV_KEYS = (
 # Soft thresholds for classifying cloud-container scarcity (not hard failures).
 _MIN_ADEQUATE_SHM_BYTES = 64 * 1024 * 1024
 _MIN_ADEQUATE_TEMP_FREE_BYTES = 1024 * 1024 * 1024
-# Linux shared-memory mount probed read-only via statvfs (not a temp-file API).
+# Linux shared-memory mount; absent on Windows → report inapplicable, do not crash.
 _SHM_PROBE_PATH = Path(os.sep) / "dev" / "shm"
 
 
@@ -84,25 +85,43 @@ def _fmt_bytes(n: int | None) -> str:
     return "%d B" % n
 
 
-def _statvfs_bytes(path: Path) -> dict:
+def _disk_usage_bytes(path: Path) -> dict:
+    """Portable disk-space probe (``shutil.disk_usage``; no Unix ``os.statvfs``)."""
     try:
-        st = os.statvfs(path)
+        present = path.exists()
     except OSError as exc:
         return {
             "path": str(path),
-            "present": path.exists(),
+            "present": False,
             "total_bytes": None,
             "avail_bytes": None,
             "error": "%s: %s" % (type(exc).__name__, exc),
         }
-    # Prefer non-root available space (f_bavail) for operator disk pressure.
-    total = int(st.f_frsize) * int(st.f_blocks)
-    avail = int(st.f_frsize) * int(st.f_bavail)
+    if not present:
+        return {
+            "path": str(path),
+            "present": False,
+            "total_bytes": None,
+            "avail_bytes": None,
+            "error": "not present / inapplicable",
+        }
+    try:
+        usage = shutil.disk_usage(path)
+    except (OSError, AttributeError) as exc:
+        # AttributeError: Windows has no os.statvfs; some platforms' shutil
+        # disk_usage still routes through it and must not kill the doctor.
+        return {
+            "path": str(path),
+            "present": True,
+            "total_bytes": None,
+            "avail_bytes": None,
+            "error": "%s: %s" % (type(exc).__name__, exc),
+        }
     return {
         "path": str(path),
         "present": True,
-        "total_bytes": total,
-        "avail_bytes": avail,
+        "total_bytes": int(usage.total),
+        "avail_bytes": int(usage.free),
         "error": None,
     }
 
@@ -289,12 +308,16 @@ def _resource_pressure_reasons(resources: dict, agent_jobs: int) -> list[str]:
 
 
 def _resource_incomplete_reasons(resources: dict) -> list[str]:
-    """Probe failures that must block a resources_look_adequate claim."""
+    """Probe failures that must block a resources_look_adequate claim.
+
+    Absent ``/dev/shm`` (Windows / non-Linux) is inapplicable, not incomplete.
+    Incomplete only when a probe target is present but unreadable, or temp fails.
+    """
     reasons = []
     shm = resources.get("shm") or {}
     temp = resources.get("temp") or {}
-    if shm.get("avail_bytes") is None:
-        reasons.append("shm available space unknown (probe failed or missing)")
+    if shm.get("present") and shm.get("avail_bytes") is None:
+        reasons.append("shm available space unknown (probe failed)")
     if temp.get("avail_bytes") is None:
         reasons.append("temp disk available space unknown (probe failed or missing)")
     return reasons
@@ -382,8 +405,8 @@ def collect_report(repo: Path | None = None, environ=None) -> dict:
     agent_jobs = agent_default_jobs(cpu_count=effective, memory_limit_bytes=memory)
 
     temp_dir = Path(tempfile.gettempdir())
-    shm = _statvfs_bytes(_SHM_PROBE_PATH)
-    temp = _statvfs_bytes(temp_dir)
+    shm = _disk_usage_bytes(_SHM_PROBE_PATH)
+    temp = _disk_usage_bytes(temp_dir)
 
     browser = _chromium_probe(browsers_dir)
     browser["browsers_dir_inherited"] = inherited_browsers
