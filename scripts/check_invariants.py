@@ -12,11 +12,26 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# First #69 Pyright slice: genuine basic type checking for backend/storage.
+# Kept next to the AST invariants so Fast Static Analysis fails if the typed
+# slice silently reverts to effectively-off mode.
+PYRIGHT_DATAFLOW_CONFIG = "pyrightconfig.json"
+PYRIGHT_TYPED_SLICE_CONFIG = "pyrightconfig.typed-slice.json"
+PYRIGHT_TYPED_SLICE_INCLUDE = ("backend/storage",)
+PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
+PYRIGHT_REQUIRED_DIAGNOSTICS = (
+    "reportUndefinedVariable",
+    "reportUnboundVariable",
+    "reportUnusedExcept",
+)
+STATIC_ANALYSIS_WORKFLOW = ".github/workflows/static-analysis.yml"
 
 # Calls that must not appear anywhere under backend/. New managed-file copies
 # must go through the durable storage capability instead of ad-hoc copy calls.
@@ -238,6 +253,167 @@ def check_repo(root: Path = REPO_ROOT) -> list[Finding]:
     return findings
 
 
+def _load_json_object(path: Path) -> dict | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _require_diagnostic_errors(cfg: dict, relpath: str) -> list[Finding]:
+    findings: list[Finding] = []
+    for key in PYRIGHT_REQUIRED_DIAGNOSTICS:
+        if cfg.get(key) != "error":
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-001",
+                    relpath,
+                    1,
+                    f"{key} must remain \"error\" (found {cfg.get(key)!r})",
+                )
+            )
+    return findings
+
+
+def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
+    """Keep the #69 typed slice from silently becoming effectively-off.
+
+    The data-flow config may stay on ``typeCheckingMode: off`` (narrow
+    diagnostics only). The typed-slice config must enable genuine analysis
+    (``basic`` / ``standard`` / ``strict``) for ``backend/storage``, and CI
+    must invoke that project file.
+    """
+    findings: list[Finding] = []
+
+    dataflow_path = root / PYRIGHT_DATAFLOW_CONFIG
+    if not dataflow_path.is_file():
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-001",
+                PYRIGHT_DATAFLOW_CONFIG,
+                1,
+                "missing Pyright data-flow config",
+            )
+        )
+    else:
+        dataflow = _load_json_object(dataflow_path)
+        if dataflow is None:
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-001",
+                    PYRIGHT_DATAFLOW_CONFIG,
+                    1,
+                    "Pyright data-flow config is not a JSON object",
+                )
+            )
+        else:
+            findings.extend(_require_diagnostic_errors(dataflow, PYRIGHT_DATAFLOW_CONFIG))
+
+    typed_path = root / PYRIGHT_TYPED_SLICE_CONFIG
+    if not typed_path.is_file():
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-002",
+                PYRIGHT_TYPED_SLICE_CONFIG,
+                1,
+                "missing Pyright typed-slice config (first #69 scope)",
+            )
+        )
+        return findings
+
+    typed = _load_json_object(typed_path)
+    if typed is None:
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-002",
+                PYRIGHT_TYPED_SLICE_CONFIG,
+                1,
+                "Pyright typed-slice config is not a JSON object",
+            )
+        )
+        return findings
+
+    findings.extend(_require_diagnostic_errors(typed, PYRIGHT_TYPED_SLICE_CONFIG))
+
+    mode = typed.get("typeCheckingMode")
+    if mode not in PYRIGHT_TYPED_SLICE_MODES:
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-002",
+                PYRIGHT_TYPED_SLICE_CONFIG,
+                1,
+                (
+                    "typed-slice typeCheckingMode must be one of "
+                    f"{sorted(PYRIGHT_TYPED_SLICE_MODES)} "
+                    f"(found {mode!r}); off would silently disable real type analysis"
+                ),
+            )
+        )
+
+    include = typed.get("include")
+    if not isinstance(include, list) or not include:
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-002",
+                PYRIGHT_TYPED_SLICE_CONFIG,
+                1,
+                "typed-slice include must be a non-empty list",
+            )
+        )
+    else:
+        normalized = tuple(str(item) for item in include)
+        if normalized != PYRIGHT_TYPED_SLICE_INCLUDE:
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-002",
+                    PYRIGHT_TYPED_SLICE_CONFIG,
+                    1,
+                    (
+                        "typed-slice include must be exactly "
+                        f"{list(PYRIGHT_TYPED_SLICE_INCLUDE)} "
+                        f"(found {list(normalized)!r}); expand only in a focused follow-up PR"
+                    ),
+                )
+            )
+
+    workflow_path = root / STATIC_ANALYSIS_WORKFLOW
+    if not workflow_path.is_file():
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-003",
+                STATIC_ANALYSIS_WORKFLOW,
+                1,
+                "missing Fast Static Analysis workflow",
+            )
+        )
+    else:
+        workflow_text = workflow_path.read_text(encoding="utf-8")
+        if PYRIGHT_TYPED_SLICE_CONFIG not in workflow_text:
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-003",
+                    STATIC_ANALYSIS_WORKFLOW,
+                    1,
+                    (
+                        f"workflow must invoke pyright --project {PYRIGHT_TYPED_SLICE_CONFIG} "
+                        "so the typed storage slice cannot be dropped from CI unnoticed"
+                    ),
+                )
+            )
+        if PYRIGHT_DATAFLOW_CONFIG not in workflow_text:
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-003",
+                    STATIC_ANALYSIS_WORKFLOW,
+                    1,
+                    f"workflow must still invoke pyright --project {PYRIGHT_DATAFLOW_CONFIG}",
+                )
+            )
+
+    return findings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -249,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     findings = check_repo(args.root.resolve())
+    findings.extend(check_pyright_configs(args.root.resolve()))
     if findings:
         for finding in findings:
             print(finding.render())
@@ -257,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print("engineering invariant check: OK")
     return 0
+
 
 
 if __name__ == "__main__":
