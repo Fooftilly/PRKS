@@ -1184,5 +1184,43 @@ class TimingBaselineUpdateTests(unittest.TestCase):
             self.assertIn("tests.e2e.keep.*", written)
             self.assertNotIn("tests.e2e.other.*", written)
 
+    def test_cli_resolves_absolute_output_before_committed_coverage_check(self):
+        from tests.e2e import update_timing_baseline as cli
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            committed = root / "tests" / "e2e" / "timing-baseline.json"
+            committed.parent.mkdir(parents=True)
+            committed.write_text(
+                json.dumps({"tests.e2e.keep.*": 7.0, "tests.e2e.other.*": 5.0}),
+                encoding="utf-8",
+            )
+            before = committed.read_text(encoding="utf-8")
+            measurements = root / "one-module.json"
+            measurements.write_text(
+                json.dumps({"tests.e2e.keep.C.test_a": 2.0}),
+                encoding="utf-8",
+            )
+            # Non-normalized absolute path to the committed file.
+            sneaky = str(root / "tests" / "e2e" / ".." / "e2e" / "timing-baseline.json")
+            self.assertTrue(Path(sneaky).is_absolute())
+            self.assertNotEqual(Path(sneaky), committed)
+            self.assertEqual(Path(sneaky).resolve(), committed)
+            discovered = [
+                "tests.e2e.keep.C.test_a",
+                "tests.e2e.other.C.test_c",
+            ]
+
+            with mock.patch.object(cli, "_repo_root", return_value=root):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = cli.main(
+                        ["--from", str(measurements), "--output", sneaky],
+                        discover_ids=lambda: discovered,
+                    )
+            self.assertEqual(code, 2, err.getvalue())
+            self.assertEqual(committed.read_text(encoding="utf-8"), before)
+            self.assertIn("incomplete", err.getvalue())
+
 if __name__ == "__main__":
     unittest.main()

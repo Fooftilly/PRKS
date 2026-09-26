@@ -237,9 +237,9 @@ def main(argv=None, *, discover_ids=None) -> int:
 
     write_path = None
     if args.output is not None:
-        write_path = Path(args.output)
-        if not write_path.is_absolute():
-            write_path = (Path.cwd() / write_path).resolve()
+        # Always resolve so non-normalized absolute paths / symlink checkouts
+        # still match committed_path and cannot skip the coverage fail-closed.
+        write_path = (Path.cwd() / Path(args.output)).resolve()
     elif args.write:
         write_path = committed_path
 
