@@ -1,5 +1,4 @@
 from backend import work_note_sync, work_role_sync, work_source_sync
-from backend import work_projection
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
@@ -1899,9 +1898,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     page_q = query.get('page', [''])[0]
                 except Exception:
                     page_q = ''
-                with db.connection() as conn:
-                    conn.execute("BEGIN")
-                    thumb = work_projection.primary_thumbnail_fields(conn, w_id)
+                thumb = db.get_primary_thumbnail_fields(w_id)
                 if not thumb:
                     self.send_error(404, "Work not found")
                     return

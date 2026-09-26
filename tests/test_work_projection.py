@@ -314,8 +314,6 @@ class WorkProjectionTests(MigrationTestCase):
         self.assertNotIn("translator", bibtex2.lower())
 
     def test_primary_thumbnail_fields_follow_primary_asset(self):
-        from backend import work_projection
-
         work_id = self.db.add_work(
             title="Thumb Work",
             file_path="/api/pdfs/original.pdf",
@@ -328,13 +326,45 @@ class WorkProjectionTests(MigrationTestCase):
             file_path="/api/pdfs/secondary.pdf",
             thumb_page=7,
         )
-        with self.db.connection() as conn:
-            fields = work_projection.primary_thumbnail_fields(conn, work_id)
+        fields = self.db.get_primary_thumbnail_fields(work_id)
         self.assertEqual(fields["file_path"], "/api/pdfs/secondary.pdf")
         self.assertEqual(fields["thumb_page"], 7)
         work = self.db.get_work(work_id)
         self.assertEqual(work["file_path"], "/api/pdfs/secondary.pdf")
         self.assertEqual(work["thumb_page"], 7)
+
+    def test_get_person_excludes_non_primary_manifestation_roles(self):
+        work_id = self.db.add_work(title="Person Scope Work")
+        primary_person = self.db.add_person("Ada", "Lovelace")
+        other_person = self.db.add_person("Charles", "Babbage")
+        self.db.add_role(primary_person, work_id, "Author")
+        self._add_second_manifestation(work_id, title="Secondary Edition")
+        with self.db.connection() as conn:
+            origin_mf = conn.execute(
+                "SELECT id FROM manifestations WHERE work_id = ? AND id != 'MF-SECOND'",
+                (work_id,),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO roles (person_id, work_id, role_type, order_index, manifestation_id) "
+                "VALUES (?, ?, 'Editor', 1, ?)",
+                (other_person, work_id, origin_mf),
+            )
+
+        # Primary Author remains visible on the Person page.
+        ada = self.db.get_person(primary_person)
+        self.assertTrue(any(w["id"] == work_id for w in ada["works"]))
+        # Person only credited on the abandoned (non-primary) Manifestation
+        # must not appear on get_person works — matches credits_scope_sql /
+        # primary_author / get_work roles.
+        charles = self.db.get_person(other_person)
+        self.assertFalse(any(w["id"] == work_id for w in charles["works"]))
+        work = self.db.get_work(work_id)
+        self.assertFalse(
+            any(
+                r.get("last_name") == "Babbage" and r.get("role_type") == "Editor"
+                for r in work["roles"]
+            )
+        )
 
     def test_search_uses_displayed_primary_metadata(self):
         work_id = self.db.add_work(

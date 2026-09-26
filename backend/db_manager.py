@@ -1240,6 +1240,15 @@ class PRKSDatabase:
             self._finish_projected_work_rows(rows, conn=conn)
             return rows
 
+    def get_primary_thumbnail_fields(self, work_id: str) -> Optional[dict]:
+        """Effective primary-Asset ``file_path`` / ``thumb_page`` for thumbnails.
+
+        Routes through ``_timed_read_snapshot`` so ``/api/works/{id}/thumbnail``
+        records the same diagnostics ``db_call`` as other projected readers.
+        """
+        with self._timed_read_snapshot() as conn:
+            return work_projection.primary_thumbnail_fields(conn, work_id)
+
     def _roles_for_manifestation_on_conn(
         self, conn, work_id: str, manifestation_id: Optional[str]
     ) -> List[dict]:
@@ -4167,6 +4176,7 @@ class PRKSDatabase:
                 return None
             person = res[0]
             pex = _prks_sql_work_summary_person_extras("w")
+            scope = work_projection.credits_scope_sql("w", "r")
             person["works"] = [
                 work_identity.strip_pointer_columns(dict(row))
                 for row in conn.execute(
@@ -4175,6 +4185,7 @@ class PRKSDatabase:
                     FROM roles r
                     JOIN works w ON r.work_id = w.id
                     WHERE r.person_id = ?
+                      AND {scope}
                     ORDER BY r.order_index ASC, r.rowid ASC
                     """,
                     (person_id,),
