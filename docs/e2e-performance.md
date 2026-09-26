@@ -474,6 +474,18 @@ Module count after this slice: **55** Chromium scenarios (from 57). Conflict UI
 buttons, offline reload+reconnect, diagnostics, hydration, and all projection
 families remain in the browser module.
 
+#### Work metadata rationalization — Slice B (abstract oversize refuse)
+
+Non-projection bounds check. Independent of Work read-projection work (#207).
+Progress / `abstract_excerpt` overlay E2Es remain deferred.
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Oversize Abstract refused without touching durable state or the server | Selftest `installWorkMetadataEditorHarness` + `prksSaveWorkMetadataFields('bib')` with a spy store: paints the exact refusal status, retains the draft, never calls `saveWorkMetadataFields` / leaves the queue empty; plus limit helper + editor abort static + Python abstract limit | MOVE |
+
+Module count after this slice alone on master: **56** Chromium scenarios (from 57).
+Combined with Slice A (core protocol): **54**.
+
 ## Benchmark protocol
 
 For any optimization:

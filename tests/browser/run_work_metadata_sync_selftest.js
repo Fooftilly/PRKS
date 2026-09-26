@@ -1815,6 +1815,11 @@ async function abstracts() {
     assert.equal(limit, 1024 * 1024);
     assert.equal(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit)), null);
     assert(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)));
+    // Same user-facing refusal the editor paints into the bib sync status
+    // (Abstract adds the Research Notes redirect; Author does not).
+    assert.match(
+        globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)),
+        /^Abstract is too long to save \(1025 KB of 1024 KB allowed\)\. Shorten it, or keep long material in Research Notes\.$/);
     const multibyte = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
     assert(multibyte.length < limit, 'under the limit by character count');
     assert(globalThis.prksWorkFieldUtf8Bytes(multibyte) > limit, '...but over it in bytes');
@@ -1822,6 +1827,50 @@ async function abstracts() {
         'a limit enforced in characters would not exist for the users most likely to hit it');
     assert.equal(globalThis.prksWorkFieldLimitError('doi', 'x'.repeat(limit)), null,
         'only byte-limited fields are checked here');
+
+    // Executable editor refusal: dirty detection → limit guard → status paint,
+    // draft retained, store save never called. A fresh empty store alone would
+    // pass even if the editor started enqueueing oversized Abstracts.
+    {
+        const refuseStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const harness = installWorkMetadataEditorHarness({
+            workId: 'W-OVER',
+            fields: { abstract: '', doi: '' },
+            observed: resolved(base()),
+            store: refuseStore,
+        });
+        const oversize = 'x'.repeat(limit + 1);
+        harness.inputs.abstract.value = oversize;
+        await harness.saveBib();
+        assert.equal(harness.saveCalls(), 0,
+            'the editor must not call saveWorkMetadataFields for an oversize Abstract');
+        assert.deepEqual(await refuseStore.listOperations(), [],
+            'nothing durable was enqueued');
+        assert.match(harness.status.textContent,
+            /^Abstract is too long to save \(1025 KB of 1024 KB allowed\)\. Shorten it, or keep long material in Research Notes\.$/,
+            'the refusal is painted into the bib sync status');
+        assert.equal(harness.inputs.abstract.value, oversize, 'the draft stays on screen');
+        assert.equal(harness.inputs.abstract.value.length, limit + 1);
+        /* Multibyte: under the limit by .length, over it in UTF-8 bytes.
+         * ASCII oversize alone would still pass if the editor regressed to
+         * checking character length instead of prksWorkFieldLimitError. */
+        const multibyteOver = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
+        assert.ok(multibyteOver.length < limit);
+        assert.ok(globalThis.prksWorkFieldUtf8Bytes(multibyteOver) > limit);
+        harness.inputs.abstract.value = multibyteOver;
+        await harness.saveBib();
+        assert.equal(harness.saveCalls(), 0,
+            'the editor must reject an Abstract that exceeds the UTF-8 byte limit');
+        assert.deepEqual(await refuseStore.listOperations(), []);
+        assert.match(harness.status.textContent,
+            /Abstract is too long to save/,
+            'byte-oversize refuse paints into the bib sync status');
+        assert.equal(harness.inputs.abstract.value, multibyteOver, 'the multibyte draft stays on screen');
+        harness.teardown();
+        // Restore state helpers the rest of abstracts() shares.
+        delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
+        require('../../frontend/js/work-metadata-state.js');
+    }
 
     // Pending Abstract overlays the Work, and DERIVES the browse excerpt.
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
