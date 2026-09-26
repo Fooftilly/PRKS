@@ -1199,6 +1199,26 @@ class PRKSDatabase:
             except Exception:
                 pass
 
+    @contextmanager
+    def _timed_read_snapshot(self):
+        """Open a connection, ``BEGIN`` a read snapshot, and record one db_call.
+
+        Slice-C projected readers that need one coherent snapshot cannot go
+        through ``execute_query`` alone (projection issues further SELECTs on
+        the same connection). Use this instead of a bare ``connection()`` so
+        diagnostics still see the DB work.
+        """
+        t0 = clock_ns()
+        try:
+            with self.connection() as conn:
+                conn.execute("BEGIN")
+                yield conn
+        finally:
+            try:
+                record_db_call(clock_ns() - t0, write=False)
+            except Exception:
+                pass
+
     def _finish_projected_work_rows(self, rows, *, conn=None) -> None:
         """Apply the Slice-C Work projection, then existing row finishing."""
         if conn is None:
@@ -1214,23 +1234,11 @@ class PRKSDatabase:
         Plain ``execute_query`` + a second connection for projection can combine
         pre-update base columns with post-update Manifestation/Asset/counts.
         ``BEGIN`` before the first SELECT keeps every dependent read consistent.
-
-        Counts as one diagnostics ``db_call``, matching the pre-snapshot
-        ``execute_query`` accounting for Work catalog routes.
         """
-        t0 = clock_ns()
-        write = classify_sql_write(sql)
-        try:
-            with self.connection() as conn:
-                conn.execute("BEGIN")
-                rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
-                self._finish_projected_work_rows(rows, conn=conn)
-                return rows
-        finally:
-            try:
-                record_db_call(clock_ns() - t0, write=write)
-            except Exception:
-                pass
+        with self._timed_read_snapshot() as conn:
+            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+            self._finish_projected_work_rows(rows, conn=conn)
+            return rows
 
     def _roles_for_manifestation_on_conn(
         self, conn, work_id: str, manifestation_id: Optional[str]
@@ -2761,8 +2769,7 @@ class PRKSDatabase:
         return self._query_projected_works(query, (tid,))
 
     def get_work(self, work_id: str) -> Optional[dict]:
-        with self.connection() as conn:
-            conn.execute("BEGIN")
+        with self._timed_read_snapshot() as conn:
             work = work_projection.legacy_work(conn, work_id)
             if work is None:
                 return None
@@ -3117,8 +3124,7 @@ class PRKSDatabase:
         )
 
     def get_playlist(self, playlist_id: str) -> Optional[dict]:
-        with self.connection() as conn:
-            conn.execute("BEGIN")
+        with self._timed_read_snapshot() as conn:
             rows = [
                 dict(row)
                 for row in conn.execute(
@@ -3666,8 +3672,7 @@ class PRKSDatabase:
         )
 
     def get_folder(self, folder_id: str) -> Optional[dict]:
-        with self.connection() as conn:
-            conn.execute("BEGIN")
+        with self._timed_read_snapshot() as conn:
             res = [
                 dict(row)
                 for row in conn.execute(
@@ -4116,32 +4121,24 @@ class PRKSDatabase:
         read after ``BEGIN`` for the same reason as the playlist catalog: a
         bare SELECT does not open a transaction, and the ETag hashes both.
         """
-        t0 = clock_ns()
-        try:
-            with self.connection() as conn:
-                conn.execute("BEGIN")
-                person_rows = conn.execute(
-                    """
-                    SELECT p.*, (
-                        SELECT GROUP_CONCAT(DISTINCT r.role_type)
-                        FROM roles r WHERE r.person_id = p.id
-                    ) AS _roles_concat
-                    FROM persons p ORDER BY p.last_name ASC, p.id ASC
-                    """
-                ).fetchall()
-                member_rows = conn.execute(
-                    """
-                    SELECT m.person_id, g.id AS group_id, g.name AS group_name
-                    FROM person_group_members m
-                    JOIN person_groups g ON g.id = m.group_id
-                    ORDER BY g.name COLLATE NOCASE, g.id ASC
-                    """
-                ).fetchall()
-        finally:
-            try:
-                record_db_call(clock_ns() - t0, write=False)
-            except Exception:
-                pass
+        with self._timed_read_snapshot() as conn:
+            person_rows = conn.execute(
+                """
+                SELECT p.*, (
+                    SELECT GROUP_CONCAT(DISTINCT r.role_type)
+                    FROM roles r WHERE r.person_id = p.id
+                ) AS _roles_concat
+                FROM persons p ORDER BY p.last_name ASC, p.id ASC
+                """
+            ).fetchall()
+            member_rows = conn.execute(
+                """
+                SELECT m.person_id, g.id AS group_id, g.name AS group_name
+                FROM person_group_members m
+                JOIN person_groups g ON g.id = m.group_id
+                ORDER BY g.name COLLATE NOCASE, g.id ASC
+                """
+            ).fetchall()
         by_p: Dict[str, List[dict]] = defaultdict(list)
         for member in member_rows:
             by_p[member["person_id"]].append(
@@ -4159,8 +4156,7 @@ class PRKSDatabase:
         return rows
 
     def get_person(self, person_id: str) -> Optional[dict]:
-        with self.connection() as conn:
-            conn.execute("BEGIN")
+        with self._timed_read_snapshot() as conn:
             res = [
                 dict(row)
                 for row in conn.execute(
