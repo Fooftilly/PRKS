@@ -2610,19 +2610,23 @@ class PRKSDatabase:
     def work_ids_matching_publisher(self, pub: str) -> List[str]:
         """Works whose displayed publisher matches substring, or equals a label of a publisher row whose name/alias matches substring.
 
-        Displayed publisher follows the Slice-C primary Manifestation field
-        (falling back to the legacy ``works.publisher`` column when unset).
+        Displayed publisher is Manifestation-owned once a primary Manifestation
+        row exists (including when that publisher is NULL). Only Works with no
+        primary Manifestation fall back to the legacy ``works.publisher`` column.
         """
         p = (pub or "").strip().lower()
         if not p:
             return []
         needle = "%" + _prks_escape_like(p) + "%"
+        displayed = (
+            "CASE WHEN pm.id IS NOT NULL THEN pm.publisher ELSE works.publisher END"
+        )
         ids: set = set()
         for r in self.execute_query(
-            """
+            f"""
             SELECT works.id FROM works
             LEFT JOIN manifestations pm ON pm.id = works.primary_manifestation_id
-            WHERE LOWER(COALESCE(pm.publisher, works.publisher, '')) LIKE ? ESCAPE '\\'
+            WHERE LOWER(COALESCE({displayed}, '')) LIKE ? ESCAPE '\\'
             """,
             (needle,),
         ):
@@ -2663,11 +2667,11 @@ class PRKSDatabase:
                 if not lab:
                     continue
                 for wr in self.execute_query(
-                    """
+                    f"""
                     SELECT works.id FROM works
                     LEFT JOIN manifestations pm ON pm.id = works.primary_manifestation_id
-                    WHERE TRIM(COALESCE(pm.publisher, works.publisher, '')) != ''
-                      AND LOWER(TRIM(COALESCE(pm.publisher, works.publisher))) = LOWER(?)
+                    WHERE TRIM(COALESCE({displayed}, '')) != ''
+                      AND LOWER(TRIM({displayed})) = LOWER(?)
                     """,
                     (lab,),
                 ):

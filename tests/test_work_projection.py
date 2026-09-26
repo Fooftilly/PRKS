@@ -367,6 +367,26 @@ class WorkProjectionTests(MigrationTestCase):
             )
         )
 
+    def test_publisher_filter_ignores_hidden_legacy_when_primary_null(self):
+        work_id = self.db.add_work(
+            title="Legacy Pub Work",
+            publisher="Legacy Press",
+        )
+        # Non-origin primary with an explicit NULL publisher: projection must
+        # show None, not inherit the hidden works.publisher value.
+        self._add_second_manifestation(
+            work_id,
+            title="Null Publisher Edition",
+            publisher=None,
+        )
+        work = self.db.get_work(work_id)
+        self.assertIsNone(work.get("publisher"))
+        self.assertNotIn(
+            work_id, self.db.work_ids_matching_publisher("Legacy Press")
+        )
+        by_filter = self.db.search_works("", publisher_filter="Legacy Press")
+        self.assertFalse(any(r["id"] == work_id for r in by_filter))
+
     def test_search_uses_displayed_primary_metadata(self):
         work_id = self.db.add_work(
             title="Legacy Hidden Title",
