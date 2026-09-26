@@ -344,12 +344,60 @@ def _pyright_glob_match(path: str, pattern: str) -> bool:
     return match_from(0, 0)
 
 
+def _literal_prefix_before_glob(pattern: str) -> str:
+    """Path segments before the first glob token (``*``, ``?``, ``**``, ``[…]``)."""
+    parts: list[str] = []
+    for segment in pattern.replace("\\", "/").strip("/").split("/"):
+        if not segment:
+            continue
+        if segment == "**" or "*" in segment or "?" in segment or "[" in segment:
+            break
+        parts.append(segment)
+    return "/".join(parts)
+
+
+def _glob_overlaps_typed_root(pattern: str, root: str) -> bool:
+    """True if ``pattern`` can match ``root``, an ancestor, or any path under it."""
+    root_parts = root.replace("\\", "/").strip("/").split("/")
+    pat_parts = [p for p in pattern.replace("\\", "/").strip("/").split("/") if p]
+    if not pat_parts:
+        return True
+
+    def dfs(pti: int, ri: int) -> bool:
+        if pti == len(pat_parts):
+            # Pattern exhausted on an ancestor or the root itself.
+            return ri <= len(root_parts)
+
+        token = pat_parts[pti]
+        if token == "**":
+            if pti == len(pat_parts) - 1:
+                return True
+            for skip in range(ri, len(root_parts) + 1):
+                if dfs(pti + 1, skip):
+                    return True
+            # Remaining tokens can match invented descendants under root.
+            return True
+
+        if ri < len(root_parts):
+            if fnmatch.fnmatchcase(root_parts[ri], token):
+                return dfs(pti + 1, ri + 1)
+            return False
+
+        # Past the root: any further pattern segments match some descendant.
+        return True
+
+    return dfs(0, 0)
+
+
 def _path_covers_typed_slice(entry: object) -> bool:
     """True when ignore/exclude can match ``backend/storage`` or anything under it.
 
     Overlap is decided by a Pyright-style glob matcher (``**`` = zero-or-more
-    directory components; ``*`` / ``?`` = one segment). Cache-only excludes such
-    as ``**/__pycache__`` are allowlisted and do not trip this guard.
+    directory components; ``*`` / ``?`` = one segment). A pattern whose literal
+    prefix is the slice root or a path under it covers the slice even when later
+    segments are globs (e.g. ``backend/storage/services/**``,
+    ``backend/storage/config.*``). Cache-only excludes such as ``**/__pycache__``
+    are allowlisted and do not trip this guard.
     """
     if _is_allowed_typed_slice_exclude(entry):
         return False
@@ -359,30 +407,19 @@ def _path_covers_typed_slice(entry: object) -> bool:
     if pattern in {"", ".", "*", "**", "**/*", "**/**"}:
         return True
 
-    # Exact target, nested path under the slice, or literal parent of the slice.
-    if "*" not in pattern and "?" not in pattern:
-        if pattern == target or pattern.startswith(target + "/"):
-            return True
-        if target.startswith(pattern + "/"):
+    lit = _literal_prefix_before_glob(pattern)
+    # Clearly rooted at or under the typed slice (globs may follow).
+    if lit == target or lit.startswith(target + "/"):
+        return True
+    # Literal-only parent of the slice (no glob metacharacters anywhere).
+    if lit and not any(ch in pattern for ch in "*?["):
+        if target.startswith(lit + "/"):
             return True
 
-    # Probe the slice root, files under it, and each ancestor directory.
-    # A hit on any of these means the exclude/ignore would silence (part of)
-    # the typed slice — including patterns that only match descendants
-    # (e.g. ``**/storage/**/*``).
-    probes = [target, f"{target}/x.py", f"{target}/pkg/x.py"]
-    parts = target.split("/")
-    for i in range(len(parts)):
-        probes.append("/".join(parts[: i + 1]))
-
-    for probe in probes:
-        if _pyright_glob_match(probe, pattern) or _pyright_glob_match(probe, raw):
-            if (
-                probe == target
-                or target.startswith(probe + "/")
-                or probe.startswith(target + "/")
-            ):
-                return True
+    if _glob_overlaps_typed_root(pattern, target):
+        return True
+    if raw != pattern and _glob_overlaps_typed_root(raw, target):
+        return True
     return False
 
 

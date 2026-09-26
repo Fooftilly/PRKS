@@ -285,6 +285,9 @@ class EngineeringInvariantTests(unittest.TestCase):
             "**/backend/**",
             "backend/*",
             "**/storage/**",
+            "backend/storage/services/**",
+            "backend/storage/services/*",
+            "backend/storage/config.*",
         )
         for pattern in cases:
             with self.subTest(pattern=pattern):
