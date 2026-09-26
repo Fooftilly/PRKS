@@ -3278,26 +3278,29 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.locator(selector).wait_for()
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
-        # fill must reach the bound editor's draft overlay before park;
-        # otherwise remount paints the empty server body. Do not require the
-        # transient "Drafting…" status — under load the 850ms debounce (or an
-        # offline-runtime flush) can advance to Saving…/Saved/blank first.
-        page.wait_for_function(
+        # This test asserts an *unsettled* draft survives park/remount — not
+        # that a settled save reloads from the server. Require dirty editor or
+        # a still-pending SET_WORK_PRIVATE_NOTE (not transient "Drafting…" and
+        # not acknowledged entity text).
+        wait_for_async(
+            page,
             """(args) => {
                 const el = document.querySelector(args.selector);
-                if (!el || el.value !== args.text) return false;
+                if (!el || el.value !== args.text) return Promise.resolve(false);
                 const snap = window.prksWorkspaceSnapshot();
                 const ctx = window.prksGetTabContext && window.prksGetTabContext(snap.focusedTabId);
                 const editor = ctx && ctx.getResource && ctx.getResource('privateNotesEditor');
-                if (!editor || editor.textarea !== el) return false;
-                if (typeof window.prksPrivateNotesTextForEntity === 'function'
-                    && window.prksPrivateNotesTextForEntity('work', args.workId, '') === args.text) {
-                    return true;
-                }
-                const work = ctx.getEntity && ctx.getEntity('work');
-                return !!(work && String(work.private_notes || '') === args.text);
+                if (!editor || editor.textarea !== el) return Promise.resolve(false);
+                if (editor.dirty) return Promise.resolve(true);
+                return prksSync.store.listOperations().then(rows =>
+                    rows.some(r => r.operation === 'SET_WORK_PRIVATE_NOTE'
+                        && r.entity_id === args.workId
+                        && r.status !== 'acknowledged'
+                        && r.payload && r.payload.text === args.text));
             }""",
             arg={"selector": selector, "text": new_text, "workId": work_a},
+            timeout=15000,
+            message="unsettled private-note draft never reached the editor before park",
         )
         # Hide/tile are async (leave preflight + flush). Awaiting both keeps the
         # remount from racing the park and makes the unsettled draft observable.
