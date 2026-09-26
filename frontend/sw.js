@@ -16,8 +16,9 @@
 
     // DEPENDENCY_REVISION is derived from frontend/vendor/DEPENDENCY-MANIFEST.json
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
-    // --repo fails if it drifts. Changing vendor bytes retires old shell/static caches.
-    const DEPENDENCY_REVISION = '6cb1850db35d';
+    // --repo fails if it drifts. Changing manifest bytes (vendor files or the
+    // committed Vue bundle) retires old shell/static caches.
+    const DEPENDENCY_REVISION = '08b4ae990df0';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -166,9 +167,12 @@
         '/js/saved-views.js',
         '/js/command-palette.js',
         '/js/app.js',
+        // Vue bootstrap module from the committed Vite build. Required because
+        // index.html loads it; not a legacy route module.
+        '/vue/prks-vue.js',
     ];
 
-    const STATIC_PATH_PREFIXES = ['/js/', '/vendor/', '/css/', '/icons/'];
+    const STATIC_PATH_PREFIXES = ['/js/', '/vendor/', '/css/', '/icons/', '/vue/'];
     const STATIC_EXTRA_PATHS = ['/manifest.webmanifest', '/favicon.svg', '/logo.svg'];
 
     function isGetRequest(request) {

@@ -38,6 +38,7 @@ from backend.dependency_gate import (
     validate_npm_island,
     validate_python_version,
     validate_requirements_file,
+    validate_vue_production,
 )
 
 # Exact pins only for the CI test-gate install argv (see RepoGateLiveTests).
@@ -647,6 +648,7 @@ class ResolvePythonTests(unittest.TestCase):
             "tools/frontend-vendor/build.mjs",
             "tools/pdf-viewer/build.mjs",
             "tools/research-graph/build.mjs",
+            "frontend-app/scripts/build.mjs",
         ):
             text = (_PROJECT / rel).read_text(encoding="utf-8")
             self.assertIn("resolvePython()", text)
@@ -1338,6 +1340,109 @@ class RepoGateLiveTests(unittest.TestCase):
         html = (_PROJECT / "frontend" / "index.html").read_text(encoding="utf-8")
         for marker in ("cdn.jsdelivr.net", "unpkg.com", "fonts.googleapis.com"):
             self.assertNotIn(marker, html)
+
+
+def _vue_gate_fixture(tmp: Path) -> Path:
+    root = Path(tmp)
+    for rel in (
+        "frontend-app/package.json",
+        "frontend-app/package-lock.json",
+        "frontend/vue/BUILD-MANIFEST.json",
+        "frontend/vue/prks-vue.js",
+        "frontend/index.html",
+        "frontend/sw.js",
+    ):
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes((_PROJECT / rel).read_bytes())
+    return root
+
+
+class VueProductionGateTests(unittest.TestCase):
+    def test_committed_vue_bundle_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = validate_vue_production(_vue_gate_fixture(tmp))
+        self.assertTrue(result.ok, result.issues)
+
+    def test_dropped_pin_fails_when_both_sides_omit_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            pkg_path = root / "frontend-app" / "package.json"
+            manifest_path = root / "frontend" / "vue" / "BUILD-MANIFEST.json"
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del pkg["devDependencies"]["typescript"]
+            del manifest["typescript"]
+            pkg_path.write_text(json.dumps(pkg), encoding="utf-8")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        pin_issues = [issue for issue in result.issues if issue.code == "vue_manifest_pin"]
+        self.assertEqual(len(pin_issues), 1)
+        self.assertIn("typescript", pin_issues[0].message)
+        self.assertIn("None", pin_issues[0].message)
+
+    def test_empty_pin_fails_when_both_sides_are_blank(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            pkg_path = root / "frontend-app" / "package.json"
+            manifest_path = root / "frontend" / "vue" / "BUILD-MANIFEST.json"
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            pkg["devDependencies"]["typescript"] = "  "
+            manifest["typescript"] = ""
+            pkg_path.write_text(json.dumps(pkg), encoding="utf-8")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        pin_issues = [issue for issue in result.issues if issue.code == "vue_manifest_pin"]
+        self.assertTrue(any("typescript" in issue.message for issue in pin_issues))
+
+    def test_node_24_below_jsdom_engines_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            pkg_path = root / "frontend-app" / "package.json"
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+            pkg["engines"]["node"] = ">=24 <25"
+            pkg_path.write_text(json.dumps(pkg), encoding="utf-8")
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        self.assertTrue(any(issue.code == "vue_node_toolchain" for issue in result.issues))
+
+    def test_lockfile_engines_must_match_jsdom_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            lock_path = root / "frontend-app" / "package-lock.json"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock["packages"][""]["engines"]["node"] = ">=24 <25"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        self.assertTrue(any(issue.code == "vue_lock_engines" for issue in result.issues))
+
+    def test_separate_css_artifact_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            css_path = root / "frontend" / "vue" / "prks-vue.css"
+            css_path.write_text("body{color:red}\n", encoding="utf-8")
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        self.assertTrue(any(issue.code == "vue_css_not_inlined" for issue in result.issues))
+
+    def test_nested_unlisted_css_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            css_path = root / "frontend" / "vue" / "assets" / "style.css"
+            css_path.parent.mkdir(parents=True)
+            css_path.write_text("body{color:red}\n", encoding="utf-8")
+            manifest_path = root / "frontend" / "vue" / "BUILD-MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertNotIn("assets/style.css", manifest.get("outputSha256") or {})
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        css_issues = [issue for issue in result.issues if issue.code == "vue_css_not_inlined"]
+        self.assertTrue(css_issues)
+        self.assertTrue(any(issue.path and issue.path.endswith("assets/style.css") for issue in css_issues))
 
 
 class StartupOrderTests(unittest.TestCase):

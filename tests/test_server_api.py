@@ -6311,6 +6311,31 @@ class TestServerAPI(unittest.TestCase):
             self.assertIn(status, (200, 304, 404), path)
             self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff", path)
 
+    def test_vue_bootstrap_bundle_is_served_with_the_shell(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        conn.request("GET", "/vue/prks-vue.js")
+        response = conn.getresponse()
+        body = response.read()
+        headers = dict(response.getheaders())
+        status = response.status
+        conn.close()
+        self.assertEqual(status, 200)
+        self.assertIn(b"data-prks-vue-bootstrap", body)
+        self.assertNotIn(b"unpkg.com", body)
+        self.assertNotIn(b"cdn.jsdelivr.net", body)
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertIn("must-revalidate", headers.get("Cache-Control", ""))
+
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        page = response.read()
+        conn.close()
+        self.assertEqual(response.status, 200)
+        self.assertIn(b'id="prks-vue-root"', page)
+        self.assertIn(b'type="module"', page)
+        self.assertIn(b'src="/vue/prks-vue.js"', page)
+
     def test_pdf_upload_writes_only_inside_the_managed_pdf_directory(self):
         """The upload write resolves through the same containment helper as
         every other managed-PDF path, so a file_name from the request body can

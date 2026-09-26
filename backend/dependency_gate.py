@@ -72,6 +72,13 @@ NPM_ISLANDS = (
         "react_guard": False,
         "types_guard": False,
     },
+    {
+        "name": "frontend-app",
+        "dir": REPO_ROOT / "frontend-app",
+        "direct_keys": ("dependencies", "devDependencies"),
+        "react_guard": False,
+        "types_guard": False,
+    },
 )
 
 # Runtime vendor files that must appear in DEPENDENCY-MANIFEST and on disk.
@@ -1241,6 +1248,31 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
         "npm:tools/pdf-viewer",
     )
 
+    vue_pkg_path = root / "frontend-app" / "package.json"
+    if vue_pkg_path.is_file():
+        vue_pkg = load_json(vue_pkg_path)
+        vue_ver = str((vue_pkg.get("dependencies") or {}).get("vue") or "")
+        vue_dir = root / "frontend" / "vue"
+        vue_runtime = []
+        js_name = "prks-vue.js"
+        js_path = vue_dir / js_name
+        if js_path.is_file():
+            vue_runtime.append(
+                {
+                    "path": f"/vue/{js_name}",
+                    "sha256": sha256_file(js_path),
+                }
+            )
+        if vue_ver and vue_runtime:
+            entries.append(
+                {
+                    "name": "prks-vue",
+                    "version": vue_ver,
+                    "source_category": "npm:frontend-app",
+                    "runtime_files": vue_runtime,
+                }
+            )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,
@@ -1707,6 +1739,180 @@ def run_test_gate(**kwargs: Any) -> GateResult:
     return validate_test_python(**kwargs)
 
 
+VUE_BUNDLE_URL = "/vue/prks-vue.js"
+VUE_BOOTSTRAP_MARKER = "data-prks-vue-bootstrap"
+VUE_NODE_ENGINES = ">=24.15.0 <25"
+_VUE_CDN_MARKERS = (
+    "cdn.jsdelivr.net",
+    "unpkg.com",
+    "cdnjs.cloudflare.com",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+)
+
+
+def validate_vue_production(repo_root: Path | None = None) -> GateResult:
+    """Committed Vue bundle matches the frontend-app pins and the shell loads it."""
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    result = GateResult(ok=True)
+    pkg_path = root / "frontend-app" / "package.json"
+    manifest_path = root / "frontend" / "vue" / "BUILD-MANIFEST.json"
+    js_path = root / "frontend" / "vue" / "prks-vue.js"
+    if not pkg_path.is_file():
+        result.fail("missing_vue_package", "frontend-app/package.json missing", str(pkg_path))
+        return result
+    if not manifest_path.is_file():
+        result.fail("missing_vue_manifest", "frontend/vue/BUILD-MANIFEST.json missing", str(manifest_path))
+        return result
+    if not js_path.is_file():
+        result.fail("missing_vue_bundle", "frontend/vue/prks-vue.js missing", str(js_path))
+        return result
+
+    pkg = load_json(pkg_path)
+    manifest = load_json(manifest_path)
+    if "builtAt" in manifest or "timestamp" in manifest:
+        result.fail(
+            "nondeterministic_vue_manifest",
+            "Vue BUILD-MANIFEST must not contain timestamps",
+            str(manifest_path),
+        )
+    engines = str((pkg.get("engines") or {}).get("node") or "")
+    if engines != VUE_NODE_ENGINES:
+        result.fail(
+            "vue_node_toolchain",
+            f"frontend-app engines.node must be {VUE_NODE_ENGINES!r}",
+            str(pkg_path),
+        )
+    lock_path = root / "frontend-app" / "package-lock.json"
+    lock_engines = ""
+    if lock_path.is_file():
+        lock = load_json(lock_path)
+        packages = lock.get("packages") if isinstance(lock, dict) else None
+        root_pkg = packages.get("") if isinstance(packages, dict) else None
+        if isinstance(root_pkg, dict):
+            lock_engines = str((root_pkg.get("engines") or {}).get("node") or "")
+    if lock_engines != VUE_NODE_ENGINES:
+        result.fail(
+            "vue_lock_engines",
+            f"frontend-app lockfile engines.node must be {VUE_NODE_ENGINES!r}",
+            str(lock_path),
+        )
+
+    deps = pkg.get("dependencies") or {}
+    dev = pkg.get("devDependencies") or {}
+    expected_pins = {
+        "vue": deps.get("vue"),
+        "vite": dev.get("vite"),
+        "typescript": dev.get("typescript"),
+        "vueTsc": dev.get("vue-tsc"),
+        "vitest": dev.get("vitest"),
+    }
+
+    def nonempty_pin(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
+
+    for key, want in expected_pins.items():
+        have = manifest.get(key)
+        want_pin = nonempty_pin(want)
+        have_pin = nonempty_pin(have)
+        if want_pin is None or have_pin is None or have_pin != want_pin:
+            result.fail(
+                "vue_manifest_pin",
+                f"BUILD-MANIFEST {key}={have!r} package.json={want!r}",
+                str(manifest_path),
+            )
+
+    recorded = manifest.get("outputSha256") or {}
+    if not isinstance(recorded, dict) or "prks-vue.js" not in recorded:
+        result.fail(
+            "vue_manifest_sha",
+            "BUILD-MANIFEST outputSha256.prks-vue.js missing",
+            str(manifest_path),
+        )
+    else:
+        actual = sha256_file(js_path)
+        if recorded.get("prks-vue.js") != actual:
+            result.fail(
+                "vue_bundle_sha",
+                "prks-vue.js sha256 does not match BUILD-MANIFEST",
+                str(js_path),
+            )
+    vue_dir = root / "frontend" / "vue"
+    for css_path in sorted(vue_dir.rglob("*.css")):
+        result.fail(
+            "vue_css_not_inlined",
+            "Vite CSS must be inlined into prks-vue.js; do not ship a separate stylesheet",
+            str(css_path),
+        )
+    if isinstance(recorded, dict):
+        for name in recorded:
+            if str(name).endswith(".css"):
+                result.fail(
+                    "vue_css_not_inlined",
+                    f"BUILD-MANIFEST lists {name}; CSS must be inlined into prks-vue.js",
+                    str(manifest_path),
+                )
+
+    bundle = js_path.read_text(encoding="utf-8", errors="replace")
+    if VUE_BOOTSTRAP_MARKER not in bundle:
+        result.fail(
+            "vue_bundle_marker",
+            "prks-vue.js is missing the bootstrap marker",
+            str(js_path),
+        )
+    if re.search(r"""from\s*["']vue["']""", bundle):
+        result.fail(
+            "vue_external_import",
+            "prks-vue.js imports vue at runtime; the production bundle must include it",
+            str(js_path),
+        )
+    for marker in _VUE_CDN_MARKERS:
+        if marker in bundle:
+            result.fail(
+                "vue_cdn",
+                f"prks-vue.js contains CDN marker {marker}",
+                str(js_path),
+            )
+    if (root / "frontend" / "vue" / "index.html").is_file():
+        result.fail(
+            "vue_second_shell",
+            "frontend/vue/index.html must not be shipped; the legacy shell loads the bundle",
+            str(root / "frontend" / "vue" / "index.html"),
+        )
+
+    index = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+    if 'id="prks-vue-root"' not in index:
+        result.fail("vue_mount_missing", "index.html is missing #prks-vue-root", str(root / "frontend" / "index.html"))
+    module_tag = re.search(
+        r'<script\b[^>]*\bsrc="/vue/prks-vue\.js"[^>]*>',
+        index,
+    )
+    if module_tag is None or 'type="module"' not in module_tag.group(0):
+        result.fail(
+            "vue_module_tag",
+            "index.html must load /vue/prks-vue.js as a module script",
+            str(root / "frontend" / "index.html"),
+        )
+
+    sw = (root / "frontend" / "sw.js").read_text(encoding="utf-8")
+    if "'/vue/prks-vue.js'" not in sw:
+        result.fail(
+            "vue_sw_precache",
+            "sw.js STATIC_PRECACHE_PATHS must include /vue/prks-vue.js",
+            str(root / "frontend" / "sw.js"),
+        )
+    if "'/vue/'" not in sw:
+        result.fail(
+            "vue_sw_prefix",
+            "sw.js STATIC_PATH_PREFIXES must include /vue/",
+            str(root / "frontend" / "sw.js"),
+        )
+    return result
+
+
 def run_repo_gate(repo_root: Path | None = None) -> GateResult:
     """Offline repository consistency. Does not require npm packages installed."""
     root = Path(repo_root) if repo_root is not None else REPO_ROOT
@@ -1722,6 +1928,7 @@ def run_repo_gate(repo_root: Path | None = None) -> GateResult:
     result.extend(validate_sw_revision(root))
     result.extend(validate_vendor_registration(root))
     result.extend(validate_no_cdn_in_loaders(root))
+    result.extend(validate_vue_production(root))
     return result
 
 

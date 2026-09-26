@@ -111,6 +111,17 @@
       ],
       "source_category": "npm:tools/pdf-viewer",
       "version": "2.15.1"
+    },
+    {
+      "name": "prks-vue",
+      "runtime_files": [
+        {
+          "path": "/vue/prks-vue.js",
+          "sha256": "8932b5a40c5efc03524639ce557a55baa23d80f2377e490e5e511f19e0a73b80"
+        }
+      ],
+      "source_category": "npm:frontend-app",
+      "version": "3.5.43"
     }
   ],
   "schema_version": 1

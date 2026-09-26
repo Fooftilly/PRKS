@@ -120,7 +120,9 @@ A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tie
 | `backend/research_network.py` | Concept, Position, and Argument/Stance domain. |
 | `backend/research_index.py` | Disposable derived note-reference index. |
 | `backend/db_schema.sql` | Complete latest schema for fresh databases. |
-| `frontend/` | Static SPA (HTML, CSS, JS), PWA assets. |
+| `frontend/` | Static SPA (HTML, CSS, legacy JS, committed Vue bundle), PWA assets. |
+| `frontend-app/` | Vue 3 + TypeScript source. Maintainer Node build only. |
+| `frontend/vue/` | Committed Vite production bundle served by the Python app. |
 | `frontend/js/request-coordinator.js` | Client request coordinator for ordinary same-origin `/api` traffic. Memory-only; not offline support. |
 | `frontend/js/offline-store.js` | Disposable IndexedDB client cache (entities/lists/metadata). No DOM, no routing, no connectivity policy. |
 | `frontend/js/offline-runtime.js` | Online/offline/reconnecting state, read-through cache policy, offline coherence domains, mutation guard. No canonical persistence of its own. |
@@ -155,6 +157,9 @@ Rebuild vendored assets after changing a pin:
 
 # PDF viewer (EmbedPDF + React)
 (cd tools/pdf-viewer && npm ci && npm run build)
+
+# Vue application bundle (Node >=24.15.0 <25; writes frontend/vue/ and refreshes the dependency manifest)
+(cd frontend-app && npm ci --ignore-scripts && npm run build)
 ```
 
 Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes change. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.

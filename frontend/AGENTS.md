@@ -2,6 +2,14 @@
 
 These rules apply to frontend work in addition to the repository-root `AGENTS.md`. `DESIGN.md` remains authoritative for UI and interaction decisions; read the sections relevant to the component being changed.
 
+## Vue application
+
+`frontend-app/` is the Vue 3 + TypeScript source (Vite, `vue-tsc`, Vitest). Node/npm are maintainer build tools (Node `>=24.15.0 <25`). The Python runtime serves the committed bundle `frontend/vue/prks-vue.js` and does not run Vite. `vite-plugin-css-injected-by-js` inlines component CSS into that bundle; the shell and service worker do not load a separate Vue stylesheet.
+
+`frontend/js/` remains the legacy application. Do not rewrite it as part of a foundation change. Migrated UI belongs in `frontend-app/src/` and must not introduce a second canonical workspace or application state model. Do not add Vue Router, Pinia, TanStack Query, or VueUse until a slice actually needs that library.
+
+The hidden `#prks-vue-root` mount only proves the bundle loads. It is not a product surface.
+
 ## Cross-boundary bulk mutations
 
 Frontend bulk operations must use a transactional backend bulk operation when one exists. Do not implement bulk UI behavior as one HTTP mutation per selected Work; preserve server-side validation and atomicity across the selection.

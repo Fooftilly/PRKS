@@ -1,6 +1,6 @@
 # PRKS Wiki
 
-PRKS (Personal Research Knowledge System) is a local research library for organizing PDFs, notes, video references, bibliographic metadata, people, folders, tags, playlists, and structured research concepts. It runs as a self-hosted web application with a Python/SQLite backend and a vanilla-JavaScript frontend.
+PRKS (Personal Research Knowledge System) is a local research library for organizing PDFs, notes, video references, bibliographic metadata, people, folders, tags, playlists, and structured research concepts. It runs as a self-hosted web application with a Python/SQLite backend and a browser frontend. The shipped shell is still the legacy JavaScript UI; new UI work starts in the Vue 3 source described in [Architecture](Architecture.md).
 
 The wiki is the orientation layer for users and contributors. It explains how the major parts fit together without replacing the repository's detailed implementation documents.
 

@@ -12,7 +12,9 @@ The application must not silently install or upgrade packages at runtime.
 
 ## Frontend/vendor dependencies
 
-PRKS is a vanilla-JavaScript application but includes vendored frontend assets and a vendored/custom PDF viewer. Vendored code must be treated as a tracked dependency rather than an invisible copy.
+The shipped shell still loads legacy JavaScript plus vendored frontend assets and a vendored/custom PDF viewer. Vendored code must be treated as a tracked dependency rather than an invisible copy.
+
+The Vue 3 application source lives in `frontend-app/` (its own `package.json` and lockfile). `npm run build` writes the committed runtime bundle `frontend/vue/prks-vue.js`, with component CSS inlined into that file. Node `>=24.15.0 <25` stays a maintainer/build-time tool; the Python application serves that file and does not install npm packages.
 
 `dependency-inventory.json` records dependency inventory used by the repository's dependency checks.
 
