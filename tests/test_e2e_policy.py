@@ -931,27 +931,37 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             ]
             out = io.StringIO()
             err = io.StringIO()
-            with mock.patch.object(runner, "discover_test_ids", return_value=ids):
-                with mock.patch.object(runner, "ensure_chromium_installed"):
+            # Isolate REPO so last-failed / timings writes cannot touch the
+            # checkout's .tests/ (passing runs clear or prune last-failed).
+            with tempfile.TemporaryDirectory() as raw:
+                with mock.patch.object(runner, "REPO", Path(raw)):
                     with mock.patch.object(
-                        runner,
-                        "run_serial",
-                        return_value=(True, {ids[0]: 1.0}, [], {}),
+                        runner, "discover_test_ids", return_value=ids
                     ):
-                        with mock.patch.object(runner, "_persist_timings") as persist:
-                            with mock.patch.dict(
-                                os.environ, {runner.FULL_GATE_CHILD_ENV: "1"}
+                        with mock.patch.object(runner, "ensure_chromium_installed"):
+                            with mock.patch.object(
+                                runner,
+                                "run_serial",
+                                return_value=(True, {ids[0]: 1.0}, [], {}),
                             ):
-                                with redirect_stdout(out), redirect_stderr(err):
-                                    code = runner.main(
-                                        [
-                                            "--shard",
-                                            "1/2",
-                                            "--jobs",
-                                            "1",
-                                            "--no-pointer-capture",
-                                        ]
-                                    )
+                                with mock.patch.object(
+                                    runner, "_persist_timings"
+                                ) as persist:
+                                    with mock.patch.dict(
+                                        os.environ, {runner.FULL_GATE_CHILD_ENV: "1"}
+                                    ):
+                                        with redirect_stdout(out), redirect_stderr(
+                                            err
+                                        ):
+                                            code = runner.main(
+                                                [
+                                                    "--shard",
+                                                    "1/2",
+                                                    "--jobs",
+                                                    "1",
+                                                    "--no-pointer-capture",
+                                                ]
+                                            )
             self.assertEqual(code, 0)
             text = out.getvalue()
             self.assertIn("NOT a full E2E gate", text)
