@@ -87,16 +87,15 @@ class OfflineWorkTagTests(unittest.TestCase):
         chip.wait_for(state='detached')
 
     def pending(self, page, count):
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 20000;
-            while (Date.now() < deadline) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation));
-                if (rows.filter(r => r.status !== 'acknowledged').length === n) return;
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-            throw new Error('Sync state did not settle');
-        }""", count)
+        wait_for_async(
+            page,
+            """n => prksSync.store.listOperations().then(rows =>
+                rows
+                    .filter(r => ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation))
+                    .filter(r => r.status !== 'acknowledged').length === n)""",
+            arg=count,
+            timeout=20000,
+            message='Sync state did not settle')
 
     def clear_offline_cache(self, page):
         """Clear the disposable cache through the real Settings surface,
@@ -130,7 +129,14 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
 
-    def test_coalescing_across_reload_and_repeated_intent(self):
+    def test_post_reload_opposite_edit_cancels_pending(self):
+        """Thin browser boundary for SPLIT coalescing: after reload, a freshly
+        mounted work-tag-editor must reload options, overlay the pending row,
+        and route the opposite click through coalesceWorkTag. Both UI
+        directions matter after remount: chip remove vs search/picker re-add
+        (bindPicker → dropdown → result-item → edit(..., true)). Deterministic
+        repeated-intent / reopened-store branches stay in the Node local-store
+        selftest."""
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
         page.reload(); self.manage(page)
@@ -161,25 +167,6 @@ class OfflineWorkTagTests(unittest.TestCase):
         ledger = {r['op_id']: r['status'] for r in self.tag_ledger(server, 'op_id, status')}
         self.assertEqual(ledger.pop(original), 'REVISION_CONFLICT')
         self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'])
-
-    def test_lost_response_replays_once(self):
-        server, page, context = self.start()
-        seen = []
-        def lose(route):
-            seen.append(route.request.post_data_json['op_id'])
-            response = route.fetch()
-            if len(seen) == 1:
-                route.abort('failed')
-            else:
-                route.fulfill(response=response)
-        page.route('**/api/sync/operations', lose)
-        self.add(page); self.pending(page, 0)
-        self.assertGreaterEqual(len(seen), 2)
-        self.assertEqual(len(set(seen)), 1)
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
-        options = db.get_work_tag_options(server.ids['work_a'])
-        self.assertEqual(next(t['relation_revision'] for t in options['assigned'] if t['tag_id'] == server.ids['tag']), 1)
-        self.assertEqual(len(self.tag_ledger(server)), 1)
 
     def test_cache_clear_keeps_intent_and_syncs_without_base(self):
         server, page, context = self.start(); self.offline(page, context)

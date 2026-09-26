@@ -230,6 +230,46 @@ async function transport() {
         runtime.stop();
     }
 
+    /* A lost response is not a reason to mint a replacement operation.
+     * The server may already have committed the first envelope, so retrying
+     * must preserve the exact op_id and semantic envelope. Backend
+     * WorkTagSyncTests separately proves that replaying that op_id is
+     * idempotent at the ledger/domain boundary. */
+    {
+        const retryStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const retryOp = await retryStore.coalesceWorkTag('W-LOST', tag.id, true, false, 0, tag);
+        const sent = [];
+        let loseFirstResponse = true;
+        const retryRuntime = syncRuntime(retryStore, async (_path, init) => {
+            const envelope = JSON.parse(init.body);
+            sent.push(envelope);
+            if (loseFirstResponse) {
+                loseFirstResponse = false;
+                throw new TypeError('response lost after send');
+            }
+            return { ok: true, status: 200, json: async () => ({ ...ack, work_id: 'W-LOST' }) };
+        }, async () => true);
+
+        await retryRuntime.wake();
+        await settle();
+        let pending = await retryStore.getOperation(retryOp.op_id);
+        assert.equal(pending.status, 'pending', 'lost response leaves the original operation retryable');
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].op_id, retryOp.op_id);
+
+        // Skip only the timer delay; do not replace or rewrite the operation.
+        await retryStore.updateOperationSyncState(retryOp.op_id, { attempt_count: 0 });
+        await retryRuntime.wake();
+        await settle();
+        retryRuntime.stop();
+
+        assert.equal(sent.length, 2, 'the same operation is retried once connectivity recovers');
+        assert.equal(sent[1].op_id, retryOp.op_id, 'retry preserves op_id for server idempotency');
+        assert.deepEqual(sent[1], sent[0], 'retry preserves the complete semantic envelope');
+        assert.equal(await retryStore.getOperation(retryOp.op_id), null,
+            'the acknowledged replay is reconciled and retired');
+    }
+
     /* Recognized terminal protocol errors must not enter a transport retry
      * loop; they persist a bounded structured result for the user instead. */
     for (const code of ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION', 'UNSUPPORTED_DEPENDENCIES']) {
