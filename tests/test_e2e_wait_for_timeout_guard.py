@@ -7,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +31,6 @@ def _init_repo(root: Path) -> None:
     _git(root, "init")
     _git(root, "config", "user.email", "prks-test@example.com")
     _git(root, "config", "user.name", "PRKS Test")
-    # Avoid depending on the developer's default branch name.
     _git(root, "checkout", "-b", "master")
 
 
@@ -54,36 +52,51 @@ HISTORICAL_E2E = (
 )
 
 
-class LineDetectionTests(unittest.TestCase):
-    def test_detects_page_wait_for_timeout(self):
-        self.assertTrue(checker.line_has_wait_for_timeout("    page.wait_for_timeout(250)\n"))
-
-    def test_detects_self_page_wait_for_timeout(self):
-        self.assertTrue(
-            checker.line_has_wait_for_timeout("        self.page.wait_for_timeout(50)")
+class AstDetectionTests(unittest.TestCase):
+    def test_detects_page_and_self_page_calls(self):
+        src = (
+            "page.wait_for_timeout(250)\n"
+            "self.page.wait_for_timeout(50)\n"
         )
+        sites = checker.iter_wait_sites(src)
+        self.assertEqual([s.lineno for s in sites], [1, 2])
 
-    def test_ignores_comment_only_mentions(self):
-        self.assertFalse(
-            checker.line_has_wait_for_timeout("# page.wait_for_timeout(500) after mutation")
-        )
-        self.assertFalse(
-            checker.line_has_wait_for_timeout("    # avoid page.wait_for_timeout here")
-        )
+    def test_detects_multiline_backslash_call(self):
+        src = "page.wait_for_timeout\\\n(250)\n"
+        sites = checker.iter_wait_sites(src)
+        self.assertEqual(len(sites), 1)
+        self.assertEqual(sites[0].lineno, 1)
 
-    def test_ignores_unrelated_calls(self):
-        self.assertFalse(checker.line_has_wait_for_timeout("    page.wait_for_timeout_ms(1)"))
-        self.assertFalse(checker.line_has_wait_for_timeout("    wait_for_timeout(1)"))
+    def test_detects_parenthesized_multiline_call(self):
+        src = "page.wait_for_timeout(\n    250\n)\n"
+        sites = checker.iter_wait_sites(src)
+        self.assertEqual(len(sites), 1)
+        self.assertEqual(sites[0].lineno, 1)
+
+    def test_ignores_string_literals_and_comments(self):
+        src = (
+            'example = ".wait_for_timeout("\n'
+            '"""page.wait_for_timeout(1)"""\n'
+            "# page.wait_for_timeout(500)\n"
+            "page.wait_for_timeout_ms(1)\n"
+            "wait_for_timeout(1)\n"
+        )
+        self.assertEqual(checker.iter_wait_sites(src), [])
+
+    def test_hash_inside_string_does_not_hide_real_call(self):
+        src = 'page.locator("#save").click(); page.wait_for_timeout(500)\n'
+        sites = checker.iter_wait_sites(src)
+        self.assertEqual(len(sites), 1)
 
 
 class MarkerExemptionTests(unittest.TestCase):
-    def test_same_line_marker_with_reason(self):
+    def test_same_line_comment_marker_with_reason(self):
         lines = [
             "    page.wait_for_timeout(250)  # prks-allow-wait-for-timeout: absence window"
         ]
         self.assertTrue(checker.line_is_exempt(lines, 1))
 
-    def test_previous_line_marker_with_reason(self):
+    def test_previous_line_comment_marker_with_reason(self):
         lines = [
             "    # prks-allow-wait-for-timeout: debounce under test",
             "    page.wait_for_timeout(100)",
@@ -103,34 +116,22 @@ class MarkerExemptionTests(unittest.TestCase):
             "",
             "    page.wait_for_timeout(100)",
         ]
-        # Previous *non-blank* line carries the marker.
         self.assertTrue(checker.line_is_exempt(lines, 3))
 
+    def test_marker_in_assignment_string_does_not_exempt(self):
+        lines = [
+            '    reason = "prks-allow-wait-for-timeout: temporary"',
+            "    page.wait_for_timeout(100)",
+        ]
+        self.assertFalse(checker.line_is_exempt(lines, 2))
+        self.assertIsNone(checker.comment_marker_reason(lines[0]))
 
-class DiffParseTests(unittest.TestCase):
-    def test_parses_added_wait_with_correct_lineno(self):
-        diff = (
-            "diff --git a/tests/e2e/test_x.py b/tests/e2e/test_x.py\n"
-            "--- a/tests/e2e/test_x.py\n"
-            "+++ b/tests/e2e/test_x.py\n"
-            "@@ -10,0 +11,2 @@\n"
-            "+    page.wait_for_timeout(100)\n"
-            "+    assert True\n"
-        )
-        self.assertEqual(
-            checker.parse_unified_diff_added_waits(diff),
-            [("tests/e2e/test_x.py", 11, "    page.wait_for_timeout(100)")],
-        )
-
-    def test_ignores_added_waits_outside_e2e(self):
-        diff = (
-            "diff --git a/tests/browser/x.py b/tests/browser/x.py\n"
-            "--- a/tests/browser/x.py\n"
-            "+++ b/tests/browser/x.py\n"
-            "@@ -1,0 +2 @@\n"
-            "+page.wait_for_timeout(1)\n"
-        )
-        self.assertEqual(checker.parse_unified_diff_added_waits(diff), [])
+    def test_marker_in_same_line_string_does_not_exempt(self):
+        lines = [
+            '    page.wait_for_timeout(100); x = "prks-allow-wait-for-timeout: no"'
+        ]
+        # No COMMENT token carries the marker.
+        self.assertFalse(checker.line_is_exempt(lines, 1))
 
 
 class RepoScenarioTests(unittest.TestCase):
@@ -153,6 +154,36 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertIn("No arbitrary sleeps", rendered)
             self.assertIn("wait_for_async", rendered)
 
+    def test_multiline_new_call_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {"tests/e2e/test_hist.py": HISTORICAL_E2E, "README": "x\n"},
+                "base",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            updated = HISTORICAL_E2E + "\n    page.wait_for_timeout\\\n    (999)\n"
+            (root / "tests/e2e/test_hist.py").write_text(updated, encoding="utf-8")
+            findings = checker.collect_findings(root, base)
+            self.assertEqual(len(findings), 1)
+            self.assertIn("new page.wait_for_timeout", findings[0].reason)
+
+    def test_string_literal_mention_does_not_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {"tests/e2e/test_hist.py": HISTORICAL_E2E, "README": "x\n"},
+                "base",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            updated = HISTORICAL_E2E + '\n    note = "page.wait_for_timeout(1)"\n'
+            (root / "tests/e2e/test_hist.py").write_text(updated, encoding="utf-8")
+            self.assertEqual(checker.collect_findings(root, base), [])
+
     def test_historical_unchanged_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -163,8 +194,7 @@ class RepoScenarioTests(unittest.TestCase):
                 "base",
             )
             base = _git(root, "rev-parse", "HEAD").stdout.strip()
-            findings = checker.collect_findings(root, base)
-            self.assertEqual(findings, [])
+            self.assertEqual(checker.collect_findings(root, base), [])
 
     def test_unrelated_edit_near_historical_timeout_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,11 +206,9 @@ class RepoScenarioTests(unittest.TestCase):
                 "base",
             )
             base = _git(root, "rev-parse", "HEAD").stdout.strip()
-            # Touch a non-timeout line in the same file.
             edited = HISTORICAL_E2E.replace("assert True", "assert True  # unrelated")
             (root / "tests/e2e/test_hist.py").write_text(edited, encoding="utf-8")
-            findings = checker.collect_findings(root, base)
-            self.assertEqual(findings, [])
+            self.assertEqual(checker.collect_findings(root, base), [])
 
     def test_approved_marker_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,11 +227,30 @@ class RepoScenarioTests(unittest.TestCase):
                 + "    page.wait_for_timeout(400)\n"
             )
             (root / "tests/e2e/test_hist.py").write_text(approved, encoding="utf-8")
+            self.assertEqual(checker.collect_findings(root, base), [])
+
+    def test_string_marker_does_not_approve_new_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {"tests/e2e/test_hist.py": HISTORICAL_E2E, "README": "x\n"},
+                "base",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            fake = (
+                HISTORICAL_E2E
+                + "\n"
+                + '    reason = "prks-allow-wait-for-timeout: temporary"\n'
+                + "    page.wait_for_timeout(400)\n"
+            )
+            (root / "tests/e2e/test_hist.py").write_text(fake, encoding="utf-8")
             findings = checker.collect_findings(root, base)
-            self.assertEqual(findings, [])
+            self.assertEqual(len(findings), 1)
+            self.assertIn("new page.wait_for_timeout", findings[0].reason)
 
     def test_removed_marker_while_addition_remains_fails(self):
-        """Same-diff: new sleep without marker fails (still required)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
@@ -220,7 +267,6 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertIn("new page.wait_for_timeout", findings[0].reason)
 
     def test_later_pr_removes_marker_call_unchanged_fails(self):
-        """#189 ratchet: delete marker in a later PR while sleep stays → fail."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
@@ -236,15 +282,11 @@ class RepoScenarioTests(unittest.TestCase):
                 "approved sleep landed",
             )
             base = _git(root, "rev-parse", "HEAD").stdout.strip()
-            # Later PR: only the exemption marker is deleted; call unchanged.
-            without_marker = (
-                HISTORICAL_E2E + "\n" + "    page.wait_for_timeout(400)\n"
-            )
+            without_marker = HISTORICAL_E2E + "\n" + "    page.wait_for_timeout(400)\n"
             (root / "tests/e2e/test_hist.py").write_text(without_marker, encoding="utf-8")
             findings = checker.collect_findings(root, base)
             self.assertEqual(len(findings), 1)
             self.assertIn("lost its approved exemption", findings[0].reason)
-            # Historical unexempted sleep in the same file must not also fail.
             self.assertIn("wait_for_timeout(400)", findings[0].snippet)
 
     def test_later_pr_removes_same_line_marker_fails(self):
@@ -270,7 +312,6 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertIn("lost its approved exemption", findings[0].reason)
 
     def test_path_allowlist_then_removal_fails(self):
-        """Same-diff: new sleep while allowlisted, then un-allowlisted → fail."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
@@ -280,7 +321,6 @@ class RepoScenarioTests(unittest.TestCase):
                 "base",
             )
             base = _git(root, "rev-parse", "HEAD").stdout.strip()
-            # New additional sleep in an allowlisted helper path.
             (root / "tests/e2e/helper_timing.py").write_text(
                 "page.wait_for_timeout(1)\npage.wait_for_timeout(2)\n",
                 encoding="utf-8",
@@ -295,8 +335,6 @@ class RepoScenarioTests(unittest.TestCase):
                 ),
                 [],
             )
-            # Removing the allowlist entry: previously allowlisted wait(1) lost
-            # its exemption, and wait(2) is still a new unapproved call.
             findings = checker.collect_findings(
                 root,
                 base,
@@ -310,7 +348,6 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertTrue(any("new page.wait_for_timeout" in r for r in reasons))
 
     def test_later_pr_removes_allowlist_call_unchanged_fails(self):
-        """#189 ratchet: drop PATH_ALLOWLIST while helper sleep unchanged → fail."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
@@ -325,7 +362,6 @@ class RepoScenarioTests(unittest.TestCase):
             )
             base = _git(root, "rev-parse", "HEAD").stdout.strip()
             helper = frozenset({"tests/e2e/helper_timing.py"})
-            # Working tree unchanged; only the allowlist shrinks vs base.
             findings = checker.collect_findings(
                 root,
                 base,
@@ -335,10 +371,39 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertEqual(findings[0].path, "tests/e2e/helper_timing.py")
             self.assertIn("lost its approved exemption", findings[0].reason)
-            # Untouched historical path must not be pulled into the failure set.
-            self.assertTrue(
-                all(f.path != "tests/e2e/test_hist.py" for f in findings)
+            self.assertTrue(all(f.path != "tests/e2e/test_hist.py" for f in findings))
+
+    def test_rename_into_e2e_from_outside_scans_full_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {
+                    "tests/unit/sleep.py": "page.wait_for_timeout(10)\n",
+                    "README": "x\n",
+                },
+                "outside e2e",
             )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            (root / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+            _git(root, "mv", "tests/unit/sleep.py", "tests/e2e/sleep.py")
+            findings = checker.collect_findings(root, base)
+            self.assertEqual([f.path for f in findings], ["tests/e2e/sleep.py"])
+            self.assertIn("new page.wait_for_timeout", findings[0].reason)
+
+    def test_rename_within_e2e_keeps_historical_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {"tests/e2e/old_name.py": HISTORICAL_E2E, "README": "x\n"},
+                "inside e2e",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            _git(root, "mv", "tests/e2e/old_name.py", "tests/e2e/new_name.py")
+            self.assertEqual(checker.collect_findings(root, base), [])
 
     def test_untracked_e2e_module_with_timeout_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,6 +417,19 @@ class RepoScenarioTests(unittest.TestCase):
             findings = checker.collect_findings(root, base)
             self.assertEqual([f.path for f in findings], ["tests/e2e/test_brand_new.py"])
 
+    def test_empty_tree_baseline_scans_tracked_e2e(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {"tests/e2e/test_hist.py": HISTORICAL_E2E, "README": "x\n"},
+                "tip",
+            )
+            findings = checker.collect_findings(root, checker.EMPTY_TREE_SHA)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0].path, "tests/e2e/test_hist.py")
+
     def test_main_ok_on_clean_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -361,8 +439,7 @@ class RepoScenarioTests(unittest.TestCase):
                 {"tests/e2e/test_hist.py": HISTORICAL_E2E, "README": "x\n"},
                 "base",
             )
-            code = checker.main(["--root", str(root), "--base", "HEAD"])
-            self.assertEqual(code, 0)
+            self.assertEqual(checker.main(["--root", str(root), "--base", "HEAD"]), 0)
 
     def test_main_fails_on_new_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -378,16 +455,17 @@ class RepoScenarioTests(unittest.TestCase):
                 HISTORICAL_E2E + "\npage.wait_for_timeout(1)\n",
                 encoding="utf-8",
             )
-            code = checker.main(["--root", str(root), "--base", base])
-            self.assertEqual(code, 1)
+            self.assertEqual(checker.main(["--root", str(root), "--base", base]), 1)
 
     def test_invalid_base_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
             _commit_tree(root, {"README": "x\n"}, "base")
-            code = checker.main(["--root", str(root), "--base", "origin/does-not-exist"])
-            self.assertEqual(code, 2)
+            self.assertEqual(
+                checker.main(["--root", str(root), "--base", "origin/does-not-exist"]),
+                2,
+            )
 
 
 class SanitizeRevisionTests(unittest.TestCase):
@@ -398,6 +476,10 @@ class SanitizeRevisionTests(unittest.TestCase):
         )
         sha = "a" * 40
         self.assertEqual(checker.sanitize_git_revision(sha), sha)
+        self.assertEqual(
+            checker.resolve_base(Path("."), checker.EMPTY_TREE_SHA),
+            checker.EMPTY_TREE_SHA,
+        )
 
     def test_rejects_options_ranges_and_metacharacters(self):
         for bad in (
@@ -430,8 +512,6 @@ class AllowlistParseTests(unittest.TestCase):
 
 class CurrentRepoSmokeTests(unittest.TestCase):
     def test_current_repo_vs_head_is_clean(self):
-        """Working tree vs HEAD must not already introduce unapproved sleeps."""
-        # collect_findings requires a resolved SHA (resolve_base sanitizes CLI).
         sha = checker.resolve_base(_ROOT, "HEAD")
         findings = checker.collect_findings(_ROOT, sha)
         self.assertEqual(
