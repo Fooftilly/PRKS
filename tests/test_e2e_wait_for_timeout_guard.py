@@ -292,13 +292,34 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertEqual(code, 2)
 
 
+class SanitizeRevisionTests(unittest.TestCase):
+    def test_accepts_head_sha_and_ref_names(self):
+        self.assertEqual(checker.sanitize_git_revision("HEAD"), "HEAD")
+        self.assertEqual(
+            checker.sanitize_git_revision("origin/master"), "origin/master"
+        )
+        sha = "a" * 40
+        self.assertEqual(checker.sanitize_git_revision(sha), sha)
+
+    def test_rejects_options_ranges_and_metacharacters(self):
+        for bad in (
+            "--upload-pack=evil",
+            "a..b",
+            "HEAD;rm",
+            "origin/master space",
+            "",
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(checker.DiscoveryError):
+                    checker.sanitize_git_revision(bad)
+
+
 class CurrentRepoSmokeTests(unittest.TestCase):
     def test_current_repo_vs_head_is_clean(self):
         """Working tree vs HEAD must not already introduce unapproved sleeps."""
-        # Skip when the script itself is uncommitted and would not be in HEAD —
-        # still enforce that collect_findings against HEAD reports nothing for
-        # production E2E sources (the checker file is under scripts/, not e2e/).
-        findings = checker.collect_findings(_ROOT, "HEAD")
+        # collect_findings requires a resolved SHA (resolve_base sanitizes CLI).
+        sha = checker.resolve_base(_ROOT, "HEAD")
+        findings = checker.collect_findings(_ROOT, sha)
         self.assertEqual(
             findings,
             [],

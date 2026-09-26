@@ -49,6 +49,18 @@ _HUNK_HEADER_RE = re.compile(
     r"\s+\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))?\s+@@"
 )
 
+# CLI/env revision tokens become git argv (list form, not shell). Accept only
+# HEAD, hex SHAs, and simple ref names — no whitespace, ranges, or option-like
+# values — so argparse/env input cannot inject extra git arguments (S8705).
+_SAFE_GIT_REV_RE = re.compile(
+    r"\A(?:"
+    r"HEAD"
+    r"|[0-9a-fA-F]{7,40}"
+    r"|[A-Za-z0-9][A-Za-z0-9._/-]*"
+    r")\Z"
+)
+_FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{40}\Z")
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -98,27 +110,61 @@ def _git(repo: Path, args: list[str], what: str) -> str:
     return proc.stdout or ""
 
 
-def resolve_base(repo: Path, explicit: str | None) -> str:
-    """Pick the comparison revision for added-line detection.
+def sanitize_git_revision(raw: str) -> str:
+    """Return a charset-validated git revision token, or raise DiscoveryError.
 
-    Precedence: ``--base`` / argv, ``PRKS_E2E_WAIT_TIMEOUT_BASE``, then ``HEAD``
-    (local dirty-tree check). CI for pull requests should pass the PR base ref.
+    ``re.fullmatch`` + returning the match group is the sanitizer boundary for
+    CLI/env input before it is placed on a git argv list.
     """
-    if explicit:
-        base = explicit
-    else:
-        base = (os.environ.get("PRKS_E2E_WAIT_TIMEOUT_BASE") or "").strip() or "HEAD"
-    if base.startswith("-"):
+    value = (raw or "").strip()
+    if not value:
+        raise DiscoveryError("invalid --base: empty revision")
+    if value.startswith("-"):
         raise DiscoveryError(
-            f"invalid --base {base!r}: a revision cannot start with '-' "
+            f"invalid --base {value!r}: a revision cannot start with '-' "
             "(git would read it as an option)"
         )
-    _git(
+    if ".." in value:
+        raise DiscoveryError(
+            f"invalid --base {value!r}: ranges are not allowed "
+            "(pass a single revision)"
+        )
+    matched = _SAFE_GIT_REV_RE.fullmatch(value)
+    if matched is None:
+        raise DiscoveryError(
+            f"invalid --base {value!r}: only HEAD, a hex SHA, or a simple "
+            "ref name is accepted"
+        )
+    return matched.group(0)
+
+
+def resolve_base(repo: Path, explicit: str | None) -> str:
+    """Pick the comparison revision and resolve it to a 40-char commit SHA.
+
+    Precedence: ``--base`` / argv, ``PRKS_E2E_WAIT_TIMEOUT_BASE``, then ``HEAD``
+    (local dirty-tree check). CI for pull requests should pass the PR base ref
+    or its already-resolved SHA. Subsequent git diffs use only the hex SHA.
+    """
+    if explicit:
+        raw = explicit
+    else:
+        raw = (os.environ.get("PRKS_E2E_WAIT_TIMEOUT_BASE") or "").strip() or "HEAD"
+    safe = sanitize_git_revision(raw)
+    # List argv (not shell). Pass only the charset-validated token — never
+    # concatenate CLI input into a peel expression (keeps S8705 clear).
+    # Branch tips / HEAD / commit SHAs resolve directly to a commit object id.
+    out = _git(
         repo,
-        ["rev-parse", "--verify", f"{base}^{{commit}}"],
-        f"base revision check vs {base}",
+        ["rev-parse", "--verify", "--end-of-options", safe],
+        f"base revision check vs {safe}",
     )
-    return base
+    sha = (out.strip().splitlines() or [""])[0].strip()
+    if _FULL_SHA_RE.fullmatch(sha) is None:
+        raise DiscoveryError(
+            f"base revision check vs {safe} failed: rev-parse did not return "
+            f"a 40-character commit SHA (got {sha!r})"
+        )
+    return sha
 
 
 def line_has_wait_for_timeout(line: str) -> bool:
@@ -223,37 +269,31 @@ def list_untracked_e2e_python(repo: Path) -> list[str]:
     return out
 
 
-def collect_findings(repo: Path, base: str) -> list[Finding]:
-    """Return violations for new unapproved ``wait_for_timeout`` call sites."""
+def collect_findings(repo: Path, base_sha: str) -> list[Finding]:
+    """Return violations for new unapproved ``wait_for_timeout`` call sites.
+
+    ``base_sha`` must be a 40-character commit SHA from ``resolve_base``.
+    ``git diff <sha>`` includes the working tree, so uncommitted edits against
+    a PR base are covered without a second HEAD pass.
+    """
+    sha = sanitize_git_revision(base_sha)
+    if _FULL_SHA_RE.fullmatch(sha) is None:
+        raise DiscoveryError(
+            f"collect_findings requires a 40-character commit SHA (got {sha!r})"
+        )
     diff_text = _git(
         repo,
         [
             "diff",
             "-U0",
             "--diff-filter=ACMR",
-            base,
+            "--end-of-options",
+            sha,
             "--",
             E2E_PREFIX,
         ],
-        f"E2E wait_for_timeout diff vs {base}",
+        f"E2E wait_for_timeout diff vs {sha}",
     )
-    # When base is not HEAD, also include local uncommitted changes vs HEAD so a
-    # dirty tree on a PR branch is still enforced (mirrors e2e affected policy).
-    if base != "HEAD":
-        local = _git(
-            repo,
-            [
-                "diff",
-                "-U0",
-                "--diff-filter=ACMR",
-                "HEAD",
-                "--",
-                E2E_PREFIX,
-            ],
-            "E2E wait_for_timeout local diff vs HEAD",
-        )
-        if local:
-            diff_text = diff_text + ("\n" if diff_text and not diff_text.endswith("\n") else "") + local
 
     candidates = parse_unified_diff_added_waits(diff_text)
 
