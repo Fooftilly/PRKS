@@ -846,6 +846,7 @@ def classify_affected_path(rel: str) -> dict:
     names = []
     notes = []
     ci_full = False
+    unmapped = False
     for rule in take_rules:
         names.append(rule["name"])
         if rule.get("ci_mode") == "full":
@@ -853,8 +854,12 @@ def classify_affected_path(rel: str) -> dict:
         if rule.get("resolve_e2e_module"):
             feats = list(features_for_e2e_module_path(rel) or ())
             if not feats:
+                # Local --affected keeps smoke; CI fails closed to full so a
+                # brand-new test_*.py without FEATURES selectors cannot land
+                # under-tested (smoke-only).
                 feats = ["smoke"]
                 notes.append("unmapped E2E module → smoke")
+                unmapped = True
         else:
             feats = list(rule.get("features") or ())
         for feat in feats:
@@ -869,7 +874,7 @@ def classify_affected_path(rel: str) -> dict:
         "skip": False,
         "note": "; ".join(notes),
         "ci_full": ci_full,
-        "unmapped": False,
+        "unmapped": unmapped,
     }
 
 

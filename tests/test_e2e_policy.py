@@ -299,6 +299,22 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(plan["features"], [])
         self.assertIn("inventory.py", plan["reason"])
 
+    def test_unmapped_e2e_test_module_is_ci_full(self):
+        # New tests/e2e/test_*.py with no FEATURES selectors must not plan as
+        # affected+smoke only — CI fail-closed to full (prefer over-test).
+        path = "tests/e2e/test_brand_new_unmapped.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["e2e-module"])
+        self.assertFalse(classified["skip"])
+        self.assertTrue(classified["unmapped"])
+        self.assertEqual(classified["features"], ["smoke"])
+        self.assertIn("unmapped E2E module", classified["note"])
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
+        self.assertIn("unmapped", plan["reason"])
+        self.assertIn("test_brand_new_unmapped.py", plan["reason"])
+
     def test_work_cards_unions_browse_work_create_shell_and_smoke(self):
         # First-match would keep only browse; shared work-cards.js also owns
         # work-create (+ shell). Prefer over-test via multi-rule feature union.
