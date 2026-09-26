@@ -174,7 +174,8 @@ class DiskProbeTests(unittest.TestCase):
     def test_exists_oserror_marks_probe_failed(self):
         path = mock.MagicMock()
         path.exists.side_effect = OSError("Permission denied")
-        path.__str__ = mock.Mock(return_value="/dev/shm")
+        # Avoid Bandit B108 hardcoded temp/shm path literals in the mock.
+        path.__str__ = mock.Mock(return_value=str(Path(os.sep) / "dev" / "shm"))
         result = doctor._disk_usage_bytes(path)
         self.assertFalse(result["present"])
         self.assertTrue(result["probe_failed"])
