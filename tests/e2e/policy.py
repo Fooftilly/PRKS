@@ -76,6 +76,26 @@ FULL_GATE_DEFAULT_JOBS = 4
 # each with --jobs 1 over one runner with FULL_GATE_DEFAULT_JOBS local workers.
 FULL_GATE_EXTERNAL_SHARDS = 4
 
+# CI gate modes for ``--ci-plan`` / ``.github/workflows/e2e-gate.yml``.
+# ``run`` alone is not enough — consumers must branch on ``mode``.
+CI_MODES = ("skip", "affected", "full")
+
+# Affected CI execution shape by selected test count (not blind 4 shards).
+# Prefer one runner + local workers when the selection is small.
+CI_AFFECTED_SINGLE_RUNNER_MAX = 30
+CI_AFFECTED_TWO_SHARD_MAX = 120
+CI_AFFECTED_LOCAL_JOBS = 2
+
+# Pointer capture on affected CI only when the selection justifies the PDF/
+# workspace pointer fixture (full mode always runs it).
+CI_POINTER_FEATURES = frozenset(
+    {
+        "tiling",
+        "workspace-drag",
+        "pdf-annotations",
+    }
+)
+
 # Per-test hang watchdog (seconds). Separate from Playwright assertion timeouts
 # and from the full-suite PRKS_E2E_FULL_TIMEOUT. Generous so slow-but-valid tests
 # are not killed; override with PRKS_E2E_TEST_WATCHDOG; set 0 to disable.
@@ -311,7 +331,8 @@ FEATURES = {
 # unioned into the final selection (not first-match across the whole diff).
 
 AFFECTED_RULES = (
-    # E2E framework itself → smoke + runner unit coverage signal
+    # E2E framework itself → smoke + runner unit coverage signal locally;
+    # CI high-risk → always full (see ci_mode).
     {
         "name": "e2e-framework",
         "paths": (
@@ -330,9 +351,11 @@ AFFECTED_RULES = (
         ),
         "features": ("smoke", "wait-async"),
         "fallback": "smoke",
-        "note": "E2E runner/harness/CI gate change → smoke + wait_for_async parity (not silent skip)",
+        "ci_mode": "full",
+        "note": "E2E runner/harness/CI gate change → smoke + wait_for_async parity (CI: full)",
     },
-    # Central shared infrastructure → broader than one domain
+    # Central shared infrastructure → broader than one domain locally;
+    # CI high-risk → always full (prefer false-positive full over under-test).
     {
         "name": "shared-frontend-core",
         "paths": (
@@ -351,7 +374,8 @@ AFFECTED_RULES = (
             "prks_app.py",
         ),
         "features": ("smoke", "shell", "tabs", "offline", "sync", "modals"),
-        "note": "Shared core → smoke + shell/tabs/offline/sync/modals",
+        "ci_mode": "full",
+        "note": "Shared core → smoke + shell/tabs/offline/sync/modals (CI: full)",
     },
     {
         "name": "graph",
@@ -776,25 +800,309 @@ def match_affected_path(rel: str):
     return "ignored", (), True, "outside production/E2E tree → skip"
 
 
-def full_e2e_ci_needed(changed_paths):
-    """Whether the authoritative full E2E CI gate should run for this diff.
+def _affected_rule(name: str):
+    """Return the AFFECTED_RULES entry for ``name``, or None."""
+    for rule in AFFECTED_RULES:
+        if rule["name"] == name:
+            return rule
+    return None
 
-    Reuses the same docs/unit/ignored skip rules as ``--affected``: when every
-    changed path is guidance-only or non-E2E tests, skip the expensive matrix.
-    An empty path list fails closed (run) so a shallow/misconfigured checkout
-    cannot silently drop the gate.
 
-    Path classification only — does not resolve feature → test IDs (that would
-    require a full discovery pass and is unnecessary for the CI skip decision).
+def _ensure_smoke(features):
+    """Return features with smoke appended once (affected CI always ∪ smoke)."""
+    out = list(features)
+    if "smoke" not in out:
+        out.append("smoke")
+    return out
+
+
+def ci_pointer_capture(mode: str, features=None) -> bool:
+    """Whether the CI gate should run pointer_capture after the matrix.
+
+    Full mode always runs it. Affected mode only when selected features
+    intersect workspace/pointer/drag/tiling (and PDF annotation) groups.
     """
+    if mode == "full":
+        return True
+    if mode != "affected":
+        return False
+    selected = set(features or ())
+    return bool(selected & CI_POINTER_FEATURES)
+
+
+def ci_execution_shape(mode: str, test_count: int | None = None, features=None):
+    """External shard count + local jobs + pointer flag for a CI mode.
+
+    Affected selections size the matrix from ``test_count`` (fail closed to
+    full-width when count is unknown). Full is always ``FULL_GATE_EXTERNAL_SHARDS``.
+    """
+    pointer = ci_pointer_capture(mode, features)
+    if mode == "skip":
+        return {
+            "external_shards": 0,
+            "local_jobs": 0,
+            "pointer_capture": False,
+        }
+    if mode == "full":
+        return {
+            "external_shards": FULL_GATE_EXTERNAL_SHARDS,
+            "local_jobs": 1,
+            "pointer_capture": True,
+        }
+    # affected
+    if test_count is None or test_count < 0:
+        # Unknown count → prefer false-positive capacity over under-sharding.
+        return {
+            "external_shards": FULL_GATE_EXTERNAL_SHARDS,
+            "local_jobs": 1,
+            "pointer_capture": pointer,
+        }
+    if test_count <= CI_AFFECTED_SINGLE_RUNNER_MAX:
+        return {
+            "external_shards": 1,
+            "local_jobs": CI_AFFECTED_LOCAL_JOBS,
+            "pointer_capture": pointer,
+        }
+    if test_count <= CI_AFFECTED_TWO_SHARD_MAX:
+        return {
+            "external_shards": 2,
+            "local_jobs": 1,
+            "pointer_capture": pointer,
+        }
+    return {
+        "external_shards": FULL_GATE_EXTERNAL_SHARDS,
+        "local_jobs": 1,
+        "pointer_capture": pointer,
+    }
+
+
+def ci_matrix_include(external_shards: int, local_jobs: int):
+    """GitHub Actions ``strategy.matrix.include`` rows for the E2E gate."""
+    if external_shards < 1:
+        return []
+    jobs = max(1, int(local_jobs or 1))
+    return [
+        {"shard": index, "total": external_shards, "jobs": jobs}
+        for index in range(1, external_shards + 1)
+    ]
+
+
+def plan_ci_e2e(changed_paths, *, force_full: bool = False):
+    """Authoritative CI gate plan for ``--ci-plan`` / e2e-gate.yml.
+
+    Single source of truth — path tables live only in ``AFFECTED_RULES`` /
+    ``CONSERVATIVE_SMOKE_PREFIXES``. Returns::
+
+        {
+          "run": bool,
+          "mode": "skip" | "affected" | "full",
+          "features": [...],  # non-empty only for affected (always includes smoke)
+          "reason": str,
+          "pointer_capture": bool,
+          "external_shards": int,
+          "local_jobs": int,
+        }
+
+    Policy (prefer false-positive full over silent under-test):
+
+    - docs / unit / ignored-only → ``skip``
+    - feature production or E2E module paths → ``affected`` = mapped ∪ smoke
+    - high-risk rules (``ci_mode: "full"``), unmapped production, requirements*,
+      empty path list, or ``force_full`` → ``full``
+    """
+    if force_full:
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "forced full E2E (master push, workflow_dispatch, or operator override)",
+            **shape,
+        }
+
     paths = list(changed_paths or [])
     if not paths:
-        return True, "no changed paths reported — running full E2E (fail closed)"
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "no changed paths reported — running full E2E (fail closed)",
+            **shape,
+        }
+
+    features = []
+    seen_f = set()
+    any_relevant = False
+    full_reasons = []
+
     for raw in paths:
-        _rule, _feats, skip, _note = match_affected_path(raw)
-        if not skip:
-            return True, "E2E-relevant changes detected — running full E2E"
-    return False, "docs/unit/ignored-only changes — skipping full E2E"
+        rel = _posix(raw)
+        rule_name, feats, skip, note = match_affected_path(rel)
+        if skip:
+            continue
+        any_relevant = True
+        rule = _affected_rule(rule_name)
+        if rule is not None and rule.get("ci_mode") == "full":
+            full_reasons.append(
+                "%s (%s)" % (rel, rule_name)
+            )
+            continue
+        if rule_name == "unmapped-production":
+            # Local --affected keeps smoke; CI fails closed to full.
+            full_reasons.append("%s (unmapped production → CI full)" % rel)
+            continue
+        # requirements* and similar conservative prefixes already hit
+        # unmapped-production above when they match CONSERVATIVE_SMOKE_PREFIXES.
+        for feat in feats:
+            if feat not in seen_f:
+                seen_f.add(feat)
+                features.append(feat)
+
+    if full_reasons:
+        shape = ci_execution_shape("full")
+        preview = ", ".join(full_reasons[:3])
+        extra = "" if len(full_reasons) <= 3 else " (+%d more)" % (len(full_reasons) - 3)
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "high-risk / shared / unmapped changes — running full E2E: %s%s"
+            % (preview, extra),
+            **shape,
+        }
+
+    if not any_relevant:
+        shape = ci_execution_shape("skip")
+        return {
+            "run": False,
+            "mode": "skip",
+            "features": [],
+            "reason": "docs/unit/ignored-only changes — skipping E2E gate",
+            **shape,
+        }
+
+    if not features:
+        # Relevant path(s) mapped to an empty feature list — fail closed.
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "E2E-relevant changes mapped to zero features — running full E2E (fail closed)",
+            **shape,
+        }
+
+    features = _ensure_smoke(features)
+    shape = ci_execution_shape("affected", test_count=None, features=features)
+    return {
+        "run": True,
+        "mode": "affected",
+        "features": features,
+        "reason": "E2E-relevant feature changes — running affected + smoke (%s)"
+        % ",".join(features),
+        **shape,
+    }
+
+
+def refine_ci_plan_with_tests(plan, all_ids):
+    """Attach test_count / execution shape; fail closed to full on empty selection.
+
+    ``all_ids`` is the discovered E2E suite (same IDs ``--feature`` uses).
+    Discovery failure is the caller's responsibility (upgrade to full before
+    calling, or let this raise).
+    """
+    if not isinstance(plan, dict):
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "malformed CI plan — running full E2E (fail closed)",
+            "test_count": None,
+            **shape,
+        }
+    mode = plan.get("mode")
+    if mode not in CI_MODES:
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "malformed CI plan mode %r — running full E2E (fail closed)" % mode,
+            "test_count": None,
+            **shape,
+        }
+    if mode != "affected":
+        out = dict(plan)
+        if mode == "full" and all_ids is not None:
+            out["test_count"] = len(all_ids)
+        elif mode == "skip":
+            out["test_count"] = 0
+        else:
+            out.setdefault("test_count", None)
+        shape = ci_execution_shape(mode, out.get("test_count"), out.get("features"))
+        out.update(shape)
+        return out
+
+    features = list(plan.get("features") or [])
+    if not features:
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "affected plan missing features — running full E2E (fail closed)",
+            "test_count": None,
+            **shape,
+        }
+    try:
+        test_ids = select_features(all_ids, features)
+    except ValueError as exc:
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "affected feature selection failed — running full E2E (fail closed): %s"
+            % exc,
+            "test_count": None,
+            **shape,
+        }
+    if not test_ids:
+        shape = ci_execution_shape("full")
+        return {
+            "run": True,
+            "mode": "full",
+            "features": [],
+            "reason": "mapped features selected zero tests — running full E2E (fail closed)",
+            "test_count": 0,
+            **shape,
+        }
+    shape = ci_execution_shape("affected", len(test_ids), features)
+    out = dict(plan)
+    out["features"] = features
+    out["test_count"] = len(test_ids)
+    out["reason"] = (
+        "E2E-relevant feature changes — running affected + smoke "
+        "(%s; %d tests)" % (",".join(features), len(test_ids))
+    )
+    out.update(shape)
+    return out
+
+
+def full_e2e_ci_needed(changed_paths):
+    """Whether the authoritative E2E CI gate should run for this diff.
+
+    Thin wrapper over ``plan_ci_e2e`` for older callers: returns
+    ``(run, reason)``. Prefer ``plan_ci_e2e`` for mode/features.
+
+    Reuses the same docs/unit/ignored skip rules as ``--affected``. An empty
+    path list fails closed (run) so a shallow/misconfigured checkout cannot
+    silently drop the gate.
+    """
+    plan = plan_ci_e2e(changed_paths)
+    return bool(plan["run"]), plan["reason"]
 
 
 def select_affected(all_ids, changed_paths):

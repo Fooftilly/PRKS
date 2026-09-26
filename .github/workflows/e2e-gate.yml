@@ -17,12 +17,17 @@ jobs:
   e2e-plan:
     permissions:
       contents: read
-    name: Full E2E plan
+    name: E2E plan
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       run: ${{ steps.plan.outputs.run }}
+      mode: ${{ steps.plan.outputs.mode }}
       reason: ${{ steps.plan.outputs.reason }}
+      features: ${{ steps.plan.outputs.features }}
+      test_count: ${{ steps.plan.outputs.test_count }}
+      pointer_capture: ${{ steps.plan.outputs.pointer_capture }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,6 +40,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install plan-time dependencies
+        # Playwright is importable for E2E discovery when mode=affected sizes shards.
+        # Chromium itself is not downloaded here.
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "playwright==1.63.0"
+
       - name: Resolve comparison base
         id: base
         shell: bash
@@ -43,59 +55,98 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
             echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # Manual runs always execute the full gate.
+            echo "force=0" >> "$GITHUB_OUTPUT"
+          else
+            # master push + workflow_dispatch always run the complete Full E2E suite.
             echo "ref=" >> "$GITHUB_OUTPUT"
             echo "force=1" >> "$GITHUB_OUTPUT"
-          else
-            before="${{ github.event.before }}"
-            if [[ -z "$before" || "$before" =~ ^0+$ ]]; then
-              echo "ref=" >> "$GITHUB_OUTPUT"
-              echo "force=1" >> "$GITHUB_OUTPUT"
-            elif git rev-parse --verify "${before}^{commit}" >/dev/null 2>&1; then
-              echo "ref=$before" >> "$GITHUB_OUTPUT"
-            else
-              # Force-push / shallow history: before SHA is present but not
-              # resolvable locally. Fail closed to the full gate (do not hand
-              # an unusable base to --ci-plan, which must not exit 2 here).
-              echo "ref=" >> "$GITHUB_OUTPUT"
-              echo "force=1" >> "$GITHUB_OUTPUT"
-            fi
           fi
 
-      - name: Decide whether full E2E is needed
+      - name: Decide E2E gate mode
         id: plan
         shell: bash
+        env:
+          PRKS_E2E: "1"
         run: |
           set -euo pipefail
           if [[ "${{ steps.base.outputs.force }}" == "1" ]]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "reason=workflow_dispatch or missing before SHA — running full E2E" >> "$GITHUB_OUTPUT"
-            echo '{"run":true,"reason":"forced"}'
-            exit 0
+            export PRKS_E2E_CI_FORCE_FULL=1
+            plan="$(python tests/e2e/run.py --ci-plan)"
+          else
+            base="${{ steps.base.outputs.ref }}"
+            plan="$(python tests/e2e/run.py --ci-plan --base "$base")"
           fi
-          base="${{ steps.base.outputs.ref }}"
-          plan="$(python tests/e2e/run.py --ci-plan --base "$base")"
           echo "$plan"
-          run="$(python -c 'import json,sys; print("true" if json.load(sys.stdin)["run"] else "false")' <<<"$plan")"
-          reason="$(python -c 'import json,sys; print(json.load(sys.stdin)["reason"])' <<<"$plan")"
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          export PLAN_JSON="$plan"
+          python <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["PLAN_JSON"])
+          required = ("run", "mode", "features", "reason")
+          missing = [k for k in required if k not in plan]
+          if missing:
+              raise SystemExit("malformed ci-plan missing keys: %s" % ", ".join(missing))
+          mode = plan["mode"]
+          if mode not in ("skip", "affected", "full"):
+              raise SystemExit("malformed ci-plan mode: %r" % mode)
+          if mode == "affected":
+              features = plan.get("features") or []
+              if not features:
+                  raise SystemExit("affected plan must list features (fail closed)")
+              count = plan.get("test_count")
+              if not count:
+                  raise SystemExit(
+                      "affected plan selected zero/unknown tests (fail closed)"
+                  )
+          matrix = plan.get("matrix") or {}
+          include = matrix.get("include") or []
+          if plan.get("run") and mode != "skip" and not include:
+              raise SystemExit("runnable plan missing matrix.include (fail closed)")
+          run = "true" if plan.get("run") else "false"
+          pointer = "true" if plan.get("pointer_capture") else "false"
+          features_json = json.dumps(list(plan.get("features") or []), separators=(",", ":"))
+          matrix_json = json.dumps({"include": include}, separators=(",", ":"))
+          count = plan.get("test_count")
+          count_s = "" if count is None else str(count)
+          reason = plan["reason"].replace("\r", " ").replace("\n", " ").strip()
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a", encoding="utf-8") as handle:
+              handle.write("run=%s\n" % run)
+              handle.write("mode=%s\n" % mode)
+              handle.write("reason=%s\n" % reason)
+              handle.write("features=%s\n" % features_json)
+              handle.write("test_count=%s\n" % count_s)
+              handle.write("pointer_capture=%s\n" % pointer)
+              # Delimiter form so JSON braces/quotes cannot break the file syntax.
+              handle.write("matrix<<EOF_MATRIX\n")
+              handle.write("%s\n" % matrix_json)
+              handle.write("EOF_MATRIX\n")
+          print(
+              "mode=%s run=%s features=%s test_count=%s shards=%d pointer=%s"
+              % (
+                  mode,
+                  run,
+                  features_json,
+                  count_s or "-",
+                  len(include),
+                  pointer,
+              )
+          )
+          PY
 
   e2e:
     permissions:
       contents: read
-    name: Full E2E (${{ matrix.shard }}/4)
+    name: E2E (${{ matrix.shard }}/${{ matrix.total }})
     needs: e2e-plan
     if: needs.e2e-plan.outputs.run == 'true'
     runs-on: ubuntu-latest
-    # Prefer 4 GitHub runners × 1 local worker over 1 runner × 4 Chromium stacks.
-    # FULL_GATE_EXTERNAL_SHARDS in tests/e2e/policy.py must stay in sync with
-    # matrix.shard and the --shard TOTAL below.
+    # FULL_GATE_EXTERNAL_SHARDS in tests/e2e/policy.py is the full-mode width.
+    # Affected mode sizes matrix.include from selected test count via --ci-plan.
     strategy:
       fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
+      matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     timeout-minutes: 25
     steps:
       - name: Checkout repository
@@ -123,16 +174,41 @@ jobs:
           "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
           "playwright==1.63.0"
 
-      - name: Run external E2E shard
-        run: >-
-          python tests/e2e/run.py --jobs 1 --shard ${{ matrix.shard }}/4
-          --no-pointer-capture
+      - name: Run E2E selection shard
+        env:
+          PRKS_E2E_MODE: ${{ needs.e2e-plan.outputs.mode }}
+          PRKS_E2E_FEATURES: ${{ needs.e2e-plan.outputs.features }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${PRKS_E2E_MODE}"
+          args=(python tests/e2e/run.py --jobs "${{ matrix.jobs }}" --no-pointer-capture)
+          if [[ "${{ matrix.total }}" -gt 1 ]]; then
+            args+=(--shard "${{ matrix.shard }}/${{ matrix.total }}")
+          fi
+          if [[ "$mode" == "affected" ]]; then
+            mapfile -t features < <(python -c 'import json,os; print("\n".join(json.loads(os.environ["PRKS_E2E_FEATURES"])))')
+            if [[ "${#features[@]}" -eq 0 ]]; then
+              echo "::error::affected mode with empty features (fail closed)"
+              exit 1
+            fi
+            for feature in "${features[@]}"; do
+              args+=(--feature "$feature")
+            done
+          elif [[ "$mode" != "full" ]]; then
+            echo "::error::unexpected E2E mode for matrix runner: $mode"
+            exit 1
+          fi
+          printf 'Running:';
+          printf ' %q' "${args[@]}"
+          printf '\n'
+          "${args[@]}"
 
       - name: Upload shard failure log
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: e2e-shard-${{ matrix.shard }}-log
+          name: e2e-shard-${{ matrix.shard }}-of-${{ matrix.total }}-log
           path: |
             .tests/
           if-no-files-found: ignore
@@ -141,9 +217,12 @@ jobs:
   e2e-pointer:
     permissions:
       contents: read
-    name: Full E2E pointer capture
+    name: E2E pointer capture
     needs: [e2e-plan, e2e]
-    if: needs.e2e-plan.outputs.run == 'true' && needs.e2e.result == 'success'
+    if: >-
+      needs.e2e-plan.outputs.run == 'true'
+      && needs.e2e-plan.outputs.pointer_capture == 'true'
+      && needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -166,7 +245,7 @@ jobs:
       - name: Install Chromium for pointer capture
         run: python tests/e2e/install_browser.py
 
-      - name: Run pointer_capture once for the full gate
+      - name: Run pointer_capture once for the gate
         env:
           PRKS_E2E: "1"
         run: python tests/browser/pointer_capture.py
@@ -188,28 +267,42 @@ jobs:
         run: |
           set -euo pipefail
           plan_run="${{ needs.e2e-plan.outputs.run }}"
+          plan_mode="${{ needs.e2e-plan.outputs.mode }}"
           plan_reason="${{ needs.e2e-plan.outputs.reason }}"
+          plan_features="${{ needs.e2e-plan.outputs.features }}"
+          plan_count="${{ needs.e2e-plan.outputs.test_count }}"
+          plan_pointer="${{ needs.e2e-plan.outputs.pointer_capture }}"
           plan_result="${{ needs.e2e-plan.result }}"
           e2e_result="${{ needs.e2e.result }}"
           pointer_result="${{ needs.e2e-pointer.result }}"
-          echo "e2e-plan: result=$plan_result run=$plan_run"
+          echo "e2e-plan: result=$plan_result run=$plan_run mode=$plan_mode"
+          echo "features: $plan_features"
+          echo "test_count: ${plan_count:-unknown}"
+          echo "pointer_capture planned: $plan_pointer"
           echo "reason: $plan_reason"
           echo "e2e matrix: $e2e_result"
           echo "pointer_capture: $pointer_result"
           if [[ "$plan_result" != "success" ]]; then
-            echo "::error::Full E2E plan job failed"
+            echo "::error::E2E plan job failed"
             exit 1
           fi
-          if [[ "$plan_run" != "true" ]]; then
-            echo "Full E2E skipped (docs/unit/ignored-only or equivalent noop)"
+          if [[ "$plan_run" != "true" || "$plan_mode" == "skip" ]]; then
+            echo "E2E gate skipped (mode=skip; docs/unit/ignored-only or equivalent noop)"
             exit 0
           fi
           if [[ "$e2e_result" != "success" ]]; then
-            echo "::error::One or more Full E2E shards failed (matrix result=$e2e_result)"
+            echo "::error::One or more E2E shards failed (mode=$plan_mode matrix result=$e2e_result)"
             exit 1
           fi
-          if [[ "$pointer_result" != "success" ]]; then
-            echo "::error::Full E2E pointer_capture failed (result=$pointer_result)"
-            exit 1
+          if [[ "$plan_pointer" == "true" ]]; then
+            if [[ "$pointer_result" != "success" ]]; then
+              echo "::error::E2E pointer_capture failed (result=$pointer_result)"
+              exit 1
+            fi
+          else
+            if [[ "$pointer_result" != "skipped" && "$pointer_result" != "success" ]]; then
+              echo "::error::Unexpected pointer job result when not planned: $pointer_result"
+              exit 1
+            fi
           fi
-          echo "Full E2E gate passed (4 runners × 1 worker + pointer_capture)"
+          echo "E2E gate passed (mode=$plan_mode features=$plan_features count=${plan_count:-unknown} pointer=$plan_pointer)"

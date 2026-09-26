@@ -267,16 +267,19 @@ whenever the module changes. The scheduling and aggregation logic lives in
 
 External CI sharding. `--shard INDEX/TOTAL` (1-based) selects one bucket from
 the same LPT partition used by `--jobs TOTAL`. The authoritative GitHub Actions
-full E2E gate (`.github/workflows/e2e-gate.yml`) prefers about four runners
-each with `--jobs 1` over one runner with four local Chromium stacks
-(`FULL_GATE_EXTERNAL_SHARDS` in `tests/e2e/policy.py`). Pointer capture runs
-once after every matrix shard passes (dedicated CI job), not once per shard.
-Docs/unit/ignored-only diffs skip the matrix via
-`python tests/e2e/run.py --ci-plan --base <ref>` (same noop policy as
-`--affected`). An unresolvable comparison base (force-push `before` SHA)
-fails closed to **run** the full gate — never a plan exit 2. Rename/copy
-discovery keeps both path images so a production→docs move cannot look
-docs-only.
+E2E gate (`.github/workflows/e2e-gate.yml`) plans via
+`python tests/e2e/run.py --ci-plan --base <ref>`:
+
+| Mode | When | Matrix |
+| --- | --- | --- |
+| `skip` | docs/unit/ignored-only | no runners |
+| `affected` | mapped feature production/E2E paths | features ∪ smoke; shard count from selected test size (1 runner + local workers when small) |
+| `full` | high-risk/shared/unmapped, `master` push, `workflow_dispatch`, discovery failure | `FULL_GATE_EXTERNAL_SHARDS` runners × `--jobs 1` |
+
+Pointer capture runs once after matrix success when mode is `full`, or when
+affected features intersect tiling / workspace-drag / pdf-annotations. An
+unresolvable comparison base fails closed to **full**. Rename/copy discovery
+keeps both path images so a production→docs move cannot look docs-only.
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer
