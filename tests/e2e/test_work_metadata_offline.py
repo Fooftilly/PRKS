@@ -433,12 +433,28 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         Never return prksNavigate's Promise from page.evaluate — Playwright
         awaits it, and a stuck leave/render wedges until the 300s watchdog.
         Exit metadata edit first so leave is not blocked on an unsaved-draft
-        confirm the test never clicks.
+        confirm the test never clicks. Wait for the canonical hash so callers
+        do not race the departing route's still-visible DOM.
         """
         page.evaluate("""() => {
             if (typeof prksSetWorkDetailsMode === 'function') void prksSetWorkDetailsMode('view');
         }""")
         page.evaluate("r => { void prksNavigate(r); }", route)
+        page.wait_for_function("r => location.hash === r", arg=route)
+
+    def wait_progress_ready(self, page, status):
+        """Progress hash committed and the requested status group rendered."""
+        route = '#/progress?status=' + quote(str(status), safe='')
+        page.wait_for_function(
+            """(args) => {
+                if (location.hash !== args.hash) return false;
+                const main = document.querySelector('.prks-tile--main');
+                if (!main || main.querySelector('.prks-route-loading')) return false;
+                const title = main.querySelector('.prks-page-title');
+                return !!title && title.textContent.indexOf(args.status) !== -1;
+            }""",
+            arg={'hash': route, 'status': str(status)},
+        )
 
     def recently_added(self, page):
         """Home -> Recently Added, warmed and rendered."""
@@ -884,13 +900,11 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def progress_ids(self, page, status):
         """The Work ids Progress shows for one status group."""
         self.navigate(page, '#/progress?status=' + quote(str(status), safe=''))
-        page.wait_for_function("""() => {
-            const el = document.querySelector('.prks-tile--main');
-            return !!el && !el.querySelector('.prks-route-loading');
-        }""")
-        page.wait_for_timeout(120)
+        self.wait_progress_ready(page, status)
         return page.evaluate(
-            "() => Array.from(document.querySelectorAll('[data-work-id]')).map(el => el.dataset.workId)")
+            """() => Array.from(
+                document.querySelectorAll('.prks-tile--main [data-work-id]')
+            ).map(el => el.dataset.workId)""")
 
     def card_badge(self, page, work_id):
         return page.evaluate("""id => {
@@ -1942,8 +1956,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     def progress(self, page, status='In Progress'):
         self.navigate(page, '#/progress?status=' + quote(str(status), safe=''))
-        page.wait_for_function("() => location.hash.indexOf('/progress') !== -1")
-        page.wait_for_selector('.card-grid')
+        self.wait_progress_ready(page, status)
 
     def progress_excerpt(self, page, work_id):
         return page.evaluate("""id => {
