@@ -209,17 +209,22 @@ Risk: weakening the guarantee that E2E cannot silently depend on the public netw
 
 ### 4. Faster initial application readiness
 
-`open_app_page()` currently navigates to `/`, waits for multiple shell elements,
-clicks Folders, then waits for `#/folders`.
+`open_app_page()` loads the canonical Folders route directly (`/#/folders`) and waits
+on real shell + Folders UI (`#sidebar`, `.prks-folder-library`,
+`location.hash === '#/folders'`). The previous `/` + Folders-nav click was a pure
+re-navigation once empty-hash canonicalize already mounted that surface.
 
-Candidates:
+Implemented:
 
-- navigate directly to the canonical Folders route if behavior is identical;
+- navigate directly to the canonical Folders route (same real-UI readiness waits;
+  no synthetic ready fakes or E2E-only init endpoints).
+
+Remaining candidates (measure `app_ready` first):
+
 - expose a stable application-ready signal derived from real initialization state;
 - collapse redundant waits once that signal is proven sufficient.
 
-Measure `app_ready` first. A synthetic E2E-only production endpoint or fake backend
-is not acceptable.
+A synthetic E2E-only production endpoint or fake backend is not acceptable.
 
 ### 5. Server startup work
 
