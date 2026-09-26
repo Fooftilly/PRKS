@@ -1214,12 +1214,23 @@ class PRKSDatabase:
         Plain ``execute_query`` + a second connection for projection can combine
         pre-update base columns with post-update Manifestation/Asset/counts.
         ``BEGIN`` before the first SELECT keeps every dependent read consistent.
+
+        Counts as one diagnostics ``db_call``, matching the pre-snapshot
+        ``execute_query`` accounting for Work catalog routes.
         """
-        with self.connection() as conn:
-            conn.execute("BEGIN")
-            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
-            self._finish_projected_work_rows(rows, conn=conn)
-            return rows
+        t0 = clock_ns()
+        write = classify_sql_write(sql)
+        try:
+            with self.connection() as conn:
+                conn.execute("BEGIN")
+                rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+                self._finish_projected_work_rows(rows, conn=conn)
+                return rows
+        finally:
+            try:
+                record_db_call(clock_ns() - t0, write=write)
+            except Exception:
+                pass
 
     def _roles_for_manifestation_on_conn(
         self, conn, work_id: str, manifestation_id: Optional[str]
@@ -2407,21 +2418,42 @@ class PRKSDatabase:
                 raise ValueError("Folder not found.")
 
     def _search_works_fts_tokens(self, tokens: List[str]) -> List[dict]:
+        """FTS5 on legacy ``works`` columns, plus primary-Manifestation title/abstract.
+
+        ``works_fts`` is ``content='works'`` (Slice C does not rewrite the FTS
+        schema). Candidate selection still has to find displayed titles, so
+        this path unions primary-Manifestation matches with the same tokens.
+        """
         clause = _prks_fts_prefix_clause(tokens)
         if not clause:
             return []
+        seen: set = set()
+        ordered: List[dict] = []
+
+        def add_rows(rows: List[dict]) -> None:
+            for row in rows:
+                wid = row["id"]
+                if wid in seen:
+                    continue
+                seen.add(wid)
+                ordered.append({"id": wid})
+
         try:
-            return self.execute_query(
-                """
-                SELECT works.id FROM works
-                JOIN works_fts ON works.rowid = works_fts.rowid
-                WHERE works_fts MATCH ?
-                ORDER BY rank
-                """,
-                (clause,),
+            add_rows(
+                self.execute_query(
+                    """
+                    SELECT works.id FROM works
+                    JOIN works_fts ON works.rowid = works_fts.rowid
+                    WHERE works_fts MATCH ?
+                    ORDER BY rank
+                    """,
+                    (clause,),
+                )
             )
         except sqlite3.OperationalError:
-            return []
+            pass
+        add_rows(self._search_works_primary_manifestation_like(tokens))
+        return ordered
 
     def _search_works_like_tokens(self, tokens: List[str]) -> List[dict]:
         if not tokens:
@@ -2630,7 +2662,6 @@ class PRKSDatabase:
             if tokens:
                 add_rows(self._search_works_fts_tokens(tokens))
                 add_rows(self._search_works_like_tokens(tokens))
-                add_rows(self._search_works_primary_manifestation_like(tokens))
             q_blob = re.sub(r"[-_]+", " ", q).strip().lower()
             q_blob = re.sub(r"\s+", " ", q_blob)
             if q_blob:

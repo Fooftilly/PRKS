@@ -353,6 +353,16 @@ class WorkProjectionTests(MigrationTestCase):
                 "WHERE id = 'MF-SECOND'"
             )
 
+        from backend.db_manager import _prks_search_tokens
+
+        tokens = _prks_search_tokens("Displayed Search Title")
+        # FTS index still carries the legacy Work title; the FTS selection path
+        # must still surface the Work via primary-Manifestation matching.
+        fts_hits = self.db._search_works_fts_tokens(tokens)
+        self.assertTrue(any(r["id"] == work_id for r in fts_hits))
+        like_hits = self.db._search_works_like_tokens(tokens)
+        self.assertTrue(any(r["id"] == work_id for r in like_hits))
+
         by_title = self.db.search_works("Displayed Search Title")
         self.assertTrue(any(r["id"] == work_id for r in by_title))
         # Primary title must be discoverable even when FTS only has legacy spelling.
