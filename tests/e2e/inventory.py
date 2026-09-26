@@ -305,10 +305,12 @@ def count_python_unit_tests(repo: Path):
     previous_e2e = os.environ.get("PRKS_E2E")
     previous_testing = os.environ.get("PRKS_TESTING")
     previous_storage = os.environ.get("PRKS_STORAGE")
+    previous_for_processing = os.environ.get("PRKS_FOR_PROCESSING_DIR")
+    previous_log_file = os.environ.get("PRKS_LOG_FILE")
     # Ensure E2E modules stay gated out of unit discovery.
     os.environ.pop("PRKS_E2E", None)
-    # Always override storage isolation — never trust a live PRKS_STORAGE
-    # (import-time setup is why run_tests.py forces data_testing).
+    # Match run_tests.apply_isolated_test_env: never trust live storage /
+    # processing / log overrides during import-time discovery.
     repo_s = str(repo)
     inserted = False
     if repo_s not in sys.path:
@@ -318,6 +320,8 @@ def count_python_unit_tests(repo: Path):
         with tempfile.TemporaryDirectory(prefix="prks-inventory-unit-") as tmp:
             os.environ["PRKS_TESTING"] = "1"
             os.environ["PRKS_STORAGE"] = tmp
+            os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+            os.environ.pop("PRKS_LOG_FILE", None)
             loader = unittest.TestLoader()
             # Match run_tests.py: discover under tests/ without top_level_dir
             # (tests/ is not a package).
@@ -359,6 +363,14 @@ def count_python_unit_tests(repo: Path):
             os.environ.pop("PRKS_STORAGE", None)
         else:
             os.environ["PRKS_STORAGE"] = previous_storage
+        if previous_for_processing is None:
+            os.environ.pop("PRKS_FOR_PROCESSING_DIR", None)
+        else:
+            os.environ["PRKS_FOR_PROCESSING_DIR"] = previous_for_processing
+        if previous_log_file is None:
+            os.environ.pop("PRKS_LOG_FILE", None)
+        else:
+            os.environ["PRKS_LOG_FILE"] = previous_log_file
         if previous_e2e is None:
             os.environ.pop("PRKS_E2E", None)
         else:

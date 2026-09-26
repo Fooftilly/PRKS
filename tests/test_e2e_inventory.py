@@ -197,22 +197,46 @@ class InventoryDiscoveryFailureTests(unittest.TestCase):
             self.assertNotIn("unit_api_count", str(ctx.exception))
 
     def test_count_python_unit_tests_overrides_live_prks_storage(self):
-        sentinel = "/sentinel/production/prks-storage-must-not-be-used"
-        previous_storage = os.environ.get("PRKS_STORAGE")
-        previous_testing = os.environ.get("PRKS_TESTING")
-        os.environ["PRKS_STORAGE"] = sentinel
+        sentinel_storage = "/sentinel/production/prks-storage-must-not-be-used"
+        sentinel_processing = "/sentinel/production/for-processing-must-not-be-used"
+        sentinel_log = "/sentinel/production/prks.log-must-not-be-used"
+        previous = {
+            "PRKS_STORAGE": os.environ.get("PRKS_STORAGE"),
+            "PRKS_TESTING": os.environ.get("PRKS_TESTING"),
+            "PRKS_FOR_PROCESSING_DIR": os.environ.get("PRKS_FOR_PROCESSING_DIR"),
+            "PRKS_LOG_FILE": os.environ.get("PRKS_LOG_FILE"),
+        }
+        os.environ["PRKS_STORAGE"] = sentinel_storage
         os.environ["PRKS_TESTING"] = "0"
+        os.environ["PRKS_FOR_PROCESSING_DIR"] = sentinel_processing
+        os.environ["PRKS_LOG_FILE"] = sentinel_log
         seen = []
 
         def fake_discover(_loader, start_dir=None, pattern="test*.py", top_level_dir=None):
             storage = os.environ.get("PRKS_STORAGE")
-            seen.append(storage)
+            seen.append(
+                {
+                    "storage": storage,
+                    "for_processing": os.environ.get("PRKS_FOR_PROCESSING_DIR"),
+                    "log_file": os.environ.get("PRKS_LOG_FILE"),
+                }
+            )
             if os.environ.get("PRKS_TESTING") != "1":
                 raise AssertionError("PRKS_TESTING not forced to 1 during discovery")
-            if storage == sentinel:
+            if storage == sentinel_storage:
                 raise AssertionError("live PRKS_STORAGE was not overridden")
             if "prks-inventory-unit-" not in str(storage or ""):
                 raise AssertionError("expected temp inventory storage, got %r" % storage)
+            if "PRKS_FOR_PROCESSING_DIR" in os.environ:
+                raise AssertionError(
+                    "PRKS_FOR_PROCESSING_DIR must be unset during discovery, got %r"
+                    % os.environ.get("PRKS_FOR_PROCESSING_DIR")
+                )
+            if "PRKS_LOG_FILE" in os.environ:
+                raise AssertionError(
+                    "PRKS_LOG_FILE must be unset during discovery, got %r"
+                    % os.environ.get("PRKS_LOG_FILE")
+                )
             return unittest.TestSuite()
 
         try:
@@ -220,17 +244,20 @@ class InventoryDiscoveryFailureTests(unittest.TestCase):
                 result = inv.count_python_unit_tests(Path(_PROJECT_DIR))
             self.assertEqual(result["unit_api_count"], 0)
             self.assertEqual(len(seen), 1)
-            self.assertEqual(os.environ.get("PRKS_STORAGE"), sentinel)
+            self.assertIsNone(seen[0]["for_processing"])
+            self.assertIsNone(seen[0]["log_file"])
+            self.assertEqual(os.environ.get("PRKS_STORAGE"), sentinel_storage)
             self.assertEqual(os.environ.get("PRKS_TESTING"), "0")
+            self.assertEqual(
+                os.environ.get("PRKS_FOR_PROCESSING_DIR"), sentinel_processing
+            )
+            self.assertEqual(os.environ.get("PRKS_LOG_FILE"), sentinel_log)
         finally:
-            if previous_storage is None:
-                os.environ.pop("PRKS_STORAGE", None)
-            else:
-                os.environ["PRKS_STORAGE"] = previous_storage
-            if previous_testing is None:
-                os.environ.pop("PRKS_TESTING", None)
-            else:
-                os.environ["PRKS_TESTING"] = previous_testing
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 class InventoryRunnerWireTests(unittest.TestCase):
