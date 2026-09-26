@@ -488,6 +488,90 @@ def _format_watchdog_detail(hb: dict, threshold_s: int, age_s: float) -> str:
     )
 
 
+def _finalize_failure_diagnostics(
+    *,
+    ok: bool,
+    failed_ids,
+    tier: str,
+    note: str,
+    persist_history: bool,
+    pointer_returncode,
+) -> None:
+    """Write or clear ``.tests/e2e-failure-diagnostics.json`` after the run.
+
+    Called only after selected E2E tests and, when enabled, pointer capture.
+    A green suite clears a stale snapshot. Pointer-capture failure persists a
+    privacy-safe record (no screenshots, traces, or library content) instead
+    of clearing. E2E failures keep the existing test snapshot; pointer capture
+    does not run in that case.
+    """
+    pointer_failed = pointer_returncode not in (None, 0)
+    if not ok and persist_history:
+        # Watchdog / parallel paths already wrote; refresh last-failed attach
+        # and fill serial assertion gaps without inventing a prior-run kind.
+        existing = load_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH) or {}
+        hb = get_e2e_heartbeat()
+        stuck = ""
+        if failed_ids:
+            stuck = failed_ids[0]
+        elif hb.get("test_id"):
+            stuck = str(hb.get("test_id") or "")
+        if existing.get("kind"):
+            payload = dict(existing)
+            payload["failed_ids"] = list(failed_ids) or list(
+                existing.get("failed_ids") or []
+            )
+            if stuck and not payload.get("stuck_test_id"):
+                payload["stuck_test_id"] = stuck
+            payload["tier"] = tier
+            payload["note"] = note
+            _persist_failure_diagnostics(payload)
+        else:
+            _persist_failure_diagnostics(
+                {
+                    "kind": "failure",
+                    "failed_ids": list(failed_ids),
+                    "stuck_test_id": stuck,
+                    "last_stage": str(hb.get("stage") or ""),
+                    "watchdog": False,
+                    "detail": "",
+                    "tier": tier,
+                    "note": note,
+                }
+            )
+        return
+    if ok and pointer_failed:
+        persist_pointer_capture_failure(pointer_returncode)
+        return
+    if ok:
+        # Success, including --no-pointer-capture and benchmark passes, must
+        # not leave a prior failure snapshot for this run.
+        clear_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH)
+
+
+def persist_pointer_capture_failure(returncode) -> bool:
+    """Write the privacy-safe pointer-capture snapshot and report success.
+
+    Same payload the local runner stores when tests pass and pointer capture
+    fails. No screenshots, traces, or library content. CI's pointer job calls
+    this directly because that job does not go through ``main()``.
+    """
+    try:
+        return bool(
+            save_failure_diagnostics(
+                REPO / FAILURE_DIAGNOSTICS_PATH,
+                {
+                    "kind": "pointer-capture",
+                    "failed_ids": [],
+                    "watchdog": False,
+                    "pointer_capture_returncode": returncode,
+                },
+            )
+        )
+    except Exception:
+        return False
+
+
 def _persist_failure_diagnostics(payload: dict) -> None:
     """Best-effort machine-readable failure snapshot under ``.tests/``.
 
@@ -880,8 +964,26 @@ def _last_diag_stage(log_file) -> tuple[str, str]:
     return stage, tid
 
 
+def _current_heartbeat_test_id(worker) -> str:
+    """In-flight unittest id from the heartbeat file, or empty.
+
+    ``stopTest`` and ``clear_e2e_heartbeat`` drop ``test_id`` before the
+    report is written. An empty id means nothing is currently running — the
+    worker log is not a substitute, because its last line may be a test that
+    already passed.
+    """
+    hb = _read_heartbeat(worker.get("heartbeat_file"))
+    if not hb:
+        return ""
+    return str(hb.get("test_id") or "").strip()
+
+
 def _hang_attribution(worker) -> tuple[str, str]:
-    """Best-effort (test_id, stage) for a hung or watchdog-killed worker."""
+    """Best-effort (test_id, stage) for diagnostic text.
+
+    Prefer the heartbeat. The log / diag-line fallback names whatever printed
+    last so a human can see it; it must not be stored as a failed test id.
+    """
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if hb and (hb.get("test_id") or hb.get("stage")):
         return str(hb.get("test_id") or ""), str(hb.get("stage") or "")
@@ -1033,9 +1135,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             if fid not in failed_ids:
                                 failed_ids.append(fid)
                         if report.get("watchdog") and not report.get("failed_ids"):
-                            tid, _stage = _hang_attribution(worker)
-                            if tid and tid not in failed_ids:
-                                failed_ids.append(tid)
+                            active_id = _current_heartbeat_test_id(worker)
+                            if active_id and active_id not in failed_ids:
+                                failed_ids.append(active_id)
                     ok = report is not None and rc == 0
                     print(
                         "[E2E %d/%d] %s — %.1fs (%d tests)"
@@ -1050,27 +1152,38 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     sys.stdout.flush()
                     if not ok:
                         _print_worker_failure(worker, jobs, report)
-                        tid, stage = _hang_attribution(worker)
+                        _, stage = _hang_attribution(worker)
+                        active_id = _current_heartbeat_test_id(worker)
+                        reported_failed = list((report or {}).get("failed_ids") or [])
                         if report is not None:
                             stage = str(report.get("stage") or stage or "")
-                            if not tid:
-                                ids = report.get("failed_ids") or []
-                                tid = ids[0] if ids else tid
+                        # Rerun only a test the heartbeat still marks in flight.
+                        # A cleared heartbeat (stopTest / pre-report clear) must
+                        # not promote the last log line — that test may have
+                        # passed. Log attribution stays in the printed diagnostic.
+                        # Cancelled --fail-fast siblings never enter this branch.
+                        if (
+                            not reported_failed
+                            and active_id
+                            and active_id not in failed_ids
+                        ):
+                            failed_ids.append(active_id)
                         is_watchdog = bool((report or {}).get("watchdog"))
                         if report is None or is_watchdog:
                             kind = "watchdog" if is_watchdog else "worker-crash"
                             record_failed = list(
-                                (report or {}).get("failed_ids")
-                                or ([tid] if tid else [])
+                                reported_failed or ([active_id] if active_id else [])
                             )
-                        elif report.get("failed_ids"):
+                            tid = active_id or (reported_failed[0] if reported_failed else "")
+                        elif reported_failed:
                             kind = "assertion-failure"
-                            record_failed = list(report.get("failed_ids") or [])
-                            tid = record_failed[0] if record_failed else tid
+                            record_failed = list(reported_failed)
+                            tid = record_failed[0]
                             stage = ""
                         else:
                             kind = "worker-crash"
-                            record_failed = [tid] if tid else []
+                            record_failed = [active_id] if active_id else []
+                            tid = active_id or ""
                         worker_failure_records.append(
                             {
                                 "kind": kind,
@@ -1995,47 +2108,6 @@ def _main(argv=None) -> int:
             if previous_ids:
                 print("Cleared last-failed (all previously failed tests resolved)")
 
-        # Machine-readable hang/failure snapshot for CI artifacts.
-        # Watchdog / parallel paths already wrote; refresh last-failed attach
-        # and fill serial assertion gaps without inventing a prior-run kind.
-        if not ok:
-            existing = load_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH) or {}
-            hb = get_e2e_heartbeat()
-            stuck = ""
-            if failed_ids:
-                stuck = failed_ids[0]
-            elif hb.get("test_id"):
-                stuck = str(hb.get("test_id") or "")
-            if existing.get("kind"):
-                payload = dict(existing)
-                payload["failed_ids"] = list(failed_ids) or list(
-                    existing.get("failed_ids") or []
-                )
-                if stuck and not payload.get("stuck_test_id"):
-                    payload["stuck_test_id"] = stuck
-                payload["tier"] = tier
-                payload["note"] = note
-                _persist_failure_diagnostics(payload)
-            else:
-                _persist_failure_diagnostics(
-                    {
-                        "kind": "failure",
-                        "failed_ids": list(failed_ids),
-                        "stuck_test_id": stuck,
-                        "last_stage": str(hb.get("stage") or ""),
-                        "watchdog": False,
-                        "detail": "",
-                        "tier": tier,
-                        "note": note,
-                    }
-                )
-        else:
-            clear_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH)
-    elif ok:
-        # Benchmark modes skip history writes but must not leave a prior
-        # failure snapshot pretending to belong to this run.
-        clear_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH)
-
     pointer = None
     if ok and not args.no_pointer_capture:
         # Once per run, in the parent, after every shard has passed -- never
@@ -2046,6 +2118,17 @@ def _main(argv=None) -> int:
             print("pointer_capture.py failed", file=sys.stderr)
     elif not ok and not args.no_pointer_capture:
         print("skipping pointer_capture.py because E2E tests failed", file=sys.stderr)
+
+    # Finalize after both the selected tests and pointer capture. Clearing on
+    # a green suite before pointer capture dropped a later pointer failure.
+    _finalize_failure_diagnostics(
+        ok=ok,
+        failed_ids=failed_ids,
+        tier=tier,
+        note=note,
+        persist_history=persist_history,
+        pointer_returncode=pointer,
+    )
 
     code = run_exit_code(ok, pointer)
     if code == 0:

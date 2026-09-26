@@ -41,3 +41,46 @@ class HangingCases(unittest.TestCase):
         # Exercises the per-test watchdog under a short PRKS_E2E_TEST_WATCHDOG.
         # Must not be collected by ordinary discovery (this module is not test_*).
         time.sleep(3600)
+
+
+class ClearedHeartbeatCrashCases(unittest.TestCase):
+    def test_passes_then_dies_after_heartbeat_clear(self):
+        """Finish the test's heartbeat, then die before the worker report.
+
+        Mirrors run_worker clearing the heartbeat in ``finally`` and exiting
+        before the report file exists. The log still names this test.
+        """
+        from tests.e2e.harness import clear_e2e_heartbeat
+
+        clear_e2e_heartbeat()
+        os._exit(3)
+
+
+class FailFastSiblingCases(unittest.TestCase):
+    """One worker fails only after its sibling has an active test id.
+
+    Used to prove --fail-fast cancellation does not record the stopped sibling
+    as a failed test. Not collected by ordinary discovery.
+    """
+
+    # Parent fail-fast SIGTERMs this worker. The loop is the wait; surviving
+    # it means cancellation never arrived.
+    _CANCEL_WAIT_S = 8.0
+
+    def test_runs_until_cancelled(self):
+        sentinel = os.environ.get("PRKS_E2E_CANCEL_SENTINEL")
+        if sentinel:
+            with open(sentinel, "w", encoding="utf-8") as handle:
+                handle.write("started")
+        deadline = time.monotonic() + self._CANCEL_WAIT_S
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.fail("parent did not cancel this worker")
+
+    def test_fails_once_sibling_is_active(self):
+        sentinel = os.environ.get("PRKS_E2E_CANCEL_SENTINEL")
+        if sentinel:
+            deadline = time.time() + 15
+            while time.time() < deadline and not os.path.exists(sentinel):
+                time.sleep(0.05)
+        self.assertEqual("expected", "actual")

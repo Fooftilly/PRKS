@@ -811,7 +811,8 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                 ok, _observed, failed, _phases = runner.run_parallel(ids, 2, {}, False)
         self.assertFalse(ok)
-        self.assertTrue(any(fid.endswith("test_fails") for fid in failed))
+        self.assertEqual(len(failed), 1)
+        self.assertTrue(failed[0].endswith("FailingCases.test_fails"))
 
     def test_a_failing_worker_fails_the_parent(self):
         ids = _ids(_CASES, "PassingCases", "test_first") + _ids(
@@ -826,6 +827,102 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         )
         ok, _ = self._run(ids, 2)
         self.assertFalse(ok)
+
+    def test_crash_without_report_keeps_active_test_in_failed_ids(self):
+        """An in-flight heartbeat id is a failed id when the worker dies."""
+        crash_id = _ids(_CASES, "CrashingCases", "test_kills_the_worker")[0]
+        pass_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        sink = io.StringIO()
+        with tempfile.TemporaryDirectory(prefix="prks-crash-attr-") as raw:
+            diag = Path(raw) / "e2e-failure-diagnostics.json"
+            with _import_runner() as runner:
+                with mock.patch.object(runner, "FAILURE_DIAGNOSTICS_PATH", diag):
+                    with mock.patch.object(
+                        runner, "LAST_FAILED_PATH", Path(raw) / "absent-last-failed.json"
+                    ):
+                        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(
+                            sink
+                        ):
+                            ok, observed, failed, _phases = runner.run_parallel(
+                                [pass_id, crash_id], 2, {}, False
+                            )
+            self.assertFalse(ok)
+            self.assertNotIn(crash_id, observed)
+            self.assertEqual(failed, [crash_id])
+            loaded = json.loads(diag.read_text(encoding="utf-8"))
+            self.assertIn(crash_id, loaded["failed_ids"])
+            self.assertEqual(loaded["failed_ids"].count(crash_id), 1)
+        self.assertIn(crash_id, sink.getvalue())
+
+    def test_cleared_heartbeat_does_not_record_finished_test_as_failed(self):
+        """A passed test whose heartbeat was cleared is diagnostic text only."""
+        finished_id = _ids(
+            _CASES,
+            "ClearedHeartbeatCrashCases",
+            "test_passes_then_dies_after_heartbeat_clear",
+        )[0]
+        pass_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        sink = io.StringIO()
+        with tempfile.TemporaryDirectory(prefix="prks-cleared-hb-") as raw:
+            diag = Path(raw) / "e2e-failure-diagnostics.json"
+            with _import_runner() as runner:
+                with mock.patch.object(runner, "FAILURE_DIAGNOSTICS_PATH", diag):
+                    with mock.patch.object(
+                        runner, "LAST_FAILED_PATH", Path(raw) / "absent-last-failed.json"
+                    ):
+                        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(
+                            sink
+                        ):
+                            ok, _observed, failed, _phases = runner.run_parallel(
+                                [pass_id, finished_id], 2, {}, False
+                            )
+            loaded = json.loads(diag.read_text(encoding="utf-8"))
+        self.assertFalse(ok)
+        self.assertNotIn(finished_id, failed)
+        self.assertNotIn(finished_id, loaded.get("failed_ids") or [])
+        for record in loaded.get("workers") or []:
+            self.assertNotIn(finished_id, record.get("failed_ids") or [])
+        self.assertIn("last started test: %s" % finished_id, sink.getvalue())
+
+    def test_fail_fast_cancelled_sibling_is_not_recorded_as_failed(self):
+        """Stopping a peer for --fail-fast must not add its active test id."""
+        fail_id = _ids(
+            _CASES, "FailFastSiblingCases", "test_fails_once_sibling_is_active"
+        )[0]
+        cancel_id = _ids(
+            _CASES, "FailFastSiblingCases", "test_runs_until_cancelled"
+        )[0]
+        sink = io.StringIO()
+        previous = os.environ.get("PRKS_E2E_CANCEL_SENTINEL")
+        with tempfile.TemporaryDirectory(prefix="prks-ff-cancel-") as raw:
+            sentinel = str(Path(raw) / "sibling-started")
+            os.environ["PRKS_E2E_CANCEL_SENTINEL"] = sentinel
+            try:
+                with _import_runner() as runner:
+                    with mock.patch.object(
+                        runner, "FAILURE_DIAGNOSTICS_PATH", Path(raw) / "diag.json"
+                    ):
+                        with mock.patch.object(
+                            runner,
+                            "LAST_FAILED_PATH",
+                            Path(raw) / "absent-last-failed.json",
+                        ):
+                            with contextlib.redirect_stdout(
+                                sink
+                            ), contextlib.redirect_stderr(sink):
+                                ok, _observed, failed, _phases = runner.run_parallel(
+                                    [fail_id, cancel_id], 2, {}, True
+                                )
+            finally:
+                if previous is None:
+                    os.environ.pop("PRKS_E2E_CANCEL_SENTINEL", None)
+                else:
+                    os.environ["PRKS_E2E_CANCEL_SENTINEL"] = previous
+            self.assertTrue(os.path.isfile(sentinel))
+        self.assertFalse(ok)
+        self.assertEqual(failed, [fail_id])
+        self.assertNotIn(cancel_id, failed)
+        self.assertIn("fail-fast", sink.getvalue())
 
     def test_per_test_watchdog_kills_hanging_worker_and_names_stage(self):
         """Short watchdog must terminate a sleeping selfcheck without retry."""
