@@ -821,6 +821,17 @@ def classify_affected_path(rel: str) -> dict:
                     "ci_full": False,
                     "unmapped": True,
                 }
+        # Unmapped support modules under tests/e2e/ (inventory, doctor, …)
+        # must not silently skip the browser gate — CI fails closed to full.
+        if rel.startswith("tests/e2e/") and rel.endswith(".py"):
+            return {
+                "rules": ["unmapped-e2e-support"],
+                "features": ["smoke"],
+                "skip": False,
+                "note": "unmapped E2E support module → smoke locally (CI: full)",
+                "ci_full": False,
+                "unmapped": True,
+            }
         return {
             "rules": ["ignored"],
             "features": [],
@@ -1001,11 +1012,13 @@ def aggregate_ci_gate_outcome(
     e2e_result,
     pointer_result,
 ):
-    """Pure aggregator decision mirroring ``e2e-result`` in e2e-gate.yml.
+    """Pure aggregator decision for ``e2e-gate.yml`` ``e2e-result``.
 
-    Pointer runs **in parallel** with the matrix (both need only ``e2e-plan``).
-    When pointer is not planned, ``skipped`` is success. Cancelled workflow
-    runs are filtered by the job ``if:`` before this runs.
+    Invoked by ``python tests/e2e/run.py --ci-aggregate`` (single source of
+    truth — do not reimplement in Bash). Pointer runs **in parallel** with the
+    matrix (both need only ``e2e-plan``). When pointer is not planned,
+    ``skipped`` is success. Cancelled workflow runs are filtered by the job
+    ``if:`` before this runs.
     """
     if plan_result != "success":
         return False, "E2E plan job failed"

@@ -57,6 +57,7 @@ from tests.e2e.policy import (
     benchmark_modes,
     ci_matrix_include,
     format_feature_catalog,
+    aggregate_ci_gate_outcome,
     full_gate_timeout_s,
     list_changed_paths,
     load_last_failed,
@@ -332,6 +333,19 @@ def discover_test_ids(modules=E2E_MODULES):
     for name in modules:
         _flatten(loader.loadTestsFromName(name), ids)
     return ids
+
+
+def invalid_e2e_discovery_ids(all_ids):
+    """Return IDs that are not real ``tests.e2e.*`` cases (e.g. ``_FailedTest``).
+
+    ``unittest`` import failures become ``unittest.loader._FailedTest.*`` without
+    raising; CI planning must reject those so shard sizing cannot undercount.
+    """
+    return [
+        test_id
+        for test_id in all_ids
+        if not str(test_id).startswith("tests.e2e.")
+    ]
 
 
 def _flatten(suite, out):
@@ -1120,6 +1134,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--ci-aggregate",
+        action="store_true",
+        help=(
+            "Evaluate the E2E gate aggregator from PLAN_* / E2E_RESULT / "
+            "POINTER_RESULT environment variables (see aggregate_ci_gate_outcome) "
+            "and exit 0/1. Used by e2e-gate.yml e2e-result; no Chromium."
+        ),
+    )
+    parser.add_argument(
         "--fail-fast",
         action="store_true",
         help=(
@@ -1408,6 +1431,56 @@ def _main(argv=None) -> int:
             print(format_inventory_text(inventory))
         return 0
 
+    if args.ci_aggregate:
+        # Single source of truth for e2e-gate.yml e2e-result (no Chromium).
+        def _env_true(name: str) -> bool:
+            return (os.environ.get(name) or "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+
+        ok, msg = aggregate_ci_gate_outcome(
+            plan_run=_env_true("PLAN_RUN"),
+            plan_mode=(os.environ.get("PLAN_MODE") or "").strip() or "skip",
+            plan_pointer=_env_true("PLAN_POINTER"),
+            plan_result=(os.environ.get("PLAN_RESULT") or "").strip(),
+            e2e_result=(os.environ.get("E2E_RESULT") or "").strip(),
+            pointer_result=(os.environ.get("POINTER_RESULT") or "").strip(),
+        )
+        # Optional diagnostics for the Actions log (reason/features are data only).
+        plan_reason = (os.environ.get("PLAN_REASON") or "").strip()
+        plan_features = (os.environ.get("PLAN_FEATURES") or "").strip()
+        plan_count = (os.environ.get("PLAN_COUNT") or "").strip()
+        print(
+            "e2e-plan: result=%s run=%s mode=%s"
+            % (
+                (os.environ.get("PLAN_RESULT") or "").strip(),
+                "true" if _env_true("PLAN_RUN") else "false",
+                (os.environ.get("PLAN_MODE") or "").strip(),
+            )
+        )
+        if plan_features:
+            print("features: %s" % plan_features)
+        print("test_count: %s" % (plan_count or "unknown"))
+        print(
+            "pointer_capture planned: %s (parallel with matrix)"
+            % ("true" if _env_true("PLAN_POINTER") else "false")
+        )
+        if plan_reason:
+            print("reason: %s" % plan_reason)
+        print("e2e matrix: %s" % ((os.environ.get("E2E_RESULT") or "").strip()))
+        print(
+            "pointer_capture: %s"
+            % ((os.environ.get("POINTER_RESULT") or "").strip())
+        )
+        if ok:
+            print(msg)
+            return 0
+        print("::error::%s" % msg)
+        return 1
+
     if args.ci_plan:
         # Cheap-ish CI decision: no Chromium. Compare committed tree to --base
         # (default HEAD). Discovery failures fail closed to mode=full — never
@@ -1441,6 +1514,15 @@ def _main(argv=None) -> int:
             # and so the workflow can size shards from test_count.
             try:
                 all_ids = discover_test_ids()
+                # Plan job may lack PyMuPDF/Pillow/etc.; loadTestsFromName then
+                # yields unittest.loader._FailedTest.* IDs instead of raising.
+                # Reject those so we fail closed to full rather than under-shard.
+                invalid_ids = invalid_e2e_discovery_ids(all_ids)
+                if invalid_ids:
+                    raise RuntimeError(
+                        "E2E discovery returned invalid test IDs: %s"
+                        % ", ".join(invalid_ids[:8])
+                    )
                 plan = refine_ci_plan_with_tests(plan, all_ids)
             except Exception as exc:  # noqa: BLE001 — fail closed to full
                 reason = (

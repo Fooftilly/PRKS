@@ -286,6 +286,19 @@ class AffectedMappingTests(unittest.TestCase):
         for name in ("folders", "browse", "playlists", "smoke"):
             self.assertIn(name, plan["features"])
 
+    def test_unmapped_e2e_support_module_is_ci_full(self):
+        # inventory.py / doctor.py / etc. must not skip the browser gate.
+        path = "tests/e2e/inventory.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["unmapped-e2e-support"])
+        self.assertFalse(classified["skip"])
+        self.assertTrue(classified["unmapped"])
+        self.assertIn("smoke", classified["features"])
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
+        self.assertIn("inventory.py", plan["reason"])
+
     def test_work_cards_unions_browse_work_create_shell_and_smoke(self):
         # First-match would keep only browse; shared work-cards.js also owns
         # work-create (+ shell). Prefer over-test via multi-rule feature union.
@@ -421,6 +434,41 @@ class AffectedMappingTests(unittest.TestCase):
             policy.FULL_GATE_EXTERNAL_SHARDS,
         )
         self.assertGreaterEqual(policy.FULL_GATE_EXTERNAL_SHARDS, 4)
+
+    def test_invalid_e2e_discovery_ids_rejects_failed_test_placeholders(self):
+        from tests.e2e import run as runner
+
+        good = [
+            "tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads",
+            "tests.e2e.test_offline.OfflineFoundationTests.test_x",
+        ]
+        self.assertEqual(runner.invalid_e2e_discovery_ids(good), [])
+        bad = good + ["unittest.loader._FailedTest.tests.e2e.test_app"]
+        self.assertEqual(
+            runner.invalid_e2e_discovery_ids(bad),
+            ["unittest.loader._FailedTest.tests.e2e.test_app"],
+        )
+
+    def test_ci_aggregate_cli_exits_on_gate_outcome(self):
+        from tests.e2e import run as runner
+
+        env_ok = {
+            **os.environ,
+            "PLAN_RUN": "true",
+            "PLAN_MODE": "full",
+            "PLAN_POINTER": "true",
+            "PLAN_RESULT": "success",
+            "E2E_RESULT": "success",
+            "POINTER_RESULT": "success",
+            "PLAN_REASON": "full",
+            "PLAN_FEATURES": "[]",
+            "PLAN_COUNT": "747",
+        }
+        with mock.patch.dict(os.environ, env_ok, clear=False):
+            self.assertEqual(runner.main(["--ci-aggregate"]), 0)
+        env_bad = {**env_ok, "E2E_RESULT": "failure"}
+        with mock.patch.dict(os.environ, env_bad, clear=False):
+            self.assertEqual(runner.main(["--ci-aggregate"]), 1)
 
     def test_aggregate_ci_gate_outcome_parallel_pointer(self):
         ok, msg = policy.aggregate_ci_gate_outcome(

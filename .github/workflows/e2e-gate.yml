@@ -286,10 +286,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
       - name: Aggregate shard outcomes
-        shell: bash
-        # Pass plan fields via env so filenames/JSON in reason/features never
-        # become Bash source through ${{ }} interpolation inside run: scripts.
+        # Single source of truth: tests.e2e.policy.aggregate_ci_gate_outcome via
+        # --ci-aggregate. Pass plan fields via env so filenames/JSON never become
+        # Bash source through ${{ }} interpolation inside run: scripts.
         env:
           PLAN_RUN: ${{ needs.e2e-plan.outputs.run }}
           PLAN_MODE: ${{ needs.e2e-plan.outputs.mode }}
@@ -300,45 +310,4 @@ jobs:
           PLAN_RESULT: ${{ needs.e2e-plan.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
           POINTER_RESULT: ${{ needs.e2e-pointer.result }}
-        run: |
-          set -euo pipefail
-          plan_run="$PLAN_RUN"
-          plan_mode="$PLAN_MODE"
-          plan_reason="$PLAN_REASON"
-          plan_features="$PLAN_FEATURES"
-          plan_count="$PLAN_COUNT"
-          plan_pointer="$PLAN_POINTER"
-          plan_result="$PLAN_RESULT"
-          e2e_result="$E2E_RESULT"
-          pointer_result="$POINTER_RESULT"
-          echo "e2e-plan: result=$plan_result run=$plan_run mode=$plan_mode"
-          echo "features: $plan_features"
-          echo "test_count: ${plan_count:-unknown}"
-          echo "pointer_capture planned: $plan_pointer (parallel with matrix)"
-          echo "reason: $plan_reason"
-          echo "e2e matrix: $e2e_result"
-          echo "pointer_capture: $pointer_result"
-          if [[ "$plan_result" != "success" ]]; then
-            echo "::error::E2E plan job failed"
-            exit 1
-          fi
-          if [[ "$plan_run" != "true" || "$plan_mode" == "skip" ]]; then
-            echo "E2E gate skipped (mode=skip; docs/unit/ignored-only or equivalent noop)"
-            exit 0
-          fi
-          if [[ "$e2e_result" != "success" ]]; then
-            echo "::error::One or more E2E shards failed (mode=$plan_mode matrix result=$e2e_result)"
-            exit 1
-          fi
-          if [[ "$plan_pointer" == "true" ]]; then
-            if [[ "$pointer_result" != "success" ]]; then
-              echo "::error::E2E pointer_capture failed (result=$pointer_result)"
-              exit 1
-            fi
-          else
-            if [[ "$pointer_result" != "skipped" && "$pointer_result" != "success" ]]; then
-              echo "::error::Unexpected pointer job result when not planned: $pointer_result"
-              exit 1
-            fi
-          fi
-          echo "E2E gate passed (mode=$plan_mode features=$plan_features count=${plan_count:-unknown} pointer=$plan_pointer parallel)"
+        run: python tests/e2e/run.py --ci-aggregate

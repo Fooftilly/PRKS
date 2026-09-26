@@ -19,7 +19,7 @@ PRKS E2E is Python unittest + Playwright Chromium via `tests/e2e/run.py`
 | Last-failed | `python tests/e2e/run.py --last-failed` | unresolved failures from prior runs |
 | Dev | `python tests/e2e/run.py --dev --feature tabs` | Fail-fast + no pointer-capture |
 | Full | `python tests/e2e/run.py --jobs 4` | Complete regression gate (runner hard-limits at 1200s; `timeout 1200 …` still fine) |
-| Full (CI shard) | `python tests/e2e/run.py --jobs 1 --shard INDEX/TOTAL` | One external slice of the full gate (GitHub Actions matrix; TOTAL defaults to 4) |
+| Full (CI shard) | `python tests/e2e/run.py --jobs 1 --shard INDEX/TOTAL` | One external slice of the full gate (GitHub Actions matrix; full-mode TOTAL = `FULL_GATE_EXTERNAL_SHARDS`, currently 6) |
 
 Convenience wrapper: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
 Catalog: `python tests/e2e/run.py --list-features`. On-demand counts/timing:
@@ -105,12 +105,13 @@ Compares the working tree (+ relevant untracked production/E2E paths) to
 that matched, and the selected features. Per path, **every matching non-skip
 rule contributes features** (union; prefer over-test). Skip rules apply only
 when no take rule matches. Unmapped production files fall back to **smoke**
-(not the full suite) locally; CI fails closed to **full**. Shared core
-(`app.js`, `server.py`, `db_manager.py`, …) and other `ci_mode: "full"` rules
-(for example `backend/research_network.py`) force full in CI. Docs/unit-only
-paths select nothing. Add new production areas by editing `AFFECTED_RULES`
-and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E module by adding
-its module/class prefix to the right feature's `selectors`.
+(not the full suite) locally; CI fails closed to **full**. Unmapped Python
+under `tests/e2e/` (support modules such as `inventory.py`) is treated the
+same way. Shared core (`app.js`, `server.py`, `db_manager.py`, …) and other
+`ci_mode: "full"` rules (for example `backend/research_network.py`) force full
+in CI. Docs/unit-only paths select nothing. Add new production areas by editing
+`AFFECTED_RULES` and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E
+module by adding its module/class prefix to the right feature's `selectors`.
 
 `--affected` fails closed: when Git change discovery itself fails (invalid
 `--base` ref, unusable checkout, missing/failing `git`, or untracked-file
@@ -283,10 +284,11 @@ Pointer capture runs **in parallel** with the matrix (both need only the plan
 job) when mode is `full`, or when affected features intersect tiling /
 workspace-drag / pdf-annotations. Chromium installs share a GHA cache keyed on
 `requirements-dev.txt` + `install_browser.py`. Plan `reason` / features reach
-the aggregator via `env:` (`PLAN_REASON`, …), not Bash string interpolation in
-`run:` scripts. An unresolvable comparison base fails closed to **full**.
-Rename/copy discovery keeps both path images so a production→docs move cannot
-look docs-only.
+the aggregator via `env:` (`PLAN_REASON`, …); `e2e-result` calls
+`python tests/e2e/run.py --ci-aggregate` (`aggregate_ci_gate_outcome`) so Bash
+does not reimplement the gate decision. An unresolvable comparison base fails
+closed to **full**. Rename/copy discovery keeps both path images so a
+production→docs move cannot look docs-only.
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer
