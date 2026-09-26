@@ -125,7 +125,10 @@ export function formatClientRequestBody(
   )
 }
 
-export function formatClientRequestReport(client: ClientRequestSnapshot | null): string {
+export function formatClientRequestReport(
+  client: ClientRequestSnapshot | null,
+  maxReads = clientRequestMaxReads(),
+): string {
   if (!client) return ''
   const counts = client.counts
   const current = client.current
@@ -147,7 +150,9 @@ export function formatClientRequestReport(client: ClientRequestSnapshot | null):
     'Aborted obsolete reads: ' + String(counts.aborted),
     'Now: reads ' +
       String(current.activeReads) +
-      '/4, mutations ' +
+      '/' +
+      String(maxReads) +
+      ', mutations ' +
       String(current.activeMutation) +
       '/1, queued reads ' +
       String(queuedReads) +
