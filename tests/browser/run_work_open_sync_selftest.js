@@ -233,6 +233,54 @@ async function terminal() {
     assert.equal(kept.status, 'pending');
     assert.equal(kept.attempt_count, 1);
     assert.deepEqual(runtime.discarded(), []);
+
+    /* A lost response is not a reason to mint a replacement open event.
+     * The server may already have ledgered the first envelope, so retry must
+     * preserve the exact op_id and semantic envelope. Backend
+     * WorkOpenSyncTests.test_replay_is_exact_after_the_work_is_reopened proves
+     * that replaying that op_id is idempotent at the ledger boundary. */
+    {
+        const retryStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const retryOp = await retryStore.recordWorkOpened(
+            'W-LOST', '2026-09-11T10:00:00.000Z', null);
+        const sent = [];
+        let loseFirstResponse = true;
+        const retryRuntime = openRuntime(retryStore, async (_path, init) => {
+            const envelope = JSON.parse(init.body);
+            sent.push(envelope);
+            if (loseFirstResponse) {
+                loseFirstResponse = false;
+                throw new TypeError('response lost after send');
+            }
+            return {
+                ok: true, status: 200,
+                json: async () => ack('W-LOST', '2026-09-11 10:00:00.000'),
+            };
+        }, async () => true);
+
+        await retryRuntime.wake();
+        await settle();
+        let pending = await retryStore.getOperation(retryOp.op_id);
+        assert.equal(pending.status, 'pending',
+            'lost response leaves the original open event retryable');
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].op_id, retryOp.op_id);
+
+        // Skip only the timer delay; do not replace or rewrite the event.
+        await retryStore.updateOperationSyncState(retryOp.op_id, { attempt_count: 0 });
+        await retryRuntime.wake();
+        await settle();
+        retryRuntime.stop();
+
+        assert.equal(sent.length, 2,
+            'the same open event is retried once connectivity recovers');
+        assert.equal(sent[1].op_id, retryOp.op_id,
+            'retry preserves op_id for server idempotency');
+        assert.deepEqual(sent[1], sent[0],
+            'retry preserves the complete semantic envelope');
+        assert.equal(await retryStore.getOperation(retryOp.op_id), null,
+            'the acknowledged replay is reconciled and retired');
+    }
 }
 
 /* ---- each family answers only its own results ---- */
