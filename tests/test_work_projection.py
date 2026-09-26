@@ -329,6 +329,7 @@ class WorkProjectionTests(MigrationTestCase):
         fields = self.db.get_primary_thumbnail_fields(work_id)
         self.assertEqual(fields["file_path"], "/api/pdfs/secondary.pdf")
         self.assertEqual(fields["thumb_page"], 7)
+        self.assertEqual(fields["primary_asset_id"], "AS-SECOND")
         work = self.db.get_work(work_id)
         self.assertEqual(work["file_path"], "/api/pdfs/secondary.pdf")
         self.assertEqual(work["thumb_page"], 7)

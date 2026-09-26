@@ -1772,6 +1772,121 @@ class TestServerAPI(unittest.TestCase):
                 or ("thumbnail unavailable" in body.lower())
             )
 
+    def test_10b_thumbnail_cache_follows_primary_asset_switch(self):
+        """Primary Asset switch must not serve a prior Asset's cached thumb.
+
+        Cache stems include the primary Asset id. Plant a future-mtime cache under
+        the old Asset (and the legacy work+page stem) and assert the route does
+        not return that planted body after the switch.
+        """
+        try:
+            import pymupdf as fitz
+        except Exception:
+            self.skipTest("pymupdf unavailable")
+
+        from backend.db_manager import prks_thumb_cache_stem
+
+        def _pdf_bytes(label: str) -> bytes:
+            doc = fitz.open()
+            page = doc.new_page(width=200, height=200)
+            page.insert_text((20, 100), label, fontsize=24)
+            data = doc.tobytes()
+            doc.close()
+            return data
+
+        pdfs_dir = server_module.pdfs_dir
+        thumbs_dir = server_module.thumbs_dir
+        os.makedirs(pdfs_dir, exist_ok=True)
+        os.makedirs(thumbs_dir, exist_ok=True)
+        name_a = f"thumb_a_{os.getpid()}.pdf"
+        name_b = f"thumb_b_{os.getpid()}.pdf"
+        with open(os.path.join(pdfs_dir, name_a), "wb") as handle:
+            handle.write(_pdf_bytes("ASSET-A"))
+        with open(os.path.join(pdfs_dir, name_b), "wb") as handle:
+            handle.write(_pdf_bytes("ASSET-B"))
+
+        w_id = self.__class__.test_db.add_work(
+            title="Thumb Asset Switch",
+            file_path=f"/api/pdfs/{name_a}",
+            source_kind="pdf",
+            thumb_page=1,
+        )
+        origin = self.__class__.test_db.get_work(w_id)
+        asset_a = origin["primary_asset_id"]
+        self.assertTrue(asset_a)
+
+        # Warm / create whatever the route needs, then plant stale caches.
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(f"{self._base_url}/api/works/{w_id}/thumbnail?page=1")
+            ) as tres:
+                self.assertEqual(tres.status, 200)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 500):
+                self.skipTest("thumbnail rendering unavailable")
+            raise
+
+        magic = b"STALE-PRIMARY-ASSET-THUMB"
+        future = time.time() + 86400
+        planted = [
+            os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 1)}.webp"),
+            os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 1, asset_a)}.webp"),
+        ]
+        for path in planted:
+            with open(path, "wb") as handle:
+                handle.write(magic)
+            os.utime(path, (future, future))
+
+        with self.__class__.test_db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO manifestations (
+                    id, work_id, kind, title
+                ) VALUES ('MF-THUMB-B', ?, 'published', 'Secondary PDF')
+                """,
+                (w_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO assets (
+                    id, manifestation_id, work_id, kind, role, storage_locator,
+                    media_type, origin, thumb_page
+                ) VALUES (
+                    'AS-THUMB-B', 'MF-THUMB-B', ?, 'managed_file', 'document', ?,
+                    'application/pdf', 'adopted', 1
+                )
+                """,
+                (w_id, name_b),
+            )
+            conn.execute(
+                "UPDATE manifestations SET primary_asset_id = 'AS-THUMB-B' "
+                "WHERE id = 'MF-THUMB-B'"
+            )
+            conn.execute(
+                "UPDATE works SET primary_manifestation_id = 'MF-THUMB-B' WHERE id = ?",
+                (w_id,),
+            )
+
+        switched = self.__class__.test_db.get_primary_thumbnail_fields(w_id)
+        self.assertEqual(switched["primary_asset_id"], "AS-THUMB-B")
+        self.assertEqual(switched["file_path"], f"/api/pdfs/{name_b}")
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self._base_url}/api/works/{w_id}/thumbnail?page=1")
+        ) as tres:
+            self.assertEqual(tres.status, 200)
+            body = tres.read()
+        self.assertNotEqual(body, magic)
+        self.assertFalse(body.startswith(magic))
+        # New primary Asset cache must be the live key.
+        new_stem = prks_thumb_cache_stem(w_id, 1, "AS-THUMB-B")
+        self.assertTrue(
+            any(
+                os.path.isfile(os.path.join(thumbs_dir, f"{new_stem}.{ext}"))
+                for ext in ("webp", "png", "jpg", "jpeg")
+            )
+        )
+
     def test_11_post_concepts_single_json_body(self):
         payload = {"name": "API Concept", "description": "from test"}
         req = urllib.request.Request(

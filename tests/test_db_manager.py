@@ -205,8 +205,14 @@ class TestDBManager(unittest.TestCase):
             file_path=f"/api/pdfs/{fname}",
             thumb_page=2,
         )
-        good = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2)}.webp")
-        stale_page = os.path.join(thumbs_dir, f"{prks_thumb_cache_stem(w_id, 9)}.png")
+        work = self.db.get_work(w_id)
+        asset_id = work["primary_asset_id"]
+        good = os.path.join(
+            thumbs_dir, f"{prks_thumb_cache_stem(w_id, 2, asset_id)}.webp"
+        )
+        stale_page = os.path.join(
+            thumbs_dir, f"{prks_thumb_cache_stem(w_id, 9, asset_id)}.png"
+        )
         orphan = os.path.join(thumbs_dir, "zzzorphan_p1_v2.webp")
         for p in (good, stale_page, orphan):
             with open(p, "wb") as f:
@@ -216,6 +222,13 @@ class TestDBManager(unittest.TestCase):
         self.assertTrue(os.path.isfile(good))
         self.assertFalse(os.path.exists(stale_page))
         self.assertFalse(os.path.exists(orphan))
+
+    def test_thumb_cache_stem_includes_primary_asset(self):
+        self.assertNotEqual(
+            prks_thumb_cache_stem("W-1", 1, "AS-A"),
+            prks_thumb_cache_stem("W-1", 1, "AS-B"),
+        )
+        self.assertIn("_aAS-A_", prks_thumb_cache_stem("W-1", 1, "AS-A"))
 
     def test_get_all_works_omits_text_and_private_notes(self):
         w_id = self.db.add_work(title="Heavy", text_content="x" * 5000, abstract="Short abs")

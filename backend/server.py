@@ -1934,7 +1934,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     pdf_mtime = 0.0
 
-                cache_base = prks_thumb_cache_stem(w_id, page)
+                cache_base = prks_thumb_cache_stem(
+                    w_id, page, thumb.get("primary_asset_id")
+                )
                 path_webp = os.path.join(thumbs_dir, cache_base + ".webp")
 
                 cache_path: str | None = None

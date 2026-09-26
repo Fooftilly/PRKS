@@ -234,4 +234,5 @@ def primary_thumbnail_fields(conn: sqlite3.Connection, work_id: str) -> Optional
     return {
         "file_path": projected.get("file_path"),
         "thumb_page": projected.get("thumb_page"),
+        "primary_asset_id": projected.get("primary_asset_id"),
     }
