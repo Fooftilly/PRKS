@@ -112,6 +112,86 @@ class WaitForAsyncParityTests(unittest.TestCase):
         self.assertIn("hung-promise after 0.4s", text)
         self.assertIn("last value was None", text)
 
+    def test_offline_metadata_pending_fails_promptly_on_never_settling_store(self):
+        """OfflineWorkMetadata pending() must not hang when listOperations never settles."""
+        from tests.e2e.test_work_metadata_offline import OfflineWorkMetadataTests
+
+        self.page.evaluate(
+            """() => {
+                window.prksSync = {
+                    store: { listOperations: () => new Promise(() => {}) },
+                };
+            }"""
+        )
+        helper = OfflineWorkMetadataTests(
+            "test_offline_metadata_pending_fails_promptly_on_never_settling_store"
+        )
+        started = time.perf_counter()
+        with self.assertRaises(AssertionError) as cm:
+            helper.pending(self.page, 1, timeout=400)
+        elapsed = time.perf_counter() - started
+        self.assertGreaterEqual(elapsed, 0.35)
+        self.assertLess(elapsed, 2.0, "pending must not hang past its timeout")
+        self.assertIn("Sync did not settle after 0.4s", str(cm.exception))
+
+    def test_offline_metadata_settled_conflicts_fails_promptly_on_never_settling_store(self):
+        from tests.e2e.test_work_metadata_offline import OfflineWorkMetadataTests
+
+        self.page.evaluate(
+            """() => {
+                window.prksSync = {
+                    store: { listOperations: () => new Promise(() => {}) },
+                };
+            }"""
+        )
+        helper = OfflineWorkMetadataTests(
+            "test_offline_metadata_settled_conflicts_fails_promptly_on_never_settling_store"
+        )
+        started = time.perf_counter()
+        with self.assertRaises(AssertionError) as cm:
+            helper.settled_conflicts(self.page, 1, timeout=400)
+        elapsed = time.perf_counter() - started
+        self.assertGreaterEqual(elapsed, 0.35)
+        self.assertLess(elapsed, 2.0, "settled_conflicts must not hang past its timeout")
+        self.assertIn("No conflict settled after 0.4s", str(cm.exception))
+
+    def test_offline_metadata_operations_fails_promptly_on_never_settling_store(self):
+        from tests.e2e.test_work_metadata_offline import OfflineWorkMetadataTests
+
+        self.page.evaluate(
+            """() => {
+                window.prksSync = {
+                    store: { listOperations: () => new Promise(() => {}) },
+                };
+            }"""
+        )
+        helper = OfflineWorkMetadataTests(
+            "test_offline_metadata_operations_fails_promptly_on_never_settling_store"
+        )
+        started = time.perf_counter()
+        with self.assertRaises(AssertionError) as cm:
+            helper.operations(self.page, timeout=400)
+        elapsed = time.perf_counter() - started
+        self.assertGreaterEqual(elapsed, 0.35)
+        self.assertLess(elapsed, 2.0, "operations must not hang past its timeout")
+        self.assertIn("listOperations did not settle after 0.4s", str(cm.exception))
+
+    def test_offline_metadata_operations_returns_empty_rows(self):
+        """Empty durable queue must still return [] (truthiness sentinel)."""
+        from tests.e2e.test_work_metadata_offline import OfflineWorkMetadataTests
+
+        self.page.evaluate(
+            """() => {
+                window.prksSync = {
+                    store: { listOperations: () => Promise.resolve([]) },
+                };
+            }"""
+        )
+        helper = OfflineWorkMetadataTests(
+            "test_offline_metadata_operations_returns_empty_rows"
+        )
+        self.assertEqual(helper.operations(self.page, timeout=1000), [])
+
     def test_direct_expression_re_evaluates_each_poll(self):
         """Non-function expressions must not freeze the first eval's value."""
         self.page.evaluate(

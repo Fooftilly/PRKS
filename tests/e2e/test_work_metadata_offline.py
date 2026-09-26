@@ -26,8 +26,11 @@ def load_tests(loader, standard_tests, pattern):
 # Measured (class alone, PRKS_E2E_DIAGNOSTIC=1): PASS often, but intermittent
 # hangs after APP_READY at varying depths — ~case 47 (recycle=20), ~13
 # (recycle=15), ~5 (recycle=12). Quiet run with recycle=4 still hung on
-# acknowledgement (~case 24): Playwright wedged so pending()'s 25s JS
-# deadline never fired. Recycle every 1 = fresh Chromium per test here.
+# acknowledgement (~case 24): custom pending() evaluate awaited
+# listOperations before checking its 25s JS deadline, so a never-settling
+# store left the 300s watchdog as first kill. pending/settled_conflicts/
+# operations now use wait_for_async (per-await race). Recycle every 1 =
+# fresh Chromium per test here.
 _DEFAULT_RECYCLE_EVERY = 1
 _HOLDER = None
 
@@ -46,8 +49,6 @@ def tearDownModule():
 
 
 class OfflineWorkMetadataTests(unittest.TestCase):
-    FIELD_OPS = "r.operation === 'SET_WORK_METADATA_FIELD'"
-
     def start(self):
         tid = self.id()
         e2e_diag("START", tid)
@@ -91,36 +92,53 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def save(self, page):
         page.locator('#save-work-bib-btn').click()
 
-    def settled_conflicts(self, page, count):
+    # Durable-store gates used to be one long page.evaluate with a JS deadline
+    # checked only AFTER await listOperations(). If that Promise never settled,
+    # the 25s deadline never ran and the 300s per-test watchdog was first kill
+    # (APP_READY body wedge). wait_for_async races each await against remaining
+    # timeout so a hung IndexedDB/listOperations fails promptly.
+    _OPS_TIMEOUT_MS = 25000
+
+    def settled_conflicts(self, page, count, timeout=None):
         """Exactly `count` field operations, all of which have reached a
         terminal result. Waiting on the row count alone also matches the
         instant before a retry is claimed, or before the result is written."""
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
-                if (rows.length === n && rows.every(r => r.status === 'conflict' && !!r.server_result)) return;
-                if (Date.now() > deadline) throw new Error('No conflict settled: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", count)
+        wait_for_async(
+            page,
+            """(n) => prksSync.store.listOperations().then(rows => {
+                const filtered = rows.filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
+                return filtered.length === n
+                    && filtered.every(r => r.status === 'conflict' && !!r.server_result);
+            })""",
+            arg=count,
+            timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
+            message='No conflict settled',
+        )
 
-    def operations(self, page):
-        return page.evaluate(
-            "() => prksSync.store.listOperations().then(rows => rows.filter(r => %s))" % self.FIELD_OPS)
+    def operations(self, page, timeout=None):
+        # One-shot read, but still await listOperations — wrap so a never-
+        # settling store fails instead of hanging evaluate. Sentinel object is
+        # always truthy (including empty rows) for wait_for_async.
+        result = wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => "
+            "({rows: rows.filter(r => r.operation === 'SET_WORK_METADATA_FIELD')}))",
+            timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
+            message='listOperations did not settle',
+        )
+        return result['rows']
 
-    def pending(self, page, count):
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
-                if (rows.length === n && !rows.some(r => r.status === 'syncing')) return;
-                if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", count)
+    def pending(self, page, count, timeout=None):
+        wait_for_async(
+            page,
+            """(n) => prksSync.store.listOperations().then(rows => {
+                const filtered = rows.filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
+                return filtered.length === n && !filtered.some(r => r.status === 'syncing');
+            })""",
+            arg=count,
+            timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
+            message='Sync did not settle',
+        )
 
     def offline(self, page, context):
         context.set_offline(True)
