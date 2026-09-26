@@ -1202,12 +1202,13 @@ def open_app_page(browser, origin: str, service_workers: str = "block"):
     e2e_heartbeat("CONTEXT_READY")
 
     started = time.perf_counter()
-    page.goto(origin + "/", wait_until="domcontentloaded")
+    # Canonical home is #/folders. Load it directly: empty-hash canonicalize already
+    # mounts .prks-folder-library with location.hash === '#/folders', so the old
+    # Folders nav click was a pure re-navigation (~45ms median measured waste).
+    # Do not invent fake init state — wait on the real shell + Folders surface.
+    page.goto(origin + "/#/folders", wait_until="domcontentloaded")
     page.wait_for_selector("#sidebar")
-    page.wait_for_selector("#page-content")
     page.wait_for_selector(".prks-folder-library")
-    # Empty location.hash is treated as Folders; click the nav link like a user.
-    page.locator('#sidebar a.nav-link[href="#/folders"]').click()
     page.wait_for_function("() => location.hash === '#/folders'")
     _profile_phase("app_ready", time.perf_counter() - started)
     e2e_heartbeat("APP_READY")
