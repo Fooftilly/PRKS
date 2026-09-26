@@ -35,6 +35,10 @@ describe('prksApiRequest', () => {
   })
 
   it('passes AbortSignal through and does not wrap abort', async () => {
+    const success = vi.fn()
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
     const controller = new AbortController()
     vi.stubGlobal(
       'fetch',
@@ -44,6 +48,50 @@ describe('prksApiRequest', () => {
       }),
     )
     await expect(prksApiRequest('/api/diagnostics/performance', { signal: controller.signal })).rejects.toSatisfy(isAbortError)
+    expect(success).not.toHaveBeenCalled()
+    expect(failure).not.toHaveBeenCalled()
+  })
+
+  it('reports any resolved HTTP response as reachable and defers transport failure', async () => {
+    const success = vi.fn()
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })),
+    )
+    await expect(prksApiRequest('/api/diagnostics/performance')).rejects.toBeInstanceOf(PrksApiError)
+    expect(success).toHaveBeenCalledTimes(1)
+    expect(failure).not.toHaveBeenCalled()
+
+    success.mockClear()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    await expect(prksApiRequest('/api/diagnostics/performance')).rejects.toBeInstanceOf(TypeError)
+    expect(success).not.toHaveBeenCalled()
+    expect(failure).not.toHaveBeenCalled()
+  })
+
+  it('does not treat a managed PDF response as reachability', async () => {
+    const success = vi.fn()
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+    await expect(prksApiRequest('/api/pdfs/item')).resolves.toEqual({})
+    expect(success).not.toHaveBeenCalled()
+    expect(failure).not.toHaveBeenCalled()
+  })
+
+  it('ignores missing reachability hooks', async () => {
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+    await expect(prksApiRequest('/api/diagnostics/performance')).resolves.toEqual({})
   })
 
   it('refuses a query string on the path', async () => {

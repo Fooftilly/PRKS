@@ -8,7 +8,9 @@ These rules apply to frontend work in addition to the repository-root `AGENTS.md
 
 `frontend/js/` remains the legacy application. Do not rewrite it as part of a foundation change. Migrated UI belongs in `frontend-app/src/` and must not introduce a second canonical workspace or application state model. TanStack Query is in use for performance diagnostics. Do not add Vue Router, Pinia, or VueUse until a slice actually needs that library.
 
-The hidden `#prks-vue-root` mount proves the bundle loads and hosts the Vue app. The first product surface is Settings performance diagnostics, teleported into `#prks-settings-perf-root`. TanStack Query owns that disposable server snapshot. Do not add a second QueryClient, Pinia, Vue Router, or VueUse until a later slice needs them. Do not persist the query cache.
+The hidden `#prks-vue-root` mount proves the bundle loads and hosts the Vue app. The first product surface is Settings performance diagnostics, teleported into `#prks-settings-perf-root`. TanStack Query owns that disposable server snapshot. Do not add a second QueryClient, Pinia, Vue Router, or VueUse until a later slice needs them. Do not persist the query cache or use it as an offline queue.
+
+The Vue HTTP transport is a real `fetch` boundary for PRKS reachability. A resolved response, of any HTTP status, calls `prksOfflineNoteRequestSuccess`. A non-abort transport failure calls `prksOfflineNoteRequestFailure` only after that query's retries are exhausted; mutations are not retried, so their transport failure is final. Managed PDF GETs (`/api/pdfs/...`) are not a reachability signal. Abort, HTTP error envelopes, and JSON/domain failures are not connectivity changes.
 
 ## Cross-boundary bulk mutations
 

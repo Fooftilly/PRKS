@@ -24,6 +24,32 @@ export function isAbortError(error: unknown): boolean {
   )
 }
 
+type PrksReachabilityRoot = typeof globalThis & {
+  prksOfflineNoteRequestSuccess?: unknown
+  prksOfflineNoteRequestFailure?: unknown
+}
+
+/** Transport failures the query/mutation caches may report once retries stop. */
+const reportableTransportFailures = new WeakSet<object>()
+
+function isManagedPdfPath(path: string): boolean {
+  return /^\/api\/pdfs\/[^/]+$/.test(path)
+}
+
+function callReachabilityHook(
+  name: 'prksOfflineNoteRequestSuccess' | 'prksOfflineNoteRequestFailure',
+): void {
+  const hook = (globalThis as PrksReachabilityRoot)[name]
+  if (typeof hook === 'function') hook()
+}
+
+/** Caches call this after retries stop. Only a marked transport error is a reachability failure. */
+export function noteFinalPrksTransportFailure(error: unknown): void {
+  if (isAbortError(error) || !(error instanceof TypeError)) return
+  if (!reportableTransportFailures.delete(error)) return
+  callReachabilityHook('prksOfflineNoteRequestFailure')
+}
+
 function readErrorEnvelope(payload: unknown): { error: string; code: string | null } | null {
   if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) return null
   const record = payload as Record<string, unknown>
@@ -43,10 +69,11 @@ export async function prksApiRequest(
   if (!path.startsWith('/api/') || path.startsWith('//') || path.includes('?')) {
     throw new TypeError('PRKS API paths must be same-origin /api/ paths without a query.')
   }
+  const method = init.method ?? 'GET'
   let response: Response
   try {
     response = await fetch(path, {
-      method: init.method ?? 'GET',
+      method,
       body: init.body,
       signal: init.signal,
       credentials: 'same-origin',
@@ -56,9 +83,12 @@ export async function prksApiRequest(
       },
     })
   } catch (error) {
-    if (isAbortError(error) || error instanceof TypeError) throw error
-    throw new TypeError('PRKS API request failed.')
+    if (isAbortError(error)) throw error
+    const transport = error instanceof TypeError ? error : new TypeError('PRKS API request failed.')
+    if (!isManagedPdfPath(path)) reportableTransportFailures.add(transport)
+    throw transport
   }
+  if (!isManagedPdfPath(path)) callReachabilityHook('prksOfflineNoteRequestSuccess')
 
   const text = await response.text()
   let payload: unknown = null

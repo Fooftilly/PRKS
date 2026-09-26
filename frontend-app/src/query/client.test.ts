@@ -1,7 +1,11 @@
 import { MutationObserver } from '@tanstack/query-core'
-import { describe, expect, it, vi } from 'vitest'
-import { PrksApiError } from '../api/http'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PrksApiError, prksApiRequest } from '../api/http'
 import { createPrksQueryClient } from './client'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('createPrksQueryClient', () => {
   it('sets explicit disposable-server-state defaults', () => {
@@ -88,6 +92,89 @@ describe('createPrksQueryClient', () => {
     await client.cancelQueries({ queryKey: ['cancel-me'] })
     await expect(pending).rejects.toThrow()
     expect(seen?.aborted).toBe(true)
+  })
+
+  it('reports transport failure only after query retries are exhausted', async () => {
+    const success = vi.fn()
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
+    let attempts = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        attempts += 1
+        if (attempts < 3) throw new TypeError('Failed to fetch')
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }),
+    )
+    const client = createPrksQueryClient()
+    await expect(
+      client.fetchQuery({
+        queryKey: ['reachability-recovers'],
+        retryDelay: 0,
+        queryFn: ({ signal }) => prksApiRequest('/api/diagnostics/performance', { signal }),
+      }),
+    ).resolves.toEqual({ ok: true })
+    expect(attempts).toBe(3)
+    expect(success).toHaveBeenCalledTimes(1)
+    expect(failure).not.toHaveBeenCalled()
+
+    attempts = 0
+    success.mockClear()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        attempts += 1
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    await expect(
+      client.fetchQuery({
+        queryKey: ['reachability-down'],
+        retryDelay: 0,
+        queryFn: ({ signal }) => prksApiRequest('/api/diagnostics/performance', { signal }),
+      }),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(attempts).toBe(3)
+    expect(success).not.toHaveBeenCalled()
+    expect(failure).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a mutation transport failure once and treats HTTP errors as reachable', async () => {
+    const success = vi.fn()
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: 'no', code: 'invalid_request' }), { status: 400 })),
+    )
+    const client = createPrksQueryClient()
+    await expect(
+      client.fetchQuery({
+        queryKey: ['reachability-400'],
+        retryDelay: 0,
+        queryFn: ({ signal }) => prksApiRequest('/api/diagnostics/performance', { signal }),
+      }),
+    ).rejects.toBeInstanceOf(PrksApiError)
+    expect(success).toHaveBeenCalledTimes(1)
+    expect(failure).not.toHaveBeenCalled()
+
+    success.mockClear()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    const observer = new MutationObserver(client, {
+      mutationFn: () =>
+        prksApiRequest('/api/diagnostics/performance/reset', { method: 'POST', body: '{}' }),
+    })
+    await expect(observer.mutate()).rejects.toBeInstanceOf(TypeError)
+    expect(failure).toHaveBeenCalledTimes(1)
+    expect(success).not.toHaveBeenCalled()
   })
 
   it('does not retry mutations', async () => {

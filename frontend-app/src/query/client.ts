@@ -1,4 +1,5 @@
-import { QueryClient } from '@tanstack/vue-query'
+import { MutationCache, QueryCache, QueryClient } from '@tanstack/vue-query'
+import { noteFinalPrksTransportFailure } from '../api/http'
 import { prksQueryRetryDelay, prksQueryShouldRetry } from './retry'
 
 /**
@@ -11,6 +12,16 @@ import { prksQueryRetryDelay, prksQueryShouldRetry } from './retry'
  */
 export function createPrksQueryClient(): QueryClient {
   return new QueryClient({
+    queryCache: new QueryCache({
+      onError: (error) => {
+        noteFinalPrksTransportFailure(error)
+      },
+    }),
+    mutationCache: new MutationCache({
+      onError: (error) => {
+        noteFinalPrksTransportFailure(error)
+      },
+    }),
     defaultOptions: {
       queries: {
         retry: prksQueryShouldRetry,
