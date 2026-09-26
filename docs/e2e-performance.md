@@ -156,7 +156,7 @@ stage rather than only "last started test".
 
 The runner always tracks the current test id + latest stage in-process (and in
 a per-worker heartbeat file under parallel jobs). A **per-test watchdog**
-(`PRKS_E2E_TEST_WATCHDOG`, default 300s, `0` disables) kills a stuck worker and
+(`PRKS_E2E_TEST_WATCHDOG`, default 120s, `0` disables) kills a stuck worker and
 reports that test id + stage without waiting for the full-suite
 `PRKS_E2E_FULL_TIMEOUT` (default 1200s). It does not retry. Playwright assertion
 timeouts remain independent.
