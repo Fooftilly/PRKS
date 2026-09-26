@@ -53,10 +53,11 @@ jobs:
         # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
         # unrelated PRs. Only newly added / newly-unexempted call sites fail.
         # PR base is the immutable event SHA (not the live base-branch tip).
-        # Zero-before pushes (new/recreated branch) and workflow_dispatch use
-        # the empty tree so the full tip is scanned. Do not merge-base with
-        # origin/master after a master push — that ref can equal HEAD and the
-        # diff becomes empty, skipping sleeps introduced earlier in the push.
+        # Zero-before pushes (new/recreated branch) use the empty tree so the
+        # full tip is scanned — do not merge-base with origin/master after a
+        # master push (that ref can equal HEAD and skip newly pushed history).
+        # workflow_dispatch compares against HEAD so grandfathered historical
+        # waits stay grandfathered (empty tree would fail the whole corpus).
         shell: bash
         env:
           PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -64,13 +65,21 @@ jobs:
         run: |
           set -euo pipefail
           empty_tree="4b825dc642cb6eb9a060e54bf8d6927f8d2765b5"
+          zero_sha="0000000000000000000000000000000000000000"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base="${PRKS_PR_BASE_SHA:?missing pull_request.base.sha}"
             git fetch --no-tags --depth=1 origin "$base"
-          elif [[ "${{ github.event_name }}" == "push" && -n "${PRKS_PUSH_BEFORE:-}" && "${PRKS_PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
-            base="$(git rev-parse --verify --end-of-options "${PRKS_PUSH_BEFORE}")"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            if [[ -n "${PRKS_PUSH_BEFORE:-}" && "${PRKS_PUSH_BEFORE}" != "$zero_sha" ]]; then
+              base="$(git rev-parse --verify --end-of-options "${PRKS_PUSH_BEFORE}")"
+            else
+              # Parentless / new-branch push: scan full tip vs empty tree.
+              base="$empty_tree"
+            fi
           else
-            base="$empty_tree"
+            # workflow_dispatch (and any other non-PR/non-push event): no-new-
+            # change baseline so historical E2E waits remain grandfathered.
+            base="$(git rev-parse --verify --end-of-options HEAD)"
           fi
           python scripts/check_e2e_wait_for_timeout.py --base "$base"
 
