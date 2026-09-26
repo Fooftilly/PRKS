@@ -733,6 +733,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
         )
 
     def test_per_test_watchdog_helper(self):
+        self.assertEqual(policy.TEST_WATCHDOG_TIMEOUT_S, 120)
         self.assertEqual(
             policy.per_test_watchdog_s({}), policy.TEST_WATCHDOG_TIMEOUT_S
         )
@@ -747,6 +748,36 @@ class LastFailedPersistenceTests(unittest.TestCase):
             policy.TEST_WATCHDOG_TIMEOUT_S, policy.FULL_GATE_TIMEOUT_S
         )
         self.assertLess(policy.TEST_WATCHDOG_TIMEOUT_S, policy.FULL_GATE_TIMEOUT_S)
+
+    def test_failure_diagnostics_round_trip_and_clear(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "e2e-failure-diagnostics.json"
+            payload = {
+                "kind": "watchdog",
+                "failed_ids": ["tests.e2e.fake.T.test_hung"],
+                "stuck_test_id": "tests.e2e.fake.T.test_hung",
+                "last_stage": "APP_READY",
+                "watchdog": True,
+                "detail": "per-test watchdog: test=tests.e2e.fake.T.test_hung "
+                "stage=APP_READY age=120s threshold=120s (no automatic retry)",
+                "worker_index": 0,
+                "report": {"watchdog": True, "failed_ids": ["tests.e2e.fake.T.test_hung"]},
+                "last_failed": {
+                    "test_ids": ["tests.e2e.fake.T.test_hung"],
+                    "meta": {"source": "per-test-watchdog"},
+                },
+            }
+            self.assertTrue(policy.save_failure_diagnostics(path, payload))
+            loaded = policy.load_failure_diagnostics(path)
+            self.assertEqual(loaded["stuck_test_id"], "tests.e2e.fake.T.test_hung")
+            self.assertEqual(loaded["last_stage"], "APP_READY")
+            self.assertTrue(loaded["watchdog"])
+            self.assertEqual(
+                loaded["last_failed"]["test_ids"], ["tests.e2e.fake.T.test_hung"]
+            )
+            policy.clear_failure_diagnostics(path)
+            self.assertIsNone(policy.load_failure_diagnostics(path))
+            self.assertFalse(policy.save_failure_diagnostics(path, "not-a-dict"))  # type: ignore[arg-type]
 
 
 class PathMatchTests(unittest.TestCase):

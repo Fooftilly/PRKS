@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 
 LAST_FAILED_PATH = Path(".tests") / "e2e-last-failed.json"
+# Machine-readable hang/failure snapshot for CI artifact upload (no traces).
+FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 
 # ---------------------------------------------------------------------------
 # Effective runtime configuration (CLI flags and the equivalent environment)
@@ -100,9 +102,9 @@ CI_POINTER_FEATURES = frozenset(
 )
 
 # Per-test hang watchdog (seconds). Separate from Playwright assertion timeouts
-# and from the full-suite PRKS_E2E_FULL_TIMEOUT. Generous so slow-but-valid tests
-# are not killed; override with PRKS_E2E_TEST_WATCHDOG; set 0 to disable.
-TEST_WATCHDOG_TIMEOUT_S = 300
+# and from the full-suite PRKS_E2E_FULL_TIMEOUT. Override with
+# PRKS_E2E_TEST_WATCHDOG; set 0 to disable. Does not retry.
+TEST_WATCHDOG_TIMEOUT_S = 120
 TEST_WATCHDOG_ENV = "PRKS_E2E_TEST_WATCHDOG"
 
 TIER_LABELS = {
@@ -1535,6 +1537,28 @@ def save_last_failed(path: Path, test_ids, meta=None) -> bool:
         "test_ids": list(test_ids),
         "meta": meta or {},
     }
+    return _atomic_json_write(path, payload)
+
+
+def load_last_failed(path: Path):
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    ids = data.get("test_ids")
+    if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+        return None
+    return data
+
+
+def _atomic_json_write(path: Path, payload: dict) -> bool:
+    """Atomic JSON write (temp + replace). Returns False on OSError."""
+    path = Path(path)
     tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1555,7 +1579,19 @@ def save_last_failed(path: Path, test_ids, meta=None) -> bool:
         return False
 
 
-def load_last_failed(path: Path):
+def save_failure_diagnostics(path: Path, payload: dict) -> bool:
+    """Persist privacy-safe hang/failure diagnostics for CI artifact upload.
+
+    Payload must not include unittest traces, library content, paths under
+    temporary storage, or other sensitive application data — only test ids,
+    lifecycle stages, worker/report metadata, and last-failed summaries.
+    """
+    if not isinstance(payload, dict):
+        return False
+    return _atomic_json_write(Path(path), dict(payload))
+
+
+def load_failure_diagnostics(path: Path):
     path = Path(path)
     if not path.is_file():
         return None
@@ -1565,10 +1601,17 @@ def load_last_failed(path: Path):
         return None
     if not isinstance(data, dict):
         return None
-    ids = data.get("test_ids")
-    if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
-        return None
     return data
+
+
+def clear_failure_diagnostics(path: Path) -> None:
+    path = Path(path)
+    if not path.is_file():
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 def extract_failed_ids(result) -> list:
