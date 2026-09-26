@@ -1898,17 +1898,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     page_q = query.get('page', [''])[0]
                 except Exception:
                     page_q = ''
-                row = db.execute_query(
-                    "SELECT file_path, thumb_page FROM works WHERE id = ?",
-                    (w_id,),
-                )
-                if not row:
+                thumb = db.get_primary_thumbnail_fields(w_id)
+                if not thumb:
                     self.send_error(404, "Work not found")
                     return
                 # Ownership identity, not the last '/'-separated piece: a
                 # stored path that is not exactly /api/pdfs/<filename> does not
                 # own a managed PDF and must not resolve to some other one.
-                pdf_filename = managed_pdf_filename(str(row[0].get('file_path') or ''))
+                pdf_filename = managed_pdf_filename(str(thumb.get('file_path') or ''))
                 if not pdf_filename:
                     self.send_error(404, "PDF not found")
                     return
@@ -1926,7 +1923,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         page = None
                 if page is None:
                     try:
-                        page = int(row[0].get('thumb_page') or 1)
+                        page = int(thumb.get('thumb_page') or 1)
                     except Exception:
                         page = 1
                 if page < 1:
@@ -1937,7 +1934,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except Exception:
                     pdf_mtime = 0.0
 
-                cache_base = prks_thumb_cache_stem(w_id, page)
+                cache_base = prks_thumb_cache_stem(
+                    w_id, page, thumb.get("primary_asset_id")
+                )
                 path_webp = os.path.join(thumbs_dir, cache_base + ".webp")
 
                 cache_path: str | None = None

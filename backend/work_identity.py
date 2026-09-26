@@ -35,9 +35,10 @@ NS_PRKS_BACKFILL = uuid.UUID("6d26588b-55c0-5737-95b2-bd0bdd2827e4")
 MANIFESTATION_PREFIX = "MF"
 ASSET_PREFIX = "AS"
 
-# The pointer columns Slice A adds to `works`. They are not part of the legacy
-# Work shape yet: the projection that exposes them is Slice C (§13.1), so the
-# readers that still `SELECT *` strip them to keep responses byte-identical.
+# The pointer columns Slice A adds to `works`. Slice C exposes only
+# primary_manifestation_id through the compatibility projection; the citation
+# pointer remains internal until the citation/version picker owns that state.
+# Raw legacy-row readers may still use strip_pointer_columns before projecting.
 WORK_POINTER_COLUMNS = ("primary_manifestation_id", "citation_manifestation_id")
 
 # Revision scopes that will become Asset-owned (§14.2). A Work holding any of

@@ -28,7 +28,7 @@ from backend.pdf_annotations import (
     reconstruct_annotation,
     round_trip_annotation,
 )
-from backend import pdf_annotation_sync, work_identity
+from backend import pdf_annotation_sync, work_identity, work_projection
 from backend.performance import (
     classify_sql_write,
     clock_ns,
@@ -324,11 +324,12 @@ def _prks_sql_first_linked_person_for_role(work_alias: str, role_type: str, colu
     rt = (role_type or "").replace("'", "''")
     ca = (column_alias or "name").replace('"', "")
     disp = _prks_sql_role_display_name_expr("p", "r")
+    scope = work_projection.credits_scope_sql(work_alias, "r")
     return (
         f"(SELECT {disp} "
         "FROM roles r "
         "JOIN persons p ON p.id = r.person_id "
-        f"WHERE r.work_id = {wid} AND r.role_type = '{rt}' "
+        f"WHERE r.work_id = {wid} AND r.role_type = '{rt}' AND {scope} "
         "ORDER BY r.order_index ASC, r.rowid ASC "
         f"LIMIT 1) AS {ca}"
     )
@@ -339,11 +340,12 @@ def _prks_sql_linked_authors_concat(work_alias: str, column_alias: str = "linked
     wid = f"{work_alias}.id"
     ca = (column_alias or "linked_authors").replace('"', "")
     disp = _prks_sql_role_display_name_expr("p", "r")
+    scope = work_projection.credits_scope_sql(work_alias, "r")
     return (
         f"(SELECT GROUP_CONCAT({disp}, ', ' "
         "ORDER BY r.order_index ASC, r.rowid ASC) "
         "FROM roles r JOIN persons p ON p.id = r.person_id "
-        f"WHERE r.work_id = {wid} AND r.role_type = 'Author') AS {ca}"
+        f"WHERE r.work_id = {wid} AND r.role_type = 'Author' AND {scope}) AS {ca}"
     )
 
 
@@ -363,11 +365,19 @@ def _prks_sql_linked_people_json(work_alias: str, column_alias: str = "linked_pe
     use. Small -- a few tens of bytes per link -- and it is what lets the
     overlay recompute the flattened columns EXACTLY rather than approximately,
     so the existing credit helper keeps deciding what the user sees.
+
+    Credits follow ``credits(primary M)``: Work-scoped roles plus roles scoped
+    to the selected primary Manifestation (not other Manifestations).
     """
     wid = f"{work_alias}.id"
     ca = (column_alias or "linked_people").replace('"', "")
     disp = _prks_sql_role_display_name_expr("p", "r")
     canonical = ("TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,''))")
+    # Scope against the outer Work row's primary pointer (r2 cannot see work_alias).
+    scope_inner = (
+        f"(r2.manifestation_id IS NULL OR r2.manifestation_id = "
+        f"{work_alias}.primary_manifestation_id)"
+    )
     return (
         "(SELECT json_group_array(json_object("
         "'person_id', r.person_id, "
@@ -383,7 +393,8 @@ def _prks_sql_linked_people_json(work_alias: str, column_alias: str = "linked_pe
         "'credit_name', COALESCE(NULLIF(TRIM(r.credit_name), ''), ''), "
         "'display_name', " + disp + ")) "
         "FROM (SELECT * FROM roles r2 "
-        f"WHERE r2.work_id = {wid} ORDER BY r2.order_index ASC, r2.rowid ASC) r "
+        f"WHERE r2.work_id = {wid} AND {scope_inner} "
+        "ORDER BY r2.order_index ASC, r2.rowid ASC) r "
         f"JOIN persons p ON p.id = r.person_id) AS {ca}"
     )
 
@@ -540,16 +551,31 @@ def prks_thumb_cache_safe_wid(work_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(work_id))
 
 
+def prks_thumb_cache_safe_asset_id(asset_id: Optional[str]) -> str:
+    """Sanitize Asset id for thumbnail filenames (must match server thumbnail handler)."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(asset_id or ""))
+
+
 # Bump when thumbnail encode format changes (invalidates on-disk cache by filename).
 PRKS_THUMB_CACHE_REV = 2
 
 
-def prks_thumb_cache_stem(work_id: str, page: int) -> str:
-    """Cache filename stem for one PDF work page thumbnail (no extension)."""
+def prks_thumb_cache_stem(
+    work_id: str, page: int, asset_id: Optional[str] = None
+) -> str:
+    """Cache filename stem for one PDF page thumbnail (no extension).
+
+    Includes the selected primary Asset id when known so switching the primary
+    PDF cannot reuse a cache file generated from a previous Asset (mtime alone
+    is insufficient when the new PDF is older than an existing thumb).
+    """
     safe = prks_thumb_cache_safe_wid(work_id)
     p = int(page) if page is not None else 1
     if p < 1:
         p = 1
+    asset = prks_thumb_cache_safe_asset_id(asset_id)
+    if asset:
+        return f"{safe}_p{p}_a{asset}_v{PRKS_THUMB_CACHE_REV}"
     return f"{safe}_p{p}_v{PRKS_THUMB_CACHE_REV}"
 
 
@@ -610,10 +636,12 @@ _PRKS_UNCATEGORIZED_FOLDER_TITLE = "Uncategorized"
 
 
 _PRKS_THUMB_CACHE_FINAL_RE = re.compile(
-    r"^(.+)_p(\d+)_v(\d+)\.(webp|png|jpg|jpeg)$", re.IGNORECASE
+    r"^(.+)_p(\d+)(?:_a([A-Za-z0-9_-]+))?_v(\d+)\.(webp|png|jpg|jpeg)$",
+    re.IGNORECASE,
 )
 _PRKS_THUMB_CACHE_TMP_RE = re.compile(
-    r"^(.+)_p(\d+)_v(\d+)\.(webp|png|jpg|jpeg)\.tmp$", re.IGNORECASE
+    r"^(.+)_p(\d+)(?:_a([A-Za-z0-9_-]+))?_v(\d+)\.(webp|png|jpg|jpeg)\.tmp$",
+    re.IGNORECASE,
 )
 # Pre-rev-2 filenames (no _vN suffix); pruned when not in allowed v2 stems.
 _PRKS_THUMB_CACHE_LEGACY_FINAL_RE = re.compile(
@@ -631,10 +659,11 @@ def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> tup
     if not os.path.isdir(td):
         return ()
     pat_final = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_v\d+)?\.(webp|png|jpg|jpeg)$", re.IGNORECASE
+        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
+        re.IGNORECASE,
     )
     pat_tmp = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
+        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
         re.IGNORECASE,
     )
     try:
@@ -656,7 +685,22 @@ def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> tup
 def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
     """Delete thumbnail files not referenced by any PDF work's thumb_page. Returns removal count."""
     rows = db.execute_query(
-        "SELECT id, thumb_page FROM works WHERE file_path LIKE '/api/pdfs/%'"
+        """
+        SELECT w.id AS id,
+               COALESCE(a.thumb_page, w.thumb_page) AS thumb_page,
+               m.primary_asset_id AS primary_asset_id
+        FROM works w
+        LEFT JOIN manifestations m ON m.id = w.primary_manifestation_id
+        LEFT JOIN assets a ON a.id = m.primary_asset_id
+        WHERE COALESCE(
+            CASE
+                WHEN a.kind = 'managed_file'
+                     AND NULLIF(TRIM(COALESCE(a.storage_locator, '')), '') IS NOT NULL
+                THEN '/api/pdfs/' || a.storage_locator
+            END,
+            w.file_path
+        ) LIKE '/api/pdfs/%'
+        """
     )
     allowed: set[str] = set()
     for row in rows or []:
@@ -670,7 +714,9 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
             page = 1
         if page < 1:
             page = 1
-        allowed.add(prks_thumb_cache_stem(str(wid), page))
+        allowed.add(
+            prks_thumb_cache_stem(str(wid), page, row.get("primary_asset_id"))
+        )
     td = db.storage.thumbs_dir
     if not os.path.isdir(td):
         return 0
@@ -683,11 +729,23 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
         stem: Optional[str] = None
         m = _PRKS_THUMB_CACHE_FINAL_RE.match(fname)
         if m:
-            stem = f"{m.group(1)}_p{m.group(2)}_v{m.group(3)}"
+            asset = m.group(3)
+            rev = m.group(4)
+            stem = (
+                f"{m.group(1)}_p{m.group(2)}_a{asset}_v{rev}"
+                if asset
+                else f"{m.group(1)}_p{m.group(2)}_v{rev}"
+            )
         else:
             m = _PRKS_THUMB_CACHE_TMP_RE.match(fname)
             if m:
-                stem = f"{m.group(1)}_p{m.group(2)}_v{m.group(3)}"
+                asset = m.group(3)
+                rev = m.group(4)
+                stem = (
+                    f"{m.group(1)}_p{m.group(2)}_a{asset}_v{rev}"
+                    if asset
+                    else f"{m.group(1)}_p{m.group(2)}_v{rev}"
+                )
             else:
                 m = _PRKS_THUMB_CACHE_LEGACY_FINAL_RE.match(fname)
                 if m:
@@ -1187,6 +1245,81 @@ class PRKSDatabase:
                 record_db_call(clock_ns() - t0, write=write)
             except Exception:
                 pass
+
+    @contextmanager
+    def _timed_read_snapshot(self):
+        """Open a connection, ``BEGIN`` a read snapshot, and record one db_call.
+
+        Slice-C projected readers that need one coherent snapshot cannot go
+        through ``execute_query`` alone (projection issues further SELECTs on
+        the same connection). Use this instead of a bare ``connection()`` so
+        diagnostics still see the DB work.
+        """
+        t0 = clock_ns()
+        try:
+            with self.connection() as conn:
+                conn.execute("BEGIN")
+                yield conn
+        finally:
+            try:
+                record_db_call(clock_ns() - t0, write=False)
+            except Exception:
+                pass
+
+    def _finish_projected_work_rows(self, rows, *, conn=None) -> None:
+        """Apply the Slice-C Work projection, then existing row finishing."""
+        if conn is None:
+            with self.connection() as projection_conn:
+                work_projection.legacy_work_summary(projection_conn, rows)
+        else:
+            work_projection.legacy_work_summary(conn, rows)
+        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+
+    def _query_projected_works(self, sql: str, params: tuple = ()) -> List[dict]:
+        """Run a Work-shaped SELECT and Slice-C projection on one read snapshot.
+
+        Plain ``execute_query`` + a second connection for projection can combine
+        pre-update base columns with post-update Manifestation/Asset/counts.
+        ``BEGIN`` before the first SELECT keeps every dependent read consistent.
+        """
+        with self._timed_read_snapshot() as conn:
+            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+            self._finish_projected_work_rows(rows, conn=conn)
+            return rows
+
+    def get_primary_thumbnail_fields(self, work_id: str) -> Optional[dict]:
+        """Effective primary-Asset ``file_path`` / ``thumb_page`` for thumbnails.
+
+        Routes through ``_timed_read_snapshot`` so ``/api/works/{id}/thumbnail``
+        records the same diagnostics ``db_call`` as other projected readers.
+        """
+        with self._timed_read_snapshot() as conn:
+            return work_projection.primary_thumbnail_fields(conn, work_id)
+
+    def _roles_for_manifestation_on_conn(
+        self, conn, work_id: str, manifestation_id: Optional[str]
+    ) -> List[dict]:
+        """Effective credits for Manifestation M: Work-scoped ∪ M-scoped roles."""
+        if manifestation_id:
+            query = """
+            SELECT p.*, r.role_type, r.order_index, r.credit_name, r.manifestation_id
+            FROM roles r
+            JOIN persons p ON r.person_id = p.id
+            WHERE r.work_id = ?
+              AND (r.manifestation_id IS NULL OR r.manifestation_id = ?)
+            ORDER BY r.order_index ASC, r.rowid ASC
+            """
+            cur = conn.execute(query, (work_id, manifestation_id))
+        else:
+            query = """
+            SELECT p.*, r.role_type, r.order_index, r.credit_name, r.manifestation_id
+            FROM roles r
+            JOIN persons p ON r.person_id = p.id
+            WHERE r.work_id = ? AND r.manifestation_id IS NULL
+            ORDER BY r.order_index ASC, r.rowid ASC
+            """
+            cur = conn.execute(query, (work_id,))
+        return [dict(row) for row in cur.fetchall()]
 
     # --- App settings (shared across all clients of this database) ---
     _PRKS_APP_SETTING_MAX_LEN = 500
@@ -2139,11 +2272,9 @@ class PRKSDatabase:
     def get_all_works(self) -> List[dict]:
         sel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(self.execute_query(
+        return self._query_projected_works(
             f"SELECT {sel}, {pex} FROM works ORDER BY works.created_at DESC, works.id ASC"
-        ))
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
+        )
 
     def etag_works_catalog(self, rows: List[dict]) -> str:
         """Weak ETag for a default Works catalog the caller already built.
@@ -2165,20 +2296,17 @@ class PRKSDatabase:
     def get_works_browse_catalog(self) -> List[dict]:
         """Complete Work catalog in the compact browse projection.
 
-        Ordered deterministically so a cached copy and a fresh read agree:
-        `title` is what every browse route sorts by locally, and `id` breaks
-        ties that a title collation alone would leave unspecified.
+        Ordered by the same effective title the Slice-C projection exposes
+        (primary Manifestation title when set, else Work title), with `id` as
+        the NOCASE tie-break so a cached copy and a fresh read agree.
         """
         sel = _prks_work_browse_select("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {sel}, {pex} FROM works "
-                "ORDER BY works.title COLLATE NOCASE ASC, works.id ASC"
-            )
+        return self._query_projected_works(
+            f"SELECT {sel}, {pex} FROM works "
+            "LEFT JOIN manifestations pm ON pm.id = works.primary_manifestation_id "
+            "ORDER BY COALESCE(pm.title, works.title) COLLATE NOCASE ASC, works.id ASC"
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
 
     def get_recent_browse(self, limit: int = 30) -> List[dict]:
         """Top-N by `last_opened_at`, with an explicit tie-break.
@@ -2195,16 +2323,12 @@ class PRKSDatabase:
         """
         sel = _prks_work_browse_select("works", abstract_excerpt=False)
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {sel}, works.last_opened_at, {pex} FROM works "
-                "WHERE works.last_opened_at IS NOT NULL "
-                "ORDER BY works.last_opened_at DESC, works.id ASC LIMIT ?",
-                (limit,),
-            )
+        return self._query_projected_works(
+            f"SELECT {sel}, works.last_opened_at, {pex} FROM works "
+            "WHERE works.last_opened_at IS NOT NULL "
+            "ORDER BY works.last_opened_at DESC, works.id ASC LIMIT ?",
+            (limit,),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
 
     def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
         """Top-N by `created_at`, same deterministic tie-break as Recent.
@@ -2218,15 +2342,11 @@ class PRKSDatabase:
         folder = (
             "(SELECT folder_id FROM folder_files WHERE work_id = works.id LIMIT 1) AS folder_id"
         )
-        rows = list(
-            self.execute_query(
-                f"SELECT {sel}, works.created_at, works.publisher, {folder}, {pex} FROM works "
-                "ORDER BY works.created_at DESC, works.id ASC LIMIT ?",
-                (limit,),
-            )
+        return self._query_projected_works(
+            f"SELECT {sel}, works.created_at, works.publisher, {folder}, {pex} FROM works "
+            "ORDER BY works.created_at DESC, works.id ASC LIMIT ?",
+            (limit,),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
 
     @staticmethod
     def etag_for_representation(label: str, rows: List[dict]) -> str:
@@ -2323,13 +2443,10 @@ class PRKSDatabase:
         placeholders = ",".join("?" * len(ordered_ids))
         wsel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({placeholders})",
-                tuple(ordered_ids),
-            )
+        rows = self._query_projected_works(
+            f"SELECT {wsel}, {pex} FROM works WHERE id IN ({placeholders})",
+            tuple(ordered_ids),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -2365,28 +2482,53 @@ class PRKSDatabase:
                 raise ValueError("Folder not found.")
 
     def _search_works_fts_tokens(self, tokens: List[str]) -> List[dict]:
+        """FTS5 on legacy ``works`` columns, plus primary-Manifestation title/abstract.
+
+        ``works_fts`` is ``content='works'`` (Slice C does not rewrite the FTS
+        schema). Candidate selection still has to find displayed titles, so
+        this path unions primary-Manifestation matches with the same tokens.
+        """
         clause = _prks_fts_prefix_clause(tokens)
         if not clause:
             return []
+        seen: set = set()
+        ordered: List[dict] = []
+
+        def add_rows(rows: List[dict]) -> None:
+            for row in rows:
+                wid = row["id"]
+                if wid in seen:
+                    continue
+                seen.add(wid)
+                ordered.append({"id": wid})
+
         try:
-            return self.execute_query(
-                """
-                SELECT works.id FROM works
-                JOIN works_fts ON works.rowid = works_fts.rowid
-                WHERE works_fts MATCH ?
-                ORDER BY rank
-                """,
-                (clause,),
+            add_rows(
+                self.execute_query(
+                    """
+                    SELECT works.id FROM works
+                    JOIN works_fts ON works.rowid = works_fts.rowid
+                    WHERE works_fts MATCH ?
+                    ORDER BY rank
+                    """,
+                    (clause,),
+                )
             )
         except sqlite3.OperationalError:
-            return []
+            pass
+        add_rows(self._search_works_primary_manifestation_like(tokens))
+        return ordered
 
     def _search_works_like_tokens(self, tokens: List[str]) -> List[dict]:
         if not tokens:
             return []
+        # Match the metadata the Slice-C projection displays: primary
+        # Manifestation title/abstract when present, else Work columns.
         blob = (
-            "LOWER(COALESCE(works.title,'') || ' ' || COALESCE(works.author_text,'') || ' ' || "
-            "COALESCE(works.abstract,'') || ' ' || COALESCE(works.text_content,''))"
+            "LOWER(COALESCE(pm.title, works.title,'') || ' ' || COALESCE(works.author_text,'') || ' ' || "
+            "COALESCE(CASE WHEN pm.id IS NOT NULL AND pm.abstract IS NOT NULL "
+            "THEN pm.abstract ELSE works.abstract END,'') || ' ' || "
+            "COALESCE(works.text_content,''))"
         )
         conds: List[str] = []
         params: List[str] = []
@@ -2396,7 +2538,35 @@ class PRKSDatabase:
             params.append(f"%{esc}%")
         where_sql = " AND ".join(conds)
         sql = (
-            f"SELECT DISTINCT works.id FROM works WHERE {where_sql} "
+            f"SELECT DISTINCT works.id FROM works "
+            "LEFT JOIN manifestations pm ON pm.id = works.primary_manifestation_id "
+            f"WHERE {where_sql} "
+            "ORDER BY works.updated_at DESC, works.created_at DESC"
+        )
+        return self.execute_query(sql, tuple(params))
+
+    def _search_works_primary_manifestation_like(self, tokens: List[str]) -> List[dict]:
+        """Candidate IDs whose primary Manifestation title/abstract matches.
+
+        Complements FTS (which still indexes legacy ``works`` columns) so a
+        non-origin primary title or abstract is findable.
+        """
+        if not tokens:
+            return []
+        blob = (
+            "LOWER(COALESCE(pm.title,'') || ' ' || COALESCE(pm.abstract,''))"
+        )
+        conds: List[str] = []
+        params: List[str] = []
+        for t in tokens:
+            esc = _prks_escape_like(t)
+            conds.append(f"{blob} LIKE ? ESCAPE '\\'")
+            params.append(f"%{esc}%")
+        where_sql = " AND ".join(conds)
+        sql = (
+            "SELECT DISTINCT works.id FROM works "
+            "JOIN manifestations pm ON pm.id = works.primary_manifestation_id "
+            f"WHERE {where_sql} "
             "ORDER BY works.updated_at DESC, works.created_at DESC"
         )
         return self.execute_query(sql, tuple(params))
@@ -2405,14 +2575,18 @@ class PRKSDatabase:
         if not q_norm.strip():
             return []
         needle = "%" + _prks_escape_like(q_norm.strip()) + "%"
-        sql = """
+        scope = work_projection.credits_scope_sql("w", "r")
+        sql = f"""
         SELECT DISTINCT w.id FROM works w
         INNER JOIN roles r ON r.work_id = w.id
         INNER JOIN persons p ON p.id = r.person_id
-        WHERE LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
-            LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+        WHERE {scope}
+          AND (
+            LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
+                LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+          )
         ORDER BY w.updated_at DESC, w.created_at DESC
         """
         return self.execute_query(sql, (needle, needle, needle))
@@ -2422,30 +2596,46 @@ class PRKSDatabase:
         if not a:
             return []
         needle = "%" + _prks_escape_like(a) + "%"
-        sql = """
+        scope = work_projection.credits_scope_sql("w", "r")
+        sql = f"""
         SELECT DISTINCT w.id AS id FROM works w
         WHERE LOWER(COALESCE(w.author_text,'')) LIKE ? ESCAPE '\\'
         UNION
         SELECT DISTINCT w.id AS id FROM works w
         INNER JOIN roles r ON r.work_id = w.id
         INNER JOIN persons p ON p.id = r.person_id
-        WHERE LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
-            LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+        WHERE {scope}
+          AND (
+            LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
+                LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+          )
         """
         rows = self.execute_query(sql, (needle, needle, needle, needle))
         return [r["id"] for r in rows]
 
     def work_ids_matching_publisher(self, pub: str) -> List[str]:
-        """Works whose publisher field matches substring, or equals a label of a publisher row whose name/alias matches substring."""
+        """Works whose displayed publisher matches substring, or equals a label of a publisher row whose name/alias matches substring.
+
+        Displayed publisher is Manifestation-owned once a primary Manifestation
+        row exists (including when that publisher is NULL). Only Works with no
+        primary Manifestation fall back to the legacy ``works.publisher`` column.
+        """
         p = (pub or "").strip().lower()
         if not p:
             return []
         needle = "%" + _prks_escape_like(p) + "%"
+        displayed = (
+            "CASE WHEN pm.id IS NOT NULL THEN pm.publisher ELSE works.publisher END"
+        )
         ids: set = set()
         for r in self.execute_query(
-            "SELECT id FROM works WHERE LOWER(COALESCE(publisher,'')) LIKE ? ESCAPE '\\'",
+            f"""
+            SELECT works.id FROM works
+            LEFT JOIN manifestations pm ON pm.id = works.primary_manifestation_id
+            WHERE LOWER(COALESCE({displayed}, '')) LIKE ? ESCAPE '\\'
+            """,
             (needle,),
         ):
             ids.add(r["id"])
@@ -2485,10 +2675,11 @@ class PRKSDatabase:
                 if not lab:
                     continue
                 for wr in self.execute_query(
-                    """
-                    SELECT id FROM works
-                    WHERE TRIM(COALESCE(publisher,'')) != ''
-                      AND LOWER(TRIM(publisher)) = LOWER(?)
+                    f"""
+                    SELECT works.id FROM works
+                    LEFT JOIN manifestations pm ON pm.id = works.primary_manifestation_id
+                    WHERE TRIM(COALESCE({displayed}, '')) != ''
+                      AND LOWER(TRIM({displayed})) = LOWER(?)
                     """,
                     (lab,),
                 ):
@@ -2563,27 +2754,20 @@ class PRKSDatabase:
             ph = ",".join("?" * len(id_list))
             wsel = _prks_work_summary_select_with_folder("works")
             pex = _prks_sql_work_summary_person_extras("works")
-            rows = list(
-                self.execute_query(
-                    f"SELECT {wsel}, {pex} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
-                    tuple(id_list),
-                )
+            return self._query_projected_works(
+                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
+                tuple(id_list),
             )
-            finish_work_summary_rows(rows, self.storage.pdfs_dir)
-            return rows
 
         if not ordered_ids:
             return []
         placeholders = ",".join("?" * len(ordered_ids))
         wsel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({placeholders})",
-                tuple(ordered_ids),
-            )
+        rows = self._query_projected_works(
+            f"SELECT {wsel}, {pex} FROM works WHERE id IN ({placeholders})",
+            tuple(ordered_ids),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ordered_ids if i in by_id]
 
@@ -2627,13 +2811,10 @@ class PRKSDatabase:
         ph = ",".join("?" * len(id_list))
         wsel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {wsel}, {pex} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
-                tuple(id_list),
-            )
+        rows = self._query_projected_works(
+            f"SELECT {wsel}, {pex} FROM works WHERE id IN ({ph}) ORDER BY updated_at DESC, created_at DESC",
+            tuple(id_list),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
         ordered.extend(rows)
         return ordered
 
@@ -2653,17 +2834,16 @@ class PRKSDatabase:
         WHERE wt.tag_id = ?
         ORDER BY w.created_at DESC
         """
-        rows = list(self.execute_query(query, (tid,)))
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
+        return self._query_projected_works(query, (tid,))
 
     def get_work(self, work_id: str) -> Optional[dict]:
-        res = self.execute_query("SELECT * FROM works WHERE id = ?", (work_id,))
-        if not res: return None
-        # Schema 17's identity pointers are not part of the Work shape until
-        # the projection slice (#60 Slice C) exposes them deliberately.
-        work = work_identity.strip_pointer_columns(res[0])
-        work['roles'] = self.get_work_roles(work_id)
+        with self._timed_read_snapshot() as conn:
+            work = work_projection.legacy_work(conn, work_id)
+            if work is None:
+                return None
+            work["roles"] = self._roles_for_manifestation_on_conn(
+                conn, work_id, work.get("primary_manifestation_id")
+            )
         work['arguments'] = []
         work['research_refs'] = {"concepts": [], "arguments": []}
         ann = self.get_work_annotations(work_id)
@@ -2760,32 +2940,24 @@ class PRKSDatabase:
         ]
         if not rows:
             return None
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
+        self._finish_projected_work_rows(rows, conn=conn)
         return rows[0]
 
     def get_recent_works(self, limit: int = 30) -> List[dict]:
         sel = _prks_work_summary_select("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {sel}, {pex} FROM works WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?",
-                (limit,),
-            )
+        return self._query_projected_works(
+            f"SELECT {sel}, {pex} FROM works WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?",
+            (limit,),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
 
     def get_recently_added_works(self, limit: int = 50) -> List[dict]:
         sel = _prks_work_summary_select_with_folder("works")
         pex = _prks_sql_work_summary_person_extras("works")
-        rows = list(
-            self.execute_query(
-                f"SELECT {sel}, {pex} FROM works ORDER BY works.created_at DESC LIMIT ?",
-                (limit,),
-            )
+        return self._query_projected_works(
+            f"SELECT {sel}, {pex} FROM works ORDER BY works.created_at DESC LIMIT ?",
+            (limit,),
         )
-        finish_work_summary_rows(rows, self.storage.pdfs_dir)
-        return rows
 
     def update_work_metadata(self, work_id: str, fields: dict):
         """Update arbitrary metadata fields on a work.
@@ -3020,24 +3192,33 @@ class PRKSDatabase:
         )
 
     def get_playlist(self, playlist_id: str) -> Optional[dict]:
-        rows = self.execute_query("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
-        if not rows:
-            return None
-        p = dict(rows[0])
-        wsel = _prks_work_summary_select("w")
-        pex = _prks_sql_work_summary_person_extras("w")
-        p["items"] = self.execute_query(
-            """
-            SELECT {wsel}, i.position, {pex}
-            FROM playlist_items i
-            JOIN works w ON w.id = i.work_id
-            WHERE i.playlist_id = ?
-            ORDER BY i.position ASC, w.created_at ASC
-            """.format(wsel=wsel, pex=pex),
-            (playlist_id,),
-        )
-        finish_work_summary_rows(p["items"], self.storage.pdfs_dir)
-        return p
+        with self._timed_read_snapshot() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM playlists WHERE id = ?", (playlist_id,)
+                ).fetchall()
+            ]
+            if not rows:
+                return None
+            p = dict(rows[0])
+            wsel = _prks_work_summary_select("w")
+            pex = _prks_sql_work_summary_person_extras("w")
+            p["items"] = [
+                dict(row)
+                for row in conn.execute(
+                    f"""
+                    SELECT {wsel}, i.position, {pex}
+                    FROM playlist_items i
+                    JOIN works w ON w.id = i.work_id
+                    WHERE i.playlist_id = ?
+                    ORDER BY i.position ASC, w.created_at ASC
+                    """,
+                    (playlist_id,),
+                ).fetchall()
+            ]
+            self._finish_projected_work_rows(p["items"], conn=conn)
+            return p
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
         """Put a Work in a Playlist, through the revision-aware boundary.
@@ -3559,42 +3740,54 @@ class PRKSDatabase:
         )
 
     def get_folder(self, folder_id: str) -> Optional[dict]:
-        res = self.execute_query("SELECT * FROM folders WHERE id = ?", (folder_id,))
-        if not res: return None
-        folder = dict(res[0])
-        child_rows = self.execute_query(
-            """
-            SELECT id, title, parent_id, description,
-                (SELECT COUNT(*) FROM folder_files ff WHERE ff.folder_id = folders.id) AS work_count,
-                (SELECT COUNT(*) FROM folders c WHERE c.parent_id = folders.id) AS child_count
-            FROM folders
-            WHERE parent_id = ?
-            ORDER BY title COLLATE NOCASE
-            """,
-            (folder_id,),
-        )
-        folder["children"] = list(child_rows)
-        if folder.get("parent_id"):
-            parent_row = self.execute_query(
-                "SELECT id, title FROM folders WHERE id = ?",
-                (folder["parent_id"],),
-            )
-            folder["parent"] = dict(parent_row[0]) if parent_row else None
-        else:
-            folder["parent"] = None
-        wsel = _prks_work_summary_select("w")
-        pex = _prks_sql_work_summary_person_extras("w")
-        query = f"""
-        SELECT
-            {wsel},
-            {pex}
-        FROM works w
-        JOIN folder_files ff ON w.id = ff.work_id
-        WHERE ff.folder_id = ?
-        ORDER BY w.created_at DESC
-        """
-        folder["works"] = list(self.execute_query(query, (folder_id,)))
-        finish_work_summary_rows(folder["works"], self.storage.pdfs_dir)
+        with self._timed_read_snapshot() as conn:
+            res = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM folders WHERE id = ?", (folder_id,)
+                ).fetchall()
+            ]
+            if not res:
+                return None
+            folder = dict(res[0])
+            folder["children"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT id, title, parent_id, description,
+                        (SELECT COUNT(*) FROM folder_files ff WHERE ff.folder_id = folders.id) AS work_count,
+                        (SELECT COUNT(*) FROM folders c WHERE c.parent_id = folders.id) AS child_count
+                    FROM folders
+                    WHERE parent_id = ?
+                    ORDER BY title COLLATE NOCASE
+                    """,
+                    (folder_id,),
+                ).fetchall()
+            ]
+            if folder.get("parent_id"):
+                parent_row = conn.execute(
+                    "SELECT id, title FROM folders WHERE id = ?",
+                    (folder["parent_id"],),
+                ).fetchone()
+                folder["parent"] = dict(parent_row) if parent_row else None
+            else:
+                folder["parent"] = None
+            wsel = _prks_work_summary_select("w")
+            pex = _prks_sql_work_summary_person_extras("w")
+            folder["works"] = [
+                dict(row)
+                for row in conn.execute(
+                    f"""
+                    SELECT {wsel}, {pex}
+                    FROM works w
+                    JOIN folder_files ff ON w.id = ff.work_id
+                    WHERE ff.folder_id = ?
+                    ORDER BY w.created_at DESC
+                    """,
+                    (folder_id,),
+                ).fetchall()
+            ]
+            self._finish_projected_work_rows(folder["works"], conn=conn)
         folder['tags'] = self.get_folder_tags(folder_id)
         return folder
 
@@ -3996,32 +4189,24 @@ class PRKSDatabase:
         read after ``BEGIN`` for the same reason as the playlist catalog: a
         bare SELECT does not open a transaction, and the ETag hashes both.
         """
-        t0 = clock_ns()
-        try:
-            with self.connection() as conn:
-                conn.execute("BEGIN")
-                person_rows = conn.execute(
-                    """
-                    SELECT p.*, (
-                        SELECT GROUP_CONCAT(DISTINCT r.role_type)
-                        FROM roles r WHERE r.person_id = p.id
-                    ) AS _roles_concat
-                    FROM persons p ORDER BY p.last_name ASC, p.id ASC
-                    """
-                ).fetchall()
-                member_rows = conn.execute(
-                    """
-                    SELECT m.person_id, g.id AS group_id, g.name AS group_name
-                    FROM person_group_members m
-                    JOIN person_groups g ON g.id = m.group_id
-                    ORDER BY g.name COLLATE NOCASE, g.id ASC
-                    """
-                ).fetchall()
-        finally:
-            try:
-                record_db_call(clock_ns() - t0, write=False)
-            except Exception:
-                pass
+        with self._timed_read_snapshot() as conn:
+            person_rows = conn.execute(
+                """
+                SELECT p.*, (
+                    SELECT GROUP_CONCAT(DISTINCT r.role_type)
+                    FROM roles r WHERE r.person_id = p.id
+                ) AS _roles_concat
+                FROM persons p ORDER BY p.last_name ASC, p.id ASC
+                """
+            ).fetchall()
+            member_rows = conn.execute(
+                """
+                SELECT m.person_id, g.id AS group_id, g.name AS group_name
+                FROM person_group_members m
+                JOIN person_groups g ON g.id = m.group_id
+                ORDER BY g.name COLLATE NOCASE, g.id ASC
+                """
+            ).fetchall()
         by_p: Dict[str, List[dict]] = defaultdict(list)
         for member in member_rows:
             by_p[member["person_id"]].append(
@@ -4039,22 +4224,33 @@ class PRKSDatabase:
         return rows
 
     def get_person(self, person_id: str) -> Optional[dict]:
-        res = self.execute_query("SELECT * FROM persons WHERE id = ?", (person_id,))
-        if not res: return None
-        person = res[0]
-        pex = _prks_sql_work_summary_person_extras("w")
-        query = f"""
-        SELECT w.*, r.role_type, r.order_index, r.credit_name, {pex}
-        FROM roles r
-        JOIN works w ON r.work_id = w.id
-        WHERE r.person_id = ?
-        ORDER BY r.order_index ASC, r.rowid ASC
-        """
-        person["works"] = [
-            work_identity.strip_pointer_columns(row)
-            for row in self.execute_query(query, (person_id,))
-        ]
-        finish_work_summary_rows(person["works"], self.storage.pdfs_dir)
+        with self._timed_read_snapshot() as conn:
+            res = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM persons WHERE id = ?", (person_id,)
+                ).fetchall()
+            ]
+            if not res:
+                return None
+            person = res[0]
+            pex = _prks_sql_work_summary_person_extras("w")
+            scope = work_projection.credits_scope_sql("w", "r")
+            person["works"] = [
+                work_identity.strip_pointer_columns(dict(row))
+                for row in conn.execute(
+                    f"""
+                    SELECT w.*, r.role_type, r.order_index, r.credit_name, {pex}
+                    FROM roles r
+                    JOIN works w ON r.work_id = w.id
+                    WHERE r.person_id = ?
+                      AND {scope}
+                    ORDER BY r.order_index ASC, r.rowid ASC
+                    """,
+                    (person_id,),
+                ).fetchall()
+            ]
+            self._finish_projected_work_rows(person["works"], conn=conn)
         person["groups"] = self.get_groups_for_person(person_id)
         return person
 
@@ -4534,14 +4730,18 @@ class PRKSDatabase:
         return int(rows[0]["m"]) + 1
 
     def get_work_roles(self, work_id: str) -> List[dict]:
-        query = """
-        SELECT p.*, r.role_type, r.order_index, r.credit_name
-        FROM roles r
-        JOIN persons p ON r.person_id = p.id
-        WHERE r.work_id = ?
-        ORDER BY r.order_index ASC, r.rowid ASC
-        """
-        return self.execute_query(query, (work_id,))
+        """Effective credits for the Work's primary Manifestation (``credits(primary M)``)."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT primary_manifestation_id FROM works WHERE id = ?",
+                (work_id,),
+            ).fetchone()
+            if row is None:
+                return []
+            return self._roles_for_manifestation_on_conn(
+                conn, work_id, row["primary_manifestation_id"]
+            )
 
     def update_role_credit_name(
         self,
@@ -5099,11 +5299,14 @@ class PRKSDatabase:
         return s
 
     def generate_bibtex(self, work_id: str) -> str:
-        work_res = self.execute_query("SELECT * FROM works WHERE id = ?", (work_id,))
-        if not work_res: return ""
-        work = work_res[0]
-
-        roles = self.get_work_roles(work_id)
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            target = work_projection.citation_target(conn, work_id)
+            work = work_projection.citation_record(conn, target) if target else None
+            if not work:
+                return ""
+            # Credits follow the citation Manifestation, not every Work role.
+            roles = self._roles_for_manifestation_on_conn(conn, work_id, target)
         # Roles sorted by order_index, then rowid (stable order when order_index ties).
         linked_authors = self._biblatex_names_for_role(roles, "Author")
         editors = self._biblatex_names_for_role(roles, "Editor")
