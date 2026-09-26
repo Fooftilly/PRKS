@@ -1,8 +1,8 @@
 """Field-scoped Work metadata: independence, conflicts and atomic local save."""
 import json
-from urllib.parse import quote
 import os
 import unittest
+from urllib.parse import quote
 
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
