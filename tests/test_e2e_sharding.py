@@ -282,6 +282,20 @@ class ShardAssignmentTests(unittest.TestCase):
                     exact, class_outlier_ratio=bad, min_class_samples=3
                 )
 
+    def test_aggregate_timing_baseline_rejects_bad_options_before_empty_input(self):
+        # Invalid options must fail even when no exact IDs remain to group.
+        with self.assertRaises(ValueError):
+            aggregate_timing_baseline({}, class_outlier_ratio=float("nan"))
+        with self.assertRaises(ValueError):
+            aggregate_timing_baseline(
+                {"mod.test": 1.0},  # two-component id → no module groups
+                class_outlier_ratio=float("inf"),
+            )
+        with self.assertRaises(ValueError):
+            aggregate_timing_baseline({}, min_class_samples=0)
+        with self.assertRaises(ValueError):
+            aggregate_timing_baseline({}, min_class_samples=-1)
+
     def test_aggregated_baseline_still_overridden_by_local_exact(self):
         exact = {
             "tests.e2e.test_offline.Case.test_%d" % i: 8.0 for i in range(4)

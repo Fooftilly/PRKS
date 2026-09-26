@@ -300,6 +300,29 @@ def aggregate_timing_baseline(
     committed file stays small and reviewable while still weighting known heavy
     classes.
     """
+    # Reject bad options before any grouping / empty-input return so callers
+    # (including the CLI) always see the option error, not a silent {}.
+    try:
+        ratio = float(class_outlier_ratio)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "class_outlier_ratio must be a finite number >= 1.0, got %r"
+            % (class_outlier_ratio,)
+        ) from exc
+    if not math.isfinite(ratio) or ratio < 1.0:
+        raise ValueError(
+            "class_outlier_ratio must be a finite number >= 1.0, got %r"
+            % (class_outlier_ratio,)
+        )
+    try:
+        min_samples = int(min_class_samples)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "min_class_samples must be >= 1, got %r" % (min_class_samples,)
+        ) from exc
+    if min_samples < 1:
+        raise ValueError("min_class_samples must be >= 1, got %r" % (min_class_samples,))
+
     by_module = {}
     by_class = {}
     for key, raw in (exact_timings or {}).items():
@@ -319,22 +342,6 @@ def aggregate_timing_baseline(
         median = _median(values)
         module_medians[module] = median
         baseline["%s.*" % module] = _round_baseline_seconds(median)
-
-    try:
-        ratio = float(class_outlier_ratio)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "class_outlier_ratio must be a finite number >= 1.0, got %r"
-            % (class_outlier_ratio,)
-        ) from exc
-    if not math.isfinite(ratio) or ratio < 1.0:
-        raise ValueError(
-            "class_outlier_ratio must be a finite number >= 1.0, got %r"
-            % (class_outlier_ratio,)
-        )
-    min_samples = int(min_class_samples)
-    if min_samples < 1:
-        raise ValueError("min_class_samples must be >= 1, got %r" % (min_class_samples,))
 
     for (module, class_name), values in sorted(by_class.items()):
         if len(values) < min_samples:
