@@ -112,33 +112,50 @@ def _cpu_affinity_count() -> int:
 
 
 def _cgroup_cpu_quota_count() -> int | None:
-    """Return finite cgroup CPU quota in CPUs, or None when unlimited/unknown.
+    """Return tightest finite cgroup CPU quota in CPUs, or None if unlimited/unknown.
 
-    Separates quota from affinity so the doctor can show both components.
+    Matches ``detect_cgroup_cpu_count`` ancestor walk: nested parents can impose
+    a tighter quota than the leaf, so the first finite value is not enough.
     """
     from tests.e2e import sharding
 
+    quota_count = None
     for directory in sharding._cgroup_v2_self_dirs():
         parsed = sharding._parse_cpu_max(sharding._read_first((directory / "cpu.max",)))
         if parsed is not None:
-            return parsed
+            quota_count = parsed if quota_count is None else min(quota_count, parsed)
 
-    for directory in sharding._cgroup_v1_self_dirs("cpu", "cpu", "cpu,cpuacct"):
-        parsed = sharding._parse_cfs_quota(
-            sharding._read_first((directory / "cpu.cfs_quota_us",)),
-            sharding._read_first((directory / "cpu.cfs_period_us",)),
+    if quota_count is None:
+        for directory in sharding._cgroup_v1_self_dirs("cpu", "cpu", "cpu,cpuacct"):
+            parsed = sharding._parse_cfs_quota(
+                sharding._read_first((directory / "cpu.cfs_quota_us",)),
+                sharding._read_first((directory / "cpu.cfs_period_us",)),
+            )
+            if parsed is not None:
+                quota_count = (
+                    parsed if quota_count is None else min(quota_count, parsed)
+                )
+
+    if quota_count is None:
+        raw = sharding._read_first(("/sys/fs/cgroup/cpu.max",))
+        quota_count = sharding._parse_cpu_max(raw)
+
+    if quota_count is None:
+        quota_count = sharding._parse_cfs_quota(
+            sharding._read_first(("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",)),
+            sharding._read_first(("/sys/fs/cgroup/cpu/cpu.cfs_period_us",)),
         )
-        if parsed is not None:
-            return parsed
+    return quota_count
 
-    raw = sharding._read_first(("/sys/fs/cgroup/cpu.max",))
-    parsed = sharding._parse_cpu_max(raw)
-    if parsed is not None:
-        return parsed
-    return sharding._parse_cfs_quota(
-        sharding._read_first(("/sys/fs/cgroup/cpu/cpu.cfs_quota_us",)),
-        sharding._read_first(("/sys/fs/cgroup/cpu/cpu.cfs_period_us",)),
-    )
+
+def _e2e_browsers_dir(repo: Path) -> Path:
+    """Repository-local Chromium cache the E2E runner forces via apply_playwright_browser_env.
+
+    Read-only: does not mkdir or mutate PLAYWRIGHT_BROWSERS_PATH.
+    """
+    if repo == REPO:
+        return BROWSERS_DIR
+    return repo / BROWSERS_DIR.name
 
 
 def _chromium_probe(browsers_dir: Path) -> dict:
@@ -165,6 +182,8 @@ def _chromium_probe(browsers_dir: Path) -> dict:
             if executable is not None:
                 chrome_version = _chrome_version_string(executable)
 
+    # Available only when the binary both exists and answers --version.
+    # A stale/corrupt path that merely exists is a toolchain gap.
     return {
         "playwright_installed": installed,
         "playwright_pinned": pinned,
@@ -172,7 +191,7 @@ def _chromium_probe(browsers_dir: Path) -> dict:
         "playwright_match": bool(installed and pinned and installed == pinned),
         "chromium_revision": revision,
         "chromium_revision_error": revision_error,
-        "chromium_available": executable is not None,
+        "chromium_available": chrome_version is not None,
         "chromium_path": str(executable) if executable else None,
         "chromium_version": chrome_version,
         "browsers_dir": str(browsers_dir),
@@ -266,9 +285,26 @@ def _resource_pressure_reasons(resources: dict, agent_jobs: int) -> list[str]:
     return reasons
 
 
-def _assessment_for(setup_reasons: list[str], resource_reasons: list[str]) -> dict:
+def _resource_incomplete_reasons(resources: dict) -> list[str]:
+    """Probe failures that must block a resources_look_adequate claim."""
+    reasons = []
+    shm = resources.get("shm") or {}
+    temp = resources.get("temp") or {}
+    if shm.get("avail_bytes") is None:
+        reasons.append("shm available space unknown (probe failed or missing)")
+    if temp.get("avail_bytes") is None:
+        reasons.append("temp disk available space unknown (probe failed or missing)")
+    return reasons
+
+
+def _assessment_for(
+    setup_reasons: list[str],
+    resource_reasons: list[str],
+    incomplete_reasons: list[str] | None = None,
+) -> dict:
     setup_gap = bool(setup_reasons)
     under_resourced = bool(resource_reasons)
+    incomplete = list(incomplete_reasons or [])
 
     if setup_gap and under_resourced:
         return {
@@ -298,6 +334,15 @@ def _assessment_for(setup_reasons: list[str], resource_reasons: list[str]) -> di
                 "look adequate; do not classify as an app regression on resource facts alone."
             ),
         }
+    if incomplete:
+        return {
+            "kind": "resource_facts_incomplete",
+            "reasons": incomplete,
+            "hint": (
+                "Resource probes are incomplete; do not treat E2E failures as an "
+                "application regression until shm/temp (and related) facts are readable."
+            ),
+        }
     return {
         "kind": "resources_look_adequate",
         "reasons": [],
@@ -311,24 +356,21 @@ def _assessment_for(setup_reasons: list[str], resource_reasons: list[str]) -> di
 def classify_assessment(facts: dict) -> dict:
     """Map collected facts to a pasteable failure-classification hint."""
     setup = _browser_setup_reasons(facts["browser"])
-    resources = _resource_pressure_reasons(
+    pressure = _resource_pressure_reasons(
         facts["resources"], facts["agent_default_workers"]
     )
-    return _assessment_for(setup, resources)
+    incomplete = _resource_incomplete_reasons(facts["resources"])
+    return _assessment_for(setup, pressure, incomplete)
 
 
 def collect_report(repo: Path | None = None, environ=None) -> dict:
     """Gather read-only facts. Pure enough to unit-test with injected environ."""
     root = Path(repo) if repo is not None else REPO
     env = os.environ if environ is None else environ
-    raw_browsers = env.get("PLAYWRIGHT_BROWSERS_PATH")
-    if raw_browsers:
-        browsers_dir = Path(raw_browsers)
-        if not browsers_dir.is_absolute():
-            browsers_dir = root / browsers_dir
-    else:
-        # Prefer the install helper's absolute cache when probing this repo.
-        browsers_dir = BROWSERS_DIR if root == REPO else (root / BROWSERS_DIR.name)
+    # E2E always forces the repo-local cache (apply_playwright_browser_env).
+    # Probe that path; surface any inherited PLAYWRIGHT_BROWSERS_PATH separately.
+    browsers_dir = _e2e_browsers_dir(root)
+    inherited_browsers = env.get("PLAYWRIGHT_BROWSERS_PATH")
 
     affinity = _cpu_affinity_count()
     quota = _cgroup_cpu_quota_count()
@@ -340,13 +382,16 @@ def collect_report(repo: Path | None = None, environ=None) -> dict:
     shm = _statvfs_bytes(_SHM_PROBE_PATH)
     temp = _statvfs_bytes(temp_dir)
 
+    browser = _chromium_probe(browsers_dir)
+    browser["browsers_dir_inherited"] = inherited_browsers
+
     facts = {
         "python": {
             "version": platform.python_version(),
             "implementation": platform.python_implementation(),
             "executable": sys.executable,
         },
-        "browser": _chromium_probe(browsers_dir),
+        "browser": browser,
         "resources": {
             "cpu_affinity": affinity,
             "cpu_cgroup_quota": quota,
@@ -398,7 +443,15 @@ def format_report(facts: dict) -> str:
     if browser["chromium_revision_error"]:
         chromium_bits.append("error=%s" % browser["chromium_revision_error"])
     lines.append("chromium: %s" % " ".join(chromium_bits))
-    lines.append("browsers_dir: %s" % browser["browsers_dir"])
+    lines.append(
+        "browsers_dir: %s (E2E repo cache; apply_playwright_browser_env)"
+        % browser["browsers_dir"]
+    )
+    inherited = browser.get("browsers_dir_inherited")
+    lines.append(
+        "playwright_browsers_path_inherited: %s"
+        % ("(unset)" if inherited is None else inherited)
+    )
 
     quota = resources["cpu_cgroup_quota"]
     lines.append(

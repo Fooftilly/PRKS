@@ -99,6 +99,63 @@ class AssessmentClassificationTests(unittest.TestCase):
         )
         self.assertEqual(result["kind"], "setup_and_under_resourced")
 
+    def test_unknown_resource_probes_are_not_adequate(self):
+        result = doctor.classify_assessment(
+            self._facts(shm_avail=None, temp_avail=None)
+        )
+        self.assertEqual(result["kind"], "resource_facts_incomplete")
+        self.assertNotEqual(result["kind"], "resources_look_adequate")
+        self.assertTrue(any("shm" in r for r in result["reasons"]))
+
+
+class CgroupCpuQuotaTests(unittest.TestCase):
+    def test_quota_uses_tightest_finite_ancestor(self):
+        import tests.e2e.sharding as sharding
+
+        leaf = Path("/sys/fs/cgroup/pod/agent/workload")
+        mid = Path("/sys/fs/cgroup/pod/agent")
+        root = Path("/sys/fs/cgroup")
+        values = {
+            leaf / "cpu.max": "400000 100000",  # 4 CPUs at leaf
+            mid / "cpu.max": "100000 100000",  # 1 CPU parent (tighter)
+            root / "cpu.max": "max 100000",
+        }
+
+        def fake_dirs():
+            yield leaf
+            yield mid
+            yield root
+
+        def fake_read(paths):
+            for path in paths:
+                if path in values:
+                    return values[path]
+            return None
+
+        with mock.patch.object(sharding, "_cgroup_v2_self_dirs", fake_dirs):
+            with mock.patch.object(sharding, "_read_first", fake_read):
+                self.assertEqual(doctor._cgroup_cpu_quota_count(), 1)
+
+
+class ChromiumProbeTests(unittest.TestCase):
+    def test_available_requires_version_probe(self):
+        browsers = Path("/repo/.playwright-browsers")
+        fake_exe = browsers / "chromium-1" / "chrome-linux" / "chrome"
+        with mock.patch.object(doctor, "installed_playwright_version", return_value="1.63.0"):
+            with mock.patch.object(doctor, "pinned_playwright_version", return_value="1.63.0"):
+                with mock.patch.object(
+                    doctor, "playwright_chromium_revision", return_value="1"
+                ):
+                    with mock.patch.object(
+                        doctor, "chromium_executable", return_value=fake_exe
+                    ):
+                        with mock.patch.object(
+                            doctor, "_chrome_version_string", return_value=None
+                        ):
+                            probe = doctor._chromium_probe(browsers)
+        self.assertFalse(probe["chromium_available"])
+        self.assertEqual(probe["chromium_path"], str(fake_exe))
+
 
 class FormatReportTests(unittest.TestCase):
     def test_format_is_deterministic_and_pasteable(self):
@@ -119,6 +176,7 @@ class FormatReportTests(unittest.TestCase):
                 "chromium_path": "/repo/.playwright-browsers/chromium-1200/chrome-linux/chrome",
                 "chromium_version": "Chromium 120.0.0",
                 "browsers_dir": "/repo/.playwright-browsers",
+                "browsers_dir_inherited": "/external/pw-cache",
             },
             "resources": {
                 "cpu_affinity": 4,
@@ -164,6 +222,10 @@ class FormatReportTests(unittest.TestCase):
         self.assertTrue(text.startswith("PRKS E2E doctor (read-only)\n"))
         self.assertIn("python: 3.12.3 (CPython)", text)
         self.assertIn("playwright: installed=1.63.0 pinned=1.63.0 match=yes", text)
+        self.assertIn("browsers_dir: /repo/.playwright-browsers", text)
+        self.assertIn(
+            "playwright_browsers_path_inherited: /external/pw-cache", text
+        )
         self.assertIn("cpu: affinity_or_cpuset=4 cgroup_quota=2 effective=2", text)
         self.assertIn("memory_cgroup: 4 GiB", text)
         self.assertIn("agent_default_workers: 1", text)
@@ -187,6 +249,7 @@ class CollectReportTests(unittest.TestCase):
             env = {
                 "PRKS_E2E_JOBS": "2",
                 "TMPDIR": str(root / "tmp"),
+                "PLAYWRIGHT_BROWSERS_PATH": str(root / "external-cache"),
             }
             (root / "tmp").mkdir()
             with mock.patch.object(doctor, "_chromium_probe") as probe:
@@ -211,6 +274,11 @@ class CollectReportTests(unittest.TestCase):
                                 doctor, "_cgroup_cpu_quota_count", return_value=1
                             ):
                                 facts = doctor.collect_report(repo=root, environ=env)
+            probe.assert_called_once_with(root / ".playwright-browsers")
+            self.assertEqual(
+                facts["browser"]["browsers_dir_inherited"],
+                str(root / "external-cache"),
+            )
             self.assertEqual(facts["env"]["PRKS_E2E_JOBS"], "2")
             self.assertIsNone(facts["env"]["PRKS_E2E_PROFILE"])
             self.assertEqual(facts["timing_baseline_committed"]["present"], True)
