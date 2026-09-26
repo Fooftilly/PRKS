@@ -302,6 +302,114 @@ async function durableSaveThroughObservedBaseCancels() {
     delete globalThis.prksSync;
 }
 
+function ensureWorksEnqueueLoaded() {
+    if (typeof globalThis.prksEnqueueWorkResearchNotesSave === 'function') return;
+    globalThis.window = globalThis;
+    if (!globalThis.document) {
+        globalThis.document = {
+            documentElement: { classList: { contains: () => false, toggle: () => {} } },
+            getElementById: () => null,
+            querySelector: () => null,
+            querySelectorAll: () => [],
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            createElement: () => ({
+                style: {},
+                setAttribute: () => {},
+                classList: { add: () => {}, remove: () => {}, contains: () => false },
+            }),
+        };
+    }
+    if (!globalThis.localStorage) {
+        globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    }
+    if (!globalThis.requestAnimationFrame) {
+        globalThis.requestAnimationFrame = (fn) => { fn(); return 0; };
+    }
+    if (!globalThis.ResizeObserver) {
+        globalThis.ResizeObserver = function () {
+            this.observe = function () {};
+            this.disconnect = function () {};
+        };
+    }
+    require('../../frontend/js/components/works.js');
+    assert.equal(typeof globalThis.prksEnqueueWorkResearchNotesSave, 'function',
+        'production enqueue must load under Node stubs');
+}
+
+async function enqueuePathAtoBtoACancels() {
+    /* Production caller Codex/CodeRabbit asked for: editor context →
+     * prksEnqueueWorkResearchNotesSave → pending returns to zero on A→B→A.
+     * Keeps durableSaveThroughObservedBaseCancels (direct durable save) intact. */
+    ensureWorksEnqueueLoaded();
+    if (typeof globalThis.prksResetResearchDraftsForTest === 'function') {
+        globalThis.prksResetResearchDraftsForTest();
+    }
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    globalThis.prksSync = { store, changed() {} };
+
+    let editorText = 'A';
+    const notes = {
+        editor: { value: () => editorText },
+        editGeneration: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        drafting: false,
+        saveError: false,
+        pendingSave: false,
+        workId: 'W-1',
+    };
+    const resources = {
+        workNotes: notes,
+        workNotesObserved: {
+            research: { value: 'A', revision: 0 },
+            private: { value: '', revision: 0 },
+        },
+        workNotesCanonical: { id: 'W-1', text_content: 'A', private_notes: '' },
+    };
+    const statusEl = { innerText: '' };
+    const ctx = {
+        timers: new Map(),
+        tabId: 'notes-enqueue-cancel',
+        getResource: key => resources[key],
+        setResource: (key, value) => { resources[key] = value; },
+        getEntity: () => ({ id: 'W-1', text_content: 'A', private_notes: '' }),
+        query: () => statusEl,
+        setTimer(name, tid) { this.timers.set(name, tid); },
+        clearTimer(name) {
+            const tid = this.timers.get(name);
+            if (tid) clearTimeout(tid);
+            this.timers.delete(name);
+        },
+        isCurrent: () => true,
+    };
+
+    async function enqueueEditorText(text) {
+        editorText = text;
+        notes.editGeneration = (Number(notes.editGeneration) || 0) + 1;
+        const promise = globalThis.prksEnqueueWorkResearchNotesSave(ctx, 'W-1');
+        assert.ok(promise && typeof promise.then === 'function',
+            'production enqueue must return the durable save promise');
+        const result = await promise;
+        assert.equal(result.code, 'saved', 'enqueue save of ' + JSON.stringify(text));
+    }
+
+    await enqueueEditorText('B');
+    assert.equal(noteRows(await store.listOperations(), RESEARCH, 'W-1').length, 1,
+        'enqueue A->B leaves one pending op');
+
+    await enqueueEditorText('A');
+    assert.equal(noteRows(await store.listOperations(), RESEARCH, 'W-1').length, 0,
+        'enqueue A->B->A returns pending op count to zero');
+
+    if (typeof globalThis.prksResetResearchDraftsForTest === 'function') {
+        globalThis.prksResetResearchDraftsForTest();
+    }
+    delete globalThis.prksSync;
+}
+
 async function reconciliation() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
     await cache.putEntity('work', 'W-1', {
@@ -455,6 +563,7 @@ async function main() {
     await byteLimits();
     await mutationTestAtoBtoA();
     await durableSaveThroughObservedBaseCancels();
+    await enqueuePathAtoBtoACancels();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
