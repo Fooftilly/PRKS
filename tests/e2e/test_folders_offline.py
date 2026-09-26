@@ -620,8 +620,37 @@ class FoldersOfflineTests(unittest.TestCase):
         self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
         o._wait_list_uncached(page, 'folders:index')
 
-    # work_deletion / work_metadata_save → folders generation is owned by
-    # offline-runtime / work-metadata Node selftests (helper-call E2Es dropped).
+    def test_work_deletion_invalidates_folders(self):
+        """DELETE_WORK through the real Work-deletion UI must fence Folders.
+
+        Vacuous helper-call coverage (`prksMarkFoldersDomainChanged` after a
+        raw DELETE) was dropped as MOVE; this KEEP exercises the entrypoint
+        that actually publishes folders coherence on ACK.
+        """
+        server, page, context, _c = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._open_details_drawer_if_tiled(page)
+        advanced = page.locator('.work-details-advanced')
+        if advanced.get_attribute('open') is None:
+            advanced.locator('summary').click()
+        page.locator('.delete-work-btn').click()
+        page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='DELETE_WORK must acknowledge before folders coherence',
+        )
+        self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
+        o._wait_list_uncached(page, 'folders:index')
+
+    # Work-metadata mark helpers → folders generation remains owned by
+    # work-metadata Node selftests (vacuous Chromium helper-call E2E dropped).
 
     def test_author_and_editor_roles_invalidate_folders_but_other_roles_do_not(self):
         server, page, context, _c = self.start()

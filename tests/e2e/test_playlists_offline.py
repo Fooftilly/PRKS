@@ -988,9 +988,34 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
     # ---- Work -> Playlist coherence ----------------------------------------
 
-    # Work-metadata ACK patches embedded playlist item titles in place rather
-    # than dropping playlists — owned by run_work_metadata_sync_selftest.js
-    # `embeddedReconciliation`. Keep the playlist inline-rename UI path below.
+    def test_work_metadata_save_reconciles_playlists_rather_than_dropping_them(self):
+        """Work metadata editor save (#save-work-identity-btn) must reconcile
+        Playlist embedded titles in place rather than dropping the cache.
+
+        Inline rename covers the playlist-local UI path that shares
+        SET_WORK_METADATA_FIELD; this KEEP covers the Work metadata editor
+        save path. Node `embeddedReconciliation` still owns the ACK patch
+        mechanics below the Chromium boundary.
+        """
+        server, page, context = self.start()
+        ids = server.ids
+        self.cache(page, ids, all_domains=True)
+        before = self.generations(page)
+        o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)
+        self.open_details_panel(page)
+        page.locator('#panel-content button', has_text='Edit metadata').click()
+        page.locator('[data-prks-work-field="title"]').fill('Playlist Video Renamed')
+        page.locator('#save-work-identity-btn').click()
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)")
+        wait_for_async(page, '''id => window.createPrksOfflineStore()
+            .getEntity('playlist', id).then(row => {
+                if (!row) return false;
+                return (row.value.items || []).some(
+                    w => w.title === 'Playlist Video Renamed');
+            })''', arg=ids['playlist_a'])
+        self.reconciled(page, before, {'concepts', 'arguments', 'people', 'playlists'},
+                        ids, 'Playlist Video Renamed')
 
     def test_playlist_inline_rename_inherits_the_shared_title_helper(self):
         server, page, context = self.start()
