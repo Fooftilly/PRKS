@@ -1851,6 +1851,21 @@ async function abstracts() {
             'the refusal is painted into the bib sync status');
         assert.equal(harness.inputs.abstract.value, oversize, 'the draft stays on screen');
         assert.equal(harness.inputs.abstract.value.length, limit + 1);
+        /* Multibyte: under the limit by .length, over it in UTF-8 bytes.
+         * ASCII oversize alone would still pass if the editor regressed to
+         * checking character length instead of prksWorkFieldLimitError. */
+        const multibyteOver = '\u65e5'.repeat(Math.floor(limit / 3) + 10);
+        assert.ok(multibyteOver.length < limit);
+        assert.ok(globalThis.prksWorkFieldUtf8Bytes(multibyteOver) > limit);
+        harness.inputs.abstract.value = multibyteOver;
+        await harness.saveBib();
+        assert.equal(harness.saveCalls(), 0,
+            'the editor must reject an Abstract that exceeds the UTF-8 byte limit');
+        assert.deepEqual(await refuseStore.listOperations(), []);
+        assert.match(harness.status.textContent,
+            /Abstract is too long to save/,
+            'byte-oversize refuse paints into the bib sync status');
+        assert.equal(harness.inputs.abstract.value, multibyteOver, 'the multibyte draft stays on screen');
         harness.teardown();
         // Restore state helpers the rest of abstracts() shares.
         delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
