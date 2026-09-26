@@ -2,8 +2,15 @@
 """Diff-aware guard against new E2E ``page.wait_for_timeout`` calls (#189).
 
 Historical ``wait_for_timeout`` debt under ``tests/e2e/`` must not fail unrelated
-PRs. This checker inspects the unified diff against a comparison base and fails
-only when a **new** call site is introduced without an explicit exemption.
+PRs. The checker compares wait call sites on touched paths (and paths removed
+from the allowlist) against the comparison base:
+
+- **New** unapproved calls fail.
+- Calls that were **exempt in the base** (marker or path allowlist) but are
+  no longer exempt fail — even when the sleep line itself is unchanged
+  (exemption-removal ratchet).
+- Historical unexempted calls on untouched paths, or still matched as
+  base-unexempted on a touched path, pass.
 
 Exemptions (narrow):
 
@@ -24,16 +31,19 @@ sync).
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 E2E_PREFIX = "tests/e2e/"
+CHECKER_RELPATH = "scripts/check_e2e_wait_for_timeout.py"
 MARKER = "prks-allow-wait-for-timeout:"
 
 # Tiny allowlist of relative paths (posix) whose entire file may introduce
@@ -204,8 +214,8 @@ def line_is_exempt(lines: list[str], lineno_1based: int) -> bool:
     return False
 
 
-def path_is_allowlisted(relpath: str) -> bool:
-    return relpath in PATH_ALLOWLIST
+def path_is_allowlisted(relpath: str, allowlist: frozenset[str] | None = None) -> bool:
+    return relpath in (PATH_ALLOWLIST if allowlist is None else allowlist)
 
 
 def _is_e2e_python(path: str | None) -> bool:
@@ -216,8 +226,111 @@ def _is_e2e_python(path: str | None) -> bool:
     )
 
 
+def normalize_wait_line(line: str) -> str:
+    """Strip trailing comments/whitespace so same-line marker edits still match."""
+    return line.split("#", 1)[0].rstrip().strip()
+
+
+def iter_wait_sites(lines: list[str]) -> list[tuple[int, str]]:
+    """Return ``(1-based lineno, raw line)`` for each wait_for_timeout call."""
+    return [
+        (i, line)
+        for i, line in enumerate(lines, start=1)
+        if line_has_wait_for_timeout(line)
+    ]
+
+
+def parse_path_allowlist_from_source(source: str) -> frozenset[str]:
+    """Extract ``PATH_ALLOWLIST`` string entries from checker source via AST."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return frozenset()
+    for node in tree.body:
+        target = None
+        value = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+            value = node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            t0 = node.targets[0]
+            if isinstance(t0, ast.Name):
+                target = t0.id
+                value = node.value
+        if target != "PATH_ALLOWLIST" or value is None:
+            continue
+        if not isinstance(value, ast.Call):
+            return frozenset()
+        if not isinstance(value.func, ast.Name) or value.func.id != "frozenset":
+            return frozenset()
+        if not value.args:
+            return frozenset()
+        arg0 = value.args[0]
+        if not isinstance(arg0, (ast.Set, ast.Tuple, ast.List)):
+            return frozenset()
+        out: set[str] = set()
+        for elt in arg0.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                out.add(elt.value)
+        return frozenset(out)
+    return frozenset()
+
+
+def load_base_path_allowlist(repo: Path, base_sha: str) -> frozenset[str]:
+    """PATH_ALLOWLIST as committed at ``base_sha``, or empty if the file is absent."""
+    sha = sanitize_git_revision(base_sha)
+    # ``git show`` with a missing path exits 128 — treat as empty allowlist.
+    cmd = ["git", "-C", str(repo), "show", f"{sha}:{CHECKER_RELPATH}"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise DiscoveryError(
+            f"base allowlist load failed: could not run git show ({exc.__class__.__name__})"
+        ) from exc
+    if proc.returncode != 0:
+        return frozenset()
+    return parse_path_allowlist_from_source(proc.stdout or "")
+
+
+def _safe_repo_relpath(relpath: str) -> str:
+    """Reject path traversal before interpolating into ``git show`` pathspecs."""
+    value = (relpath or "").strip().replace("\\", "/")
+    if (
+        not value
+        or value.startswith("/")
+        or value.startswith("../")
+        or "/../" in value
+        or value.endswith("/..")
+        or "\0" in value
+    ):
+        raise DiscoveryError(f"unsafe repository relative path: {relpath!r}")
+    return value
+
+
+def read_file_at_revision(repo: Path, base_sha: str, relpath: str) -> list[str] | None:
+    """Return lines of ``relpath`` at ``base_sha``, or None if it did not exist."""
+    sha = sanitize_git_revision(base_sha)
+    safe_path = _safe_repo_relpath(relpath)
+    # sha is a validated 40-char hex; safe_path has no traversal segments.
+    cmd = ["git", "-C", str(repo), "show", f"{sha}:{safe_path}"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise DiscoveryError(
+            f"read {safe_path} at {sha} failed: could not run git show "
+            f"({exc.__class__.__name__})"
+        ) from exc
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").splitlines()
+
+
 def parse_unified_diff_added_waits(diff_text: str) -> list[tuple[str, int, str]]:
-    """Return ``(path, new_lineno, line_text)`` for added wait_for_timeout lines."""
+    """Return ``(path, new_lineno, line_text)`` for added wait_for_timeout lines.
+
+    Kept for unit tests and as a documentation of the added-line shape; the
+    main collector uses base/current site matching instead.
+    """
     findings: list[tuple[str, int, str]] = []
     path: str | None = None
     new_lineno = 0
@@ -255,6 +368,33 @@ def parse_unified_diff_added_waits(diff_text: str) -> list[tuple[str, int, str]]
     return findings
 
 
+def list_changed_e2e_python(repo: Path, base_sha: str) -> list[str]:
+    """E2E ``*.py`` paths changed vs ``base_sha`` (name-only) plus untracked."""
+    sha = sanitize_git_revision(base_sha)
+    raw = _git(
+        repo,
+        [
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMR",
+            "--end-of-options",
+            sha,
+            "--",
+            E2E_PREFIX,
+        ],
+        f"E2E changed-path discovery vs {sha}",
+    )
+    paths: list[str] = []
+    for line in raw.splitlines():
+        path = line.strip()
+        if _is_e2e_python(path) and path not in paths:
+            paths.append(path)
+    for path in list_untracked_e2e_python(repo):
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
 def list_untracked_e2e_python(repo: Path) -> list[str]:
     raw = _git(
         repo,
@@ -269,78 +409,106 @@ def list_untracked_e2e_python(repo: Path) -> list[str]:
     return out
 
 
-def collect_findings(repo: Path, base_sha: str) -> list[Finding]:
-    """Return violations for new unapproved ``wait_for_timeout`` call sites.
+def _base_exempt_counters(
+    base_lines: list[str] | None,
+    *,
+    base_allowlisted: bool,
+) -> tuple[Counter[str], Counter[str]]:
+    """Return ``(unexempted, exempted)`` multisets of normalized wait lines."""
+    unexempted: Counter[str] = Counter()
+    exempted: Counter[str] = Counter()
+    if not base_lines:
+        return unexempted, exempted
+    for lineno, line in iter_wait_sites(base_lines):
+        key = normalize_wait_line(line)
+        if base_allowlisted or line_is_exempt(base_lines, lineno):
+            exempted[key] += 1
+        else:
+            unexempted[key] += 1
+    return unexempted, exempted
+
+
+def collect_findings(
+    repo: Path,
+    base_sha: str,
+    *,
+    path_allowlist: frozenset[str] | None = None,
+    base_path_allowlist: frozenset[str] | None = None,
+) -> list[Finding]:
+    """Return violations for new or newly-unexempted ``wait_for_timeout`` sites.
 
     ``base_sha`` must be a 40-character commit SHA from ``resolve_base``.
-    ``git diff <sha>`` includes the working tree, so uncommitted edits against
-    a PR base are covered without a second HEAD pass.
+    Optional allowlist kwargs override module/base defaults (tests).
     """
     sha = sanitize_git_revision(base_sha)
     if _FULL_SHA_RE.fullmatch(sha) is None:
         raise DiscoveryError(
             f"collect_findings requires a 40-character commit SHA (got {sha!r})"
         )
-    diff_text = _git(
-        repo,
-        [
-            "diff",
-            "-U0",
-            "--diff-filter=ACMR",
-            "--end-of-options",
-            sha,
-            "--",
-            E2E_PREFIX,
-        ],
-        f"E2E wait_for_timeout diff vs {sha}",
+
+    current_allow = (
+        PATH_ALLOWLIST if path_allowlist is None else frozenset(path_allowlist)
     )
+    if base_path_allowlist is None:
+        base_allow = load_base_path_allowlist(repo, sha)
+    else:
+        base_allow = frozenset(base_path_allowlist)
 
-    candidates = parse_unified_diff_added_waits(diff_text)
+    removed_allow = base_allow - current_allow
+    paths: list[str] = list(list_changed_e2e_python(repo, sha))
+    for rel in sorted(removed_allow):
+        if _is_e2e_python(rel) and rel not in paths:
+            paths.append(rel)
 
-    # Entire contents of untracked E2E modules are "new".
-    file_cache: dict[str, list[str]] = {}
-    for rel in list_untracked_e2e_python(repo):
-        abs_path = repo / rel
-        try:
-            text = abs_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        lines = text.splitlines()
-        file_cache[rel] = lines
-        for i, line in enumerate(lines, start=1):
-            if line_has_wait_for_timeout(line):
-                candidates.append((rel, i, line))
-
-    # Deduplicate identical (path, line) from base+HEAD double diff.
-    seen: set[tuple[str, int]] = set()
     findings: list[Finding] = []
-    for rel, lineno, snippet in candidates:
-        key = (rel, lineno)
-        if key in seen:
+    for rel in paths:
+        abs_path = repo / rel
+        if abs_path.is_file():
+            current_lines = abs_path.read_text(encoding="utf-8").splitlines()
+        else:
+            # Deleted in the working tree — nothing to enforce on the tip.
             continue
-        seen.add(key)
-        if path_is_allowlisted(rel):
-            continue
-        if rel not in file_cache:
-            abs_path = repo / rel
-            if abs_path.is_file():
-                file_cache[rel] = abs_path.read_text(encoding="utf-8").splitlines()
-            else:
-                file_cache[rel] = []
-        lines = file_cache[rel]
-        if line_is_exempt(lines, lineno):
-            continue
-        findings.append(
-            Finding(
-                path=rel,
-                line=lineno,
-                snippet=snippet,
-                reason=(
-                    "new page.wait_for_timeout(...) under tests/e2e/ without an "
-                    "approved exemption"
-                ),
-            )
+        base_lines = read_file_at_revision(repo, sha, rel)
+        unexempted, exempted = _base_exempt_counters(
+            base_lines,
+            base_allowlisted=rel in base_allow,
         )
+        currently_allowlisted = rel in current_allow
+
+        for lineno, line in iter_wait_sites(current_lines):
+            if currently_allowlisted or line_is_exempt(current_lines, lineno):
+                continue
+            key = normalize_wait_line(line)
+            if unexempted[key] > 0:
+                unexempted[key] -= 1
+                continue  # historical debt still unmatched
+            if exempted[key] > 0:
+                exempted[key] -= 1
+                findings.append(
+                    Finding(
+                        path=rel,
+                        line=lineno,
+                        snippet=line,
+                        reason=(
+                            "page.wait_for_timeout(...) lost its approved "
+                            "exemption (marker or PATH_ALLOWLIST) while the "
+                            "call remains"
+                        ),
+                    )
+                )
+                continue
+            findings.append(
+                Finding(
+                    path=rel,
+                    line=lineno,
+                    snippet=line,
+                    reason=(
+                        "new page.wait_for_timeout(...) under tests/e2e/ without "
+                        "an approved exemption"
+                    ),
+                )
+            )
+
     findings.sort(key=lambda f: (f.path, f.line))
     return findings
 
