@@ -6039,11 +6039,14 @@ function prksShowInlineComboboxResults(input, results) {
             results.classList.contains('hidden') || !results.classList.contains('is-open');
         results.classList.remove('hidden');
         if (needsOpenAnim) {
+            // Restart the open transition with a forced reflow, but set
+            // `is-open` in this turn. Deferring it to rAF left a frame where
+            // rows were already in the DOM (Playwright can see them) while
+            // keyboard Enter/ArrowDown still treated the panel as closed —
+            // the intermittent Work Create E2E race.
             results.classList.remove('is-open');
             void results.offsetHeight;
-            requestAnimationFrame(() => {
-                results.classList.add('is-open');
-            });
+            results.classList.add('is-open');
         }
     }
     if (input && typeof input.scrollIntoView === 'function') {

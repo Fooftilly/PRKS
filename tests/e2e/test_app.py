@@ -10860,6 +10860,9 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self._assert_modal_fits_without_scrolling(page)
         page.locator("#work-folder-search").click()
         page.keyboard.type("Daily Read")
+        # Rows can be in the DOM a frame before keyboard treats the panel as
+        # open; wait for the open marker the app sets with the rows.
+        page.wait_for_selector("#folder-results.is-open .result-item")
         page.keyboard.press("ArrowDown")
         page.keyboard.press("Enter")
         page.wait_for_function(
@@ -10886,6 +10889,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         # Keyboard pick: the first ArrowDown skips "Quick-create" and lands on a match.
         page.locator("#upload-person-search").click()
         page.keyboard.type("E2E Auth")
+        page.wait_for_selector("#person-results.is-open .result-item--person-pick")
         page.keyboard.press("ArrowDown")
         page.keyboard.press("Enter")
         rows = page.locator("#upload-roles-list .prks-upload-person-row")
@@ -11453,7 +11457,11 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#upload-tag-search").click()
         page.keyboard.type("racetag")
         # The row for the full query: Enter on rows still rendering is ignored.
-        page.locator("#upload-tag-results .result-item--create", has_text='"racetag"').wait_for()
+        # Require `.is-open` — Playwright can see clipped rows before keyboard
+        # treats the panel as open (same race as folder/person keyboard picks).
+        page.locator(
+            "#upload-tag-results.is-open .result-item--create", has_text='"racetag"'
+        ).wait_for()
         page.keyboard.press("Enter")
         page.wait_for_function("() => typeof window.__e2eReleaseTag === 'function'")
         page.keyboard.press("Control+Enter")

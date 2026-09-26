@@ -155,6 +155,16 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("e.ctrlKey || e.metaKey", form)
         self.assertIn("work-title", form)
 
+    def test_inline_combobox_is_open_is_synchronous(self):
+        """Keyboard readiness must not wait a frame after rows exist (#WorkCreate E2E)."""
+        ui = _read(_UI)
+        show = ui.split("function prksShowInlineComboboxResults", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("results.classList.add('is-open')", show)
+        # The open class is applied in this turn after a forced reflow — not
+        # deferred to requestAnimationFrame, which raced Enter/ArrowDown.
+        self.assertNotIn("requestAnimationFrame", show)
+        self.assertIn("void results.offsetHeight", show)
+
     def test_stale_blur_does_not_close_a_refocused_list(self):
         ui = _read(_UI)
         blur = ui.split("// Hide results when focus moves away", 1)[1].split("function renderResults", 1)[0]
