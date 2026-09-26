@@ -3247,7 +3247,16 @@ class WorkspaceTabsTests(_BrowserE2E):
 
         _open_work_from_home(page, WORK_A_TITLE)
         page.evaluate("(id) => window.prksNavigate('#/works/' + id, { target: 'tile' })", arg=work_b)
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        # mode===tiled can land a frame before secondaryTree is a leaf with
+        # tabId; reading .tabId early yields undefined and hide/tile parks the
+        # wrong pane so the unsettled draft never remounts.
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(snap && snap.mode === 'tiled' && snap.secondaryTree
+                    && snap.secondaryTree.type === 'leaf' && snap.secondaryTree.tabId);
+            }"""
+        )
         ids = page.evaluate(
             """() => ({
                 a: window.prksWorkspaceSnapshot().mainTabId,
@@ -3256,15 +3265,42 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         page.evaluate("id => window.prksWorkspaceMakeMain(id)", arg=ids["b"])
         page.evaluate("id => window.prksWorkspaceFocusTab(id)", arg=ids["a"])
+        page.wait_for_function(
+            """(id) => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(snap && snap.focusedTabId === id
+                    && snap.secondaryTree && snap.secondaryTree.type === 'leaf'
+                    && snap.secondaryTree.tabId === id);
+            }""",
+            arg=ids["a"],
+        )
         selector = "#prks-private-notes-work-" + work_a
         page.locator(selector).wait_for()
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
+        # fill must reach the drafting path before park; otherwise remount
+        # paints the empty server body and the wait below times out.
+        page.wait_for_function(
+            """(args) => {
+                const el = document.querySelector(args.selector);
+                const status = document.querySelector(
+                    '#prks-private-notes-status-work-' + args.workId);
+                return !!(el && el.value === args.text
+                    && status && /Drafting/.test(status.textContent || ''));
+            }""",
+            arg={"selector": selector, "text": new_text, "workId": work_a},
+        )
         # Hide/tile are async (leave preflight + flush). Awaiting both keeps the
         # remount from racing the park and makes the unsettled draft observable.
         page.evaluate("async id => { await window.prksWorkspaceHideLeaf(id); }", arg=ids["a"])
         page.evaluate("async id => { await window.prksWorkspaceTileTab(id); }", arg=ids["a"])
-        page.wait_for_function("() => window.prksWorkspaceSnapshot().mode === 'tiled'")
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(snap && snap.mode === 'tiled' && snap.secondaryTree
+                    && snap.secondaryTree.type === 'leaf');
+            }"""
+        )
         page.locator(selector).wait_for()
         page.wait_for_function(
             """(args) => {
@@ -4290,6 +4326,18 @@ class TabContextHostRootTests(_BrowserE2E):
         group_id = page.evaluate("() => location.hash.split('/')[3]")
         page.locator("#panel-content button", has_text="Edit group").click()
         page.wait_for_selector("#gd-save-btn")
+        # While CREATE_PERSON_GROUP is unsettled, acknowledgedGroupBase uses the
+        # create payload at revision 0 and never GETs /sync-state — so the hold
+        # below would miss. Wait until construction has retired first.
+        wait_for_async(
+            page,
+            """(gid) => prksSync.store.listOperations().then(rows =>
+                !rows.some(r => r.operation === 'CREATE_PERSON_GROUP'
+                    && r.entity_id === gid))""",
+            arg=group_id,
+            timeout=15000,
+            message="CREATE_PERSON_GROUP still unsettled before save intercept",
+        )
 
         # There is no Group PATCH any more: the save is durable. What it DOES
         # await is the revision base it measures the edit against, so that read
@@ -4340,6 +4388,18 @@ class TabContextHostRootTests(_BrowserE2E):
         page.wait_for_selector("#gd-save-btn")
 
         group_id = page.evaluate("() => location.hash.split('/')[3]")
+        # Pending CREATE_PERSON_GROUP skips the /sync-state GET (revision 0 from
+        # the create payload). Retire construction before the intercept so the
+        # save path actually hits the revision base read this test holds.
+        wait_for_async(
+            page,
+            """(gid) => prksSync.store.listOperations().then(rows =>
+                !rows.some(r => r.operation === 'CREATE_PERSON_GROUP'
+                    && r.entity_id === gid))""",
+            arg=group_id,
+            timeout=15000,
+            message="CREATE_PERSON_GROUP still unsettled before save intercept",
+        )
         held = []
         fail_next = {"value": True}
 
