@@ -3278,15 +3278,24 @@ class WorkspaceTabsTests(_BrowserE2E):
         page.locator(selector).wait_for()
         new_text = "PRIVATE-PARK-NEW-%s" % int(time.time() * 1000)
         page.locator(selector).fill(new_text)
-        # fill must reach the drafting path before park; otherwise remount
-        # paints the empty server body and the wait below times out.
+        # fill must reach the bound editor's draft overlay before park;
+        # otherwise remount paints the empty server body. Do not require the
+        # transient "Drafting…" status — under load the 850ms debounce (or an
+        # offline-runtime flush) can advance to Saving…/Saved/blank first.
         page.wait_for_function(
             """(args) => {
                 const el = document.querySelector(args.selector);
-                const status = document.querySelector(
-                    '#prks-private-notes-status-work-' + args.workId);
-                return !!(el && el.value === args.text
-                    && status && /Drafting/.test(status.textContent || ''));
+                if (!el || el.value !== args.text) return false;
+                const snap = window.prksWorkspaceSnapshot();
+                const ctx = window.prksGetTabContext && window.prksGetTabContext(snap.focusedTabId);
+                const editor = ctx && ctx.getResource && ctx.getResource('privateNotesEditor');
+                if (!editor || editor.textarea !== el) return false;
+                if (typeof window.prksPrivateNotesTextForEntity === 'function'
+                    && window.prksPrivateNotesTextForEntity('work', args.workId, '') === args.text) {
+                    return true;
+                }
+                const work = ctx.getEntity && ctx.getEntity('work');
+                return !!(work && String(work.private_notes || '') === args.text);
             }""",
             arg={"selector": selector, "text": new_text, "workId": work_a},
         )
