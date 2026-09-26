@@ -360,7 +360,13 @@ async function payloadAllowance() {
     }), e => e.prksLocalStoreCode === 'payload_too_large');
 }
 
-/* ---- acknowledgement reaches every cached representation, coherently ---- */
+/* ---- acknowledgement reaches every cached representation, coherently ----
+ *
+ * Direct reconciliation: callers pass an already-shaped ACK into
+ * `reconcileWorkSource`. That is not the open-editor acceptAck path (Chromium
+ * KEEP: submit SHORT, receive WATCH, assert cache + `#meta-video-url`). The
+ * trailing convergent block below stages SHORT→WATCH through the sync handler.
+ */
 async function reconciliation() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
     /* A cached video row carries the identity AND the presentation the server
@@ -439,6 +445,44 @@ async function reconciliation() {
     assert.equal(await blocked.reconcileWorkSource({ work_id: 'W-1', server_revision: 7,
         source: { source_kind: 'video', provider: 'youtube', provider_id: 'DDD',
             source_url: WATCH('DDD'), thumb_url: null, urldate: '2026-09-13' } }), false);
+
+    /* A convergent acknowledgement: same video, the server's own spelling.
+     * Stage the SHORT request the client sent, then reconcile through the
+     * sync handler (not a hand-built reconcileWorkSource call) so the ACK
+     * path copies the stored WATCH spelling. Open-editor acceptAck spelling
+     * remains a Chromium KEEP. */
+    const convergentCache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    await convergentCache.putEntity('work', 'W-1', {
+        id: 'W-1', title: 'Clip', source_kind: 'video', provider: 'youtube',
+        provider_id: 'AAA', source_url: WATCH('AAA'),
+        thumb_url: 'https://img/AAA.jpg', urldate: '2024-01-01',
+    });
+    await convergentCache.putEntity('work-source-state', 'W-1', { work_id: 'W-1', revision: 0 });
+    const convergentRuntime = createPrksOfflineRuntime({
+        store: convergentCache, window: null,
+        prksRequest: async () => { throw new Error('no reads in convergent scenario'); },
+    });
+    globalThis.prksOfflineReconcileWorkSource =
+        result => convergentRuntime.reconcileWorkSource(result);
+    const asked = op('W-1', SHORT('BBB'));
+    const convergentAck = {
+        work_id: 'W-1', code: 'ACKNOWLEDGED', changed: false, server_revision: 1,
+        provider: 'youtube', provider_id: 'BBB', source_kind: 'video',
+        source_url: WATCH('BBB'), thumb_url: 'https://img/BBB.jpg',
+        urldate: '2026-09-13',
+    };
+    assert.equal(globalThis.prksWorkSourceSyncHandler.isResult(convergentAck, asked), true,
+        'handler accepts the stored spelling even though it is not the URL asked');
+    assert.equal(await globalThis.prksWorkSourceSyncHandler.reconcile(convergentAck), true);
+    const converged = (await convergentCache.getEntity('work', 'W-1')).value;
+    assert.equal(converged.source_url, WATCH('BBB'),
+        'the stored spelling, never the URL this device asked for');
+    assert.equal(converged.provider_id, 'BBB');
+    assert.equal(converged.thumb_url, 'https://img/BBB.jpg',
+        'presentation comes from the acknowledgement, not local derivation');
+    assert.equal((await convergentCache.getEntity('work-source-state', 'W-1')).value.revision, 1,
+        'the base is the server\'s revision even when the write did not advance it further');
+    delete globalThis.prksOfflineReconcileWorkSource;
 }
 
 /* ---- a GET that began before the acknowledgement must lose ---- */

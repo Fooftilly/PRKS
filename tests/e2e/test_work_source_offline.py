@@ -4,6 +4,16 @@ The source is deliberately NOT a set of scalar fields. Replacing a video
 rewrites `source_kind`, `provider`, `provider_id` and `source_url` together,
 and two URLs naming the same video are the same source however they are
 spelled -- so identity, not URL text, decides what a conflict is.
+
+Chromium coverage here is intentionally thin: real UI wiring, offline edit
+across reload, user-visible conflict resolution, cache-visible thumbnail, and
+browser projections Node selftests cannot prove -- including editor
+`state.observed` coalescing, Apply-button base updates, and `acceptAck`
+spelling. Deterministic parser, store coalescing, protocol convergent writes,
+conflict arithmetic, and aggregate atomics live in
+`tests/test_work_source_sync.py` and
+`tests/browser/run_work_source_sync_selftest.js`. Store-layer Node coverage
+does not replace those editor paths.
 """
 import os
 import unittest
@@ -13,7 +23,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PLAYLIST_VIDEO_ONE_TITLE, WORK_A_TITLE, seed_playlists_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import AppServer, open_app_page, require_chromium
 
 # Three videos, each in both spellings PRKS accepts. The pairs exist so a
 # re-spelling can be told apart from a different video: SHORT_TWO and WATCH_TWO
@@ -158,7 +168,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
             "id => prksRefreshPendingWorkSources().then(() => "
             "  prksEffectiveWorkSource({ id, source_kind: 'video' }))", work_id)
 
-    # ---- the aggregate ------------------------------------------------------
+    # ---- KEEP: browser / UI / reload / conflict / cache-visible ------------
 
     def test_an_offline_source_change_survives_a_reload_and_synchronizes(self):
         """One decision, four columns -- and nothing partially applied at any
@@ -186,42 +196,6 @@ class OfflineWorkSourceTests(unittest.TestCase):
             'source_kind': 'video', 'provider': 'youtube',
             'provider_id': 'e2e0000099', 'source_url': WATCH_TWO,
         })
-
-    def test_all_four_columns_move_together_or_not_at_all(self):
-        """A pending source is a whole identity on the client too: the provider
-        id a thumbnail would be built from never lags the URL that named it."""
-        server, page, context = self.start()
-        work = server.ids['playlist_video_one']
-        self.edit(page)
-        self.offline(page, context)
-        self.url(page, SHORT_TWO)
-        self.save(page)
-        self.pending(page, 1)
-        effective = self.effective(page, work)
-        self.assertEqual(effective['source_kind'], 'video')
-        self.assertEqual(effective['provider'], 'youtube')
-        self.assertEqual(effective['provider_id'], 'e2e0000099')
-        self.assertEqual(effective['source_url'], SHORT_TWO,
-                         'the URL stays exactly as the user typed it')
-
-    def test_a_respelling_of_the_same_video_is_not_a_conflict(self):
-        """Identity is provider + provider_id. Two people who pasted the same
-        video converged, whichever link each of them used."""
-        server, page, context = self.start()
-        work = server.ids['playlist_video_one']
-        self.edit(page)
-        self.offline(page, context)
-        self.url(page, SHORT_TWO)
-        self.save(page)
-        self.pending(page, 1)
-
-        # Another device names the SAME video with the watch spelling while
-        # this one is offline, so the base revision goes stale.
-        self.other_device_sets_source(server, work, WATCH_TWO)
-
-        self.reconnect(page, context)
-        self.pending(page, 0)
-        self.assertEqual(self.columns(server, work)['provider_id'], 'e2e0000099')
 
     def test_a_different_video_is_a_conflict_the_user_decides(self):
         server, page, context = self.start()
@@ -265,8 +239,6 @@ class OfflineWorkSourceTests(unittest.TestCase):
             "() => { const el = document.getElementById('meta-video-url-error');"
             "        return !!el && el.textContent.trim().length > 0; }")
         self.pending(page, 0)
-
-    # ---- 2O.1: the aggregate is complete only if it can be used twice -------
 
     def test_two_consecutive_source_changes_do_not_conflict_with_each_other(self):
         """The regression 2O.1 exists for.
@@ -327,7 +299,12 @@ class OfflineWorkSourceTests(unittest.TestCase):
         """A source is an aggregate, so there is at most one unsynchronized
         intent for a Work. Two rows sharing one base revision means the
         coordinator sends the first, the revision advances, and the user's own
-        second change then arrives stale."""
+        second change then arrives stale.
+
+        Kept Chromium: the editor's `state.observed` must feed
+        `saveWorkSource`. Store-only Node coalescing cannot catch an editor
+        that stops measuring against the acknowledged base.
+        """
         server, page, context = self.start()
         work = server.ids['playlist_video_one']
         self.edit(page)
@@ -354,6 +331,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
                          'ONE revision: the intermediate choice was never sent')
 
     def test_returning_to_the_acknowledged_video_leaves_no_intent(self):
+        """Return-to-base through the real editor, not a hand-built store call."""
         server, page, context = self.start()
         work = server.ids['playlist_video_one']
         self.edit(page)
@@ -440,7 +418,12 @@ class OfflineWorkSourceTests(unittest.TestCase):
     def test_after_apply_choosing_the_servers_own_video_cancels(self):
         """Returning to the identity the server reported is a cancellation.
         On the pre-conflict base the editor read it as a change and sent it,
-        colliding with the very video it was converging on."""
+        colliding with the very video it was converging on.
+
+        Kept Chromium: Apply must update the editor's observed base. A Node
+        test that constructs `serverBase` by hand still passes if the Apply
+        button stops doing that.
+        """
         server, page, context = self.start()
         work = server.ids['playlist_video_one']
         self.edit(page)
@@ -553,6 +536,9 @@ class OfflineWorkSourceTests(unittest.TestCase):
         that wrote back "what I asked for" would hold an acknowledged
         `source_url` the server does not have. Worse, it would keep the
         identity it last cached while the server has moved on.
+
+        Kept Chromium: `acceptAck` must write the stored spelling into the
+        open editor. Handler/cache reconciliation alone cannot prove that.
         """
         server, page, context = self.start()
         work = server.ids['playlist_video_one']
