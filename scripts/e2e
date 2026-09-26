@@ -8,6 +8,7 @@
 #   scripts/e2e dev --feature tabs
 #   scripts/e2e agent [--base origin/master]
 #   scripts/e2e full [--jobs 4]
+#   scripts/e2e doctor
 #   scripts/e2e list-features
 #   scripts/e2e update-timing-baseline --from PATH [--write]
 set -euo pipefail
@@ -18,7 +19,7 @@ RUN=("$PY" tests/e2e/run.py)
 
 if [[ $# -lt 1 ]]; then
   cat <<'EOF' >&2
-usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|list-features|list-tests|update-timing-baseline> [args...]
+usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|doctor|list-features|list-tests|update-timing-baseline> [args...]
 EOF
   exit 2
 fi
@@ -152,9 +153,13 @@ EOF
     # measurement exports. Additive; does not own sharding/inventory entrypoints.
     exec "$PY" tests/e2e/update_timing_baseline.py "$@"
     ;;
+  doctor)
+    # Read-only environment facts. Never installs browsers or writes timings.
+    exec "$PY" tests/e2e/doctor.py "$@"
+    ;;
   *)
     echo "unknown command: $cmd" >&2
-    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|list-features|list-tests|update-timing-baseline>" >&2
+    echo "usage: scripts/e2e <smoke|feature|affected|last-failed|dev|agent|full|doctor|list-features|list-tests|update-timing-baseline>" >&2
     exit 2
     ;;
 esac
