@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "codemirror": "5.65.21",
-    "dompurify": "3.4.15",
+    "dompurify": "3.4.16",
     "easymde": "2.21.0",
     "lucide": "1.47.0"
   }
