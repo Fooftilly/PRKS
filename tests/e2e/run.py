@@ -9,6 +9,10 @@ Playwright package is missing instead of reporting SKIP.
 order and is the mode to reach for when debugging. `--jobs N` shards individual
 test IDs across N worker processes; each worker owns its own Playwright,
 Chromium, PRKS subprocesses and port window, so per-test isolation is unchanged.
+
+`--shard INDEX/TOTAL` selects one slice of that same deterministic partition for
+an external runner (GitHub Actions matrix). Prefer ~4 CI runners × `--jobs 1`
+over one runner × 4 local stacks.
 """
 from __future__ import annotations
 
@@ -45,12 +49,14 @@ from tests.e2e.harness import (
 )
 from tests.e2e.install_browser import ensure_chromium_installed
 from tests.e2e.policy import (
+    FULL_GATE_EXTERNAL_SHARDS,
     LAST_FAILED_PATH,
     PROFILE_ENV,
     SEED_CACHE_ENV,
     ChangeDiscoveryError,
     benchmark_modes,
     format_feature_catalog,
+    full_e2e_ci_needed,
     full_gate_timeout_s,
     list_changed_paths,
     load_last_failed,
@@ -74,8 +80,10 @@ from tests.e2e.sharding import (
     merge_timing_sources,
     merge_timings,
     parse_jobs,
+    parse_shard,
     run_exit_code,
     save_timings,
+    select_external_shard,
     shard_estimates,
     worker_port_range,
 )
@@ -1056,7 +1064,9 @@ def build_parser():
             "Default is the full suite on one worker (deterministic). "
             "Use --smoke / --feature / --affected / --last-failed / --dev / --agent "
             "for targeted development feedback. "
-            "--jobs N shards individual test IDs across N processes."
+            "--jobs N shards individual test IDs across N processes. "
+            "--shard INDEX/TOTAL selects one external slice of the same partition "
+            "(CI matrix; prefer TOTAL runners × --jobs 1)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -1069,7 +1079,10 @@ def build_parser():
             "  python tests/e2e/run.py --last-failed\n"
             "  python tests/e2e/run.py --jobs 4   # full regression gate "
             "(runner hard-limits at 1200s)\n"
+            "  python tests/e2e/run.py --jobs 1 --shard 2/%d  # external CI shard\n"
+            "  python tests/e2e/run.py --ci-plan --base origin/master\n"
             "  python tests/e2e/run.py --jobs 1 tests.e2e.test_app.AppShellAndNavigationTests\n"
+            % FULL_GATE_EXTERNAL_SHARDS
         ),
     )
     parser.add_argument(
@@ -1082,6 +1095,25 @@ def build_parser():
         "-j",
         default=None,
         help="Worker processes (default 1, or $PRKS_E2E_JOBS). The flag wins over the env var.",
+    )
+    parser.add_argument(
+        "--shard",
+        default=None,
+        metavar="INDEX/TOTAL",
+        help=(
+            "External shard of the selected suite (1-based INDEX). "
+            "Uses the same timing-aware LPT partition as --jobs. "
+            "Also accepts $PRKS_E2E_SHARD. The flag wins over the env var."
+        ),
+    )
+    parser.add_argument(
+        "--ci-plan",
+        action="store_true",
+        help=(
+            "Print a JSON plan for the full E2E CI gate (run true/false + reason) "
+            "from the git diff vs --base, then exit. No Chromium. Docs/unit/ignored-"
+            "only diffs skip the matrix; empty/failed discovery fails closed to run."
+        ),
     )
     parser.add_argument(
         "--fail-fast",
@@ -1333,6 +1365,53 @@ def _main(argv=None) -> int:
         print(format_feature_catalog())
         return 0
 
+    if args.ci_plan:
+        # Cheap CI decision: no discovery, no Chromium. Compare committed tree
+        # to --base (default HEAD) using the same docs/unit/ignored noop policy.
+        # Discovery failures (unresolvable force-push before SHA, damaged
+        # checkout) fail closed to run=true — never exit 2 and trip the
+        # aggregate job before any shard runs.
+        try:
+            paths = list_changed_paths(
+                REPO, base=args.base, include_untracked=False
+            )
+        except ChangeDiscoveryError as exc:
+            reason = (
+                "change discovery failed — running full E2E (fail closed): %s" % exc
+            )
+            print("ci-plan: %s" % reason, file=sys.stderr)
+            print(
+                json.dumps(
+                    {
+                        "run": True,
+                        "reason": reason,
+                        "changed_paths": None,
+                        "external_shards": FULL_GATE_EXTERNAL_SHARDS,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        needed, reason = full_e2e_ci_needed(paths)
+        print(
+            json.dumps(
+                {
+                    "run": bool(needed),
+                    "reason": reason,
+                    "changed_paths": len(paths),
+                    "external_shards": FULL_GATE_EXTERNAL_SHARDS,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    try:
+        shard = parse_shard(args.shard, os.environ.get("PRKS_E2E_SHARD"))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     # Resolve selection before Chromium install so docs/unit --affected and
     # --list-tests are cheap no-ops (no browser download).
     apply_e2e_playwright_env()
@@ -1367,6 +1446,36 @@ def _main(argv=None) -> int:
             args.no_pointer_capture = True
             tier = "agent" if args.agent else "dev"
             note = (note + "; fail-fast") if note else "fail-fast"
+
+    # External shard filter shares the LPT partitioner with --jobs so CI matrix
+    # slices are disjoint and timing-balanced when baseline/local weights exist.
+    if shard is not None and tier not in ("affected-noop", "last-failed-stale"):
+        shard_index, shard_total = shard
+        baseline_timings = load_timings(REPO / BASELINE_TIMINGS_PATH)
+        local_timings = load_timings(REPO / TIMINGS_PATH)
+        timings_for_shard = merge_timing_sources(baseline_timings, local_timings)
+        before = len(test_ids)
+        test_ids = select_external_shard(
+            test_ids, shard_index, shard_total, timings_for_shard
+        )
+        shard_note = "shard %d/%d (%d of %d tests)" % (
+            shard_index + 1,
+            shard_total,
+            len(test_ids),
+            before,
+        )
+        note = ("%s; %s" % (note, shard_note)) if note else shard_note
+        # Pointer capture belongs to the full gate once, not once per matrix
+        # runner. Shard 1 keeps it unless the caller passed --no-pointer-capture
+        # (CI runs a dedicated pointer job after all shards pass).
+        if shard_index != 0 and not args.no_pointer_capture:
+            args.no_pointer_capture = True
+            print(
+                "external shard %d/%d: skipping pointer_capture "
+                "(owned by shard 1/%d or a dedicated CI job)"
+                % (shard_index + 1, shard_total, shard_total),
+                file=sys.stderr,
+            )
 
     if args.list_tests:
         for test_id in test_ids:
@@ -1405,6 +1514,14 @@ def _main(argv=None) -> int:
         return 0
 
     if not test_ids:
+        if shard is not None:
+            # More external shards than tests is a successful empty slice, not a
+            # broken selection — the sibling runners still cover the suite.
+            print(
+                "shard %d/%d: no tests assigned — success"
+                % (shard[0] + 1, shard[1])
+            )
+            return 0
         print("no E2E tests selected", file=sys.stderr)
         if tier == "affected":
             print(
@@ -1416,6 +1533,8 @@ def _main(argv=None) -> int:
 
     # Full gate: one wall-clock deadline covers chromium install, shards, and
     # pointer_capture. Parent re-execs as a supervised child (Windows + POSIX).
+    # External --shard slices still use the full-gate supervisor when tier is
+    # full so a hung Chromium cannot outlive PRKS_E2E_FULL_TIMEOUT.
     if tier == "full":
         timeout_s = full_gate_timeout_s()
         if timeout_s > 0 and not os.environ.get(FULL_GATE_CHILD_ENV):
@@ -1430,17 +1549,23 @@ def _main(argv=None) -> int:
         return 1
     apply_e2e_playwright_env()
 
-    print(report_banner(tier, len(test_ids), note))
-    if tier != "full":
+    # External --shard slices keep tier=="full" for the deadline supervisor, but
+    # reporting/timing must treat them as targeted: merge_timings with known_ids
+    # set to this shard would drop sibling shards' entries from the shared
+    # .tests/e2e-timings.json history.
+    report_tier = "targeted" if shard is not None and tier == "full" else tier
+    print(report_banner(report_tier, len(test_ids), note))
+    if report_tier != "full":
         print(
             "NOTE: a PASS here is %s coverage — not equivalent to the full E2E gate."
-            % tier
+            % report_tier
         )
 
     try:
         # Serial-by-default so debugging stays deterministic. Cloud-agent mode
         # chooses a conservative width from effective cgroup CPU/memory limits;
-        # explicit --jobs / PRKS_E2E_JOBS still wins.
+        # explicit --jobs / PRKS_E2E_JOBS still wins. External CI shards prefer
+        # --jobs 1 (one Chromium stack per matrix runner).
         default_jobs = agent_default_jobs() if args.agent else 1
         jobs = parse_jobs(args.jobs, os.environ.get("PRKS_E2E_JOBS"), default=default_jobs)
     except ValueError as exc:
@@ -1495,7 +1620,7 @@ def _main(argv=None) -> int:
             )
             print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
 
-    targeted = tier != "full"
+    targeted = tier != "full" or shard is not None
     # Benchmark modes still print profile / slowest for this run, but must not
     # train LPT history or mutate last-failed — those files drive ordinary gates.
     persist_history = not active_benchmark_modes
@@ -1507,6 +1632,8 @@ def _main(argv=None) -> int:
     if persist_history:
         # Persist only machine-local observations; the committed bootstrap
         # baseline remains immutable input and must never be copied into .tests.
+        # When targeted (including external --shard of a full suite), known_ids
+        # is None so sibling-shard / unselected history is retained.
         _persist_timings(observed, test_ids if not targeted else None)
     # Baseline prefix weights are scheduling hints, not measured test timings;
     # keep them out of the human "slowest tests" report.
@@ -1563,9 +1690,12 @@ def _main(argv=None) -> int:
 
     code = run_exit_code(ok, pointer)
     if code == 0:
-        print("E2E PASS (%s)%s" % (tier, "" if tier == "full" else " — not a full gate"))
+        print(
+            "E2E PASS (%s)%s"
+            % (report_tier, "" if report_tier == "full" else " — not a full gate")
+        )
     else:
-        print("E2E FAIL (%s)" % tier)
+        print("E2E FAIL (%s)" % report_tier)
     return code
 
 
