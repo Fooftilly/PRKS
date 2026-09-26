@@ -254,6 +254,12 @@ async function run() {
             const result = await runtime.readThroughEntity(kinds[i], '1', '/api/test', {domain:domains[i]});
             assertEq(domains[i] + ' fallback isolation', result.source, i===6 ? 'unavailable' : 'cache');
         }
+        for (let i=0; i<domains.length; i++) {
+            const result = await runtime.readThroughList(
+                domains[i] + ':index', '/api/test', {domain:domains[i]});
+            assertEq(domains[i] + ' list fallback isolation',
+                result.source, i===6 ? 'unavailable' : 'cache');
+        }
         assertEq('Works unaffected by Folder cleanup',
             (await runtime.readThroughEntity('work','1','/api/test')).source, 'cache');
         assertEq('Folder constant', mod.PRKS_OFFLINE_DOMAIN_FOLDERS, 'folders');
