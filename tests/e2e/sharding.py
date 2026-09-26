@@ -283,6 +283,36 @@ def combine_measurement_timings(*sources):
     return {key: _median(values) for key, values in sorted(buckets.items())}
 
 
+def assess_measurement_coverage(exact_timings, discovered_ids):
+    """Compare exact measurements to current E2E discovery.
+
+    Returns ``(missing_modules, missing_ids)`` — both sorted lists. A committed
+    baseline refresh must see every discovered module and every discovered
+    exact test ID; otherwise a shard/affected export would silently drop most
+    of the suite's bootstrap weights.
+    """
+    measured_ids = set()
+    measured_modules = set()
+    for key, raw in (exact_timings or {}).items():
+        if not isinstance(key, str) or is_baseline_prefix_key(key):
+            continue
+        if _valid_timing_value(raw) is None:
+            continue
+        if _module_and_class(key) is None:
+            continue
+        measured_ids.add(key)
+        measured_modules.add(module_of(key))
+
+    discovered = []
+    for test_id in discovered_ids or ():
+        if isinstance(test_id, str) and test_id and not is_baseline_prefix_key(test_id):
+            discovered.append(test_id)
+    discovered_modules = {module_of(test_id) for test_id in discovered}
+    missing_modules = sorted(discovered_modules - measured_modules)
+    missing_ids = sorted(set(discovered) - measured_ids)
+    return missing_modules, missing_ids
+
+
 def aggregate_timing_baseline(
     exact_timings,
     *,

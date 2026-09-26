@@ -219,7 +219,9 @@ corrupt, or full of renamed tests, the runner still works and unknown tests
 take a default estimate. Refresh the committed baseline from representative
 CI/full-gate measurement exports with
 `scripts/e2e update-timing-baseline --from PATH [--write]` (see
-`docs/e2e-performance.md`); do not treat a laptop's `.tests/e2e-timings.json` as
+`docs/e2e-performance.md`); committed writes fail closed unless the export covers
+every discovered E2E module/exact ID (`--allow-partial` / alternate `--output`
+for experiments). Do not treat a laptop's `.tests/e2e-timings.json` as
 authoritative. Each shard keeps one module's tests contiguous, because these
 modules launch Chromium in `setUpModule` and unittest re-runs a module fixture
 whenever the module changes. The scheduling and aggregation logic lives in

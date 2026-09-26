@@ -46,6 +46,11 @@ ordinary JSON diff in the PR. The generator emits only `prefix.*` keys (module
 medians, plus class-level prefixes when a class is a clear outlier), so the
 committed file stays small and does not absorb exact per-test IDs.
 
+Committed writes fail closed unless the measurement export covers **every**
+current E2E module and every discovered exact test ID (so a single shard or
+affected-run file cannot wipe most bootstrap weights). Partial / experimental
+generation needs `--allow-partial` or an alternate `--output` path.
+
 ## Current per-test path
 
 Most real-browser tests do all of the following:

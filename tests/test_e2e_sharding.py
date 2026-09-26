@@ -27,6 +27,7 @@ from tests.e2e.sharding import (
     agent_default_jobs,
     aggregate_external_shard_results,
     aggregate_timing_baseline,
+    assess_measurement_coverage,
     aggregate_worker_results,
     assign_shards,
     combine_measurement_timings,
@@ -295,6 +296,21 @@ class ShardAssignmentTests(unittest.TestCase):
             aggregate_timing_baseline({}, min_class_samples=0)
         with self.assertRaises(ValueError):
             aggregate_timing_baseline({}, min_class_samples=-1)
+
+    def test_assess_measurement_coverage_reports_missing_modules_and_ids(self):
+        exact = {"tests.e2e.a.C.test_x": 1.0}
+        discovered = [
+            "tests.e2e.a.C.test_x",
+            "tests.e2e.a.C.test_y",
+            "tests.e2e.b.C.test_z",
+        ]
+        missing_modules, missing_ids = assess_measurement_coverage(exact, discovered)
+        self.assertEqual(missing_modules, ["tests.e2e.b"])
+        self.assertEqual(
+            missing_ids,
+            ["tests.e2e.a.C.test_y", "tests.e2e.b.C.test_z"],
+        )
+        self.assertEqual(assess_measurement_coverage(exact, ["tests.e2e.a.C.test_x"]), ([], []))
 
     def test_aggregated_baseline_still_overridden_by_local_exact(self):
         exact = {
@@ -1113,6 +1129,60 @@ class TimingBaselineUpdateTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 with contextlib.redirect_stderr(io.StringIO()):
                     cli.build_parser().parse_args([])
+
+    def test_cli_refuses_partial_overwrite_of_committed_baseline(self):
+        from tests.e2e import update_timing_baseline as cli
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            # Pretend the committed baseline path lives in the temp tree.
+            committed = root / "tests" / "e2e" / "timing-baseline.json"
+            committed.parent.mkdir(parents=True)
+            committed.write_text(
+                json.dumps({"tests.e2e.keep.*": 7.0, "tests.e2e.other.*": 5.0}),
+                encoding="utf-8",
+            )
+            before = committed.read_text(encoding="utf-8")
+            measurements = root / "one-module.json"
+            measurements.write_text(
+                json.dumps({"tests.e2e.keep.C.test_a": 2.0}),
+                encoding="utf-8",
+            )
+            discovered = [
+                "tests.e2e.keep.C.test_a",
+                "tests.e2e.keep.C.test_b",
+                "tests.e2e.other.C.test_c",
+            ]
+
+            with mock.patch.object(cli, "_repo_root", return_value=root):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = cli.main(
+                        ["--from", str(measurements), "--write"],
+                        discover_ids=lambda: discovered,
+                    )
+            self.assertEqual(code, 2)
+            self.assertEqual(committed.read_text(encoding="utf-8"), before)
+            self.assertIn("incomplete", err.getvalue())
+            self.assertIn("tests.e2e.other", err.getvalue())
+
+            # Explicit opt-in may overwrite; alternate --output always may.
+            with mock.patch.object(cli, "_repo_root", return_value=root):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = cli.main(
+                        [
+                            "--from",
+                            str(measurements),
+                            "--write",
+                            "--allow-partial",
+                        ],
+                        discover_ids=lambda: discovered,
+                    )
+            self.assertEqual(code, 0)
+            written = json.loads(committed.read_text(encoding="utf-8"))
+            self.assertIn("tests.e2e.keep.*", written)
+            self.assertNotIn("tests.e2e.other.*", written)
 
 if __name__ == "__main__":
     unittest.main()
