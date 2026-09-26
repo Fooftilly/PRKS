@@ -302,7 +302,10 @@ def _is_allowed_typed_slice_exclude(entry: object) -> bool:
     raw = str(entry).replace("\\", "/").strip()
     if raw in PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES:
         return True
-    return any(_normalize_pyright_path(item) == _normalize_pyright_path(raw) for item in PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES)
+    return any(
+        _normalize_pyright_path(item) == _normalize_pyright_path(raw)
+        for item in PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES
+    )
 
 
 def _path_covers_typed_slice(entry: object) -> bool:
@@ -369,7 +372,11 @@ def _path_covers_typed_slice(entry: object) -> bool:
         probe_paths.append("/".join(parts[: i + 1]))
     for probe in probe_paths:
         if fnmatch.fnmatch(probe, pattern) or fnmatch.fnmatch(probe, raw):
-            if probe == target or target.startswith(probe + "/") or probe.startswith(target + "/"):
+            if (
+                probe == target
+                or target.startswith(probe + "/")
+                or probe.startswith(target + "/")
+            ):
                 return True
     return False
 
