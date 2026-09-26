@@ -1796,6 +1796,183 @@ async function hydration() {
     require('../../frontend/js/work-metadata-state.js');
 }
 
+/* Minimal DOM + focused-tab harness for the REAL work-metadata-editor save
+ * path. Store-only coalescing / limit helpers do not exercise dirty detection,
+ * status paint, draft retention, or the abort-before-enqueue ordering. */
+function makeMetaEl(tag) {
+    const el = {
+        tagName: String(tag || 'div').toUpperCase(),
+        nodeType: 1,
+        id: '',
+        value: '',
+        disabled: false,
+        title: '',
+        textContent: '',
+        children: [],
+        parentElement: null,
+        attributes: Object.create(null),
+        dataset: Object.create(null),
+        style: {},
+        classList: { add() {}, remove() {}, contains() { return false; } },
+    };
+    el.getAttribute = (k) => (k === 'id' ? el.id : (Object.prototype.hasOwnProperty.call(el.attributes, k)
+        ? el.attributes[k] : null));
+    el.setAttribute = (k, v) => {
+        if (k === 'id') el.id = String(v);
+        else if (k === 'data-prks-work-field') {
+            el.attributes[k] = String(v);
+            el.dataset.prksWorkField = String(v);
+        } else if (k === 'data-prks-role') {
+            el.attributes[k] = String(v);
+        } else el.attributes[k] = String(v);
+    };
+    el.removeAttribute = (k) => { delete el.attributes[k]; };
+    el.appendChild = (child) => {
+        child.parentElement = el;
+        el.children.push(child);
+        if (child.nodeType === 3) el.textContent += child.textContent;
+        return child;
+    };
+    el.replaceChildren = (...nodes) => {
+        el.children.forEach(c => { c.parentElement = null; });
+        el.children = [];
+        el.textContent = '';
+        nodes.forEach(n => el.appendChild(n));
+    };
+    el.focus = () => {};
+    el.querySelector = (sel) => {
+        const all = el.querySelectorAll(sel);
+        return all.length ? all[0] : null;
+    };
+    el.querySelectorAll = (sel) => {
+        const out = [];
+        const match = (n) => {
+            if (sel.startsWith('#') && n.id === sel.slice(1)) return true;
+            if (sel.startsWith('[data-prks-role="') &&
+                n.getAttribute('data-prks-role') === sel.slice('[data-prks-role="'.length, -2)) return true;
+            if (sel.startsWith('[data-prks-work-field="') &&
+                n.getAttribute('data-prks-work-field') === sel.slice('[data-prks-work-field="'.length, -2)) return true;
+            if (sel === '[data-prks-work-field]' && n.getAttribute('data-prks-work-field')) return true;
+            if (sel.startsWith('label[for="') && n.tagName === 'LABEL' &&
+                n.getAttribute('for') === sel.slice('label[for="'.length, -2)) return true;
+            return false;
+        };
+        const walk = (n) => {
+            n.children.forEach(c => {
+                if (c.nodeType === 1) {
+                    if (match(c)) out.push(c);
+                    walk(c);
+                }
+            });
+        };
+        walk(el);
+        return out;
+    };
+    return el;
+}
+
+function installWorkMetadataEditorHarness({ workId, fields, observed, store }) {
+    const panel = makeMetaEl('div');
+    panel.id = 'panel-content';
+    const bib = makeMetaEl('div');
+    bib.setAttribute('data-prks-role', 'work-bib-editor');
+    const status = makeMetaEl('div');
+    status.setAttribute('data-prks-role', 'work-bib-sync');
+    const saveBtn = makeMetaEl('button');
+    saveBtn.id = 'save-work-bib-btn';
+    const inputs = {};
+    Object.keys(fields).forEach(field => {
+        const input = makeMetaEl('textarea');
+        input.id = 'work-field-' + field;
+        input.setAttribute('data-prks-work-field', field);
+        input.value = fields[field];
+        inputs[field] = input;
+        bib.appendChild(input);
+    });
+    bib.appendChild(status);
+    bib.appendChild(saveBtn);
+    panel.appendChild(bib);
+
+    const document = {
+        getElementById: (id) => {
+            if (id === 'panel-content') return panel;
+            if (id === 'save-work-bib-btn') return saveBtn;
+            return null;
+        },
+        querySelector: (sel) => {
+            if (sel === '[data-prks-role="work-bib-rows"]') return null;
+            if (sel === '[data-prks-role="work-meta-empty"]') return null;
+            return panel.querySelector(sel);
+        },
+        querySelectorAll: (sel) => panel.querySelectorAll(sel),
+        createElement: (tag) => makeMetaEl(tag),
+        createTextNode: (t) => ({ nodeType: 3, textContent: String(t), data: String(t) }),
+    };
+    globalThis.document = document;
+    globalThis.window = globalThis;
+
+    let saveCalls = 0;
+    const realSave = store.saveWorkMetadataFields.bind(store);
+    store.saveWorkMetadataFields = async (...args) => {
+        saveCalls += 1;
+        return realSave(...args);
+    };
+
+    const editorState = {
+        workId,
+        generation: 1,
+        observed: { fields: observed },
+        operations: [],
+        errors: {},
+        preparing: null,
+        paintVersion: 0,
+    };
+    const work = Object.assign({ id: workId }, fields);
+    Object.keys(fields).forEach(f => { if (work[f] === undefined) work[f] = ''; });
+
+    globalThis.prksSync = {
+        store,
+        changed() {},
+    };
+    globalThis.prksGetFocusedTabContext = () => ({
+        destroyed: false,
+        generation: 1,
+        getResource: (name) => (name === 'workMetadataEditor' ? editorState : null),
+        getEntity: (name) => (name === 'work' ? work : null),
+        setResource() {},
+    });
+    globalThis.prksRightPanelOwnedBy = () => true;
+    globalThis.prksOwnerTabIsFocused = () => true;
+    globalThis.prksOfflineRuntimeState = () => 'offline';
+    globalThis.prksSetButtonBusy = () => {};
+    globalThis.prksOfflineRuntimeSubscribe = () => () => {};
+
+    delete require.cache[require.resolve('../../frontend/js/work-metadata-editor.js')];
+    require('../../frontend/js/work-metadata-editor.js');
+
+    return {
+        inputs,
+        status,
+        editorState,
+        saveCalls: () => saveCalls,
+        async saveBib() {
+            await globalThis.prksSaveWorkMetadataFields(workId, 'bib');
+        },
+        async refreshOps() {
+            editorState.operations = (await store.listOperations())
+                .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
+        },
+        teardown() {
+            delete globalThis.document;
+            delete globalThis.prksGetFocusedTabContext;
+            delete globalThis.prksRightPanelOwnedBy;
+            delete globalThis.prksOwnerTabIsFocused;
+            delete globalThis.prksSetButtonBusy;
+            delete require.cache[require.resolve('../../frontend/js/work-metadata-editor.js')];
+        },
+    };
+}
+
 /* ---- Abstract: large scalar + DERIVED projection ---- */
 async function abstracts() {
     const excerpt = globalThis.prksAbstractExcerpt;
@@ -1828,14 +2005,34 @@ async function abstracts() {
     assert.equal(globalThis.prksWorkFieldLimitError('doi', 'x'.repeat(limit)), null,
         'only byte-limited fields are checked here');
 
-    // An oversize Abstract never becomes a durable operation: dirty detection
-    // still sees the draft, but the editor aborts before enqueue (static
-    // contract in test_frontend_work_metadata_sync). The store path itself
-    // would accept a value that already passed the editor gate.
-    const refuseStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
-    assert.equal(globalThis.prksWorkFieldLimitError('abstract', 'x'.repeat(limit + 1)) == null, false);
-    assert.deepEqual(await refuseStore.listOperations(), [],
-        'limit refusal is decided before any store write is attempted');
+    // Executable editor refusal: dirty detection → limit guard → status paint,
+    // draft retained, store save never called. A fresh empty store alone would
+    // pass even if the editor started enqueueing oversized Abstracts.
+    {
+        const refuseStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const harness = installWorkMetadataEditorHarness({
+            workId: 'W-OVER',
+            fields: { abstract: '', doi: '' },
+            observed: resolved(base()),
+            store: refuseStore,
+        });
+        const oversize = 'x'.repeat(limit + 1);
+        harness.inputs.abstract.value = oversize;
+        await harness.saveBib();
+        assert.equal(harness.saveCalls(), 0,
+            'the editor must not call saveWorkMetadataFields for an oversize Abstract');
+        assert.deepEqual(await refuseStore.listOperations(), [],
+            'nothing durable was enqueued');
+        assert.match(harness.status.textContent,
+            /^Abstract is too long to save \(1025 KB of 1024 KB allowed\)\. Shorten it, or keep long material in Research Notes\.$/,
+            'the refusal is painted into the bib sync status');
+        assert.equal(harness.inputs.abstract.value, oversize, 'the draft stays on screen');
+        assert.equal(harness.inputs.abstract.value.length, limit + 1);
+        harness.teardown();
+        // Restore state helpers the rest of abstracts() shares.
+        delete require.cache[require.resolve('../../frontend/js/work-metadata-state.js')];
+        require('../../frontend/js/work-metadata-state.js');
+    }
 
     // Pending Abstract overlays the Work, and DERIVES the browse excerpt.
     const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
