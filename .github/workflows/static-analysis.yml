@@ -53,8 +53,10 @@ jobs:
         # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
         # unrelated PRs. Only newly added / newly-unexempted call sites fail.
         # PR base is the immutable event SHA (not the live base-branch tip).
-        # Zero-before pushes use origin/master when available, else the empty
-        # tree, so earlier commits in a newly pushed history are still covered.
+        # Zero-before pushes (new/recreated branch) and workflow_dispatch use
+        # the empty tree so the full tip is scanned. Do not merge-base with
+        # origin/master after a master push — that ref can equal HEAD and the
+        # diff becomes empty, skipping sleeps introduced earlier in the push.
         shell: bash
         env:
           PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -68,12 +70,7 @@ jobs:
           elif [[ "${{ github.event_name }}" == "push" && -n "${PRKS_PUSH_BEFORE:-}" && "${PRKS_PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
             base="$(git rev-parse --verify --end-of-options "${PRKS_PUSH_BEFORE}")"
           else
-            if git rev-parse --verify --end-of-options origin/master >/dev/null 2>&1; then
-              base="$(git merge-base HEAD origin/master 2>/dev/null \
-                || git rev-parse --verify --end-of-options origin/master)"
-            else
-              base="$empty_tree"
-            fi
+            base="$empty_tree"
           fi
           python scripts/check_e2e_wait_for_timeout.py --base "$base"
 
