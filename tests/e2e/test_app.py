@@ -3022,7 +3022,9 @@ def _warm_person_group_sync_state(page, group_id):
         lambda r: (
             r.request.method == "GET"
             and urlparse(r.url).path == sync_path
-            and r.ok
+            # Playwright may surface conditional revalidation as 304 while
+            # fetchJsonStrict still resolves the cached entity as OK.
+            and (r.ok or r.status == 304)
         ),
         timeout=15000,
     ):
