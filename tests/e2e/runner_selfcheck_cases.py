@@ -41,3 +41,26 @@ class HangingCases(unittest.TestCase):
         # Exercises the per-test watchdog under a short PRKS_E2E_TEST_WATCHDOG.
         # Must not be collected by ordinary discovery (this module is not test_*).
         time.sleep(3600)
+
+
+class FailFastSiblingCases(unittest.TestCase):
+    """One worker fails only after its sibling has an active test id.
+
+    Used to prove --fail-fast cancellation does not record the stopped sibling
+    as a failed test. Not collected by ordinary discovery.
+    """
+
+    def test_runs_until_cancelled(self):
+        sentinel = os.environ.get("PRKS_E2E_CANCEL_SENTINEL")
+        if sentinel:
+            with open(sentinel, "w", encoding="utf-8") as handle:
+                handle.write("started")
+        time.sleep(30)
+
+    def test_fails_once_sibling_is_active(self):
+        sentinel = os.environ.get("PRKS_E2E_CANCEL_SENTINEL")
+        if sentinel:
+            deadline = time.time() + 15
+            while time.time() < deadline and not os.path.exists(sentinel):
+                time.sleep(0.05)
+        self.assertEqual("expected", "actual")

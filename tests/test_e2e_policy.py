@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -2090,6 +2091,189 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
         self.assertTrue(hasattr(runner, "_supervise_full_gate"))
         self.assertFalse(hasattr(runner, "_arm_full_gate_watchdog"))
         self.assertFalse(hasattr(runner, "FullGateTimeoutError"))
+
+
+class CrashLastFailedRetentionTests(unittest.TestCase):
+    def test_crash_attributed_id_is_retained_in_last_failed(self):
+        """main() persists the active id when a worker dies without a report."""
+        from tests.e2e import run as runner
+
+        crash_id = (
+            "tests.e2e.runner_selfcheck_cases.CrashingCases.test_kills_the_worker"
+        )
+        pass_id = "tests.e2e.runner_selfcheck_cases.PassingCases.test_first"
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-crash-last-") as raw:
+                root = Path(raw)
+                last_path = root / "e2e-last-failed.json"
+                diag_path = root / "e2e-failure-diagnostics.json"
+                with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
+                    with mock.patch.object(
+                        runner, "FAILURE_DIAGNOSTICS_PATH", diag_path
+                    ):
+                        with mock.patch.object(
+                            runner,
+                            "discover_test_ids",
+                            return_value=[pass_id, crash_id],
+                        ):
+                            with mock.patch.object(runner, "ensure_chromium_installed"):
+                                with mock.patch.object(runner, "_persist_timings"):
+                                    with mock.patch.object(runner, "_print_slowest"):
+                                        with contextlib.redirect_stdout(io.StringIO()):
+                                            with contextlib.redirect_stderr(io.StringIO()):
+                                                code = runner.main(
+                                                    [
+                                                        pass_id,
+                                                        crash_id,
+                                                        "--jobs",
+                                                        "2",
+                                                        "--no-pointer-capture",
+                                                    ]
+                                                )
+                self.assertEqual(code, 1)
+                data = policy.load_last_failed(last_path)
+                self.assertIsNotNone(data)
+                self.assertEqual(data["test_ids"], [crash_id])
+                loaded = policy.load_failure_diagnostics(diag_path)
+                self.assertIsNotNone(loaded)
+                self.assertIn(crash_id, loaded["failed_ids"])
+                self.assertNotEqual(loaded.get("kind"), "pointer-capture")
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+
+class PointerCaptureDiagnosticsTests(unittest.TestCase):
+    """Diagnostics finalize after pointer capture, without traces or content."""
+
+    def _invoke(
+        self,
+        *,
+        tests_ok,
+        failed_ids=None,
+        pointer_code=0,
+        no_pointer=False,
+        during_tests=None,
+        during_pointer=None,
+    ):
+        from tests.e2e import run as runner
+
+        test_id = "tests.e2e.fake.DiagTests.test_one"
+        failed = list(failed_ids or [])
+        observed = {test_id: 0.2} if tests_ok else {}
+
+        def run_serial(*_args, **_kwargs):
+            if during_tests is not None:
+                during_tests(diag)
+            return (tests_ok, observed, failed, {})
+
+        def run_pointer():
+            if during_pointer is not None:
+                during_pointer(diag)
+            return pointer_code
+
+        with tempfile.TemporaryDirectory(prefix="prks-ptr-diag-") as raw:
+            repo = Path(raw)
+            diag = repo / ".tests" / "e2e-failure-diagnostics.json"
+            argv = [test_id, "--jobs", "1"]
+            if no_pointer:
+                argv.append("--no-pointer-capture")
+            with contextlib.ExitStack() as stack:
+                enter = stack.enter_context
+                enter(mock.patch.object(runner, "REPO", repo))
+                enter(mock.patch.object(runner, "ensure_chromium_installed"))
+                enter(
+                    mock.patch.object(
+                        runner, "discover_test_ids", return_value=[test_id]
+                    )
+                )
+                enter(mock.patch.object(runner, "run_serial", side_effect=run_serial))
+                pointer = enter(
+                    mock.patch.object(
+                        runner, "_run_pointer_capture", side_effect=run_pointer
+                    )
+                )
+                enter(mock.patch.object(runner, "_print_slowest"))
+                enter(mock.patch.object(runner, "_persist_timings"))
+                enter(contextlib.redirect_stdout(io.StringIO()))
+                enter(contextlib.redirect_stderr(io.StringIO()))
+                code = runner.main(argv)
+            loaded = policy.load_failure_diagnostics(diag)
+            return code, loaded, pointer
+
+    def test_pass_and_pointer_pass_clears_diagnostics(self):
+        def plant(diag):
+            policy.save_failure_diagnostics(
+                diag, {"kind": "stale", "failed_ids": ["tests.e2e.fake.T.test_old"]}
+            )
+
+        code, loaded, pointer = self._invoke(
+            tests_ok=True, pointer_code=0, during_pointer=plant
+        )
+        self.assertEqual(code, 0)
+        pointer.assert_called_once()
+        self.assertIsNone(loaded)
+
+    def test_e2e_failure_keeps_existing_diagnostics(self):
+        test_id = "tests.e2e.fake.DiagTests.test_one"
+
+        def plant(diag):
+            policy.save_failure_diagnostics(
+                diag,
+                {
+                    "kind": "worker-crash",
+                    "failed_ids": [test_id],
+                    "stuck_test_id": test_id,
+                    "last_stage": "APP_READY",
+                    "watchdog": False,
+                },
+            )
+
+        code, loaded, pointer = self._invoke(
+            tests_ok=False,
+            failed_ids=[test_id],
+            during_tests=plant,
+        )
+        self.assertEqual(code, 1)
+        pointer.assert_not_called()
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded["kind"], "worker-crash")
+        self.assertEqual(loaded["failed_ids"], [test_id])
+        self.assertEqual(loaded["last_stage"], "APP_READY")
+        self.assertNotIn("pointer_capture_returncode", loaded)
+        self.assertNotIn("screenshot", loaded)
+        self.assertNotIn("trace", loaded)
+
+    def test_pointer_failure_writes_privacy_safe_diagnostics(self):
+        code, loaded, pointer = self._invoke(tests_ok=True, pointer_code=7)
+        self.assertEqual(code, 1)
+        pointer.assert_called_once()
+        self.assertEqual(
+            loaded,
+            {
+                "kind": "pointer-capture",
+                "failed_ids": [],
+                "watchdog": False,
+                "pointer_capture_returncode": 7,
+            },
+        )
+
+    def test_no_pointer_capture_success_clears_diagnostics(self):
+        def plant(diag):
+            policy.save_failure_diagnostics(
+                diag, {"kind": "stale", "failed_ids": ["tests.e2e.fake.T.test_old"]}
+            )
+
+        code, loaded, pointer = self._invoke(
+            tests_ok=True, no_pointer=True, during_tests=plant
+        )
+        self.assertEqual(code, 0)
+        pointer.assert_not_called()
+        self.assertIsNone(loaded)
 
 
 if __name__ == "__main__":
