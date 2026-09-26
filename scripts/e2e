@@ -170,10 +170,12 @@ EOF
         *) passthrough+=("$arg") ;;
       esac
     done
+    # Bash 3.2 + set -u treats empty "${array[@]}" as unbound; the
+    # ${arr[@]+"${arr[@]}"} form stays nounset-safe and keeps arg boundaries.
     if [[ "$json" -eq 1 ]]; then
-      exec "${RUN[@]}" --inventory-json "${passthrough[@]}"
+      exec "${RUN[@]}" --inventory-json ${passthrough[@]+"${passthrough[@]}"}
     fi
-    exec "${RUN[@]}" --inventory "${passthrough[@]}"
+    exec "${RUN[@]}" --inventory ${passthrough[@]+"${passthrough[@]}"}
     ;;
   *)
     echo "unknown command: $cmd" >&2
