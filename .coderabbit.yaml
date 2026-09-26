@@ -24,7 +24,7 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
-    drafts: false
+    drafts: true
 
   path_filters:
     - "!frontend/vendor/**/*.js"
