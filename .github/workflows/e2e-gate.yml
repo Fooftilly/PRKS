@@ -176,7 +176,10 @@ jobs:
       contents: read
     name: Full E2E gate
     needs: [e2e-plan, e2e, e2e-pointer]
-    if: always()
+    # Skip when this workflow run was cancelled (concurrency cancel-in-progress
+    # on a superseding push). otherwise always() still runs the aggregator with
+    # needs.*.result == cancelled and falsely fails the required-check-shaped gate.
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
