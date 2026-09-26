@@ -203,6 +203,7 @@ class RepoScenarioTests(unittest.TestCase):
             self.assertEqual(findings, [])
 
     def test_removed_marker_while_addition_remains_fails(self):
+        """Same-diff: new sleep without marker fails (still required)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
@@ -216,8 +217,60 @@ class RepoScenarioTests(unittest.TestCase):
             (root / "tests/e2e/test_hist.py").write_text(without_marker, encoding="utf-8")
             findings = checker.collect_findings(root, base)
             self.assertEqual(len(findings), 1)
+            self.assertIn("new page.wait_for_timeout", findings[0].reason)
+
+    def test_later_pr_removes_marker_call_unchanged_fails(self):
+        """#189 ratchet: delete marker in a later PR while sleep stays → fail."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            approved = (
+                HISTORICAL_E2E
+                + "\n"
+                + "    # prks-allow-wait-for-timeout: absence window\n"
+                + "    page.wait_for_timeout(400)\n"
+            )
+            _commit_tree(
+                root,
+                {"tests/e2e/test_hist.py": approved, "README": "x\n"},
+                "approved sleep landed",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            # Later PR: only the exemption marker is deleted; call unchanged.
+            without_marker = (
+                HISTORICAL_E2E + "\n" + "    page.wait_for_timeout(400)\n"
+            )
+            (root / "tests/e2e/test_hist.py").write_text(without_marker, encoding="utf-8")
+            findings = checker.collect_findings(root, base)
+            self.assertEqual(len(findings), 1)
+            self.assertIn("lost its approved exemption", findings[0].reason)
+            # Historical unexempted sleep in the same file must not also fail.
+            self.assertIn("wait_for_timeout(400)", findings[0].snippet)
+
+    def test_later_pr_removes_same_line_marker_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            approved = (
+                "page.wait_for_timeout(250)  "
+                "# prks-allow-wait-for-timeout: debounce under test\n"
+            )
+            _commit_tree(
+                root,
+                {"tests/e2e/test_timing.py": approved, "README": "x\n"},
+                "same-line marker",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            (root / "tests/e2e/test_timing.py").write_text(
+                "page.wait_for_timeout(250)\n",
+                encoding="utf-8",
+            )
+            findings = checker.collect_findings(root, base)
+            self.assertEqual(len(findings), 1)
+            self.assertIn("lost its approved exemption", findings[0].reason)
 
     def test_path_allowlist_then_removal_fails(self):
+        """Same-diff: new sleep while allowlisted, then un-allowlisted → fail."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _init_repo(root)
@@ -232,15 +285,60 @@ class RepoScenarioTests(unittest.TestCase):
                 "page.wait_for_timeout(1)\npage.wait_for_timeout(2)\n",
                 encoding="utf-8",
             )
-            with mock.patch.object(
-                checker, "PATH_ALLOWLIST", frozenset({"tests/e2e/helper_timing.py"})
-            ):
-                self.assertEqual(checker.collect_findings(root, base), [])
-            # Removing the allowlist entry while the new call remains → fail.
-            with mock.patch.object(checker, "PATH_ALLOWLIST", frozenset()):
-                findings = checker.collect_findings(root, base)
-                self.assertEqual(len(findings), 1)
-                self.assertEqual(findings[0].path, "tests/e2e/helper_timing.py")
+            helper = frozenset({"tests/e2e/helper_timing.py"})
+            self.assertEqual(
+                checker.collect_findings(
+                    root,
+                    base,
+                    path_allowlist=helper,
+                    base_path_allowlist=helper,
+                ),
+                [],
+            )
+            # Removing the allowlist entry: previously allowlisted wait(1) lost
+            # its exemption, and wait(2) is still a new unapproved call.
+            findings = checker.collect_findings(
+                root,
+                base,
+                path_allowlist=frozenset(),
+                base_path_allowlist=helper,
+            )
+            self.assertEqual(len(findings), 2)
+            self.assertTrue(all(f.path == "tests/e2e/helper_timing.py" for f in findings))
+            reasons = sorted(f.reason for f in findings)
+            self.assertTrue(any("lost its approved exemption" in r for r in reasons))
+            self.assertTrue(any("new page.wait_for_timeout" in r for r in reasons))
+
+    def test_later_pr_removes_allowlist_call_unchanged_fails(self):
+        """#189 ratchet: drop PATH_ALLOWLIST while helper sleep unchanged → fail."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _init_repo(root)
+            _commit_tree(
+                root,
+                {
+                    "tests/e2e/helper_timing.py": "page.wait_for_timeout(1)\n",
+                    "tests/e2e/test_hist.py": HISTORICAL_E2E,
+                    "README": "x\n",
+                },
+                "allowlisted helper landed",
+            )
+            base = _git(root, "rev-parse", "HEAD").stdout.strip()
+            helper = frozenset({"tests/e2e/helper_timing.py"})
+            # Working tree unchanged; only the allowlist shrinks vs base.
+            findings = checker.collect_findings(
+                root,
+                base,
+                path_allowlist=frozenset(),
+                base_path_allowlist=helper,
+            )
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0].path, "tests/e2e/helper_timing.py")
+            self.assertIn("lost its approved exemption", findings[0].reason)
+            # Untouched historical path must not be pulled into the failure set.
+            self.assertTrue(
+                all(f.path != "tests/e2e/test_hist.py" for f in findings)
+            )
 
     def test_untracked_e2e_module_with_timeout_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -312,6 +410,22 @@ class SanitizeRevisionTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 with self.assertRaises(checker.DiscoveryError):
                     checker.sanitize_git_revision(bad)
+
+
+class AllowlistParseTests(unittest.TestCase):
+    def test_parses_empty_and_populated_frozenset(self):
+        self.assertEqual(
+            checker.parse_path_allowlist_from_source(
+                "PATH_ALLOWLIST: frozenset[str] = frozenset()\n"
+            ),
+            frozenset(),
+        )
+        self.assertEqual(
+            checker.parse_path_allowlist_from_source(
+                'PATH_ALLOWLIST: frozenset[str] = frozenset({"tests/e2e/a.py"})\n'
+            ),
+            frozenset({"tests/e2e/a.py"}),
+        )
 
 
 class CurrentRepoSmokeTests(unittest.TestCase):
