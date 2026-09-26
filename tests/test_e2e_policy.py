@@ -254,7 +254,8 @@ class AffectedMappingTests(unittest.TestCase):
                 rule, feats, skip, _note = policy.match_affected_path(path)
                 self.assertEqual(rule, "e2e-framework")
                 self.assertFalse(skip)
-                self.assertEqual(feats, ("smoke",))
+                # wait-async rides with the shared e2e-framework rule (#222).
+                self.assertEqual(feats, ("smoke", "wait-async"))
 
     def test_select_affected_broken_feature_selection_is_not_noop(self):
         # Features mapped, but none of the known IDs match → fail, not noop.
