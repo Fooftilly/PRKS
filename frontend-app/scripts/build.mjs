@@ -14,7 +14,7 @@ import { resolvePython } from "../../tools/resolve-python3.mjs";
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(appRoot, "..");
 const outDir = join(repoRoot, "frontend", "vue");
-const allowedNames = new Set(["prks-vue.js", "prks-vue.css", "BUILD-MANIFEST.json"]);
+const allowedNames = new Set(["prks-vue.js", "BUILD-MANIFEST.json"]);
 
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -34,6 +34,15 @@ if (existsSync(emittedIndex)) {
   rmSync(emittedIndex);
 }
 
+const emittedCss = readdirSync(outDir).filter((name) => name.endsWith(".css"));
+if (emittedCss.length) {
+  console.error(
+    "Vite left a stylesheet in frontend/vue; CSS must be inlined into prks-vue.js:",
+    emittedCss.join(", "),
+  );
+  process.exit(1);
+}
+
 const unexpected = readdirSync(outDir).filter((name) => !allowedNames.has(name));
 if (unexpected.length) {
   console.error("unexpected Vite output in frontend/vue:", unexpected.join(", "));
@@ -50,10 +59,6 @@ const pkg = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
 const outputSha256 = {
   "prks-vue.js": sha256(jsPath),
 };
-const cssPath = join(outDir, "prks-vue.css");
-if (existsSync(cssPath)) {
-  outputSha256["prks-vue.css"] = sha256(cssPath);
-}
 
 const manifest = {
   schema_version: 1,

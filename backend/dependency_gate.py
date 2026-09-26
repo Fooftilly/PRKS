@@ -1254,14 +1254,13 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
         vue_ver = str((vue_pkg.get("dependencies") or {}).get("vue") or "")
         vue_dir = root / "frontend" / "vue"
         vue_runtime = []
-        for name in ("prks-vue.js", "prks-vue.css"):
-            path = vue_dir / name
-            if not path.is_file():
-                continue
+        js_name = "prks-vue.js"
+        js_path = vue_dir / js_name
+        if js_path.is_file():
             vue_runtime.append(
                 {
-                    "path": f"/vue/{name}",
-                    "sha256": sha256_file(path),
+                    "path": f"/vue/{js_name}",
+                    "sha256": sha256_file(js_path),
                 }
             )
         if vue_ver and vue_runtime:
@@ -1742,7 +1741,7 @@ def run_test_gate(**kwargs: Any) -> GateResult:
 
 VUE_BUNDLE_URL = "/vue/prks-vue.js"
 VUE_BOOTSTRAP_MARKER = "data-prks-vue-bootstrap"
-VUE_NODE_ENGINES = ">=24 <25"
+VUE_NODE_ENGINES = ">=24.15.0 <25"
 _VUE_CDN_MARKERS = (
     "cdn.jsdelivr.net",
     "unpkg.com",
@@ -1781,8 +1780,22 @@ def validate_vue_production(repo_root: Path | None = None) -> GateResult:
     if engines != VUE_NODE_ENGINES:
         result.fail(
             "vue_node_toolchain",
-            f"frontend-app engines.node must be {VUE_NODE_ENGINES!r} (CI Node 24)",
+            f"frontend-app engines.node must be {VUE_NODE_ENGINES!r}",
             str(pkg_path),
+        )
+    lock_path = root / "frontend-app" / "package-lock.json"
+    lock_engines = ""
+    if lock_path.is_file():
+        lock = load_json(lock_path)
+        packages = lock.get("packages") if isinstance(lock, dict) else None
+        root_pkg = packages.get("") if isinstance(packages, dict) else None
+        if isinstance(root_pkg, dict):
+            lock_engines = str((root_pkg.get("engines") or {}).get("node") or "")
+    if lock_engines != VUE_NODE_ENGINES:
+        result.fail(
+            "vue_lock_engines",
+            f"frontend-app lockfile engines.node must be {VUE_NODE_ENGINES!r}",
+            str(lock_path),
         )
 
     deps = pkg.get("dependencies") or {}
@@ -1794,11 +1807,21 @@ def validate_vue_production(repo_root: Path | None = None) -> GateResult:
         "vueTsc": dev.get("vue-tsc"),
         "vitest": dev.get("vitest"),
     }
+
+    def nonempty_pin(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
+
     for key, want in expected_pins.items():
-        if manifest.get(key) != want:
+        have = manifest.get(key)
+        want_pin = nonempty_pin(want)
+        have_pin = nonempty_pin(have)
+        if want_pin is None or have_pin is None or have_pin != want_pin:
             result.fail(
                 "vue_manifest_pin",
-                f"BUILD-MANIFEST {key}={manifest.get(key)!r} package.json={want!r}",
+                f"BUILD-MANIFEST {key}={have!r} package.json={want!r}",
                 str(manifest_path),
             )
 
@@ -1817,20 +1840,21 @@ def validate_vue_production(repo_root: Path | None = None) -> GateResult:
                 "prks-vue.js sha256 does not match BUILD-MANIFEST",
                 str(js_path),
             )
-    css_path = root / "frontend" / "vue" / "prks-vue.css"
-    if css_path.is_file():
-        if recorded.get("prks-vue.css") != sha256_file(css_path):
-            result.fail(
-                "vue_css_sha",
-                "prks-vue.css sha256 does not match BUILD-MANIFEST",
-                str(css_path),
-            )
-    elif "prks-vue.css" in recorded:
+    vue_dir = root / "frontend" / "vue"
+    for css_path in sorted(vue_dir.glob("*.css")):
         result.fail(
-            "vue_css_missing",
-            "BUILD-MANIFEST lists prks-vue.css but the file is absent",
+            "vue_css_not_inlined",
+            "Vite CSS must be inlined into prks-vue.js; do not ship a separate stylesheet",
             str(css_path),
         )
+    if isinstance(recorded, dict):
+        for name in recorded:
+            if str(name).endswith(".css"):
+                result.fail(
+                    "vue_css_not_inlined",
+                    f"BUILD-MANIFEST lists {name}; CSS must be inlined into prks-vue.js",
+                    str(manifest_path),
+                )
 
     bundle = js_path.read_text(encoding="utf-8", errors="replace")
     if VUE_BOOTSTRAP_MARKER not in bundle:

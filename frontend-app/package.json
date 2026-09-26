@@ -5,7 +5,7 @@
   "type": "module",
   "description": "PRKS Vue 3 application source. Node/npm are maintainer build tools only. The Python runtime serves the committed bundle in frontend/vue/.",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24.15.0 <25"
   },
   "scripts": {
     "dev": "vite",

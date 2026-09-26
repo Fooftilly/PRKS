@@ -1,10 +1,12 @@
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
+import { inlineCssIntoJs } from './inline-css-plugin.ts'
 
 // Maintainer build only. Production PRKS loads frontend/vue/prks-vue.js
 // from the Python static root; this config never runs inside prks_app.py.
+// Extracted CSS is inlined into that bundle. Do not emit a separate stylesheet.
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), inlineCssIntoJs()],
   publicDir: false,
   base: '/vue/',
   build: {
@@ -24,6 +26,6 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'inline-css-plugin.test.ts'],
   },
 })

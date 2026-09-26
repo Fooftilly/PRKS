@@ -158,8 +158,8 @@ Rebuild vendored assets after changing a pin:
 # PDF viewer (EmbedPDF + React)
 (cd tools/pdf-viewer && npm ci && npm run build)
 
-# Vue application bundle (Node 24; writes frontend/vue/ and refreshes the dependency manifest)
-(cd frontend-app && npm ci && npm run build)
+# Vue application bundle (Node >=24.15.0 <25; writes frontend/vue/ and refreshes the dependency manifest)
+(cd frontend-app && npm ci --ignore-scripts && npm run build)
 ```
 
 Each build refreshes `frontend/vendor/DEPENDENCY-MANIFEST.json` and `frontend/sw.js`'s `DEPENDENCY_REVISION` so service-worker static/shell caches retire when vendor bytes change. Inter is intentionally raw-managed (npm would alter the CSS/woff2 contract); update its `VERSION` + assets, then `python scripts/dependency_gate.py --write-manifest`.
