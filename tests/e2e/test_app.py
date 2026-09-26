@@ -2972,6 +2972,78 @@ def _continue_held_routes(held):
                 pass
 
 
+def _person_group_id_from_hash(page):
+    """Parse `#/people/groups/:id` (decoded). Empty when the hash is not a detail route."""
+    gid = page.evaluate(
+        """() => {
+            const m = String(location.hash || '').match(/^#\\/people\\/groups\\/([^/?#]+)/);
+            return m ? decodeURIComponent(m[1]) : '';
+        }"""
+    )
+    if not gid:
+        raise AssertionError(
+            "expected #/people/groups/:id in location.hash, got %r"
+            % (page.evaluate("() => location.hash"),)
+        )
+    return gid
+
+
+def _wait_person_group_create_settled(page, group_id):
+    """Wait until CREATE_PERSON_GROUP is no longer unsettled for this group.
+
+    Matches `pendingCreates` / `unsettled` in person-group-state.js
+    (`status !== 'acknowledged'`). While construction is unsettled,
+    `acknowledgedGroupBase` returns the create payload at revision 0 and never
+    GETs `/sync-state` — so a save-intercept hold would miss.
+    """
+    wait_for_async(
+        page,
+        """(gid) => (async () => {
+            const ops = typeof prksDurableOperationsOrNone === 'function'
+                ? await prksDurableOperationsOrNone() : [];
+            return !ops.some(r => r && r.operation === 'CREATE_PERSON_GROUP'
+                && r.entity_id === gid && r.status !== 'acknowledged');
+        })()""",
+        arg=group_id,
+        timeout=15000,
+        message="CREATE_PERSON_GROUP still unsettled before save intercept",
+    )
+
+
+def _warm_person_group_sync_state(page, group_id):
+    """Force a `/sync-state` GET after CREATE settled (route hold must be off).
+
+    Same pattern as the Person profile save hold: warm the revision-base read
+    while the route falls through, then arm the hold so the save's next GET is
+    the in-flight window under test.
+    """
+    sync_path = "/api/person-groups/%s/sync-state" % group_id
+    with page.expect_response(
+        lambda r: (
+            r.request.method == "GET"
+            and urlparse(r.url).path == sync_path
+            and r.ok
+        ),
+        timeout=15000,
+    ):
+        page.evaluate(
+            """async (gid) => {
+                const ops = typeof prksDurableOperationsOrNone === 'function'
+                    ? await prksDurableOperationsOrNone() : [];
+                if (ops.some(r => r && r.operation === 'CREATE_PERSON_GROUP'
+                        && r.entity_id === gid && r.status !== 'acknowledged')) {
+                    throw new Error(
+                        'CREATE_PERSON_GROUP still unsettled during sync-state warm');
+                }
+                const base = await prksAcknowledgedPersonGroupBase(gid, ops);
+                if (!base) {
+                    throw new Error('person-group base unavailable during sync-state warm');
+                }
+            }""",
+            arg=group_id,
+        )
+
+
 class RequestCoordinatorTests(_BrowserE2E):
     def test_identical_work_detail_gets_dedupe_to_one_network_request(self):
         server, page, _collector = self._start_app()
@@ -4325,6 +4397,7 @@ class TabContextHostRootTests(_BrowserE2E):
     def test_person_group_save_does_not_navigate_other_tab(self):
         _server, page, _collector = self._start_app()
         held = []
+        hold_active = {"on": False}
         page.evaluate("() => window.prksNavigate('#/people/groups')")
         page.wait_for_function("() => location.hash === '#/people/groups'")
         page.wait_for_selector(".prks-group-library")
@@ -4333,35 +4406,33 @@ class TabContextHostRootTests(_BrowserE2E):
         page.fill("#group-name", "E2E Owner Group")
         page.locator("#save-group-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
-        group_id = page.evaluate("() => location.hash.split('/')[3]")
+        group_id = _person_group_id_from_hash(page)
         page.locator("#panel-content button", has_text="Edit group").click()
         page.wait_for_selector("#gd-save-btn")
         # While CREATE_PERSON_GROUP is unsettled, acknowledgedGroupBase uses the
         # create payload at revision 0 and never GETs /sync-state — so the hold
-        # below would miss. Wait until construction has retired first.
-        wait_for_async(
-            page,
-            """(gid) => prksSync.store.listOperations().then(rows =>
-                !rows.some(r => r.operation === 'CREATE_PERSON_GROUP'
-                    && r.entity_id === gid))""",
-            arg=group_id,
-            timeout=15000,
-            message="CREATE_PERSON_GROUP still unsettled before save intercept",
-        )
+        # below would miss. Wait until construction has retired, then warm the
+        # revision-base read before arming the hold (Person-profile pattern).
+        _wait_person_group_create_settled(page, group_id)
 
         # There is no Group PATCH any more: the save is durable. What it DOES
         # await is the revision base it measures the edit against, so that read
         # is the in-flight window this test needs.
+        sync_path = "/api/person-groups/%s/sync-state" % group_id
+
         def hold_group_state(route):
             req = route.request
-            path = urlparse(req.url).path
-            if req.method == "GET" and path.endswith("/sync-state") and group_id in path:
+            if (hold_active["on"]
+                    and req.method == "GET"
+                    and urlparse(req.url).path == sync_path):
                 held.append(route)
                 return
             route.fallback()
 
         page.route("**/api/person-groups/**", hold_group_state)
         try:
+            _warm_person_group_sync_state(page, group_id)
+            hold_active["on"] = True
             page.locator("#gd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -4374,10 +4445,12 @@ class TabContextHostRootTests(_BrowserE2E):
             page.evaluate("() => window.prksNavigate('#/folders', { target: 'new-tab', activate: true })")
             page.wait_for_function("() => document.querySelectorAll('.prks-workspace-tab').length === 2")
             page.wait_for_function("() => location.hash === '#/folders'")
+            hold_active["on"] = False
             _continue_held_routes(held)
             page.wait_for_timeout(400)
             self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
         finally:
+            hold_active["on"] = False
             _continue_held_routes(held)
             try:
                 page.unroute("**/api/person-groups/**", hold_group_state)
@@ -4397,35 +4470,34 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator("#panel-content button", has_text="Edit group").click()
         page.wait_for_selector("#gd-save-btn")
 
-        group_id = page.evaluate("() => location.hash.split('/')[3]")
+        group_id = _person_group_id_from_hash(page)
         # Pending CREATE_PERSON_GROUP skips the /sync-state GET (revision 0 from
-        # the create payload). Retire construction before the intercept so the
-        # save path actually hits the revision base read this test holds.
-        wait_for_async(
-            page,
-            """(gid) => prksSync.store.listOperations().then(rows =>
-                !rows.some(r => r.operation === 'CREATE_PERSON_GROUP'
-                    && r.entity_id === gid))""",
-            arg=group_id,
-            timeout=15000,
-            message="CREATE_PERSON_GROUP still unsettled before save intercept",
-        )
+        # the create payload). Retire construction, warm a successful base read
+        # with the hold off, then arm — so the save's next GET is interceptable.
+        _wait_person_group_create_settled(page, group_id)
         held = []
+        hold_active = {"on": False}
         fail_next = {"value": True}
+        sync_path = "/api/person-groups/%s/sync-state" % group_id
 
         def hold_then_fail_once(route):
             req = route.request
-            path = urlparse(req.url).path
-            if (req.method == "GET" and path.endswith("/sync-state")
-                    and group_id in path and fail_next["value"]):
+            if (hold_active["on"]
+                    and req.method == "GET"
+                    and urlparse(req.url).path == sync_path
+                    and fail_next["value"]):
                 held.append(route)
                 return
             route.fallback()
 
         page.route("**/api/person-groups/**", hold_then_fail_once)
         try:
+            _warm_person_group_sync_state(page, group_id)
             self.assertIsNone(page.locator("#gd-save-btn").get_attribute("aria-busy"))
             save_btn = page.locator("#gd-save-btn")
+            # Dirty a field so Save measures a real edit against the warmed base.
+            page.fill("#gd-name", "E2E Retry Group Renamed")
+            hold_active["on"] = True
             save_btn.click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -4439,6 +4511,7 @@ class TabContextHostRootTests(_BrowserE2E):
             self.assertEqual(save_btn.inner_text(), "Saving…")
 
             fail_next["value"] = False
+            hold_active["on"] = False
             # A base this device cannot read is the one thing that still stops a
             # durable save: without the group's revisions the edit would have to
             # guess, and guessing is what a base revision exists to prevent.
@@ -4464,6 +4537,7 @@ class TabContextHostRootTests(_BrowserE2E):
             page.wait_for_selector("#gd-save-btn", state="hidden")
             page.locator("#panel-content button", has_text="Edit group").wait_for()
         finally:
+            hold_active["on"] = False
             _continue_held_routes(held)
             try:
                 page.unroute("**/api/person-groups/**", hold_then_fail_once)
