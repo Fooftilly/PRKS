@@ -30,6 +30,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Need the PR base (or push before SHA) so the E2E wait_for_timeout
+          # guard can diff only *new* call sites (#189).
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
@@ -45,6 +48,23 @@ jobs:
 
       - name: Enforce PRKS engineering invariants
         run: python scripts/check_invariants.py
+
+      - name: Fail on new E2E page.wait_for_timeout
+        # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
+        # unrelated PRs. Only newly added unapproved call sites fail.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            base="origin/${{ github.base_ref }}"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            base="${{ github.event.before }}"
+          else
+            # workflow_dispatch / first push: compare to parent when available.
+            base="$(git rev-parse HEAD^ 2>/dev/null || git rev-parse HEAD)"
+          fi
+          python scripts/check_e2e_wait_for_timeout.py --base "$base"
 
   pyright:
     permissions:
