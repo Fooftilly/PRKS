@@ -167,6 +167,49 @@ class WaitForAsyncParityTests(unittest.TestCase):
         self.assertIs(result, True)
         self.assertEqual(calls["n"], 1, "expected one evaluate; setup used %d" % setup_calls)
 
+    def test_fast_false_polls_do_not_accumulate_race_timers(self):
+        """Per-poll deadline timers must be cleared when the predicate settles."""
+        self.page.evaluate(
+            """() => {
+                const realSet = window.setTimeout.bind(window);
+                const realClear = window.clearTimeout.bind(window);
+                const pending = new Set();
+                window.__prksTimerPeak = 0;
+                window.__prksTimerPending = () => pending.size;
+                window.setTimeout = (fn, delay, ...rest) => {
+                    const id = realSet((...args) => {
+                        pending.delete(id);
+                        fn(...args);
+                    }, delay, ...rest);
+                    pending.add(id);
+                    if (pending.size > window.__prksTimerPeak) {
+                        window.__prksTimerPeak = pending.size;
+                    }
+                    return id;
+                };
+                window.clearTimeout = (id) => {
+                    pending.delete(id);
+                    return realClear(id);
+                };
+                window.__polls = 0;
+            }"""
+        )
+        # ~30 quick false polls (50ms sleep between) then success — without
+        # clearTimeout the race timers would peak near the poll count.
+        result = harness.wait_for_async(
+            self.page,
+            "() => { window.__polls += 1; return window.__polls > 30; }",
+            timeout=10000,
+        )
+        self.assertIs(result, True)
+        peak, pending, polls = self.page.evaluate(
+            "() => [window.__prksTimerPeak, window.__prksTimerPending(), window.__polls]"
+        )
+        self.assertGreaterEqual(polls, 31)
+        # At most one race timer + one inter-poll sleep timer live at once.
+        self.assertLessEqual(peak, 3, "race timers leaked; peak=%r polls=%r" % (peak, polls))
+        self.assertEqual(pending, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

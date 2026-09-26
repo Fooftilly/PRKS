@@ -501,6 +501,8 @@ async ({ expression, arg, timeoutMs, pollMs }) => {
         // Bound each predicate await by remaining timeout. A Promise that never
         // settles must not block the loop past the caller's deadline (Qodo on
         // #220 / #222). Resolved falsey values still poll as before.
+        // Clear the race timer when the predicate wins so fast false polls do
+        // not accumulate armed setTimeouts until the overall deadline.
         let settled = null;
         const predicatePromise = Promise.resolve(invoke(arg)).then(
             (value) => {
@@ -512,10 +514,20 @@ async ({ expression, arg, timeoutMs, pollMs }) => {
                 return settled;
             }
         );
-        const timedOut = await Promise.race([
-            predicatePromise.then(() => false),
-            new Promise((resolve) => setTimeout(() => resolve(true), remaining)),
-        ]);
+        let timer = null;
+        let timedOut = false;
+        try {
+            timedOut = await Promise.race([
+                predicatePromise.then(() => false),
+                new Promise((resolve) => {
+                    timer = setTimeout(() => resolve(true), remaining);
+                }),
+            ]);
+        } finally {
+            if (timer !== null) {
+                clearTimeout(timer);
+            }
+        }
         if (!settled) {
             // Late settle/reject after we leave evaluate: avoid unhandled rejection.
             predicatePromise.catch(() => {});
