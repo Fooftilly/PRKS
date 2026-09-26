@@ -320,21 +320,31 @@ land the replacement fast coverage before removing the browser scenario.
 
 ### Work Source family (applied)
 
-`tests/e2e/test_work_source_offline.py` retains **10** Chromium scenarios for the
-browser boundaries above (offline edit + reload, conflict UI, non-video editor
-absence, invalid-URL editor refusal, open-editor remount base, cache-visible
-thumbnail, Apply/Use-server projections including offline recovery).
+`tests/e2e/test_work_source_offline.py` retains **14** Chromium scenarios for the
+browser boundaries above, including editor `state.observed` paths that Node
+store/handler tests cannot replace:
 
-Moved out of Chromium after replacement coverage existed:
+- offline edit + reload, conflict UI, non-video editor absence, invalid-URL
+  editor refusal, open-editor remount base, cache-visible thumbnail,
+  Apply/Use-server projections including offline recovery;
+- **editor coalescing** (double-edit before send; return-to-base);
+- **post-Apply cancel** (Apply button updates observed base, then choosing the
+  server's video cancels);
+- **convergent ACK open-editor spelling** (`acceptAck` writes the stored URL).
+
+Moved out of Chromium only where the contract is proven without the editor:
 
 | Removed E2E | Replacement |
 | --- | --- |
 | four-column pending identity | Node `effectiveSourceOverlay` in `run_work_source_sync_selftest.js` |
 | respelling same video not a conflict | Python `test_a_stale_but_convergent_choice_is_not_a_conflict` |
-| A→B→C before send is one operation | Node `coalescing` |
-| return to acknowledged leaves no intent | Node `coalescing` (A→B→A) |
-| after Apply choosing server video cancels | Node `conflictResolution` cancel-on-server-identity |
-| convergent ack never publishes unstored URL | Python convergent acknowledgement + Node reconciliation (stored spelling / server revision) |
+
+Store-layer Node coverage (`coalescing`, `conflictResolution`, handler
+`isResult` / `reconcile` for SHORT→WATCH convergent ACK) remains as fast
+regression for the durable store and sync handler. It does **not** authorize
+dropping the Chromium editor scenarios above: a hand-built `serverBase` or a
+direct `reconcileWorkSource` call still passes if the Apply button or
+`acceptAck` regresses.
 
 Op-id replay, protocol bounds, thumbnail invalidation on the server write, and
 revision/conflict arithmetic remain in `tests/test_work_source_sync.py` (and the

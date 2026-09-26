@@ -7,10 +7,13 @@ spelled -- so identity, not URL text, decides what a conflict is.
 
 Chromium coverage here is intentionally thin: real UI wiring, offline edit
 across reload, user-visible conflict resolution, cache-visible thumbnail, and
-browser projections Node selftests cannot prove. Deterministic parser,
-coalescing, return-to-base, convergent writes, conflict arithmetic, and
-aggregate atomics live in `tests/test_work_source_sync.py` and
-`tests/browser/run_work_source_sync_selftest.js`.
+browser projections Node selftests cannot prove -- including editor
+`state.observed` coalescing, Apply-button base updates, and `acceptAck`
+spelling. Deterministic parser, store coalescing, protocol convergent writes,
+conflict arithmetic, and aggregate atomics live in
+`tests/test_work_source_sync.py` and
+`tests/browser/run_work_source_sync_selftest.js`. Store-layer Node coverage
+does not replace those editor paths.
 """
 import os
 import unittest
@@ -22,9 +25,15 @@ from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PLAYLIST_VIDEO_ONE_TITLE, WORK_A_TITLE, seed_playlists_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
 
+# Three videos, each in both spellings PRKS accepts. The pairs exist so a
+# re-spelling can be told apart from a different video: SHORT_TWO and WATCH_TWO
+# are ONE video, and only the URL text differs.
 WATCH_ONE = "https://www.youtube.com/watch?v=e2e0000001"
+SHORT_ONE = "https://youtu.be/e2e0000001"
 WATCH_TWO = "https://www.youtube.com/watch?v=e2e0000099"
+SHORT_TWO = "https://youtu.be/e2e0000099"
 OTHER_VIDEO = "https://www.youtube.com/watch?v=e2e0000055"
+SHORT_OTHER = "https://youtu.be/e2e0000055"
 THIRD_VIDEO = "https://www.youtube.com/watch?v=e2e0000077"
 
 
@@ -286,6 +295,60 @@ class OfflineWorkSourceTests(unittest.TestCase):
                           'the previous video\'s image is gone from the cache too')
         self.assertEqual(cached['provider_id'], 'e2e0000099')
 
+    def test_changing_the_video_twice_before_it_sends_is_one_operation(self):
+        """A source is an aggregate, so there is at most one unsynchronized
+        intent for a Work. Two rows sharing one base revision means the
+        coordinator sends the first, the revision advances, and the user's own
+        second change then arrives stale.
+
+        Kept Chromium: the editor's `state.observed` must feed
+        `saveWorkSource`. Store-only Node coalescing cannot catch an editor
+        that stops measuring against the acknowledged base.
+        """
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+
+        self.url(page, WATCH_TWO)
+        self.save(page)
+        self.pending(page, 1)
+        self.url(page, THIRD_VIDEO)
+        self.save(page)
+        self.pending(page, 1)
+        operations = page.evaluate(
+            "() => prksSync.store.listOperations().then(r => r"
+            "  .filter(o => o.operation === 'SET_WORK_SOURCE')"
+            "  .map(o => o.payload.source.url))")
+        self.assertEqual(operations, [THIRD_VIDEO],
+                         'one intent, naming the video the user actually chose')
+        self.assertEqual(self.effective(page, work)['provider_id'], 'e2e0000077')
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.columns(server, work)['provider_id'], 'e2e0000077')
+        self.assertEqual(self.cached_source_revision(page, work), 1,
+                         'ONE revision: the intermediate choice was never sent')
+
+    def test_returning_to_the_acknowledged_video_leaves_no_intent(self):
+        """Return-to-base through the real editor, not a hand-built store call."""
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+        self.url(page, WATCH_TWO)
+        self.save(page)
+        self.pending(page, 1)
+        # The share-link spelling of the video it already has: a different URL,
+        # the same video.
+        self.url(page, SHORT_ONE)
+        self.save(page)
+        self.pending(page, 0)
+        self.assertEqual(self.cached_work(page, work)['provider_id'], 'e2e0000001',
+                         'back to the acknowledged video, with nothing to send')
+        self.assertEqual(self.cached_work(page, work)['source_url'], WATCH_ONE,
+                         'and the acknowledged spelling is untouched')
+
     def test_apply_my_source_resends_the_same_intent_against_the_server(self):
         """The conflict reached the user and the button threw.
 
@@ -351,6 +414,37 @@ class OfflineWorkSourceTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.columns(server, work)['provider_id'], 'e2e0000077',
                          'and it lands rather than conflicting a second time')
+
+    def test_after_apply_choosing_the_servers_own_video_cancels(self):
+        """Returning to the identity the server reported is a cancellation.
+        On the pre-conflict base the editor read it as a change and sent it,
+        colliding with the very video it was converging on.
+
+        Kept Chromium: Apply must update the editor's observed base. A Node
+        test that constructs `serverBase` by hand still passes if the Apply
+        button stops doing that.
+        """
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+        self.url(page, WATCH_TWO)
+        self.save(page)
+        self.pending(page, 1)
+        self.other_device_sets_source(server, work, OTHER_VIDEO)
+
+        self.reconnect(page, context)
+        self.conflicts(page, 1)
+        self.offline(page, context)
+        page.locator('[data-prks-role="work-source-sync"] button',
+                     has_text='Apply my source').click()
+        self.pending(page, 1)
+
+        self.url(page, SHORT_OTHER)               # the server's video, respelled
+        self.save(page)
+        self.pending(page, 0)
+        self.assertEqual(self.source_operations(page), [],
+                         'nothing left to send: this IS the server\'s video')
 
     def test_use_server_moves_this_device_to_the_servers_video(self):
         """Discarding the local intent is only half of "Use server".
@@ -434,3 +528,36 @@ class OfflineWorkSourceTests(unittest.TestCase):
             "        return !!b && !b.disabled; }", timeout=20000)
         self.assertEqual(page.input_value('#meta-video-url'), OTHER_VIDEO)
         self.assertEqual(self.cached_source_revision(page, work), 1)
+
+    def test_a_convergent_acknowledgement_never_publishes_an_unstored_url(self):
+        """Two devices choosing the same video in different spellings.
+
+        The server stores nothing -- a spelling is not a change -- so a client
+        that wrote back "what I asked for" would hold an acknowledged
+        `source_url` the server does not have. Worse, it would keep the
+        identity it last cached while the server has moved on.
+
+        Kept Chromium: `acceptAck` must write the stored spelling into the
+        open editor. Handler/cache reconciliation alone cannot prove that.
+        """
+        server, page, context = self.start()
+        work = server.ids['playlist_video_one']
+        self.edit(page)
+        self.offline(page, context)
+        self.url(page, SHORT_TWO)          # youtu.be/...99
+        self.save(page)
+        self.pending(page, 1)
+        self.other_device_sets_source(server, work, WATCH_TWO)   # watch?v=...99
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        stored = self.columns(server, work)
+        self.assertEqual(stored['source_url'], WATCH_TWO, 'the server kept its own spelling')
+        cached = self.cached_work(page, work)
+        self.assertEqual(cached['source_url'], stored['source_url'],
+                         'and the client holds exactly that, not the URL it sent')
+        self.assertEqual(cached['provider_id'], stored['provider_id'])
+        self.assertEqual(self.cached_source_revision(page, work), 1,
+                         'the base is the server\'s revision, not the one we started from')
+        self.assertEqual(page.input_value('#meta-video-url'), stored['source_url'],
+                         'the open editor shows the stored spelling too')
