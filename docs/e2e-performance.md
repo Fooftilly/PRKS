@@ -467,7 +467,7 @@ credit overlays, thumb cards, abstract excerpts) are deferred.
 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
-| Repeated edits coalesce and returning to base cancels | `tests/browser/run_work_metadata_sync_selftest.js` `coalescing()` owns A→B→C as one pending op, repeat-noop, and edit-back-to-base cancel | MOVE |
+| Repeated edits coalesce and returning to base cancels | Store `coalescing()` owns A→B→C / repeat-noop / edit-back-to-base; `editorCoalescing()` drives the real `prksSaveWorkMetadataFields` bib Save (DOM harness) so a never-sent pending field stays editable and subsequent Saves dirty against the displayed pending value | SPLIT |
 | Lost response applies the edit once | Selftest `lostResponse()` proves transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_metadata_sync.py` `test_idempotency_normalization_and_reuse` plus the existing exact-replay matrix prove server ledger idempotency / `OP_ID_REUSE` | SPLIT → fast layers |
 
 Module count after this slice: **55** Chromium scenarios (from 57). Conflict UI
