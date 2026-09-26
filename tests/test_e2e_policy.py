@@ -225,25 +225,329 @@ class AffectedMappingTests(unittest.TestCase):
         )
         self.assertFalse(needed)
         self.assertIn("skipping", reason)
+        plan = policy.plan_ci_e2e(
+            ["docs/wiki/Testing.md", "AGENTS.md", "README.md"]
+        )
+        self.assertFalse(plan["run"])
+        self.assertEqual(plan["mode"], "skip")
+        self.assertEqual(plan["features"], [])
 
     def test_full_e2e_ci_skips_unit_only(self):
         needed, reason = policy.full_e2e_ci_needed(["tests/test_e2e_sharding.py"])
         self.assertFalse(needed)
         self.assertIn("skipping", reason)
+        plan = policy.plan_ci_e2e(["tests/test_e2e_sharding.py"])
+        self.assertEqual(plan["mode"], "skip")
 
     def test_full_e2e_ci_runs_for_production_and_gate_workflow(self):
         needed, reason = policy.full_e2e_ci_needed(["frontend/js/app.js"])
         self.assertTrue(needed)
-        self.assertIn("running", reason)
+        self.assertIn("full E2E", reason)
+        plan = policy.plan_ci_e2e(["frontend/js/app.js"])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
         needed_wf, _reason = policy.full_e2e_ci_needed(
             [".github/workflows/e2e-gate.yml"]
         )
         self.assertTrue(needed_wf)
+        self.assertEqual(
+            policy.plan_ci_e2e([".github/workflows/e2e-gate.yml"])["mode"], "full"
+        )
 
     def test_full_e2e_ci_empty_paths_fail_closed_to_run(self):
         needed, reason = policy.full_e2e_ci_needed([])
         self.assertTrue(needed)
         self.assertIn("fail closed", reason)
+        plan = policy.plan_ci_e2e([])
+        self.assertEqual(plan["mode"], "full")
+
+    def test_plan_ci_feature_production_is_affected_plus_smoke(self):
+        plan = policy.plan_ci_e2e(["frontend/js/components/folders.js"])
+        self.assertTrue(plan["run"])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertIn("folders", plan["features"])
+        self.assertIn("browse", plan["features"])
+        self.assertIn("smoke", plan["features"])
+
+    def test_plan_ci_feature_e2e_module_is_affected_plus_smoke(self):
+        plan = policy.plan_ci_e2e(["tests/e2e/test_work_tags_offline.py"])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertIn("sync", plan["features"])
+        self.assertIn("smoke", plan["features"])
+
+    def test_plan_ci_multi_feature_union(self):
+        plan = policy.plan_ci_e2e(
+            [
+                "frontend/js/components/folders.js",
+                "frontend/js/components/playlists.js",
+            ]
+        )
+        self.assertEqual(plan["mode"], "affected")
+        for name in ("folders", "browse", "playlists", "smoke"):
+            self.assertIn(name, plan["features"])
+
+    def test_unmapped_e2e_support_module_is_ci_full(self):
+        # inventory.py / doctor.py / etc. must not skip the browser gate.
+        path = "tests/e2e/inventory.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["unmapped-e2e-support"])
+        self.assertFalse(classified["skip"])
+        self.assertTrue(classified["unmapped"])
+        self.assertIn("smoke", classified["features"])
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
+        self.assertIn("inventory.py", plan["reason"])
+
+    def test_unmapped_e2e_test_module_is_ci_full(self):
+        # New tests/e2e/test_*.py with no FEATURES selectors must not plan as
+        # affected+smoke only — CI fail-closed to full (prefer over-test).
+        path = "tests/e2e/test_brand_new_unmapped.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["e2e-module"])
+        self.assertFalse(classified["skip"])
+        self.assertTrue(classified["unmapped"])
+        self.assertEqual(classified["features"], ["smoke"])
+        self.assertIn("unmapped E2E module", classified["note"])
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
+        self.assertIn("unmapped", plan["reason"])
+        self.assertIn("test_brand_new_unmapped.py", plan["reason"])
+
+    def test_work_cards_unions_browse_work_create_shell_and_smoke(self):
+        # First-match would keep only browse; shared work-cards.js also owns
+        # work-create (+ shell). Prefer over-test via multi-rule feature union.
+        path = "frontend/js/components/work-cards.js"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["browse", "work-create"])
+        self.assertEqual(
+            classified["features"], ["browse", "work-create", "shell"]
+        )
+        rule, feats, skip, _note = policy.match_affected_path(path)
+        self.assertEqual(rule, "browse+work-create")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("browse", "work-create", "shell"))
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertEqual(
+            plan["features"], ["browse", "work-create", "shell", "smoke"]
+        )
+
+    def test_research_network_core_is_ci_full(self):
+        # Shared Concepts/Positions/Arguments domain — do not under-test as
+        # concepts-only; CI fail-closed to full.
+        path = "backend/research_network.py"
+        classified = policy.classify_affected_path(path)
+        self.assertEqual(classified["rules"], ["research-network-core"])
+        self.assertTrue(classified["ci_full"])
+        for feat in ("concepts", "positions", "arguments", "graph", "notes"):
+            self.assertIn(feat, classified["features"])
+        plan = policy.plan_ci_e2e([path])
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["features"], [])
+        self.assertIn("research_network.py", plan["reason"])
+        self.assertIn("research-network-core", plan["reason"])
+
+    def test_ci_reason_path_token_strips_shell_metacharacters(self):
+        nasty = 'frontend/js/evil"`$(id)`.js'
+        token = policy.ci_reason_path_token(nasty)
+        self.assertNotIn('"', token)
+        self.assertNotIn("`", token)
+        self.assertNotIn("$", token)
+        self.assertNotIn("\\", token)
+        self.assertIn("frontend/js/evil", token)
+        plan = policy.plan_ci_e2e([nasty])
+        self.assertEqual(plan["mode"], "full")
+        self.assertNotIn('"', plan["reason"])
+        self.assertNotIn("`", plan["reason"])
+        self.assertNotIn("$(", plan["reason"])
+        self.assertIn("unmapped", plan["reason"])
+
+    def test_plan_ci_shared_frontend_and_harness_and_requirements_are_full(self):
+        for path in (
+            "frontend/js/app.js",
+            "tests/e2e/harness.py",
+            "tests/e2e/policy.py",
+            ".github/workflows/e2e-gate.yml",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "backend/db_schema.sql",
+        ):
+            with self.subTest(path=path):
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full", path)
+                self.assertEqual(plan["features"], [])
+                self.assertTrue(plan["run"])
+
+    def test_plan_ci_unknown_production_fails_closed_to_full(self):
+        plan = policy.plan_ci_e2e(["frontend/js/brand-new-unmapped-helper.js"])
+        self.assertEqual(plan["mode"], "full")
+        self.assertIn("unmapped", plan["reason"])
+
+    def test_plan_ci_force_full_and_master_dispatch_shape(self):
+        plan = policy.plan_ci_e2e(["docs/wiki/Testing.md"], force_full=True)
+        self.assertEqual(plan["mode"], "full")
+        self.assertTrue(plan["run"])
+        self.assertEqual(plan["external_shards"], policy.FULL_GATE_EXTERNAL_SHARDS)
+        self.assertTrue(plan["pointer_capture"])
+
+    def test_plan_ci_rename_pre_image_keeps_gate(self):
+        plan = policy.plan_ci_e2e(["frontend/js/app.js", "docs/app-notes.md"])
+        self.assertEqual(plan["mode"], "full")
+
+    def test_refine_ci_plan_empty_features_fail_closed(self):
+        refined = policy.refine_ci_plan_with_tests(
+            {
+                "run": True,
+                "mode": "affected",
+                "features": ["graph"],
+                "reason": "x",
+            },
+            ["tests.e2e.unrelated.SomeTests.test_x"],
+        )
+        self.assertEqual(refined["mode"], "full")
+        self.assertIn("zero tests", refined["reason"])
+
+    def test_refine_ci_plan_malformed_fail_closed(self):
+        refined = policy.refine_ci_plan_with_tests({"run": True, "mode": "wat"}, [])
+        self.assertEqual(refined["mode"], "full")
+        refined_none = policy.refine_ci_plan_with_tests(None, [])
+        self.assertEqual(refined_none["mode"], "full")
+
+    def test_refine_ci_plan_sizes_shards_from_count(self):
+        fake_ids = [
+            "tests.e2e.test_folders_offline.A.test_%d" % i for i in range(10)
+        ] + list(policy.SMOKE_TEST_IDS)
+        plan = policy.plan_ci_e2e(["frontend/js/components/folders.js"])
+        refined = policy.refine_ci_plan_with_tests(plan, fake_ids)
+        self.assertEqual(refined["mode"], "affected")
+        self.assertGreater(refined["test_count"], 0)
+        self.assertEqual(refined["external_shards"], 1)
+        self.assertEqual(refined["local_jobs"], policy.CI_AFFECTED_LOCAL_JOBS)
+        self.assertFalse(refined["pointer_capture"])
+
+    def test_ci_pointer_capture_for_tiling_affected(self):
+        self.assertTrue(
+            policy.ci_pointer_capture("affected", ["tiling", "smoke"])
+        )
+        self.assertFalse(
+            policy.ci_pointer_capture("affected", ["folders", "smoke"])
+        )
+        self.assertTrue(policy.ci_pointer_capture("full"))
+
+    def test_ci_matrix_include_rows(self):
+        self.assertEqual(policy.ci_matrix_include(0, 1), [])
+        self.assertEqual(
+            policy.ci_matrix_include(2, 1),
+            [
+                {"shard": 1, "total": 2, "jobs": 1},
+                {"shard": 2, "total": 2, "jobs": 1},
+            ],
+        )
+        self.assertEqual(
+            len(policy.ci_matrix_include(policy.FULL_GATE_EXTERNAL_SHARDS, 1)),
+            policy.FULL_GATE_EXTERNAL_SHARDS,
+        )
+        self.assertGreaterEqual(policy.FULL_GATE_EXTERNAL_SHARDS, 4)
+
+    def test_invalid_e2e_discovery_ids_rejects_failed_test_placeholders(self):
+        from tests.e2e import run as runner
+
+        good = [
+            "tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads",
+            "tests.e2e.test_offline.OfflineFoundationTests.test_x",
+        ]
+        self.assertEqual(runner.invalid_e2e_discovery_ids(good), [])
+        bad = good + ["unittest.loader._FailedTest.tests.e2e.test_app"]
+        self.assertEqual(
+            runner.invalid_e2e_discovery_ids(bad),
+            ["unittest.loader._FailedTest.tests.e2e.test_app"],
+        )
+
+    def test_ci_aggregate_cli_exits_on_gate_outcome(self):
+        from tests.e2e import run as runner
+
+        env_ok = {
+            **os.environ,
+            "PLAN_RUN": "true",
+            "PLAN_MODE": "full",
+            "PLAN_POINTER": "true",
+            "PLAN_RESULT": "success",
+            "E2E_RESULT": "success",
+            "POINTER_RESULT": "success",
+            "PLAN_REASON": "full",
+            "PLAN_FEATURES": "[]",
+            "PLAN_COUNT": "747",
+        }
+        with mock.patch.dict(os.environ, env_ok, clear=False):
+            self.assertEqual(runner.main(["--ci-aggregate"]), 0)
+        env_bad = {**env_ok, "E2E_RESULT": "failure"}
+        with mock.patch.dict(os.environ, env_bad, clear=False):
+            self.assertEqual(runner.main(["--ci-aggregate"]), 1)
+
+    def test_aggregate_ci_gate_outcome_parallel_pointer(self):
+        ok, msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="success",
+        )
+        self.assertTrue(ok)
+        self.assertIn("passed", msg)
+
+        ok_skip, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=False,
+            plan_mode="skip",
+            plan_pointer=False,
+            plan_result="success",
+            e2e_result="skipped",
+            pointer_result="skipped",
+        )
+        self.assertTrue(ok_skip)
+
+        ok_no_ptr, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="affected",
+            plan_pointer=False,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="skipped",
+        )
+        self.assertTrue(ok_no_ptr)
+
+        bad_shard, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="failure",
+            pointer_result="success",
+        )
+        self.assertFalse(bad_shard)
+
+        bad_ptr, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="failure",
+        )
+        self.assertFalse(bad_ptr)
+
+        # Pointer may finish before matrix; aggregator still requires both.
+        early_ptr_fail, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="skipped",
+        )
+        self.assertFalse(early_ptr_fail)
 
     def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
         for path in (
@@ -256,6 +560,7 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertFalse(skip)
                 # wait-async rides with the shared e2e-framework rule (#222).
                 self.assertEqual(feats, ("smoke", "wait-async"))
+                self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
 
     def test_select_affected_broken_feature_selection_is_not_noop(self):
         # Features mapped, but none of the known IDs match → fail, not noop.
@@ -509,7 +814,11 @@ class ListChangedPathsTests(unittest.TestCase):
             ["frontend/js/app.js", "docs/app-notes.md"]
         )
         self.assertTrue(needed_both)
-        self.assertIn("running", reason)
+        self.assertIn("full E2E", reason)
+        self.assertEqual(
+            policy.plan_ci_e2e(["frontend/js/app.js", "docs/app-notes.md"])["mode"],
+            "full",
+        )
 
     def test_untracked_scripts_and_e2e_policy_are_discoverable(self):
         with mock.patch("subprocess.run") as run:
@@ -904,8 +1213,14 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertEqual(code, 0)
             plan = json.loads(out.getvalue().strip())
             self.assertTrue(plan["run"])
+            self.assertEqual(plan["mode"], "full")
+            self.assertEqual(plan["features"], [])
             self.assertIn("fail closed", plan["reason"])
             self.assertIn("fail closed", err.getvalue())
+            self.assertIn("include", plan["matrix"])
+            self.assertEqual(
+                len(plan["matrix"]["include"]), policy.FULL_GATE_EXTERNAL_SHARDS
+            )
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)

@@ -55,13 +55,16 @@ from tests.e2e.policy import (
     SEED_CACHE_ENV,
     ChangeDiscoveryError,
     benchmark_modes,
+    ci_matrix_include,
     format_feature_catalog,
-    full_e2e_ci_needed,
+    aggregate_ci_gate_outcome,
     full_gate_timeout_s,
     list_changed_paths,
     load_last_failed,
     merge_last_failed,
     per_test_watchdog_s,
+    plan_ci_e2e,
+    refine_ci_plan_with_tests,
     report_banner,
     save_last_failed,
     select_affected,
@@ -330,6 +333,19 @@ def discover_test_ids(modules=E2E_MODULES):
     for name in modules:
         _flatten(loader.loadTestsFromName(name), ids)
     return ids
+
+
+def invalid_e2e_discovery_ids(all_ids):
+    """Return IDs that are not real ``tests.e2e.*`` cases (e.g. ``_FailedTest``).
+
+    ``unittest`` import failures become ``unittest.loader._FailedTest.*`` without
+    raising; CI planning must reject those so shard sizing cannot undercount.
+    """
+    return [
+        test_id
+        for test_id in all_ids
+        if not str(test_id).startswith("tests.e2e.")
+    ]
 
 
 def _flatten(suite, out):
@@ -1111,9 +1127,19 @@ def build_parser():
         "--ci-plan",
         action="store_true",
         help=(
-            "Print a JSON plan for the full E2E CI gate (run true/false + reason) "
-            "from the git diff vs --base, then exit. No Chromium. Docs/unit/ignored-"
-            "only diffs skip the matrix; empty/failed discovery fails closed to run."
+            "Print a JSON plan for the E2E CI gate (run, mode skip|affected|full, "
+            "features, reason, shards) from the git diff vs --base, then exit. "
+            "No Chromium. Docs/unit/ignored-only → skip; feature paths → affected+smoke; "
+            "high-risk/shared/unmapped → full. Empty/failed discovery fails closed to full."
+        ),
+    )
+    parser.add_argument(
+        "--ci-aggregate",
+        action="store_true",
+        help=(
+            "Evaluate the E2E gate aggregator from PLAN_* / E2E_RESULT / "
+            "POINTER_RESULT environment variables (see aggregate_ci_gate_outcome) "
+            "and exit 0/1. Used by e2e-gate.yml e2e-result; no Chromium."
         ),
     )
     parser.add_argument(
@@ -1405,12 +1431,64 @@ def _main(argv=None) -> int:
             print(format_inventory_text(inventory))
         return 0
 
+    if args.ci_aggregate:
+        # Single source of truth for e2e-gate.yml e2e-result (no Chromium).
+        def _env_true(name: str) -> bool:
+            return (os.environ.get(name) or "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+
+        ok, msg = aggregate_ci_gate_outcome(
+            plan_run=_env_true("PLAN_RUN"),
+            plan_mode=(os.environ.get("PLAN_MODE") or "").strip() or "skip",
+            plan_pointer=_env_true("PLAN_POINTER"),
+            plan_result=(os.environ.get("PLAN_RESULT") or "").strip(),
+            e2e_result=(os.environ.get("E2E_RESULT") or "").strip(),
+            pointer_result=(os.environ.get("POINTER_RESULT") or "").strip(),
+        )
+        # Optional diagnostics for the Actions log (reason/features are data only).
+        plan_reason = (os.environ.get("PLAN_REASON") or "").strip()
+        plan_features = (os.environ.get("PLAN_FEATURES") or "").strip()
+        plan_count = (os.environ.get("PLAN_COUNT") or "").strip()
+        print(
+            "e2e-plan: result=%s run=%s mode=%s"
+            % (
+                (os.environ.get("PLAN_RESULT") or "").strip(),
+                "true" if _env_true("PLAN_RUN") else "false",
+                (os.environ.get("PLAN_MODE") or "").strip(),
+            )
+        )
+        if plan_features:
+            print("features: %s" % plan_features)
+        print("test_count: %s" % (plan_count or "unknown"))
+        print(
+            "pointer_capture planned: %s (parallel with matrix)"
+            % ("true" if _env_true("PLAN_POINTER") else "false")
+        )
+        if plan_reason:
+            print("reason: %s" % plan_reason)
+        print("e2e matrix: %s" % ((os.environ.get("E2E_RESULT") or "").strip()))
+        print(
+            "pointer_capture: %s"
+            % ((os.environ.get("POINTER_RESULT") or "").strip())
+        )
+        if ok:
+            print(msg)
+            return 0
+        print("::error::%s" % msg)
+        return 1
+
     if args.ci_plan:
-        # Cheap CI decision: no discovery, no Chromium. Compare committed tree
-        # to --base (default HEAD) using the same docs/unit/ignored noop policy.
-        # Discovery failures (unresolvable force-push before SHA, damaged
-        # checkout) fail closed to run=true — never exit 2 and trip the
-        # aggregate job before any shard runs.
+        # Cheap-ish CI decision: no Chromium. Compare committed tree to --base
+        # (default HEAD). Discovery failures fail closed to mode=full — never
+        # exit 2 and trip the aggregate job before any shard runs.
+        force_full = bool(
+            (os.environ.get("PRKS_E2E_CI_FORCE_FULL") or "").strip()
+            in ("1", "true", "yes", "on")
+        )
         try:
             paths = list_changed_paths(
                 REPO, base=args.base, include_untracked=False
@@ -1420,30 +1498,56 @@ def _main(argv=None) -> int:
                 "change discovery failed — running full E2E (fail closed): %s" % exc
             )
             print("ci-plan: %s" % reason, file=sys.stderr)
-            print(
-                json.dumps(
-                    {
-                        "run": True,
-                        "reason": reason,
-                        "changed_paths": None,
-                        "external_shards": FULL_GATE_EXTERNAL_SHARDS,
-                    },
-                    sort_keys=True,
+            shape_plan = plan_ci_e2e([], force_full=True)
+            shape_plan["reason"] = reason
+            shape_plan["changed_paths"] = None
+            shape_plan["matrix"] = {
+                "include": ci_matrix_include(
+                    shape_plan["external_shards"], shape_plan["local_jobs"]
                 )
-            )
+            }
+            print(json.dumps(shape_plan, sort_keys=True))
             return 0
-        needed, reason = full_e2e_ci_needed(paths)
-        print(
-            json.dumps(
-                {
-                    "run": bool(needed),
-                    "reason": reason,
-                    "changed_paths": len(paths),
-                    "external_shards": FULL_GATE_EXTERNAL_SHARDS,
-                },
-                sort_keys=True,
+        plan = plan_ci_e2e(paths, force_full=force_full)
+        if plan["mode"] == "affected":
+            # Resolve feature → IDs so empty/broken mappings fail closed to full
+            # and so the workflow can size shards from test_count.
+            try:
+                all_ids = discover_test_ids()
+                # Plan job may lack PyMuPDF/Pillow/etc.; loadTestsFromName then
+                # yields unittest.loader._FailedTest.* IDs instead of raising.
+                # Reject those so we fail closed to full rather than under-shard.
+                invalid_ids = invalid_e2e_discovery_ids(all_ids)
+                if invalid_ids:
+                    raise RuntimeError(
+                        "E2E discovery returned invalid test IDs: %s"
+                        % ", ".join(invalid_ids[:8])
+                    )
+                plan = refine_ci_plan_with_tests(plan, all_ids)
+            except Exception as exc:  # noqa: BLE001 — fail closed to full
+                reason = (
+                    "E2E discovery failed — running full E2E (fail closed): %s" % exc
+                )
+                print("ci-plan: %s" % reason, file=sys.stderr)
+                plan = plan_ci_e2e([], force_full=True)
+                plan["reason"] = reason
+        elif plan["mode"] == "full" and not force_full:
+            # Optional count for aggregator messaging; never fail the plan on
+            # discovery here — full already runs regardless.
+            try:
+                plan = refine_ci_plan_with_tests(plan, discover_test_ids())
+            except Exception:  # noqa: BLE001
+                plan = dict(plan)
+                plan.setdefault("test_count", None)
+        plan = dict(plan)
+        plan["changed_paths"] = len(paths)
+        plan["matrix"] = {
+            "include": ci_matrix_include(
+                int(plan.get("external_shards") or 0),
+                int(plan.get("local_jobs") or 1),
             )
-        )
+        }
+        print(json.dumps(plan, sort_keys=True))
         return 0
 
     try:
