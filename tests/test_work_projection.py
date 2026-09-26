@@ -367,6 +367,67 @@ class WorkProjectionTests(MigrationTestCase):
             )
         )
 
+    def test_author_search_excludes_non_primary_manifestation_roles(self):
+        work_id = self.db.add_work(title="Author Search Scope Work")
+        primary_person = self.db.add_person("Ada", "Lovelace")
+        hidden_person = self.db.add_person("Charles", "Babbage")
+        self.db.add_role(primary_person, work_id, "Author")
+        self._add_second_manifestation(work_id, title="Secondary Edition")
+        with self.db.connection() as conn:
+            origin_mf = conn.execute(
+                "SELECT id FROM manifestations WHERE work_id = ? AND id != 'MF-SECOND'",
+                (work_id,),
+            ).fetchone()[0]
+            # Author only on the abandoned (non-primary) Manifestation.
+            conn.execute(
+                "INSERT INTO roles (person_id, work_id, role_type, order_index, manifestation_id) "
+                "VALUES (?, ?, 'Author', 1, ?)",
+                (hidden_person, work_id, origin_mf),
+            )
+
+        work = self.db.get_work(work_id)
+        role_names = {
+            (r.get("role_type"), r.get("last_name")) for r in work["roles"]
+        }
+        self.assertIn(("Author", "Lovelace"), role_names)
+        self.assertNotIn(("Author", "Babbage"), role_names)
+
+        catalog = self.db.get_works_browse_catalog()
+        row = next(item for item in catalog if item["id"] == work_id)
+        self.assertEqual(row.get("primary_author"), "Ada Lovelace")
+        people = row.get("linked_people") or []
+        self.assertTrue(
+            any("Lovelace" in (p.get("display_name") or "") for p in people)
+        )
+        self.assertFalse(
+            any("Babbage" in (p.get("display_name") or "") for p in people)
+        )
+        self.assertNotIn("Babbage", row.get("linked_authors") or "")
+
+        hidden = self.db.get_person(hidden_person)
+        self.assertFalse(any(w["id"] == work_id for w in hidden["works"]))
+
+        linked_hits = self.db._search_works_linked_persons_substring("babbage")
+        self.assertFalse(any(r["id"] == work_id for r in linked_hits))
+        self.assertNotIn(work_id, self.db.work_ids_matching_author("Babbage"))
+        by_author = self.db.search_works("", author_filter="Babbage")
+        self.assertFalse(any(r["id"] == work_id for r in by_author))
+        name_search = self.db.search_works("Babbage")
+        self.assertFalse(any(r["id"] == work_id for r in name_search))
+
+        # Work-scoped / primary-scoped credits must still match.
+        self.assertTrue(any(w["id"] == work_id for w in self.db.get_person(primary_person)["works"]))
+        self.assertIn(work_id, self.db.work_ids_matching_author("Lovelace"))
+        self.assertTrue(
+            any(r["id"] == work_id for r in self.db.search_works("", author_filter="Lovelace"))
+        )
+        self.assertTrue(
+            any(
+                r["id"] == work_id
+                for r in self.db._search_works_linked_persons_substring("lovelace")
+            )
+        )
+
     def test_publisher_filter_ignores_hidden_legacy_when_primary_null(self):
         work_id = self.db.add_work(
             title="Legacy Pub Work",

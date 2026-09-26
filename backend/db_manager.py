@@ -2575,14 +2575,18 @@ class PRKSDatabase:
         if not q_norm.strip():
             return []
         needle = "%" + _prks_escape_like(q_norm.strip()) + "%"
-        sql = """
+        scope = work_projection.credits_scope_sql("w", "r")
+        sql = f"""
         SELECT DISTINCT w.id FROM works w
         INNER JOIN roles r ON r.work_id = w.id
         INNER JOIN persons p ON p.id = r.person_id
-        WHERE LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
-            LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+        WHERE {scope}
+          AND (
+            LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
+                LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+          )
         ORDER BY w.updated_at DESC, w.created_at DESC
         """
         return self.execute_query(sql, (needle, needle, needle))
@@ -2592,17 +2596,21 @@ class PRKSDatabase:
         if not a:
             return []
         needle = "%" + _prks_escape_like(a) + "%"
-        sql = """
+        scope = work_projection.credits_scope_sql("w", "r")
+        sql = f"""
         SELECT DISTINCT w.id AS id FROM works w
         WHERE LOWER(COALESCE(w.author_text,'')) LIKE ? ESCAPE '\\'
         UNION
         SELECT DISTINCT w.id AS id FROM works w
         INNER JOIN roles r ON r.work_id = w.id
         INNER JOIN persons p ON p.id = r.person_id
-        WHERE LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
-            LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+        WHERE {scope}
+          AND (
+            LOWER(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')))
+                LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.aliases,'')) LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(p.last_name,'')) LIKE ? ESCAPE '\\'
+          )
         """
         rows = self.execute_query(sql, (needle, needle, needle, needle))
         return [r["id"] for r in rows]
