@@ -273,14 +273,18 @@ class EngineeringInvariantTests(unittest.TestCase):
             self.assertIn("exclude", findings[0].message)
 
     def test_pyright_typed_slice_rejects_parent_globs(self):
-        """Parent/recursive globs must not wipe backend/storage unnoticed."""
+        """Globs that can match backend/storage or anything under it must fail."""
         cases = (
+            "backend/**/storage/**",
+            "backend/**/storage",
+            "**/storage/**/*",
+            "**/backend/**/storage/**",
+            "backend/**/*",
+            "**",
             "backend/**",
             "**/backend/**",
             "backend/*",
             "**/storage/**",
-            "backend/**/storage/**",
-            "**/storage/**/*",
         )
         for pattern in cases:
             with self.subTest(pattern=pattern):
@@ -295,6 +299,22 @@ class EngineeringInvariantTests(unittest.TestCase):
                     findings = checker.check_pyright_configs(root)
                     self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
                     self.assertIn(pattern, findings[0].message)
+
+    def test_pyright_typed_slice_allows_pycache_excludes(self):
+        """Genuine cache-only excludes must not trip INV-PYRIGHT-002."""
+        for pattern in ("**/__pycache__", "**/__pycache__/**", "__pycache__"):
+            with self.subTest(pattern=pattern):
+                self.assertFalse(checker._path_covers_typed_slice(pattern))
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    self._write_valid_pyright_tree(root)
+                    typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+                    typed["exclude"] = [pattern]
+                    (root / "pyrightconfig.typed-slice.json").write_text(
+                        json.dumps(typed), encoding="utf-8"
+                    )
+                    findings = checker.check_pyright_configs(root)
+                    self.assertEqual(findings, [])
 
     def test_pyright_typed_slice_rejects_missing_ci_reference(self):
         with tempfile.TemporaryDirectory() as tmp:

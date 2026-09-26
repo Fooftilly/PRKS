@@ -345,11 +345,11 @@ def _pyright_glob_match(path: str, pattern: str) -> bool:
 
 
 def _path_covers_typed_slice(entry: object) -> bool:
-    """True when ignore/exclude would suppress analysis of backend/storage.
+    """True when ignore/exclude can match ``backend/storage`` or anything under it.
 
-    Handles parent paths and recursive globs including nested ``**`` forms such
-    as ``backend/**``, ``**/backend/**``, ``backend/*``, ``**/storage/**``,
-    ``backend/**/storage/**``, and ``**/storage/**/*``.
+    Overlap is decided by a Pyright-style glob matcher (``**`` = zero-or-more
+    directory components; ``*`` / ``?`` = one segment). Cache-only excludes such
+    as ``**/__pycache__`` are allowlisted and do not trip this guard.
     """
     if _is_allowed_typed_slice_exclude(entry):
         return False
