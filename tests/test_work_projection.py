@@ -185,6 +185,203 @@ class WorkProjectionTests(MigrationTestCase):
         self.assertIn("  title = {Cited Edition},\n", bibtex)
         self.assertIn("  publisher = {Citation Press},\n", bibtex)
 
+    def _add_second_manifestation(
+        self,
+        work_id,
+        *,
+        mf_id="MF-SECOND",
+        title="Secondary Title",
+        publisher="Secondary Press",
+        asset_id=None,
+        file_path=None,
+        thumb_page=None,
+        make_primary=True,
+    ):
+        with self.db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO manifestations (
+                    id, work_id, kind, title, abstract, doc_type, year, publisher
+                ) VALUES (?, ?, 'translation', ?, 'Secondary abstract', 'book', '2026', ?)
+                """,
+                (mf_id, work_id, title, publisher),
+            )
+            if asset_id and file_path:
+                locator = file_path.rsplit("/", 1)[-1]
+                conn.execute(
+                    """
+                    INSERT INTO assets (
+                        id, manifestation_id, work_id, kind, role, storage_locator,
+                        media_type, origin, thumb_page
+                    ) VALUES (?, ?, ?, 'managed_file', 'document', ?,
+                              'application/pdf', 'adopted', ?)
+                    """,
+                    (asset_id, mf_id, work_id, locator, thumb_page),
+                )
+                conn.execute(
+                    "UPDATE manifestations SET primary_asset_id = ? WHERE id = ?",
+                    (asset_id, mf_id),
+                )
+            if make_primary:
+                conn.execute(
+                    "UPDATE works SET primary_manifestation_id = ? WHERE id = ?",
+                    (mf_id, work_id),
+                )
+
+    def test_projected_credits_exclude_other_manifestation_roles(self):
+        work_id = self.db.add_work(title="Credit Work")
+        primary_person = self.db.add_person("Ada", "Lovelace")
+        other_person = self.db.add_person("Charles", "Babbage")
+        self.db.add_role(primary_person, work_id, "Author")
+        self._add_second_manifestation(work_id, title="Secondary Edition")
+        # Origin MF is no longer primary; scope Editor to the abandoned origin.
+        with self.db.connection() as conn:
+            origin_mf = conn.execute(
+                "SELECT id FROM manifestations WHERE work_id = ? AND id != 'MF-SECOND'",
+                (work_id,),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO roles (person_id, work_id, role_type, order_index, manifestation_id) "
+                "VALUES (?, ?, 'Editor', 1, ?)",
+                (other_person, work_id, origin_mf),
+            )
+            # Translator on the selected primary must remain visible.
+            conn.execute(
+                "INSERT INTO roles (person_id, work_id, role_type, order_index, manifestation_id) "
+                "VALUES (?, ?, 'Translator', 2, 'MF-SECOND')",
+                (other_person, work_id),
+            )
+
+        work = self.db.get_work(work_id)
+        role_types = {(r["role_type"], r.get("last_name")) for r in work["roles"]}
+        self.assertIn(("Author", "Lovelace"), role_types)
+        self.assertIn(("Translator", "Babbage"), role_types)
+        self.assertNotIn(("Editor", "Babbage"), role_types)
+
+        catalog = self.db.get_works_browse_catalog()
+        row = next(item for item in catalog if item["id"] == work_id)
+        self.assertEqual(row["primary_author"], "Ada Lovelace")
+        self.assertIsNone(row.get("primary_editor"))
+        people = row["linked_people"]
+        self.assertTrue(any(p["role_type"] == "Author" for p in people))
+        self.assertTrue(any(p["role_type"] == "Translator" for p in people))
+        self.assertFalse(any(p["role_type"] == "Editor" for p in people))
+
+    def test_bibtex_credits_follow_citation_manifestation(self):
+        work_id = self.db.add_work(title="Primary Title", year="2020")
+        primary_author = self.db.add_person("Ada", "Lovelace")
+        cited_author = self.db.add_person("Charles", "Babbage")
+        self.db.add_role(primary_author, work_id, "Author")
+        with self.db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO manifestations (
+                    id, work_id, kind, title, doc_type, year, publisher
+                ) VALUES (
+                    'MF-CITED', ?, 'published', 'Cited Edition',
+                    'book', '2026', 'Citation Press'
+                )
+                """,
+                (work_id,),
+            )
+            conn.execute(
+                "INSERT INTO roles (person_id, work_id, role_type, order_index, manifestation_id) "
+                "VALUES (?, ?, 'Editor', 1, 'MF-CITED')",
+                (cited_author, work_id),
+            )
+            conn.execute(
+                "UPDATE works SET citation_manifestation_id = 'MF-CITED' WHERE id = ?",
+                (work_id,),
+            )
+
+        bibtex = self.db.generate_bibtex(work_id)
+        self.assertIn("  author = {Lovelace, Ada},\n", bibtex)
+        self.assertIn("  editor = {Babbage, Charles},\n", bibtex)
+        self.assertIn("  title = {Cited Edition},\n", bibtex)
+        # Primary-only Translator on a different Manifestation must not appear.
+        with self.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO manifestations (id, work_id, kind, title) "
+                "VALUES ('MF-OTHER', ?, 'translation', 'Other')",
+                (work_id,),
+            )
+            conn.execute(
+                "INSERT INTO roles (person_id, work_id, role_type, order_index, manifestation_id) "
+                "VALUES (?, ?, 'Translator', 2, 'MF-OTHER')",
+                (cited_author, work_id),
+            )
+        bibtex2 = self.db.generate_bibtex(work_id)
+        self.assertNotIn("translator", bibtex2.lower())
+
+    def test_primary_thumbnail_fields_follow_primary_asset(self):
+        from backend import work_projection
+
+        work_id = self.db.add_work(
+            title="Thumb Work",
+            file_path="/api/pdfs/original.pdf",
+            source_kind="pdf",
+            thumb_page=1,
+        )
+        self._add_second_manifestation(
+            work_id,
+            asset_id="AS-SECOND",
+            file_path="/api/pdfs/secondary.pdf",
+            thumb_page=7,
+        )
+        with self.db.connection() as conn:
+            fields = work_projection.primary_thumbnail_fields(conn, work_id)
+        self.assertEqual(fields["file_path"], "/api/pdfs/secondary.pdf")
+        self.assertEqual(fields["thumb_page"], 7)
+        work = self.db.get_work(work_id)
+        self.assertEqual(work["file_path"], "/api/pdfs/secondary.pdf")
+        self.assertEqual(work["thumb_page"], 7)
+
+    def test_search_uses_displayed_primary_metadata(self):
+        work_id = self.db.add_work(
+            title="Legacy Hidden Title",
+            abstract="Legacy hidden abstract",
+            publisher="Legacy Press",
+        )
+        self._add_second_manifestation(
+            work_id,
+            title="Displayed Search Title",
+            publisher="Displayed Press",
+        )
+        with self.db.connection() as conn:
+            conn.execute(
+                "UPDATE manifestations SET abstract = 'Displayed search abstract' "
+                "WHERE id = 'MF-SECOND'"
+            )
+
+        by_title = self.db.search_works("Displayed Search Title")
+        self.assertTrue(any(r["id"] == work_id for r in by_title))
+        # Primary title must be discoverable even when FTS only has legacy spelling.
+        self.assertTrue(
+            any(r["id"] == work_id for r in self.db.search_works("Displayed"))
+        )
+        by_pub = self.db.search_works("", publisher_filter="Displayed Press")
+        self.assertTrue(any(r["id"] == work_id for r in by_pub))
+        row = next(r for r in by_title if r["id"] == work_id)
+        self.assertEqual(row["title"], "Displayed Search Title")
+        self.assertEqual(row["publisher"], "Displayed Press")
+
+    def test_browse_orders_by_effective_displayed_title(self):
+        early = self.db.add_work(title="AAA Legacy")
+        late = self.db.add_work(title="ZZZ Legacy")
+        # Flip displayed order vs legacy: early Work shows "ZZZ Displayed",
+        # late Work shows "AAA Displayed".
+        self._add_second_manifestation(
+            early, mf_id="MF-EARLY", title="ZZZ Displayed", make_primary=True
+        )
+        self._add_second_manifestation(
+            late, mf_id="MF-LATE", title="AAA Displayed", make_primary=True
+        )
+        catalog = self.db.get_works_browse_catalog()
+        ids = [row["id"] for row in catalog if row["id"] in (early, late)]
+        self.assertEqual(ids, [late, early])
+        titles = [row["title"] for row in catalog if row["id"] in (early, late)]
+        self.assertEqual(titles, ["AAA Displayed", "ZZZ Displayed"])
+
 
 if __name__ == "__main__":
     unittest.main()

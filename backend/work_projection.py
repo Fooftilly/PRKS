@@ -208,3 +208,30 @@ def citation_record(conn: sqlite3.Connection, manifestation_id: str) -> Optional
         dict(m), None if a is None else dict(a), m_count, a_count,
     ))
     return out
+
+
+def credits_scope_sql(work_alias: str, role_alias: str = "r") -> str:
+    """SQL predicate: Work-scoped roles plus roles for the Work's primary Manifestation.
+
+    ``credits(M)`` = Work-scoped (``manifestation_id IS NULL``) ∪ roles scoped to M
+    (docs/work-identity-model.md §7.5 / §13.1).
+    """
+    return (
+        f"({role_alias}.manifestation_id IS NULL OR "
+        f"{role_alias}.manifestation_id = {work_alias}.primary_manifestation_id)"
+    )
+
+
+def primary_thumbnail_fields(conn: sqlite3.Connection, work_id: str) -> Optional[dict]:
+    """Effective ``file_path`` / ``thumb_page`` for the selected primary Asset.
+
+    Used by ``/api/works/{id}/thumbnail`` so it follows the same primary Asset
+    the compatibility projection exposes, not the legacy origin ``works`` columns.
+    """
+    projected = legacy_work(conn, work_id)
+    if projected is None:
+        return None
+    return {
+        "file_path": projected.get("file_path"),
+        "thumb_page": projected.get("thumb_page"),
+    }
