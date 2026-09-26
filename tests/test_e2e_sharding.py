@@ -267,6 +267,21 @@ class ShardAssignmentTests(unittest.TestCase):
         baseline = aggregate_timing_baseline(exact, class_outlier_ratio=1.5, min_class_samples=3)
         self.assertEqual(set(baseline), {"tests.e2e.m.*"})
 
+    def test_aggregate_timing_baseline_rejects_non_finite_class_outlier_ratio(self):
+        exact = {
+            "tests.e2e.m.A.test_1": 2.0,
+            "tests.e2e.m.A.test_2": 2.0,
+            "tests.e2e.m.A.test_3": 2.0,
+            "tests.e2e.m.B.test_1": 10.0,
+            "tests.e2e.m.B.test_2": 10.0,
+            "tests.e2e.m.B.test_3": 10.0,
+        }
+        for bad in (float("nan"), float("inf"), float("-inf"), 0.5, "nan"):
+            with self.assertRaises(ValueError):
+                aggregate_timing_baseline(
+                    exact, class_outlier_ratio=bad, min_class_samples=3
+                )
+
     def test_aggregated_baseline_still_overridden_by_local_exact(self):
         exact = {
             "tests.e2e.test_offline.Case.test_%d" % i: 8.0 for i in range(4)

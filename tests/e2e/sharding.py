@@ -320,9 +320,18 @@ def aggregate_timing_baseline(
         module_medians[module] = median
         baseline["%s.*" % module] = _round_baseline_seconds(median)
 
-    ratio = float(class_outlier_ratio)
-    if ratio < 1.0:
-        raise ValueError("class_outlier_ratio must be >= 1.0, got %r" % (class_outlier_ratio,))
+    try:
+        ratio = float(class_outlier_ratio)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "class_outlier_ratio must be a finite number >= 1.0, got %r"
+            % (class_outlier_ratio,)
+        ) from exc
+    if not math.isfinite(ratio) or ratio < 1.0:
+        raise ValueError(
+            "class_outlier_ratio must be a finite number >= 1.0, got %r"
+            % (class_outlier_ratio,)
+        )
     min_samples = int(min_class_samples)
     if min_samples < 1:
         raise ValueError("min_class_samples must be >= 1, got %r" % (min_class_samples,))
