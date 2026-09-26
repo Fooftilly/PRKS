@@ -106,6 +106,7 @@ E2E_MODULES = (
     "tests.e2e.test_person_create_offline",
     "tests.e2e.test_person_edit_offline",
     "tests.e2e.test_modal_lifecycle",
+    "tests.e2e.test_wait_for_async",
 )
 
 SLOWEST_LIMIT = 25

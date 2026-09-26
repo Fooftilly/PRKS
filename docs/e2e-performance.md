@@ -135,19 +135,14 @@ significant after snapshot caching.
 Risk: accidentally making assertions vacuous because a fixture no longer contains
 the state that makes a path meaningful.
 
-### 2. Move async polling into the browser
+### 2. Move async polling into the browser — done
 
-`wait_for_async()` currently resolves the predicate with `page.evaluate()`, then
-polls every 50 ms from Python. This is semantically correct and deliberately avoids
-the Promise-truthiness trap documented in AGENTS.md, but frequent durable/offline
-waits incur Python/Playwright round trips.
-
-A candidate replacement is one browser-side async polling loop that returns only on
-success/timeout while preserving the current resolved-value semantics and diagnostic
-last value.
-
-Measure `async_wait` first. Do not replace it with ordinary
-`page.wait_for_function(() => promise)`, which is incorrect for these predicates.
+`wait_for_async()` runs one browser-side async polling loop inside a single
+`page.evaluate`, preserving resolved-value semantics and the diagnostic last
+value (see `tests/e2e/test_wait_for_async.py`). Do not replace it with ordinary
+`page.wait_for_function(() => promise)`, which remains incorrect for these
+predicates. Re-measure `async_wait` when changing the poll interval or the
+in-page helper.
 
 ### 3. Reduce same-origin request interception cost
 

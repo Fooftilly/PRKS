@@ -250,6 +250,10 @@ FEATURES = {
         "description": "Shared modal lifecycle: Escape, unsaved confirm, focus restore",
         "selectors": ("tests.e2e.test_modal_lifecycle",),
     },
+    "wait-async": {
+        "description": "Harness wait_for_async resolved-value / timeout parity (blank page)",
+        "selectors": ("tests.e2e.test_wait_for_async",),
+    },
     "folders": {
         "description": "Folders/Home offline + durable Folder ops",
         "selectors": (
@@ -312,9 +316,9 @@ AFFECTED_RULES = (
             "tests/browser/pointer_capture.py",
             "scripts/e2e",
         ),
-        "features": ("smoke",),
+        "features": ("smoke", "wait-async"),
         "fallback": "smoke",
-        "note": "E2E runner/harness change → smoke suite (not silent skip)",
+        "note": "E2E runner/harness change → smoke + wait_for_async parity",
     },
     # Central shared infrastructure → broader than one domain
     {
