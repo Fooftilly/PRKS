@@ -119,31 +119,46 @@ class AssessmentClassificationTests(unittest.TestCase):
         facts = self._facts(shm_avail=None)
         facts["resources"]["shm"] = {
             "present": False,
+            "probe_failed": False,
             "avail_bytes": None,
             "error": "not present / inapplicable",
         }
         result = doctor.classify_assessment(facts)
         self.assertEqual(result["kind"], "resources_look_adequate")
 
+    def test_shm_probe_failed_is_incomplete(self):
+        # exists() OSError must not look like absent/inapplicable shm.
+        facts = self._facts()
+        facts["resources"]["shm"] = {
+            "present": False,
+            "probe_failed": True,
+            "avail_bytes": None,
+            "error": "OSError: Permission denied",
+        }
+        result = doctor.classify_assessment(facts)
+        self.assertEqual(result["kind"], "resource_facts_incomplete")
+        self.assertTrue(any("shm" in r for r in result["reasons"]))
+
 
 class DiskProbeTests(unittest.TestCase):
-    def test_portable_without_statvfs(self):
-        # Regression: Windows has no os.statvfs. On Linux shutil.disk_usage still
-        # calls it; AttributeError must become a structured error, never a crash.
+    def test_disk_usage_attribute_error_is_structured(self):
+        # Patch shutil.disk_usage directly so the error path works on Windows
+        # (where disk_usage does not call os.statvfs).
         with mock.patch.object(
-            doctor.os,
-            "statvfs",
+            doctor.shutil,
+            "disk_usage",
             side_effect=AttributeError("module 'os' has no attribute 'statvfs'"),
-            create=True,
         ):
             result = doctor._disk_usage_bytes(Path(tempfile.gettempdir()))
         self.assertTrue(result["present"])
+        self.assertTrue(result["probe_failed"])
         self.assertIsNone(result["avail_bytes"])
         self.assertIn("AttributeError", result["error"])
 
     def test_disk_usage_success_path(self):
         result = doctor._disk_usage_bytes(Path(tempfile.gettempdir()))
         self.assertTrue(result["present"])
+        self.assertFalse(result["probe_failed"])
         self.assertIsNone(result["error"])
         self.assertIsNotNone(result["avail_bytes"])
         self.assertGreater(result["avail_bytes"], 0)
@@ -152,18 +167,31 @@ class DiskProbeTests(unittest.TestCase):
         missing = Path(tempfile.mkdtemp()) / "no-such-shm"
         result = doctor._disk_usage_bytes(missing)
         self.assertFalse(result["present"])
+        self.assertFalse(result["probe_failed"])
         self.assertIsNone(result["avail_bytes"])
         self.assertIn("inapplicable", result["error"])
 
-    def test_collect_report_survives_missing_statvfs(self):
+    def test_exists_oserror_marks_probe_failed(self):
+        path = mock.MagicMock()
+        path.exists.side_effect = OSError("Permission denied")
+        path.__str__ = mock.Mock(return_value="/dev/shm")
+        result = doctor._disk_usage_bytes(path)
+        self.assertFalse(result["present"])
+        self.assertTrue(result["probe_failed"])
+        self.assertIsNone(result["avail_bytes"])
+        self.assertTrue(
+            "OSError" in result["error"] or "Permission" in result["error"],
+            result["error"],
+        )
+
+    def test_collect_report_survives_disk_usage_failure(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (root / "tests" / "e2e").mkdir(parents=True)
             with mock.patch.object(
-                doctor.os,
-                "statvfs",
+                doctor.shutil,
+                "disk_usage",
                 side_effect=AttributeError("no statvfs"),
-                create=True,
             ):
                 with mock.patch.object(doctor, "_chromium_probe") as probe:
                     probe.return_value = {
@@ -194,7 +222,6 @@ class DiskProbeTests(unittest.TestCase):
                                     text = doctor.format_report(facts)
         self.assertIn("PRKS E2E doctor", text)
         self.assertIn("disk_temp:", text)
-        # Must not raise; temp may be error-structured when statvfs is gone.
         self.assertIn(facts["resources"]["temp"]["path"], text)
 
 

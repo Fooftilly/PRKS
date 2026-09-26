@@ -86,13 +86,19 @@ def _fmt_bytes(n: int | None) -> str:
 
 
 def _disk_usage_bytes(path: Path) -> dict:
-    """Portable disk-space probe (``shutil.disk_usage``; no Unix ``os.statvfs``)."""
+    """Portable disk-space probe (``shutil.disk_usage``; no Unix ``os.statvfs``).
+
+    ``probe_failed`` distinguishes existence/permission probe errors from a
+    genuinely absent path (e.g. no ``/dev/shm`` on Windows).
+    """
     try:
         present = path.exists()
     except OSError as exc:
+        # Non-ignored OSError from exists() (e.g. EACCES) — not "absent".
         return {
             "path": str(path),
             "present": False,
+            "probe_failed": True,
             "total_bytes": None,
             "avail_bytes": None,
             "error": "%s: %s" % (type(exc).__name__, exc),
@@ -101,6 +107,7 @@ def _disk_usage_bytes(path: Path) -> dict:
         return {
             "path": str(path),
             "present": False,
+            "probe_failed": False,
             "total_bytes": None,
             "avail_bytes": None,
             "error": "not present / inapplicable",
@@ -113,6 +120,7 @@ def _disk_usage_bytes(path: Path) -> dict:
         return {
             "path": str(path),
             "present": True,
+            "probe_failed": True,
             "total_bytes": None,
             "avail_bytes": None,
             "error": "%s: %s" % (type(exc).__name__, exc),
@@ -120,6 +128,7 @@ def _disk_usage_bytes(path: Path) -> dict:
     return {
         "path": str(path),
         "present": True,
+        "probe_failed": False,
         "total_bytes": int(usage.total),
         "avail_bytes": int(usage.free),
         "error": None,
@@ -311,12 +320,15 @@ def _resource_incomplete_reasons(resources: dict) -> list[str]:
     """Probe failures that must block a resources_look_adequate claim.
 
     Absent ``/dev/shm`` (Windows / non-Linux) is inapplicable, not incomplete.
-    Incomplete only when a probe target is present but unreadable, or temp fails.
+    ``probe_failed`` (e.g. exists() OSError) with unknown avail is incomplete.
     """
     reasons = []
     shm = resources.get("shm") or {}
     temp = resources.get("temp") or {}
-    if shm.get("present") and shm.get("avail_bytes") is None:
+    if (
+        (shm.get("present") or shm.get("probe_failed"))
+        and shm.get("avail_bytes") is None
+    ):
         reasons.append("shm available space unknown (probe failed)")
     if temp.get("avail_bytes") is None:
         reasons.append("temp disk available space unknown (probe failed or missing)")
