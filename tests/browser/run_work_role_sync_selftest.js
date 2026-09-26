@@ -370,10 +370,10 @@ async function coalescing() {
         { person: { canonical_name: 'Jane Doe' } });
 
     /* Opposite cancel before send: absent -> ADD -> REMOVE is not two
-     * changes; it is none. Former E2E
-     * test_linking_and_unlinking_before_it_sends_leaves_no_intent owned this
-     * contract in Chromium; an empty role queue is what proves nothing is
-     * ever sent on reconnect. */
+     * changes; it is none. SPLIT with the thin Chromium scenario
+     * test_linking_and_unlinking_before_it_sends_leaves_no_intent (role
+     * modal / unlink confirm / reconnect silence); this store path owns the
+     * empty-queue arithmetic for both opposite directions. */
     const absent = { state: null, revision: 0 };
     await save('', absent);
     assert.equal((await rows())[0].operation, 'ADD_WORK_PERSON_ROLE');

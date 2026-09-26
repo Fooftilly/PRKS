@@ -438,24 +438,25 @@ per-contract map.
 
 #### Work-People rationalization
 
-Applies the same KEEP / SPLIT / MOVE model as the Work-Tag pilot (#204) to
-`tests/e2e/test_work_people_offline.py`.
+Applies the KEEP / SPLIT / MOVE model defined in
+[`tests/e2e/AGENTS.md`](../tests/e2e/AGENTS.md#coverage-layer-rule-keep--split--move)
+to `tests/e2e/test_work_people_offline.py`.
 
-| Former browser scenario | Replacement fast coverage | Decision |
+| Scenario | Fast coverage | Decision |
 | --- | --- | --- |
-| Linking then unlinking before send leaves no intent | Node `coalescing()` in `run_work_role_sync_selftest.js` — absent→ADD→REMOVE and present→REMOVE→ADD both leave an empty role queue (nothing to transmit) | MOVE |
+| Linking then unlinking before send leaves no intent | Node `coalescing()` in `run_work_role_sync_selftest.js` owns absent→ADD→REMOVE / present→REMOVE→ADD empty-queue arithmetic | **SPLIT** — thin Chromium: role-modal link → optimistic chip → unlink confirm → empty list → reconnect transmits nothing (`test_linking_and_unlinking_before_it_sends_leaves_no_intent`) |
 
-The browser module retains the integrated boundaries that still need Chromium:
-offline Author link outranks `author_text` across Manage people / Progress /
-Person page (including reload), last-Author unlink reveals text credit, Editor
-fallback credit, cross-family pending role + `author_text` composition, credit
-override through the role modal, live Research Graph Author edge, online
-link→unlink without remount (base revision advances), and stale-base convergent
-link with reconnect UI.
+The browser module also retains the integrated KEEP boundaries that still need
+Chromium: offline Author link outranks `author_text` across Manage people /
+Progress / Person page (including reload), last-Author unlink reveals text
+credit, Editor fallback credit, cross-family pending role + `author_text`
+composition, credit override through the role modal, live Research Graph Author
+edge, online link→unlink without remount (base revision advances), and
+stale-base convergent link with reconnect UI.
 
-Do not restate the AGENTS.md KEEP / SPLIT / MOVE policy owned by #204. Credit /
-UI KEEP rows stay intact; folders / playlists / person-groups / browse / graph
-cache matrices remain KEEP-heavy until per-contract Node maps exist.
+Credit / UI KEEP rows stay intact; folders / playlists / person-groups /
+browse / graph cache matrices remain KEEP-heavy until per-contract Node maps
+exist.
 
 ## Benchmark protocol
 

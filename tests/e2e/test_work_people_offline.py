@@ -439,5 +439,30 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.assertEqual(self.roles(server, work), {(server.ids['jane'], 'Author')})
         self.assertEqual(self.detail_people(page), [JANE_DISPLAY])
 
-    # Never-sent opposite cancel (link then unlink before send) lives in
-    # Node coalescing() — see docs/e2e-performance.md Work-People rationalization.
+    # ---- 9: never-sent opposite cancel (thin UI boundary) -------------------
+
+    def test_linking_and_unlinking_before_it_sends_leaves_no_intent(self):
+        """Thin browser boundary for SPLIT opposite cancel.
+
+        Node `coalescing()` owns the store algorithm (absent→ADD→REMOVE /
+        present→REMOVE→ADD leave an empty role queue). This scenario keeps the
+        real role-modal link, optimistic chip, unlink confirmation, empty
+        relationship list, and reconnect that must transmit nothing — the path
+        `saveWorkPersonRole` alone cannot see.
+        """
+        server, page, context = self.start()
+        work = server.ids['people_work']
+        self.manage_people(page, work)
+        self.offline(page, context)
+
+        self.link(page, JANE_DISPLAY)
+        self.pending(page, 1)
+        self.assertIn(JANE_DISPLAY, self.detail_people(page))
+        self.unlink(page, server.ids['jane'])
+        self.pending(page, 0)
+        self.assertEqual(self.detail_people(page), [])
+
+        self.reconnect(page, context)
+        self.pending(page, 0)
+        self.assertEqual(self.roles(server, work), set(),
+                         'nothing was ever sent, because nothing changed')
