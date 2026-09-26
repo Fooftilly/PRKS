@@ -96,6 +96,20 @@ class WorkNoteSyncFrontendTests(unittest.TestCase):
         self.assertNotIn('parse_research_markup', runtime)
         self.assertNotIn('parseResearchMarkup', runtime)
 
+    def test_enqueue_measures_against_work_note_observed(self):
+        """Editor flush/enqueue must pass the acknowledged observed base into
+        durable save — not an already-effective overlay body."""
+        works = (FRONTEND / 'components' / 'works.js').read_text()
+        start = works.index('function prksEnqueueWorkResearchNotesSave(')
+        body = works[start: works.index('function prksFlushPendingWorkResearchNotes(', start)]
+        self.assertIn("prksWorkNoteObserved(owner, 'work-research-note')", body)
+        self.assertIn("prksSaveWorkNoteDurably(id, 'work-research-note', content, observed)", body)
+        self.assertNotIn('prksEffectiveNoteWork', body)
+        flush_start = works.index('function prksFlushPendingWorkResearchNotes(')
+        flush_end = works.index('\nwindow.prksEnqueueWorkResearchNotesSave', flush_start)
+        flush_body = works[flush_start:flush_end]
+        self.assertIn('prksEnqueueWorkResearchNotesSave(owner, id)', flush_body)
+
     def test_a_to_b_to_a_is_mutation_tested(self):
         """If saveWorkNote deleted B and then enqueued A, A->B->A would leave
         an operation. The store selftest already proves the live code cancels;

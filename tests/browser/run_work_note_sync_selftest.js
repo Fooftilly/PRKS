@@ -227,6 +227,81 @@ async function mutationTestAtoBtoA() {
     }
 }
 
+/* ---- editor save path: enqueue selects acknowledged observed, not effective ---- */
+function enqueueSelectsAcknowledgedObserved() {
+    const works = fs.readFileSync(
+        path.join(__dirname, '../../frontend/js/components/works.js'), 'utf8');
+    const start = works.indexOf('function prksEnqueueWorkResearchNotesSave(');
+    assert.ok(start >= 0, 'enqueue must exist');
+    const end = works.indexOf('function prksFlushPendingWorkResearchNotes(', start);
+    assert.ok(end > start, 'flush must follow enqueue');
+    const body = works.slice(start, end);
+    assert.ok(body.includes("prksWorkNoteObserved(owner, 'work-research-note')"),
+        'enqueue must measure against the acknowledged observed base');
+    assert.ok(body.includes("prksSaveWorkNoteDurably(id, 'work-research-note', content, observed)"),
+        'enqueue must pass that observed into the durable save');
+    assert.ok(!body.includes('prksEffectiveNoteWork'),
+        'enqueue must not derive observed from an already-effective Work');
+    const flushStart = works.indexOf('function prksFlushPendingWorkResearchNotes(');
+    const flushEnd = works.indexOf('\nwindow.prksEnqueueWorkResearchNotesSave', flushStart);
+    assert.ok(flushEnd > flushStart, 'flush must be followed by its window export');
+    const flushBody = works.slice(flushStart, flushEnd);
+    assert.ok(flushBody.includes('prksEnqueueWorkResearchNotesSave(owner, id)'),
+        'flush must hand off to the same enqueue path');
+}
+
+async function durableSaveThroughObservedBaseCancels() {
+    /* Mirrors prksEnqueueWorkResearchNotesSave: editor text + prksWorkNoteObserved
+     * → prksSaveWorkNoteDurably. Store-only coalescing is covered above; this
+     * proves the acknowledged-base selection the editor path relies on. */
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    globalThis.prksSync = { store, changed() {} };
+    const resources = {
+        workNotesObserved: {
+            research: { value: 'A', revision: 0 },
+            private: { value: '', revision: 0 },
+        },
+    };
+    const ctx = {
+        getResource: key => resources[key],
+        setResource: (key, value) => { resources[key] = value; },
+    };
+    const observedOf = () => globalThis.prksWorkNoteObserved(ctx, RESEARCH_KIND);
+
+    async function saveEditorText(text) {
+        const result = await globalThis.prksSaveWorkNoteDurably(
+            'W-1', RESEARCH_KIND, text, observedOf());
+        assert.equal(result.code, 'saved', 'editor-path save of ' + JSON.stringify(text));
+    }
+
+    await saveEditorText('B');
+    let rows = noteRows(await store.listOperations(), RESEARCH, 'W-1');
+    assert.equal(rows.length, 1, 'A->B through durable save leaves one intent');
+    assert.equal(rows[0].payload.text, 'B');
+    assert.equal(observedOf().value, 'A',
+        'pending B must not rewrite the acknowledged observed base');
+    const effective = globalThis.prksEffectiveNoteWork(
+        { id: 'W-1', text_content: 'A', private_notes: '' }, rows);
+    assert.equal(effective.text_content, 'B');
+    assert.notEqual(observedOf().value, effective.text_content,
+        'observed stays on A while the overlay shows B');
+
+    await saveEditorText('A');
+    rows = noteRows(await store.listOperations(), RESEARCH, 'W-1');
+    assert.equal(rows.length, 0, 'A->B->A through acknowledged observed cancels');
+
+    /* Failure mode Codex called out: feeding the effective body as observed
+     * makes editing back to A look like a new change. */
+    const poison = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    await poison.saveWorkNote('W-1', RESEARCH, 'B', observed('A', 0));
+    await poison.saveWorkNote('W-1', RESEARCH, 'A', observed('B', 0));
+    const poisoned = noteRows(await poison.listOperations(), RESEARCH, 'W-1');
+    assert.equal(poisoned.length, 1, 'effective-as-observed would leave an A operation');
+    assert.equal(poisoned[0].payload.text, 'A');
+
+    delete globalThis.prksSync;
+}
+
 async function reconciliation() {
     const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
     await cache.putEntity('work', 'W-1', {
@@ -272,7 +347,24 @@ async function reconciliation() {
     const argumentsMid = offline.currentDomainGeneration('arguments');
     const graphMid = offline.currentDomainGeneration('research-graph-core');
     const peopleGraphMid = offline.currentDomainGeneration('research-graph-people');
-    assert.equal(await offline.reconcilePrivateNote(privateAck, privateOp), true);
+    /* Dispatch through the production handler + wrapper, not offline.reconcile*
+     * directly. createPrksOfflineRuntime({}) owns the default root wrappers, so
+     * rebind them to this scenario's runtime for the duration of the ACK. */
+    const prevPrivate = globalThis.prksOfflineReconcilePrivateNote;
+    const prevResearch = globalThis.prksOfflineReconcileWorkNote;
+    globalThis.prksOfflineReconcilePrivateNote = (result, op) =>
+        offline.reconcilePrivateNote(result, op);
+    globalThis.prksOfflineReconcileWorkNote = (result, op) =>
+        offline.reconcileWorkNote(result, op);
+    try {
+        assert.equal(
+            await globalThis.prksNoteSyncHandler.reconcile(privateAck, privateOp),
+            true,
+            'Private ACK must travel through prksNoteSyncHandler.reconcile');
+    } finally {
+        globalThis.prksOfflineReconcilePrivateNote = prevPrivate;
+        globalThis.prksOfflineReconcileWorkNote = prevResearch;
+    }
     assert.equal((await cache.getEntity('work', 'W-1')).value.private_notes, 'Q');
     assert.equal((await cache.getEntity('work', 'W-1')).value.text_content, 'B [[concept:New]]');
     assert.equal((await cache.getEntity('work-notes-state', 'W-1')).value.private_note_revision, 3);
@@ -356,11 +448,13 @@ async function reconciliation() {
 async function main() {
     acknowledgedBase();
     handlerContract();
+    enqueueSelectsAcknowledgedObserved();
     await coalescingFor(RESEARCH, 'Research');
     await coalescingFor(PRIVATE, 'Private');
     await scopesDoNotBlockEachOther();
     await byteLimits();
     await mutationTestAtoBtoA();
+    await durableSaveThroughObservedBaseCancels();
     await reconciliation();
     console.log('All ' + checks + ' Work note checks passed');
 }
