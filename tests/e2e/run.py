@@ -1191,6 +1191,20 @@ def build_parser():
         help="Print the E2E feature-group catalog and exit.",
     )
     parser.add_argument(
+        "--inventory",
+        action="store_true",
+        help=(
+            "Print on-demand suite inventory (E2E by feature/module, timing "
+            "weights, Node selftest runners, Python unit/API discovery) and exit. "
+            "Not a coverage gate — see coverage-boundary note in the report."
+        ),
+    )
+    parser.add_argument(
+        "--inventory-json",
+        action="store_true",
+        help="Same as --inventory but emit machine-readable JSON.",
+    )
+    parser.add_argument(
         "--profile",
         action="store_true",
         help=(
@@ -1364,6 +1378,31 @@ def _main(argv=None) -> int:
 
     if args.list_features:
         print(format_feature_catalog())
+        return 0
+
+    if args.inventory or args.inventory_json:
+        # Inventory needs E2E discovery + optional unit discovery; no Chromium.
+        # Fail closed on unittest load/import errors — never count _FailedTest
+        # placeholders as real tests or exit 0 with incomplete counts.
+        from tests.e2e.inventory import (
+            DiscoveryError,
+            build_inventory,
+            discover_e2e_test_ids,
+            format_inventory_json,
+            format_inventory_text,
+        )
+
+        apply_e2e_playwright_env()
+        try:
+            all_ids = discover_e2e_test_ids(E2E_MODULES)
+            inventory = build_inventory(all_ids, repo=REPO)
+        except DiscoveryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.inventory_json:
+            print(format_inventory_json(inventory), end="")
+        else:
+            print(format_inventory_text(inventory))
         return 0
 
     if args.ci_plan:
