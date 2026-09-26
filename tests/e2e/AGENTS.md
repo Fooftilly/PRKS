@@ -60,6 +60,11 @@ offline/reload/reconnect, conflict-resolution UI, degraded catalog, cache-clear,
 durable-queue wiring, and Tag lifecycle flows rather than re-testing pure
 state-machine branches in Chromium.
 
+Per-family KEEP / SPLIT / MOVE maps and retained browser boundaries are recorded
+under `docs/e2e-performance.md` (Work-Tag pilot, Work-People, …). Hard constraints
+for that wave: no retries to hide flakes; no fake E2E backend; no weakened
+assertions for speed; no shared browser/server state without proven isolation.
+
 ### During implementation
 
 1. Run the relevant unit/self-tests first.

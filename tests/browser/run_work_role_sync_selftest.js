@@ -369,19 +369,27 @@ async function coalescing() {
         { state: observed.state, revision: observed.revision },
         { person: { canonical_name: 'Jane Doe' } });
 
-    // absent -> ADD -> REMOVE is not two changes; it is none.
+    /* Opposite cancel before send: absent -> ADD -> REMOVE is not two
+     * changes; it is none. SPLIT with the thin Chromium scenario
+     * test_linking_and_unlinking_before_it_sends_leaves_no_intent (role
+     * modal / unlink confirm / reconnect silence); this store path owns the
+     * empty-queue arithmetic for both opposite directions. */
     const absent = { state: null, revision: 0 };
     await save('', absent);
     assert.equal((await rows())[0].operation, 'ADD_WORK_PERSON_ROLE');
+    assert.equal((await rows())[0].status, 'pending');
     await save(null, absent);
-    assert.equal((await rows()).length, 0, 'returning to the base leaves no intent');
+    assert.equal((await rows()).length, 0,
+        'link then unlink before send leaves no intent to transmit');
 
-    // present -> REMOVE -> ADD likewise.
+    // present -> REMOVE -> ADD likewise (opposite direction).
     const present = { state: '', revision: 3 };
     await save(null, present);
     assert.equal((await rows())[0].operation, 'REMOVE_WORK_PERSON_ROLE');
+    assert.equal((await rows())[0].status, 'pending');
     await save('', present);
-    assert.equal((await rows()).length, 0);
+    assert.equal((await rows()).length, 0,
+        'unlink then re-link to the acknowledged base leaves no intent');
 
     /* Changing one's mind about a credit twice is ONE operation naming the
      * last choice -- and it is a CREDIT operation, because the element was

@@ -19,7 +19,12 @@ from tests.e2e.fixtures import (
     PEOPLE_WORK_TITLE,
     seed_work_people_library,
 )
-from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.harness import (
+    AppServer,
+    open_app_page,
+    require_chromium,
+    wait_for_async,
+)
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -136,16 +141,21 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         page.locator('#prks-modal-confirm-ok').click()
 
     def pending(self, page, count, pred=None):
-        page.evaluate("""async ([n, pred]) => {
-            const matches = new Function('r', 'return ' + pred);
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations()).filter(matches);
-                if (rows.length === n && !rows.some(r => r.status === 'syncing')) return;
-                if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", [count, pred or self.ROLE_OPS])
+        # wait_for_async: page.wait_for_function treats a settled Promise as
+        # always-truthy, so durable-queue gates must poll the resolved value.
+        wait_for_async(
+            page,
+            """([n, pred]) => {
+                const matches = new Function('r', 'return ' + pred);
+                return prksSync.store.listOperations().then(rows => {
+                    const filtered = rows.filter(matches);
+                    return filtered.length === n
+                        && !filtered.some(r => r.status === 'syncing');
+                });
+            }""",
+            arg=[count, pred or self.ROLE_OPS],
+            timeout=25000,
+            message='Sync did not settle')
 
     def credit_line(self, page, work_id):
         """The Progress card credit, scoped to the visible Main tile.
@@ -429,9 +439,17 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.assertEqual(self.roles(server, work), {(server.ids['jane'], 'Author')})
         self.assertEqual(self.detail_people(page), [JANE_DISPLAY])
 
-    # ---- 9: never-sent coalescing ------------------------------------------
+    # ---- 9: never-sent opposite cancel (thin UI boundary) -------------------
 
     def test_linking_and_unlinking_before_it_sends_leaves_no_intent(self):
+        """Thin browser boundary for SPLIT opposite cancel.
+
+        Node `coalescing()` owns the store algorithm (absent→ADD→REMOVE /
+        present→REMOVE→ADD leave an empty role queue). This scenario keeps the
+        real role-modal link, optimistic chip, unlink confirmation, empty
+        relationship list, and reconnect that must transmit nothing — the path
+        `saveWorkPersonRole` alone cannot see.
+        """
         server, page, context = self.start()
         work = server.ids['people_work']
         self.manage_people(page, work)
@@ -439,6 +457,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.link(page, JANE_DISPLAY)
         self.pending(page, 1)
+        self.assertIn(JANE_DISPLAY, self.detail_people(page))
         self.unlink(page, server.ids['jane'])
         self.pending(page, 0)
         self.assertEqual(self.detail_people(page), [])
