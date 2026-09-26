@@ -5406,6 +5406,37 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(result[0], 409)
         self.assertEqual(self._sv_json("POST", "/api/sync/operations", op), result)
 
+    def test_work_metadata_sync_http_lost_response_replay(self):
+        """Lost-response retry hits /api/sync/operations, not process_operation.
+
+        The Node selftest mocks transport and the Python sync unit test calls
+        process_operation directly. Neither covers the HTTP adapter after the
+        server has already committed. Drop the first response, replay the
+        identical envelope, and assert the field revision stays 1.
+        """
+        import uuid
+        db = server_module.db
+        work = db.add_work("HTTP Meta Lost")
+        op = dict(
+            op_id=str(uuid.uuid4()), device_id=str(uuid.uuid4()),
+            operation="SET_WORK_METADATA_FIELD", entity_type="work",
+            entity_id=work, payload={"field": "doi", "value": "10.1/http-lost"},
+            base_revision=0, occurred_at="2026-09-12T10:00:00Z",
+            created_at="2026-09-12T10:00:00Z", depends_on=[],
+        )
+        # Commit on the wire, then treat the body as unavailable (lost in flight).
+        first_status, _lost = self._sv_json("POST", "/api/sync/operations", op)
+        self.assertEqual(first_status, 200)
+        status, result = self._sv_json("POST", "/api/sync/operations", op)
+        self.assertEqual(status, 200)
+        self.assertEqual(result.get("code"), "ACKNOWLEDGED")
+        self.assertEqual(result.get("server_revision"), 1)
+        self.assertEqual(result.get("value"), "10.1/http-lost")
+        state_status, state = self._sv_json("GET", f"/api/works/{work}/metadata-state")
+        self.assertEqual(state_status, 200)
+        self.assertEqual(state["fields"]["doi"]["revision"], 1)
+        self.assertEqual(state["fields"]["doi"]["value"], "10.1/http-lost")
+
     def test_research_note_ack_includes_research_refs_not_body(self):
         """Durable Research Note ACK keeps the body omitted but carries the
         compact research_refs map so the live Work preview can resolve links
