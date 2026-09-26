@@ -1052,6 +1052,57 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 self.assertIn("tests.e2e.fake.T.test_hung", loaded["test_ids"])
                 self.assertIn("tests.e2e.old.T.test_prior", loaded["test_ids"])
 
+    def test_persist_watchdog_diagnostics_records_stuck_id_and_stage(self):
+        """Watchdog path must persist machine-readable .tests/ diagnostics."""
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-wd-diag-") as raw:
+                root = Path(raw)
+                from tests.e2e import policy
+
+                last_path = root / "e2e-last-failed.json"
+                diag_path = root / "e2e-failure-diagnostics.json"
+                policy.save_last_failed(
+                    last_path,
+                    ["tests.e2e.fake.T.test_hung"],
+                    meta={"source": "per-test-watchdog"},
+                )
+                with mock.patch.object(runner, "REPO", root), mock.patch(
+                    "tests.e2e.run.LAST_FAILED_PATH",
+                    Path("e2e-last-failed.json"),
+                ), mock.patch(
+                    "tests.e2e.run.FAILURE_DIAGNOSTICS_PATH",
+                    Path("e2e-failure-diagnostics.json"),
+                ), mock.patch(
+                    "tests.e2e.run.benchmark_modes", return_value=()
+                ):
+                    runner._persist_watchdog_diagnostics(
+                        test_id="tests.e2e.fake.T.test_hung",
+                        stage="APP_READY",
+                        detail=(
+                            "per-test watchdog: test=tests.e2e.fake.T.test_hung "
+                            "stage=APP_READY age=120s threshold=120s "
+                            "(no automatic retry)"
+                        ),
+                        worker_index=0,
+                        report={
+                            "watchdog": True,
+                            "failed_ids": ["tests.e2e.fake.T.test_hung"],
+                            "errors": 1,
+                            "failures": 0,
+                        },
+                    )
+                loaded = policy.load_failure_diagnostics(diag_path)
+                self.assertIsNotNone(loaded)
+                self.assertEqual(loaded["stuck_test_id"], "tests.e2e.fake.T.test_hung")
+                self.assertEqual(loaded["last_stage"], "APP_READY")
+                self.assertTrue(loaded["watchdog"])
+                self.assertEqual(loaded["worker_index"], 0)
+                self.assertEqual(
+                    loaded["last_failed"]["test_ids"],
+                    ["tests.e2e.fake.T.test_hung"],
+                )
+                self.assertIn("no automatic retry", loaded["detail"])
+
     def test_run_worker_and_run_serial_watchdog_default_off(self):
         """CodeRabbit: helpers default enable_watchdog=False."""
         import inspect

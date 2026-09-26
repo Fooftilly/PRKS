@@ -49,6 +49,7 @@ from tests.e2e.harness import (
 )
 from tests.e2e.install_browser import ensure_chromium_installed
 from tests.e2e.policy import (
+    FAILURE_DIAGNOSTICS_PATH,
     FULL_GATE_EXTERNAL_SHARDS,
     LAST_FAILED_PATH,
     PROFILE_ENV,
@@ -56,16 +57,19 @@ from tests.e2e.policy import (
     ChangeDiscoveryError,
     benchmark_modes,
     ci_matrix_include,
+    clear_failure_diagnostics,
     format_feature_catalog,
     aggregate_ci_gate_outcome,
     full_gate_timeout_s,
     list_changed_paths,
+    load_failure_diagnostics,
     load_last_failed,
     merge_last_failed,
     per_test_watchdog_s,
     plan_ci_e2e,
     refine_ci_plan_with_tests,
     report_banner,
+    save_failure_diagnostics,
     save_last_failed,
     select_affected,
     select_features,
@@ -470,6 +474,27 @@ def _format_watchdog_detail(hb: dict, threshold_s: int, age_s: float) -> str:
     )
 
 
+def _persist_failure_diagnostics(payload: dict) -> None:
+    """Best-effort machine-readable failure snapshot under ``.tests/``.
+
+    Intended for CI artifact upload after shard failure. Omits unittest
+    traces and library content — only ids, stages, and worker metadata.
+    """
+    if benchmark_modes():
+        return
+    data = dict(payload or {})
+    last = load_last_failed(REPO / LAST_FAILED_PATH)
+    if last is not None and "last_failed" not in data:
+        data["last_failed"] = {
+            "test_ids": list(last.get("test_ids") or []),
+            "meta": dict(last.get("meta") or {}),
+        }
+    try:
+        save_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH, data)
+    except Exception:
+        pass
+
+
 def _write_watchdog_report(report_file: str, detail: str, test_id: str) -> None:
     if not report_file:
         return
@@ -491,6 +516,37 @@ def _write_watchdog_report(report_file: str, detail: str, test_id: str) -> None:
             json.dump(report, handle)
     except OSError:
         pass
+
+
+def _persist_watchdog_diagnostics(
+    *,
+    test_id: str,
+    stage: str,
+    detail: str,
+    worker_index: int | None = None,
+    report: dict | None = None,
+) -> None:
+    """Write watchdog attribution into ``.tests/`` before the worker dies."""
+    tid = str(test_id or "").strip()
+    payload = {
+        "kind": "watchdog",
+        "failed_ids": [tid] if tid else [],
+        "stuck_test_id": tid,
+        "last_stage": str(stage or ""),
+        "watchdog": True,
+        "detail": detail,
+    }
+    if worker_index is not None:
+        payload["worker_index"] = int(worker_index)
+    if report is not None:
+        payload["report"] = {
+            "watchdog": bool(report.get("watchdog")),
+            "failed_ids": list(report.get("failed_ids") or []),
+            "errors": report.get("errors"),
+            "failures": report.get("failures"),
+            "returncode": report.get("returncode"),
+        }
+    _persist_failure_diagnostics(payload)
 
 
 def _persist_watchdog_last_failed(test_id: str) -> None:
@@ -517,7 +573,7 @@ def _install_test_watchdog(
     *,
     persist_last_failed: bool = False,
 ) -> None:
-    """Kill this worker if one test exceeds the generous hang threshold.
+    """Kill this worker if one test exceeds the hang threshold.
 
     Separate from Playwright assertion timeouts and from the full-suite
     PRKS_E2E_FULL_TIMEOUT. Names the stuck test id + latest diagnostic stage,
@@ -558,6 +614,15 @@ def _install_test_watchdog(
                     _persist_watchdog_last_failed(tid)
                 except Exception:
                     pass
+            try:
+                _persist_watchdog_diagnostics(
+                    test_id=tid,
+                    stage=str(hb.get("stage") or ""),
+                    detail=detail,
+                    worker_index=index,
+                )
+            except Exception:
+                pass
             clear_e2e_heartbeat()
             os._exit(124)
 
@@ -903,6 +968,12 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             detail,
                             str((hb or {}).get("test_id") or ""),
                         )
+                        _persist_watchdog_diagnostics(
+                            test_id=str((hb or {}).get("test_id") or ""),
+                            stage=str((hb or {}).get("stage") or ""),
+                            detail=detail,
+                            worker_index=worker["index"],
+                        )
                         _stop_worker(worker)
                 for worker in list(pending):
                     if worker["proc"].poll() is None:
@@ -945,6 +1016,58 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     sys.stdout.flush()
                     if not ok:
                         _print_worker_failure(worker, jobs, report)
+                        if report is None or report.get("watchdog"):
+                            tid, stage = _hang_attribution(worker)
+                            _persist_failure_diagnostics(
+                                {
+                                    "kind": (
+                                        "watchdog"
+                                        if (report or {}).get("watchdog")
+                                        else "worker-crash"
+                                    ),
+                                    "failed_ids": list(
+                                        (report or {}).get("failed_ids") or ([tid] if tid else [])
+                                    ),
+                                    "stuck_test_id": tid,
+                                    "last_stage": stage,
+                                    "watchdog": bool((report or {}).get("watchdog")),
+                                    "detail": (report or {}).get("detail") or "",
+                                    "worker_index": worker["index"],
+                                    "report": {
+                                        "returncode": rc,
+                                        "reported": report is not None,
+                                        "failed_ids": list(
+                                            (report or {}).get("failed_ids") or []
+                                        ),
+                                        "failures": (report or {}).get("failures"),
+                                        "errors": (report or {}).get("errors"),
+                                        "watchdog": bool(
+                                            (report or {}).get("watchdog")
+                                        ),
+                                    },
+                                }
+                            )
+                        elif report.get("failed_ids"):
+                            _persist_failure_diagnostics(
+                                {
+                                    "kind": "assertion-failure",
+                                    "failed_ids": list(report.get("failed_ids") or []),
+                                    "stuck_test_id": (report.get("failed_ids") or [""])[0],
+                                    "last_stage": "",
+                                    "watchdog": False,
+                                    "worker_index": worker["index"],
+                                    "report": {
+                                        "returncode": rc,
+                                        "reported": True,
+                                        "failed_ids": list(
+                                            report.get("failed_ids") or []
+                                        ),
+                                        "failures": report.get("failures"),
+                                        "errors": report.get("errors"),
+                                        "watchdog": False,
+                                    },
+                                }
+                            )
                         if fail_fast:
                             stopped_early = True
                             print(
@@ -1822,6 +1945,38 @@ def _main(argv=None) -> int:
                 pass
             if previous_ids:
                 print("Cleared last-failed (all previously failed tests resolved)")
+
+        # Machine-readable hang/failure snapshot for CI `.tests/` artifacts.
+        # Already written early on watchdog paths; refresh here so assertion
+        # failures also persist ids + last-failed, and successes clear stale
+        # diagnostics from a previous run in the same checkout.
+        if not ok:
+            hb = get_e2e_heartbeat()
+            stuck = ""
+            if failed_ids:
+                stuck = failed_ids[0]
+            elif hb.get("test_id"):
+                stuck = str(hb.get("test_id") or "")
+            existing = load_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH) or {}
+            # Prefer an earlier watchdog write's stage when this refresh has none.
+            stage = str(hb.get("stage") or "") or str(existing.get("last_stage") or "")
+            kind = "watchdog" if existing.get("watchdog") else "failure"
+            _persist_failure_diagnostics(
+                {
+                    "kind": kind,
+                    "failed_ids": list(failed_ids),
+                    "stuck_test_id": stuck or str(existing.get("stuck_test_id") or ""),
+                    "last_stage": stage,
+                    "watchdog": bool(existing.get("watchdog")),
+                    "detail": existing.get("detail") or "",
+                    "worker_index": existing.get("worker_index"),
+                    "report": existing.get("report"),
+                    "tier": tier,
+                    "note": note,
+                }
+            )
+        else:
+            clear_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH)
 
     pointer = None
     if ok and not args.no_pointer_capture:

@@ -29,7 +29,7 @@ def load_tests(loader, standard_tests, pattern):
 # (recycle=15), ~5 (recycle=12). Quiet run with recycle=4 still hung on
 # acknowledgement (~case 24). Two bounded defects in this module:
 # (1) pending/settled_conflicts/operations awaited listOperations inside one
-# evaluate before checking a JS deadline — never-settle → 300s watchdog;
+# evaluate before checking a JS deadline — never-settle → 120s watchdog;
 # now wait_for_async (per-await race). (2) page.evaluate("… => prksNavigate(…)")
 # awaited the navigation Promise; when leave/render never settled, evaluate
 # hung until the watchdog — now void + exit metadata edit + DOM wait.
@@ -97,7 +97,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     # Durable-store gates used to be one long page.evaluate with a JS deadline
     # checked only AFTER await listOperations(). If that Promise never settled,
-    # the 25s deadline never ran and the 300s per-test watchdog was first kill
+    # the 25s deadline never ran and the 120s per-test watchdog was first kill
     # (APP_READY body wedge). wait_for_async races each await against remaining
     # timeout so a hung IndexedDB/listOperations fails promptly.
     _OPS_TIMEOUT_MS = 25000
@@ -393,7 +393,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """Fire-and-forget workspace navigation.
 
         Never return prksNavigate's Promise from page.evaluate — Playwright
-        awaits it, and a stuck leave/render wedges until the 300s watchdog.
+        awaits it, and a stuck leave/render wedges until the 120s watchdog.
         Exit metadata edit first so leave is not blocked on an unsaved-draft
         confirm the test never clicks. Wait for the canonical hash so callers
         do not race the departing route's still-visible DOM.

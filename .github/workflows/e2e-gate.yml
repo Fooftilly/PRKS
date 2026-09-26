@@ -220,11 +220,14 @@ jobs:
 
       - name: Upload shard failure log
         if: failure()
+        # Pin v4.6.2 supports include-hidden-files (default false). Without it,
+        # path `.tests/` matches nothing useful — hidden dirs are skipped.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-shard-${{ matrix.shard }}-of-${{ matrix.total }}-log
           path: |
             .tests/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
