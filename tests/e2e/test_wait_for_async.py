@@ -184,6 +184,22 @@ class WaitForAsyncParityTests(unittest.TestCase):
         helper = object.__new__(OfflineWorkMetadataTests)
         self.assertEqual(helper.operations(self.page, timeout=1000), [])
 
+    def test_void_navigate_evaluate_returns_when_navigation_promise_hangs(self):
+        """page.evaluate('r => prksNavigate(r)') awaits the Promise and wedges
+        when navigation never settles; the void form must return immediately."""
+        self.page.evaluate(
+            """() => {
+                window.prksNavigate = () => new Promise(() => {});
+            }"""
+        )
+        started = time.perf_counter()
+        self.page.evaluate("r => { void prksNavigate(r); }", "#/progress")
+        self.assertLess(
+            time.perf_counter() - started,
+            1.0,
+            "void prksNavigate evaluate must not await the navigation Promise",
+        )
+
     def test_direct_expression_re_evaluates_each_poll(self):
         """Non-function expressions must not freeze the first eval's value."""
         self.page.evaluate(
