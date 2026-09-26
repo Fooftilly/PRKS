@@ -421,7 +421,7 @@ Work-Open rationalization (#211) to `tests/e2e/test_work_notes_offline.py`.
 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
-| Editing back to the acknowledged body cancels the pending op | Node `coalescingFor(RESEARCH)` A→B→A plus `mutationTestAtoBtoA`; editor-path coverage via `durableSaveThroughObservedBaseCancels` (`prksWorkNoteObserved` → `prksSaveWorkNoteDurably`) and static enqueue/flush pins in `run_work_note_sync_selftest.js` / `test_frontend_work_note_sync.py` | MOVE |
+| Editing back to the acknowledged body cancels the pending op | Node `coalescingFor(RESEARCH)` A→B→A plus `mutationTestAtoBtoA`; editor-path coverage via `durableSaveThroughObservedBaseCancels` and production `enqueuePathAtoBtoACancels` (`prksEnqueueWorkResearchNotesSave` with editor context → pending returns to zero); static enqueue/flush pins in `run_work_note_sync_selftest.js` / `test_frontend_work_note_sync.py` | MOVE |
 | Private ACK does not fence Concepts | Node `reconciliation()` dispatches Private ACK through `prksNoteSyncHandler.reconcile` → `prksOfflineReconcilePrivateNote` (must not advance Concepts/Arguments/Graph generations; patches only `private_notes`) | MOVE |
 | Stale research revision is a conflict (compact body privacy) | Node `handlerContract` rejects body-carrying conflicts; Python `test_a_stale_research_base_against_a_different_value_conflicts` and `test_compact_conflict_results_omit_note_bodies` | SPLIT → fast layers for shape; thin Chromium retains reconnect park |
 
