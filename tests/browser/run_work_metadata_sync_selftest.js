@@ -1419,9 +1419,14 @@ async function embeddedReconciliation() {
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
 
+    const embeddedDomains = ['folders', 'people', 'playlists'];
     const ack = { code: 'ACKNOWLEDGED', work_id: 'W-Y', field: 'year',
         value: '1998', server_revision: 1, changed: true };
+    const beforeYear = embeddedDomains.map(d => offline.currentDomainGeneration(d));
     assert.equal(await offline.reconcileWorkField(ack), true);
+    assert.ok(embeddedDomains.every((d, i) =>
+        offline.currentDomainGeneration(d) > beforeYear[i]),
+        'year reconciliation advances embedded domains');
 
     assert.equal((await cache.getEntity('work', 'W-Y')).value.year, '1998');
     assert.deepEqual((await cache.getEntity('work-metadata-state', 'W-Y')).value.fields.year,
@@ -1431,8 +1436,12 @@ async function embeddedReconciliation() {
     }
     /* Status rides the SAME generic path: a registry entry, and no
      * Status-specific reconciliation code anywhere. */
+    const beforeStatus = embeddedDomains.map(d => offline.currentDomainGeneration(d));
     assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
         field: 'status', value: 'Completed', server_revision: 1, changed: true }), true);
+    assert.ok(embeddedDomains.every((d, i) =>
+        offline.currentDomainGeneration(d) > beforeStatus[i]),
+        'status reconciliation advances embedded domains');
     for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
         assert.equal((await cache.getList(key)).value[0].status, 'Completed', key + ' status');
     }
@@ -1443,9 +1452,13 @@ async function embeddedReconciliation() {
     /* And so does `author_text` -- the same registry-only change. The value it
      * writes is the FIELD; what any of these rows end up CREDITING is still
      * decided afterwards by the credit helper from linked role data. */
+    const beforeAuthorText = embeddedDomains.map(d => offline.currentDomainGeneration(d));
     assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
         field: 'author_text', value: 'Acknowledged Author', server_revision: 1,
         changed: true }), true);
+    assert.ok(embeddedDomains.every((d, i) =>
+        offline.currentDomainGeneration(d) > beforeAuthorText[i]),
+        'author_text reconciliation advances embedded domains');
     for (const key of ['works-browse:index', 'recent:index', 'recently-added:index']) {
         assert.equal((await cache.getList(key)).value[0].author_text, 'Acknowledged Author', key);
     }
@@ -1466,10 +1479,10 @@ async function embeddedReconciliation() {
 
     /* A field no summary carries must not drag those domains into its
      * reconciliation -- DOI is the control case. */
-    const before = ['folders', 'people', 'playlists'].map(d => offline.currentDomainGeneration(d));
+    const before = embeddedDomains.map(d => offline.currentDomainGeneration(d));
     assert.equal(await offline.reconcileWorkField({ code: 'ACKNOWLEDGED', work_id: 'W-Y',
         field: 'doi', value: '10.1/x', server_revision: 1, changed: true }), true);
-    assert.deepEqual(['folders', 'people', 'playlists'].map(d => offline.currentDomainGeneration(d)),
+    assert.deepEqual(embeddedDomains.map(d => offline.currentDomainGeneration(d)),
         before, 'a detail-only field leaves embedded domains completely alone');
 
     // Nothing cached of a kind is nothing to reconcile, not a failure.
