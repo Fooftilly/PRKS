@@ -156,6 +156,31 @@ class ChromiumProbeTests(unittest.TestCase):
         self.assertFalse(probe["chromium_available"])
         self.assertEqual(probe["chromium_path"], str(fake_exe))
 
+    def test_available_false_when_version_command_fails_with_stderr(self):
+        browsers = Path("/repo/.playwright-browsers")
+        fake_exe = browsers / "chromium-1" / "chrome-linux" / "chrome"
+        failed = subprocess.CompletedProcess(
+            args=[str(fake_exe), "--version"],
+            returncode=127,
+            stdout="",
+            stderr="error while loading shared libraries: libnss3.so",
+        )
+        with mock.patch.object(doctor, "installed_playwright_version", return_value="1.63.0"):
+            with mock.patch.object(doctor, "pinned_playwright_version", return_value="1.63.0"):
+                with mock.patch.object(
+                    doctor, "playwright_chromium_revision", return_value="1"
+                ):
+                    with mock.patch.object(
+                        doctor, "chromium_executable", return_value=fake_exe
+                    ):
+                        with mock.patch.object(
+                            doctor.subprocess, "run", return_value=failed
+                        ):
+                            probe = doctor._chromium_probe(browsers)
+        self.assertIsNone(probe["chromium_version"])
+        self.assertFalse(probe["chromium_available"])
+        self.assertEqual(probe["chromium_path"], str(fake_exe))
+
 
 class FormatReportTests(unittest.TestCase):
     def test_format_is_deterministic_and_pasteable(self):

@@ -209,6 +209,9 @@ def _chrome_version_string(executable: Path) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+    # Nonzero exit with stderr noise must not look like a usable Chromium.
+    if completed.returncode != 0:
+        return None
     text = (completed.stdout or completed.stderr or "").strip()
     if not text:
         return None
