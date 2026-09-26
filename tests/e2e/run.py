@@ -1368,13 +1368,30 @@ def _main(argv=None) -> int:
     if args.ci_plan:
         # Cheap CI decision: no discovery, no Chromium. Compare committed tree
         # to --base (default HEAD) using the same docs/unit/ignored noop policy.
+        # Discovery failures (unresolvable force-push before SHA, damaged
+        # checkout) fail closed to run=true — never exit 2 and trip the
+        # aggregate job before any shard runs.
         try:
             paths = list_changed_paths(
                 REPO, base=args.base, include_untracked=False
             )
         except ChangeDiscoveryError as exc:
-            print("ci-plan: %s" % exc, file=sys.stderr)
-            return 2
+            reason = (
+                "change discovery failed — running full E2E (fail closed): %s" % exc
+            )
+            print("ci-plan: %s" % reason, file=sys.stderr)
+            print(
+                json.dumps(
+                    {
+                        "run": True,
+                        "reason": reason,
+                        "changed_paths": None,
+                        "external_shards": FULL_GATE_EXTERNAL_SHARDS,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         needed, reason = full_e2e_ci_needed(paths)
         print(
             json.dumps(

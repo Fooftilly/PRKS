@@ -463,8 +463,9 @@ class ListChangedPathsTests(unittest.TestCase):
         with mock.patch("subprocess.run") as run:
             run.side_effect = [
                 _git_ok("deadbeef\n"),  # rev-parse: base resolves to one commit
-                _git_ok("frontend/js/app.js\nfrontend/js/gone.js\n"),  # diff vs base (incl D)
-                _git_ok("frontend/js/app.js\nbackend/x.py\n"),  # local vs HEAD when base != HEAD
+                # --name-status -z (incl D): status\0path\0...
+                _git_ok("M\0frontend/js/app.js\0D\0frontend/js/gone.js\0"),
+                _git_ok("M\0frontend/js/app.js\0M\0backend/x.py\0"),  # local vs HEAD
                 _git_ok("scripts/e2e\nfrontend/js/new.js\n"),  # untracked
             ]
             paths = policy.list_changed_paths(
@@ -475,10 +476,39 @@ class ListChangedPathsTests(unittest.TestCase):
             self.assertIn("backend/x.py", paths)
             self.assertIn("frontend/js/new.js", paths)
             self.assertIn("scripts/e2e", paths)
-            # Diff filter must include Deleted (D).
+            # Diff filter must include Deleted (D); name-status -z keeps both
+            # rename images (covered below) and is what CI planning uses.
             diff_cmd = run.call_args_list[1][0][0]
             self.assertIn("--diff-filter=ACMRD", diff_cmd)
+            self.assertIn("--name-status", diff_cmd)
+            self.assertIn("-z", diff_cmd)
             self.assertIn("rev-parse", run.call_args_list[0][0][0])
+
+    def test_name_status_z_keeps_both_rename_images(self):
+        self.assertEqual(
+            policy.paths_from_name_status_z(
+                "R100\0frontend/js/app.js\0docs/app-notes.md\0"
+            ),
+            ["frontend/js/app.js", "docs/app-notes.md"],
+        )
+        self.assertEqual(
+            policy.paths_from_name_status_z(
+                "C080\0backend/server.py\0backend/server_copy.py\0M\0frontend/js/ui.js\0"
+            ),
+            ["backend/server.py", "backend/server_copy.py", "frontend/js/ui.js"],
+        )
+        self.assertEqual(policy.paths_from_name_status_z(""), [])
+        self.assertEqual(policy.paths_from_name_status_z("M\0alone.py\0"), ["alone.py"])
+
+    def test_rename_into_docs_still_requires_full_e2e(self):
+        """Post-image alone is docs-only; pre-image production path must keep the gate."""
+        needed_post_only, _reason = policy.full_e2e_ci_needed(["docs/app-notes.md"])
+        self.assertFalse(needed_post_only)
+        needed_both, reason = policy.full_e2e_ci_needed(
+            ["frontend/js/app.js", "docs/app-notes.md"]
+        )
+        self.assertTrue(needed_both)
+        self.assertIn("running", reason)
 
     def test_untracked_scripts_and_e2e_policy_are_discoverable(self):
         with mock.patch("subprocess.run") as run:
@@ -572,7 +602,7 @@ class ListChangedPathsTests(unittest.TestCase):
 
     def test_untracked_failure_is_irrelevant_when_discovery_is_disabled(self):
         with mock.patch("subprocess.run") as run:
-            run.side_effect = [_git_ok("backend/server.py\n")]
+            run.side_effect = [_git_ok("M\0backend/server.py\0")]
             self.assertEqual(
                 policy.list_changed_paths(Path("/tmp/repo"), include_untracked=False),
                 ["backend/server.py"],
@@ -654,6 +684,36 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             repo = self._seeded_repo(Path(raw))
             with self.assertRaises(policy.ChangeDiscoveryError):
                 policy.list_changed_paths(repo, base="backend")
+
+    def test_rename_production_to_docs_keeps_both_images(self):
+        """A prod→docs rename must still require the full E2E CI gate."""
+        with tempfile.TemporaryDirectory() as raw:
+            repo = self._seeded_repo(Path(raw))
+            seed = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                text=True,
+            ).strip()
+            (repo / "docs").mkdir()
+            self._git(repo, "mv", "backend/server.py", "docs/server-notes.md")
+            self._git(
+                repo,
+                "-c",
+                "user.email=e2e@example.invalid",
+                "-c",
+                "user.name=E2E",
+                "commit",
+                "--quiet",
+                "--no-gpg-sign",
+                "-m",
+                "rename into docs",
+            )
+            paths = policy.list_changed_paths(
+                repo, base=seed, include_untracked=False
+            )
+            self.assertIn("backend/server.py", paths)
+            self.assertIn("docs/server-notes.md", paths)
+            needed, reason = policy.full_e2e_ci_needed(paths)
+            self.assertTrue(needed, reason)
 
 
 class BenchmarkModeTests(unittest.TestCase):
@@ -796,7 +856,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             err = io.StringIO()
             failure = policy.ChangeDiscoveryError(
                 "change discovery vs origin/nope failed: "
-                "`git diff --name-only --diff-filter=ACMRD origin/nope` exited 128 "
+                "`git diff --name-status -z --diff-filter=ACMRD origin/nope` exited 128 "
                 "— fatal: bad revision 'origin/nope'"
             )
             with mock.patch.object(runner, "ensure_chromium_installed") as ensure:
@@ -814,6 +874,37 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertNotIn("success no-op", out.getvalue())
             ensure.assert_not_called()
             serial.assert_not_called()
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_ci_plan_discovery_failure_fails_closed_to_run(self):
+        """Unresolved --base (e.g. force-push before SHA) must still run the gate."""
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+            import io
+            import json
+            from contextlib import redirect_stderr, redirect_stdout
+
+            out = io.StringIO()
+            err = io.StringIO()
+            failure = policy.ChangeDiscoveryError(
+                "invalid --base 'deadbeef': not a single revision this repository resolves"
+            )
+            with mock.patch.object(
+                runner, "list_changed_paths", side_effect=failure
+            ):
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = runner.main(["--ci-plan", "--base", "deadbeef"])
+            self.assertEqual(code, 0)
+            plan = json.loads(out.getvalue().strip())
+            self.assertTrue(plan["run"])
+            self.assertIn("fail closed", plan["reason"])
+            self.assertIn("fail closed", err.getvalue())
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)

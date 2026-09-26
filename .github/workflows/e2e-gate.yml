@@ -52,8 +52,14 @@ jobs:
             if [[ -z "$before" || "$before" =~ ^0+$ ]]; then
               echo "ref=" >> "$GITHUB_OUTPUT"
               echo "force=1" >> "$GITHUB_OUTPUT"
-            else
+            elif git rev-parse --verify "${before}^{commit}" >/dev/null 2>&1; then
               echo "ref=$before" >> "$GITHUB_OUTPUT"
+            else
+              # Force-push / shallow history: before SHA is present but not
+              # resolvable locally. Fail closed to the full gate (do not hand
+              # an unusable base to --ci-plan, which must not exit 2 here).
+              echo "ref=" >> "$GITHUB_OUTPUT"
+              echo "force=1" >> "$GITHUB_OUTPUT"
             fi
           fi
 

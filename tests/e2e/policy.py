@@ -867,7 +867,7 @@ UNTRACKED_AFFECTED_PREFIXES = (
 )
 
 
-def _git_lines(repo: Path, args, what: str) -> list:
+def _git_stdout(repo: Path, args, what: str) -> str:
     """Run one read-only git command; raise ChangeDiscoveryError on any failure.
 
     Git failures (missing executable, damaged checkout, invalid base ref) must
@@ -893,7 +893,58 @@ def _git_lines(repo: Path, args, what: str) -> list:
                 (" — " + detail[0]) if detail else "",
             )
         )
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    return proc.stdout or ""
+
+
+def _git_lines(repo: Path, args, what: str) -> list:
+    """Newline-oriented wrapper around ``_git_stdout`` (ls-files, rev-parse)."""
+    return [line.strip() for line in _git_stdout(repo, args, what).splitlines() if line.strip()]
+
+
+def paths_from_name_status_z(raw: str) -> list[str]:
+    """Extract paths from ``git diff --name-status -z`` stdout.
+
+    Renames (``R*``) and copies (``C*``) contribute **both** the pre-image and
+    post-image path. ``--name-only`` only reports the destination, so a
+    production file renamed into docs/unit would otherwise look like a
+    docs-only change and skip the full E2E CI gate.
+    """
+    if not raw:
+        return []
+    parts = raw.split("\0")
+    out: list[str] = []
+    i = 0
+    n = len(parts)
+    while i < n:
+        status = parts[i]
+        i += 1
+        if not status:
+            continue
+        if i >= n:
+            break
+        first = parts[i]
+        i += 1
+        if not first:
+            continue
+        out.append(first)
+        if status[0] in ("R", "C"):
+            if i >= n:
+                break
+            second = parts[i]
+            i += 1
+            if second:
+                out.append(second)
+    return out
+
+
+def _diff_changed_paths(repo: Path, ref: str, what: str) -> list[str]:
+    """Paths changed vs ``ref``, including both sides of renames/copies."""
+    raw = _git_stdout(
+        repo,
+        ["diff", "--name-status", "-z", "--diff-filter=ACMRD", ref, "--"],
+        what,
+    )
+    return paths_from_name_status_z(raw)
 
 
 def _verify_base_revision(repo: Path, base: str) -> None:
@@ -922,8 +973,11 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
 
     Default comparison is the agent-normal case: dirty working tree + index
     against HEAD (or against `base` when provided). Includes Added/Copied/
-    Modified/Renamed/Deleted (D). Also includes untracked files under
-    frontend/, backend/, tests/e2e/, tools/, scripts/ when include_untracked.
+    Modified/Renamed/Deleted (D). Rename/copy detection contributes **both**
+    the pre-image and post-image path (via ``--name-status -z``), so a
+    production→docs move cannot look docs-only to ``--affected`` / ``--ci-plan``.
+    Also includes untracked files under frontend/, backend/, tests/e2e/,
+    tools/, scripts/ when include_untracked.
 
     Fails closed: any Git/change-discovery failure raises ChangeDiscoveryError
     instead of degrading to an empty (and therefore "nothing affected") list.
@@ -945,21 +999,16 @@ def list_changed_paths(repo: Path, base: str | None = None, include_untracked=Tr
         _verify_base_revision(repo, base)
     ref = base or "HEAD"
     paths = []
-    # Staged + unstaged vs ref — include deletes so removed production/E2E
-    # files still drive feature selection.
-    for line in _git_lines(
-        repo,
-        ["diff", "--name-only", "--diff-filter=ACMRD", ref, "--"],
-        "change discovery vs %s" % ref,
-    ):
-        paths.append(line)
+    # Staged + unstaged vs ref — include deletes and both rename images so
+    # removed/moved production paths still drive feature / full-E2E selection.
+    for line in _diff_changed_paths(repo, ref, "change discovery vs %s" % ref):
+        if line not in paths:
+            paths.append(line)
     # Also include staged-only relative to HEAD when base is HEAD — already covered
     # by diff HEAD. When base is another ref, also include uncommitted local work:
     if base and base != "HEAD":
-        for line in _git_lines(
-            repo,
-            ["diff", "--name-only", "--diff-filter=ACMRD", "HEAD", "--"],
-            "local change discovery vs HEAD",
+        for line in _diff_changed_paths(
+            repo, "HEAD", "local change discovery vs HEAD"
         ):
             if line not in paths:
                 paths.append(line)
