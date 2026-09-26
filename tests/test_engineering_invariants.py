@@ -272,6 +272,28 @@ class EngineeringInvariantTests(unittest.TestCase):
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
             self.assertIn("exclude", findings[0].message)
 
+    def test_pyright_typed_slice_rejects_parent_globs(self):
+        """Parent/recursive globs must not wipe backend/storage unnoticed."""
+        cases = (
+            "backend/**",
+            "**/backend/**",
+            "backend/*",
+            "**/storage/**",
+        )
+        for pattern in cases:
+            with self.subTest(pattern=pattern):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    self._write_valid_pyright_tree(root)
+                    typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+                    typed["exclude"] = ["**/__pycache__", pattern]
+                    (root / "pyrightconfig.typed-slice.json").write_text(
+                        json.dumps(typed), encoding="utf-8"
+                    )
+                    findings = checker.check_pyright_configs(root)
+                    self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+                    self.assertIn(pattern, findings[0].message)
+
     def test_pyright_typed_slice_rejects_missing_ci_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -295,6 +317,24 @@ class EngineeringInvariantTests(unittest.TestCase):
                     "      - run: pyright --project pyrightconfig.json\n"
                     "      # - run: pyright --project pyrightconfig.typed-slice.json\n"
                     "      - run: echo pyrightconfig.typed-slice.json\n"
+                ),
+                encoding="utf-8",
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-003"])
+            self.assertIn("typed-slice", findings[0].message)
+
+    def test_pyright_ci_rejects_echo_of_pyright_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / ".github" / "workflows" / "static-analysis.yml").write_text(
+                (
+                    "jobs:\n"
+                    "  pyright:\n"
+                    "    steps:\n"
+                    "      - run: pyright --project pyrightconfig.json\n"
+                    '      - run: echo "pyright --project pyrightconfig.typed-slice.json"\n'
                 ),
                 encoding="utf-8",
             )

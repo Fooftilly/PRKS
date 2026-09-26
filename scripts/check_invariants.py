@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import json
 import re
 from dataclasses import dataclass
@@ -297,25 +298,79 @@ def _normalize_pyright_path(entry: object) -> str:
     return str(entry).replace("\\", "/").rstrip("/")
 
 
-def _path_covers_typed_slice(entry: object) -> bool:
-    """True when ignore/exclude would suppress analysis of backend/storage."""
+def _is_allowed_typed_slice_exclude(entry: object) -> bool:
     raw = str(entry).replace("\\", "/").strip()
     if raw in PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES:
+        return True
+    return any(_normalize_pyright_path(item) == _normalize_pyright_path(raw) for item in PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES)
+
+
+def _path_covers_typed_slice(entry: object) -> bool:
+    """True when ignore/exclude would suppress analysis of backend/storage.
+
+    Handles parent paths and common recursive/one-level globs such as
+    ``backend/**``, ``**/backend/**``, ``backend/*``, and ``**/storage/**``.
+    """
+    if _is_allowed_typed_slice_exclude(entry):
         return False
-    e = _normalize_pyright_path(raw)
-    if any(_normalize_pyright_path(item) == e for item in PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES):
-        return False
+    raw = str(entry).replace("\\", "/").strip()
+    pattern = raw.rstrip("/")
     target = PYRIGHT_TYPED_SLICE_ROOT
-    if e in {"", ".", "*", "**", "**/*"}:
+    if pattern in {"", ".", "*", "**", "**/*", "**/**"}:
         return True
-    if e == target or e.startswith(target + "/"):
+
+    # Exact target, nested path under the slice, or literal parent of the slice.
+    if pattern == target or pattern.startswith(target + "/"):
         return True
-    if target.startswith(e + "/"):
+    if target.startswith(pattern + "/"):
         return True
-    if "backend/storage" in e:
+    if pattern in {"storage", "**/storage"} or pattern.endswith("/storage"):
         return True
-    if e in {"storage", "**/storage"} or e.endswith("/storage"):
+    if "backend/storage" in pattern:
         return True
+
+    # Strip a single trailing recursive / one-level glob suffix.
+    base = pattern
+    one_level = False
+    if base.endswith("/**"):
+        base = base[:-3].rstrip("/")
+    elif base.endswith("/*"):
+        one_level = True
+        base = base[:-2].rstrip("/")
+
+    anywhere = False
+    if base.startswith("**/"):
+        anywhere = True
+        base = base[3:].rstrip("/")
+
+    if base and _is_allowed_typed_slice_exclude(base):
+        return False
+
+    if base == target or (base and target.startswith(base + "/")):
+        # backend, backend/**, backend/*, **/backend, **/backend/**
+        if one_level:
+            rest = target[len(base) + 1 :]
+            return bool(rest) and "/" not in rest
+        return True
+
+    if anywhere and base:
+        # **/storage, **/storage/**, **/backend/storage
+        if target == base or target.endswith("/" + base):
+            return True
+        if f"/{base}/" in f"/{target}/":
+            return True
+        if target.startswith(base + "/"):
+            return True
+
+    # fnmatch covers mixed globs (* matches across '/', enough for Pyright path patterns).
+    probe_paths = [target, f"{target}/x.py"]
+    parts = target.split("/")
+    for i in range(len(parts)):
+        probe_paths.append("/".join(parts[: i + 1]))
+    for probe in probe_paths:
+        if fnmatch.fnmatch(probe, pattern) or fnmatch.fnmatch(probe, raw):
+            if probe == target or target.startswith(probe + "/") or probe.startswith(target + "/"):
+                return True
     return False
 
 
@@ -403,15 +458,42 @@ def _strip_shell_comment_lines(script: str) -> str:
     return "\n".join(kept)
 
 
+def _shell_chunk_invokes_pyright(chunk: str) -> bool:
+    """True when ``pyright`` is an invoked command, not text inside ``echo``."""
+    # Drop quoted strings so ``echo "pyright --project X"`` does not count.
+    unquoted = re.sub(r'"[^"]*"', ' "" ', chunk)
+    unquoted = re.sub(r"'[^']*'", " '' ", unquoted)
+    tokens = unquoted.split()
+    if not tokens:
+        return False
+    head = tokens[0].rsplit("/", 1)[-1]
+    if head in {"echo", "printf", "cat"}:
+        return False
+    for index, token in enumerate(tokens):
+        name = token.rsplit("/", 1)[-1]
+        if name != "pyright":
+            continue
+        if index == 0:
+            return True
+        # npm/npx exec … -- pyright  (or similar package runners)
+        if head in {"npm", "npx", "yarn", "pnpm"} and "--" in tokens[:index]:
+            return True
+        if tokens[index - 1] in {"--", "time", "command", "exec", "env"}:
+            return True
+    return False
+
+
 def _executable_pyright_projects(workflow_text: str) -> set[str]:
-    """Project paths passed to ``pyright --project`` in executable ``run`` steps."""
+    """Project paths from real ``pyright --project`` invocations in ``run`` steps."""
     projects: set[str] = set()
     for script in _workflow_run_scripts(workflow_text):
         cleaned = _strip_shell_comment_lines(script)
-        if "pyright" not in cleaned:
-            continue
-        for match in _PYRIGHT_PROJECT_ARG_RE.finditer(cleaned):
-            projects.add(match.group("path"))
+        for chunk in re.split(r"[;\n|&]+", cleaned):
+            chunk = chunk.strip()
+            if not chunk or not _shell_chunk_invokes_pyright(chunk):
+                continue
+            for match in _PYRIGHT_PROJECT_ARG_RE.finditer(chunk):
+                projects.add(match.group("path"))
     return projects
 
 
