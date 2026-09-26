@@ -48,6 +48,7 @@ export default [
   {
     ignores: [
       "frontend/vendor/**",
+      "frontend/vue/**",
       "tools/**/node_modules/**",
       ".playwright-browsers/**",
     ],

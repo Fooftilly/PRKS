@@ -117,7 +117,16 @@ class FrontendDependencyTests(unittest.TestCase):
     def test_dependency_manifest_lists_vendor_runtime(self):
         manifest = json.loads(_read(_VENDOR / "DEPENDENCY-MANIFEST.json"))
         names = {d["name"] for d in manifest["dependencies"]}
-        for name in ("dompurify", "easymde", "codemirror", "lucide", "cytoscape", "inter", "prks-pdf-viewer"):
+        for name in (
+            "dompurify",
+            "easymde",
+            "codemirror",
+            "lucide",
+            "cytoscape",
+            "inter",
+            "prks-pdf-viewer",
+            "prks-vue",
+        ):
             self.assertIn(name, names)
 
     def test_index_loads_local_deps_in_order(self):

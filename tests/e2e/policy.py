@@ -383,6 +383,17 @@ AFFECTED_RULES = (
         "ci_mode": "full",
         "note": "Shared core → smoke + shell/tabs/offline/sync/modals (CI: full)",
     },
+    # Vue source and its committed production bundle. index.html/sw.js stay on
+    # shared-frontend-core, so a shell-tag change still selects the broad set.
+    {
+        "name": "vue-frontend",
+        "paths": (
+            "frontend-app/**",
+            "frontend/vue/**",
+        ),
+        "features": ("smoke",),
+        "note": "Vue bootstrap bundle → smoke (shell boot). Not a feature migration.",
+    },
     {
         "name": "graph",
         "paths": (

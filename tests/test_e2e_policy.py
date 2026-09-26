@@ -89,6 +89,20 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(feats, ("graph",))
         self.assertFalse(skip)
 
+    def test_vue_frontend_maps_to_smoke(self):
+        rule, feats, skip, _note = policy.match_affected_path(
+            "frontend-app/src/mount.ts"
+        )
+        self.assertEqual(rule, "vue-frontend")
+        self.assertEqual(feats, ("smoke",))
+        self.assertFalse(skip)
+        rule, feats, skip, _note = policy.match_affected_path(
+            "frontend/vue/prks-vue.js"
+        )
+        self.assertEqual(rule, "vue-frontend")
+        self.assertEqual(feats, ("smoke",))
+        self.assertFalse(skip)
+
     def test_shared_core_is_broad(self):
         _rule, feats, skip, _note = policy.match_affected_path("frontend/js/app.js")
         self.assertFalse(skip)

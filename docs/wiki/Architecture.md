@@ -38,7 +38,7 @@ PRKS threaded HTTP server
 
 The normal process entry point is `prks_app.py`. Backend modules under `backend/` own storage, migrations, API/server behavior, synchronization families, PDF processing, backup/restore, indexing, logging, and research-network operations.
 
-The frontend under `frontend/` is a browser SPA composed from vanilla JavaScript modules and CSS. It deliberately does not use a framework runtime.
+The shipped UI shell under `frontend/js/` is still the legacy vanilla-JavaScript SPA. New UI is introduced from `frontend-app/` (Vue 3, TypeScript, Vite). The Python server serves the committed production bundle in `frontend/vue/` with the rest of `frontend/`. Running PRKS does not require Node.
 
 ## Backend boundaries
 
@@ -61,7 +61,8 @@ SQLite connections are operation-scoped; PRKS does not rely on a general-purpose
 
 Important frontend areas include:
 
-- `frontend/js/app.js` and `navigation.js` — app shell and route/navigation behavior.
+- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle, mounted from a hidden host in the legacy shell.
+- `frontend/js/app.js` and `navigation.js` — legacy app shell and route/navigation behavior.
 - `components/` — route-level UI surfaces.
 - `tab-context.js` and `workspace-*.js` — in-app tabs, split view, pane layout, and persistence.
 - `local-store.js`, `sync-runtime.js`, and domain `*-state.js` modules — durable local-first intent and reconciliation.

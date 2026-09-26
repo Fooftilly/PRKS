@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "vue": "3.5.43",
+  "vite": "8.3.1",
+  "typescript": "5.9.2",
+  "vueTsc": "3.3.11",
+  "vitest": "5.0.2",
+  "outputSha256": {
+    "prks-vue.js": "8932b5a40c5efc03524639ce557a55baa23d80f2377e490e5e511f19e0a73b80"
+  }
+}

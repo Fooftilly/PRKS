@@ -60,6 +60,14 @@ updates:
       - dependency-name: "codemirror"
         update-types: ["version-update:semver-major"]
 
+  # Maintainer-only Vue 3 + Vite application build. Not a PRKS runtime dependency.
+  - package-ecosystem: "npm"
+    directory: "/frontend-app"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build(deps)"
+
   # Keep the Python base image in the root Dockerfile visible to Dependabot.
   - package-ecosystem: "docker"
     directory: "/"

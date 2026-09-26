@@ -223,6 +223,89 @@
       "dependabot_monitored": true
     },
     {
+      "name": "vue",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> dependencies.vue",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [
+        "frontend/vue/prks-vue.js",
+        "frontend/vue/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vue/BUILD-MANIFEST.json -> vue",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "vite",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.vite",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [
+        "frontend/vue/prks-vue.js",
+        "frontend/vue/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vue/BUILD-MANIFEST.json -> vite",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "vue-tsc",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.vue-tsc",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": "frontend/vue/BUILD-MANIFEST.json -> vueTsc",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "vitest",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.vitest",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": "frontend/vue/BUILD-MANIFEST.json -> vitest",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@vitejs/plugin-vue",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.@vitejs/plugin-vue",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@vue/test-utils",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.@vue/test-utils",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "jsdom",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.jsdom",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
       "name": "inter",
       "scope": "vendor",
       "authoritative_source": "frontend/vendor/inter/VERSION",

@@ -131,6 +131,7 @@ async function run() {
     assert('vendor path eligible', sw.isStaticEligiblePath('/vendor/pdfium.wasm'));
     assert('css path eligible', sw.isStaticEligiblePath('/css/style.css'));
     assert('icons path eligible', sw.isStaticEligiblePath('/icons/icon-192.png'));
+    assert('vue bundle path eligible', sw.isStaticEligiblePath('/vue/prks-vue.js'));
     assert('manifest extra path eligible', sw.isStaticEligiblePath('/manifest.webmanifest'));
     assert('favicon extra path eligible', sw.isStaticEligiblePath('/favicon.svg'));
     assert('api path not static-eligible', !sw.isStaticEligiblePath('/api/works'));

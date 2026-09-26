@@ -647,6 +647,7 @@ class ResolvePythonTests(unittest.TestCase):
             "tools/frontend-vendor/build.mjs",
             "tools/pdf-viewer/build.mjs",
             "tools/research-graph/build.mjs",
+            "frontend-app/scripts/build.mjs",
         ):
             text = (_PROJECT / rel).read_text(encoding="utf-8")
             self.assertIn("resolvePython()", text)
