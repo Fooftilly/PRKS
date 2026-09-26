@@ -9,6 +9,8 @@
  * and deleting reasons about every intent naming the Concept, including one
  * that gave it to another as a parent.
  */
+const fs = require("fs");
+const path = require("path");
 const strict = require("assert/strict");
 let checks = 0;
 const assert = new Proxy(function (...args) { checks += 1; return strict(...args); },
@@ -17,6 +19,47 @@ const { createFakeIndexedDBFactory } = require("./lib/fake_indexeddb.js");
 const { createPrksLocalStore } = require("../../frontend/js/local-store.js");
 require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/concept-state.js");
+
+/* Production API wrappers live as browser <script> top-levels in api.js /
+ * app.js. Evaluate the real functions here so cancel/same-set coverage cannot
+ * drift from a hand-rebuilt composition of helpers. */
+globalThis.window = globalThis;
+function loadTopLevelFunction(source, name) {
+    const markers = ["async function " + name + "(", "function " + name + "("];
+    let at = -1;
+    for (const marker of markers) {
+        at = source.indexOf(marker);
+        if (at !== -1) break;
+    }
+    if (at === -1) throw new Error("missing top-level function: " + name);
+    const brace = source.indexOf("{", at);
+    let depth = 0;
+    for (let i = brace; i < source.length; i++) {
+        const ch = source[i];
+        if (ch === "{") depth += 1;
+        else if (ch === "}") {
+            depth -= 1;
+            if (depth === 0) {
+                (0, eval)(source.slice(at, i + 1));
+                return;
+            }
+        }
+    }
+    throw new Error("unclosed top-level function: " + name);
+}
+{
+    const apiSrc = fs.readFileSync(path.join(__dirname, "../../frontend/js/api.js"), "utf8");
+    const appSrc = fs.readFileSync(path.join(__dirname, "../../frontend/js/app.js"), "utf8");
+    loadTopLevelFunction(appSrc, "prksDurableOperationsOrNone");
+    for (const name of [
+        "prksConceptSaveMessage",
+        "prksConceptBaseUnavailable",
+        "updateConcept",
+        "putConceptParents",
+    ]) {
+        loadTopLevelFunction(apiSrc, name);
+    }
+}
 
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
@@ -31,6 +74,38 @@ const parentsBase = (ids, revision) => ({ parent_ids: ids || [], revision: revis
 
 const rowsFor = async (store, operation) =>
     (await store.listOperations()).filter(r => r.operation === operation);
+
+/** Mirror E2E prepare(): concept + concept-state already cached for wrappers. */
+function installCachedConcept(id, options) {
+    const description = options.description == null ? "" : String(options.description);
+    const parentIds = Array.isArray(options.parent_ids) ? options.parent_ids.slice() : [];
+    const descriptionRevision = options.descriptionRevision || 0;
+    const parentsRevision = options.parentsRevision || 0;
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => {
+        if (entityId !== id) return { value: null, source: "unavailable" };
+        if (kind === "concept-state") {
+            return {
+                value: {
+                    concept_id: id,
+                    fields: { description: { revision: descriptionRevision } },
+                    identity: { name: "Systems", aliases: [] },
+                    identity_revision: 0,
+                    parent_ids: parentIds.slice(),
+                    parents_revision: parentsRevision,
+                },
+                source: "cache",
+            };
+        }
+        if (kind === "concept") {
+            return {
+                value: { id: id, name: "Systems", description: description },
+                source: "cache",
+            };
+        }
+        return { value: null, source: "unavailable" };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+}
 
 function conceptAck(op) {
     return { code: "ACKNOWLEDGED", concept_id: op.entity_id, changed: true,
@@ -119,6 +194,41 @@ async function theDefinitionCoalescesAndCancels() {
     /* B -> A, never sent, is ZERO operations. */
     await store.saveConceptFields(id, { description: "First" }, base);
     assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 0);
+}
+
+/* The deleted E2E called production updateConcept(...). Store/helper arithmetic
+ * alone would miss a wrapper regression (wrong observed base, skipping dirty
+ * fields, broken durable wiring). Call the real api.js wrapper here. */
+async function theDefinitionCancelGoesThroughApiWrapper() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "A".repeat(31) + "B";
+    installCachedConcept(id, {
+        description: "First",
+        descriptionRevision: 3,
+        parent_ids: [],
+        parentsRevision: 0,
+    });
+
+    await globalThis.updateConcept(id, { description: "Temporary." });
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 1,
+        "wrapper enqueues a pending definition edit");
+
+    /* Helper arithmetic still matters: dirty must see the pending overlay. */
+    const pending = await store.listOperations();
+    const base = await globalThis.prksAcknowledgedConceptFields(id, pending);
+    assert.deepEqual(
+        globalThis.prksDirtyConceptFields(id, { description: "Temporary." }, base, pending),
+        {},
+        "an untouched pending value is not a new edit");
+    assert.deepEqual(
+        globalThis.prksDirtyConceptFields(id, { description: "First" }, base, pending),
+        { description: "First" },
+        "editing back to the acknowledged value IS a change the wrapper must forward");
+
+    await globalThis.updateConcept(id, { description: "First" });
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 0,
+        "production updateConcept A→B→A cancel leaves no intent");
 }
 
 async function theDefinitionIsNotTheIdentity() {
@@ -212,6 +322,37 @@ async function theParentSetIsASet() {
     const rows = await rowsFor(store, "SET_CONCEPT_PARENTS");
     assert.equal(rows.length, 1);
     assert.deepEqual(rows[0].payload.parent_ids, ["C-4"]);
+
+    /* Back to exactly the acknowledged set (any order) cancels: A → B → A
+     * never sent is ZERO operations -- same cancel contract as the definition. */
+    assert.equal(await store.setConceptParents(id, ["C-2", "C-1"], base), null);
+    assert.equal((await rowsFor(store, "SET_CONCEPT_PARENTS")).length, 0);
+}
+
+/* Same as definition cancel: the deleted E2E called putConceptParents. Store
+ * same-set arithmetic is necessary but not sufficient — exercise the real
+ * api.js wrapper against a cached acknowledged parent set. */
+async function theParentSetCancelGoesThroughApiWrapper() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "F".repeat(31) + "0";
+    installCachedConcept(id, {
+        description: "",
+        descriptionRevision: 0,
+        parent_ids: ["C-1", "C-2"],
+        parentsRevision: 5,
+    });
+
+    await globalThis.putConceptParents(id, ["C-2", "C-1"]);
+    assert.equal((await rowsFor(store, "SET_CONCEPT_PARENTS")).length, 0,
+        "production putConceptParents treats order-insensitive same set as no intent");
+
+    await globalThis.putConceptParents(id, ["C-3"]);
+    assert.equal((await rowsFor(store, "SET_CONCEPT_PARENTS")).length, 1);
+
+    await globalThis.putConceptParents(id, ["C-2", "C-1"]);
+    assert.equal((await rowsFor(store, "SET_CONCEPT_PARENTS")).length, 0,
+        "production putConceptParents A→B→A cancel leaves no intent");
 }
 
 async function aConceptCannotBeItsOwnParent() {
@@ -389,11 +530,13 @@ async function main() {
     await aConceptIsAValidParentImmediately();
     await aConceptNeedsAName();
     await theDefinitionCoalescesAndCancels();
+    await theDefinitionCancelGoesThroughApiWrapper();
     await theDefinitionIsNotTheIdentity();
     await theIdentityIsOneDecision();
     await aPendingRenameReachesEverySurfaceThatNamesIt();
     await anIdentityEditSurvivesAReload();
     await theParentSetIsASet();
+    await theParentSetCancelGoesThroughApiWrapper();
     await aConceptCannotBeItsOwnParent();
     await aPendingHierarchyShowsAtBothEnds();
     await deletingCancelsWhatWasNeverSent();
