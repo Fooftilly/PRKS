@@ -141,6 +141,98 @@ class InventoryPureLogicTests(unittest.TestCase):
             )
 
 
+class InventoryDiscoveryFailureTests(unittest.TestCase):
+    def test_collect_test_ids_excludes_failed_test(self):
+        loader = unittest.TestLoader()
+        suite = loader.loadTestsFromName("tests.this_module_does_not_exist_for_inventory")
+        ids, failed = inv.collect_test_ids(suite)
+        self.assertEqual(ids, [])
+        self.assertEqual(len(failed), 1)
+        self.assertTrue(inv._is_failed_test(failed[0]))
+        self.assertTrue(loader.errors)
+
+    def test_raise_if_discovery_errors_on_loader_errors(self):
+        with self.assertRaises(inv.DiscoveryError) as ctx:
+            inv.raise_if_discovery_errors(
+                "Python unit/API",
+                errors=["Failed to import test module: boom"],
+                failed=[],
+            )
+        self.assertIn("refusing to report inventory counts", str(ctx.exception))
+        self.assertEqual(ctx.exception.errors[0], "Failed to import test module: boom")
+
+    def test_raise_if_discovery_errors_on_failed_test_only(self):
+        loader = unittest.TestLoader()
+        suite = loader.loadTestsFromName("tests.missing_inventory_module_xyz")
+        _ids, failed = inv.collect_test_ids(suite)
+        with self.assertRaises(inv.DiscoveryError) as ctx:
+            inv.raise_if_discovery_errors("E2E", errors=[], failed=failed)
+        self.assertTrue(ctx.exception.failed_ids)
+
+    def test_discover_e2e_test_ids_fails_closed(self):
+        with self.assertRaises(inv.DiscoveryError) as ctx:
+            inv.discover_e2e_test_ids(["tests.e2e.definitely_missing_module_for_inventory"])
+        self.assertIn("E2E discovery failed", str(ctx.exception))
+
+    def test_count_python_unit_tests_fails_closed_on_import_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_ok.py").write_text(
+                "import unittest\n"
+                "class Ok(unittest.TestCase):\n"
+                "    def test_pass(self):\n"
+                "        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            (tests_dir / "test_broken_import.py").write_text(
+                "raise ImportError('deliberate inventory discovery failure')\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(inv.DiscoveryError) as ctx:
+                inv.count_python_unit_tests(root)
+            self.assertIn("Python unit/API discovery failed", str(ctx.exception))
+            # Must not quietly count the _FailedTest placeholder as a unit test.
+            self.assertNotIn("unit_api_count", str(ctx.exception))
+
+    def test_count_python_unit_tests_overrides_live_prks_storage(self):
+        sentinel = "/sentinel/production/prks-storage-must-not-be-used"
+        previous_storage = os.environ.get("PRKS_STORAGE")
+        previous_testing = os.environ.get("PRKS_TESTING")
+        os.environ["PRKS_STORAGE"] = sentinel
+        os.environ["PRKS_TESTING"] = "0"
+        seen = []
+
+        def fake_discover(_loader, start_dir=None, pattern="test*.py", top_level_dir=None):
+            storage = os.environ.get("PRKS_STORAGE")
+            seen.append(storage)
+            if os.environ.get("PRKS_TESTING") != "1":
+                raise AssertionError("PRKS_TESTING not forced to 1 during discovery")
+            if storage == sentinel:
+                raise AssertionError("live PRKS_STORAGE was not overridden")
+            if "prks-inventory-unit-" not in str(storage or ""):
+                raise AssertionError("expected temp inventory storage, got %r" % storage)
+            return unittest.TestSuite()
+
+        try:
+            with mock.patch.object(unittest.TestLoader, "discover", fake_discover):
+                result = inv.count_python_unit_tests(Path(_PROJECT_DIR))
+            self.assertEqual(result["unit_api_count"], 0)
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(os.environ.get("PRKS_STORAGE"), sentinel)
+            self.assertEqual(os.environ.get("PRKS_TESTING"), "0")
+        finally:
+            if previous_storage is None:
+                os.environ.pop("PRKS_STORAGE", None)
+            else:
+                os.environ["PRKS_STORAGE"] = previous_storage
+            if previous_testing is None:
+                os.environ.pop("PRKS_TESTING", None)
+            else:
+                os.environ["PRKS_TESTING"] = previous_testing
+
+
 class InventoryRunnerWireTests(unittest.TestCase):
     def test_inventory_flag_exits_without_chromium(self):
         previous = os.environ.get("PRKS_E2E")
@@ -152,16 +244,24 @@ class InventoryRunnerWireTests(unittest.TestCase):
             with mock.patch.object(runner, "ensure_chromium_installed") as ensure:
                 with mock.patch.object(
                     inv,
-                    "count_python_unit_tests",
-                    return_value={
-                        "total_discovered": 0,
-                        "unit_api_count": 0,
-                        "e2e_leaked_into_unit": 0,
-                        "ux_tour_leaked_into_unit": 0,
-                    },
+                    "discover_e2e_test_ids",
+                    return_value=[
+                        "tests.e2e.test_app.AppShellAndNavigationTests."
+                        "test_app_loads_and_real_navigation"
+                    ],
                 ):
-                    with redirect_stdout(buf):
-                        code = runner.main(["--inventory"])
+                    with mock.patch.object(
+                        inv,
+                        "count_python_unit_tests",
+                        return_value={
+                            "total_discovered": 0,
+                            "unit_api_count": 0,
+                            "e2e_leaked_into_unit": 0,
+                            "ux_tour_leaked_into_unit": 0,
+                        },
+                    ):
+                        with redirect_stdout(buf):
+                            code = runner.main(["--inventory"])
             ensure.assert_not_called()
             self.assertEqual(code, 0)
             out = buf.getvalue()
@@ -184,20 +284,89 @@ class InventoryRunnerWireTests(unittest.TestCase):
             with mock.patch.object(runner, "ensure_chromium_installed"):
                 with mock.patch.object(
                     inv,
-                    "count_python_unit_tests",
-                    return_value={
-                        "total_discovered": 0,
-                        "unit_api_count": 0,
-                        "e2e_leaked_into_unit": 0,
-                        "ux_tour_leaked_into_unit": 0,
-                    },
+                    "discover_e2e_test_ids",
+                    return_value=[
+                        "tests.e2e.test_app.AppShellAndNavigationTests."
+                        "test_app_loads_and_real_navigation"
+                    ],
                 ):
-                    with redirect_stdout(buf):
-                        code = runner.main(["--inventory-json"])
+                    with mock.patch.object(
+                        inv,
+                        "count_python_unit_tests",
+                        return_value={
+                            "total_discovered": 0,
+                            "unit_api_count": 0,
+                            "e2e_leaked_into_unit": 0,
+                            "ux_tour_leaked_into_unit": 0,
+                        },
+                    ):
+                        with redirect_stdout(buf):
+                            code = runner.main(["--inventory-json"])
             self.assertEqual(code, 0)
             payload = json.loads(buf.getvalue())
             self.assertGreater(payload["e2e"]["total"], 0)
             self.assertIn("by_feature", payload["e2e"])
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_inventory_exits_nonzero_on_discovery_error(self):
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+
+            err = io.StringIO()
+            with mock.patch.object(runner, "ensure_chromium_installed"):
+                with mock.patch.object(
+                    inv,
+                    "discover_e2e_test_ids",
+                    side_effect=inv.DiscoveryError(
+                        "E2E discovery failed; refusing to report inventory counts",
+                        errors=["boom"],
+                        failed_ids=["unittest.loader._FailedTest.x"],
+                    ),
+                ):
+                    with mock.patch("sys.stderr", err):
+                        code = runner.main(["--inventory"])
+            self.assertEqual(code, 2)
+            self.assertIn("refusing to report inventory counts", err.getvalue())
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_inventory_exits_nonzero_on_unit_discovery_error(self):
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+
+            err = io.StringIO()
+            with mock.patch.object(runner, "ensure_chromium_installed"):
+                with mock.patch.object(
+                    inv,
+                    "discover_e2e_test_ids",
+                    return_value=[
+                        "tests.e2e.test_app.AppShellAndNavigationTests."
+                        "test_app_loads_and_real_navigation"
+                    ],
+                ):
+                    with mock.patch.object(
+                        inv,
+                        "count_python_unit_tests",
+                        side_effect=inv.DiscoveryError(
+                            "Python unit/API discovery failed; refusing",
+                            errors=["Failed to import test module: missing_dep"],
+                        ),
+                    ):
+                        with mock.patch("sys.stderr", err):
+                            code = runner.main(["--inventory"])
+            self.assertEqual(code, 2)
+            self.assertIn("Python unit/API discovery failed", err.getvalue())
         finally:
             if previous is None:
                 os.environ.pop("PRKS_E2E", None)

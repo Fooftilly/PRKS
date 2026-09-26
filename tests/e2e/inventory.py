@@ -10,9 +10,20 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from unittest.loader import _FailedTest
+
+
+class DiscoveryError(Exception):
+    """unittest discovery hit import/load failures; inventory must not exit 0."""
+
+    def __init__(self, message, *, errors=None, failed_ids=None):
+        super().__init__(message)
+        self.errors = list(errors or [])
+        self.failed_ids = list(failed_ids or [])
 
 from tests.e2e.policy import (
     FEATURES,
@@ -192,14 +203,93 @@ def count_node_selftests(repo: Path):
     }
 
 
-def _flatten_suite(suite, out):
-    for item in suite:
-        if isinstance(item, unittest.TestSuite):
-            _flatten_suite(item, out)
-        elif isinstance(item, unittest.TestCase):
-            out.append(item.id())
-        else:  # pragma: no cover
-            out.append(str(item))
+def _is_failed_test(case) -> bool:
+    """True for unittest import/load placeholders (never real cases)."""
+    return isinstance(case, _FailedTest) or type(case).__name__ == "_FailedTest"
+
+
+def collect_test_ids(suite):
+    """Walk a suite; return (real_ids, failed_cases).
+
+    `_FailedTest` placeholders and other non-TestCase suite entries are never
+    counted as real inventory IDs.
+    """
+    ids = []
+    failed = []
+
+    def walk(node):
+        for item in node:
+            if isinstance(item, unittest.TestSuite):
+                walk(item)
+            elif isinstance(item, unittest.TestCase):
+                if _is_failed_test(item):
+                    failed.append(item)
+                else:
+                    ids.append(item.id())
+            else:  # pragma: no cover - defensive
+                failed.append(item)
+
+    walk(suite)
+    return ids, failed
+
+
+def format_discovery_errors(scope: str, *, errors, failed) -> str:
+    """Human-readable discovery failure for stderr / DiscoveryError."""
+    lines = [
+        "%s discovery failed; refusing to report inventory counts "
+        "(unittest load/import errors are not real tests)." % scope
+    ]
+    for err in errors or []:
+        text = err if isinstance(err, str) else str(err)
+        for part in text.strip().splitlines() or [text]:
+            lines.append("  %s" % part)
+    for case in failed or []:
+        if isinstance(case, unittest.TestCase):
+            detail = ""
+            exc = getattr(case, "_exception", None)
+            if exc is not None:
+                detail = ": %s" % exc
+            lines.append("  _FailedTest %s%s" % (case.id(), detail))
+        else:
+            lines.append("  unresolved suite entry: %r" % (case,))
+    return "\n".join(lines)
+
+
+def raise_if_discovery_errors(scope: str, *, errors, failed):
+    """Raise DiscoveryError when loader.errors or _FailedTest entries exist."""
+    error_list = list(errors or [])
+    failed_list = list(failed or [])
+    if not error_list and not failed_list:
+        return
+    failed_ids = []
+    for case in failed_list:
+        if isinstance(case, unittest.TestCase):
+            failed_ids.append(case.id())
+        else:
+            failed_ids.append(repr(case))
+    raise DiscoveryError(
+        format_discovery_errors(scope, errors=error_list, failed=failed_list),
+        errors=error_list,
+        failed_ids=failed_ids,
+    )
+
+
+def discover_e2e_test_ids(modules):
+    """Discover E2E test IDs from module names; fail closed on load errors."""
+    loader = unittest.TestLoader()
+    all_ids = []
+    all_failed = []
+    for name in modules:
+        suite = loader.loadTestsFromName(name)
+        ids, failed = collect_test_ids(suite)
+        all_ids.extend(ids)
+        all_failed.extend(failed)
+    raise_if_discovery_errors(
+        "E2E",
+        errors=loader.errors,
+        failed=all_failed,
+    )
+    return all_ids
 
 
 def count_python_unit_tests(repo: Path):
@@ -208,59 +298,71 @@ def count_python_unit_tests(repo: Path):
     Relies on E2E modules' `load_tests` returning empty when PRKS_E2E != 1, and
     UX tour not matching `test_*.py` discovery under tests/ux_tour the same way
     when gated. Counts are approximate live discovery results.
+
+    Raises DiscoveryError when any module fails to import/load so inventory
+    never exits 0 with inflated `_FailedTest` placeholders as "tests".
     """
-    previous = os.environ.get("PRKS_E2E")
+    previous_e2e = os.environ.get("PRKS_E2E")
+    previous_testing = os.environ.get("PRKS_TESTING")
+    previous_storage = os.environ.get("PRKS_STORAGE")
     # Ensure E2E modules stay gated out of unit discovery.
     os.environ.pop("PRKS_E2E", None)
-    # Isolated defaults so import-time storage config does not touch data/.
-    testing_was = "PRKS_TESTING" in os.environ
-    storage_was = "PRKS_STORAGE" in os.environ
-    if not testing_was:
-        os.environ["PRKS_TESTING"] = "1"
-    if not storage_was:
-        os.environ["PRKS_STORAGE"] = str(repo / "data_testing")
-    # Match run_tests.py: project root on sys.path, discover under tests/
-    # without top_level_dir (tests/ is not a package).
+    # Always override storage isolation — never trust a live PRKS_STORAGE
+    # (import-time setup is why run_tests.py forces data_testing).
     repo_s = str(repo)
     inserted = False
     if repo_s not in sys.path:
         sys.path.insert(0, repo_s)
         inserted = True
     try:
-        loader = unittest.TestLoader()
-        suite = loader.discover(
-            start_dir=str(repo / "tests"),
-            pattern="test_*.py",
-        )
-        ids = []
-        _flatten_suite(suite, ids)
-        e2e_ids = [tid for tid in ids if tid.startswith("tests.e2e.")]
-        ux_ids = [tid for tid in ids if tid.startswith("tests.ux_tour.")]
-        unit_ids = [
-            tid
-            for tid in ids
-            if not tid.startswith("tests.e2e.") and not tid.startswith("tests.ux_tour.")
-        ]
-        return {
-            "total_discovered": len(ids),
-            "unit_api_count": len(unit_ids),
-            "e2e_leaked_into_unit": len(e2e_ids),
-            "ux_tour_leaked_into_unit": len(ux_ids),
-        }
+        with tempfile.TemporaryDirectory(prefix="prks-inventory-unit-") as tmp:
+            os.environ["PRKS_TESTING"] = "1"
+            os.environ["PRKS_STORAGE"] = tmp
+            loader = unittest.TestLoader()
+            # Match run_tests.py: discover under tests/ without top_level_dir
+            # (tests/ is not a package).
+            suite = loader.discover(
+                start_dir=str(repo / "tests"),
+                pattern="test_*.py",
+            )
+            ids, failed = collect_test_ids(suite)
+            raise_if_discovery_errors(
+                "Python unit/API",
+                errors=loader.errors,
+                failed=failed,
+            )
+            e2e_ids = [tid for tid in ids if tid.startswith("tests.e2e.")]
+            ux_ids = [tid for tid in ids if tid.startswith("tests.ux_tour.")]
+            unit_ids = [
+                tid
+                for tid in ids
+                if not tid.startswith("tests.e2e.")
+                and not tid.startswith("tests.ux_tour.")
+            ]
+            return {
+                "total_discovered": len(ids),
+                "unit_api_count": len(unit_ids),
+                "e2e_leaked_into_unit": len(e2e_ids),
+                "ux_tour_leaked_into_unit": len(ux_ids),
+            }
     finally:
         if inserted and repo_s in sys.path:
             try:
                 sys.path.remove(repo_s)
             except ValueError:
                 pass
-        if not testing_was:
+        if previous_testing is None:
             os.environ.pop("PRKS_TESTING", None)
-        if not storage_was:
+        else:
+            os.environ["PRKS_TESTING"] = previous_testing
+        if previous_storage is None:
             os.environ.pop("PRKS_STORAGE", None)
-        if previous is None:
+        else:
+            os.environ["PRKS_STORAGE"] = previous_storage
+        if previous_e2e is None:
             os.environ.pop("PRKS_E2E", None)
         else:
-            os.environ["PRKS_E2E"] = previous
+            os.environ["PRKS_E2E"] = previous_e2e
 
 
 def build_inventory(

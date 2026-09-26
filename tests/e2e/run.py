@@ -1382,15 +1382,23 @@ def _main(argv=None) -> int:
 
     if args.inventory or args.inventory_json:
         # Inventory needs E2E discovery + optional unit discovery; no Chromium.
+        # Fail closed on unittest load/import errors — never count _FailedTest
+        # placeholders as real tests or exit 0 with incomplete counts.
         from tests.e2e.inventory import (
+            DiscoveryError,
             build_inventory,
+            discover_e2e_test_ids,
             format_inventory_json,
             format_inventory_text,
         )
 
         apply_e2e_playwright_env()
-        all_ids = discover_test_ids()
-        inventory = build_inventory(all_ids, repo=REPO)
+        try:
+            all_ids = discover_e2e_test_ids(E2E_MODULES)
+            inventory = build_inventory(all_ids, repo=REPO)
+        except DiscoveryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         if args.inventory_json:
             print(format_inventory_json(inventory), end="")
         else:
