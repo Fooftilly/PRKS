@@ -277,7 +277,27 @@ jobs:
       - name: Run pointer_capture once for the gate
         env:
           PRKS_E2E: "1"
-        run: python tests/browser/pointer_capture.py
+        run: |
+          set +e
+          python tests/browser/pointer_capture.py
+          code=$?
+          set -e
+          if [[ "$code" -ne 0 ]]; then
+            # This job does not go through tests/e2e/run.py main(), so record
+            # the same privacy-safe snapshot the local finalizer writes.
+            POINTER_RC="$code" python -c 'import os; from tests.e2e.run import persist_pointer_capture_failure; persist_pointer_capture_failure(int(os.environ["POINTER_RC"]))'
+            exit "$code"
+          fi
+
+      - name: Upload pointer failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-pointer-failure-diagnostics
+          path: .tests/e2e-failure-diagnostics.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
   e2e-result:
     permissions:

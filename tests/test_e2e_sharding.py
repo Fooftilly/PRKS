@@ -829,7 +829,7 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
         self.assertFalse(ok)
 
     def test_crash_without_report_keeps_active_test_in_failed_ids(self):
-        """Heartbeat/log attribution must land in run-level failed_ids."""
+        """An in-flight heartbeat id is a failed id when the worker dies."""
         crash_id = _ids(_CASES, "CrashingCases", "test_kills_the_worker")[0]
         pass_id = _ids(_CASES, "PassingCases", "test_first")[0]
         sink = io.StringIO()
@@ -853,6 +853,36 @@ class ParallelRunnerProtocolTests(unittest.TestCase):
             self.assertIn(crash_id, loaded["failed_ids"])
             self.assertEqual(loaded["failed_ids"].count(crash_id), 1)
         self.assertIn(crash_id, sink.getvalue())
+
+    def test_cleared_heartbeat_does_not_record_finished_test_as_failed(self):
+        """A passed test whose heartbeat was cleared is diagnostic text only."""
+        finished_id = _ids(
+            _CASES,
+            "ClearedHeartbeatCrashCases",
+            "test_passes_then_dies_after_heartbeat_clear",
+        )[0]
+        pass_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        sink = io.StringIO()
+        with tempfile.TemporaryDirectory(prefix="prks-cleared-hb-") as raw:
+            diag = Path(raw) / "e2e-failure-diagnostics.json"
+            with _import_runner() as runner:
+                with mock.patch.object(runner, "FAILURE_DIAGNOSTICS_PATH", diag):
+                    with mock.patch.object(
+                        runner, "LAST_FAILED_PATH", Path(raw) / "absent-last-failed.json"
+                    ):
+                        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(
+                            sink
+                        ):
+                            ok, _observed, failed, _phases = runner.run_parallel(
+                                [pass_id, finished_id], 2, {}, False
+                            )
+            loaded = json.loads(diag.read_text(encoding="utf-8"))
+        self.assertFalse(ok)
+        self.assertNotIn(finished_id, failed)
+        self.assertNotIn(finished_id, loaded.get("failed_ids") or [])
+        for record in loaded.get("workers") or []:
+            self.assertNotIn(finished_id, record.get("failed_ids") or [])
+        self.assertIn("last started test: %s" % finished_id, sink.getvalue())
 
     def test_fail_fast_cancelled_sibling_is_not_recorded_as_failed(self):
         """Stopping a peer for --fail-fast must not add its active test id."""

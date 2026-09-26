@@ -2146,6 +2146,58 @@ class CrashLastFailedRetentionTests(unittest.TestCase):
             else:
                 os.environ["PRKS_E2E"] = previous
 
+    def test_cleared_heartbeat_is_not_retained_in_last_failed(self):
+        """A finished test that dies before the report must not be rerun."""
+        from tests.e2e import run as runner
+
+        finished_id = (
+            "tests.e2e.runner_selfcheck_cases.ClearedHeartbeatCrashCases."
+            "test_passes_then_dies_after_heartbeat_clear"
+        )
+        pass_id = "tests.e2e.runner_selfcheck_cases.PassingCases.test_first"
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            with tempfile.TemporaryDirectory(prefix="prks-cleared-last-") as raw:
+                root = Path(raw)
+                last_path = root / "e2e-last-failed.json"
+                diag_path = root / "e2e-failure-diagnostics.json"
+                with mock.patch.object(runner, "LAST_FAILED_PATH", last_path):
+                    with mock.patch.object(
+                        runner, "FAILURE_DIAGNOSTICS_PATH", diag_path
+                    ):
+                        with mock.patch.object(
+                            runner,
+                            "discover_test_ids",
+                            return_value=[pass_id, finished_id],
+                        ):
+                            with mock.patch.object(runner, "ensure_chromium_installed"):
+                                with mock.patch.object(runner, "_persist_timings"):
+                                    with mock.patch.object(runner, "_print_slowest"):
+                                        with contextlib.redirect_stdout(io.StringIO()):
+                                            with contextlib.redirect_stderr(io.StringIO()):
+                                                code = runner.main(
+                                                    [
+                                                        pass_id,
+                                                        finished_id,
+                                                        "--jobs",
+                                                        "2",
+                                                        "--no-pointer-capture",
+                                                    ]
+                                                )
+                self.assertEqual(code, 1)
+                data = policy.load_last_failed(last_path)
+                retained = (data or {}).get("test_ids") or []
+                self.assertNotIn(finished_id, retained)
+                loaded = policy.load_failure_diagnostics(diag_path)
+                self.assertIsNotNone(loaded)
+                self.assertNotIn(finished_id, loaded.get("failed_ids") or [])
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
 
 class PointerCaptureDiagnosticsTests(unittest.TestCase):
     """Diagnostics finalize after pointer capture, without traces or content."""
@@ -2274,6 +2326,41 @@ class PointerCaptureDiagnosticsTests(unittest.TestCase):
         self.assertEqual(code, 0)
         pointer.assert_not_called()
         self.assertIsNone(loaded)
+
+
+class PointerCaptureCiArtifactTests(unittest.TestCase):
+    def test_persist_pointer_capture_failure_writes_exact_snapshot(self):
+        from tests.e2e import run as runner
+
+        with tempfile.TemporaryDirectory(prefix="prks-ptr-fn-") as raw:
+            root = Path(raw)
+            with mock.patch.object(runner, "REPO", root):
+                self.assertTrue(runner.persist_pointer_capture_failure(9))
+            loaded = policy.load_failure_diagnostics(
+                root / ".tests" / "e2e-failure-diagnostics.json"
+            )
+        self.assertEqual(
+            loaded,
+            {
+                "kind": "pointer-capture",
+                "failed_ids": [],
+                "watchdog": False,
+                "pointer_capture_returncode": 9,
+            },
+        )
+
+    def test_pointer_job_writes_and_uploads_failure_diagnostics(self):
+        text = Path(".github/workflows/e2e-gate.yml").read_text(encoding="utf-8")
+        start = text.index("  e2e-pointer:")
+        end = text.index("\n  e2e-result:")
+        job = text[start:end]
+        self.assertIn("python tests/browser/pointer_capture.py", job)
+        self.assertIn("persist_pointer_capture_failure", job)
+        self.assertIn("e2e-failure-diagnostics.json", job)
+        self.assertIn("include-hidden-files: true", job)
+        self.assertIn("Upload pointer failure diagnostics", job)
+        self.assertNotIn("screenshot", job.lower())
+        self.assertNotIn("trace", job.lower())
 
 
 if __name__ == "__main__":

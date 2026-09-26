@@ -541,25 +541,35 @@ def _finalize_failure_diagnostics(
             )
         return
     if ok and pointer_failed:
-        # Exact shape: ids/stages/return code only. Do not attach traces,
-        # screenshots, or last-failed library context.
-        try:
+        persist_pointer_capture_failure(pointer_returncode)
+        return
+    if ok:
+        # Success, including --no-pointer-capture and benchmark passes, must
+        # not leave a prior failure snapshot for this run.
+        clear_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH)
+
+
+def persist_pointer_capture_failure(returncode) -> bool:
+    """Write the privacy-safe pointer-capture snapshot and report success.
+
+    Same payload the local runner stores when tests pass and pointer capture
+    fails. No screenshots, traces, or library content. CI's pointer job calls
+    this directly because that job does not go through ``main()``.
+    """
+    try:
+        return bool(
             save_failure_diagnostics(
                 REPO / FAILURE_DIAGNOSTICS_PATH,
                 {
                     "kind": "pointer-capture",
                     "failed_ids": [],
                     "watchdog": False,
-                    "pointer_capture_returncode": pointer_returncode,
+                    "pointer_capture_returncode": returncode,
                 },
             )
-        except Exception:
-            pass
-        return
-    if ok:
-        # Success, including --no-pointer-capture and benchmark passes, must
-        # not leave a prior failure snapshot for this run.
-        clear_failure_diagnostics(REPO / FAILURE_DIAGNOSTICS_PATH)
+        )
+    except Exception:
+        return False
 
 
 def _persist_failure_diagnostics(payload: dict) -> None:
@@ -954,8 +964,26 @@ def _last_diag_stage(log_file) -> tuple[str, str]:
     return stage, tid
 
 
+def _current_heartbeat_test_id(worker) -> str:
+    """In-flight unittest id from the heartbeat file, or empty.
+
+    ``stopTest`` and ``clear_e2e_heartbeat`` drop ``test_id`` before the
+    report is written. An empty id means nothing is currently running — the
+    worker log is not a substitute, because its last line may be a test that
+    already passed.
+    """
+    hb = _read_heartbeat(worker.get("heartbeat_file"))
+    if not hb:
+        return ""
+    return str(hb.get("test_id") or "").strip()
+
+
 def _hang_attribution(worker) -> tuple[str, str]:
-    """Best-effort (test_id, stage) for a hung or watchdog-killed worker."""
+    """Best-effort (test_id, stage) for diagnostic text.
+
+    Prefer the heartbeat. The log / diag-line fallback names whatever printed
+    last so a human can see it; it must not be stored as a failed test id.
+    """
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if hb and (hb.get("test_id") or hb.get("stage")):
         return str(hb.get("test_id") or ""), str(hb.get("stage") or "")
@@ -1107,9 +1135,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             if fid not in failed_ids:
                                 failed_ids.append(fid)
                         if report.get("watchdog") and not report.get("failed_ids"):
-                            tid, _stage = _hang_attribution(worker)
-                            if tid and tid not in failed_ids:
-                                failed_ids.append(tid)
+                            active_id = _current_heartbeat_test_id(worker)
+                            if active_id and active_id not in failed_ids:
+                                failed_ids.append(active_id)
                     ok = report is not None and rc == 0
                     print(
                         "[E2E %d/%d] %s — %.1fs (%d tests)"
@@ -1124,25 +1152,29 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     sys.stdout.flush()
                     if not ok:
                         _print_worker_failure(worker, jobs, report)
-                        tid, stage = _hang_attribution(worker)
+                        _, stage = _hang_attribution(worker)
+                        active_id = _current_heartbeat_test_id(worker)
                         reported_failed = list((report or {}).get("failed_ids") or [])
                         if report is not None:
                             stage = str(report.get("stage") or stage or "")
-                            if not tid and reported_failed:
-                                tid = reported_failed[0]
-                        # A crash before the report leaves failed_ids empty even
-                        # when heartbeat/log still names the active test. Record
-                        # that id so last-failed can rerun it. Reported ids were
-                        # copied above. Cancelled --fail-fast siblings are marked
-                        # cancelled and never enter this branch.
-                        if not reported_failed and tid and tid not in failed_ids:
-                            failed_ids.append(tid)
+                        # Rerun only a test the heartbeat still marks in flight.
+                        # A cleared heartbeat (stopTest / pre-report clear) must
+                        # not promote the last log line — that test may have
+                        # passed. Log attribution stays in the printed diagnostic.
+                        # Cancelled --fail-fast siblings never enter this branch.
+                        if (
+                            not reported_failed
+                            and active_id
+                            and active_id not in failed_ids
+                        ):
+                            failed_ids.append(active_id)
                         is_watchdog = bool((report or {}).get("watchdog"))
                         if report is None or is_watchdog:
                             kind = "watchdog" if is_watchdog else "worker-crash"
                             record_failed = list(
-                                reported_failed or ([tid] if tid else [])
+                                reported_failed or ([active_id] if active_id else [])
                             )
+                            tid = active_id or (reported_failed[0] if reported_failed else "")
                         elif reported_failed:
                             kind = "assertion-failure"
                             record_failed = list(reported_failed)
@@ -1150,7 +1182,8 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             stage = ""
                         else:
                             kind = "worker-crash"
-                            record_failed = [tid] if tid else []
+                            record_failed = [active_id] if active_id else []
+                            tid = active_id or ""
                         worker_failure_records.append(
                             {
                                 "kind": kind,
