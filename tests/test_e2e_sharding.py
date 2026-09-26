@@ -1103,6 +1103,39 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 )
                 self.assertIn("no automatic retry", loaded["detail"])
 
+    def test_privacy_safe_detail_drops_exception_text(self):
+        with _import_runner() as runner:
+            self.assertEqual(
+                runner._privacy_safe_detail(
+                    {"detail": "worker 0 raised OSError: /tmp/secret"},
+                    watchdog=False,
+                ),
+                "",
+            )
+            safe = (
+                "per-test watchdog: test=tests.e2e.fake.T.test_hung "
+                "stage=APP_READY age=120s threshold=120s (no automatic retry)"
+            )
+            self.assertEqual(
+                runner._privacy_safe_detail({"detail": safe}, watchdog=True),
+                safe,
+            )
+
+    def test_watchdog_report_includes_stage_field(self):
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-wd-report-") as raw:
+                path = Path(raw) / "report.json"
+                runner._write_watchdog_report(
+                    str(path),
+                    "per-test watchdog: test=t stage=START age=1s threshold=2s "
+                    "(no automatic retry)",
+                    "tests.e2e.fake.T.test_hung",
+                    stage="START",
+                )
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(data["stage"], "START")
+                self.assertTrue(data["watchdog"])
+
     def test_run_worker_and_run_serial_watchdog_default_off(self):
         """CodeRabbit: helpers default enable_watchdog=False."""
         import inspect
