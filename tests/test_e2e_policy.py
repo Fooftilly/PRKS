@@ -367,6 +367,74 @@ class AffectedMappingTests(unittest.TestCase):
                 {"shard": 2, "total": 2, "jobs": 1},
             ],
         )
+        self.assertEqual(
+            len(policy.ci_matrix_include(policy.FULL_GATE_EXTERNAL_SHARDS, 1)),
+            policy.FULL_GATE_EXTERNAL_SHARDS,
+        )
+        self.assertGreaterEqual(policy.FULL_GATE_EXTERNAL_SHARDS, 4)
+
+    def test_aggregate_ci_gate_outcome_parallel_pointer(self):
+        ok, msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="success",
+        )
+        self.assertTrue(ok)
+        self.assertIn("passed", msg)
+
+        ok_skip, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=False,
+            plan_mode="skip",
+            plan_pointer=False,
+            plan_result="success",
+            e2e_result="skipped",
+            pointer_result="skipped",
+        )
+        self.assertTrue(ok_skip)
+
+        ok_no_ptr, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="affected",
+            plan_pointer=False,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="skipped",
+        )
+        self.assertTrue(ok_no_ptr)
+
+        bad_shard, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="failure",
+            pointer_result="success",
+        )
+        self.assertFalse(bad_shard)
+
+        bad_ptr, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="failure",
+        )
+        self.assertFalse(bad_ptr)
+
+        # Pointer may finish before matrix; aggregator still requires both.
+        early_ptr_fail, _msg = policy.aggregate_ci_gate_outcome(
+            plan_run=True,
+            plan_mode="full",
+            plan_pointer=True,
+            plan_result="success",
+            e2e_result="success",
+            pointer_result="skipped",
+        )
+        self.assertFalse(early_ptr_fail)
 
     def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
         for path in (

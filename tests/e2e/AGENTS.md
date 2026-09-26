@@ -276,10 +276,12 @@ E2E gate (`.github/workflows/e2e-gate.yml`) plans via
 | `affected` | mapped feature production/E2E paths | features ∪ smoke; shard count from selected test size (1 runner + local workers when small) |
 | `full` | high-risk/shared/unmapped, `master` push, `workflow_dispatch`, discovery failure | `FULL_GATE_EXTERNAL_SHARDS` runners × `--jobs 1` |
 
-Pointer capture runs once after matrix success when mode is `full`, or when
-affected features intersect tiling / workspace-drag / pdf-annotations. An
-unresolvable comparison base fails closed to **full**. Rename/copy discovery
-keeps both path images so a production→docs move cannot look docs-only.
+Pointer capture runs **in parallel** with the matrix (both need only the plan
+job) when mode is `full`, or when affected features intersect tiling /
+workspace-drag / pdf-annotations. Chromium installs share a GHA cache keyed on
+`requirements-dev.txt` + `install_browser.py`. An unresolvable comparison base
+fails closed to **full**. Rename/copy discovery keeps both path images so a
+production→docs move cannot look docs-only.
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer

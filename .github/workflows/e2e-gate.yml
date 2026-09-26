@@ -165,6 +165,16 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: Install runtime and E2E dependencies
         # Keep runtime pins in sync with requirements.txt. Playwright comes from
         # requirements-dev.txt. Explicit package== pins plus --only-binary satisfy
@@ -173,6 +183,10 @@ jobs:
           python -m pip install --isolated --disable-pip-version-check
           "--only-binary=:all:" "PyMuPDF==1.28.2" "Pillow==12.3.0" "pydantic==2.13.5"
           "playwright==1.63.0"
+
+      - name: Ensure Chromium in repo cache
+        # install_browser.py reuses .playwright-browsers when the pin matches.
+        run: python tests/e2e/install_browser.py
 
       - name: Run E2E selection shard
         env:
@@ -218,11 +232,11 @@ jobs:
     permissions:
       contents: read
     name: E2E pointer capture
-    needs: [e2e-plan, e2e]
+    # Parallel with the matrix: both depend only on e2e-plan (not on each other).
+    needs: [e2e-plan]
     if: >-
       needs.e2e-plan.outputs.run == 'true'
       && needs.e2e-plan.outputs.pointer_capture == 'true'
-      && needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -236,6 +250,16 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
       - name: Install Playwright
         run: >-
@@ -278,7 +302,7 @@ jobs:
           echo "e2e-plan: result=$plan_result run=$plan_run mode=$plan_mode"
           echo "features: $plan_features"
           echo "test_count: ${plan_count:-unknown}"
-          echo "pointer_capture planned: $plan_pointer"
+          echo "pointer_capture planned: $plan_pointer (parallel with matrix)"
           echo "reason: $plan_reason"
           echo "e2e matrix: $e2e_result"
           echo "pointer_capture: $pointer_result"
@@ -305,4 +329,4 @@ jobs:
               exit 1
             fi
           fi
-          echo "E2E gate passed (mode=$plan_mode features=$plan_features count=${plan_count:-unknown} pointer=$plan_pointer)"
+          echo "E2E gate passed (mode=$plan_mode features=$plan_features count=${plan_count:-unknown} pointer=$plan_pointer parallel)"

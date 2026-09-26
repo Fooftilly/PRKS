@@ -74,16 +74,19 @@ FULL_GATE_TIMEOUT_S = 1200
 FULL_GATE_DEFAULT_JOBS = 4
 # Authoritative GitHub Actions full E2E matrix width. Prefer this many runners
 # each with --jobs 1 over one runner with FULL_GATE_DEFAULT_JOBS local workers.
-FULL_GATE_EXTERNAL_SHARDS = 4
+# Raised 4 → 6 after LPT timing-weight measurement on the post-rationalization
+# suite (~747 tests): estimated slowest-shard load ~980s → ~654s with balanced
+# imbalance; do not raise local --jobs on a single runner.
+FULL_GATE_EXTERNAL_SHARDS = 6
 
 # CI gate modes for ``--ci-plan`` / ``.github/workflows/e2e-gate.yml``.
 # ``run`` alone is not enough — consumers must branch on ``mode``.
 CI_MODES = ("skip", "affected", "full")
 
-# Affected CI execution shape by selected test count (not blind 4 shards).
+# Affected CI execution shape by selected test count (not blind full width).
 # Prefer one runner + local workers when the selection is small.
 CI_AFFECTED_SINGLE_RUNNER_MAX = 30
-CI_AFFECTED_TWO_SHARD_MAX = 120
+CI_AFFECTED_TWO_SHARD_MAX = 200
 CI_AFFECTED_LOCAL_JOBS = 2
 
 # Pointer capture on affected CI only when the selection justifies the PDF/
@@ -885,6 +888,38 @@ def ci_matrix_include(external_shards: int, local_jobs: int):
         {"shard": index, "total": external_shards, "jobs": jobs}
         for index in range(1, external_shards + 1)
     ]
+
+
+def aggregate_ci_gate_outcome(
+    *,
+    plan_run,
+    plan_mode,
+    plan_pointer,
+    plan_result,
+    e2e_result,
+    pointer_result,
+):
+    """Pure aggregator decision mirroring ``e2e-result`` in e2e-gate.yml.
+
+    Pointer runs **in parallel** with the matrix (both need only ``e2e-plan``).
+    When pointer is not planned, ``skipped`` is success. Cancelled workflow
+    runs are filtered by the job ``if:`` before this runs.
+    """
+    if plan_result != "success":
+        return False, "E2E plan job failed"
+    if (not plan_run) or plan_mode == "skip":
+        return True, "E2E gate skipped (mode=skip)"
+    if e2e_result != "success":
+        return False, "One or more E2E shards failed (mode=%s)" % plan_mode
+    if plan_pointer:
+        if pointer_result != "success":
+            return False, "E2E pointer_capture failed (result=%s)" % pointer_result
+    elif pointer_result not in ("skipped", "success"):
+        return False, "Unexpected pointer job result when not planned: %s" % pointer_result
+    return True, "E2E gate passed (mode=%s pointer=%s)" % (
+        plan_mode,
+        "required" if plan_pointer else "not-required",
+    )
 
 
 def plan_ci_e2e(changed_paths, *, force_full: bool = False):
