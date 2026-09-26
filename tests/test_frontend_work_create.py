@@ -1,6 +1,7 @@
 """Structural + Node regressions for New File creation UX."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -21,6 +22,61 @@ _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_ribbon_create_self
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _extract_show_inline_combobox_results() -> str:
+    ui = _read(_UI)
+    start = "function prksIsInlineComboboxPanel(results) {"
+    chunk = ui.split(start, 1)[1]
+    # Through the closing brace of prksShowInlineComboboxResults (next top-level fn).
+    body, _rest = chunk.split("\nfunction initSearchableCombobox", 1)
+    return start + body
+
+
+def _run_show_inline_combobox_case(js_body: str) -> None:
+    """Invoke prksShowInlineComboboxResults in a minimal DOM fixture (Node vm)."""
+    source = _extract_show_inline_combobox_results()
+    script = r"""
+const vm = require('vm');
+const source = %s;
+function makeClassList(initial) {
+    const set = new Set(initial || []);
+    return {
+        contains(name) { return set.has(name); },
+        add(name) { set.add(name); },
+        remove(name) { set.delete(name); },
+        _values() { return Array.from(set); },
+    };
+}
+function makeResults(classes) {
+    return {
+        classList: makeClassList(classes),
+        __prksCollapseTimer: null,
+        get offsetHeight() { return 1; },
+    };
+}
+const context = {
+    clearTimeout() {},
+    setTimeout() { return 0; },
+    window: {
+        setTimeout() { return 0; },
+        clearTimeout() {},
+    },
+    makeResults,
+};
+vm.createContext(context);
+vm.runInContext(
+    source + '; this.prksShowInlineComboboxResults = prksShowInlineComboboxResults;',
+    context,
+);
+(() => {
+%s
+})();
+""" % (
+        json.dumps(source),
+        js_body,
+    )
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
 
 class FrontendWorkCreateTests(unittest.TestCase):
@@ -161,9 +217,27 @@ class FrontendWorkCreateTests(unittest.TestCase):
         show = ui.split("function prksShowInlineComboboxResults", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("results.classList.add('is-open')", show)
         # The open class is applied in this turn after a forced reflow — not
-        # deferred to requestAnimationFrame, which raced Enter/ArrowDown.
+        # deferred to requestAnimationFrame / microtask, which raced Enter/ArrowDown.
         self.assertNotIn("requestAnimationFrame", show)
+        self.assertNotIn("Promise.resolve", show)
         self.assertIn("void results.offsetHeight", show)
+        # Runtime: is-open must be present immediately when the helper returns
+        # (source-text checks alone would miss a Promise.then deferral).
+        _run_show_inline_combobox_case(
+            r"""
+            const results = makeResults(['hidden', 'combobox-results--tag-panel']);
+            context.prksShowInlineComboboxResults(null, results);
+            if (!results.classList.contains('is-open')) {
+                throw new Error(
+                    'expected is-open synchronously after show; classes=' +
+                    results.classList._values().join(',')
+                );
+            }
+            if (results.classList.contains('hidden')) {
+                throw new Error('expected hidden cleared synchronously');
+            }
+            """
+        )
 
     def test_stale_blur_does_not_close_a_refocused_list(self):
         ui = _read(_UI)
