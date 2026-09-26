@@ -30,6 +30,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Need the PR base (or push before SHA) so the E2E wait_for_timeout
+          # guard can diff only *new* call sites (#189).
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
@@ -45,6 +48,34 @@ jobs:
 
       - name: Enforce PRKS engineering invariants
         run: python scripts/check_invariants.py
+
+      - name: Fail on new E2E page.wait_for_timeout
+        # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
+        # unrelated PRs. Only newly added / newly-unexempted call sites fail.
+        # PR base is the immutable event SHA (not the live base-branch tip).
+        # Zero-before pushes use origin/master when available, else the empty
+        # tree, so earlier commits in a newly pushed history are still covered.
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          empty_tree="4b825dc642cb6eb9a060e54bf8d6927f8d2765b5"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${PRKS_PR_BASE_SHA:?missing pull_request.base.sha}"
+            git fetch --no-tags --depth=1 origin "$base"
+          elif [[ "${{ github.event_name }}" == "push" && -n "${PRKS_PUSH_BEFORE:-}" && "${PRKS_PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
+            base="$(git rev-parse --verify --end-of-options "${PRKS_PUSH_BEFORE}")"
+          else
+            if git rev-parse --verify --end-of-options origin/master >/dev/null 2>&1; then
+              base="$(git merge-base HEAD origin/master 2>/dev/null \
+                || git rev-parse --verify --end-of-options origin/master)"
+            else
+              base="$empty_tree"
+            fi
+          fi
+          python scripts/check_e2e_wait_for_timeout.py --base "$base"
 
   pyright:
     permissions:
