@@ -911,6 +911,61 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             else:
                 os.environ["PRKS_E2E"] = previous
 
+    def test_external_full_shard_reports_targeted_and_preserves_sibling_timings(self):
+        """A --shard slice of the full suite must not prune other shards' timings.
+
+        Keep tier==full for the deadline supervisor (child env set here), but
+        report/persist as targeted so merge_timings(known_ids=None) retains
+        sibling history.
+        """
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"
+        try:
+            from tests.e2e import run as runner
+            import io
+            from contextlib import redirect_stderr, redirect_stdout
+
+            ids = [
+                "tests.e2e.runner_selfcheck_cases.PassingCases.test_first",
+                "tests.e2e.runner_selfcheck_cases.PassingCases.test_second",
+            ]
+            out = io.StringIO()
+            err = io.StringIO()
+            with mock.patch.object(runner, "discover_test_ids", return_value=ids):
+                with mock.patch.object(runner, "ensure_chromium_installed"):
+                    with mock.patch.object(
+                        runner,
+                        "run_serial",
+                        return_value=(True, {ids[0]: 1.0}, [], {}),
+                    ):
+                        with mock.patch.object(runner, "_persist_timings") as persist:
+                            with mock.patch.dict(
+                                os.environ, {runner.FULL_GATE_CHILD_ENV: "1"}
+                            ):
+                                with redirect_stdout(out), redirect_stderr(err):
+                                    code = runner.main(
+                                        [
+                                            "--shard",
+                                            "1/2",
+                                            "--jobs",
+                                            "1",
+                                            "--no-pointer-capture",
+                                        ]
+                                    )
+            self.assertEqual(code, 0)
+            text = out.getvalue()
+            self.assertIn("NOT a full E2E gate", text)
+            self.assertIn("E2E PASS (targeted)", text)
+            self.assertNotIn("FULL REGRESSION GATE", text)
+            persist.assert_called_once()
+            _observed, known_ids = persist.call_args[0]
+            self.assertIsNone(known_ids)
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
     def test_fail_fast_last_failed_persists_unexecuted_priors(self):
         """Runner must merge on observed completions, not the pre-run selection."""
         previous_env = os.environ.get("PRKS_E2E")

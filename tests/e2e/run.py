@@ -1549,11 +1549,16 @@ def _main(argv=None) -> int:
         return 1
     apply_e2e_playwright_env()
 
-    print(report_banner(tier, len(test_ids), note))
-    if tier != "full":
+    # External --shard slices keep tier=="full" for the deadline supervisor, but
+    # reporting/timing must treat them as targeted: merge_timings with known_ids
+    # set to this shard would drop sibling shards' entries from the shared
+    # .tests/e2e-timings.json history.
+    report_tier = "targeted" if shard is not None and tier == "full" else tier
+    print(report_banner(report_tier, len(test_ids), note))
+    if report_tier != "full":
         print(
             "NOTE: a PASS here is %s coverage — not equivalent to the full E2E gate."
-            % tier
+            % report_tier
         )
 
     try:
@@ -1615,7 +1620,7 @@ def _main(argv=None) -> int:
             )
             print("  %7.2fs  %s  [%s]" % (infra_seconds, test_id, detail))
 
-    targeted = tier != "full"
+    targeted = tier != "full" or shard is not None
     # Benchmark modes still print profile / slowest for this run, but must not
     # train LPT history or mutate last-failed — those files drive ordinary gates.
     persist_history = not active_benchmark_modes
@@ -1627,6 +1632,8 @@ def _main(argv=None) -> int:
     if persist_history:
         # Persist only machine-local observations; the committed bootstrap
         # baseline remains immutable input and must never be copied into .tests.
+        # When targeted (including external --shard of a full suite), known_ids
+        # is None so sibling-shard / unselected history is retained.
         _persist_timings(observed, test_ids if not targeted else None)
     # Baseline prefix weights are scheduling hints, not measured test timings;
     # keep them out of the human "slowest tests" report.
@@ -1683,9 +1690,12 @@ def _main(argv=None) -> int:
 
     code = run_exit_code(ok, pointer)
     if code == 0:
-        print("E2E PASS (%s)%s" % (tier, "" if tier == "full" else " — not a full gate"))
+        print(
+            "E2E PASS (%s)%s"
+            % (report_tier, "" if report_tier == "full" else " — not a full gate")
+        )
     else:
-        print("E2E FAIL (%s)" % tier)
+        print("E2E FAIL (%s)" % report_tier)
     return code
 
 
