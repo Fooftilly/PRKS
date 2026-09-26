@@ -2,6 +2,7 @@
 import json
 import os
 import unittest
+from urllib.parse import quote
 
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
@@ -26,8 +27,13 @@ def load_tests(loader, standard_tests, pattern):
 # Measured (class alone, PRKS_E2E_DIAGNOSTIC=1): PASS often, but intermittent
 # hangs after APP_READY at varying depths — ~case 47 (recycle=20), ~13
 # (recycle=15), ~5 (recycle=12). Quiet run with recycle=4 still hung on
-# acknowledgement (~case 24): Playwright wedged so pending()'s 25s JS
-# deadline never fired. Recycle every 1 = fresh Chromium per test here.
+# acknowledgement (~case 24). Two bounded defects in this module:
+# (1) pending/settled_conflicts/operations awaited listOperations inside one
+# evaluate before checking a JS deadline — never-settle → 300s watchdog;
+# now wait_for_async (per-await race). (2) page.evaluate("… => prksNavigate(…)")
+# awaited the navigation Promise; when leave/render never settled, evaluate
+# hung until the watchdog — now void + exit metadata edit + DOM wait.
+# Recycle every 1 = fresh Chromium per test here.
 _DEFAULT_RECYCLE_EVERY = 1
 _HOLDER = None
 
@@ -46,8 +52,6 @@ def tearDownModule():
 
 
 class OfflineWorkMetadataTests(unittest.TestCase):
-    FIELD_OPS = "r.operation === 'SET_WORK_METADATA_FIELD'"
-
     def start(self):
         tid = self.id()
         e2e_diag("START", tid)
@@ -91,36 +95,53 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def save(self, page):
         page.locator('#save-work-bib-btn').click()
 
-    def settled_conflicts(self, page, count):
+    # Durable-store gates used to be one long page.evaluate with a JS deadline
+    # checked only AFTER await listOperations(). If that Promise never settled,
+    # the 25s deadline never ran and the 300s per-test watchdog was first kill
+    # (APP_READY body wedge). wait_for_async races each await against remaining
+    # timeout so a hung IndexedDB/listOperations fails promptly.
+    _OPS_TIMEOUT_MS = 25000
+
+    def settled_conflicts(self, page, count, timeout=None):
         """Exactly `count` field operations, all of which have reached a
         terminal result. Waiting on the row count alone also matches the
         instant before a retry is claimed, or before the result is written."""
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
-                if (rows.length === n && rows.every(r => r.status === 'conflict' && !!r.server_result)) return;
-                if (Date.now() > deadline) throw new Error('No conflict settled: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", count)
+        wait_for_async(
+            page,
+            """(n) => prksSync.store.listOperations().then(rows => {
+                const filtered = rows.filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
+                return filtered.length === n
+                    && filtered.every(r => r.status === 'conflict' && !!r.server_result);
+            })""",
+            arg=count,
+            timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
+            message='No conflict settled',
+        )
 
-    def operations(self, page):
-        return page.evaluate(
-            "() => prksSync.store.listOperations().then(rows => rows.filter(r => %s))" % self.FIELD_OPS)
+    def operations(self, page, timeout=None):
+        # One-shot read, but still await listOperations — wrap so a never-
+        # settling store fails instead of hanging evaluate. Sentinel object is
+        # always truthy (including empty rows) for wait_for_async.
+        result = wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => "
+            "({rows: rows.filter(r => r.operation === 'SET_WORK_METADATA_FIELD')}))",
+            timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
+            message='listOperations did not settle',
+        )
+        return result['rows']
 
-    def pending(self, page, count):
-        page.evaluate("""async n => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
-                if (rows.length === n && !rows.some(r => r.status === 'syncing')) return;
-                if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", count)
+    def pending(self, page, count, timeout=None):
+        wait_for_async(
+            page,
+            """(n) => prksSync.store.listOperations().then(rows => {
+                const filtered = rows.filter(r => r.operation === 'SET_WORK_METADATA_FIELD');
+                return filtered.length === n && !filtered.some(r => r.status === 'syncing');
+            })""",
+            arg=count,
+            timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
+            message='Sync did not settle',
+        )
 
     def offline(self, page, context):
         context.set_offline(True)
@@ -406,9 +427,22 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     # ---- the cross-projection case this milestone exists for ----------------
 
+    def navigate(self, page, route):
+        """Fire-and-forget workspace navigation.
+
+        Never return prksNavigate's Promise from page.evaluate — Playwright
+        awaits it, and a stuck leave/render wedges until the 300s watchdog.
+        Exit metadata edit first so leave is not blocked on an unsaved-draft
+        confirm the test never clicks.
+        """
+        page.evaluate("""() => {
+            if (typeof prksSetWorkDetailsMode === 'function') void prksSetWorkDetailsMode('view');
+        }""")
+        page.evaluate("r => { void prksNavigate(r); }", route)
+
     def recently_added(self, page):
         """Home -> Recently Added, warmed and rendered."""
-        page.evaluate("() => prksNavigate('#/folders')")
+        self.navigate(page, '#/folders')
         page.wait_for_selector('.prks-folder-library__tab-btn[data-tab="recently-added"]')
         page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
         page.wait_for_selector('#prks-folder-library-recently-added')
@@ -428,12 +462,22 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         ).map(el => el.dataset.workId)""")
 
     def cached_recently_added_publisher(self, page, work_id):
-        return page.evaluate("""id => window.createPrksOfflineStore().getList('recently-added:index')
-            .then(row => {
-                if (!row) return null;
-                const found = row.value.find(w => w.id === id);
-                return found ? found.publisher : null;
-            })""", work_id)
+        result = wait_for_async(
+            page,
+            """id => window.createPrksOfflineStore().getList('recently-added:index')
+                .then(row => {
+                    let value = null;
+                    if (row) {
+                        const found = row.value.find(w => w.id === id);
+                        if (found) value = found.publisher;
+                    }
+                    return { value: value, done: true };
+                })""",
+            arg=work_id,
+            timeout=self._OPS_TIMEOUT_MS,
+            message='recently-added list did not settle',
+        )
+        return result['value']
 
     def test_pending_publisher_is_searchable_in_recently_added_before_it_syncs(self):
         """The core of this milestone. Recently Added filters locally over
@@ -531,7 +575,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """Visit the three browse catalogs so all three snapshots are cached."""
         for route, key in ((self.PROGRESS, 'works-browse:index'),
                            ('#/recent', 'recent:index')):
-            page.evaluate("r => prksNavigate(r)", route)
+            self.navigate(page, route)
             page.wait_for_selector('[data-work-id]')
             o._wait_list_cached(page, key)
         self.recently_added(page)
@@ -539,7 +583,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     def card_meta(self, page, route, work_id):
         """The meta row of one Work card on a browse route."""
-        page.evaluate("r => prksNavigate(r)", route)
+        self.navigate(page, route)
         page.wait_for_selector('[data-work-id="%s"]' % work_id)
         return page.evaluate("""id => {
             const el = document.querySelector('[data-work-id="' + id + '"] .work-card__meta');
@@ -547,21 +591,41 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         }""", work_id)
 
     def cached_list_field(self, page, list_key, work_id, field):
-        return page.evaluate("""([key, id, field]) =>
-            window.createPrksOfflineStore().getList(key).then(row => {
-                if (!row) return null;
-                const found = row.value.find(w => w.id === id);
-                return found ? found[field] : null;
-            })""", [list_key, work_id, field])
+        result = wait_for_async(
+            page,
+            """([key, id, field]) =>
+                window.createPrksOfflineStore().getList(key).then(row => {
+                    let value = null;
+                    if (row) {
+                        const found = row.value.find(w => w.id === id);
+                        if (found) value = found[field];
+                    }
+                    return { value: value, done: true };
+                })""",
+            arg=[list_key, work_id, field],
+            timeout=self._OPS_TIMEOUT_MS,
+            message='cached list read did not settle',
+        )
+        return result['value']
 
     def cached_person_work_field(self, page, person_id, work_id, field):
-        return page.evaluate("""([pid, wid, field]) =>
-            window.createPrksOfflineStore().getEntity('person', pid).then(row => {
-                if (!row) return null;
-                const works = (row.value && row.value.works) || [];
-                const found = works.find(w => w.id === wid);
-                return found ? found[field] : null;
-            })""", [person_id, work_id, field])
+        result = wait_for_async(
+            page,
+            """([pid, wid, field]) =>
+                window.createPrksOfflineStore().getEntity('person', pid).then(row => {
+                    let value = null;
+                    if (row) {
+                        const works = (row.value && row.value.works) || [];
+                        const found = works.find(w => w.id === wid);
+                        if (found) value = found[field];
+                    }
+                    return { value: value, done: true };
+                })""",
+            arg=[person_id, work_id, field],
+            timeout=self._OPS_TIMEOUT_MS,
+            message='cached person read did not settle',
+        )
+        return result['value']
 
     def test_a_pending_year_reaches_every_surface_that_shows_one(self):
         """The reason 2G is its own milestone. Publisher reached ONE cached
@@ -687,7 +751,6 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'the embedded Person summary was patched in place')
         self.assertIn('2026', self.card_meta(page, self.PROGRESS, work),
                       'the value survives the overlay being retired')
-
     def test_a_cleared_year_falls_back_to_the_pending_published_date(self):
         """The displayed year is DERIVED: an explicit Year wins, and the
         Published Date supplies it otherwise. Both are synchronized precisely
@@ -752,7 +815,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=30000,
             message='the playlist never reached the server')
-        page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
+        self.navigate(page, '#/playlists/' + quote(str(playlist), safe=''))
         page.wait_for_selector('.prks-playlist-detail')
         page.wait_for_selector('[data-pl-nav="%s"]' % work)
         o._wait_entity_cached(page, 'playlist', playlist)
@@ -768,7 +831,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 1)
 
-        page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
+        self.navigate(page, '#/playlists/' + quote(str(playlist), safe=''))
         page.wait_for_selector('[data-pl-nav="%s"]' % work)
         page.wait_for_function("""id => {
             const el = document.querySelector('[data-pl-nav="' + id + '"] .meta-row');
@@ -820,7 +883,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     def progress_ids(self, page, status):
         """The Work ids Progress shows for one status group."""
-        page.evaluate("s => prksNavigate('#/progress?status=' + encodeURIComponent(s))", status)
+        self.navigate(page, '#/progress?status=' + quote(str(status), safe=''))
         page.wait_for_function("""() => {
             const el = document.querySelector('.prks-tile--main');
             return !!el && !el.querySelector('.prks-route-loading');
@@ -851,7 +914,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             o._open_work_from_home(page, open_title)
         self.progress_ids(page, status)
         o._wait_list_cached(page, 'works-browse:index')
-        page.evaluate("() => prksNavigate('#/recent')")
+        self.navigate(page, '#/recent')
         page.wait_for_selector('[data-work-id="%s"]' % work_id)
         o._wait_list_cached(page, 'recent:index')
         self.recently_added(page)
@@ -900,7 +963,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         o._open_person(page, person)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         o._wait_entity_cached(page, 'person', person)
-        page.evaluate("id => prksNavigate('#/playlists/' + encodeURIComponent(id))", playlist)
+        self.navigate(page, '#/playlists/' + quote(str(playlist), safe=''))
         page.wait_for_selector('.prks-playlist-detail')
         o._wait_entity_cached(page, 'playlist', playlist)
 
@@ -911,7 +974,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save_status(page)
         self.pending(page, 1)
 
-        page.evaluate("() => prksNavigate('#/recent')")
+        self.navigate(page, '#/recent')
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertEqual(self.card_badge(page, work), 'Paused', 'Recently opened')
         self.recently_added(page)
@@ -1083,7 +1146,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          {'field': 'author_text', 'value': 'New Author'})
 
         for route in (self.PROGRESS_NOT_STARTED, '#/recent'):
-            page.evaluate("r => prksNavigate(r)", route)
+            self.navigate(page, route)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             self.assertIn('New Author', self.credit(page, work), route)
             self.assertNotIn('Old Author', self.credit(page, work), route)
@@ -1094,14 +1157,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         page.reload()
         page.wait_for_selector('#sidebar')
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        self.navigate(page, self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('New Author', self.credit(page, work), 'after a reload')
 
         self.reconnect(page, context)
         self.pending(page, 0)
         self.assertEqual(self.server_value(server, work, 'author_text'), 'New Author')
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        self.navigate(page, self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('New Author', self.credit(page, work), 'no reversion at acknowledgement')
         self.assertEqual(self.cached_list_field(page, 'recent:index', work, 'author_text'),
@@ -1130,7 +1193,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.assertEqual(page.locator('[data-prks-work-field="author_text"]').input_value(),
                          'New Text', 'the editor shows the pending FIELD')
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn(PERSON_DISPLAY, self.credit(page, work),
                       'the card still credits the linked Author')
@@ -1139,7 +1202,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.reconnect(page, context)
         self.pending(page, 0)
         self.assertEqual(self.server_value(server, work, 'author_text'), 'New Text')
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn(PERSON_DISPLAY, self.credit(page, work),
                       'and still does once the server knows')
@@ -1164,7 +1227,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 1)
 
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        self.navigate(page, self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         credit = self.credit(page, work)
         self.assertIn(PERSON_DISPLAY, credit, 'the linked Editor stands in')
@@ -1174,7 +1237,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.reconnect(page, context)
         self.pending(page, 0)
         self.assertEqual(self.server_value(server, work, 'author_text'), '')
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        self.navigate(page, self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn(PERSON_DISPLAY, self.credit(page, work))
 
@@ -1214,7 +1277,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertLess(len(ledger), 1024)
 
         # The credit is still composed correctly from the acknowledged value.
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS_NOT_STARTED)
+        self.navigate(page, self.PROGRESS_NOT_STARTED)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('QQQ', self.credit(page, work))
 
@@ -1327,7 +1390,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         shows counts: the assertion is about which group a Work is IN, and a
         count that happens to match would not say that.
         """
-        page.evaluate("r => prksNavigate(r)", '#/types/' + doc_type)
+        self.navigate(page, '#/types/' + doc_type)
         page.wait_for_selector('.types-page')
         return page.evaluate("""() => Array.from(
             document.querySelectorAll('.types-page [data-work-id]'))
@@ -1383,7 +1446,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 1)
 
         for route in (self.PROGRESS, '#/recent'):
-            page.evaluate("r => prksNavigate(r)", route)
+            self.navigate(page, route)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             self.assertIn(renamed, page.evaluate(
                 "id => document.querySelector('[data-work-id=\"' + id + '\"]').textContent", work),
@@ -1536,7 +1599,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.db_for(server).update_work_metadata(work, {'thumb_page': 5})
         page.reload()
         page.wait_for_selector('#sidebar')
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('page=5', self.thumb_src(page, work),
                       'the acknowledged page is stated explicitly')
@@ -1559,7 +1622,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             # holding, and counting both would be counting the wrong thing.
             self.pending(page, 1)
 
-            page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+            self.navigate(page, self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             src = self.thumb_src(page, work)
             self.assertIn('page=1', src, 'a pending clear means page 1, immediately')
@@ -1572,7 +1635,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.pending(page, 0)
         self.assertIsNone(self.db_for(server).get_work(work)['thumb_page'])
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('page=1', self.thumb_src(page, work),
                       'and nothing changes visibly at acknowledgement')
@@ -1599,7 +1662,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             # enqueued a MARK_WORK_OPENED that this same blocked send is also
             # holding, and counting both would be counting the wrong thing.
             self.pending(page, 1)
-            page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+            self.navigate(page, self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             self.assertIn('page=5', self.thumb_src(page, work))
             self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 2,
@@ -1629,7 +1692,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 1)
 
         seen = self.thumb_requests(page)
-        page.evaluate("r => prksNavigate(r)", self.PROGRESS)
+        self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         page.wait_for_timeout(400)   # a settle window: absence needs one
         self.assertEqual(seen, [], 'a cached card requested no thumbnail at all')
@@ -1870,7 +1933,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             const ctx = prksGetFocusedTabContext();
             return prksWorkMetaDraftIsDirty(ctx, ctx.getEntity('work'));
         }"""), 'a saved field must not read as an unsaved draft')
-        page.evaluate("() => prksNavigate('#/folders')")
+        self.navigate(page, '#/folders')
         page.wait_for_function("() => location.hash.indexOf('/works/') === -1")
         self.assertEqual(page.locator('#prks-modal-confirm:not(.hidden)').count(), 0,
                          'no prompt to discard changes that were already saved')
@@ -1878,7 +1941,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     # ---- Abstract: large scalar with a DERIVED projection -------------------
 
     def progress(self, page, status='In Progress'):
-        page.evaluate("s => prksNavigate('#/progress?status=' + encodeURIComponent(s))", status)
+        self.navigate(page, '#/progress?status=' + quote(str(status), safe=''))
         page.wait_for_function("() => location.hash.indexOf('/progress') !== -1")
         page.wait_for_selector('.card-grid')
 
