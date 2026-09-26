@@ -400,8 +400,8 @@ Applies the KEEP / SPLIT / MOVE model to the two pure queue invariants in
 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
-| Definition taken back before send leaves no intent | Node `theDefinitionCoalescesAndCancels` (store coalesce/cancel) **and** `theDefinitionCancelGoesThroughDirtyFields` (`prksDirtyConceptFields` + acknowledged base → store, the `updateConcept(description)` composition) | MOVE |
-| Same parents (order-insensitive set) leave no intent | Node `theParentSetIsASet` — reorder vs acknowledged base is null; second reparent replaces; return to acknowledged set cancels | MOVE |
+| Definition taken back before send leaves no intent | Node `theDefinitionCoalescesAndCancels` (store) **and** `theDefinitionCancelGoesThroughApiWrapper` — production `updateConcept` from `frontend/js/api.js` against fake IndexedDB (plus dirty-fields overlay asserts) | MOVE |
+| Same parents (order-insensitive set) leave no intent | Node `theParentSetIsASet` (store) **and** `theParentSetCancelGoesThroughApiWrapper` — production `putConceptParents` from `frontend/js/api.js` | MOVE |
 
 Retained browser boundaries in that module stay Chromium: offline create +
 reload, named refusals (`CONCEPT_EXISTS`, cycle, note-named delete), definition

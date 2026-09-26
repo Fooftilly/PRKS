@@ -216,7 +216,7 @@ class DurableConceptTests(unittest.TestCase):
 
     # Definition A→B→A cancel is owned by Node
     # `theDefinitionCoalescesAndCancels` (store) and
-    # `theDefinitionCancelGoesThroughDirtyFields` (updateConcept composition)
+    # `theDefinitionCancelGoesThroughApiWrapper` (production updateConcept)
     # in run_concept_sync_selftest.js.
 
     # ---- identity -----------------------------------------------------------
@@ -305,7 +305,9 @@ class DurableConceptTests(unittest.TestCase):
         self.assertEqual([p['id'] for p in stored['parents']], [unvisited])
 
     # Parent-set equality (order-insensitive) and A→B→A cancel are owned by
-    # Node `theParentSetIsASet` in run_concept_sync_selftest.js.
+    # Node `theParentSetIsASet` (store) and
+    # `theParentSetCancelGoesThroughApiWrapper` (production putConceptParents)
+    # in run_concept_sync_selftest.js.
 
     def test_a_cycle_comes_back_as_a_named_refusal(self):
         server, page, context = self.start()
