@@ -9564,6 +9564,10 @@ class WorkspaceDragDropTests(_BrowserE2E):
 
         dialogs = []
         page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+        # Tree build can still be projecting PDF annotation catch-up. Those
+        # `/annotations-snapshot` (and similar) GETs must not be attributed to
+        # the pane move — same gate as Main-close runtime preservation.
+        _wait_pdf_annotation_gates_idle(page)
         seen_gets = []
         page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
 
@@ -9622,8 +9626,18 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertTrue(identity["dPdfSame"], "moving a pane must not reload its PDF")
         self.assertTrue(identity["dNotesSame"], "moving a pane must not remount its notes editor")
         self.assertEqual(identity["mounted"], 4, "moving a visible pane must not mount/unmount anything")
-        for path in ("/api/works/", "/api/persons/", "/api/positions/", "/api/pdfs/"):
-            self.assertFalse(any(path in u for u in seen_gets), "pane move must not fetch: " + path)
+        # Entity detail GETs only — not `/annotations-snapshot`, `/opened`, etc.
+        # A broad `/api/works/` substring match races late catch-up from tree build.
+        for path in (
+            "/api/works/" + tree["work_a"],
+            "/api/works/" + tree["work_b"],
+            "/api/persons/" + tree["person"],
+            "/api/positions/" + tree["position"],
+        ):
+            self.assertFalse(
+                any(_url_is_entity_detail_get(u, path) for u in seen_gets),
+                "pane move must not remount via entity detail GET: " + path,
+            )
 
     def test_drag_global_tab_of_visible_secondary_also_moves_it(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
