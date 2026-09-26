@@ -7,7 +7,7 @@ The Python process serves the committed production bundle:
 - `frontend/vue/prks-vue.js` (Vue, plus component CSS inlined by `vite-plugin-css-injected-by-js`)
 - `frontend/vue/BUILD-MANIFEST.json`
 
-Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the bundle on a hidden `#prks-vue-root`. That mount proves the runtime path. It is not a product surface, a router, or a second workspace state model.
+Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the bundle on a hidden `#prks-vue-root`. That app teleports Settings performance diagnostics into `#prks-settings-perf-root`. It is not a router and not a second workspace state model.
 
 ## Toolchain
 
@@ -29,8 +29,11 @@ npm run build       # Vite production bundle + dependency manifest + service-wor
 
 | Path | Role |
 | --- | --- |
+| `src/features/performance-diagnostics/` | Settings performance diagnostics |
+| `src/api/` | Typed PRKS API client used by feature services |
+| `src/query/` | Application QueryClient |
 | `src/components/` | Migrated single-file components, when a slice creates them |
 | `src/composables/` | Feature-local Vue logic, when a slice needs it |
 | `frontend/js/` | Legacy runtime. Leave it in place until a slice replaces a specific responsibility |
 
-Do not add Vue Router, Pinia, TanStack Query, VueUse, or another application state model in this package until a migrated surface requires it.
+`@tanstack/vue-query` is the server-state owner for performance diagnostics. Do not add Vue Router, Pinia, VueUse, or a second QueryClient until a later slice requires it. Do not persist the query cache.

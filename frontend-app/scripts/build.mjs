@@ -63,6 +63,7 @@ const outputSha256 = {
 const manifest = {
   schema_version: 1,
   vue: pkg.dependencies.vue,
+  tanstackVueQuery: pkg.dependencies["@tanstack/vue-query"],
   vite: pkg.devDependencies.vite,
   typescript: pkg.devDependencies.typescript,
   vueTsc: pkg.devDependencies["vue-tsc"],

@@ -237,6 +237,20 @@
       "dependabot_monitored": true
     },
     {
+      "name": "@tanstack/vue-query",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> dependencies.@tanstack/vue-query",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [
+        "frontend/vue/prks-vue.js",
+        "frontend/vue/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vue/BUILD-MANIFEST.json -> tanstackVueQuery",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
       "name": "vite",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> devDependencies.vite",

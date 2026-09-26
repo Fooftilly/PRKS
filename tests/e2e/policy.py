@@ -583,6 +583,25 @@ AFFECTED_RULES = (
         ),
         "features": ("settings",),
     },
+    # Performance diagnostics Vue slice. Explicit paths only — do not map
+    # frontend-app/src/** to smoke or to settings.
+    {
+        "name": "settings-performance-diagnostics",
+        "paths": (
+            "frontend-app/src/App.vue",
+            "frontend-app/src/main.ts",
+            "frontend-app/src/mount.ts",
+            "frontend-app/src/mount.test.ts",
+            "frontend-app/src/features/performance-diagnostics/**",
+            "frontend-app/src/api/http.ts",
+            "frontend-app/src/api/http.test.ts",
+            "frontend-app/src/api/performance-diagnostics.ts",
+            "frontend-app/src/api/performance-diagnostics.test.ts",
+            "frontend-app/src/query/**",
+        ),
+        "features": ("settings",),
+        "note": "Vue performance diagnostics (#232) → settings. Other frontend-app/src files stay unmapped.",
+    },
     {
         "name": "offline-runtime",
         "paths": (

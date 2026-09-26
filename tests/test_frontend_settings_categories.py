@@ -87,9 +87,7 @@ class SettingsCategoryStructureTests(unittest.TestCase):
             "prks-backup-restore-btn",
             "prks-reindex-pdf-text-btn",
             "prks-linearize-existing-pdfs-btn",
-            "prks-perf-refresh-btn",
-            "prks-perf-reset-btn",
-            "prks-perf-copy-btn",
+            "prks-settings-perf-root",
             "prks-setting-ui-hints",
             "prks-setting-force-mobile",
             "prks-setting-mobile-work-notes-right",
@@ -234,7 +232,25 @@ class SettingsCategoryJsTests(unittest.TestCase):
             "\nwindow.prksActivateSettingsCategory", 1
         )[0]
         self.assertIn("__prksSettingsDiagnosticsLoaded", fn)
-        self.assertIn("prksLoadPerformanceDiagnostics()", fn)
+        self.assertIn("prksVueActivatePerformanceDiagnostics", fn)
+        self.assertIn("__prksPerformanceDiagnosticsRequested", fn)
+        self.assertNotIn("prksLoadPerformanceDiagnostics", app)
+        vue = _read(
+            os.path.join(
+                _PROJECT_DIR,
+                "frontend-app",
+                "src",
+                "features",
+                "performance-diagnostics",
+                "PerformanceDiagnostics.vue",
+            )
+        )
+        for control_id in (
+            "prks-perf-refresh-btn",
+            "prks-perf-reset-btn",
+            "prks-perf-copy-btn",
+        ):
+            self.assertIn(f'id="{control_id}"', vue)
 
     def test_settings_category_state_not_persisted_to_localstorage_or_api(self):
         app = _read(_APP)

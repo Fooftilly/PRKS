@@ -117,7 +117,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "8932b5a40c5efc03524639ce557a55baa23d80f2377e490e5e511f19e0a73b80"
+          "sha256": "a3348c75c1dbcd5188c744808801b84b7fea06359df828d3401fdb20f0fa3908"
         }
       ],
       "source_category": "npm:frontend-app",

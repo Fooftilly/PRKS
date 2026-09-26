@@ -91,9 +91,6 @@ class AffectedMappingTests(unittest.TestCase):
 
     def test_vue_frontend_maps_to_smoke(self):
         for path in (
-            "frontend-app/src/mount.ts",
-            "frontend-app/src/App.vue",
-            "frontend-app/src/main.ts",
             "frontend-app/vite.config.ts",
             "frontend-app/scripts/build.mjs",
             "frontend-app/package.json",
@@ -108,6 +105,39 @@ class AffectedMappingTests(unittest.TestCase):
                 plan = policy.plan_ci_e2e([path])
                 self.assertEqual(plan["mode"], "affected")
                 self.assertIn("smoke", plan["features"])
+
+    def test_performance_diagnostics_vue_maps_to_settings(self):
+        paths = (
+            "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.vue",
+            "frontend-app/src/features/performance-diagnostics/usePerformanceDiagnostics.ts",
+            "frontend-app/src/api/performance-diagnostics.ts",
+            "frontend-app/src/api/http.ts",
+            "frontend-app/src/query/client.ts",
+            "frontend-app/src/query/retry.ts",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "settings-performance-diagnostics")
+                self.assertFalse(skip)
+                self.assertEqual(feats, ("settings",))
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "affected")
+                # Affected CI always unions smoke. The path rule itself does not.
+                self.assertEqual(plan["features"], ["settings", "smoke"])
+
+    def test_vue_shell_files_that_mount_diagnostics_include_settings(self):
+        for path in (
+            "frontend-app/src/App.vue",
+            "frontend-app/src/main.ts",
+            "frontend-app/src/mount.ts",
+            "frontend-app/src/mount.test.ts",
+        ):
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertFalse(skip)
+                self.assertEqual(rule, "vue-frontend+settings-performance-diagnostics")
+                self.assertEqual(feats, ("smoke", "settings"))
 
     def test_unmapped_vue_screen_is_full_ci_even_with_bundle(self):
         screen = "frontend-app/src/components/Works.vue"

@@ -6,9 +6,9 @@ These rules apply to frontend work in addition to the repository-root `AGENTS.md
 
 `frontend-app/` is the Vue 3 + TypeScript source (Vite, `vue-tsc`, Vitest). Node/npm are maintainer build tools (Node `>=24.15.0 <25`). The Python runtime serves the committed bundle `frontend/vue/prks-vue.js` and does not run Vite. `vite-plugin-css-injected-by-js` inlines component CSS into that bundle; the shell and service worker do not load a separate Vue stylesheet.
 
-`frontend/js/` remains the legacy application. Do not rewrite it as part of a foundation change. Migrated UI belongs in `frontend-app/src/` and must not introduce a second canonical workspace or application state model. Do not add Vue Router, Pinia, TanStack Query, or VueUse until a slice actually needs that library.
+`frontend/js/` remains the legacy application. Do not rewrite it as part of a foundation change. Migrated UI belongs in `frontend-app/src/` and must not introduce a second canonical workspace or application state model. TanStack Query is in use for performance diagnostics. Do not add Vue Router, Pinia, or VueUse until a slice actually needs that library.
 
-The hidden `#prks-vue-root` mount only proves the bundle loads. It is not a product surface.
+The hidden `#prks-vue-root` mount proves the bundle loads and hosts the Vue app. The first product surface is Settings performance diagnostics, teleported into `#prks-settings-perf-root`. TanStack Query owns that disposable server snapshot. Do not add a second QueryClient, Pinia, Vue Router, or VueUse until a later slice needs them. Do not persist the query cache.
 
 ## Cross-boundary bulk mutations
 
@@ -229,9 +229,12 @@ Inactive Settings category panels are hidden and inert, never removed/recreated.
 Switching categories must not reset a running Backup/Maintenance operation, a
 chosen restore file, or any control's in-progress value.
 
-Diagnostics data loads only on first activation of the Diagnostics category, not
-whenever Settings opens. Revisiting Diagnostics reuses the retained snapshot;
-only the explicit Refresh action re-fetches.
+Performance diagnostics loads only on first activation of the Diagnostics
+category, not whenever Settings opens. TanStack Query retains that disposable
+server snapshot; revisiting the category does not re-fetch. Refresh and Reset
+invalidate it. The offline-cache status in the same category is a separate
+read and is not query state. The query cache is not canonical library data
+and is not an offline queue.
 
 ## Saved Views
 

@@ -56,7 +56,14 @@ from backend.research_network import ResearchError
 import backend.research_network as research_network
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.errors import research_error_envelope
-from backend.api_contract.openapi import positions_openapi_document
+from backend.api_contract.openapi import (
+    performance_diagnostics_openapi_document,
+    positions_openapi_document,
+)
+from backend.api_contract.performance import (
+    PerformanceDiagnosticsReset,
+    PerformanceSnapshot,
+)
 from backend.api_contract.positions import (
     PositionCreateRequest,
     PositionDeleted,
@@ -1851,7 +1858,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         
         try:
             if path == '/api/diagnostics/performance':
-                self.send_json(200, performance_snapshot())
+                self.send_json(200, dump_response(PerformanceSnapshot, performance_snapshot()))
             elif path == '/api/works':
                 # `?projection=browse` is an explicit, additive contract: the
                 # compact catalog the browse routes cache. The default response
@@ -2292,6 +2299,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # Vertical-slice OpenAPI for Positions (#180 / #45). Additive;
                 # not yet the full PRKS surface.
                 self.send_json(200, positions_openapi_document())
+            elif path == '/api/openapi/performance-diagnostics.json':
+                self.send_json(200, performance_diagnostics_openapi_document())
             elif path == '/api/positions':
                 rows = research_network.list_positions(db)
                 self.send_json(200, dump_response(PositionSummary, rows))
@@ -2644,7 +2653,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
             if path == '/api/diagnostics/performance/reset':
                 reset_performance()
-                self.send_json(200, {"status": "reset"})
+                self.send_json(
+                    200,
+                    dump_response(PerformanceDiagnosticsReset, {"status": "reset"}),
+                )
                 return
 
             if path == '/api/client-errors':

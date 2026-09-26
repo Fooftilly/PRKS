@@ -25,7 +25,7 @@
 </head>
 
 <body>
-    <!-- Vue bootstrap host (#230). Hidden until a migrated surface owns visible UI. -->
+    <!-- Vue app host (#230). Hidden bootstrap marker; performance diagnostics teleports into Settings. -->
     <div id="prks-vue-root" hidden></div>
     <div id="app-container">
         <!-- Sidebar -->
@@ -490,38 +490,7 @@
                     <section class="prks-settings-section" aria-labelledby="prks-settings-perf-heading">
                         <h5 id="prks-settings-perf-heading" class="prks-settings-section__title">Performance diagnostics</h5>
                         <p class="prks-settings-hint">Runtime-only measurements from this PRKS process. No research content, search terms or file names are recorded. Measurements reset when PRKS restarts.</p>
-                        <p class="prks-settings-hint" id="prks-perf-summary" aria-live="polite">Loading measurements…</p>
-                        <div class="prks-perf-table-wrap">
-                            <table class="prks-perf-table" id="prks-perf-routes">
-                                <caption class="prks-sr-only">Slowest API routes</caption>
-                                <thead>
-                                    <tr>
-                                        <th scope="col">Route</th>
-                                        <th scope="col">Calls</th>
-                                        <th scope="col">Avg</th>
-                                        <th scope="col">P95</th>
-                                        <th scope="col">Max</th>
-                                        <th scope="col">DB</th>
-                                        <th scope="col">DB/call</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="prks-perf-routes-body">
-                                    <tr><td colspan="7">No API requests measured yet.</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <p class="prks-settings-hint" id="prks-perf-spans"></p>
-                        <p class="prks-settings-hint" id="prks-perf-thumbs"></p>
-                        <div id="prks-perf-client" class="prks-perf-client">
-                            <h5 class="prks-settings-section__title">Client request coordinator</h5>
-                            <p class="prks-settings-hint" id="prks-perf-client-body">Loading measurements…</p>
-                        </div>
-                        <div class="prks-backup-restore-row">
-                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-refresh-btn">Refresh</button>
-                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-reset-btn">Reset</button>
-                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-perf-copy-btn">Copy report</button>
-                        </div>
-                        <p class="prks-settings-hint" id="prks-perf-status" aria-live="polite"></p>
+                        <div id="prks-settings-perf-root"></div>
                     </section>
                     <section class="prks-settings-section prks-settings-section--sep" aria-labelledby="prks-settings-offline-heading">
                         <h5 id="prks-settings-offline-heading" class="prks-settings-section__title">Offline cache <span class="prks-settings-scope">This device</span></h5>
