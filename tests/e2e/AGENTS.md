@@ -226,7 +226,10 @@ each with `--jobs 1` over one runner with four local Chromium stacks
 once after every matrix shard passes (dedicated CI job), not once per shard.
 Docs/unit/ignored-only diffs skip the matrix via
 `python tests/e2e/run.py --ci-plan --base <ref>` (same noop policy as
-`--affected`).
+`--affected`). An unresolvable comparison base (force-push `before` SHA)
+fails closed to **run** the full gate — never a plan exit 2. Rename/copy
+discovery keeps both path images so a production→docs move cannot look
+docs-only.
 
 The parent fails the gate if any worker fails, errors, crashes, or exits without
 writing a result document; a vanished worker is never read as a pass. Pointer
