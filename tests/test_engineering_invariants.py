@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -158,6 +159,169 @@ class EngineeringInvariantTests(unittest.TestCase):
                 for p in checker.iter_production_python(root)
             ]
             self.assertIn("prks_app.py", scanned)
+
+    def _write_valid_pyright_tree(self, root: Path) -> None:
+        (root / "backend" / "storage").mkdir(parents=True)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / "pyrightconfig.json").write_text(
+            json.dumps(
+                {
+                    "include": ["prks_app.py", "backend"],
+                    "typeCheckingMode": "off",
+                    "reportUndefinedVariable": "error",
+                    "reportUnboundVariable": "error",
+                    "reportUnusedExcept": "error",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / "pyrightconfig.typed-slice.json").write_text(
+            json.dumps(
+                {
+                    "include": ["backend/storage"],
+                    "exclude": ["**/__pycache__"],
+                    "typeCheckingMode": "basic",
+                    "reportUndefinedVariable": "error",
+                    "reportUnboundVariable": "error",
+                    "reportUnusedExcept": "error",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / ".github" / "workflows" / "static-analysis.yml").write_text(
+            (
+                "jobs:\n"
+                "  pyright:\n"
+                "    steps:\n"
+                "      - run: pyright --project pyrightconfig.json\n"
+                "      - run: pyright --project pyrightconfig.typed-slice.json\n"
+            ),
+            encoding="utf-8",
+        )
+
+    def test_pyright_typed_slice_config_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self.assertEqual(checker.check_pyright_configs(root), [])
+
+    def test_pyright_typed_slice_rejects_off_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            typed = root / "pyrightconfig.typed-slice.json"
+            typed.write_text(
+                json.dumps(
+                    {
+                        "include": ["backend/storage"],
+                        "typeCheckingMode": "off",
+                        "reportUndefinedVariable": "error",
+                        "reportUnboundVariable": "error",
+                        "reportUnusedExcept": "error",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+            self.assertIn("typeCheckingMode", findings[0].message)
+
+    def test_pyright_dataflow_requires_backend_include(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / "pyrightconfig.json").write_text(
+                json.dumps(
+                    {
+                        "include": ["prks_app.py"],
+                        "typeCheckingMode": "off",
+                        "reportUndefinedVariable": "error",
+                        "reportUnboundVariable": "error",
+                        "reportUnusedExcept": "error",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-001"])
+            self.assertIn("backend", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_ignore_of_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+            typed["ignore"] = ["backend/storage"]
+            (root / "pyrightconfig.typed-slice.json").write_text(
+                json.dumps(typed), encoding="utf-8"
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+            self.assertIn("ignore", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_exclude_of_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+            typed["exclude"] = ["**/__pycache__", "backend/storage"]
+            (root / "pyrightconfig.typed-slice.json").write_text(
+                json.dumps(typed), encoding="utf-8"
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+            self.assertIn("exclude", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_missing_ci_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / ".github" / "workflows" / "static-analysis.yml").write_text(
+                "jobs:\n  pyright:\n    steps:\n      - run: pyright --project pyrightconfig.json\n",
+                encoding="utf-8",
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-003"])
+
+    def test_pyright_ci_rejects_comment_only_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / ".github" / "workflows" / "static-analysis.yml").write_text(
+                (
+                    "jobs:\n"
+                    "  pyright:\n"
+                    "    steps:\n"
+                    "      - run: pyright --project pyrightconfig.json\n"
+                    "      # - run: pyright --project pyrightconfig.typed-slice.json\n"
+                    "      - run: echo pyrightconfig.typed-slice.json\n"
+                ),
+                encoding="utf-8",
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-003"])
+            self.assertIn("typed-slice", findings[0].message)
+
+    def test_pyright_ci_rejects_commented_out_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / ".github" / "workflows" / "static-analysis.yml").write_text(
+                (
+                    "jobs:\n"
+                    "  pyright:\n"
+                    "    steps:\n"
+                    "      - run: pyright --project pyrightconfig.json\n"
+                    "      # kept for docs: pyright --project pyrightconfig.typed-slice.json\n"
+                ),
+                encoding="utf-8",
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-003"])
+
+    def test_current_repo_pyright_configs_pass(self):
+        findings = checker.check_pyright_configs(_ROOT)
+        self.assertEqual(findings, [], "\n".join(f.render() for f in findings))
 
 
 if __name__ == "__main__":

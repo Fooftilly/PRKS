@@ -49,7 +49,7 @@ jobs:
   pyright:
     permissions:
       contents: read
-    name: Pyright data-flow checks
+    name: Pyright data-flow + typed storage slice
     runs-on: ubuntu-latest
     timeout-minutes: 8
 
@@ -64,8 +64,13 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Run Pyright
+      # Narrow diagnostics across prks_app.py + backend (typeCheckingMode: off).
+      - name: Run Pyright data-flow checks
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
+
+      # Genuine basic type checking for the first #69 slice: backend/storage.
+      - name: Run Pyright typed slice (backend/storage, basic)
+        run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
 
   eslint:
     permissions:
