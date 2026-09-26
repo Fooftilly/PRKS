@@ -9569,7 +9569,18 @@ class WorkspaceDragDropTests(_BrowserE2E):
         # the pane move — same gate as Main-close runtime preservation.
         _wait_pdf_annotation_gates_idle(page)
         seen_gets = []
-        page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
+
+        def _on_get(req):
+            if req.method != "GET":
+                return
+            # Byte-range PDF streaming reuses `/api/pdfs/<file>` and is not a
+            # remount; only non-Range GETs count toward the network assert.
+            headers = req.headers or {}
+            if any(k.lower() == "range" for k in headers):
+                return
+            seen_gets.append(req.url)
+
+        page.on("request", _on_get)
 
         d_grip = _grip_box(page, tree["d_id"])
         b_box = _tile_box(page, tree["b_id"])
@@ -9626,13 +9637,18 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertTrue(identity["dPdfSame"], "moving a pane must not reload its PDF")
         self.assertTrue(identity["dNotesSame"], "moving a pane must not remount its notes editor")
         self.assertEqual(identity["mounted"], 4, "moving a visible pane must not mount/unmount anything")
-        # Entity detail GETs only — not `/annotations-snapshot`, `/opened`, etc.
-        # A broad `/api/works/` substring match races late catch-up from tree build.
+        # Entity / PDF detail GETs only — not `/annotations-snapshot`, `/opened`,
+        # or Range PDF streaming. Broad `/api/works/` / `/api/pdfs/` substring
+        # matches race late catch-up from tree build.
+        pdf_a = "/api/pdfs/" + server.ids["pdf_name"]
+        pdf_b = "/api/pdfs/e2e-related.pdf"
         for path in (
             "/api/works/" + tree["work_a"],
             "/api/works/" + tree["work_b"],
             "/api/persons/" + tree["person"],
             "/api/positions/" + tree["position"],
+            pdf_a,
+            pdf_b,
         ):
             self.assertFalse(
                 any(_url_is_entity_detail_get(u, path) for u in seen_gets),
