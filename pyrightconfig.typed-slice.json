@@ -1,0 +1,13 @@
+{
+  "include": [
+    "backend/storage"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportUndefinedVariable": "error",
+  "reportUnboundVariable": "error",
+  "reportUnusedExcept": "error"
+}
