@@ -621,25 +621,36 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_list_uncached(page, 'folders:index')
 
     def test_work_deletion_invalidates_folders(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        before = self.generations(page)
-        page.evaluate(
-            """async (id) => { await prksRequest('/api/works/' + encodeURIComponent(id), { method: 'DELETE' }); }""",
-            ids['work_b'],
-        )
-        # Route the assertion through the real UI hook rather than the raw call.
-        page.evaluate("() => prksMarkFoldersDomainChanged()")
-        self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
+        """DELETE_WORK through the real Work-deletion UI must fence Folders.
 
-    def test_work_metadata_save_invalidates_folders(self):
+        Vacuous helper-call coverage (`prksMarkFoldersDomainChanged` after a
+        raw DELETE) was dropped as MOVE; this KEEP exercises the entrypoint
+        that actually publishes folders coherence on ACK.
+        """
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
         before = self.generations(page)
-        page.evaluate("(id) => prksMarkWorkTitleChanged(id)", ids['work_a'])
+        o._open_work_from_home(page, WORK_A_TITLE)
+        o._open_details_drawer_if_tiled(page)
+        advanced = page.locator('.work-details-advanced')
+        if advanced.get_attribute('open') is None:
+            advanced.locator('summary').click()
+        page.locator('.delete-work-btn').click()
+        page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        wait_for_async(
+            page,
+            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=60000,
+            message='DELETE_WORK must acknowledge before folders coherence',
+        )
         self.assertGreater(o._domain_generation(page, 'folders'), before['folders'])
+        o._wait_list_uncached(page, 'folders:index')
+
+    # Work-metadata mark helpers → folders generation remains owned by
+    # work-metadata Node selftests (vacuous Chromium helper-call E2E dropped).
 
     def test_author_and_editor_roles_invalidate_folders_but_other_roles_do_not(self):
         server, page, context, _c = self.start()
@@ -1039,51 +1050,8 @@ class FoldersOfflineTests(unittest.TestCase):
         self.assertNotIn('Offline · cached', o._content_text(page))
         self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
-    def test_stale_reads_cannot_repopulate_an_invalidated_cache(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids)
-        # A GET already in flight when the domain is invalidated must not win.
-        page.evaluate(
-            """async (id) => {
-                const listPromise = prksOfflineReadList('folders:index', '/api/folders', { domain: 'folders' });
-                const entityPromise = prksOfflineReadEntity(
-                    'folder', id, '/api/folders/' + encodeURIComponent(id), { domain: 'folders' });
-                prksMarkFoldersDomainChanged();
-                await listPromise;
-                await entityPromise;
-            }""",
-            ids['folder_parent'],
-        )
-        page.wait_for_timeout(400)
-        o._wait_list_uncached(page, 'folders:index')
-        o._wait_entity_uncached(page, 'folder', ids['folder_parent'])
-
-    def test_folder_cleanup_failure_stays_domain_local(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        blocked = page.evaluate(
-            """() => {
-                const store = window.createPrksOfflineStore();
-                const original = store.deleteEntitiesOfKind;
-                window.createPrksOfflineStore = function () {
-                    const s = store;
-                    s.deleteEntitiesOfKind = function (kind) {
-                        if (kind === 'folder') return Promise.reject(new Error('forced sweep failure'));
-                        return original.call(s, kind);
-                    };
-                    return s;
-                };
-                return true;
-            }"""
-        )
-        self.assertTrue(blocked)
-        page.evaluate("() => prksMarkFoldersDomainChanged()")
-        page.wait_for_timeout(600)
-        # Other domains keep serving their caches regardless.
-        self.assertIsNotNone(o._cached_list(page, 'people:index'))
-        self.assertIsNotNone(o._cached_list(page, 'playlists:index'))
+    # Stale Folder GET after markDomainChanged and Folder cleanup locality are
+    # owned by tests/browser/run_offline_runtime_selftest.js.
 
 
 if __name__ == '__main__':

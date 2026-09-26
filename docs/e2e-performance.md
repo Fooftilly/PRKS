@@ -486,6 +486,25 @@ Progress / `abstract_excerpt` overlay E2Es remain deferred.
 Module count after this slice alone on master: **56** Chromium scenarios (from 57).
 Combined with Slice A (core protocol): **54**.
 
+#### Folder / Playlist already-proven runtime fences
+
+Small MOVE slice for contracts already owned by Node with no replacement gap:
+
+| Former browser scenario | Replacement fast coverage | Decision |
+| --- | --- | --- |
+| Folder stale GET cannot repopulate after `markDomainChanged` | `tests/browser/run_offline_runtime_selftest.js` Folder list+entity stale block | MOVE |
+| Folder cleanup failure stays domain-local | Same selftest Folder cleanup locality | MOVE |
+| Work deletion / Work metadata mark helpers bump folders generation | Offline-runtime domain mark helpers + `run_work_metadata_sync_selftest.js` (vacuous Chromium helper-call E2Es) | MOVE |
+
+KEEP (entrypoint UI, not helper-call):
+
+| Browser scenario | Why Chromium | Fast layer still useful |
+| --- | --- | --- |
+| Work deletion via `.delete-work-btn` invalidates folders generation + `folders:index` | Real DELETE_WORK UI → ACK → `reconcileDeletedWork` folders fence | Node mark helpers do not replace the entrypoint |
+| Work metadata editor `#save-work-identity-btn` reconciles playlist titles in place | Editor save path is distinct from playlist inline-rename | Node `embeddedReconciliation` owns ACK patch mechanics |
+
+Playlist stale-hold E2Es (in-flight GET held across a durable membership/delete) stay in Chromium until the Node selftest covers that richer hold/release composition. Folder/Playlist cache render, route ownership, and disconnect control matrices remain KEEP.
+
 ## Benchmark protocol
 
 For any optimization:

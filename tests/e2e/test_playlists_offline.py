@@ -989,10 +989,14 @@ class PlaylistsOfflineTests(unittest.TestCase):
     # ---- Work -> Playlist coherence ----------------------------------------
 
     def test_work_metadata_save_reconciles_playlists_rather_than_dropping_them(self):
-        """A Playlist row renders the Work's title, so a rename has to reach
-        it -- but by RECONCILIATION, not invalidation: the exact new title is
-        patched into the cached Playlist rather than the snapshot being
-        thrown away."""
+        """Work metadata editor save (#save-work-identity-btn) must reconcile
+        Playlist embedded titles in place rather than dropping the cache.
+
+        Inline rename covers the playlist-local UI path that shares
+        SET_WORK_METADATA_FIELD; this KEEP covers the Work metadata editor
+        save path. Node `embeddedReconciliation` still owns the ACK patch
+        mechanics below the Chromium boundary.
+        """
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids, all_domains=True)
@@ -1004,10 +1008,6 @@ class PlaylistsOfflineTests(unittest.TestCase):
         page.locator('#save-work-identity-btn').click()
         wait_for_async(page,
             "() => prksSync.store.listOperations().then(r => r.length === 0)")
-        # A Work Title is local-first now, so the rename RECONCILES the exact
-        # new title into every cached representation instead of invalidating
-        # four domains. The cached Playlist keeps its snapshot and gains the
-        # new title in place.
         wait_for_async(page, '''id => window.createPrksOfflineStore()
             .getEntity('playlist', id).then(row => {
                 if (!row) return false;
