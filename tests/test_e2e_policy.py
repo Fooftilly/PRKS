@@ -90,18 +90,39 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertFalse(skip)
 
     def test_vue_frontend_maps_to_smoke(self):
-        rule, feats, skip, _note = policy.match_affected_path(
-            "frontend-app/src/mount.ts"
-        )
-        self.assertEqual(rule, "vue-frontend")
+        for path in (
+            "frontend-app/src/mount.ts",
+            "frontend-app/src/App.vue",
+            "frontend-app/src/main.ts",
+            "frontend-app/vite.config.ts",
+            "frontend-app/scripts/build.mjs",
+            "frontend-app/package.json",
+            "frontend/vue/prks-vue.js",
+            "frontend/vue/BUILD-MANIFEST.json",
+        ):
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "vue-frontend")
+                self.assertEqual(feats, ("smoke",))
+                self.assertFalse(skip)
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "affected")
+                self.assertIn("smoke", plan["features"])
+
+    def test_unmapped_vue_screen_is_full_ci_even_with_bundle(self):
+        screen = "frontend-app/src/components/Works.vue"
+        rule, feats, skip, _note = policy.match_affected_path(screen)
+        self.assertEqual(rule, "unmapped-production")
         self.assertEqual(feats, ("smoke",))
         self.assertFalse(skip)
-        rule, feats, skip, _note = policy.match_affected_path(
-            "frontend/vue/prks-vue.js"
+        plan = policy.plan_ci_e2e([screen, "frontend/vue/prks-vue.js"])
+        self.assertEqual(plan["mode"], "full")
+        self.assertTrue(plan["run"])
+        readme_rule, _feats, readme_skip, _note = policy.match_affected_path(
+            "frontend-app/README.md"
         )
-        self.assertEqual(rule, "vue-frontend")
-        self.assertEqual(feats, ("smoke",))
-        self.assertFalse(skip)
+        self.assertNotEqual(readme_rule, "vue-frontend")
+        self.assertTrue(readme_skip)
 
     def test_shared_core_is_broad(self):
         _rule, feats, skip, _note = policy.match_affected_path("frontend/js/app.js")

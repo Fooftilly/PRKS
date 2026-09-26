@@ -1429,6 +1429,21 @@ class VueProductionGateTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any(issue.code == "vue_css_not_inlined" for issue in result.issues))
 
+    def test_nested_unlisted_css_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _vue_gate_fixture(tmp)
+            css_path = root / "frontend" / "vue" / "assets" / "style.css"
+            css_path.parent.mkdir(parents=True)
+            css_path.write_text("body{color:red}\n", encoding="utf-8")
+            manifest_path = root / "frontend" / "vue" / "BUILD-MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertNotIn("assets/style.css", manifest.get("outputSha256") or {})
+            result = validate_vue_production(root)
+        self.assertFalse(result.ok)
+        css_issues = [issue for issue in result.issues if issue.code == "vue_css_not_inlined"]
+        self.assertTrue(css_issues)
+        self.assertTrue(any(issue.path and issue.path.endswith("assets/style.css") for issue in css_issues))
+
 
 class StartupOrderTests(unittest.TestCase):
     def test_prks_app_validates_before_storage(self):

@@ -4,7 +4,6 @@
     "useDefineForClassFields": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noUnusedLocals": true,
@@ -23,8 +22,6 @@
     "env.d.ts",
     "src/**/*.ts",
     "src/**/*.vue",
-    "vite.config.ts",
-    "inline-css-plugin.ts",
-    "inline-css-plugin.test.ts"
+    "vite.config.ts"
   ]
 }

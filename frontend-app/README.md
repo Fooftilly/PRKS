@@ -4,7 +4,7 @@ Maintainer-only Vue 3 + TypeScript source for the incremental frontend migration
 
 The Python process serves the committed production bundle:
 
-- `frontend/vue/prks-vue.js` (Vue and any component CSS, inlined)
+- `frontend/vue/prks-vue.js` (Vue, plus component CSS inlined by `vite-plugin-css-injected-by-js`)
 - `frontend/vue/BUILD-MANIFEST.json`
 
 Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the bundle on a hidden `#prks-vue-root`. That mount proves the runtime path. It is not a product surface, a router, or a second workspace state model.

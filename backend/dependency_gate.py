@@ -1841,7 +1841,7 @@ def validate_vue_production(repo_root: Path | None = None) -> GateResult:
                 str(js_path),
             )
     vue_dir = root / "frontend" / "vue"
-    for css_path in sorted(vue_dir.glob("*.css")):
+    for css_path in sorted(vue_dir.rglob("*.css")):
         result.fail(
             "vue_css_not_inlined",
             "Vite CSS must be inlined into prks-vue.js; do not ship a separate stylesheet",

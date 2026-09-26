@@ -383,16 +383,27 @@ AFFECTED_RULES = (
         "ci_mode": "full",
         "note": "Shared core → smoke + shell/tabs/offline/sync/modals (CI: full)",
     },
-    # Vue source and its committed production bundle. index.html/sw.js stay on
-    # shared-frontend-core, so a shell-tag change still selects the broad set.
+    # Vue foundation only. index.html/sw.js stay on shared-frontend-core.
+    # New screens under frontend-app/src/ are not listed, so they stay
+    # unmapped production (local smoke, CI full) until a feature rule names them.
     {
         "name": "vue-frontend",
         "paths": (
-            "frontend-app/**",
+            "frontend-app/package.json",
+            "frontend-app/package-lock.json",
+            "frontend-app/tsconfig.json",
+            "frontend-app/env.d.ts",
+            "frontend-app/index.html",
+            "frontend-app/vite.config.ts",
+            "frontend-app/scripts/build.mjs",
+            "frontend-app/src/main.ts",
+            "frontend-app/src/mount.ts",
+            "frontend-app/src/mount.test.ts",
+            "frontend-app/src/App.vue",
             "frontend/vue/**",
         ),
         "features": ("smoke",),
-        "note": "Vue bootstrap bundle → smoke (shell boot). Not a feature migration.",
+        "note": "Vue bootstrap and committed bundle → smoke. New src screens are unmapped (CI: full).",
     },
     {
         "name": "graph",
@@ -663,6 +674,8 @@ AFFECTED_RULES = (
 # Unknown production paths under these prefixes fall back to smoke (not full).
 CONSERVATIVE_SMOKE_PREFIXES = (
     "frontend/",
+    # Unmapped Vue screens. Explicit vue-frontend paths above win first.
+    "frontend-app/src/",
     "backend/",
     "tools/",
     "prks_app.py",
