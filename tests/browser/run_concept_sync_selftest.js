@@ -121,6 +121,74 @@ async function theDefinitionCoalescesAndCancels() {
     assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 0);
 }
 
+/* updateConcept(description) does not call the store with the draft verbatim:
+ * it diffs against what is SHOWING (pending overlay), then forwards only the
+ * dirty map. A→B→A cancel therefore depends on dirtyConceptFields emitting
+ * the acknowledged value when the user reverts, not on a silent no-op
+ * against the server base that would leave B queued. */
+async function theDefinitionCancelGoesThroughDirtyFields() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const id = "C-" + "A".repeat(31) + "B";
+    /* Existing Concept: prepare() in E2E caches concept + concept-state so
+     * updateConcept can resolve an acknowledged base. Mirror that here. */
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => {
+        if (entityId !== id) return { value: null, source: "unavailable" };
+        if (kind === "concept-state") {
+            return {
+                value: {
+                    concept_id: id,
+                    fields: { description: { revision: 3 } },
+                    identity: { name: "Systems", aliases: [] },
+                    identity_revision: 0,
+                    parent_ids: [],
+                    parents_revision: 0,
+                },
+                source: "cache",
+            };
+        }
+        if (kind === "concept") {
+            return {
+                value: { id: id, name: "Systems", description: "First" },
+                source: "cache",
+            };
+        }
+        return { value: null, source: "unavailable" };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+
+    const ops0 = await store.listOperations();
+    const base = await globalThis.prksAcknowledgedConceptFields(id, ops0);
+    assert.equal(base.description.value, "First");
+    assert.equal(base.description.revision, 3);
+
+    await store.saveConceptFields(id, { description: "Temporary." }, base);
+    const pending = await store.listOperations();
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 1);
+
+    assert.deepEqual(
+        globalThis.prksDirtyConceptFields(id, { description: "Temporary." }, base, pending),
+        {},
+        "an untouched pending value is not a new edit");
+    assert.deepEqual(
+        globalThis.prksDirtyConceptFields(id, { description: "First" }, base, pending),
+        { description: "First" },
+        "editing back to the acknowledged value IS a change the wrapper must forward");
+
+    /* The same composition updateConcept uses for description. */
+    const acknowledged = await globalThis.prksAcknowledgedConceptFields(id, pending);
+    assert.equal(acknowledged.description.value, "First");
+    assert.equal(acknowledged.description.revision, 3);
+    const changes = globalThis.prksDirtyConceptFields(
+        id, { description: "First" }, acknowledged, pending);
+    assert.deepEqual(changes, { description: "First" });
+    if (Object.keys(changes).length) {
+        await store.saveConceptFields(id, changes, acknowledged);
+    }
+    assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 0,
+        "wrapper-forwarded revert retires the never-sent intent");
+}
+
 async function theDefinitionIsNotTheIdentity() {
     const store = newStore();
     const id = "C-" + "B".repeat(32);
@@ -394,6 +462,7 @@ async function main() {
     await aConceptIsAValidParentImmediately();
     await aConceptNeedsAName();
     await theDefinitionCoalescesAndCancels();
+    await theDefinitionCancelGoesThroughDirtyFields();
     await theDefinitionIsNotTheIdentity();
     await theIdentityIsOneDecision();
     await aPendingRenameReachesEverySurfaceThatNamesIt();

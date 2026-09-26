@@ -215,7 +215,9 @@ class DurableConceptTests(unittest.TestCase):
                          'Edited offline.')
 
     # Definition A→B→A cancel is owned by Node
-    # `theDefinitionCoalescesAndCancels` in run_concept_sync_selftest.js.
+    # `theDefinitionCoalescesAndCancels` (store) and
+    # `theDefinitionCancelGoesThroughDirtyFields` (updateConcept composition)
+    # in run_concept_sync_selftest.js.
 
     # ---- identity -----------------------------------------------------------
 
