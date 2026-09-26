@@ -2,6 +2,11 @@
 
 Research Notes and Reminders each have one revision. The browser never parses
 research markup; the server still does on ACK.
+
+Deterministic cancel / private-fence / compact-conflict shape contracts live in
+Node (`run_work_note_sync_selftest.js`) and Python (`test_work_note_sync.py`).
+This module keeps the Chromium boundaries: real editor reload/remount and a
+thin reconnect conflict park.
 """
 import os
 import unittest
@@ -11,7 +16,7 @@ from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -41,28 +46,27 @@ class OfflineWorkNotesTests(unittest.TestCase):
         return server, page, context
 
     def pending(self, page, operation, count):
-        page.evaluate("""async ([op, n]) => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => r.operation === op);
-                if (rows.length === n && !rows.some(r => r.status === 'syncing')) return;
-                if (Date.now() > deadline) throw new Error('Sync did not settle: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", [operation, count])
+        wait_for_async(
+            page,
+            """([op, n]) => prksSync.store.listOperations().then(rows => {
+                const matched = rows.filter(r => r.operation === op);
+                return matched.length === n && !matched.some(r => r.status === 'syncing');
+            })""",
+            arg=[operation, count],
+            timeout=25000,
+            message='Sync did not settle')
 
     def conflicts(self, page, operation, count):
-        page.evaluate("""async ([op, n]) => {
-            const deadline = Date.now() + 25000;
-            for (;;) {
-                const rows = (await prksSync.store.listOperations())
-                    .filter(r => r.operation === op);
-                if (rows.length === n && rows.every(r => r.status === 'conflict' && !!r.server_result)) return;
-                if (Date.now() > deadline) throw new Error('No conflict settled: ' + JSON.stringify(rows));
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
-        }""", [operation, count])
+        wait_for_async(
+            page,
+            """([op, n]) => prksSync.store.listOperations().then(rows => {
+                const matched = rows.filter(r => r.operation === op);
+                return matched.length === n
+                    && matched.every(r => r.status === 'conflict' && !!r.server_result);
+            })""",
+            arg=[operation, count],
+            timeout=25000,
+            message='No conflict settled')
 
     def offline(self, page, context):
         context.set_offline(True)
@@ -160,18 +164,12 @@ class OfflineWorkNotesTests(unittest.TestCase):
         names = {row['name'] for row in db.execute_query('SELECT name FROM concepts')}
         self.assertNotIn('Should Not Exist', names)
 
-    def test_editing_back_to_the_acknowledged_body_cancels_the_pending_op(self):
-        server, page, context = self.start()
-        original = self.editor_text(page)
-        self.offline(page, context)
-        self.set_notes(page, 'Temporary B')
-        self.pending(page, 'SET_WORK_RESEARCH_NOTE', 1)
-        self.set_notes(page, original)
-        self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
-        self.assertEqual(self.db_for(server).get_work(server.ids['work_a'])['text_content'],
-                         original)
-
     def test_a_stale_research_revision_is_a_conflict(self):
+        """Thin reconnect boundary: a stale base parks as conflict.
+
+        Compact conflict shape (no note body fields) is owned by Node
+        `handlerContract` and Python `test_compact_conflict_results_omit_note_bodies`.
+        """
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -185,31 +183,5 @@ class OfflineWorkNotesTests(unittest.TestCase):
             return row && row.server_result;
         })""")
         self.assertEqual(result['code'], 'REVISION_CONFLICT')
-        self.assertNotIn('text', result)
-        self.assertNotIn('current_value', result)
-        self.assertNotIn('current_preview', result)
-        self.assertIsInstance(result.get('current_revision'), int)
-        self.assertIsInstance(result.get('current_bytes'), int)
-        self.assertIsInstance(result.get('requested_bytes'), int)
         self.assertEqual(self.db_for(server).get_work(work)['text_content'],
                          'Other device wrote C')
-
-    def test_private_ack_does_not_fence_concepts(self):
-        server, page, context = self.start()
-        work = server.ids['work_a']
-        selector = '#prks-private-notes-work-' + work
-        page.locator(selector).wait_for()
-        generation_before = page.evaluate(
-            "() => typeof prksOfflineDomainGeneration === 'function'"
-            " ? prksOfflineDomainGeneration('concepts') : 0")
-        page.locator(selector).fill('just a reminder')
-        page.locator(selector).blur()
-        page.locator('#prks-private-notes-status-work-' + work, has_text='Saved').wait_for(timeout=15000)
-        self.pending(page, 'SET_WORK_PRIVATE_NOTE', 0)
-        generation_after = page.evaluate(
-            "() => typeof prksOfflineDomainGeneration === 'function'"
-            " ? prksOfflineDomainGeneration('concepts') : 0")
-        self.assertEqual(generation_before, generation_after,
-                         'a Private ACK must not fence Concepts')
-        cached = self.cached_work(page, work)
-        self.assertEqual(cached['private_notes'], 'just a reminder')
