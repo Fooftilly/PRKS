@@ -14,6 +14,7 @@ const props = defineProps<{
 const intents = inject(conceptIntentsKey)
 
 const searchQuery = ref('')
+const searchInput = ref<HTMLInputElement | null>(null)
 const scopeHost = ref<HTMLElement | null>(null)
 const titleIconHost = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
@@ -62,6 +63,10 @@ function refreshIcons(): void {
 
 function clearSearch(): void {
   searchQuery.value = ''
+  // Match legacy research-index Clear: restore focus to the live search input.
+  void nextTick(() => {
+    searchInput.value?.focus()
+  })
 }
 
 function onCreate(): void {
@@ -118,6 +123,7 @@ watch(
       <div v-if="showToolbar" class="prks-toolbar prks-research-index__toolbar">
         <input
           id="prks-concept-search"
+          ref="searchInput"
           v-model="searchQuery"
           type="search"
           class="prks-input"

@@ -2,7 +2,7 @@
  * Shared research-index helpers + Concept create flow.
  *
  * Concept index/detail rendering lives in the Vue Concepts feature
- * (`frontend-app/src/features/concepts/`). Positions and Arguments still reuse
+ * (`frontend-app/src/features/concepts/`). Sibling research indexes still reuse
  * the research-index / research-markdown helpers defined here.
  */
 (function (root) {

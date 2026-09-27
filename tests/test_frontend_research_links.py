@@ -115,13 +115,16 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_indexes_use_dense_rows(self):
         concepts = _read(_CONCEPTS)
+        concepts_row = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptRow.vue")
+        )
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
         self.assertIn("prks-research-row", concepts)
         self.assertIn("prksResearchIndexRowHtml", concepts)
-        self.assertIn("Top-level concept", concepts)
-        self.assertNotIn("No parent", concepts)
-        self.assertNotIn("Parents:", concepts.split("function conceptRowHtml", 1)[1].split("function matchConcept", 1)[0])
+        self.assertIn("Top-level concept", concepts_row)
+        self.assertNotIn("No parent", concepts_row)
+        self.assertNotIn("Parents:", concepts_row)
         self.assertIn("prks-research-row", positions)
         self.assertIn("prks-research-row", args)
         self.assertIn("prks-tab", args)
@@ -129,10 +132,13 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_index_search_is_shared_and_client_only(self):
         concepts = _read(_CONCEPTS)
+        concepts_match = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "match.ts")
+        )
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
-        # One shared helper, reused by the other two index modules -- not three
-        # unrelated search implementations.
+        # Shared helper remains for Positions/Arguments; Concepts Vue owns its own
+        # local filter with the same match semantics.
         self.assertIn("function bindResearchIndexSearch", concepts)
         self.assertIn("function normalizeSearchQuery", concepts)
         self.assertIn("prksBindResearchIndexSearch: bindResearchIndexSearch", concepts)
@@ -150,7 +156,8 @@ class FrontendResearchLinksTests(unittest.TestCase):
         # Argument kind filter stays a real route/query param; search only narrows within it.
         self.assertIn("k === 'all' ? '#/arguments' : '#/arguments?kind=", args)
         self.assertIn("matchArgument", args)
-        self.assertIn("function matchConcept", concepts)
+        self.assertIn("export function matchConceptIndexItem", concepts_match)
+        self.assertNotIn("fetch", concepts_match)
         self.assertIn("function matchPosition", positions)
 
     def test_research_index_empty_states_are_distinct(self):
