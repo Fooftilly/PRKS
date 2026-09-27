@@ -192,6 +192,11 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         concepts_case = app[app.index("case 'concepts': {"):
                             app.index("case 'concept-detail': {")]
         self.assertIn('skipPageEnter: sameConceptsWorkspace', concepts_case)
+        # Retained unavailable/not-found must clear prior provenance banners.
+        detail_case = app[app.index("case 'concept-detail': {"):
+                          app.index("case 'positions': {")]
+        self.assertIn('prksOfflinePrependBanner(contentDiv, null)', concepts_case)
+        self.assertGreaterEqual(detail_case.count('prksOfflinePrependBanner(contentDiv, null)'), 2)
 
     def test_a_graph_node_is_patched_never_invented(self):
         """Graph is a projection. A Concept the snapshot does not contain is one

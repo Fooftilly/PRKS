@@ -3985,6 +3985,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         items: [],
                         generation: generation,
                     });
+                    /* Retained Concepts host keeps contentDiv; clear any prior
+                     * cached-provenance banner so it cannot describe the previous route. */
+                    prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
                         notFoundTitle: 'Concepts not available offline',
@@ -4046,6 +4049,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         conceptId: conceptId,
                         generation: generation,
                     });
+                    prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
                         notFoundTitle: 'Concept not available offline',
@@ -4061,6 +4065,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         conceptId: conceptId,
                         generation: generation,
                     });
+                    prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
                         notFoundTitle: 'Concept not found',
