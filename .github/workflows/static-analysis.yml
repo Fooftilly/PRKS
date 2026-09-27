@@ -49,9 +49,9 @@ jobs:
       - name: Enforce PRKS engineering invariants
         run: python scripts/check_invariants.py
 
-      - name: Fail on new E2E page.wait_for_timeout
-        # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
-        # unrelated PRs. Only newly added / newly-unexempted call sites fail.
+      - name: Resolve diff-aware check base
+        id: diff-base
+        # Shared by the diff-aware guards below (#189, #190).
         # PR base is the immutable event SHA (not the live base-branch tip).
         # Zero-before pushes (new/recreated branch) use the empty tree so the
         # full tip is scanned — do not merge-base with origin/master after a
@@ -81,7 +81,23 @@ jobs:
             # change baseline so historical E2E waits remain grandfathered.
             base="$(git rev-parse --verify --end-of-options HEAD)"
           fi
-          python scripts/check_e2e_wait_for_timeout.py --base "$base"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Fail on new E2E page.wait_for_timeout
+        # Diff-aware (#189): historical sleeps under tests/e2e/ do not fail
+        # unrelated PRs. Only newly added / newly-unexempted call sites fail.
+        env:
+          PRKS_DIFF_BASE: ${{ steps.diff-base.outputs.base }}
+        run: python scripts/check_e2e_wait_for_timeout.py --base "$PRKS_DIFF_BASE"
+
+      - name: Schema-change gate (db_schema + migration + version + PK parity)
+        # #190: a db_schema.sql change needs a LATEST_SCHEMA_VERSION bump and
+        # one new Migration per bumped version; ON CONFLICT tables in the
+        # canonical schema must be in _CURRENT_TABLE_PKS (or the narrow
+        # allowlist in the script). Non-schema PRs pass unchanged.
+        env:
+          PRKS_DIFF_BASE: ${{ steps.diff-base.outputs.base }}
+        run: python scripts/check_schema_change.py --base "$PRKS_DIFF_BASE"
 
   pyright:
     permissions:

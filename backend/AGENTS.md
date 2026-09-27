@@ -207,6 +207,9 @@ Any schema/data change needed by an existing database requires:
 4. add fresh-DB and upgraded-DB tests.
 
 Never change schema only in `db_schema.sql`.
+`scripts/check_schema_change.py` (#190, Fast Static Analysis) enforces
+this per PR and requires every canonical table upserted with `ON CONFLICT`
+to be in `_CURRENT_TABLE_PKS`; see its docstring for codes and allowlist.
 
 Work identity (#60, schema 17, `docs/work-identity-model.md`): `works` is
 still the only authority for every field. `manifestations`/`assets` are a
