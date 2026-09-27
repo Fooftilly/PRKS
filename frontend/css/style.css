@@ -4972,6 +4972,19 @@ a.tag {
     align-self: stretch;
 }
 
+/* Vue route-surface host must participate in the Folder Library flex chain
+ * (#261). Without this, panes collapse and the Recently Added toolbar
+ * overlays card titles (pointer interception in E2E). */
+.prks-tab-root > [data-prks-vue-route-host]:has(.prks-folder-library) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
 /* People groups library (#/people/groups): same full-height layout as folder library */
 #main-content:has(.prks-workspace-canvas--stacked .prks-group-library) {
     display: flex;

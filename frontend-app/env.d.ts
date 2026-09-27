@@ -29,6 +29,17 @@ interface ConceptDetailPresentRequest {
   shell?: boolean
 }
 
+interface FolderLibraryPresentRequest {
+  owner: object
+  host: HTMLElement
+  contentRoot?: HTMLElement | null
+  availability?: 'ready' | 'unavailable'
+  folders?: unknown
+  offlineCached?: boolean
+  generation?: number
+  shell?: boolean
+}
+
 interface PrksPromptTextOptions {
   title: string
   message?: string
@@ -79,6 +90,7 @@ interface Window {
   prksWorkBrowseModeToggleHtml?: (hiddenId?: string) => string
   prksWorkBrowseCollectionClass?: (extraClass?: string) => string
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
+  prksTagSearchIconHtml?: () => string
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
@@ -86,6 +98,86 @@ interface Window {
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
   prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
+  prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
+  prksVueDismissFolderLibrary?: (owner: object) => void
+  prksFolderLibraryTreeInnerHtml?: (
+    list: unknown,
+    filterQuery?: string,
+    options?: { delegateToggle?: boolean },
+  ) => string
+  prksFolderLibraryCatalogGlanceParts?: (folders: unknown) => Array<string | null>
+  prksPaintFolderLibraryGlance?: (host: HTMLElement, parts: unknown) => void
+  prksScheduleFolderLibraryGlance?: (
+    root: ParentNode | HTMLElement,
+    options?: {
+      folders?: unknown[]
+      recentlyAddedWorks?: unknown[] | null
+    },
+  ) => void
+  prksPublishFolderDashboardState?: (state: {
+    container?: HTMLElement | null
+    vueOwned?: boolean
+    recentlyAddedLoading?: boolean
+    recentlyAddedWorks?: unknown[] | null
+    switchTab?: (tab: string) => void | Promise<void>
+    [key: string]: unknown
+  }) => void
+  prksUnpublishFolderDashboardState?: (container: HTMLElement) => void
+  prksFolderDashboardStateForRoot?: (root: ParentNode | HTMLElement | null) =>
+    | {
+        container?: HTMLElement | null
+        folders?: unknown[]
+        recentlyAddedWorks?: unknown[] | null
+        [key: string]: unknown
+      }
+    | undefined
+  prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
+  prksFolderLibraryExpandToggleInnerHtml?: () => string
+  prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
+  prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
+  prksRecentlyAddedDateLabel?: (createdAt: unknown) => string
+  prksRecentlyAddedWorkMatchesQuery?: (
+    work: unknown,
+    query: string,
+    foldersById: Map<string, unknown>,
+  ) => boolean
+  prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
+  prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
+  prksToggleFolderNode?: (folderId: string) => void
+  prksToggleFolderNodeInHost?: (
+    treeHost: HTMLElement,
+    folderId: string,
+    folders?: readonly unknown[],
+  ) => void
+  prksToggleAllFolderNodes?: () => void
+  prksToggleAllFolderNodesInHost?: (
+    treeHost: HTMLElement,
+    folders: readonly unknown[],
+  ) => void
+  prksOfflineRecentlyAddedFetch?: () => Promise<{
+    source?: string
+    value?: unknown
+  } | null>
+  prksResolveOfflineRecentlyAdded?: (offline: unknown) => unknown[] | null
+  prksEffectiveProjectionRows?: (rows: unknown[], domain: string) => unknown[]
+  prksOfflineDomainGeneration?: (domain: string) => unknown
+  prksRefreshPendingWorkMetadata?: () => Promise<void>
+  prksPendingWorkMetadataGeneration?: () => unknown
+  prksHideWorkThumbPreview?: () => void
+  prksReleaseWorkThumbPreview?: (root: ParentNode | null) => void
+  prksReleaseLazyWorkThumbs?: (root: ParentNode | null) => void
+  openModal?: (id: string) => void
+  __prksFolderDashboardState?: {
+    vueOwned?: boolean
+    container?: HTMLElement | null
+    recentlyAddedLoading?: boolean
+    recentlyAddedWorks?: unknown[] | null
+    switchTab?: (tab: string) => void | Promise<void>
+    [key: string]: unknown
+  }
+  __prksRecentlyAddedDirty?: boolean
+  __prksFolderLibraryBrandHomeReset?: boolean
+  prksSync?: { subscribe?: (listener: () => void) => () => void }
   prksCreateConceptFlow?: (
     initialName?: string,
     ownerOpts?: {

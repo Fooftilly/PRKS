@@ -1260,6 +1260,9 @@ function initSidebarBrandHome() {
         }
         const st = window.__prksFolderDashboardState;
         if (st) st.filterQuery = '';
+        // Vue Folder Library retains across this refresh; signal an intentional
+        // filter clear so the mounted input stays in sync with storage.
+        window.__prksFolderLibraryBrandHomeReset = true;
         handleRoute();
     });
 }
@@ -2843,6 +2846,38 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
  * Same-owner Concepts refresh reuses the existing host so local index state
  * (searchQuery) survives an in-place projection update.
  */
+/**
+ * Mount the Vue Folder Library surface in this pane.
+ * `detail.folders` must already be the authoritative effective folder projection.
+ */
+function prksPresentVueFolderLibrary(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const request = {
+        feature: 'folder-library',
+        owner: ctx,
+        contentRoot: contentDiv,
+        availability: detail.availability || 'ready',
+        folders: detail.folders,
+        offlineCached: !!detail.offlineCached,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentFolderLibrary === 'function') {
+        window.prksVuePresentFolderLibrary(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksPresentVueConcepts(ctx, contentDiv, detail) {
     let host =
         contentDiv && typeof contentDiv.querySelector === 'function'
@@ -3135,12 +3170,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
             '[data-prks-concepts-index-view], [data-prks-concept-detail-view]'
         )
     );
+    const sameFolderLibraryWorkspace = !!(
+        route.name === 'folders' &&
+        contentDiv.querySelector('[data-prks-folder-library-view]')
+    );
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = true;
+    }
+    if (sameFolderLibraryWorkspace) {
+        ctx.__prksRetainFolderLibrarySurface = true;
     }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
+    }
+    if (sameFolderLibraryWorkspace) {
+        ctx.__prksRetainFolderLibrarySurface = false;
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3176,6 +3221,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (
         !sameFolderWorkspace &&
         !sameConceptsWorkspace &&
+        !sameFolderLibraryWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3189,12 +3235,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
         if (typeof window.prksVueDismissConcepts === 'function') {
             window.prksVueDismissConcepts(ctx);
+        }
+        if (typeof window.prksVueDismissFolderLibrary === 'function') {
+            window.prksVueDismissFolderLibrary(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
@@ -3206,8 +3255,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
-    } else {
-        // Concepts in-place refresh: keep the Vue host; mark busy until paint.
+    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace) {
+        // Folder Library / Concepts in-place refresh: keep the Vue host; mark busy until paint.
         contentDiv.setAttribute('aria-busy', 'true');
     }
 
@@ -3234,13 +3283,23 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (!folders) {
                     // A cached [] is a real empty library; only a MISSING
                     // snapshot is an unavailable state.
-                    prksOfflineRenderUnavailable(contentDiv, 'Folders not available offline');
+                    prksPresentVueFolderLibrary(ctx, contentDiv, {
+                        availability: 'unavailable',
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, offlineFolders);
                     titleOpts = { notFound: true, notFoundTitle: 'Folders not available offline' };
                     break;
                 }
                 publishSidebar({ folderCount: folders.length });
-                renderDashboard(folders, contentDiv, { offlineCached: offlineFolders.source === 'cache', ctx: ctx });
+                prksPresentVueFolderLibrary(ctx, contentDiv, {
+                    availability: 'ready',
+                    folders: folders,
+                    offlineCached: offlineFolders.source === 'cache',
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineFolders);
+                titleOpts = { skipPageEnter: sameFolderLibraryWorkspace };
                 break;
             }
             case 'playlists': {
@@ -4453,6 +4512,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
     } catch (_e) {
         if (stale()) return;
         if (typeof prksIsAbortError === 'function' && prksIsAbortError(_e)) return;
+        /* Retained Vue surfaces skip beginRoute dismiss. An error path that
+         * replaces contentDiv must still tear them down so unmount/cleanup run. */
+        if (sameFolderLibraryWorkspace && typeof window.prksVueDismissFolderLibrary === 'function') {
+            window.prksVueDismissFolderLibrary(ctx);
+        }
+        if (sameConceptsWorkspace && typeof window.prksVueDismissConcepts === 'function') {
+            window.prksVueDismissConcepts(ctx);
+        }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);
         }
@@ -5246,13 +5313,9 @@ function initForms() {
             if (
                 ownerRoute &&
                 ownerRoute.name === 'folders' &&
-                typeof fetchFolders === 'function' &&
-                typeof renderDashboard === 'function'
+                typeof prksNavigate === 'function'
             ) {
-                const folders = await fetchFolders();
-                if (ownerCtx && ownerCtx.root && ownerCtx.mounted) {
-                    renderDashboard(folders, ownerCtx.root);
-                }
+                prksNavigate('#/folders', { replace: true, tabId: ownerCtx.tabId });
                 return;
             }
             /* Not a reload: the record is local, and reloading would throw away

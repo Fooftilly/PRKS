@@ -1,0 +1,120 @@
+<script setup lang="ts">
+import { useEventListener } from '@vueuse/core'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { folderLibraryIntentsKey } from './intents'
+import {
+  effectiveRecentlyAddedRows,
+  recentlyAddedMatchesQuery,
+  recentlyAddedWorkCardHtml,
+} from './legacy-recently-added'
+import type { FolderRow, RecentlyAddedWork } from './types'
+import { initLazyWorkThumbs, releaseWorkThumbResources } from './work-thumb-lifecycle'
+
+const props = defineProps<{
+  folders: readonly FolderRow[]
+  filterQuery: string
+  works: RecentlyAddedWork[] | null
+  offlineCached: boolean
+  unavailable: boolean
+  loading: boolean
+  generation: number
+  /** Bumped when pending work-metadata overlay changes while mounted. */
+  overlayRevision: number
+}>()
+
+const intents = inject(folderLibraryIntentsKey)
+const collectionEl = ref<HTMLElement | null>(null)
+
+const effectiveRows = computed(() => {
+  void props.overlayRevision
+  if (!props.works) return []
+  return effectiveRecentlyAddedRows([...props.works])
+})
+
+const filtered = computed(() => {
+  const q = props.filterQuery.trim()
+  if (!q) return effectiveRows.value
+  return effectiveRows.value.filter((w) => recentlyAddedMatchesQuery(w, q, props.folders))
+})
+
+const collectionClass = computed(() => {
+  void props.generation
+  const fn = window.prksWorkBrowseCollectionClass
+  return typeof fn === 'function'
+    ? fn('prks-folder-library__grid')
+    : 'prks-folder-library__grid card-grid'
+})
+
+const collectionHtml = computed(() => {
+  if (props.unavailable) {
+    return '<p class="prks-inline-message">Recently added is not available offline.</p>'
+  }
+  // Match legacy: leave the pane empty while the first fetch is in flight so
+  // E2E `children.length > 0` waits for real cards (or empty/filter states),
+  // not a loading placeholder that resolves the wait early.
+  if (props.loading && !props.works) {
+    return ''
+  }
+  if (!filtered.value.length) {
+    const q = props.filterQuery.trim()
+    if (q) return '<p class="prks-inline-message">No files match your search.</p>'
+    return (
+      '<div class="prks-folder-tree__empty-state">' +
+      '<p class="prks-inline-message">No files in the library yet.</p>' +
+      '<button type="button" class="prks-btn prks-btn--primary prks-folder-tree__create-btn" data-prks-role="new-work-from-recently-added">New File</button>' +
+      '</div>'
+    )
+  }
+  const cached = props.offlineCached
+  return filtered.value.map((w) => recentlyAddedWorkCardHtml(w, cached)).join('')
+})
+
+function paintCollection(): void {
+  const el = collectionEl.value
+  if (!el) return
+  // #170: release before every DOM replace; always re-init (incl. cached) so
+  // IntersectionObserver prune runs after detach.
+  releaseWorkThumbResources(el)
+  el.innerHTML = collectionHtml.value
+  window.prksRefreshIcons?.(el)
+  initLazyWorkThumbs(el)
+}
+
+// Generic click listener with VueUse scope cleanup (#233). Preview ownership
+// stays in work-thumb-lifecycle / legacy helpers.
+useEventListener(collectionEl, 'click', (event: MouseEvent) => {
+  const btn = (event.target as HTMLElement | null)?.closest(
+    '[data-prks-role="new-work-from-recently-added"]',
+  )
+  if (btn) {
+    event.preventDefault()
+    intents?.openWorkModal()
+  }
+})
+
+onMounted(() => {
+  paintCollection()
+})
+
+onBeforeUnmount(() => {
+  releaseWorkThumbResources(collectionEl.value)
+})
+
+// Paint synchronously so awaited tab switches and fill+150ms filter waits see
+// cards in the same turn (debounce(0) raced offline metadata E2E helpers).
+watch(collectionHtml, () => {
+  paintCollection()
+}, { flush: 'post' })
+
+defineExpose({ releaseThumbs: () => releaseWorkThumbResources(collectionEl.value) })
+</script>
+
+<template>
+  <div class="prks-folder-library__scroll prks-folder-library__scroll--added">
+    <div
+      id="prks-folder-library-recently-added"
+      ref="collectionEl"
+      :class="collectionClass"
+    ></div>
+  </div>
+</template>

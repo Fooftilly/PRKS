@@ -1819,6 +1819,7 @@ def validate_vue_production(repo_root: Path | None = None) -> GateResult:
     expected_pins = {
         "vue": deps.get("vue"),
         "tanstackVueQuery": deps.get("@tanstack/vue-query"),
+        "vueUse": deps.get("@vueuse/core"),
         "vite": dev.get("vite"),
         "typescript": dev.get("typescript"),
         "vueTsc": dev.get("vue-tsc"),

@@ -14,7 +14,7 @@ The application must not silently install or upgrade packages at runtime.
 
 The shipped shell still loads legacy JavaScript plus vendored frontend assets and a vendored/custom PDF viewer. Vendored code must be treated as a tracked dependency rather than an invisible copy.
 
-The Vue 3 application source lives in `frontend-app/` (its own `package.json` and lockfile), including `@tanstack/vue-query` for disposable server state. `npm run build` writes the committed runtime bundle `frontend/vue/prks-vue.js`, with component CSS inlined into that file. Node `>=24.15.0 <25` stays a maintainer/build-time tool; the Python application serves that file and does not install npm packages.
+The Vue 3 application source lives in `frontend-app/` (its own `package.json` and lockfile), including `@tanstack/vue-query` for disposable server state and `@vueuse/core` for selective generic browser lifecycle helpers. `npm run build` writes the committed runtime bundle `frontend/vue/prks-vue.js`, with component CSS inlined into that file. Node `>=24.15.0 <25` stays a maintainer/build-time tool; the Python application serves that file and does not install npm packages.
 
 `dependency-inventory.json` records dependency inventory used by the repository's dependency checks.
 

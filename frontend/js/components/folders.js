@@ -61,6 +61,14 @@ function prksSetFolderNodeCollapsed(folderId, collapsed) {
 }
 
 function prksRerenderFolderDashboard() {
+    /* Vue owns Folder Library presentation (#261). Prefer a same-tab navigate
+     * so the coordinator rebuilds the effective projection and Vue present
+     * reuses the route host. Fall back to legacy renderDashboard only when
+     * the Vue bridge is unavailable. */
+    if (typeof window.prksNavigate === 'function') {
+        window.prksNavigate('#/folders', { replace: true });
+        return;
+    }
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     renderDashboard(st.folders || [], st.container);
@@ -74,7 +82,8 @@ function prksFolderLibraryFilterFromStorage() {
     }
 }
 
-function prksFolderLibraryTreeInnerHtml(list, filterQuery) {
+function prksFolderLibraryTreeInnerHtml(list, filterQuery, options) {
+    const opts = options && typeof options === 'object' ? options : {};
     if (!list || !list.length) {
         return (
             '<div class="prks-folder-tree__empty-state">' +
@@ -83,7 +92,10 @@ function prksFolderLibraryTreeInnerHtml(list, filterQuery) {
             '</div>'
         );
     }
-    return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, { filterQuery })}</div>`;
+    return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, {
+        filterQuery,
+        delegateToggle: !!opts.delegateToggle,
+    })}</div>`;
 }
 
 function prksRerenderFolderTreeOnly() {
@@ -174,6 +186,55 @@ function prksSyncAllFolderTreeBranchesUi(host, folders) {
             prksSyncFolderTreeBranchUi(host, f.id, prksFolderNodeCollapsed(f.id));
         }
     });
+}
+
+function prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, folders) {
+    if (!treeHost || typeof treeHost.closest !== 'function') {
+        prksUpdateFolderLibraryExpandToggleBtn();
+        return;
+    }
+    const root = treeHost.closest('.prks-folder-library') || treeHost.closest('[data-prks-folder-library-view]');
+    const btn = root
+        ? root.querySelector('#prks-folder-library-expand-toggle')
+        : null;
+    if (!btn) {
+        prksUpdateFolderLibraryExpandToggleBtn();
+        return;
+    }
+    const list = Array.isArray(folders) ? folders : [];
+    const label = prksFolderLibraryExpandToggleLabel(list);
+    const allCollapsed = prksFolderTreeAllCollapsed(list);
+    if (!btn.querySelector('.ribbon-btn__icon')) {
+        btn.innerHTML = prksFolderLibraryExpandToggleInnerHtml();
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
+    }
+    btn.classList.toggle('is-collapse-all', !allCollapsed);
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+}
+
+/** Host-scoped expand/collapse — does not touch another pane's tree. */
+function prksToggleFolderNodeInHost(treeHost, folderId, folders) {
+    const idRaw = String(folderId || '').trim();
+    const id = idRaw ? decodeURIComponent(idRaw) : '';
+    if (!id || !treeHost) return;
+    prksSetFolderNodeCollapsed(id, !prksFolderNodeCollapsed(id));
+    const collapsed = prksFolderNodeCollapsed(id);
+    prksSyncFolderTreeBranchUi(treeHost, id, collapsed);
+    const st = window.__prksFolderDashboardState;
+    const list = Array.isArray(folders)
+        ? folders
+        : (st && Array.isArray(st.folders) ? st.folders : null);
+    prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, list);
+}
+
+/** Host-scoped expand/collapse-all using the owning projection's folders. */
+function prksToggleAllFolderNodesInHost(treeHost, folders) {
+    if (!treeHost || !Array.isArray(folders)) return;
+    const allCollapsed = prksFolderTreeAllCollapsed(folders);
+    prksSetAllFolderNodesCollapsed(folders, !allCollapsed);
+    prksSyncAllFolderTreeBranchesUi(treeHost, folders);
+    prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, folders);
 }
 
 function prksToggleAllFolderNodes() {
@@ -269,10 +330,15 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
             ? ` aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}"`
             : '';
 
+    // Vue Folder Library hosts own toggles via delegated click (no inline
+    // stopPropagation that would block the host listener).
+    const toggleOnclick = opts.delegateToggle
+        ? ''
+        : ` onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');"`;
     const toggleHtml = expandable
         ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
               collapsed ? 'Expand subfolders' : 'Collapse subfolders'
-          }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');">${
+          }"${toggleOnclick}>${
               typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸'
           }</button>`
         : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
@@ -508,6 +574,7 @@ function renderFolderTreeRoots(folders, options = {}) {
             collapsed,
             matchClass,
             selectedId: options.selectedId,
+            delegateToggle: !!options.delegateToggle,
         });
 
         if (hasChildren) {
@@ -630,6 +697,8 @@ function prksRecentlyAddedWorkMatchesQuery(work, query, foldersById) {
 function prksRerenderFolderLibraryRecentlyAddedOnly() {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
+    // Vue Folder Library owns Recently Added paint + #170 teardown.
+    if (st.vueOwned) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
     if (!Array.isArray(st.recentlyAddedWorks)) {
@@ -739,7 +808,9 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
  * themselves stay in `work-metadata-state.js`; this only says "repaint". */
 async function prksRefreshRecentlyAddedOverlay() {
     const st = window.__prksFolderDashboardState;
-    if (!st || !st.container || !Array.isArray(st.recentlyAddedWorks)) return;
+    // Vue-owned surfaces subscribe to metadata overlay themselves and repaint
+    // through release-before-replace (#170). Do not replace their card DOM.
+    if (!st || st.vueOwned || !st.container || !Array.isArray(st.recentlyAddedWorks)) return;
     if (typeof prksRefreshPendingWorkMetadata !== 'function') return;
     await prksRefreshPendingWorkMetadata();
     st.recentlyAddedPendingGeneration =
@@ -759,6 +830,8 @@ if (typeof window !== 'undefined' && window.prksSync &&
 async function prksLoadFolderLibraryRecentlyAdded(force) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
+    // Vue owns load + paint for the migrated dashboard.
+    if (st.vueOwned) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
     // The in-memory copy is only usable while the Recently-added coherence
@@ -867,6 +940,22 @@ function prksSwitchFolderLibraryTab(tab) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     const want = tab === 'recently-added' ? 'recently-added' : 'folders';
+    // Vue owns tab + Recently Added rows. Prefer the awaitable bridge so
+    // callers (and Playwright `page.evaluate`) settle after load+paint —
+    // a bare button click returned before the first card existed.
+    if (st.vueOwned) {
+        if (typeof st.switchTab === 'function') {
+            return st.switchTab(want);
+        }
+        const root = st.container.querySelector('[data-prks-folder-library-view]');
+        const btn =
+            root &&
+            root.querySelector(`.prks-folder-library__tab-btn[data-tab="${want}"]`);
+        if (btn && typeof btn.click === 'function') {
+            btn.click();
+            return;
+        }
+    }
     st.activeTab = want;
     try {
         sessionStorage.setItem(PRKS_FOLDER_LIBRARY_TAB_KEY, want);
@@ -927,9 +1016,49 @@ async function prksPeekCachedBrowseList(listKey) {
     }
 }
 
-async function prksCollectFolderLibraryGlanceExtras() {
+/* Per-container Folder Library dashboard bridges. Dual-mounted Main/Secondary
+ * surfaces must not overwrite a singleton — glance extras and tab helpers resolve
+ * the owner that contains the requesting root, and unpublish restores another
+ * still-mounted owner instead of clearing the last writer. */
+const __prksFolderDashboardOwners = new Map();
+
+function prksPublishFolderDashboardState(state) {
+    if (!state || !state.container) {
+        window.__prksFolderDashboardState = state;
+        return;
+    }
+    __prksFolderDashboardOwners.set(state.container, state);
+    window.__prksFolderDashboardState = state;
+}
+
+function prksUnpublishFolderDashboardState(container) {
+    if (!container) return;
+    __prksFolderDashboardOwners.delete(container);
+    const st = window.__prksFolderDashboardState;
+    if (!st || st.container !== container) return;
+    const next = __prksFolderDashboardOwners.values().next();
+    window.__prksFolderDashboardState = next.done ? undefined : next.value;
+}
+
+function prksFolderDashboardStateForRoot(root) {
+    if (root) {
+        for (const st of __prksFolderDashboardOwners.values()) {
+            if (!st || !st.container) continue;
+            if (
+                st.container === root ||
+                (typeof st.container.contains === 'function' && st.container.contains(root))
+            ) {
+                return st;
+            }
+        }
+    }
+    return window.__prksFolderDashboardState;
+}
+
+async function prksCollectFolderLibraryGlanceExtras(options) {
     const parts = [];
     const CONTINUE_CAP = 3;
+    const opts = options && typeof options === 'object' ? options : {};
 
     /* Continue / In Progress / Recently added reuse already-warmed snapshots or
      * in-memory tab state only. Never start browse/recently-added read-through
@@ -971,11 +1100,20 @@ async function prksCollectFolderLibraryGlanceExtras() {
         }
     }
 
-    const stMem = window.__prksFolderDashboardState;
+    /* Prefer caller-owned rows (Vue scheduleGlance) over any singleton bridge.
+     * An explicit null means "this owner has no RA rows", not "fall back". */
+    const raRows = Object.prototype.hasOwnProperty.call(opts, 'recentlyAddedWorks')
+        ? (Array.isArray(opts.recentlyAddedWorks) ? opts.recentlyAddedWorks : null)
+        : (() => {
+              const stMem = window.__prksFolderDashboardState;
+              return stMem && Array.isArray(stMem.recentlyAddedWorks)
+                  ? stMem.recentlyAddedWorks
+                  : null;
+          })();
     /* Only reuse an already-loaded Recently-added RAM copy. Do not warm
      * recently-added:index from Home glance — that domain is independent. */
-    if (stMem && Array.isArray(stMem.recentlyAddedWorks) && stMem.recentlyAddedWorks.length) {
-        parts.push(stMem.recentlyAddedWorks.length + ' recently added');
+    if (Array.isArray(raRows) && raRows.length) {
+        parts.push(raRows.length + ' recently added');
     }
 
     const procCount =
@@ -1003,7 +1141,7 @@ async function prksCollectFolderLibraryGlanceExtras() {
     return parts;
 }
 
-async function prksScheduleFolderLibraryGlance(root) {
+async function prksScheduleFolderLibraryGlance(root, options) {
     const host =
         root && root.querySelector
             ? root.querySelector('[data-prks-role="folder-library-glance-host"]')
@@ -1011,11 +1149,20 @@ async function prksScheduleFolderLibraryGlance(root) {
     if (!host) return;
     const token = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
     host.dataset.glanceToken = token;
-    const st = window.__prksFolderDashboardState;
-    const catalogParts = prksFolderLibraryCatalogGlanceParts((st && st.folders) || []);
+    const opts = options && typeof options === 'object' ? options : {};
+    const st = prksFolderDashboardStateForRoot(root);
+    const folders = Array.isArray(opts.folders)
+        ? opts.folders
+        : ((st && st.folders) || []);
+    const extrasOpts = Object.prototype.hasOwnProperty.call(opts, 'recentlyAddedWorks')
+        ? { recentlyAddedWorks: opts.recentlyAddedWorks }
+        : st
+          ? { recentlyAddedWorks: st.recentlyAddedWorks }
+          : {};
+    const catalogParts = prksFolderLibraryCatalogGlanceParts(folders);
     let extras = [];
     try {
-        extras = await prksCollectFolderLibraryGlanceExtras();
+        extras = await prksCollectFolderLibraryGlanceExtras(extrasOpts);
     } catch (_e) {
         extras = [];
     }
@@ -1101,7 +1248,7 @@ function renderDashboard(folders, container, options = {}) {
         </div>
         </div>
     `;
-    window.__prksFolderDashboardState = {
+    prksPublishFolderDashboardState({
         folders: list,
         container,
         activeTab,
@@ -1112,7 +1259,7 @@ function renderDashboard(folders, container, options = {}) {
         recentlyAddedPendingGeneration: prev.recentlyAddedPendingGeneration,
         recentlyAddedCached: prev.recentlyAddedCached,
         recentlyAddedLoading: false,
-    };
+    });
     const root = container.querySelector('.prks-folder-library');
     prksBindFolderLibrarySearch(root);
     prksBindFolderLibraryFilesSearch(root);
@@ -1133,7 +1280,10 @@ function renderDashboard(folders, container, options = {}) {
     if (activeTab === 'recently-added') {
         void prksLoadFolderLibraryRecentlyAdded(false);
     }
-    void prksScheduleFolderLibraryGlance(root);
+    void prksScheduleFolderLibraryGlance(root, {
+        folders: list,
+        recentlyAddedWorks: prev.recentlyAddedWorks,
+    });
     prksBindFolderOfflineState(options && options.ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
@@ -1900,8 +2050,24 @@ window.mountFolderAttachControlsForWork = mountFolderAttachControlsForWork;
 window.prksFolderRowLabel = prksFolderRowLabel;
 window.prksCollectFolderDescendantIds = prksCollectFolderDescendantIds;
 window.prksToggleFolderNode = prksToggleFolderNode;
+window.prksToggleFolderNodeInHost = prksToggleFolderNodeInHost;
 window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
 window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
+window.prksToggleAllFolderNodesInHost = prksToggleAllFolderNodesInHost;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
 window.prksFillFolderDetailTree = prksFillFolderDetailTree;
+window.prksFolderLibraryTreeInnerHtml = prksFolderLibraryTreeInnerHtml;
+window.prksFolderLibraryCatalogGlanceParts = prksFolderLibraryCatalogGlanceParts;
+window.prksPaintFolderLibraryGlance = prksPaintFolderLibraryGlance;
+window.prksScheduleFolderLibraryGlance = prksScheduleFolderLibraryGlance;
+window.prksPublishFolderDashboardState = prksPublishFolderDashboardState;
+window.prksUnpublishFolderDashboardState = prksUnpublishFolderDashboardState;
+window.prksFolderDashboardStateForRoot = prksFolderDashboardStateForRoot;
+window.prksFolderLibraryExpandToggleLabel = prksFolderLibraryExpandToggleLabel;
+window.prksFolderLibraryExpandToggleInnerHtml = prksFolderLibraryExpandToggleInnerHtml;
+window.prksFolderTreeHasCollapsibleNodes = prksFolderTreeHasCollapsibleNodes;
+window.prksFolderTreeAllCollapsed = prksFolderTreeAllCollapsed;
+window.prksRecentlyAddedDateLabel = prksRecentlyAddedDateLabel;
+window.prksRecentlyAddedWorkMatchesQuery = prksRecentlyAddedWorkMatchesQuery;
+window.prksBindFolderOfflineState = prksBindFolderOfflineState;

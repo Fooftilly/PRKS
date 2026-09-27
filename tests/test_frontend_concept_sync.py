@@ -182,7 +182,11 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         app = (FRONTEND / 'app.js').read_text()
         self.assertIn('sameConceptsWorkspace', app)
         self.assertIn('__prksRetainConceptsSurface', app)
-        self.assertIn('!sameFolderWorkspace && !sameConceptsWorkspace', app)
+        # Folder Library Vue (#261) shares the same dismiss/loading wipe gate.
+        self.assertIn(
+            '!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace',
+            app,
+        )
         present = app[app.index('function prksPresentVueConcepts'):
                       app.index('function prksRenderRouteLoading')]
         self.assertIn(':scope > [data-prks-vue-route-host]', present)
