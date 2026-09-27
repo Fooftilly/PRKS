@@ -643,6 +643,9 @@
                 root.prksDestroyTabContext(tabId);
             }
             delete mountedSet[tabId];
+            if (typeof root.prksWorkspaceReleaseContentHost === 'function') {
+                root.prksWorkspaceReleaseContentHost(tabId);
+            }
             if (onDestroyContext) onDestroyContext(tabId);
         }
 
@@ -729,21 +732,86 @@
             if (next !== state) commitCanonical(next);
         }
 
+        const projectionListeners = new Set();
+
+        function detachedProjection() {
+            const body = {
+                state: copyJson(snapshot()) || emptyProjectionState(),
+                visualTiled: visualTiled(),
+                narrowFallback: !!narrowFallback,
+                tabStatus: tabStatusMap(),
+            };
+            return deepFreeze(body);
+        }
+
+        function emptyProjectionState() {
+            return {
+                version: WORKSPACE_VERSION,
+                mode: MODE_STACKED,
+                mainTabId: null,
+                focusedTabId: null,
+                secondaryTree: null,
+                tabs: [],
+                mainSplitRatio: DEFAULT_MAIN_SPLIT_RATIO,
+            };
+        }
+
+        function tabStatusMap() {
+            const out = Object.create(null);
+            for (let i = 0; i < state.tabs.length; i++) {
+                const id = state.tabs[i].id;
+                out[id] = tabStatusKind(id);
+            }
+            return out;
+        }
+
+        function deepFreeze(value) {
+            if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+            Object.freeze(value);
+            if (Array.isArray(value)) {
+                for (let i = 0; i < value.length; i++) deepFreeze(value[i]);
+                return value;
+            }
+            const keys = Object.keys(value);
+            for (let i = 0; i < keys.length; i++) deepFreeze(value[keys[i]]);
+            return value;
+        }
+
+        /**
+         * Notify subscribers with a detached, frozen snapshot. One copy per
+         * publish, shared by the listeners of that publish. Does not paint DOM.
+         */
+        function publishProjection() {
+            if (!projectionListeners.size) return;
+            const projection = detachedProjection();
+            const listeners = Array.from(projectionListeners);
+            for (let i = 0; i < listeners.length; i++) {
+                try {
+                    listeners[i](projection);
+                } catch (_e) {}
+            }
+        }
+
+        function subscribeProjection(listener) {
+            if (typeof listener !== 'function') return function () {};
+            projectionListeners.add(listener);
+            try {
+                listener(detachedProjection());
+            } catch (_e) {}
+            return function unsubscribe() {
+                projectionListeners.delete(listener);
+            };
+        }
+
         function paint() {
             enforceInvariants();
             onChange();
-            if (typeof root.prksWorkspaceSyncTiles === 'function') {
-                root.prksWorkspaceSyncTiles(snapshot(), { visualMode: visualTiled() ? MODE_TILED : MODE_STACKED });
-            }
             noteCanonicalChange();
+            publishProjection();
         }
 
         function paintFocus() {
-            if (typeof root.prksWorkspaceApplyFocus === 'function') {
-                root.prksWorkspaceApplyFocus(snapshot(), { visualMode: visualTiled() ? MODE_TILED : MODE_STACKED });
-            } else {
-                paint();
-            }
+            publishProjection();
         }
 
         function bootstrap(initialHash) {
@@ -1823,6 +1891,8 @@
             markHandled: markHandled,
             peekRenderGen: peekRenderGen,
             visualTiled: visualTiled,
+            subscribe: subscribeProjection,
+            publish: publishProjection,
             getMainTabId: function () {
                 return state.mainTabId;
             },
@@ -1869,12 +1939,6 @@
     let tabFocusIndex = 0;
     const priorNavigate = root.prksNavigate;
 
-    function iconHtml(name) {
-        if (typeof root.prksIcon === 'function') {
-            return root.prksIcon(name, { size: 'sm', className: 'prks-workspace-tab__icon-svg' });
-        }
-        return '';
-    }
 
     function liveEl() {
         if (typeof document === 'undefined') return null;
@@ -2050,6 +2114,10 @@
     }
 
     function prksWorkspaceRefreshTabStatus(tabId) {
+        if (root.__prksWorkspaceShellOwned && production && typeof production.publish === 'function') {
+            production.publish();
+            return;
+        }
         if (typeof document === 'undefined' || !tabId) return;
         const list = document.getElementById('prks-workspace-tabs');
         if (!list) return;
@@ -2131,189 +2199,31 @@
         }
     }
 
-    function tabRoleFlags(tab, snap, visualTiled, secIds) {
-        const isMain = tab.id === snap.mainTabId;
-        const isTiled = visualTiled && !isMain && secIds.indexOf(tab.id) !== -1;
-        const isFocused = tab.id === snap.focusedTabId;
-        return {
-            isMain: isMain,
-            isTiled: isTiled,
-            isFocused: isFocused,
-            isParked: !isMain && !isTiled,
-        };
-    }
-
-    function syncTabTrailing(wrap, tab, flags) {
-        const existingSplit = wrap.querySelector(':scope > .prks-workspace-tab__split');
-        const existingMark = wrap.querySelector(':scope > .prks-workspace-tab__split-mark');
-        const close = wrap.querySelector(':scope > .prks-workspace-tab__close');
-        const wantMark = flags.isTiled;
-        const wantSplit =
-            flags.isParked &&
-            typeof root.prksRouteSupportsTile === 'function' &&
-            root.prksRouteSupportsTile(tab.route);
-        if (wantMark) {
-            if (existingSplit) existingSplit.remove();
-            if (!existingMark) {
-                const mark = document.createElement('span');
-                mark.className = 'prks-workspace-tab__split-mark';
-                mark.setAttribute('aria-hidden', 'true');
-                mark.innerHTML = iconHtml('columns-2');
-                wrap.insertBefore(mark, close || null);
-            }
-        } else if (existingMark) {
-            existingMark.remove();
-        }
-        if (wantSplit) {
-            let split = existingSplit;
-            if (!split) {
-                split = document.createElement('button');
-                split.type = 'button';
-                split.className = 'prks-workspace-tab__split';
-                split.innerHTML = iconHtml('columns-2');
-                split.addEventListener('click', function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const id = wrap.getAttribute('data-tab-id');
-                    if (id && production) void production.tileTab(id);
-                });
-                wrap.insertBefore(split, close || null);
-            }
-            split.setAttribute('aria-label', 'Open ' + tab.title + ' in split view');
-            split.title = 'Open in split view';
-        } else if (existingSplit) {
-            existingSplit.remove();
-        }
-        if (close) {
-            close.setAttribute('aria-label', 'Close ' + tab.title);
-        }
-    }
-
-    function createTabWrap(tab, flags, index) {
-        const wrap = document.createElement('div');
-        wrap.setAttribute('data-tab-id', tab.id);
-
-        const activate = document.createElement('button');
-        activate.type = 'button';
-        activate.className = 'prks-workspace-tab__activate';
-        activate.setAttribute('role', 'tab');
-        activate.addEventListener('click', function () {
-            const id = wrap.getAttribute('data-tab-id');
-            if (id && production) void production.activateTab(id);
-        });
-        activate.addEventListener('keydown', onTabKeydown);
-        activate.addEventListener('contextmenu', function (e) {
-            if (typeof root.prksWorkspaceOpenTabMenu === 'function') {
-                e.preventDefault();
-                root.prksWorkspaceOpenTabMenu(wrap.getAttribute('data-tab-id'), e);
-            }
-        });
-
-        const icon = document.createElement('span');
-        icon.className = 'prks-workspace-tab__icon';
-        icon.setAttribute('aria-hidden', 'true');
-
-        const title = document.createElement('span');
-        title.className = 'prks-workspace-tab__title';
-
-        activate.appendChild(icon);
-        activate.appendChild(title);
-        wrap.appendChild(activate);
-
-        const close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'prks-workspace-tab__close';
-        close.title = 'Close';
-        close.innerHTML = iconHtml('x');
-        close.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const id = wrap.getAttribute('data-tab-id');
-            if (id && production) void production.closeTab(id);
-        });
-        wrap.appendChild(close);
-        wrap.addEventListener('contextmenu', function (e) {
-            if (e.target && e.target.closest && e.target.closest('.prks-workspace-tab__close, .prks-workspace-tab__split')) {
-                return;
-            }
-            if (typeof root.prksWorkspaceOpenTabMenu === 'function') {
-                e.preventDefault();
-                root.prksWorkspaceOpenTabMenu(wrap.getAttribute('data-tab-id'), e);
-            }
-        });
-        applyTabWrap(wrap, tab, flags, index);
-        return wrap;
-    }
-
-    function applyTabWrap(wrap, tab, flags, index) {
-        /* Toggle only the flag classes this function owns -- an ordinary reconciling paint
-         * (e.g. a resolved-title update) must never clobber an unrelated transient class an
-         * external module applied directly to this same, reused DOM node (e.g. workspace-drag.js's
-         * `is-drag-source` while this tab is the live drag source). Do not replace `className`
-         * wholesale. */
-        wrap.classList.add('prks-workspace-tab');
-        wrap.classList.toggle('is-main', !!flags.isMain);
-        wrap.classList.toggle('is-tiled', !!flags.isTiled);
-        wrap.classList.toggle('is-focused', !!flags.isFocused);
-        wrap.classList.toggle('is-parked', !!flags.isParked);
-        const activate = wrap.querySelector('.prks-workspace-tab__activate');
-        if (activate) {
-            activate.setAttribute('aria-selected', flags.isMain ? 'true' : 'false');
-            activate.tabIndex = flags.isMain ? 0 : -1;
-            activate.title = tab.title;
-            const title = activate.querySelector('.prks-workspace-tab__title');
-            if (title) title.textContent = tab.title;
-            const icon = activate.querySelector('.prks-workspace-tab__icon');
-            if (icon && icon.getAttribute('data-icon') !== tab.icon) {
-                icon.setAttribute('data-icon', tab.icon || '');
-                icon.innerHTML = iconHtml(tab.icon);
-            }
-        }
-        syncTabTrailing(wrap, tab, flags);
-        applyTabStatus(wrap, tab.id);
-        if (flags.isMain) tabFocusIndex = index;
-    }
+    /* Tab-strip and pane DOM are painted by the Vue workspace shell.
+     * Removed from this production renderer: tabRoleFlags, syncTabTrailing,
+     * createTabWrap, applyTabWrap, and paintProduction's DOM reconciliation.
+     * Coordinator effects (leave, mount, URL, persistence) stay here.
+     * prksWorkspaceTabKeydown still owns roving tabindex and keyboard activation.
+     */
 
     function paintProduction() {
         if (typeof document === 'undefined' || !production) return;
-        const list = document.getElementById('prks-workspace-tabs');
-        if (!list) return;
         bindTabStripChrome();
-        const snap = production.snapshot();
-        const secIds = root.collectLeafTabIds(snap.secondaryTree);
-        const visualTiled = typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
-        const byId = Object.create(null);
-        const kids = Array.prototype.slice.call(list.children);
-        for (let i = 0; i < kids.length; i++) {
-            const id = kids[i].getAttribute('data-tab-id');
-            if (id) byId[id] = kids[i];
-        }
-        const nextIds = {};
-        snap.tabs.forEach(function (tab, i) {
-            nextIds[tab.id] = true;
-            const flags = tabRoleFlags(tab, snap, visualTiled, secIds);
-            let wrap = byId[tab.id];
-            if (!wrap) wrap = createTabWrap(tab, flags, i);
-            else applyTabWrap(wrap, tab, flags, i);
-            if (list.children[i] !== wrap) {
-                list.insertBefore(wrap, list.children[i] || null);
-            }
-        });
-        kids.forEach(function (el) {
-            const id = el.getAttribute('data-tab-id');
-            if (!id || !nextIds[id]) el.remove();
-        });
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(list);
         paintSplitControl();
+    }
+
+    function prksWorkspaceAfterShellRender() {
+        if (typeof document === 'undefined' || !production) return;
+        const snap = production.snapshot();
+        const visualTiled =
+            typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
         revealWorkspaceTab(snap.mainTabId);
         if (visualTiled && snap.focusedTabId && snap.focusedTabId !== snap.mainTabId) {
             revealWorkspaceTab(snap.focusedTabId);
         }
         updateTabOverflow();
         syncTrailingTabStops();
-        if (typeof root.prksWorkspaceSyncTiles === 'function') {
-            root.prksWorkspaceSyncTiles(snap, { visualMode: visualTiled ? MODE_TILED : MODE_STACKED });
-        }
+        paintSplitControl();
     }
 
     function tabButtons() {
@@ -2673,6 +2583,9 @@
     }
 
     function prksWorkspaceInit() {
+        /* Vue paints the shell. Set this before bootstrap so the first publish
+         * is the presentation path and the legacy tile reconciler is not used. */
+        root.__prksWorkspaceShellOwned = true;
         const ws = ensureProduction();
         if (!productionReady) {
             ws.bootstrap();
@@ -2869,6 +2782,23 @@
         return production.snapshot();
     }
 
+    /**
+     * Subscribe to detached workspace projections. The listener is called
+     * immediately with the current projection and again after each committed
+     * canonical change. Returns an unsubscribe function. Multiple subscribers
+     * share one coordinator; none of them own state. Usable without Vue.
+     */
+    function prksWorkspaceSubscribe(listener) {
+        const ws = ensureProduction();
+        if (!ws || typeof ws.subscribe !== 'function') return function () {};
+        return ws.subscribe(listener);
+    }
+
+    function prksWorkspaceRepublish() {
+        if (!production || typeof production.publish !== 'function') return;
+        production.publish();
+    }
+
     function prksWorkspaceFindTabByRoute(hash, options) {
         if (!production || typeof production.findTabByRoute !== 'function') return null;
         return production.findTabByRoute(hash, options);
@@ -2902,6 +2832,10 @@
         prksWorkspaceCloseTabsToTheRight: prksWorkspaceCloseTabsToTheRight,
         prksWorkspaceRestoreFocus: prksWorkspaceRestoreFocus,
         prksWorkspaceRefreshTabStatus: prksWorkspaceRefreshTabStatus,
+        prksWorkspaceSubscribe: prksWorkspaceSubscribe,
+        prksWorkspaceRepublish: prksWorkspaceRepublish,
+        prksWorkspaceTabKeydown: onTabKeydown,
+        prksWorkspaceAfterShellRender: prksWorkspaceAfterShellRender,
         prksWorkspaceFocusTab: prksWorkspaceFocusTab,
         prksWorkspaceMakeMain: prksWorkspaceMakeMain,
         prksWorkspaceTileTab: prksWorkspaceTileTab,

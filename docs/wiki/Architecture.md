@@ -61,7 +61,7 @@ SQLite connections are operation-scoped; PRKS does not rely on a general-purpose
 
 Important frontend areas include:
 
-- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle. The app mounts from a hidden host and teleports Settings performance diagnostics into the legacy shell. TanStack Query holds that disposable server snapshot only.
+- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle. The app mounts from a hidden host and teleports Settings performance diagnostics and the workspace shell into the legacy page. TanStack Query holds that disposable server snapshot only. The workspace shell renders a read-only projection; it does not own tabs, focus, or split state.
 - `frontend/js/app.js` and `navigation.js` — legacy app shell and route/navigation behavior.
 - `components/` — route-level UI surfaces.
 - `tab-context.js` and `workspace-*.js` — in-app tabs, split view, pane layout, and persistence.
@@ -100,7 +100,7 @@ The implementation details and current operation families are documented in:
 
 ## Workspace architecture
 
-Each visible PRKS page runs inside a TabContext. Main and Secondary panes have separate route state, DOM roots, async generations, and live resources. This prevents split-view pages from accidentally sharing document-scoped state. Logical workspace structure (tabs, Main, focus, and the Secondary tree) is one typed model; TabContext remains the per-pane runtime and is not serialized with that model.
+Each visible PRKS page runs inside a TabContext. Main and Secondary panes have separate route state, DOM roots, async generations, and live resources. This prevents split-view pages from accidentally sharing document-scoped state. Logical workspace structure (tabs, Main, focus, and the Secondary tree) is one typed model. The workspace coordinator applies that model and owns effects, dirty checks, persistence, history, and TabContext lifetime. The Vue workspace shell only renders the published snapshot and sends intents. TabContext and the route-surface own feature content inside a stable host keyed by tab id. TabContext remains the per-pane runtime and is not serialized with the workspace model.
 
 See [Workspace Tabs and Split View](Workspace-Tabs-and-Split-View.md).
 

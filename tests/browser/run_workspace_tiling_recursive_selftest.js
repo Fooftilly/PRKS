@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-/* Fuller fake-DOM coverage for the recursive Secondary tile renderer/reconciler
- * (workspace-tiling.js) + nested divider mechanics (workspace-split.js). Proves DOM/runtime
- * identity is preserved across unrelated tree mutations: split, Make Main, close-collapse,
- * hide/park, and pruning of stale hosts.
+/* Fuller fake-DOM coverage for the frozen recursive Secondary tile oracle
+ * (tests/browser/fixtures/workspace-tiling-legacy-painter.js) + nested divider
+ * mechanics (workspace-split.js). Production painting is the Vue workspace shell.
+ * This oracle proves the split/menu DOM contract: identity is preserved across
+ * unrelated tree mutations (split, Make Main, close-collapse, hide/park, prune).
  */
 
 const fs = require('fs');
@@ -12,7 +13,10 @@ const path = require('path');
 const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
-const tilingSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tiling.js'), 'utf8');
+const tilingSrc = fs.readFileSync(
+    path.join(rootDir, 'tests/browser/fixtures/workspace-tiling-legacy-painter.js'),
+    'utf8',
+);
 const splitSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-split.js'), 'utf8');
 const modelSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-model.js'), 'utf8');
 const treeSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tree.js'), 'utf8');

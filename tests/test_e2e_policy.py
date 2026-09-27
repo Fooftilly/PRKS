@@ -401,6 +401,27 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertEqual(plan["mode"], "full")
                 self.assertTrue(plan["run"])
 
+        shell_paths = (
+            "frontend-app/src/workspace-shell/WorkspaceShell.vue",
+            "frontend-app/src/workspace-shell/WorkspaceCanvas.vue",
+            "frontend-app/src/workspace-shell/WorkspaceTree.vue",
+            "frontend/js/workspace-hosts.js",
+        )
+        for path in shell_paths:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "unmapped-production")
+                self.assertFalse(skip)
+                self.assertNotIn("tiling", feats)
+                self.assertNotIn("tabs", feats)
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertTrue(plan["run"])
+        story = "frontend-app/src/workspace-shell/WorkspaceTab.stories.ts"
+        story_rule, _story_feats, story_skip, _story_note = policy.match_affected_path(story)
+        self.assertEqual(story_rule, "storybook-catalog")
+        self.assertTrue(story_skip)
+
         tree = "frontend/js/workspace-tree.js"
         tree_rule, tree_feats, tree_skip, _tree_note = policy.match_affected_path(tree)
         self.assertEqual(tree_rule, "workspace-tiling")
@@ -419,6 +440,7 @@ class AffectedMappingTests(unittest.TestCase):
         for rule_entry in policy.AFFECTED_RULES:
             for pattern in rule_entry["paths"]:
                 self.assertNotEqual(pattern, "frontend-app/src/**")
+                self.assertNotIn("workspace-shell", pattern)
 
         revision_diff = (
             "diff --git a/frontend/sw.js b/frontend/sw.js\n"
