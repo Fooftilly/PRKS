@@ -25,6 +25,9 @@ const intents = inject(folderLibraryIntentsKey)
 const activeTab = ref<FolderLibraryTab>(readFolderLibraryTabFromStorage())
 const folderFilter = ref(readFolderFilterFromStorage())
 const filesFilter = ref(readRecentlyAddedFilterFromStorage())
+/** Debounced queries drive expensive tree / card paints (#233 useDebounceFn). */
+const treeFilterQuery = ref(folderFilter.value)
+const filesFilterQuery = ref(filesFilter.value)
 const glanceHost = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
@@ -32,28 +35,38 @@ const folderSearchIcon = ref<HTMLElement | null>(null)
 const filesSearchIcon = ref<HTMLElement | null>(null)
 const expandToggleInner = ref<HTMLElement | null>(null)
 const recentlyAddedPane = ref<InstanceType<typeof RecentlyAddedPane> | null>(null)
+/** Bumped after expand toggles so toolbar chrome stays authoritative. */
+const collapseEpoch = ref(0)
+/** Bumped when pending work-metadata overlay changes while Recently Added is mounted. */
+const overlayRevision = ref(0)
 
 const recentlyAddedWorks = ref<RecentlyAddedWork[] | null>(null)
 const recentlyAddedCached = ref(false)
 const recentlyAddedUnavailable = ref(false)
 const recentlyAddedLoading = ref(false)
+const recentlyAddedGeneration = ref<unknown>(null)
+const recentlyAddedPendingGeneration = ref<unknown>(null)
+let loadSeq = 0
 
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const folders = computed(() => props.projection.folders)
 
 const hasCollapsible = computed(() => {
   void props.projection.generation
+  void collapseEpoch.value
   const fn = window.prksFolderTreeHasCollapsibleNodes
   return typeof fn === 'function' ? fn(folders.value) : false
 })
 
 const expandAllCollapsed = computed(() => {
   void props.projection.generation
+  void collapseEpoch.value
   const fn = window.prksFolderTreeAllCollapsed
   return typeof fn === 'function' ? fn(folders.value) : false
 })
 
 const expandToggleLabel = computed(() => {
+  void collapseEpoch.value
   const fn = window.prksFolderLibraryExpandToggleLabel
   return typeof fn === 'function' ? fn(folders.value) : 'Expand all'
 })
@@ -67,7 +80,17 @@ const catalogParts = computed(() => {
 })
 
 let offlineDispose: (() => void) | null = null
+let overlayDispose: (() => void) | null = null
 
+function treeHostEl(): HTMLElement | null {
+  return rootEl.value?.querySelector('[data-prks-folder-tree-host]') as HTMLElement | null
+}
+
+/**
+ * Publish a thin bridge for legacy helpers that still read dashboard chrome
+ * (offline banner binding, expand-toggle patch). Mark vueOwned so the legacy
+ * metadata-sync subscriber does not replace Vue-owned Recently Added DOM.
+ */
 function syncLegacyDashboardState(): void {
   const content = props.contentRoot
   if (!content) return
@@ -75,13 +98,15 @@ function syncLegacyDashboardState(): void {
     folders: [...folders.value],
     container: content,
     activeTab: activeTab.value,
-    filterQuery: folderFilter.value,
-    recentlyAddedFilterQuery: filesFilter.value,
-    recentlyAddedWorks: recentlyAddedWorks.value,
-    recentlyAddedGeneration: null,
-    recentlyAddedPendingGeneration: null,
+    filterQuery: treeFilterQuery.value,
+    recentlyAddedFilterQuery: filesFilterQuery.value,
+    // Vue owns the pane — do not hand rows to the legacy overlay repaint path.
+    recentlyAddedWorks: null,
+    recentlyAddedGeneration: recentlyAddedGeneration.value,
+    recentlyAddedPendingGeneration: recentlyAddedPendingGeneration.value,
     recentlyAddedCached: recentlyAddedCached.value,
     recentlyAddedLoading: recentlyAddedLoading.value,
+    vueOwned: true,
   }
 }
 
@@ -93,11 +118,13 @@ function paintCatalogGlance(): void {
 }
 
 const applyFolderFilter = useDebounceFn((query: string) => {
+  treeFilterQuery.value = query
   persistFolderFilter(query)
   syncLegacyDashboardState()
 }, 150)
 
 const applyFilesFilter = useDebounceFn((query: string) => {
+  filesFilterQuery.value = query
   persistRecentlyAddedFilter(query)
   syncLegacyDashboardState()
 }, 150)
@@ -130,32 +157,58 @@ async function setActiveTab(tab: FolderLibraryTab): Promise<void> {
 }
 
 async function loadRecentlyAdded(force: boolean): Promise<void> {
+  const seq = ++loadSeq
+  const routeGen = props.projection.generation
   recentlyAddedLoading.value = true
-  const result = await intents?.loadRecentlyAdded(force)
+  const result = await intents?.loadRecentlyAdded(force, {
+    works: recentlyAddedWorks.value,
+    generation: recentlyAddedGeneration.value,
+    pendingGeneration: recentlyAddedPendingGeneration.value,
+    offlineCached: recentlyAddedCached.value,
+  })
+  // Drop obsolete responses after overlapping loads / retain refresh.
+  if (seq !== loadSeq || props.projection.generation !== routeGen) return
   recentlyAddedLoading.value = false
   if (!result) return
+  const prevPending = recentlyAddedPendingGeneration.value
   recentlyAddedWorks.value = result.works
   recentlyAddedCached.value = result.offlineCached
   recentlyAddedUnavailable.value = result.unavailable
+  recentlyAddedGeneration.value = result.generation
+  recentlyAddedPendingGeneration.value = result.pendingGeneration
+  if (!result.reused || result.pendingGeneration !== prevPending) {
+    overlayRevision.value += 1
+  }
   syncLegacyDashboardState()
   await nextTick()
   // #170: always re-init after paint (including cached) so prune runs.
-  if (activeTab.value === 'recently-added') {
+  if (activeTab.value === 'recently-added' && seq === loadSeq) {
     const pane = rootEl.value?.querySelector('#prks-folder-library-recently-added')
     initLazyWorkThumbs(pane)
   }
 }
 
 function onExpandAll(): void {
-  intents?.toggleExpandAll()
+  intents?.toggleExpandAll(treeHostEl(), folders.value)
+  collapseEpoch.value += 1
+}
+
+function onTreeCollapsedChanged(): void {
+  collapseEpoch.value += 1
 }
 
 function onFolderSearchClear(): void {
   folderFilter.value = ''
+  treeFilterQuery.value = ''
+  persistFolderFilter('')
+  syncLegacyDashboardState()
 }
 
 function onFilesSearchClear(): void {
   filesFilter.value = ''
+  filesFilterQuery.value = ''
+  persistRecentlyAddedFilter('')
+  syncLegacyDashboardState()
 }
 
 function paintSearchIcons(): void {
@@ -181,6 +234,19 @@ function paintBrowseMode(): void {
   window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
+/**
+ * Brand-home clears session storage then retain-refreshes with
+ * `__prksFolderLibraryBrandHomeReset`. Adopt that intentional clear without
+ * clobbering an in-progress typed filter on ordinary projection refreshes.
+ */
+function syncFiltersFromBrandHomeReset(): void {
+  if (!window.__prksFolderLibraryBrandHomeReset) return
+  window.__prksFolderLibraryBrandHomeReset = false
+  folderFilter.value = ''
+  treeFilterQuery.value = ''
+  persistFolderFilter('')
+}
+
 onMounted(() => {
   syncLegacyDashboardState()
   paintCatalogGlance()
@@ -188,6 +254,15 @@ onMounted(() => {
   paintExpandToggle()
   intents?.scheduleGlance(rootEl.value)
   offlineDispose = intents?.bindFolderOfflineState(props.contentRoot ?? null) ?? null
+  overlayDispose =
+    intents?.subscribeMetadataOverlay(() => {
+      overlayRevision.value += 1
+      recentlyAddedPendingGeneration.value =
+        typeof window.prksPendingWorkMetadataGeneration === 'function'
+          ? window.prksPendingWorkMetadataGeneration()
+          : recentlyAddedPendingGeneration.value
+      syncLegacyDashboardState()
+    }) ?? null
   paintBrowseMode()
   if (activeTab.value === 'recently-added') {
     void loadRecentlyAdded(false)
@@ -197,6 +272,9 @@ onMounted(() => {
 watch(
   () => props.projection.generation,
   async () => {
+    // Brand-home may clear storage + legacy filter while the Vue surface is
+    // retained — adopt that reset without wiping ordinary typed filters.
+    syncFiltersFromBrandHomeReset()
     syncLegacyDashboardState()
     await nextTick()
     paintCatalogGlance()
@@ -204,6 +282,9 @@ watch(
     paintExpandToggle()
     intents?.scheduleGlance(rootEl.value)
     paintBrowseMode()
+    if (activeTab.value === 'recently-added') {
+      void loadRecentlyAdded(false)
+    }
   },
 )
 
@@ -212,11 +293,19 @@ watch(hasCollapsible, async () => {
   paintExpandToggle()
 })
 
+watch(collapseEpoch, async () => {
+  await nextTick()
+  paintExpandToggle()
+})
+
 onBeforeUnmount(() => {
+  loadSeq += 1
   releaseRecentlyAddedResources()
   releaseWorkThumbResources(rootEl.value)
   offlineDispose?.()
   offlineDispose = null
+  overlayDispose?.()
+  overlayDispose = null
 })
 </script>
 
@@ -339,8 +428,9 @@ onBeforeUnmount(() => {
         >
           <FolderTree
             :folders="folders"
-            :filter-query="folderFilter"
+            :filter-query="treeFilterQuery"
             :generation="projection.generation"
+            @collapsed-changed="onTreeCollapsedChanged"
           />
         </div>
         <div
@@ -353,12 +443,13 @@ onBeforeUnmount(() => {
           <RecentlyAddedPane
             ref="recentlyAddedPane"
             :folders="folders"
-            :filter-query="filesFilter"
+            :filter-query="filesFilterQuery"
             :works="recentlyAddedWorks"
             :offline-cached="recentlyAddedCached"
             :unavailable="recentlyAddedUnavailable"
             :loading="recentlyAddedLoading"
             :generation="projection.generation"
+            :overlay-revision="overlayRevision"
           />
         </div>
       </div>

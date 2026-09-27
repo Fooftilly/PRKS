@@ -18,12 +18,15 @@ const props = defineProps<{
   unavailable: boolean
   loading: boolean
   generation: number
+  /** Bumped when pending work-metadata overlay changes while mounted. */
+  overlayRevision: number
 }>()
 
 const intents = inject(folderLibraryIntentsKey)
 const collectionEl = ref<HTMLElement | null>(null)
 
 const effectiveRows = computed(() => {
+  void props.overlayRevision
   if (!props.works) return []
   return effectiveRecentlyAddedRows([...props.works])
 })

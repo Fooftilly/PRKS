@@ -184,6 +184,55 @@ function prksSyncAllFolderTreeBranchesUi(host, folders) {
     });
 }
 
+function prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, folders) {
+    if (!treeHost || typeof treeHost.closest !== 'function') {
+        prksUpdateFolderLibraryExpandToggleBtn();
+        return;
+    }
+    const root = treeHost.closest('.prks-folder-library') || treeHost.closest('[data-prks-folder-library-view]');
+    const btn = root
+        ? root.querySelector('#prks-folder-library-expand-toggle')
+        : null;
+    if (!btn) {
+        prksUpdateFolderLibraryExpandToggleBtn();
+        return;
+    }
+    const list = Array.isArray(folders) ? folders : [];
+    const label = prksFolderLibraryExpandToggleLabel(list);
+    const allCollapsed = prksFolderTreeAllCollapsed(list);
+    if (!btn.querySelector('.ribbon-btn__icon')) {
+        btn.innerHTML = prksFolderLibraryExpandToggleInnerHtml();
+        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
+    }
+    btn.classList.toggle('is-collapse-all', !allCollapsed);
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+}
+
+/** Host-scoped expand/collapse — does not touch another pane's tree. */
+function prksToggleFolderNodeInHost(treeHost, folderId, folders) {
+    const idRaw = String(folderId || '').trim();
+    const id = idRaw ? decodeURIComponent(idRaw) : '';
+    if (!id || !treeHost) return;
+    prksSetFolderNodeCollapsed(id, !prksFolderNodeCollapsed(id));
+    const collapsed = prksFolderNodeCollapsed(id);
+    prksSyncFolderTreeBranchUi(treeHost, id, collapsed);
+    const st = window.__prksFolderDashboardState;
+    const list = Array.isArray(folders)
+        ? folders
+        : (st && Array.isArray(st.folders) ? st.folders : null);
+    prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, list);
+}
+
+/** Host-scoped expand/collapse-all using the owning projection's folders. */
+function prksToggleAllFolderNodesInHost(treeHost, folders) {
+    if (!treeHost || !Array.isArray(folders)) return;
+    const allCollapsed = prksFolderTreeAllCollapsed(folders);
+    prksSetAllFolderNodesCollapsed(folders, !allCollapsed);
+    prksSyncAllFolderTreeBranchesUi(treeHost, folders);
+    prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, folders);
+}
+
 function prksToggleAllFolderNodes() {
     const st = window.__prksFolderDashboardState;
     if (!st || !Array.isArray(st.folders)) return;
@@ -638,6 +687,8 @@ function prksRecentlyAddedWorkMatchesQuery(work, query, foldersById) {
 function prksRerenderFolderLibraryRecentlyAddedOnly() {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
+    // Vue Folder Library owns Recently Added paint + #170 teardown.
+    if (st.vueOwned) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
     if (!Array.isArray(st.recentlyAddedWorks)) {
@@ -747,7 +798,9 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
  * themselves stay in `work-metadata-state.js`; this only says "repaint". */
 async function prksRefreshRecentlyAddedOverlay() {
     const st = window.__prksFolderDashboardState;
-    if (!st || !st.container || !Array.isArray(st.recentlyAddedWorks)) return;
+    // Vue-owned surfaces subscribe to metadata overlay themselves and repaint
+    // through release-before-replace (#170). Do not replace their card DOM.
+    if (!st || st.vueOwned || !st.container || !Array.isArray(st.recentlyAddedWorks)) return;
     if (typeof prksRefreshPendingWorkMetadata !== 'function') return;
     await prksRefreshPendingWorkMetadata();
     st.recentlyAddedPendingGeneration =
@@ -1908,8 +1961,10 @@ window.mountFolderAttachControlsForWork = mountFolderAttachControlsForWork;
 window.prksFolderRowLabel = prksFolderRowLabel;
 window.prksCollectFolderDescendantIds = prksCollectFolderDescendantIds;
 window.prksToggleFolderNode = prksToggleFolderNode;
+window.prksToggleFolderNodeInHost = prksToggleFolderNodeInHost;
 window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
 window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
+window.prksToggleAllFolderNodesInHost = prksToggleAllFolderNodesInHost;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
 window.prksFillFolderDetailTree = prksFillFolderDetailTree;

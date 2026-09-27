@@ -1260,6 +1260,9 @@ function initSidebarBrandHome() {
         }
         const st = window.__prksFolderDashboardState;
         if (st) st.filterQuery = '';
+        // Vue Folder Library retains across this refresh; signal an intentional
+        // filter clear so the mounted input stays in sync with storage.
+        window.__prksFolderLibraryBrandHomeReset = true;
         handleRoute();
     });
 }

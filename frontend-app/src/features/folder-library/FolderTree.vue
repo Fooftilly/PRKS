@@ -10,6 +10,10 @@ const props = defineProps<{
   generation: number
 }>()
 
+const emit = defineEmits<{
+  collapsedChanged: []
+}>()
+
 const intents = inject(folderLibraryIntentsKey)
 const treeHost = ref<HTMLElement | null>(null)
 
@@ -43,7 +47,10 @@ useEventListener(treeHost, 'click', (event: MouseEvent) => {
     event.stopPropagation()
     const row = toggle.closest('[data-folder-id]')
     const folderId = row?.getAttribute('data-folder-id') || ''
-    if (folderId) intents?.toggleExpand(folderId)
+    if (folderId) {
+      intents?.toggleExpand(folderId, treeHost.value, props.folders)
+      emit('collapsedChanged')
+    }
   }
 })
 

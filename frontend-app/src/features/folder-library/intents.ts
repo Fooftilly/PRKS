@@ -16,6 +16,16 @@ export interface RecentlyAddedLoadResult {
   works: RecentlyAddedWork[] | null
   offlineCached: boolean
   unavailable: boolean
+  generation: unknown
+  pendingGeneration: unknown
+  reused: boolean
+}
+
+export interface RecentlyAddedCacheHint {
+  works: RecentlyAddedWork[] | null
+  generation: unknown
+  pendingGeneration: unknown
+  offlineCached: boolean
 }
 
 export interface FolderLibraryIntents {
@@ -23,11 +33,19 @@ export interface FolderLibraryIntents {
   openWorkModal(): void
   navigateFolder(folderId: string): void
   switchTab(tab: FolderLibraryTab): void
-  loadRecentlyAdded(force?: boolean): Promise<RecentlyAddedLoadResult>
-  toggleExpand(folderId: string): void
-  toggleExpandAll(): void
+  loadRecentlyAdded(
+    force: boolean | undefined,
+    cache: RecentlyAddedCacheHint,
+  ): Promise<RecentlyAddedLoadResult>
+  toggleExpand(
+    folderId: string,
+    treeHost: HTMLElement | null,
+    folders?: readonly unknown[],
+  ): void
+  toggleExpandAll(treeHost: HTMLElement | null, folders: readonly unknown[]): void
   bindFolderOfflineState(contentRoot: HTMLElement | null): () => void
   scheduleGlance(root: HTMLElement | null): void
+  subscribeMetadataOverlay(onChange: () => void): () => void
 }
 
 export const folderLibraryIntentsKey: InjectionKey<FolderLibraryIntents> = Symbol(
@@ -39,6 +57,18 @@ function ownsSurface(
   generation: number,
 ): boolean {
   return !!(owner && typeof owner.isCurrent === 'function' && owner.isCurrent(generation))
+}
+
+function normalizeWorks(works: unknown): RecentlyAddedWork[] {
+  if (!Array.isArray(works)) return []
+  return works
+    .map((w) => {
+      if (!w || typeof w !== 'object') return null
+      const id = String((w as { id?: unknown }).id || '').trim()
+      if (!id) return null
+      return w as RecentlyAddedWork
+    })
+    .filter((w): w is RecentlyAddedWork => w != null)
 }
 
 export function readFolderLibraryTabFromStorage(): FolderLibraryTab {
@@ -121,53 +151,121 @@ export function browserFolderLibraryIntents(
       persistFolderLibraryTab(want)
     },
 
-    async loadRecentlyAdded(force) {
+    async loadRecentlyAdded(force, cache) {
       if (!ownsSurface(owner, generation)) {
-        return { works: null, offlineCached: false, unavailable: true }
+        return {
+          works: null,
+          offlineCached: false,
+          unavailable: true,
+          generation: null,
+          pendingGeneration: null,
+          reused: false,
+        }
       }
-      const shouldForce = !!force || window.__prksRecentlyAddedDirty === true
       const domainGen =
         typeof window.prksOfflineDomainGeneration === 'function'
           ? window.prksOfflineDomainGeneration('recently-added')
           : null
+      const pendingGeneration =
+        typeof window.prksPendingWorkMetadataGeneration === 'function'
+          ? window.prksPendingWorkMetadataGeneration()
+          : null
+      const shouldForce = !!force || window.__prksRecentlyAddedDirty === true
+      const memoryStale = cache.generation !== domainGen
+      const overlayStale = cache.pendingGeneration !== pendingGeneration
+
+      if (!shouldForce && !memoryStale && Array.isArray(cache.works)) {
+        if (overlayStale && typeof window.prksRefreshPendingWorkMetadata === 'function') {
+          await window.prksRefreshPendingWorkMetadata()
+        }
+        return {
+          works: cache.works,
+          offlineCached: cache.offlineCached,
+          unavailable: false,
+          generation: domainGen,
+          pendingGeneration:
+            typeof window.prksPendingWorkMetadataGeneration === 'function'
+              ? window.prksPendingWorkMetadataGeneration()
+              : pendingGeneration,
+          reused: true,
+        }
+      }
+
       if (typeof window.prksRefreshPendingWorkMetadata === 'function') {
         await window.prksRefreshPendingWorkMetadata()
+      }
+      if (!ownsSurface(owner, generation)) {
+        return {
+          works: null,
+          offlineCached: false,
+          unavailable: true,
+          generation: null,
+          pendingGeneration: null,
+          reused: false,
+        }
       }
       const offlineRecentlyAdded =
         typeof window.prksOfflineRecentlyAddedFetch === 'function'
           ? await window.prksOfflineRecentlyAddedFetch()
           : null
+      if (!ownsSurface(owner, generation)) {
+        return {
+          works: null,
+          offlineCached: false,
+          unavailable: true,
+          generation: null,
+          pendingGeneration: null,
+          reused: false,
+        }
+      }
       const works =
         typeof window.prksResolveOfflineRecentlyAdded === 'function'
           ? window.prksResolveOfflineRecentlyAdded(offlineRecentlyAdded)
           : null
       if (!works) {
-        return { works: null, offlineCached: false, unavailable: true }
+        return {
+          works: null,
+          offlineCached: false,
+          unavailable: true,
+          generation: null,
+          pendingGeneration: null,
+          reused: false,
+        }
       }
       const offlineCached = !!(offlineRecentlyAdded && offlineRecentlyAdded.source === 'cache')
-      void domainGen
-      void shouldForce
-      const rows = Array.isArray(works)
-        ? works
-            .map((w) => {
-              if (!w || typeof w !== 'object') return null
-              const id = String((w as { id?: unknown }).id || '').trim()
-              if (!id) return null
-              return w as RecentlyAddedWork
-            })
-            .filter((w): w is RecentlyAddedWork => w != null)
-        : []
+      const rows = normalizeWorks(works)
       window.__prksRecentlyAddedDirty = false
-      return { works: rows, offlineCached, unavailable: false }
+      return {
+        works: rows,
+        offlineCached,
+        unavailable: false,
+        generation:
+          typeof window.prksOfflineDomainGeneration === 'function'
+            ? window.prksOfflineDomainGeneration('recently-added')
+            : domainGen,
+        pendingGeneration:
+          typeof window.prksPendingWorkMetadataGeneration === 'function'
+            ? window.prksPendingWorkMetadataGeneration()
+            : pendingGeneration,
+        reused: false,
+      }
     },
 
-    toggleExpand(folderId) {
+    toggleExpand(folderId, treeHost, folders) {
+      if (typeof window.prksToggleFolderNodeInHost === 'function' && treeHost) {
+        window.prksToggleFolderNodeInHost(treeHost, folderId, folders)
+        return
+      }
       if (typeof window.prksToggleFolderNode === 'function') {
         window.prksToggleFolderNode(folderId)
       }
     },
 
-    toggleExpandAll() {
+    toggleExpandAll(treeHost, folders) {
+      if (typeof window.prksToggleAllFolderNodesInHost === 'function' && treeHost) {
+        window.prksToggleAllFolderNodesInHost(treeHost, folders)
+        return
+      }
       if (typeof window.prksToggleAllFolderNodes === 'function') {
         window.prksToggleAllFolderNodes()
       }
@@ -187,6 +285,19 @@ export function browserFolderLibraryIntents(
     scheduleGlance(root) {
       const fn = window.prksScheduleFolderLibraryGlance
       if (typeof fn === 'function' && root) fn(root)
+    },
+
+    subscribeMetadataOverlay(onChange) {
+      const sync = window.prksSync
+      if (!sync || typeof sync.subscribe !== 'function') return () => {}
+      return sync.subscribe(() => {
+        void (async () => {
+          if (typeof window.prksRefreshPendingWorkMetadata === 'function') {
+            await window.prksRefreshPendingWorkMetadata()
+          }
+          onChange()
+        })()
+      })
     },
   }
 }

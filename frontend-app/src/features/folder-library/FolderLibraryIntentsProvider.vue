@@ -14,11 +14,12 @@ provide(folderLibraryIntentsKey, {
   openWorkModal: () => current.value.openWorkModal(),
   navigateFolder: (id) => current.value.navigateFolder(id),
   switchTab: (tab) => current.value.switchTab(tab),
-  loadRecentlyAdded: (force) => current.value.loadRecentlyAdded(force),
-  toggleExpand: (id) => current.value.toggleExpand(id),
-  toggleExpandAll: () => current.value.toggleExpandAll(),
+  loadRecentlyAdded: (force, cache) => current.value.loadRecentlyAdded(force, cache),
+  toggleExpand: (id, host, folders) => current.value.toggleExpand(id, host, folders),
+  toggleExpandAll: (host, folders) => current.value.toggleExpandAll(host, folders),
   bindFolderOfflineState: (root) => current.value.bindFolderOfflineState(root),
   scheduleGlance: (root) => current.value.scheduleGlance(root),
+  subscribeMetadataOverlay: (onChange) => current.value.subscribeMetadataOverlay(onChange),
 })
 </script>
 

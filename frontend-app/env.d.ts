@@ -117,7 +117,16 @@ interface Window {
   prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
   prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
   prksToggleFolderNode?: (folderId: string) => void
+  prksToggleFolderNodeInHost?: (
+    treeHost: HTMLElement,
+    folderId: string,
+    folders?: readonly unknown[],
+  ) => void
   prksToggleAllFolderNodes?: () => void
+  prksToggleAllFolderNodesInHost?: (
+    treeHost: HTMLElement,
+    folders: readonly unknown[],
+  ) => void
   prksOfflineRecentlyAddedFetch?: () => Promise<{
     source?: string
     value?: unknown
@@ -126,12 +135,15 @@ interface Window {
   prksEffectiveProjectionRows?: (rows: unknown[], domain: string) => unknown[]
   prksOfflineDomainGeneration?: (domain: string) => unknown
   prksRefreshPendingWorkMetadata?: () => Promise<void>
+  prksPendingWorkMetadataGeneration?: () => unknown
   prksHideWorkThumbPreview?: () => void
   prksReleaseWorkThumbPreview?: (root: ParentNode | null) => void
   prksReleaseLazyWorkThumbs?: (root: ParentNode | null) => void
   openModal?: (id: string) => void
   __prksFolderDashboardState?: Record<string, unknown>
   __prksRecentlyAddedDirty?: boolean
+  __prksFolderLibraryBrandHomeReset?: boolean
+  prksSync?: { subscribe?: (listener: () => void) => () => void }
   prksCreateConceptFlow?: (
     initialName?: string,
     ownerOpts?: {

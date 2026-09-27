@@ -42,15 +42,21 @@ class FolderLibraryVueContracts(unittest.TestCase):
 
     def test_vue_feature_owns_preview_lifecycle_helpers(self):
         lifecycle = (FRONTEND_APP / "work-thumb-lifecycle.ts").read_text()
-        self.assertIn("prksHideWorkThumbPreview", lifecycle)
         self.assertIn("prksReleaseWorkThumbPreview", lifecycle)
         self.assertIn("prksReleaseLazyWorkThumbs", lifecycle)
         self.assertIn("prksInitLazyWorkThumbs", lifecycle)
+        # Scoped release only — global hide would dismiss another pane's preview.
+        self.assertNotIn("prksHideWorkThumbPreview()", lifecycle)
         pane = (FRONTEND_APP / "RecentlyAddedPane.vue").read_text()
         self.assertIn("releaseWorkThumbResources", pane)
         self.assertIn("initLazyWorkThumbs", pane)
+        self.assertIn("overlayRevision", pane)
         # Cached paints must still init so IntersectionObserver prune runs (#170).
         self.assertNotIn("if (!props.offlineCached)", pane)
+        folders = (FRONTEND / "components" / "folders.js").read_text()
+        self.assertIn("prksToggleFolderNodeInHost", folders)
+        self.assertIn("prksToggleAllFolderNodesInHost", folders)
+        self.assertIn("st.vueOwned", folders)
 
     def test_vueuse_is_selective_generic_only(self):
         route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()

@@ -5,9 +5,7 @@
 
 export function releaseWorkThumbResources(root: ParentNode | null | undefined): void {
   if (!root) return
-  if (typeof window.prksHideWorkThumbPreview === 'function') {
-    window.prksHideWorkThumbPreview()
-  }
+  // Scoped only — do not call global hide; another pane may own the preview.
   if (typeof window.prksReleaseWorkThumbPreview === 'function') {
     window.prksReleaseWorkThumbPreview(root)
   }
