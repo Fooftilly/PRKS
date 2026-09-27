@@ -1,4 +1,4 @@
-import { createVNode, provide, type VNode } from 'vue'
+import { createVNode } from 'vue'
 import {
   dismissRouteSurface,
   presentRouteSurface,
@@ -7,8 +7,9 @@ import {
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
 import ConceptDetailRoute from './ConceptDetailRoute.vue'
+import ConceptIntentsProvider from './ConceptIntentsProvider.vue'
 import ConceptsIndexRoute from './ConceptsIndexRoute.vue'
-import { browserConceptIntents, conceptIntentsKey, type ConceptIntentOwner } from './intents'
+import type { ConceptIntentOwner } from './intents'
 import {
   buildConceptDetailProjection,
   buildConceptIndexProjection,
@@ -40,20 +41,6 @@ export interface ConceptDetailPresentInput {
   shell?: boolean
 }
 
-function wrapWithIntents(
-  owner: ConceptIntentOwner,
-  generation: number,
-  child: VNode,
-): VNode {
-  return createVNode({
-    name: 'ConceptIntentsProvider',
-    setup() {
-      provide(conceptIntentsKey, browserConceptIntents(owner, generation))
-      return () => child
-    },
-  })
-}
-
 /**
  * Paint one owner's Concepts index from an already-effective projection.
  * Owner session bookkeeping lives in the shared route-surface lifecycle.
@@ -80,10 +67,12 @@ export function presentConceptsIndex(input: ConceptsIndexPresentInput): void {
         items,
         generation,
       })
-      return wrapWithIntents(
-        input.owner,
-        generation,
-        createVNode(ConceptsIndexRoute, { projection }),
+      // Stable provider component type so same-host repaints keep local Vue state
+      // (e.g. searchQuery) instead of remounting a fresh anonymous definition.
+      return createVNode(
+        ConceptIntentsProvider,
+        { owner: input.owner, generation },
+        { default: () => createVNode(ConceptsIndexRoute, { projection }) },
       )
     },
   })
@@ -120,10 +109,10 @@ export function presentConceptDetail(input: ConceptDetailPresentInput): void {
         concept,
         generation,
       })
-      return wrapWithIntents(
-        input.owner,
-        generation,
-        createVNode(ConceptDetailRoute, { projection }),
+      return createVNode(
+        ConceptIntentsProvider,
+        { owner: input.owner, generation },
+        { default: () => createVNode(ConceptDetailRoute, { projection }) },
       )
     },
   })

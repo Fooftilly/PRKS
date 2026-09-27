@@ -181,7 +181,13 @@
         );
     }
 
-    async function createConceptFlow(initialName) {
+    /**
+     * @param {string} [initialName]
+     * @param {{ tabId?: string, generation?: number, isCurrent?: (g: number) => boolean }} [ownerOpts]
+     *        Optional owning-tab context from the Vue Concepts intent. Callers that omit
+     *        it keep the prior focused-tab navigation behavior (notes markup, etc.).
+     */
+    async function createConceptFlow(initialName, ownerOpts) {
         /* No connectivity guard: a Concept is created under an id this device
          * mints, so it is real the moment it is written. Also reachable from
          * the Work Research Notes markup flow. */
@@ -195,7 +201,16 @@
         try {
             const created = await root.createConcept({ name: String(name).trim() });
             if (created && created.id && typeof root.prksNavigate === 'function') {
-                root.prksNavigate('#/concepts/' + encodeURIComponent(created.id));
+                const opts = ownerOpts || {};
+                const gen = opts.generation;
+                const stillCurrent =
+                    typeof opts.isCurrent !== 'function' ||
+                    (typeof gen === 'number' && opts.isCurrent(gen));
+                if (stillCurrent) {
+                    const navOpts = {};
+                    if (opts.tabId != null && opts.tabId !== '') navOpts.tabId = opts.tabId;
+                    root.prksNavigate('#/concepts/' + encodeURIComponent(created.id), navOpts);
+                }
             }
             return created;
         } catch (err) {

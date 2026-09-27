@@ -84,7 +84,14 @@ export function browserConceptIntents(
     async create(initialName) {
       const flow = window.prksCreateConceptFlow
       if (typeof flow !== 'function') return
-      await flow(initialName)
+      await flow(initialName, {
+        tabId: owner?.tabId,
+        generation,
+        isCurrent:
+          owner && typeof owner.isCurrent === 'function'
+            ? (gen: number) => !!owner.isCurrent?.(gen)
+            : undefined,
+      })
     },
 
     async rename(concept) {
@@ -114,6 +121,7 @@ export function browserConceptIntents(
 
     async remove(concept) {
       const confirmFn = window.prksConfirmDestructive
+      // Fail closed when the destructive-confirm helper is missing — never delete silently.
       const ok =
         typeof confirmFn === 'function'
           ? await confirmFn({
@@ -122,7 +130,7 @@ export function browserConceptIntents(
                 'Delete this Concept? Notes that still mention it will recreate a similarly named Concept on save.',
               confirmLabel: 'Delete',
             })
-          : true
+          : false
       if (!ok) return
       if (!owner || typeof owner.isCurrent !== 'function' || !owner.isCurrent(generation)) return
       try {

@@ -86,7 +86,21 @@ interface Window {
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
   prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
-  prksCreateConceptFlow?: (initialName?: string) => Promise<unknown>
+  prksCreateConceptFlow?: (
+    initialName?: string,
+    ownerOpts?: {
+      tabId?: string
+      generation?: number
+      isCurrent?: (generation: number) => boolean
+    },
+  ) => Promise<unknown>
+  prksResearchIndexRowHtml?: (opts: {
+    href: string
+    title: string
+    kind?: string
+    icon?: string
+    meta?: string[]
+  }) => string
   prksResearchMarkdownHtml?: (text: string) => string
   prksEscapeHtml?: (value: unknown) => string
   prksPageHeaderIconHtml?: (name: string) => string

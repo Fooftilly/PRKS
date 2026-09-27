@@ -14,6 +14,8 @@ const intents = inject(conceptIntentsKey)
 const rootEl = ref<HTMLElement | null>(null)
 const summaryHost = ref<HTMLElement | null>(null)
 const definitionHost = ref<HTMLElement | null>(null)
+const parentsHost = ref<HTMLElement | null>(null)
+const childrenHost = ref<HTMLElement | null>(null)
 
 const availability = computed(() => props.projection.availability)
 const concept = computed(() => props.projection.concept)
@@ -34,6 +36,33 @@ const parentSub = computed(() => {
 const mentionCount = computed(() => Number(concept.value?.mention_count) || 0)
 
 const definitionHtml = computed(() => researchMarkdownHtml(concept.value?.description))
+
+function escHtml(value: string): string {
+  const fn = window.prksEscapeHtml
+  if (typeof fn === 'function') return fn(value)
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** DESIGN.md: relationship rows via shared `prksResearchIndexRowHtml`. */
+function researchRelationRowsHtml(
+  rows: readonly { id: string; name: string }[],
+): string {
+  const rowHtml = window.prksResearchIndexRowHtml
+  if (typeof rowHtml !== 'function') return ''
+  return rows
+    .map((row) =>
+      rowHtml({
+        href: `#/concepts/${encodeURIComponent(row.id)}`,
+        title: escHtml(row.name || row.id),
+        kind: 'Concept',
+      }),
+    )
+    .join('')
+}
 
 function paintSummary(): void {
   const host = summaryHost.value
@@ -60,6 +89,18 @@ function paintDefinition(): void {
   const host = definitionHost.value
   if (!host) return
   host.innerHTML = definitionHtml.value
+}
+
+function paintRelations(): void {
+  const c = concept.value
+  const parents = parentsHost.value
+  const children = childrenHost.value
+  if (parents) {
+    parents.innerHTML = c && c.parents.length ? researchRelationRowsHtml(c.parents) : ''
+  }
+  if (children) {
+    children.innerHTML = c && c.children.length ? researchRelationRowsHtml(c.children) : ''
+  }
 }
 
 function refreshIcons(): void {
@@ -89,14 +130,24 @@ function onEditParents(): void {
 onMounted(() => {
   paintSummary()
   paintDefinition()
+  paintRelations()
   refreshIcons()
 })
 
 watch(
-  () => [props.projection.generation, concept.value?.id, concept.value?.name, concept.value?.description] as const,
+  () =>
+    [
+      props.projection.generation,
+      concept.value?.id,
+      concept.value?.name,
+      concept.value?.description,
+      concept.value?.parents,
+      concept.value?.children,
+    ] as const,
   () => {
     paintSummary()
     paintDefinition()
+    paintRelations()
     refreshIcons()
   },
 )
@@ -219,21 +270,11 @@ watch(
             </div>
           </div>
           <p v-if="parentSub" class="research-entity__section-sub meta-row">{{ parentSub }}</p>
-          <div v-if="concept.parents.length" class="list-view prks-research-index">
-            <a
-              v-for="parent in concept.parents"
-              :key="parent.id"
-              class="prks-list-row prks-research-row"
-              :href="`#/concepts/${encodeURIComponent(parent.id)}`"
-            >
-              <span class="prks-research-row__body">
-                <span class="prks-research-row__title-line">
-                  <span class="prks-research-row__title">{{ parent.name || parent.id }}</span>
-                  <span class="prks-research-row__kind">Concept</span>
-                </span>
-              </span>
-            </a>
-          </div>
+          <div
+            v-if="concept.parents.length"
+            ref="parentsHost"
+            class="list-view prks-research-index"
+          ></div>
           <p v-else class="meta-row">Top-level concept.</p>
         </section>
 
@@ -241,21 +282,11 @@ watch(
           <div class="research-entity__section-head">
             <h3 id="prks-concept-children-h">Subconcepts</h3>
           </div>
-          <div v-if="concept.children.length" class="list-view prks-research-index">
-            <a
-              v-for="child in concept.children"
-              :key="child.id"
-              class="prks-list-row prks-research-row"
-              :href="`#/concepts/${encodeURIComponent(child.id)}`"
-            >
-              <span class="prks-research-row__body">
-                <span class="prks-research-row__title-line">
-                  <span class="prks-research-row__title">{{ child.name || child.id }}</span>
-                  <span class="prks-research-row__kind">Concept</span>
-                </span>
-              </span>
-            </a>
-          </div>
+          <div
+            v-if="concept.children.length"
+            ref="childrenHost"
+            class="list-view prks-research-index"
+          ></div>
           <p v-else class="meta-row">No subconcepts.</p>
         </section>
 
