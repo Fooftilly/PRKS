@@ -219,6 +219,33 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
     expect(movePane).not.toHaveBeenCalled()
   })
 
+  it('onDrop with empty dropTargets cancels without resolve/commit', async () => {
+    const monitor = monitorCapture.args!
+    const src = sourcePayload('B')
+    monitor.onDragStart?.({
+      source: src as ElementDragType['payload'],
+      location: locationAt(150, 20),
+    } as never)
+    monitor.onDrag?.({
+      source: src as ElementDragType['payload'],
+      location: locationAt(20, 20),
+    } as never)
+
+    const emptyTargets = locationAt(20, 20)
+    emptyTargets.current.dropTargets = []
+    monitor.onDrop?.({
+      source: src as ElementDragType['payload'],
+      location: emptyTargets,
+    } as never)
+    await Promise.resolve()
+    expect(onSessionEnd).toHaveBeenCalledTimes(1)
+    expect(onSessionEnd).toHaveBeenCalledWith('cancel')
+    expect(document.getElementById('prks-workspace-live')?.textContent).toBe('Move cancelled.')
+    expect(reorderTab).not.toHaveBeenCalled()
+    expect(movePane).not.toHaveBeenCalled()
+    expect(session?.active).toBe(false)
+  })
+
   it('refresh() rebinds without touching production shell commit hooks', () => {
     const win = window as Window & { prksWorkspaceOnShellCommit?: unknown }
     const prior = win.prksWorkspaceOnShellCommit

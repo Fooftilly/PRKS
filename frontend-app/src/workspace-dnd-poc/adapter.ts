@@ -605,18 +605,23 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
         }
         const dropSource = src.data.source
         const snap = options.getSnapshot()
-        // Always recompute from the final pointer — never trust a throttled onDrag cache.
-        const finalIntent = snap
-          ? resolveIntentAtPoint(
-              root,
-              snap,
-              dropSource,
-              location.current.input.clientX,
-              location.current.input.clientY,
-              options.routeSupportsTile,
-            )
-          : null
-        const leaves = snap?.secondaryLeafTabIds ?? []
+        // Native cancel (Esc / lost capture) can fire onDrop with cancelled still false
+        // and empty dropTargets — abort before resolve/commit.
+        if (!snap || location.current.dropTargets.length === 0) {
+          announce('Move cancelled.')
+          endSession('cancel')
+          return
+        }
+        // Final-pointer re-resolve only when drop targets are still active.
+        const finalIntent = resolveIntentAtPoint(
+          root,
+          snap,
+          dropSource,
+          location.current.input.clientX,
+          location.current.input.clientY,
+          options.routeSupportsTile,
+        )
+        const leaves = snap.secondaryLeafTabIds
         const validIntent =
           finalIntent &&
           (finalIntent.kind !== 'secondary-edge' || finalIntent.valid)

@@ -260,6 +260,28 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
     expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
   })
 
+  it('3b. dragEnd without drop commits nothing (native cancel path)', async () => {
+    await mountShell()
+    const h = handlers()
+    bind(h)
+    const source = document.querySelector('.prks-workspace-tab[data-tab-id="D"]') as HTMLElement
+    const strip = document.getElementById('prks-workspace-tabs')!
+    startDragOver(source, strip, 320, 20)
+    fireDrag('dragover', strip, { clientX: 20, clientY: 20 })
+    flushAnimationFrames(1)
+    expect(session?.active).toBe(true)
+    // End the native drag without a drop event — no coordinator commit.
+    dragEnd(window)
+    await Promise.resolve()
+    expect(h.reorderTab).not.toHaveBeenCalled()
+    expect(h.movePane).not.toHaveBeenCalled()
+    expect(h.hideLeaf).not.toHaveBeenCalled()
+    expect(h.splitLeaf).not.toHaveBeenCalled()
+    expect(h.tileTab).not.toHaveBeenCalled()
+    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
+  })
+
   it('4. tab added after mount becomes draggable after reconcile', async () => {
     await mountShell(
       projection({
