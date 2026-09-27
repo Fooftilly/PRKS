@@ -20,6 +20,8 @@ const pageReady = ref(false)
 let unsubscribe = (): void => {}
 let dndSession: WorkspaceDndSession | null = null
 let priorInitDrag: (() => void) | undefined
+let initDragHook: (() => void) | undefined
+let unmounted = false
 
 const projectionRef = computed(() => (props.projection !== undefined ? props.projection : live.value))
 
@@ -48,12 +50,14 @@ watch(projectionRef, (next, prev) => {
 })
 
 function routeSupportsTile(route: string): boolean {
+  // Fail closed when the coordinator policy global is absent (matches tab affordances).
   return typeof window.prksRouteSupportsTile === 'function'
     ? window.prksRouteSupportsTile(route)
-    : true
+    : false
 }
 
 function ensureDndBound(): void {
+  if (unmounted) return
   if (dndSession) {
     dndSession.reconcile()
     return
@@ -65,10 +69,11 @@ function ensureDndBound(): void {
     observeDom: false,
   })
   priorInitDrag = window.prksWorkspaceInitDrag
-  window.prksWorkspaceInitDrag = () => {
+  initDragHook = () => {
     ensureDndBound()
     dndSession?.reconcile()
   }
+  window.prksWorkspaceInitDrag = initDragHook
 }
 
 function signalShellCommit(): void {
@@ -100,13 +105,15 @@ onMounted(() => {
 onUpdated(signalShellCommit)
 
 onUnmounted(() => {
+  unmounted = true
   unsubscribe()
   unsubscribe = () => {}
   dndSession?.destroy()
   dndSession = null
-  if (window.prksWorkspaceInitDrag && priorInitDrag !== undefined) {
+  if (window.prksWorkspaceInitDrag === initDragHook) {
     window.prksWorkspaceInitDrag = priorInitDrag
   }
+  initDragHook = undefined
   priorInitDrag = undefined
 })
 </script>
