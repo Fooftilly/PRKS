@@ -64,6 +64,7 @@ const manifest = {
   schema_version: 1,
   vue: pkg.dependencies.vue,
   tanstackVueQuery: pkg.dependencies["@tanstack/vue-query"],
+  vueUseCore: pkg.dependencies["@vueuse/core"],
   vite: pkg.devDependencies.vite,
   typescript: pkg.devDependencies.typescript,
   vueTsc: pkg.devDependencies["vue-tsc"],

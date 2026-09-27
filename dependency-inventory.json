@@ -251,6 +251,21 @@
       "dependabot_monitored": true
     },
     {
+      "name": "@vueuse/core",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> dependencies.@vueuse/core",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [
+        "frontend/vue/prks-vue.js",
+        "frontend/vue/BUILD-MANIFEST.json"
+      ],
+      "version_metadata": "frontend/vue/BUILD-MANIFEST.json -> vueUseCore",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "#233 selective VueUse for generic browser lifecycle in Folder Library (#262); not for Folder/durable/route/preview product semantics."
+    },
+    {
       "name": "@atlaskit/pragmatic-drag-and-drop",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> dependencies.@atlaskit/pragmatic-drag-and-drop",
