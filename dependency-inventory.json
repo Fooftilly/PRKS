@@ -331,6 +331,39 @@
       "dependabot_monitored": true
     },
     {
+      "name": "storybook",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.storybook",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@storybook/vue3-vite",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.@storybook/vue3-vite",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
+      "name": "@storybook/addon-a11y",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.@storybook/addon-a11y",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
       "name": "inter",
       "scope": "vendor",
       "authoritative_source": "frontend/vendor/inter/VERSION",

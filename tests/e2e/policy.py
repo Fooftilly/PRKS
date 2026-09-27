@@ -388,7 +388,10 @@ AFFECTED_RULES = (
     # a deliberate shared-Vue-core mapping exists. The generated bundle
     # (frontend/vue/**) is not in this rule; plan_ci_e2e treats it separately.
     # New screens under frontend-app/src/ stay unmapped (CI full) until a
-    # feature rule names them. index.html/sw.js stay on shared-frontend-core.
+    # feature rule names them. Shared primitives in src/components/ stay
+    # unmapped too: they are not owned by one feature. Storybook config and
+    # *.stories.* are the storybook-catalog skip rule, not production source.
+    # index.html/sw.js stay on shared-frontend-core.
     {
         "name": "vue-frontend",
         "paths": (
@@ -589,6 +592,7 @@ AFFECTED_RULES = (
     # Performance diagnostics feature files only. Shared Vue transport
     # (api/http.ts), query/**, bootstrap, and dependency pins are not owned
     # here. Do not map frontend-app/src/** to smoke or to settings.
+    # Stories under this tree are catalog files, not settings source.
     {
         "name": "settings-performance-diagnostics",
         "paths": (
@@ -596,8 +600,14 @@ AFFECTED_RULES = (
             "frontend-app/src/api/performance-diagnostics.ts",
             "frontend-app/src/api/performance-diagnostics.test.ts",
         ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
         "features": ("settings",),
-        "note": "Vue performance diagnostics feature files (#232) → settings. Shared Vue transport and query client stay unmapped.",
+        "note": "Vue performance diagnostics feature files (#232) → settings. Stories stay on storybook-catalog. Shared Vue transport and query client stay unmapped.",
     },
     {
         "name": "offline-runtime",
@@ -684,6 +694,22 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # Storybook is a maintainer catalog. It is not the Vue app and must not
+    # explain a rebuilt frontend/vue bundle or select a feature suite.
+    {
+        "name": "storybook-catalog",
+        "paths": (
+            "frontend-app/.storybook/**",
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+            "frontend-app/storybook-static/**",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "Storybook catalog only. Not production application source.",
     },
 )
 
@@ -828,13 +854,17 @@ def classify_affected_path(rel: str) -> dict:
       rules (list[str]), features (list[str]), skip (bool), note (str),
       ci_full (bool), unmapped (bool)
 
-    Skip rules apply only when no non-skip rule matches. ``ci_mode: "full"`` on
+    Skip rules apply only when no non-skip rule matches. A rule with
+    ``exclude_paths`` does not match those paths, so a story under a feature
+    tree can fall through to ``storybook-catalog``. ``ci_mode: "full"`` on
     any matching take rule sets ``ci_full``.
     """
     rel = _posix(rel)
     take_rules = []
     skip_rule = None
     for rule in AFFECTED_RULES:
+        if any(_path_matches(rel, pattern) for pattern in rule.get("exclude_paths") or ()):
+            continue
         if not any(_path_matches(rel, pattern) for pattern in rule["paths"]):
             continue
         if rule.get("skip"):
@@ -1135,7 +1165,7 @@ _VUE_PRODUCTION_SOURCE_SUFFIXES = (".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs")
 
 
 def _is_vue_production_source_path(rel: str) -> bool:
-    """Known Vue production source. Test and spec files do not qualify."""
+    """Known Vue production source. Tests, specs, and stories do not qualify."""
     rel = _posix(rel)
     if not rel.startswith("frontend-app/src/"):
         return False
@@ -1150,7 +1180,7 @@ def _is_vue_production_source_path(rel: str) -> bool:
     if not suffix:
         return False
     stem = name[: -len(suffix)]
-    return not stem.endswith((".test", ".spec"))
+    return not stem.endswith((".test", ".spec", ".stories"))
 
 
 def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:

@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
+import PrksStatusText from '../../components/PrksStatusText.vue'
 import { formatPerformanceReport, formatClientRequestBody, formatSpans, formatSummary, formatThumbnailCache, dbCallsPerRequest, formatPerfMs, routeLabel } from './format'
 import { usePerformanceDiagnostics } from './usePerformanceDiagnostics'
 
@@ -81,33 +84,22 @@ async function onCopy(): Promise<void> {
   <p id="prks-perf-spans" class="prks-settings-hint">{{ spansText }}</p>
   <p id="prks-perf-thumbs" class="prks-settings-hint">{{ thumbsText }}</p>
   <div id="prks-perf-client" class="prks-perf-client">
-    <h5 class="prks-settings-section__title">Client request coordinator</h5>
+    <PrksSectionHeader>Client request coordinator</PrksSectionHeader>
     <p id="prks-perf-client-body" class="prks-settings-hint">{{ clientText }}</p>
   </div>
   <div class="prks-backup-restore-row">
-    <button
+    <PrksButton
       id="prks-perf-refresh-btn"
-      type="button"
-      class="prks-btn prks-btn--secondary"
-      :disabled="refreshBusy"
-      :aria-busy="refreshBusy ? 'true' : undefined"
+      :busy="refreshBusy"
+      :busy-label="refreshBusy && !resetBusy ? 'Refreshing…' : undefined"
       @click="onRefresh"
     >
-      {{ refreshBusy && !resetBusy ? 'Refreshing…' : 'Refresh' }}
-    </button>
-    <button
-      id="prks-perf-reset-btn"
-      type="button"
-      class="prks-btn prks-btn--secondary"
-      :disabled="resetBusy"
-      :aria-busy="resetBusy ? 'true' : undefined"
-      @click="onReset"
-    >
-      {{ resetBusy ? 'Resetting…' : 'Reset' }}
-    </button>
-    <button id="prks-perf-copy-btn" type="button" class="prks-btn prks-btn--secondary" @click="onCopy">
-      Copy report
-    </button>
+      Refresh
+    </PrksButton>
+    <PrksButton id="prks-perf-reset-btn" :busy="resetBusy" busy-label="Resetting…" @click="onReset">
+      Reset
+    </PrksButton>
+    <PrksButton id="prks-perf-copy-btn" @click="onCopy">Copy report</PrksButton>
   </div>
-  <p id="prks-perf-status" class="prks-settings-hint" aria-live="polite">{{ statusText }}</p>
+  <PrksStatusText id="prks-perf-status">{{ statusText }}</PrksStatusText>
 </template>

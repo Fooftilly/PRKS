@@ -169,3 +169,92 @@ jobs:
             git status --porcelain -- frontend/vue frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
             exit 1
           fi
+
+      # Storybook is maintainer-only. pull_request and push build only
+      # after a successful diff against a defined baseline (PR base, or a
+      # fetched nonzero push before SHA) that touches frontend-app/ or this
+      # workflow. A missing baseline, a failed fetch, or a failed diff fails
+      # the step. A readable diff with no matching path is the only skip.
+      # workflow_dispatch builds with no diff and does not invent a baseline.
+      - name: Storybook build when frontend tooling changes
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          pattern='^(frontend-app/|\.github/workflows/static-analysis\.yml$)'
+          zero_sha="0000000000000000000000000000000000000000"
+          event_name="${{ github.event_name }}"
+          run_storybook=false
+
+          # Capture git diff before matching. Do not pipe it into grep:
+          # under pipefail a SIGPIPE can look like "no match". -z keeps
+          # pathnames unquoted, so a name like Café.stories.ts cannot hide
+          # behind a leading quote. grep -z status 1 is "no match"; any
+          # other grep failure fails the step.
+          apply_successful_diff() {
+            local left="$1"
+            local diff_file diff_status grep_status
+            diff_file="$(mktemp)"
+            if git diff -z --name-only "$left" HEAD >"$diff_file"; then
+              diff_status=0
+            else
+              diff_status=$?
+            fi
+            if [[ "$diff_status" -ne 0 ]]; then
+              echo "Storybook path diff failed (status ${diff_status})" >&2
+              rm -f "$diff_file"
+              exit 1
+            fi
+            if grep -zEq "$pattern" "$diff_file"; then
+              run_storybook=true
+            else
+              grep_status=$?
+              if [[ "$grep_status" -ne 1 ]]; then
+                echo "Storybook path match failed (status ${grep_status})" >&2
+                rm -f "$diff_file"
+                exit 1
+              fi
+            fi
+            rm -f "$diff_file"
+          }
+
+          fetch_baseline() {
+            local sha="$1"
+            if ! git fetch --no-tags --depth=1 origin "$sha"; then
+              echo "Failed to fetch Storybook diff baseline ${sha}" >&2
+              exit 1
+            fi
+          }
+
+          if [[ "$event_name" == "pull_request" ]]; then
+            if [[ -z "${PRKS_PR_BASE_SHA:-}" ]]; then
+              echo "Pull request has no base SHA; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PR_BASE_SHA}"
+            apply_successful_diff "${PRKS_PR_BASE_SHA}"
+          elif [[ "$event_name" == "push" ]]; then
+            if [[ -z "${PRKS_PUSH_BEFORE:-}" || "${PRKS_PUSH_BEFORE}" == "$zero_sha" ]]; then
+              echo "Push before SHA is missing or zero; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PUSH_BEFORE}"
+            apply_successful_diff "${PRKS_PUSH_BEFORE}"
+          elif [[ "$event_name" == "workflow_dispatch" ]]; then
+            echo "Manual Fast Static Analysis run; building Storybook."
+            run_storybook=true
+          else
+            echo "No Storybook diff baseline for event ${event_name}." >&2
+            exit 1
+          fi
+          if [[ "$run_storybook" != "true" ]]; then
+            echo "Skipping Storybook build: diff does not touch frontend-app or this workflow."
+            exit 0
+          fi
+          npm run build-storybook --prefix frontend-app
+          if [[ -e frontend/storybook-static || -e frontend/vue/index.html || -e frontend/vue/iframe.html ]]; then
+            echo "Storybook wrote into the PRKS runtime tree" >&2
+            exit 1
+          fi
