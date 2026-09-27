@@ -181,6 +181,37 @@ def _comment_end(text: str, i: int) -> int | None:
     return None
 
 
+def _mask_sql(text: str) -> str:
+    """Blank string literals and comments (same length), keep identifiers.
+
+    Structural scans then never read ``'ON CONFLICT(x) DO ...'`` inside a
+    literal or comment as SQL, while quoted table names still parse.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        comment_end = _comment_end(text, i)
+        if comment_end is not None:
+            out.append(" " * (comment_end - i))
+            i = comment_end
+            continue
+        ch = text[i]
+        if ch in "'\"`":
+            j = _quoted_end(text, i)
+            body = text[i:j]
+            out.append(ch + " " * (len(body) - 2) + body[-1] if ch == "'" and len(body) >= 2 else body)
+            i = j
+        elif ch == "[":
+            j = text.find("]", i)
+            j = len(text) if j < 0 else j + 1
+            out.append(text[i:j])
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def normalize_sql(text: str) -> str:
     """Drop SQL comments and insignificant whitespace; keep quoted text verbatim.
 
@@ -429,7 +460,7 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
         covered.update(id(child) for child in ast.walk(node))
         if "CONFLICT" not in text.upper():
             continue
-        for stmt in text.split(";"):
+        for stmt in _mask_sql(text).split(";"):
             sites.extend(_statement_upserts(stmt, relpath, getattr(node, "lineno", 1)))
     return sites
 

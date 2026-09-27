@@ -440,6 +440,19 @@ class GateRepoTests(unittest.TestCase):
         )
         self.assertEqual(self.codes(), [])
 
+    def test_clause_text_inside_literals_and_comments_is_ignored(self):
+        self.write(
+            {
+                "backend/lit.py": (
+                    "SQL = ('INSERT INTO sync_entity_revisions (scope_type, scope_id, revision) '\n"
+                    "       'VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id) '\n"
+                    "       \"DO UPDATE SET scope_type = 'ON CONFLICT(title) DO NOTHING; x' \"\n"
+                    "       '/* ON CONFLICT(revision) DO NOTHING */ -- ON CONFLICT(x) DO\\n')\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \
