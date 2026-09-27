@@ -612,10 +612,9 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
           endSession('cancel')
           return
         }
-        // Source may already be gone (e.g. hideLeaf parked the pane before deferred
-        // reconcile cancel) — do not resolve/commit or a stale drop can remount via split-leaf.
-        const liveSource = sourceElement(root, dropSource)
-        if (!liveSource || !document.contains(liveSource)) {
+        // Use Pragmatic's original drag element — not a same-tabId querySelector hit,
+        // which can find a Vue replacement after hideLeaf/reconcile and allow a stale commit.
+        if (!document.contains(src.element)) {
           announce('Move cancelled.')
           endSession('cancel')
           return

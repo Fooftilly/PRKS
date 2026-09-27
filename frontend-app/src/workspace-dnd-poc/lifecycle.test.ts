@@ -68,10 +68,14 @@ function locationAt(clientX: number, clientY: number): DragLocationHistory {
   return { initial: entry, previous: entry, current: entry }
 }
 
-function sourcePayload(tabId: string, kind: 'tab' | 'pane' = 'tab') {
+function sourcePayload(
+  tabId: string,
+  kind: 'tab' | 'pane' = 'tab',
+  element: HTMLElement = document.body,
+) {
   return {
     data: { type: 'prks-workspace-poc', source: { kind, tabId } },
-    element: document.body,
+    element,
     dragHandle: null,
   }
 }
@@ -246,22 +250,20 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
     expect(session?.active).toBe(false)
   })
 
-  it('onDrop cancels when the dragged source element left the document', async () => {
+  it('onDrop cancels when the original drag element left even if a same-id replacement exists', async () => {
     const splitLeaf = vi.fn(() => true)
-    // Rebind with a tracked splitLeaf so a remount path would be visible.
     session!.destroy()
-    // Restore the pane tile that destroy/cleanup may have left; setup already appended it.
-    if (!document.querySelector('.prks-tile[data-prks-tab-id="B"]')) {
-      const page = document.getElementById('page-content')!
-      const tile = document.createElement('div')
-      tile.className = 'prks-tile'
-      tile.setAttribute('data-prks-tab-id', 'B')
-      page.appendChild(tile)
+    const page = document.getElementById('page-content')!
+    let originalTile = document.querySelector('.prks-tile[data-prks-tab-id="B"]') as HTMLElement | null
+    if (!originalTile) {
+      originalTile = document.createElement('div')
+      originalTile.className = 'prks-tile'
+      originalTile.setAttribute('data-prks-tab-id', 'B')
+      page.appendChild(originalTile)
     }
     session = bindPocAdapter({
       getSnapshot: () => ({
         mainTabId: 'A',
-        // Stale snapshot still lists B — the remount bug if we commit after hideLeaf.
         secondaryLeafTabIds: ['B'],
         hasSecondaryTree: true,
         narrowFallback: false,
@@ -295,14 +297,19 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
     onSessionEnd.mockClear()
     const monitor = monitorCapture.args!
 
-    const src = sourcePayload('B', 'pane')
+    // Pragmatic tracks the original element identity — not a later same-tabId node.
+    const src = sourcePayload('B', 'pane', originalTile)
     monitor.onDragStart?.({
       source: src as ElementDragType['payload'],
       location: locationAt(10, 60),
     } as never)
-    // Simulate hideLeaf parking the pane before deferred reconcile cancel.
-    document.querySelector('.prks-tile[data-prks-tab-id="B"]')?.remove()
-    expect(document.querySelector('.prks-tile[data-prks-tab-id="B"]')).toBeNull()
+    originalTile.remove()
+    const replacement = document.createElement('div')
+    replacement.className = 'prks-tile'
+    replacement.setAttribute('data-prks-tab-id', 'B')
+    page.appendChild(replacement)
+    expect(document.contains(originalTile)).toBe(false)
+    expect(document.querySelector('.prks-tile[data-prks-tab-id="B"]')).toBe(replacement)
 
     monitor.onDrop?.({
       source: src as ElementDragType['payload'],
