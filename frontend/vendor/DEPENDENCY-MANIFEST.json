@@ -122,6 +122,17 @@
       ],
       "source_category": "npm:frontend-app",
       "version": "3.5.43"
+    },
+    {
+      "name": "prks-workspace-model",
+      "runtime_files": [
+        {
+          "path": "/js/workspace-model.js",
+          "sha256": "33dc2241193a98a3bdff71357a56e0c41a66c3e3639ef55d836b137daef6ca15"
+        }
+      ],
+      "source_category": "frontend-app:workspace-model",
+      "version": "1"
     }
   ],
   "schema_version": 1

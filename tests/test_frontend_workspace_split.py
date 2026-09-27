@@ -40,9 +40,11 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
 
     def test_ratio_state_lives_in_workspace_tabs(self):
         src = _read(_WS)
+        constants = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace", "constants.ts"))
         self.assertIn("mainSplitRatio", src)
         self.assertIn("DEFAULT_MAIN_SPLIT_RATIO", src)
-        self.assertIn("0.58", src)
+        self.assertIn("workspaceModelApi.DEFAULT_MAIN_SPLIT_RATIO", src)
+        self.assertIn("0.58", constants)
         self.assertIn("prksWorkspaceSetMainSplitRatio", src)
         self.assertIn("prksWorkspaceGetSplitRatio", src)
         self.assertIn("prksWorkspaceResetMainSplitRatio", src)

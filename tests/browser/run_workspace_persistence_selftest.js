@@ -787,6 +787,7 @@ async function run() {
     assert('read-time unknown route cleared', store.getItem(KEY) == null);
 
     const srcFiles = [
+        'workspace-model.js',
         'workspace-tabs.js',
         'workspace-tree.js',
         'workspace-tiling.js',

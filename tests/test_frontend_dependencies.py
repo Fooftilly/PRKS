@@ -126,6 +126,7 @@ class FrontendDependencyTests(unittest.TestCase):
             "inter",
             "prks-pdf-viewer",
             "prks-vue",
+            "prks-workspace-model",
         ):
             self.assertIn(name, names)
 

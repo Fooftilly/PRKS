@@ -8,6 +8,7 @@ import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _OVERVIEW = os.path.join(_ROOT, "frontend", "js", "workspace-overview.js")
+_MODEL = os.path.join(_ROOT, "frontend", "js", "workspace-model.js")
 _TREE = os.path.join(_ROOT, "frontend", "js", "workspace-tree.js")
 
 
@@ -20,6 +21,9 @@ def _run_overview(body: str) -> None:
     inner = "var overviewApi = api;\n" + body
     script = (
         "const vm = require('vm');\n"
+        "const modelSrc = "
+        + json.dumps(_read(_MODEL))
+        + ";\n"
         "const treeSrc = "
         + json.dumps(_read(_TREE))
         + ";\n"
@@ -29,6 +33,7 @@ def _run_overview(body: str) -> None:
         "const module = { exports: {} };\n"
         "const context = { console: console, module: module, exports: module.exports };\n"
         "vm.createContext(context);\n"
+        "vm.runInContext(modelSrc, context);\n"
         "vm.runInContext(treeSrc, context);\n"
         "vm.runInContext(overviewSrc, context);\n"
         "context.api = module.exports;\n"

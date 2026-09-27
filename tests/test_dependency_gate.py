@@ -1336,6 +1336,39 @@ class RepoGateLiveTests(unittest.TestCase):
         self.assertIn("prks-static-' + DEPENDENCY_REVISION", sw)
         self.assertIn("RETIRE_PREFIXES", sw)
 
+    def test_workspace_model_bytes_change_dependency_revision(self):
+        from unittest.mock import patch
+
+        from backend import dependency_gate as gate
+
+        real_sha = gate.sha256_file
+        seen = {"model": 0}
+
+        def sha_for_model_change(path: Path) -> str:
+            digest = real_sha(path)
+            if Path(path).name == "workspace-model.js":
+                seen["model"] += 1
+                if seen["model"] > 1:
+                    return "ab" * 32
+            return digest
+
+        with patch.object(gate, "sha256_file", side_effect=sha_for_model_change):
+            first = gate.build_dependency_manifest(_PROJECT)
+            second = gate.build_dependency_manifest(_PROJECT)
+        model = next(item for item in first["dependencies"] if item["name"] == "prks-workspace-model")
+        self.assertEqual(model["runtime_files"][0]["path"], "/js/workspace-model.js")
+        self.assertEqual(len(model["runtime_files"][0]["sha256"]), 64)
+        self.assertNotEqual(
+            gate.dependency_manifest_revision(first),
+            gate.dependency_manifest_revision(second),
+        )
+        changed = {
+            item["name"]: item
+            for item in second["dependencies"]
+            if item != next(old for old in first["dependencies"] if old["name"] == item["name"])
+        }
+        self.assertEqual(set(changed), {"prks-workspace-model"})
+
     def test_no_cdn_in_index(self):
         html = (_PROJECT / "frontend" / "index.html").read_text(encoding="utf-8")
         for marker in ("cdn.jsdelivr.net", "unpkg.com", "fonts.googleapis.com"):

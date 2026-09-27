@@ -11,6 +11,8 @@ Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the 
 
 The legacy PRKS router stays canonical. `src/route-surface/` is the owner-scoped bridge from a TabContext route instance into a Vue view. Route-local runtime cannot live on `window`. Generations are never compared across TabContexts. Global shell and navigation state belongs to the shell/router. Generic browser lifecycle and this PRKS route-instance lifecycle are different concerns. Early presentation is feature-scoped: each feature registers its own presenter, and a pending request paints only on the host that stored it.
 
+`src/workspace/` is the typed canonical workspace model and its pure transforms. `npm run build` emits it as the classic script `frontend/js/workspace-model.js`, loaded before `workspace-tree.js`. It is not part of `frontend/vue/prks-vue.js`, and `src/main.ts` must not import it. `workspace-tabs.js` owns the one live state object and the effect adapter. This package does not render a workspace tab strip, pane tree, or canvas. Do not add Pinia or a second snapshot.
+
 ## Toolchain
 
 CI and rebuilds use **Node `>=24.15.0 <25`** (`engines` in `package.json`; the Vue job in `.github/workflows/static-analysis.yml`). Do not regenerate `frontend/vue/` outside that range. `jsdom@30.1.1` does not accept Node 24.0–24.14.
@@ -32,6 +34,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 
 | Path | Role |
 | --- | --- |
+| `src/workspace/` | Canonical typed workspace state and pure transforms. Built to `frontend/js/workspace-model.js`. Not a Vue renderer and not a second state owner |
 | `src/route-surface/` | Typed Vue route-instance lifecycle. Owner-scoped mount, generation, cleanup, and feature-scoped host-local early presentation. Not a router |
 | `src/features/performance-diagnostics/` | Settings performance diagnostics |
 | `src/features/progress/` | Progress route, first route-surface consumer. Consumes the effective works-browse snapshot; not a Query cache |

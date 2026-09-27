@@ -72,6 +72,14 @@ const manifest = {
 };
 writeFileSync(join(outDir, "BUILD-MANIFEST.json"), JSON.stringify(manifest, null, 2) + "\n");
 
+const modelBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-workspace-model.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (modelBuild.status !== 0) {
+  process.exit(modelBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

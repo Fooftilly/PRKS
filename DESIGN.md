@@ -650,7 +650,7 @@ Ordinary global-tab switching warm-suspends an eligible PDF Work by moving its e
 
 Hide from split (local, per-leaf) removes that one leaf from the tree and normalizes it, but keeps its logical tab open and parked — distinct from Close (which destroys the tab) and from the global Hide split (which parks every visible leaf at once but keeps the entire tree intact, restorable via Show split).
 
-Focus after a leaf disappears (close, local hide, or narrow fallback) prefers the closest surviving sibling in the locally-collapsed subtree; otherwise the nearest remaining leaf in deterministic depth-first tree order; otherwise Main.
+Focus after a leaf disappears (close, local hide, or narrow fallback) moves only when that leaf owned focus. It then prefers the closest surviving sibling in the locally-collapsed subtree; otherwise the nearest remaining leaf in deterministic depth-first tree order; otherwise Main. Stacked mode, including a hidden split, keeps focus on Main.
 
 Focus restoration after close / hide / split / Make main / narrow fallback prefers the resulting focused tile, else that tab’s activation control. Do not leave DOM focus on a destroyed node. Pointer or keyboard entering a tile focuses it without promoting Main or changing the URL.
 

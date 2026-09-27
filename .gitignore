@@ -24,6 +24,7 @@ tools/research-graph/node_modules/
 tools/frontend-vendor/node_modules/
 frontend-app/node_modules/
 frontend-app/storybook-static/
+frontend-app/.workspace-model-build/
 frontend-app/debug-storybook.log
 frontend/vendor/prks-pdf-viewer/esbuild-meta.json
 

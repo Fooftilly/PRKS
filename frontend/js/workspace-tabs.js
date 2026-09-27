@@ -6,15 +6,26 @@
 (function (root) {
     'use strict';
 
-    const WORKSPACE_VERSION = 1;
+    function loadWorkspaceModel() {
+        /* Require only when it is a real function. A VM that injects `module`
+         * without `require` must use the classic-script global instead. */
+        if (typeof module !== 'undefined' && module.exports && typeof require === 'function') {
+            return require('./workspace-model.js');
+        }
+        if (!root.prksWorkspaceModel) throw new Error('PRKS workspace model is not loaded');
+        return root.prksWorkspaceModel;
+    }
+
+    const workspaceModelApi = loadWorkspaceModel();
+    const WORKSPACE_VERSION = workspaceModelApi.WORKSPACE_STATE_VERSION;
     const MODE_STACKED = 'stacked';
     const MODE_TILED = 'tiled';
     const HOME_HASH = '#/folders';
     /* Main region width / usable split width (usable excludes the separator track).
      * Canonical preference is persisted by workspace-persistence.js, not here. */
-    const DEFAULT_MAIN_SPLIT_RATIO = 0.58;
+    const DEFAULT_MAIN_SPLIT_RATIO = workspaceModelApi.DEFAULT_MAIN_SPLIT_RATIO;
     /* 1 Main + up to 3 Secondary leaves = 4 mounted TabContexts at once, at most. */
-    const PRKS_MAX_VISIBLE_TABS = 4;
+    const PRKS_MAX_VISIBLE_TABS = workspaceModelApi.MAX_VISIBLE_PANES;
     const INTERACTIVE_NEST =
         'button, a, input, select, textarea, [contenteditable="true"],' +
         '[role="button"], [role="link"], [role="menuitem"], [role="tab"],' +
@@ -43,18 +54,6 @@
             historyIndex: tab.historyIndex,
             titleRouteGen: tab.titleRouteGen,
         };
-    }
-
-    function copySecondaryTree(tree) {
-        if (!tree) return null;
-        if (tree.type === 'leaf') return tree.tabId ? { type: 'leaf', tabId: String(tree.tabId) } : null;
-        if (tree.type === 'split') {
-            const first = copySecondaryTree(tree.first);
-            const second = copySecondaryTree(tree.second);
-            if (!first || !second) return null;
-            return { type: 'split', id: tree.id, axis: tree.axis, ratio: tree.ratio, first: first, second: second };
-        }
-        return null;
     }
 
     function workspacePayload(tab) {
@@ -252,7 +251,41 @@
         }
 
         function paneCapReached() {
-            return root.leafCount(state.secondaryTree) >= PRKS_MAX_VISIBLE_TABS - 1;
+            return workspaceModelApi.secondaryLeafCapReached(state.secondaryTree);
+        }
+
+        function presentation() {
+            return { narrowFallback: narrowFallback };
+        }
+
+        /* Replace canonical fields from a pure plan. Same-reference results are a no-op
+         * so a repair that found nothing to change is not mutated. Ephemeral
+         * titleRouteGen stays off the typed model and is copied back onto replacement tabs. */
+        function commitCanonical(next) {
+            if (!next || next === state) return false;
+            const prev = Object.create(null);
+            for (let i = 0; i < state.tabs.length; i++) prev[state.tabs[i].id] = state.tabs[i];
+            const tabs = next.tabs.slice();
+            for (let i = 0; i < tabs.length; i++) {
+                const tab = tabs[i];
+                const old = prev[tab.id];
+                if (old && old !== tab && tab.titleRouteGen == null && old.titleRouteGen != null) {
+                    tab.titleRouteGen = old.titleRouteGen;
+                }
+            }
+            state.version = next.version;
+            state.mode = next.mode;
+            state.mainTabId = next.mainTabId;
+            state.focusedTabId = next.focusedTabId;
+            state.secondaryTree = next.secondaryTree;
+            state.tabs = tabs;
+            state.mainSplitRatio = next.mainSplitRatio;
+            return true;
+        }
+
+        function oldMainSupportsTile() {
+            const oldMain = getMainTab();
+            return !!(oldMain && routeSupportsTile(oldMain.route));
         }
 
         /** Depth-first order (first before second); the sole leaf when the tree is a bare leaf. */
@@ -397,7 +430,7 @@
                 if (root.containsTab(state.secondaryTree, match.id)) {
                     if (!promoteSecondaryToMain(match.id)) return;
                 } else {
-                    state.mainTabId = match.id;
+                    setMain(match.id);
                 }
                 state.focusedTabId = state.mainTabId;
                 return;
@@ -496,21 +529,16 @@
         }
 
         function snapshot() {
-            return {
-                version: state.version,
-                mode: state.mode,
-                mainTabId: state.mainTabId,
-                focusedTabId: state.focusedTabId,
-                secondaryTree: copySecondaryTree(state.secondaryTree),
-                tabs: state.tabs.map(copyTab),
-                mainSplitRatio: state.mainSplitRatio,
-            };
+            const snap = workspaceModelApi.workspaceSnapshot(state);
+            for (let i = 0; i < snap.tabs.length; i++) {
+                const live = getTab(snap.tabs[i].id);
+                snap.tabs[i].titleRouteGen = live && live.titleRouteGen != null ? live.titleRouteGen : null;
+            }
+            return snap;
         }
 
         function clampUnitRatio(value) {
-            const n = Number(value);
-            if (!Number.isFinite(n)) return DEFAULT_MAIN_SPLIT_RATIO;
-            return Math.max(0, Math.min(1, n));
+            return workspaceModelApi.clampMainSplitRatio(value);
         }
 
         function getMainSplitRatio() {
@@ -519,13 +547,14 @@
 
         function setMainSplitRatio(ratio, options) {
             const opts = options || {};
-            state.mainSplitRatio = clampUnitRatio(ratio);
+            const plan = workspaceModelApi.planMainSplitRatio(state, ratio);
+            commitCanonical(plan.state);
             if (opts.paint === false) {
                 noteCanonicalChange();
-                return state.mainSplitRatio;
+                return plan.ratio;
             }
             paint();
-            return state.mainSplitRatio;
+            return plan.ratio;
         }
 
         function resetMainSplitRatio(options) {
@@ -658,29 +687,33 @@
         }
 
         function setMain(tabId) {
-            state.mainTabId = tabId;
-            state.focusedTabId = tabId;
+            if (!getTab(tabId) || root.containsTab(state.secondaryTree, tabId)) {
+                state.mainTabId = tabId;
+                state.focusedTabId = tabId;
+                return;
+            }
+            const plan = workspaceModelApi.planActivate(state, tabId, presentation(), {
+                fromPopstate: true,
+                oldMainSupportsTile: false,
+            });
+            if (plan.ok && plan.kind === 'set-main') commitCanonical(plan.state);
+            else {
+                state.mainTabId = tabId;
+                state.focusedTabId = tabId;
+            }
         }
 
         function navigateTabHistory(tab, hash, replace) {
-            if (replace) {
-                tab.history[tab.historyIndex] = hash;
-                applyTabRoute(tab, hash);
-                return;
-            }
-            if (tab.route === hash) {
-                applyTabRoute(tab, hash);
-                return;
-            }
-            tab.history = tab.history.slice(0, tab.historyIndex + 1);
-            if (tab.history[tab.history.length - 1] === hash) {
-                tab.historyIndex = tab.history.length - 1;
-                applyTabRoute(tab, hash);
-                return;
-            }
-            tab.history.push(hash);
-            tab.historyIndex = tab.history.length - 1;
-            applyTabRoute(tab, hash);
+            const planned = workspaceModelApi.planTabHistory(tab, hash, !!replace, {
+                title: routeLoadingTitle(hash),
+                icon: routeTabIcon(hash),
+            });
+            tab.route = planned.route;
+            tab.title = planned.title;
+            tab.icon = planned.icon;
+            tab.history = planned.history;
+            tab.historyIndex = planned.historyIndex;
+            tab.titleRouteGen = null;
         }
 
         function awaitLeave(tabId, nextHash) {
@@ -692,31 +725,8 @@
         }
 
         function enforceInvariants() {
-            if (!state.mainTabId && state.tabs.length) state.mainTabId = state.tabs[0].id;
-            if (state.secondaryTree) {
-                /* Every leaf must reference an existing logical tab and never the Main tab.
-                 * Drop and normalize any leaf that fails (defensive; should not happen in
-                 * correct operation, since every mutation path already validates this). */
-                const leafIds = root.collectLeafTabIds(state.secondaryTree);
-                for (let i = 0; i < leafIds.length; i++) {
-                    const id = leafIds[i];
-                    if (!getTab(id) || id === state.mainTabId) {
-                        state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, id));
-                    }
-                }
-                if (state.secondaryTree) {
-                    const check = root.validateTree(state.secondaryTree);
-                    if (!check.ok) {
-                        throw new Error('workspace secondaryTree invariant violation: ' + check.errors.join('; '));
-                    }
-                }
-            }
-            if (state.mode === MODE_TILED && !state.secondaryTree) state.mode = MODE_STACKED;
-            if (state.mode === MODE_STACKED) {
-                state.focusedTabId = state.mainTabId;
-            } else if (state.focusedTabId !== state.mainTabId && !root.containsTab(state.secondaryTree, state.focusedTabId)) {
-                state.focusedTabId = state.mainTabId;
-            }
+            const next = workspaceModelApi.repairWorkspaceState(state);
+            if (next !== state) commitCanonical(next);
         }
 
         function paint() {
@@ -815,23 +825,10 @@
          * Does not mount or paint.
          */
         function promoteSecondaryToMain(newMainId) {
-            const tab = getTab(newMainId);
-            if (!tab) return false;
-            if (tab.id === state.mainTabId) {
-                state.focusedTabId = tab.id;
-                return true;
-            }
-            if (!root.containsTab(state.secondaryTree, tab.id)) return false;
-            const oldMain = getMainTab();
-            if (oldMain && routeSupportsTile(oldMain.route)) {
-                state.secondaryTree = root.replaceTabId(state.secondaryTree, tab.id, oldMain.id);
-            } else {
-                state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, tab.id));
-                if (oldMain && oldMain.id !== tab.id) coldParkContext(oldMain.id);
-            }
-            state.mainTabId = tab.id;
-            state.focusedTabId = tab.id;
-            if (!state.secondaryTree) state.mode = MODE_STACKED;
+            const plan = workspaceModelApi.planMakeMain(state, newMainId, oldMainSupportsTile());
+            if (!plan.ok) return false;
+            if (plan.coldParkTabId) coldParkContext(plan.coldParkTabId);
+            if (plan.changed) commitCanonical(plan.state);
             return true;
         }
 
@@ -849,10 +846,13 @@
          * "route change" read.
          */
         function preflightMainPromotion(targetId) {
-            const oldMain = getMainTab();
-            if (!oldMain || oldMain.id === targetId) return Promise.resolve(true);
-            if (routeSupportsTile(oldMain.route)) return Promise.resolve(true);
-            return awaitLeave(oldMain.id, oldMain.route);
+            const pf = workspaceModelApi.preflightMakeMain(state, targetId, {
+                narrowFallback: narrowFallback,
+                homeHash: homeHash,
+                oldMainSupportsTile: oldMainSupportsTile(),
+            });
+            if (pf.type !== 'main-promotion' || !pf.requiresLeave) return Promise.resolve(true);
+            return awaitLeave(pf.oldMainId, pf.nextHash);
         }
 
         /**
@@ -864,7 +864,8 @@
             const tab = getTab(tabId);
             if (!tab) return Promise.resolve(false);
             if (tab.id === state.mainTabId) {
-                state.focusedTabId = tab.id;
+                const plan = workspaceModelApi.planMakeMain(state, tab.id, true);
+                if (plan.changed) commitCanonical(plan.state);
                 paintAndRestore(tab.id);
                 refreshFocusedPanel();
                 return Promise.resolve(true);
@@ -882,25 +883,28 @@
         }
 
         function focusTab(tabId) {
-            if (!getTab(tabId)) return false;
-            if (!isVisibleTab(tabId)) return false;
-            if (state.mode === MODE_STACKED && tabId !== state.mainTabId) return false;
-            if (state.focusedTabId === tabId) return true;
-            state.focusedTabId = tabId;
+            const plan = workspaceModelApi.planFocus(state, tabId, presentation());
+            if (!plan.ok) return false;
+            if (!plan.changed) return true;
+            commitCanonical(plan.state);
             paintFocus();
             refreshFocusedPanel();
             return true;
         }
 
         function mountAndRenderSecondary(tab) {
-            state.mode = MODE_TILED;
+            const modePlan = workspaceModelApi.planSetMode(state, MODE_TILED, presentation());
+            if (modePlan.ok && modePlan.kind === 'show') commitCanonical(modePlan.state);
+            else state.mode = MODE_TILED;
             if (narrowFallback) {
                 state.focusedTabId = state.mainTabId;
                 paintAndRestore(state.mainTabId);
                 announce('', 'narrow');
                 return Promise.resolve(copyTab(tab));
             }
-            state.focusedTabId = tab.id;
+            const focus = workspaceModelApi.planFocus(state, tab.id, presentation());
+            if (focus.ok && focus.changed) commitCanonical(focus.state);
+            else if (!focus.ok) state.focusedTabId = tab.id;
             paintAndRestore(tab.id);
             const resumed = mountContext(tab.id);
             announce(tab.title, 'split');
@@ -926,11 +930,16 @@
          * that, used by drag-drop's left/above edge zones). Mounts only `tab` -- the target
          * leaf and every other leaf keep their existing TabContext untouched. */
         function performSplit(targetTabId, axis, tab, placement) {
-            state.secondaryTree = root.splitLeaf(state.secondaryTree, targetTabId, {
-                axis: axis,
-                newTabId: tab.id,
-                placement: placement === 'first' ? 'first' : 'second',
-            });
+            const plan = workspaceModelApi.planSplitLeaf(
+                state,
+                targetTabId,
+                tab.id,
+                axis,
+                placement === 'first' ? 'first' : 'second',
+                root.nextSplitId
+            );
+            if (!plan.ok) return Promise.resolve(false);
+            commitCanonical(plan.state);
             return mountAndRenderSecondary(tab);
         }
 
@@ -982,14 +991,17 @@
             if (!visualTiled()) return false;
             if (!root.containsTab(state.secondaryTree, sourceTabId)) return false;
             if (!root.containsTab(state.secondaryTree, targetTabId)) return false;
-            const useAxis = axis === 'top-bottom' ? 'top-bottom' : 'left-right';
-            const usePlacement = placement === 'first' ? 'first' : 'second';
-            const nextTree = root.moveLeafRelativeToTarget(state.secondaryTree, sourceTabId, targetTabId, {
-                axis: useAxis,
-                placement: usePlacement,
-            });
-            if (nextTree === state.secondaryTree) return false;
-            state.secondaryTree = nextTree;
+            const plan = workspaceModelApi.planMovePane(
+                state,
+                sourceTabId,
+                targetTabId,
+                axis,
+                placement,
+                presentation(),
+                root.nextSplitId
+            );
+            if (!plan.ok) return false;
+            commitCanonical(plan.state);
             paint();
             return true;
         }
@@ -1000,16 +1012,9 @@
          * `secondaryTree`, mounted contexts, or the URL. Both drag-drop and the tab context
          * menu's Move left/right commands call this one function. */
         function reorderTab(tabId, beforeTabId) {
-            const idx = tabIndex(tabId);
-            if (idx < 0 || tabId === beforeTabId) return false;
-            const tab = state.tabs[idx];
-            state.tabs.splice(idx, 1);
-            let insertAt = state.tabs.length;
-            if (beforeTabId) {
-                const beforeIdx = tabIndex(beforeTabId);
-                if (beforeIdx !== -1) insertAt = beforeIdx;
-            }
-            state.tabs.splice(insertAt, 0, tab);
+            const plan = workspaceModelApi.planReorder(state, tabId, beforeTabId || null);
+            if (!plan.ok) return false;
+            commitCanonical(plan.state);
             paint();
             return true;
         }
@@ -1034,21 +1039,19 @@
          * the tree and focuses the closest surviving sibling, else the nearest remaining leaf in
          * deterministic tree order, else Main. */
         function hideLeaf(tabId) {
-            if (!root.containsTab(state.secondaryTree, tabId)) return Promise.resolve(false);
-            const needLeave = visualTiled() && contextMounted(tabId);
-            const leaveP = needLeave ? awaitLeave(tabId, homeHash) : Promise.resolve(true);
+            const pf = workspaceModelApi.preflightHideLeaf(state, tabId, {
+                narrowFallback: narrowFallback,
+                homeHash: homeHash,
+                mounted: contextMounted(tabId),
+            });
+            if (pf.type === 'none' && !root.containsTab(state.secondaryTree, tabId)) return Promise.resolve(false);
+            const leaveP = pf.type === 'leave-tab' ? awaitLeave(pf.tabId, pf.nextHash) : Promise.resolve(true);
             return leaveP.then(function (ok) {
                 if (!ok) return false;
-                if (!root.containsTab(state.secondaryTree, tabId)) return false;
-                const sibling = root.findSiblingLeafTabId(state.secondaryTree, tabId);
+                const plan = workspaceModelApi.planHideLeaf(state, tabId);
+                if (!plan.ok) return false;
                 if (contextMounted(tabId)) coldParkContext(tabId);
-                state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, tabId));
-                if (!state.secondaryTree) state.mode = MODE_STACKED;
-                if (state.focusedTabId === tabId) {
-                    const nextLeaves = root.collectLeafTabIds(state.secondaryTree);
-                    const preferred = sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null;
-                    state.focusedTabId = preferred || state.mainTabId;
-                }
+                commitCanonical(plan.state);
                 paintAndRestore(state.focusedTabId);
                 refreshFocusedPanel();
                 return true;
@@ -1061,14 +1064,18 @@
             if (tab.id === state.mainTabId) return Promise.resolve(false);
             const tree = state.secondaryTree;
             if (root.containsTab(tree, tab.id)) {
-                state.mode = MODE_TILED;
+                const modePlan = workspaceModelApi.planSetMode(state, MODE_TILED, presentation());
+                if (modePlan.ok && modePlan.kind === 'show') commitCanonical(modePlan.state);
+                else state.mode = MODE_TILED;
                 if (narrowFallback) {
                     state.focusedTabId = state.mainTabId;
                     paintAndRestore(state.mainTabId);
                     announce('', 'narrow');
                     return Promise.resolve(copyTab(tab));
                 }
-                state.focusedTabId = tab.id;
+                const focus = workspaceModelApi.planFocus(state, tab.id, presentation());
+                if (focus.ok && focus.changed) commitCanonical(focus.state);
+                else if (!focus.ok) state.focusedTabId = tab.id;
                 paintAndRestore(tab.id);
                 if (!contextMounted(tab.id)) {
                     const resumed = mountContext(tab.id);
@@ -1229,7 +1236,12 @@
             const tab = getTab(tabId);
             if (!tab) return Promise.resolve(false);
             if (tab.id === state.mainTabId && !opts.fromPopstate) {
-                state.focusedTabId = tab.id;
+                const plan = workspaceModelApi.planActivate(state, tab.id, presentation(), {
+                    fromPopstate: false,
+                    oldMainSupportsTile: oldMainSupportsTile(),
+                });
+                if (!plan.ok || plan.kind !== 'focus-main') return Promise.resolve(false);
+                if (plan.changed) commitCanonical(plan.state);
                 paint();
                 refreshFocusedPanel();
                 return Promise.resolve(true);
@@ -1278,64 +1290,38 @@
             const closing = state.tabs[idx];
             const closingMain = closing.id === state.mainTabId;
             const closingLeaf = root.containsTab(state.secondaryTree, closing.id);
+            let leaveP;
             if (!closingMain) {
                 const needLeave = closingLeaf && visualTiled();
-                const leaveP = needLeave ? awaitLeave(closing.id, homeHash) : Promise.resolve(true);
+                leaveP = needLeave ? awaitLeave(closing.id, homeHash) : Promise.resolve(true);
+            } else {
+                const previewForLeave = workspaceModelApi.planCloseTab(state, tabId, null);
+                const successorForLeave = previewForLeave.successorId ? getTab(previewForLeave.successorId) : null;
+                const nextHash = successorForLeave ? successorForLeave.route : homeHash;
+                leaveP = awaitLeave(closing.id, nextHash);
+            }
+            if (!closingMain) {
                 return leaveP.then(function (ok) {
                     if (!ok) return false;
                     if (!getTab(tabId)) return false;
+                    const plan = workspaceModelApi.planCloseTab(state, tabId, null);
+                    if (!plan.ok || plan.needsHomeTab) return false;
                     destroyContext(closing.id);
-                    const i = tabIndex(tabId);
-                    if (i >= 0) state.tabs.splice(i, 1);
-                    if (closingLeaf) {
-                        /* Prefer the closest surviving sibling in the collapsed local subtree;
-                         * otherwise the nearest remaining leaf in deterministic (depth-first)
-                         * tree order; otherwise Main. */
-                        const sibling = root.findSiblingLeafTabId(state.secondaryTree, closing.id);
-                        state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, closing.id));
-                        if (!state.secondaryTree) state.mode = MODE_STACKED;
-                        const nextLeaves = root.collectLeafTabIds(state.secondaryTree);
-                        const preferred = sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null;
-                        state.focusedTabId = preferred || state.mainTabId;
-                    }
+                    commitCanonical(plan.state);
                     paintAndRestore(state.focusedTabId);
                     return true;
                 });
             }
-            const treeLeavesForMainClose = root.collectLeafTabIds(state.secondaryTree);
-            const secId = treeLeavesForMainClose.length ? treeLeavesForMainClose[0] : null;
-            const promotingLeaf = !!secId;
-            let successor = secId ? getTab(secId) : null;
-            if (!successor) successor = state.tabs[idx + 1] || state.tabs[idx - 1] || null;
-            if (successor && successor.id === closing.id) successor = null;
-            const nextHash = successor ? successor.route : homeHash;
-            return awaitLeave(closing.id, nextHash).then(function (ok) {
+            return leaveP.then(function (ok) {
                 if (!ok) return false;
-                const i = tabIndex(tabId);
-                if (i < 0) return false;
-                const wasMountedSuccessor = successor && contextMounted(successor.id);
-                destroyContext(tabId);
-                const j = tabIndex(tabId);
-                if (j >= 0) state.tabs.splice(j, 1);
-                if (promotingLeaf && successor) {
-                    /* Promote the deterministic first surviving Secondary leaf (depth-first tree
-                     * order) into Main's exact former position; remove that one leaf and
-                     * normalize. Every OTHER Secondary leaf's tree position, mounted state, and
-                     * TabContext are left completely untouched -- closing Main must not hide or
-                     * remount unrelated surviving panes. Only collapse to stacked if no
-                     * Secondary leaves remain afterward. */
-                    state.secondaryTree = root.normalizeTree(root.removeLeaf(state.secondaryTree, successor.id));
-                    if (!state.secondaryTree) state.mode = MODE_STACKED;
-                } else {
-                    /* No Secondary leaf existed to promote -- ordinary tab-strip neighbor
-                     * fallback (or none at all), same as a bare stacked Main close. */
-                    state.secondaryTree = null;
-                    state.mode = MODE_STACKED;
-                }
-                if (!successor) {
+                if (tabIndex(tabId) < 0) return false;
+                const preview = workspaceModelApi.planCloseTab(state, tabId, null);
+                if (preview.needsHomeTab) {
+                    destroyContext(tabId);
                     const home = makeTab(homeHash);
-                    state.tabs.push(home);
-                    setMain(home.id);
+                    const planned = workspaceModelApi.planCloseTab(state, tabId, home);
+                    if (!planned.ok) return false;
+                    commitCanonical(planned.state);
                     paint();
                     mountContext(home.id);
                     commitUrl(home, 'replace');
@@ -1346,12 +1332,16 @@
                         return true;
                     });
                 }
-                setMain(successor.id);
-                const resumedSuccessor = !wasMountedSuccessor && mountContext(successor.id);
+                if (!preview.ok) return false;
+                const successor = preview.successorId ? getTab(preview.successorId) : null;
+                const wasMountedSuccessor = !!(successor && contextMounted(successor.id));
+                destroyContext(tabId);
+                commitCanonical(preview.state);
+                const resumedSuccessor = !wasMountedSuccessor && mountContext(preview.successorId);
                 commitUrl(successor, 'replace');
-                paintAndRestore(successor.id);
+                paintAndRestore(preview.successorId);
                 if (wasMountedSuccessor || resumedSuccessor) {
-                    publishShell(successor.id);
+                    publishShell(preview.successorId);
                     refreshFocusedPanel();
                     return true;
                 }
@@ -1499,25 +1489,32 @@
         }
 
         function setMode(mode) {
-            if (mode !== MODE_STACKED && mode !== MODE_TILED) return Promise.resolve(false);
-            if (mode === MODE_TILED) {
-                if (!state.secondaryTree) return Promise.resolve(false);
-                state.mode = MODE_TILED;
-                state.focusedTabId = state.mainTabId;
+            const plan = workspaceModelApi.planSetMode(state, mode, presentation());
+            if (!plan.ok) return Promise.resolve(false);
+            if (plan.kind === 'noop') return Promise.resolve(true);
+            if (plan.kind === 'show') {
+                commitCanonical(plan.state);
                 paint();
                 if (narrowFallback) return Promise.resolve(true);
                 return mountAllSecondaryLeaves();
             }
-            if (state.mode === MODE_STACKED && !visualTiled()) return Promise.resolve(true);
             /* Global Hide split parks every visible leaf at once; this must be atomic (spec:
-             * depth-first preflight, stop at first rejection, no partial unmounting). */
-            const leaves = root.collectLeafTabIds(state.secondaryTree);
-            const mountedLeaves = visualTiled() ? leaves.filter(contextMounted) : [];
+             * depth-first preflight, stop at first rejection, no partial unmounting).
+             * Leave approval is async. Replan from the live state afterward so a workspace
+             * edit that landed during the prompt is not overwritten by the pre-await plan.
+             * A changed mounted Secondary set was not the set that approved leave, so that
+             * newer state stays and this hide does not park or commit. Close, hide-leaf,
+             * make-main, narrow fallback, and popstate already re-read or replan after
+             * approval; they do not commit a pre-await snapshot. */
+            const mountedLeaves = visualTiled() ? plan.leafIds.filter(contextMounted) : [];
             return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
                 if (!ok) return false;
-                mountedLeaves.forEach(coldParkContext);
-                state.mode = MODE_STACKED;
-                state.focusedTabId = state.mainTabId;
+                const fresh = workspaceModelApi.planSetMode(state, mode, presentation());
+                if (!fresh.ok || fresh.kind !== 'hide') return false;
+                const stillMounted = fresh.leafIds.filter(contextMounted);
+                if (stillMounted.join(',') !== mountedLeaves.join(',')) return false;
+                stillMounted.forEach(coldParkContext);
+                commitCanonical(fresh.state);
                 paintAndRestore(state.mainTabId);
                 refreshFocusedPanel();
                 return true;
@@ -1772,16 +1769,15 @@
          * mainSplitRatio. Persistence reads them from workspace state; this setter never
          * touches storage. `options.paint === false` skips a full repaint (used by drag). */
         function setNestedSplitRatio(splitId, ratio, options) {
-            const node = root.findNodeById(state.secondaryTree, splitId);
-            if (!node) return null;
-            state.secondaryTree = root.setSplitRatio(state.secondaryTree, splitId, ratio);
-            const updated = root.findNodeById(state.secondaryTree, splitId);
+            const plan = workspaceModelApi.planNestedSplitRatio(state, splitId, ratio);
+            if (!plan.ok) return null;
+            commitCanonical(plan.state);
             if (options && options.paint === false) {
                 noteCanonicalChange();
-                return updated ? updated.ratio : null;
+                return plan.ratio;
             }
             paint();
-            return updated ? updated.ratio : null;
+            return plan.ratio;
         }
 
         function canAddSecondaryLeaf() {
