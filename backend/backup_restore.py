@@ -324,6 +324,7 @@ def take_ready_backup(token: str) -> tuple[str, str, list[str]]:
         raise BackupError("unknown_token", "Backup is not available.", http_status=404)
     with _ready_lock:
         item = _ready_backups.pop(token, None)
+        _lease_taken_archive_unlocked(item)
     if not item:
         raise BackupError("unknown_token", "Backup is not available.", http_status=404)
     path = str(item.get("path") or "")
@@ -332,6 +333,21 @@ def take_ready_backup(token: str) -> tuple[str, str, list[str]]:
     if not path or not os.path.isfile(path):
         raise BackupError("unknown_token", "Backup is not available.", http_status=404)
     return path, filename, warnings
+
+
+def _lease_taken_archive_unlocked(item: Optional[dict[str, Any]]) -> None:
+    """Keep a just-taken archive out of the reclamation sweep while it downloads.
+
+    Once the token is gone the sweep no longer sees the archive as registered,
+    and an unswept token can already be past the TTL. A fresh mtime, set under
+    ``_ready_lock``, gives the download handler a full TTL to open and stream it.
+    """
+    if not item or not item.get("path"):
+        return
+    try:
+        os.utime(str(item["path"]), None)
+    except OSError:
+        return
 
 
 def _expire_ready_backups_unlocked(*, now: Optional[float] = None) -> None:
@@ -368,8 +384,11 @@ def _reclaim_abandoned_ready_backups_unlocked(
     * an archive still registered under a live token is never touched.
 
     The caller holds ``_ready_lock`` so registration and download hand-off
-    cannot interleave with the decision. Removal goes through the maintenance
-    boundary's descriptor-anchored ``_discard_maintenance_child()``.
+    cannot interleave with the decision; ``take_ready_backup()`` refreshes the
+    archive's mtime under the same lock, so a download in progress is fresh
+    here. Removal goes through the maintenance boundary's descriptor-anchored
+    ``_discard_maintenance_child()`` and is file-only: it unlinks the entry only
+    while it is still the regular file vetted here, and never recurses.
     """
     current = time.time() if now is None else now
     try:
@@ -387,9 +406,10 @@ def _reclaim_abandoned_ready_backups_unlocked(
     reclaimed = 0
     for name in names:
         child = os.path.join(root, name)
-        if not _is_abandoned_ready_backup(child, name, protected, current):
+        vetted = _abandoned_ready_backup_stat(child, name, protected, current)
+        if vetted is None:
             continue
-        _discard_maintenance_child(config, _BACKUP_SUBROOT, child)
+        _discard_maintenance_child(config, _BACKUP_SUBROOT, child, expect_file=vetted)
         if not os.path.lexists(child):
             reclaimed += 1
     if reclaimed:
@@ -413,27 +433,33 @@ def _registered_ready_backups_unlocked() -> tuple[set[str], set[tuple[int, int]]
     return paths, identities
 
 
-def _is_abandoned_ready_backup(
+def _abandoned_ready_backup_stat(
     child: str,
     name: str,
     protected: tuple[set[str], set[tuple[int, int]]],
     current: float,
-) -> bool:
-    """Whether one backup-subroot entry is a generated archive past its TTL."""
+) -> Optional[os.stat_result]:
+    """The vetted ``lstat`` of a generated archive past its TTL, else None.
+
+    The result is the identity removal must still find; see
+    ``_unlink_proven_file()``.
+    """
     if not _READY_BACKUP_NAME_RE.fullmatch(name):
-        return False
+        return None
     try:
         st = os.lstat(child)
     except OSError:
-        return False
+        return None
     if not stat.S_ISREG(st.st_mode) or _is_directory_reparse_point(child):
-        return False
+        return None
     protected_paths, protected_ids = protected
     if (st.st_dev, st.st_ino) in protected_ids:
-        return False
+        return None
     if os.path.normcase(os.path.abspath(child)) in protected_paths:
-        return False
-    return current - st.st_mtime >= READY_BACKUP_TTL_SECONDS
+        return None
+    if current - st.st_mtime < READY_BACKUP_TTL_SECONDS:
+        return None
+    return st
 
 
 def cleanup_expired_backup_jobs(config: StorageConfig, *, now: Optional[float] = None) -> None:
@@ -1040,7 +1066,36 @@ def _remove_reparse_aware(path: str) -> None:
         os.rmdir(directory)
 
 
-def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
+def _unlink_proven_file(
+    root: str, leaf: str, dir_fd: Optional[int], expected: os.stat_result
+) -> None:
+    """Unlink one entry of a proven subroot only if it is still the vetted file.
+
+    For sweeps that decided on a specific regular file: the entry is re-read
+    relative to the same directory the unlink uses and must still be a regular
+    file with the identity the caller vetted. Anything else -- a directory,
+    link or different file swapped in since, or the same name reached through a
+    subroot replaced on the path-based branch -- is refused rather than removed,
+    and nothing here ever recurses. ``leaf`` is already a bare basename, so it
+    is addressed directly instead of by enumerating the whole subroot.
+    """
+    target = leaf if dir_fd is not None else os.path.join(root, leaf)
+    try:
+        st = os.lstat(target, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(st.st_mode) or not os.path.samestat(st, expected):
+        raise ValueError("maintenance entry changed before removal")
+    os.unlink(target, dir_fd=dir_fd)
+
+
+def _remove_proven_child(
+    root: str,
+    leaf: str,
+    dir_fd: Optional[int],
+    *,
+    expect_file: Optional[os.stat_result] = None,
+) -> None:
     """Remove the entry of an already-proven subroot whose name equals ``leaf``.
 
     The name handed to the syscall is the one the directory itself reports; the
@@ -1052,7 +1107,12 @@ def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
     could not be listed" must not be indistinguishable from "the child is
     already gone", because callers read a quiet return as proof of removal.
     A leaf that is genuinely absent from the listing is still a no-op.
+
+    With ``expect_file`` the removal is file-only; see ``_unlink_proven_file()``.
     """
+    if expect_file is not None:
+        _unlink_proven_file(root, leaf, dir_fd, expect_file)
+        return
     listing = os.listdir(root if dir_fd is None else dir_fd)
     for entry in listing:
         if entry != leaf:
@@ -1072,7 +1132,11 @@ def _remove_proven_child(root: str, leaf: str, dir_fd: Optional[int]) -> None:
 
 
 def _remove_maintenance_child(
-    config: StorageConfig, subroot: tuple[str, ...], path: str
+    config: StorageConfig,
+    subroot: tuple[str, ...],
+    path: str,
+    *,
+    expect_file: Optional[os.stat_result] = None,
 ) -> None:
     """Remove exactly one direct child of a maintenance subroot.
 
@@ -1133,7 +1197,7 @@ def _remove_maintenance_child(
         # let a retarget between the check and the open bind this descriptor to
         # a different maintenance tree.
         try:
-            _remove_proven_child(expected_root, leaf, fd)
+            _remove_proven_child(expected_root, leaf, fd, expect_file=expect_file)
         finally:
             os.close(fd)
         return
@@ -1164,11 +1228,15 @@ def _remove_maintenance_child(
     # *inside* the already-authorized tree between this point and the unlink;
     # _remove_reparse_aware() shrinks that further by never traversing a link or
     # reparse point at any depth.
-    _remove_proven_child(verified_root, leaf, None)
+    _remove_proven_child(verified_root, leaf, None, expect_file=expect_file)
 
 
 def _discard_maintenance_child(
-    config: StorageConfig, subroot: tuple[str, ...], path: str
+    config: StorageConfig,
+    subroot: tuple[str, ...],
+    path: str,
+    *,
+    expect_file: Optional[os.stat_result] = None,
 ) -> None:
     """Best-effort cleanup of maintenance garbage: log and carry on.
 
@@ -1184,7 +1252,7 @@ def _discard_maintenance_child(
     logging one is safe.
     """
     try:
-        _remove_maintenance_child(config, subroot, path)
+        _remove_maintenance_child(config, subroot, path, expect_file=expect_file)
     except Exception as exc:
         LOGGER.error("restore_cleanup_failed error_type=%s", safe_error_type(exc))
 

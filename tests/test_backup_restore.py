@@ -1164,6 +1164,79 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
         backup_module.cleanup_expired_backup_jobs(cfg)
         self.assertEqual(self._ready_names(self._backup_root(cfg)), [])
 
+    def test_taken_archive_past_ttl_survives_a_sweep_before_download(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path = backup_module._ready_backups[token]["path"]
+        # An unswept token past its TTL is still accepted by take.
+        old = time.time() - backup_module.READY_BACKUP_TTL_SECONDS - 60
+        backup_module._ready_backups[token]["created_unix"] = old
+        self._age(path)
+
+        taken_path, _filename, _warnings = backup_module.take_ready_backup(token)
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertEqual(taken_path, path)
+        self.assertTrue(os.path.isfile(path))
+
+    def test_archive_swapped_for_a_directory_is_not_removed(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        path = self._fake_archive(root, self._generated_name(11))
+        real_discard = backup_module._discard_maintenance_child
+
+        def swap_then_discard(config, subroot, child, **kwargs):
+            os.remove(child)
+            os.makedirs(child)
+            with open(os.path.join(child, "keep.bin"), "wb") as handle:
+                handle.write(b"keep")
+            return real_discard(config, subroot, child, **kwargs)
+
+        with patch.object(backup_module, "_discard_maintenance_child", swap_then_discard):
+            backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertTrue(os.path.isfile(os.path.join(path, "keep.bin")))
+
+    def test_file_only_removal_refuses_a_changed_entry(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        subroot = backup_module._BACKUP_SUBROOT
+        for supports_fd in (backup_module._SUPPORTS_DIR_FD, False):
+            with self.subTest(supports_dir_fd=supports_fd), patch.object(
+                backup_module, "_SUPPORTS_DIR_FD", supports_fd
+            ):
+                path = self._fake_archive(root, self._generated_name(12))
+                vetted = os.lstat(path)
+                os.remove(path)
+                os.makedirs(path)
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg, subroot, path, expect_file=vetted
+                    )
+                self.assertTrue(os.path.isdir(path))
+                os.rmdir(path)
+
+                path = self._fake_archive(root, self._generated_name(13))
+                vetted = os.lstat(path)
+                os.remove(path)
+                other = self._fake_archive(root, "placeholder.bin")
+                with open(path, "wb") as handle:
+                    handle.write(b"different file")
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg, subroot, path, expect_file=vetted
+                    )
+                self.assertTrue(os.path.isfile(path))
+                os.remove(path)
+                os.remove(other)
+
+                path = self._fake_archive(root, self._generated_name(14))
+                backup_module._remove_maintenance_child(
+                    cfg, subroot, path, expect_file=os.lstat(path)
+                )
+                self.assertFalse(os.path.lexists(path))
+
     def test_in_progress_work_directory_is_not_reclaimed(self):
         cfg = self._cfg()
         root = self._backup_root(cfg)
