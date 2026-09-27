@@ -101,6 +101,14 @@ describe('Folder Library route bridge', () => {
     expect(el.textContent).toContain('Folder Library')
   })
 
+  function beginRouteCleanups(cleanups: Set<() => void>): void {
+    // Mirror tab-context: drain the set before invoking so re-arms during a
+    // retain no-op survive for the next leave / failed refresh.
+    const fns = Array.from(cleanups)
+    cleanups.clear()
+    fns.forEach((fn) => fn())
+  }
+
   it('keeps folder filter across production-style retain refresh', async () => {
     stubFolderLibraryWindow()
     const cleanups = new Set<() => void>()
@@ -137,8 +145,8 @@ describe('Folder Library route bridge', () => {
     search!.dispatchEvent(new Event('input'))
     await nextTick()
     pane[FOLDER_LIBRARY_RETAIN_SURFACE_KEY] = true
-    Array.from(cleanups).forEach((fn) => fn())
-    cleanups.clear()
+    beginRouteCleanups(cleanups)
+    expect(cleanups.size).toBeGreaterThan(0)
     pane[FOLDER_LIBRARY_RETAIN_SURFACE_KEY] = false
     presentFolderLibrary({
       owner: pane,
@@ -152,7 +160,48 @@ describe('Folder Library route bridge', () => {
     })
     await nextTick()
     expect(routeHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('alp')
-    Array.from(cleanups).forEach((fn) => fn())
+    beginRouteCleanups(cleanups)
+    expect(routeHost.querySelector('[data-prks-folder-library-view]')).toBeNull()
+  })
+
+  it('re-armed cleanup dismisses retained surface after failed same-route refresh', async () => {
+    stubFolderLibraryWindow()
+    const cleanups = new Set<() => void>()
+    const pane: {
+      tabId: string
+      isCurrent: () => boolean
+      registerCleanup: (fn: () => void) => () => void
+      [FOLDER_LIBRARY_RETAIN_SURFACE_KEY]?: boolean
+    } = {
+      tabId: 'coord',
+      isCurrent: () => true,
+      registerCleanup(fn: () => void) {
+        cleanups.add(fn)
+        return () => {
+          cleanups.delete(fn)
+        }
+      },
+    }
+    const contentDiv = document.createElement('div')
+    document.body.appendChild(contentDiv)
+    const routeHost = document.createElement('div')
+    routeHost.setAttribute('data-prks-vue-route-host', 'true')
+    contentDiv.appendChild(routeHost)
+    presentFolderLibrary({
+      owner: pane,
+      host: routeHost,
+      contentRoot: contentDiv,
+      folders: [{ id: 'F1', title: 'Alpha', parent_id: null, work_count: 0, child_count: 0 }],
+      generation: 1,
+    })
+    expect(routeHost.querySelector('[data-prks-folder-library-view]')).not.toBeNull()
+    // Same-route refresh: retain cleanup runs, then load fails before present.
+    pane[FOLDER_LIBRARY_RETAIN_SURFACE_KEY] = true
+    beginRouteCleanups(cleanups)
+    pane[FOLDER_LIBRARY_RETAIN_SURFACE_KEY] = false
+    // No presentFolderLibrary — simulate offline/effective throw.
+    // Tab leave / route leave must still tear down the retained Vue tree.
+    beginRouteCleanups(cleanups)
     expect(routeHost.querySelector('[data-prks-folder-library-view]')).toBeNull()
   })
 

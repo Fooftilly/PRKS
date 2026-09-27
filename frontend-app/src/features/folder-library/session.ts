@@ -33,7 +33,13 @@ function armFolderLibraryOwnerCleanup(owner: FolderLibraryOwner): void {
   owner[FOLDER_LIBRARY_CLEANUP_ARMED_KEY] = true
   owner.registerCleanup(() => {
     owner[FOLDER_LIBRARY_CLEANUP_ARMED_KEY] = false
-    if (owner[FOLDER_LIBRARY_RETAIN_SURFACE_KEY]) return
+    if (owner[FOLDER_LIBRARY_RETAIN_SURFACE_KEY]) {
+      // beginRoute already drained the cleanup set. Re-arm immediately so a
+      // mid-refresh load failure or tab leave still dismisses the retained
+      // surface (presentFolderLibrary only re-arms after a successful paint).
+      armFolderLibraryOwnerCleanup(owner)
+      return
+    }
     dismissFolderLibrary(owner)
   })
 }

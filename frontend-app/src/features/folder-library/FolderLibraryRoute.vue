@@ -187,7 +187,14 @@ async function loadRecentlyAdded(force: boolean): Promise<void> {
     if (!surfaceStillOwned() || epoch !== loadEpoch || props.projection.generation !== routeGen) {
       return
     }
-    if (!result) return
+    if (!result) {
+      recentlyAddedWorks.value = null
+      recentlyAddedUnavailable.value = true
+      recentlyAddedGeneration.value = null
+      recentlyAddedPendingGeneration.value = null
+      syncLegacyDashboardState()
+      return
+    }
     const prevPending = recentlyAddedPendingGeneration.value
     recentlyAddedWorks.value = result.works
     recentlyAddedCached.value = result.offlineCached
@@ -205,6 +212,13 @@ async function loadRecentlyAdded(force: boolean): Promise<void> {
       const pane = rootEl.value?.querySelector('#prks-folder-library-recently-added')
       initLazyWorkThumbs(pane)
     }
+  } catch {
+    if (!surfaceStillOwned() || epoch !== loadEpoch) return
+    recentlyAddedWorks.value = null
+    recentlyAddedUnavailable.value = true
+    recentlyAddedGeneration.value = null
+    recentlyAddedPendingGeneration.value = null
+    syncLegacyDashboardState()
   } finally {
     if (epoch === loadEpoch) {
       recentlyAddedLoading.value = false
@@ -295,7 +309,7 @@ onMounted(() => {
     }) ?? null
   paintBrowseMode()
   if (activeTab.value === 'recently-added') {
-    void loadRecentlyAdded(false)
+    void loadRecentlyAdded(false).catch(() => {})
   }
 })
 
@@ -314,7 +328,7 @@ watch(
     intents?.scheduleGlance(rootEl.value)
     paintBrowseMode()
     if (activeTab.value === 'recently-added') {
-      void loadRecentlyAdded(false)
+      void loadRecentlyAdded(false).catch(() => {})
     }
   },
 )
