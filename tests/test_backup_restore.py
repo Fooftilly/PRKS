@@ -987,6 +987,337 @@ class TestBackupPathSafety(BackupRestoreTestCase):
         self.assertTrue(os.path.isdir(staging_root))
 
 
+class TestReadyBackupReclamation(BackupRestoreTestCase):
+    """#205: finished archives no ready token can reach are reclaimed from disk."""
+
+    def setUp(self):
+        super().setUp()
+        with backup_module._ready_lock:
+            self._saved_ready = dict(backup_module._ready_backups)
+            backup_module._ready_backups.clear()
+
+    def tearDown(self):
+        with backup_module._ready_lock:
+            backup_module._ready_backups.clear()
+            backup_module._ready_backups.update(self._saved_ready)
+        super().tearDown()
+
+    def _simulate_restart(self):
+        with backup_module._ready_lock:
+            backup_module._ready_backups.clear()
+
+    def _backup_root(self, cfg):
+        root = backup_module._maintenance_subroot(cfg, *backup_module._BACKUP_SUBROOT)
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    def _age(self, path, seconds=None):
+        if seconds is None:
+            seconds = backup_module.READY_BACKUP_TTL_SECONDS + 60
+        old = time.time() - seconds
+        os.utime(path, (old, old), follow_symlinks=False)
+
+    def _generated_name(self, index):
+        return f"prks-backup-20240101T0000{index:02d}Z{backup_module.BACKUP_EXTENSION}"
+
+    def _fake_archive(self, root, name, *, stale=True):
+        path = os.path.join(root, name)
+        with open(path, "wb") as handle:
+            handle.write(b"PK-fixture")
+        if stale:
+            self._age(path)
+        return path
+
+    def _ready_names(self, root):
+        return sorted(
+            name for name in os.listdir(root)
+            if backup_module._READY_BACKUP_NAME_RE.fullmatch(name)
+        )
+
+    def _symlink_or_skip(self, target, link, *, directory=False):
+        try:
+            os.symlink(target, link, target_is_directory=directory)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
+    def test_expired_token_and_its_archive_are_reclaimed_past_ttl(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path = backup_module._ready_backups[token]["path"]
+        self.assertTrue(os.path.isfile(path))
+
+        backup_module.cleanup_expired_backup_jobs(
+            cfg, now=time.time() + backup_module.READY_BACKUP_TTL_SECONDS + 1
+        )
+
+        self.assertNotIn(token, backup_module._ready_backups)
+        self.assertFalse(os.path.lexists(path))
+
+    def test_stale_archive_is_reclaimed_after_a_restart(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path = backup_module._ready_backups[token]["path"]
+        self._simulate_restart()
+        self._age(path)
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertFalse(os.path.lexists(path))
+        self.assertTrue(os.path.isdir(self._backup_root(cfg)))
+
+    def test_stash_ages_the_archive_from_the_token_clock(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        result = create_backup(cfg)
+        self._age(result.archive_path)
+        token = backup_module.stash_ready_backup(result)
+        created = backup_module._ready_backups[token]["created_unix"]
+        self.assertAlmostEqual(os.path.getmtime(result.archive_path), created, delta=2)
+
+    def test_fresh_unregistered_archive_is_preserved(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path = backup_module._ready_backups[token]["path"]
+        self._simulate_restart()
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertTrue(os.path.isfile(path))
+
+    def test_archive_of_an_active_token_is_preserved_even_when_its_file_looks_old(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path = backup_module._ready_backups[token]["path"]
+        self._age(path)
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertTrue(os.path.isfile(path))
+        taken_path, filename, _warnings = backup_module.take_ready_backup(token)
+        self.assertEqual(taken_path, path)
+        self.assertEqual(filename, os.path.basename(path))
+
+    def test_unrecognized_entries_are_preserved(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        outside = self._tmpdir("prks-outside-")
+        victim = os.path.join(outside, "victim.prks-backup")
+        with open(victim, "wb") as handle:
+            handle.write(b"keep")
+        self._age(victim)
+        keep = [
+            self._fake_archive(root, "notes.txt"),
+            self._fake_archive(root, "upload.prks-backup"),
+            self._fake_archive(root, "prks-backup-latest.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z.prks-backup.part"),
+            self._fake_archive(root, ".prks-backup-20240101T000000Z.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000.prks-backup"),
+            self._fake_archive(root, "prks-backup-99999999T999999Z.prks-backup"),
+            self._fake_archive(root, "prks-backup-20241340T250000Z.prks-backup"),
+        ]
+        named_dir = os.path.join(root, self._generated_name(1))
+        os.makedirs(named_dir)
+        inner = self._fake_archive(named_dir, "payload.bin")
+        self._age(named_dir)
+        keep.append(inner)
+        link = os.path.join(root, self._generated_name(2))
+        self._symlink_or_skip(victim, link)
+        self._age(link)
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        for path in keep:
+            self.assertTrue(os.path.isfile(path), os.path.basename(path))
+        self.assertTrue(os.path.isdir(named_dir))
+        self.assertTrue(os.path.islink(link))
+        with open(victim, "rb") as handle:
+            self.assertEqual(handle.read(), b"keep")
+
+    def test_multiple_stale_archives_are_reclaimed_in_one_pass(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        stale = [self._fake_archive(root, self._generated_name(i)) for i in range(4)]
+        fresh = self._fake_archive(root, self._generated_name(10), stale=False)
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        for path in stale:
+            self.assertFalse(os.path.lexists(path))
+        self.assertTrue(os.path.isfile(fresh))
+
+    def test_take_then_download_cleanup_is_unchanged(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path, filename, _warnings = backup_module.take_ready_backup(token)
+        self.assertTrue(os.path.isfile(path))
+        self.assertTrue(filename.endswith(backup_module.BACKUP_EXTENSION))
+        with self.assertRaises(BackupError):
+            backup_module.take_ready_backup(token)
+        # Opportunistic cleanup between the take and the stream leaves a fresh
+        # archive alone; the download handler still owns its removal.
+        backup_module.cleanup_expired_backup_jobs(cfg)
+        self.assertTrue(os.path.isfile(path))
+        os.remove(path)
+        backup_module.cleanup_expired_backup_jobs(cfg)
+        self.assertEqual(self._ready_names(self._backup_root(cfg)), [])
+
+    def test_taken_archive_past_ttl_survives_a_sweep_before_download(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        token = backup_module.stash_ready_backup(create_backup(cfg))
+        path = backup_module._ready_backups[token]["path"]
+        # An unswept token past its TTL is still accepted by take.
+        old = time.time() - backup_module.READY_BACKUP_TTL_SECONDS - 60
+        backup_module._ready_backups[token]["created_unix"] = old
+        self._age(path)
+
+        taken_path, _filename, _warnings = backup_module.take_ready_backup(token)
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertEqual(taken_path, path)
+        self.assertTrue(os.path.isfile(path))
+
+    def test_archive_swapped_for_a_directory_is_not_removed(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        path = self._fake_archive(root, self._generated_name(11))
+        real_discard = backup_module._discard_maintenance_child
+
+        def swap_then_discard(config, subroot, child, **kwargs):
+            os.remove(child)
+            os.makedirs(child)
+            with open(os.path.join(child, "keep.bin"), "wb") as handle:
+                handle.write(b"keep")
+            return real_discard(config, subroot, child, **kwargs)
+
+        with patch.object(backup_module, "_discard_maintenance_child", swap_then_discard):
+            backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertTrue(os.path.isfile(os.path.join(path, "keep.bin")))
+
+    def test_file_only_removal_refuses_a_changed_entry(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        subroot = backup_module._BACKUP_SUBROOT
+        for supports_fd in (backup_module._SUPPORTS_DIR_FD, False):
+            with self.subTest(supports_dir_fd=supports_fd), patch.object(
+                backup_module, "_SUPPORTS_DIR_FD", supports_fd
+            ):
+                path = self._fake_archive(root, self._generated_name(12))
+                vetted = os.lstat(path)
+                os.remove(path)
+                os.makedirs(path)
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg, subroot, path, expect_file=vetted
+                    )
+                self.assertTrue(os.path.isdir(path))
+                os.rmdir(path)
+
+                path = self._fake_archive(root, self._generated_name(13))
+                vetted = os.lstat(path)
+                os.remove(path)
+                other = self._fake_archive(root, "placeholder.bin")
+                with open(path, "wb") as handle:
+                    handle.write(b"different file")
+                with self.assertRaises(ValueError):
+                    backup_module._remove_maintenance_child(
+                        cfg, subroot, path, expect_file=vetted
+                    )
+                self.assertTrue(os.path.isfile(path))
+                os.remove(path)
+                os.remove(other)
+
+                path = self._fake_archive(root, self._generated_name(14))
+                backup_module._remove_maintenance_child(
+                    cfg, subroot, path, expect_file=os.lstat(path)
+                )
+                self.assertFalse(os.path.lexists(path))
+
+    def test_in_progress_work_directory_is_not_reclaimed(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        work_dir = os.path.join(root, "abcdefghijklmnop")
+        os.makedirs(work_dir)
+        snapshot = self._fake_archive(work_dir, "prks_data.db")
+        archive = self._fake_archive(work_dir, self._generated_name(3))
+        self._age(work_dir)
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertTrue(os.path.isfile(snapshot))
+        self.assertTrue(os.path.isfile(archive))
+
+    def test_cleanup_during_backup_packing_does_not_disturb_it(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        seen = {}
+
+        def hook(archive_path):
+            self._age(archive_path)
+            backup_module.cleanup_expired_backup_jobs(
+                cfg, now=time.time() + backup_module.READY_BACKUP_TTL_SECONDS * 10
+            )
+            seen["survived"] = os.path.isfile(archive_path)
+
+        result = create_backup(cfg, post_archive_hook=hook)
+
+        self.assertTrue(seen["survived"])
+        self.assertTrue(result.verified)
+        self.assertTrue(os.path.isfile(result.archive_path))
+
+    def test_backup_lifecycle_reclaims_abandoned_archives(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        root = self._backup_root(cfg)
+        abandoned = self._fake_archive(root, self._generated_name(4))
+        events = []
+
+        backup_module.run_backup_with_progress(cfg, events.append)
+
+        self.assertEqual(events[-1]["phase"], "ready")
+        self.assertFalse(os.path.lexists(abandoned))
+        path = backup_module._ready_backups[events[-1]["token"]]["path"]
+        self.assertTrue(os.path.isfile(path))
+
+    def test_cleanup_stays_inside_the_backup_subroot(self):
+        cfg = self._cfg()
+        self._backup_root(cfg)
+        maint = backup_module._maintenance_subroot(cfg)
+        staging = backup_module._maintenance_subroot(cfg, *backup_module._STAGING_SUBROOT)
+        os.makedirs(staging, exist_ok=True)
+        elsewhere = [
+            self._fake_archive(cfg.root, self._generated_name(5)),
+            self._fake_archive(maint, self._generated_name(6)),
+            self._fake_archive(staging, self._generated_name(7)),
+        ]
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        for path in elsewhere:
+            self.assertTrue(os.path.isfile(path))
+
+    def test_cleanup_refuses_a_symlinked_backup_subroot(self):
+        cfg = self._cfg()
+        maint = backup_module._maintenance_subroot(cfg)
+        os.makedirs(maint, exist_ok=True)
+        outside = self._tmpdir("prks-outside-")
+        victim = self._fake_archive(outside, self._generated_name(8))
+        self._symlink_or_skip(
+            outside, os.path.join(maint, "backup"), directory=True
+        )
+
+        with self.assertLogs("prks.backup", level="ERROR"):
+            backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertTrue(os.path.isfile(victim))
+
+
 class TestBackupInventory(BackupRestoreTestCase):
     def test_every_storage_config_path_is_classified(self):
         self.assertEqual(storage_config_path_field_names(), classified_storage_field_names())
@@ -2704,7 +3035,7 @@ class TestBackupRestoreHTTP(BackupRestoreTestCase):
         import http.client
         import socket
 
-        self._bind_library(title="HTTP Progress Work")
+        lib = self._bind_library(title="HTTP Progress Work")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -2763,6 +3094,21 @@ class TestBackupRestoreHTTP(BackupRestoreTestCase):
         self.assertIn(".prks-backup", res.getheader("Content-Disposition") or "")
         self.assertGreater(len(blob), 64)
         conn.close()
+
+        # A successful download still removes its archive itself.
+        backup_dir = backup_module._maintenance_subroot(
+            lib["cfg"], *backup_module._BACKUP_SUBROOT
+        )
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            left = [
+                name for name in os.listdir(backup_dir)
+                if backup_module._READY_BACKUP_NAME_RE.fullmatch(name)
+            ]
+            if not left:
+                break
+            time.sleep(0.05)
+        self.assertEqual(left, [])
 
     def test_restore_post_requires_origin_when_present(self):
         import http.client
