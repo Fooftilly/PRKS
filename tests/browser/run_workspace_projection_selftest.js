@@ -172,6 +172,28 @@ function makeWorkspace() {
         global.prksWorkspaceApplyRestoredFocus = prevApplyFocus;
     }
 
+    const remountHost = makeWorkspace();
+    const beforeLeave = [];
+    const unsubRemount = remountHost.ws.subscribe(function (projection) {
+        beforeLeave.push(projection);
+    });
+    const commitBeforeLeave = beforeLeave[0].commit;
+    unsubRemount();
+    remountHost.ws.setResolvedTitle('#/folders', 'After listeners left');
+    const afterRemount = [];
+    remountHost.ws.subscribe(function (projection) {
+        afterRemount.push(projection);
+    });
+    assert(
+        'late subscribe sees state committed with no listeners',
+        afterRemount[0] && afterRemount[0].state.tabs[0].title === 'After listeners left'
+    );
+    assert('late subscribe does not reuse the pre-mutation projection', afterRemount[0] !== beforeLeave[0]);
+    assert(
+        'listener-less publish does not mint a phantom commit',
+        afterRemount[0].commit === commitBeforeLeave + 1
+    );
+
     const status = makeWorkspace();
     let statusPublishes = 0;
     let lastStatus = null;

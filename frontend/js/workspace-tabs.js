@@ -825,7 +825,13 @@
          * publish, shared by the listeners of that publish. Does not paint DOM.
          */
         function publishProjection() {
-            if (!projectionListeners.size) return;
+            if (!projectionListeners.size) {
+                /* State may have moved. Drop the cache so a later subscribe
+                 * rebuilds the current projection instead of replaying the
+                 * last one. Do not mint a commit nobody receives. */
+                cachedProjection = null;
+                return;
+            }
             publishSerial += 1;
             latestCommit = publishSerial;
             const projection = projectionAt(publishSerial);
