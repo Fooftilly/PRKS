@@ -209,10 +209,13 @@ FEATURES = {
         ),
     },
     "positions": {
-        "description": "Positions durable ops + offline Positions",
+        "description": "Positions index/detail Vue surface + durable ops + offline Positions",
         "selectors": (
             "tests.e2e.test_positions_durable",
+            "tests.e2e.test_positions_route_surface",
             "tests.e2e.test_offline.OfflinePositionTests",
+            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_position_index_search_matches_title_and_description",
+            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_position_relationship_rows_use_shared_research_row_language",
         ),
     },
     "arguments": {
@@ -625,6 +628,18 @@ AFFECTED_RULES = (
         ),
         "features": ("folders", "browse"),
         "note": "Vue Folder Library (#261) → folders + browse (preview/thumbs). Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "positions-vue",
+        "paths": ("frontend-app/src/features/positions/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("positions",),
+        "note": "Vue Positions index/detail (#266) → positions. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "settings",

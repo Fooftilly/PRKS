@@ -19,6 +19,15 @@ _CONCEPTS_VUE_DETAIL = os.path.join(
     _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptDetailRoute.vue"
 )
 _POSITIONS = os.path.join(_FRONTEND, "js", "components", "positions.js")
+_POSITIONS_VUE_INDEX = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "positions", "PositionsIndexRoute.vue"
+)
+_POSITIONS_VUE_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "positions", "PositionDetailRoute.vue"
+)
+_POSITIONS_MATCH = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "positions", "match.ts"
+)
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
 _CREATE_FLOW_SELFTEST = os.path.join(
     _PROJECT_DIR, "tests", "browser", "run_concept_create_flow_selftest.js"
@@ -93,6 +102,11 @@ class FrontendResearchLinksTests(unittest.TestCase):
             src = _read(path)
             self.assertNotIn("window.prompt", src, path)
         self.assertIn("prksPromptTextDialog", src)
+        positions_intents = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "positions", "intents.ts")
+        )
+        self.assertIn("prksPromptTextDialog", positions_intents)
+        self.assertNotIn("fetch(", positions_intents)
 
     def test_research_picker_uses_canonical_dialog(self):
         works = _read(_WORKS)
@@ -122,7 +136,11 @@ class FrontendResearchLinksTests(unittest.TestCase):
         concepts_row = _read(
             os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptRow.vue")
         )
-        positions = _read(_POSITIONS)
+        positions = _read(
+            os.path.join(
+                _PROJECT_DIR, "frontend-app", "src", "features", "positions", "PositionRow.vue"
+            )
+        )
         args = _read(_ARGS)
         self.assertIn("prks-research-row", concepts)
         self.assertIn("prksResearchIndexRowHtml", concepts)
@@ -139,16 +157,14 @@ class FrontendResearchLinksTests(unittest.TestCase):
         concepts_match = _read(
             os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "match.ts")
         )
-        positions = _read(_POSITIONS)
+        positions_match = _read(_POSITIONS_MATCH)
         args = _read(_ARGS)
-        # Shared helper remains for Positions/Arguments; Concepts Vue owns its own
-        # local filter with the same match semantics.
+        # Shared helper remains for Arguments. Concepts and Positions Vue own
+        # local filters with the same match semantics.
         self.assertIn("function bindResearchIndexSearch", concepts)
         self.assertIn("function normalizeSearchQuery", concepts)
         self.assertIn("prksBindResearchIndexSearch: bindResearchIndexSearch", concepts)
-        self.assertIn("root.prksBindResearchIndexSearch", positions)
         self.assertIn("root.prksBindResearchIndexSearch", args)
-        self.assertNotIn("function bindResearchIndexSearch", positions)
         self.assertNotIn("function bindResearchIndexSearch", args)
         # Purely local filtering: no network call is part of the search path.
         search_block = concepts.split("function bindResearchIndexSearch", 1)[1].split(
@@ -162,33 +178,35 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("matchArgument", args)
         self.assertIn("export function matchConceptIndexItem", concepts_match)
         self.assertNotIn("fetch", concepts_match)
-        self.assertIn("function matchPosition", positions)
+        self.assertIn("export function matchPositionIndexItem", positions_match)
+        self.assertNotIn("fetch", positions_match)
+        self.assertNotIn("prksRequest", positions_match)
 
     def test_research_index_empty_states_are_distinct(self):
         concepts = _read(_CONCEPTS)
         concepts_vue = _read(_CONCEPTS_VUE_INDEX)
-        positions = _read(_POSITIONS)
+        positions_vue = _read(_POSITIONS_VUE_INDEX)
         args = _read(_ARGS)
         self.assertIn("function researchIndexSearchEmptyHtml", concepts)
         self.assertIn("data-research-search-clear", concepts)
         self.assertIn("prks-concept-new-empty", concepts_vue)
         self.assertIn("No Concepts yet.", concepts_vue)
         self.assertIn("data-research-search-clear", concepts_vue)
-        self.assertIn("prks-position-new-empty", positions)
+        self.assertIn("prks-position-new-empty", positions_vue)
         self.assertIn("prks-argument-new-empty", args)
         self.assertIn("prks-stance-new-empty", args)
-        self.assertIn("No Positions yet.", positions)
+        self.assertIn("No Positions yet.", positions_vue)
         self.assertIn("No Arguments or Stances yet.", args)
 
     def test_research_entity_sections_use_shared_head_pattern(self):
         concepts = _read(_CONCEPTS)
         concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
-        positions = _read(_POSITIONS)
+        positions_detail = _read(_POSITIONS_VUE_DETAIL)
         args = _read(_ARGS)
         self.assertIn("function researchSectionHeadHtml", concepts)
         self.assertIn("research-entity__section-head", concepts)
         self.assertIn("prksResearchSectionHeadHtml: researchSectionHeadHtml", concepts)
-        self.assertIn("root.prksResearchSectionHeadHtml", positions)
+        self.assertIn("prksResearchSectionHeadHtml", positions_detail)
         self.assertIn("root.prksResearchSectionHeadHtml", args)
         # Concept detail (Vue): canonical section set, each a real .research-entity__section.
         for heading in (
@@ -209,9 +227,9 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("prksResearchIndexRowHtml", concepts_detail)
         self.assertIn("prksResearchSectionHeadHtml", concepts_detail)
         # Position detail uses the same research-entity shell.
-        self.assertIn("research-entity", positions)
-        self.assertIn("No description yet.", positions)
-        self.assertNotIn("project-card", positions)
+        self.assertIn("research-entity", positions_detail)
+        self.assertIn("No description yet.", positions_detail)
+        self.assertNotIn("project-card", positions_detail)
         # Argument section counts/contextual empty wording, without disturbing edit mode.
         self.assertIn("No targets.", args)
         self.assertIn("No sources.", args)
