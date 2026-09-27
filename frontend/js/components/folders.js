@@ -830,6 +830,8 @@ if (typeof window !== 'undefined' && window.prksSync &&
 async function prksLoadFolderLibraryRecentlyAdded(force) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
+    // Vue owns load + paint for the migrated dashboard.
+    if (st.vueOwned) return;
     const pane = st.container.querySelector('#prks-folder-library-recently-added');
     if (!pane) return;
     // The in-memory copy is only usable while the Recently-added coherence
