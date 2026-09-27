@@ -158,6 +158,22 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     expect(movePane).not.toHaveBeenCalled()
   })
 
+  it('invalid edge overlay uses a non-color reason cue', async () => {
+    await mountTiledShell()
+    const hover = createHoverController()
+    const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
+    hover.showEdgeOverlay(tile, 'left', false, 'cap')
+    const overlay = document.getElementById('prks-dnd-poc-edge-overlay')
+    expect(overlay).toBeTruthy()
+    expect(overlay?.classList.contains('is-invalid')).toBe(true)
+    expect(overlay?.dataset.reason).toBe('cap')
+    expect(overlay?.textContent).toContain('Pane limit')
+    expect(overlay?.style.borderStyle).toBe('dashed')
+    hover.showEdgeOverlay(tile, 'right', false, 'route')
+    expect(document.getElementById('prks-dnd-poc-edge-overlay')?.textContent).toContain('Cannot split')
+    hover.clear()
+  })
+
   it('confirmed drop commits reorder/move through handlers only', async () => {
     const reorderTab = vi.fn(() => true)
     const movePane = vi.fn(() => true)
@@ -179,6 +195,7 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
       hit: {
         kind: 'strip',
         x: 10,
+        sourceIndex: 3,
         otherTabRects: [
           { id: 'A', left: 0, right: 40 },
           { id: 'B', left: 40, right: 80 },

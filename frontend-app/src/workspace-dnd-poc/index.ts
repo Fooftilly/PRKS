@@ -13,5 +13,11 @@ export {
 } from './drop-intent'
 export { commitDropIntent, browserCommitHandlers } from './commit'
 export { createHoverController } from './hover'
-export { bindPocAdapter, isPocEnabled, PRKS_DND_POC_FLAG } from './adapter'
+export {
+  bindPocAdapter,
+  isPocEnabled,
+  PRKS_DND_POC_FLAG,
+  resolveIntentAtPoint,
+  hitFromPointer,
+} from './adapter'
 export { KEYBOARD_EQUIVALENT_PATHS, keyboardEquivalentSummary } from './a11y'

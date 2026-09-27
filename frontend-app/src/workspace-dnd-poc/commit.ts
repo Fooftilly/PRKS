@@ -25,6 +25,10 @@ export interface PocCommitHandlers {
   onCommand?(command: WorkspaceCommand): void
 }
 
+function asOk(result: boolean | void | undefined): boolean {
+  return result !== false
+}
+
 export async function commitDropIntent(
   source: DragSource,
   intent: WorkspaceDropIntent | null,
@@ -35,8 +39,8 @@ export async function commitDropIntent(
 
   if (intent.kind === 'secondary-empty') {
     if (source.kind !== 'tab') return { ok: false, command: null }
-    const ok = await Promise.resolve(handlers.tileTab(source.tabId))
-    return { ok: ok !== false, command: null }
+    const ok = asOk(await Promise.resolve(handlers.tileTab(source.tabId)))
+    return { ok, command: null }
   }
 
   const command = dropIntentToCommand(source, intent, secondaryLeafTabIds)
@@ -44,30 +48,36 @@ export async function commitDropIntent(
   handlers.onCommand?.(command)
 
   if (command.type === 'reorder-tab') {
-    const ok = handlers.reorderTab(command.tabId, command.beforeTabId)
-    return { ok: ok !== false, command }
+    return { ok: asOk(handlers.reorderTab(command.tabId, command.beforeTabId)), command }
   }
   if (command.type === 'hide-leaf') {
-    const ok = await Promise.resolve(handlers.hideLeaf(command.tabId))
-    return { ok: ok !== false, command }
+    return { ok: asOk(await Promise.resolve(handlers.hideLeaf(command.tabId))), command }
   }
   if (command.type === 'move-pane') {
-    const ok = handlers.movePane(
-      command.sourceTabId,
-      command.targetTabId,
-      command.axis,
-      command.placement,
-    )
-    return { ok: ok !== false, command }
+    return {
+      ok: asOk(
+        handlers.movePane(
+          command.sourceTabId,
+          command.targetTabId,
+          command.axis,
+          command.placement,
+        ),
+      ),
+      command,
+    }
   }
   if (command.type === 'split-leaf') {
-    const ok = await Promise.resolve(
-      handlers.splitLeaf(command.targetTabId, command.axis, {
-        tabId: command.newTabId,
-        placement: command.placement,
-      }),
-    )
-    return { ok: ok !== false, command }
+    return {
+      ok: asOk(
+        await Promise.resolve(
+          handlers.splitLeaf(command.targetTabId, command.axis, {
+            tabId: command.newTabId,
+            placement: command.placement,
+          }),
+        ),
+      ),
+      command,
+    }
   }
   return { ok: false, command }
 }
@@ -94,19 +104,29 @@ export function browserCommitHandlers(): PocCommitHandlers {
   const win = window as CoordinatorWindow
   return {
     reorderTab(tabId, beforeTabId) {
-      return win.prksWorkspaceReorderTab?.(tabId, beforeTabId) !== false
+      const fn = win.prksWorkspaceReorderTab
+      if (typeof fn !== 'function') return false
+      return fn(tabId, beforeTabId) !== false
     },
     hideLeaf(tabId) {
-      return win.prksWorkspaceHideLeaf?.(tabId)
+      const fn = win.prksWorkspaceHideLeaf
+      if (typeof fn !== 'function') return false
+      return fn(tabId)
     },
     tileTab(tabId) {
-      return win.prksWorkspaceTileTab?.(tabId)
+      const fn = win.prksWorkspaceTileTab
+      if (typeof fn !== 'function') return false
+      return fn(tabId)
     },
     movePane(sourceTabId, targetTabId, axis, placement) {
-      return win.prksWorkspaceMovePane?.(sourceTabId, targetTabId, axis, placement) !== false
+      const fn = win.prksWorkspaceMovePane
+      if (typeof fn !== 'function') return false
+      return fn(sourceTabId, targetTabId, axis, placement) !== false
     },
     splitLeaf(targetTabId, axis, options) {
-      return win.prksWorkspaceSplitLeaf?.(targetTabId, axis, options)
+      const fn = win.prksWorkspaceSplitLeaf
+      if (typeof fn !== 'function') return false
+      return fn(targetTabId, axis, options)
     },
   }
 }

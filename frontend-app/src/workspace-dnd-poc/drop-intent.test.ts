@@ -22,11 +22,13 @@ function base(overrides: Partial<ResolveDropIntentInput> = {}): ResolveDropInten
 
 describe('resolveDropIntent', () => {
   it('resolves tab reorder on the strip', () => {
+    // Full order [A, B, C]; source B at index 1. Drop near start → before A (idx 0 ≠ 1).
     const intent = resolveDropIntent(
       base({
         hit: {
           kind: 'strip',
-          x: 70,
+          x: 20,
+          sourceIndex: 1,
           otherTabRects: [
             { id: 'A', left: 0, right: 60 },
             { id: 'C', left: 60, right: 120 },
@@ -34,19 +36,58 @@ describe('resolveDropIntent', () => {
         },
       }),
     )
-    expect(intent).toEqual({ kind: 'tab-reorder', beforeTabId: 'C', index: 1 })
+    expect(intent).toEqual({ kind: 'tab-reorder', beforeTabId: 'A', index: 0 })
     expect(dropIntentToCommand({ kind: 'tab', tabId: 'B' }, intent, ['C'])).toEqual({
       type: 'reorder-tab',
       tabId: 'B',
-      beforeTabId: 'C',
+      beforeTabId: 'A',
     })
+  })
+
+  it('rejects strip self-drop at the source insertion slot', () => {
+    // Full order [A, B, C]; source B at 1. Drop between A and C → idx 1 === sourceIndex.
+    expect(
+      resolveDropIntent(
+        base({
+          hit: {
+            kind: 'strip',
+            x: 70,
+            sourceIndex: 1,
+            otherTabRects: [
+              { id: 'A', left: 0, right: 60 },
+              { id: 'C', left: 60, right: 120 },
+            ],
+          },
+        }),
+      ),
+    ).toBeNull()
+  })
+
+  it('keeps valid Main tab reorders that change order', () => {
+    // Full order [A, B, C]; source Main A at 0. Drop mid-C → idx 1 (before C) ≠ 0.
+    const intent = resolveDropIntent(
+      base({
+        source: { kind: 'tab', tabId: 'A' },
+        mainTabId: 'A',
+        hit: {
+          kind: 'strip',
+          x: 70,
+          sourceIndex: 0,
+          otherTabRects: [
+            { id: 'B', left: 0, right: 60 },
+            { id: 'C', left: 60, right: 120 },
+          ],
+        },
+      }),
+    )
+    expect(intent).toEqual({ kind: 'tab-reorder', beforeTabId: 'C', index: 1 })
   })
 
   it('parks a pane dropped on the strip', () => {
     const intent = resolveDropIntent(
       base({
         source: { kind: 'pane', tabId: 'C' },
-        hit: { kind: 'strip', x: 10, otherTabRects: [] },
+        hit: { kind: 'strip', x: 10, sourceIndex: 0, otherTabRects: [] },
       }),
     )
     expect(intent).toEqual({ kind: 'park' })

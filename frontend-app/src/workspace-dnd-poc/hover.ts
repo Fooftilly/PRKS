@@ -6,7 +6,12 @@
 export interface HoverController {
   showReorderMarker(list: HTMLElement, beforeTabId: string | null): void
   showParkTarget(list: HTMLElement): void
-  showEdgeOverlay(tile: HTMLElement, zone: 'left' | 'right' | 'above' | 'below', valid: boolean): void
+  showEdgeOverlay(
+    tile: HTMLElement,
+    zone: 'left' | 'right' | 'above' | 'below',
+    valid: boolean,
+    reason?: 'cap' | 'route' | null,
+  ): void
   showEmptySecondary(canvas: HTMLElement): void
   clear(): void
 }
@@ -56,7 +61,7 @@ export function createHoverController(doc: Document = document): HoverController
       clear()
       list.classList.add('is-drop-target-park')
     },
-    showEdgeOverlay(tile, zone, valid) {
+    showEdgeOverlay(tile, zone, valid, reason = null) {
       clear()
       const rect = bandRect(tile.getBoundingClientRect(), zone)
       const overlay = doc.createElement('div')
@@ -64,6 +69,21 @@ export function createHoverController(doc: Document = document): HoverController
       overlay.className = 'prks-drag-edge-overlay' + (valid ? '' : ' is-invalid')
       overlay.setAttribute('aria-hidden', 'true')
       overlay.dataset.prksDndPoc = '1'
+      if (!valid) {
+        // Non-color cue (DESIGN: state must not rely on color alone). Live region
+        // also announces the cap/route reason via announceTargetChange.
+        overlay.dataset.reason = reason === 'route' ? 'route' : 'cap'
+        overlay.style.borderStyle = 'dashed'
+        overlay.style.display = 'flex'
+        overlay.style.alignItems = 'center'
+        overlay.style.justifyContent = 'center'
+        overlay.style.backgroundImage =
+          'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.12) 5px, rgba(0,0,0,0.12) 10px)'
+        const label = doc.createElement('span')
+        label.className = 'prks-drag-edge-overlay__reason'
+        label.textContent = reason === 'route' ? 'Cannot split' : 'Pane limit'
+        overlay.appendChild(label)
+      }
       overlay.style.left = Math.round(rect.left) + 'px'
       overlay.style.top = Math.round(rect.top) + 'px'
       overlay.style.width = Math.round(rect.width) + 'px'

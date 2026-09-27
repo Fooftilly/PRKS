@@ -40,6 +40,13 @@ export interface DropHitStrip {
   readonly x: number
   /** Ordered rects of every OTHER tab (source already excluded). */
   readonly otherTabRects: readonly TabRect[]
+  /**
+   * Index of the source tab in the full strip order (before exclusion).
+   * When the computed insertion index equals this value, the drop is a no-op
+   * self-slot and resolveDropIntent returns null. Main reorders that actually
+   * change order still resolve normally.
+   */
+  readonly sourceIndex: number
 }
 
 export interface DropHitLeaf {
@@ -78,6 +85,8 @@ export function resolveDropIntent(input: ResolveDropIntentInput): WorkspaceDropI
   if (hit.kind === 'strip') {
     if (source.kind === 'pane') return { kind: 'park' }
     const idx = computeReorderIndex(hit.otherTabRects, hit.x)
+    // Same insertion slot as the source's current position → no-op (self-drop).
+    if (hit.sourceIndex >= 0 && idx === hit.sourceIndex) return null
     return {
       kind: 'tab-reorder',
       beforeTabId: hit.otherTabRects[idx] ? hit.otherTabRects[idx].id : null,

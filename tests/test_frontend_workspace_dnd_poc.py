@@ -52,10 +52,23 @@ class WorkspaceDndPocContracts(unittest.TestCase):
         ):
             self.assertTrue((_POC / name).is_file(), name)
 
-    def test_decision_is_adopt(self) -> None:
+    def test_decision_is_provisional_adopt(self) -> None:
         readme = (_POC / "README.md").read_text(encoding="utf-8")
-        self.assertIn("Decision: ADOPT", readme)
+        self.assertIn("Decision: ADOPT (provisional)", readme)
         self.assertIn("Exactly one canonical workspace state", readme)
+        self.assertTrue((_POC / "interaction.test.ts").is_file())
+        self.assertTrue((_POC / "pragmatic-harness.ts").is_file())
+
+    def test_inventory_rows_for_poc_packages(self) -> None:
+        inv = json.loads((_ROOT / "dependency-inventory.json").read_text(encoding="utf-8"))
+        names = {row["name"] for row in inv["dependencies"]}
+        self.assertIn("@atlaskit/pragmatic-drag-and-drop", names)
+        self.assertIn("@atlaskit/pragmatic-drag-and-drop-auto-scroll", names)
+        self.assertIn("@atlaskit/pragmatic-drag-and-drop-unit-testing", names)
+        for row in inv["dependencies"]:
+            if row["name"].startswith("@atlaskit/pragmatic-drag-and-drop"):
+                self.assertEqual(row.get("generated_assets"), [])
+                self.assertIn("frontend-app/package.json", row["authoritative_source"])
 
 
 if __name__ == "__main__":

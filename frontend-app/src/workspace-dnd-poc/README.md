@@ -1,6 +1,9 @@
 # #234 Pragmatic Drag and Drop — research PoC
 
-**Decision: ADOPT** (sensors/lifecycle only; production cutover is a separate issue).
+**Decision: ADOPT (provisional)** — sensors/lifecycle only; production cutover is a separate
+issue (#256). Provisional until focused Pragmatic interaction evidence in
+`interaction.test.ts` is accepted; do not treat #256 as fully authorized and do not close #234
+solely on this PoC PR.
 
 Baseline: `master` at `f353e2879b3ca8fed0da6d7c78035673d0847bd3` (#255 Vue WorkspaceShell).
 
@@ -45,8 +48,19 @@ Exactly one canonical workspace state. Hover/preview never mutates it. Only conf
 
 - Pure `resolveDropIntent` / `dropIntentToCommand` Vitest coverage (reorder, park, nested edge move, parked→split, cap invalid, Main exclusion, empty-Secondary).
 - Adapter binds to **real Vue WorkspaceShell DOM** from #255 (tabs, grips, tiles); cancel/destroy leave no hover residue; commit path only on confirmed drop.
+- **Focused Pragmatic interaction tests** (`interaction.test.ts`) use the official
+  `@atlaskit/pragmatic-drag-and-drop-unit-testing` DragEvent polyfill harness so
+  monitor/draggable/drop-target callbacks run (jsdom limitation vs Chromium hardware —
+  documented in `pragmatic-harness.ts`). Covers reorder, nested edge move, final-drop
+  authority, post-mount reconcile, cancel via `prksWorkspaceCancelActiveDrag`, strip
+  autoscroll, and single coordinator commit.
+- **Lifecycle callback tests** (`lifecycle.test.ts`) capture `monitorForElements`
+  `onDragStart`/`onDrag`/`onDrop` and exercise start→drag→drop plus start→cancel→drop
+  (idempotent `onSessionEnd`; no commit after cancel).
+- Strip self-slot reorders resolve to null; Main reorders that change order remain valid.
+- Invalid edge overlays include a dashed/hatch + text cue; live region announces cap/route.
 - Keyboard-equivalent paths documented in `a11y.ts` (at least Move tab left/right, Split right/down, Hide from split, Open in split view, Escape).
-- Cancellation hard criteria: Escape, window blur, `cancel()`, `destroy()` — no canonical mutation.
+- Cancellation hard criteria: Escape, window blur, `cancel()`, `destroy()`, shell cancel hook — no canonical mutation.
 
 ## Quantified comparison
 
@@ -69,7 +83,7 @@ Exactly one canonical workspace state. Hover/preview never mutates it. Only conf
 - [x] Cancellation / lifecycle cleanup
 - [x] Autoscroll on overflowing tab strip (wired; production strip still owns scroll CSS)
 - [x] A11y keyboard-equivalent path documented
-- [x] Explicit **ADOPT**
+- [x] Explicit **ADOPT (provisional)** pending acceptance of interaction evidence
 
 ## Migration risks (for follow-up issue)
 

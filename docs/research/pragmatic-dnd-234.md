@@ -2,7 +2,9 @@
 
 Authoritative tracking issue: [#234](https://github.com/Fooftilly/PRKS/issues/234).
 
-**Conclusion: ADOPT** for the interaction/sensor layer only. Production migration is a separate engineering task linked from #234.
+**Conclusion: ADOPT (provisional)** for the interaction/sensor layer only. Production
+migration is tracked as #256 but is not fully authorized until the focused Pragmatic
+interaction evidence is accepted. Do not close #234 solely on the research PR.
 
 PoC source and detailed matrix: [`frontend-app/src/workspace-dnd-poc/README.md`](../../frontend-app/src/workspace-dnd-poc/README.md).
 
