@@ -104,9 +104,12 @@ class FolderLibraryRouteSurfaceTests(unittest.TestCase):
         page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
         page.wait_for_selector("#prks-folder-library-recently-added", timeout=15000)
 
-        # Seed a visible body-mounted preview as if P had opened it.
+        # Seed a visible body-mounted preview owned by a card inside Recently
+        # Added so scoped release (root.contains(source)) models the real path.
         seeded = page.evaluate(
             """() => {
+                const pane = document.querySelector('#prks-folder-library-recently-added');
+                if (!pane) return { visible: false, owned: false };
                 let el = document.getElementById('prks-work-thumb-preview');
                 if (!el) {
                     el = document.createElement('div');
@@ -116,13 +119,18 @@ class FolderLibraryRouteSurfaceTests(unittest.TestCase):
                 el.hidden = false;
                 el.style.display = 'block';
                 el.textContent = 'stale-preview';
-                window.__prksWorkThumbPreviewSource = document.createElement('img');
+                const source = document.createElement('img');
+                source.setAttribute('data-prks-e2e-preview-source', '1');
+                pane.appendChild(source);
+                window.__prksWorkThumbPreviewSource = source;
                 return {
                     visible: !el.hidden && el.style.display !== 'none',
+                    owned: !!(pane.contains(source)),
                 };
             }"""
         )
         self.assertTrue(seeded["visible"])
+        self.assertTrue(seeded["owned"])
 
         page.locator('.prks-folder-library__tab-btn[data-tab="folders"]').click()
         page.wait_for_function(

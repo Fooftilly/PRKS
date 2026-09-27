@@ -110,8 +110,9 @@ function syncLegacyDashboardState(): void {
     activeTab: activeTab.value,
     filterQuery: treeFilterQuery.value,
     recentlyAddedFilterQuery: filesFilterQuery.value,
-    // Vue owns the pane — do not hand rows to the legacy overlay repaint path.
-    recentlyAddedWorks: null,
+    // Rows stay on the bridge for glance extras ("N recently added").
+    // vueOwned keeps legacy metadata-sync / DOM paint from owning the pane.
+    recentlyAddedWorks: recentlyAddedWorks.value ? [...recentlyAddedWorks.value] : null,
     recentlyAddedGeneration: recentlyAddedGeneration.value,
     recentlyAddedPendingGeneration: recentlyAddedPendingGeneration.value,
     recentlyAddedCached: recentlyAddedCached.value,
