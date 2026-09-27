@@ -177,6 +177,17 @@ def _quoted_end(text: str, i: int) -> int:
     return len(text)
 
 
+def _quoted_token_end(text: str, i: int) -> int | None:
+    """End of the quoted token (``'…'``, ``"…"``, `` `…` ``, ``[…]``) at ``i``, or None."""
+    ch = text[i]
+    if ch == "[":
+        end = text.find("]", i)
+        return len(text) if end < 0 else end + 1
+    if ch in "'\"`":
+        return _quoted_end(text, i)
+    return None
+
+
 def _comment_end(text: str, i: int) -> int | None:
     """Index just past the SQL comment starting at ``i``, or None if none starts there."""
     if text.startswith("--", i):
@@ -204,18 +215,13 @@ def _mask_sql(text: str) -> str:
             out.append(" " * (comment_end - i))
             i = comment_end
             continue
-        ch = text[i]
-        if ch in "'\"`[":
-            if ch == "[":
-                j = text.find("]", i)
-                j = len(text) if j < 0 else j + 1
-            else:
-                j = _quoted_end(text, i)
+        j = _quoted_token_end(text, i)
+        if j is not None:
             body = text[i:j]
-            out.append(ch + " " * (len(body) - 2) + body[-1] if len(body) >= 2 else body)
+            out.append(body[0] + " " * (len(body) - 2) + body[-1] if len(body) >= 2 else body)
             i = j
         else:
-            out.append(ch)
+            out.append(text[i])
             i += 1
     return "".join(out)
 
@@ -224,7 +230,8 @@ def normalize_sql(text: str) -> str:
     """Drop SQL comments and insignificant whitespace; keep quoted text verbatim.
 
     Comment and layout edits are not schema changes, but whitespace inside a
-    string literal or quoted identifier is (for example a changed DEFAULT).
+    string literal or quoted identifier (``"…"``, `` `…` ``, ``[…]``) is (for
+    example a changed DEFAULT or column name).
     """
     out: list[str] = []
     i = 0
@@ -235,7 +242,8 @@ def normalize_sql(text: str) -> str:
             i = comment_end if comment_end is not None else i + 1
             pending_space = True
             continue
-        j = _quoted_end(text, i) if text[i] in "'\"`" else i + 1
+        quoted_end = _quoted_token_end(text, i)
+        j = quoted_end if quoted_end is not None else i + 1
         if pending_space and out:
             out.append(" ")
         out.append(text[i:j])

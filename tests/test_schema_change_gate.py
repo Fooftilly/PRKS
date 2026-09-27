@@ -155,6 +155,21 @@ class GateRepoTests(unittest.TestCase):
         self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "title TEXT DEFAULT 'a b'")})
         self.assertEqual(self.codes(), ["SCHEMA-GATE-001"])
 
+    def test_bracket_identifier_content_is_a_schema_change(self):
+        self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "[a  b] TEXT /* [x -- y] */")})
+        _git(self.repo, "commit", "-qam", "bracket")
+        self.base = _git(self.repo, "rev-parse", "HEAD").strip()
+        self.assertEqual(self.codes(), [])
+        self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "[a b] TEXT /* [x -- y] */")})
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-001"])
+
+    def test_comment_markers_inside_bracket_identifiers_are_content(self):
+        self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "[a -- b] TEXT")})
+        _git(self.repo, "commit", "-qam", "bracket dash")
+        self.base = _git(self.repo, "rev-parse", "HEAD").strip()
+        self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "[a -- c] TEXT")})
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-001"])
+
     def test_block_comments_are_not_schema_changes(self):
         self.write({"backend/db_schema.sql": "/* header */\n" + BASE_SCHEMA})
         self.assertEqual(self.codes(), [])
