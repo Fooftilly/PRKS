@@ -82,6 +82,30 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertNotIn("useIntersectionObserver", combined)
         self.assertNotIn("useMouseInElement", combined)
 
+    def test_bridge_publishes_loaded_rows_for_glance_without_legacy_paint(self):
+        """Retained refresh must keep rows for glance; vueOwned blocks legacy DOM paint."""
+        route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
+        sync = route[route.index("function syncLegacyDashboardState") :]
+        sync = sync[: sync.index("\nfunction paintCatalogGlance")]
+        self.assertIn("recentlyAddedWorks: recentlyAddedWorks.value", sync)
+        self.assertNotIn("recentlyAddedWorks: null", sync)
+        self.assertIn("vueOwned: true", sync)
+        folders = (FRONTEND / "components" / "folders.js").read_text()
+        rerender = folders[
+            folders.index("function prksRerenderFolderLibraryRecentlyAddedOnly") :
+        ]
+        rerender = rerender[: rerender.index("\nfunction prksApplyFolderLibraryFilesSearchFilter")]
+        self.assertIn("if (st.vueOwned) return;", rerender)
+        glance = folders[folders.index("async function prksCollectFolderLibraryGlanceExtras") :]
+        glance = glance[: glance.index("\nasync function prksScheduleFolderLibraryGlance")]
+        self.assertIn("stMem.recentlyAddedWorks.length", glance)
+
+    def test_e2e_preview_seed_owns_source_under_recently_added_pane(self):
+        e2e = (ROOT / "tests" / "e2e" / "test_folder_library_route_surface.py").read_text()
+        self.assertIn("pane.appendChild(source)", e2e)
+        self.assertIn('owned: !!(pane.contains(source))', e2e)
+        self.assertIn('self.assertTrue(seeded["owned"])', e2e)
+
 
 if __name__ == "__main__":
     unittest.main()
