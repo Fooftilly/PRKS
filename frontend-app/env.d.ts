@@ -90,6 +90,7 @@ interface Window {
   prksWorkBrowseModeToggleHtml?: (hiddenId?: string) => string
   prksWorkBrowseCollectionClass?: (extraClass?: string) => string
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
+  prksTagSearchIconHtml?: () => string
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void

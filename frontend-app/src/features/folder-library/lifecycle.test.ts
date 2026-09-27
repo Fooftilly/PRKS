@@ -100,4 +100,33 @@ describe('Folder Library preview lifecycle (#170)', () => {
     expect(releasePreview).toHaveBeenCalled()
     expect(releaseLazy).toHaveBeenCalled()
   })
+
+  it('re-inits lazy thumbs after cached paint so observer prune runs (#170)', async () => {
+    const initLazy = vi.fn()
+    window.prksHideWorkThumbPreview = () => {}
+    window.prksReleaseWorkThumbPreview = () => {}
+    window.prksReleaseLazyWorkThumbs = () => {}
+    window.prksInitLazyWorkThumbs = initLazy
+    window.prksWorkCardHtml = () => '<article class="work-card">card</article>'
+    window.prksWorkBrowseCollectionClass = () => 'card-grid'
+
+    mount(RecentlyAddedPane, {
+      props: {
+        folders: [],
+        filterQuery: '',
+        works: [{ id: 'W1', title: 'One' }],
+        offlineCached: true,
+        unavailable: false,
+        loading: false,
+        generation: 1,
+      },
+      global: {
+        provide: {
+          [folderLibraryIntentsKey as symbol]: noopIntents,
+        },
+      },
+    })
+    await nextTick()
+    expect(initLazy).toHaveBeenCalled()
+  })
 })

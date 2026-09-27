@@ -27,6 +27,10 @@ const folderFilter = ref(readFolderFilterFromStorage())
 const filesFilter = ref(readRecentlyAddedFilterFromStorage())
 const glanceHost = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
+const modeHost = ref<HTMLElement | null>(null)
+const folderSearchIcon = ref<HTMLElement | null>(null)
+const filesSearchIcon = ref<HTMLElement | null>(null)
+const expandToggleInner = ref<HTMLElement | null>(null)
 const recentlyAddedPane = ref<InstanceType<typeof RecentlyAddedPane> | null>(null)
 
 const recentlyAddedWorks = ref<RecentlyAddedWork[] | null>(null)
@@ -135,7 +139,8 @@ async function loadRecentlyAdded(force: boolean): Promise<void> {
   recentlyAddedUnavailable.value = result.unavailable
   syncLegacyDashboardState()
   await nextTick()
-  if (activeTab.value === 'recently-added' && !result.offlineCached) {
+  // #170: always re-init after paint (including cached) so prune runs.
+  if (activeTab.value === 'recently-added') {
     const pane = rootEl.value?.querySelector('#prks-folder-library-recently-added')
     initLazyWorkThumbs(pane)
   }
@@ -153,15 +158,34 @@ function onFilesSearchClear(): void {
   filesFilter.value = ''
 }
 
+function paintSearchIcons(): void {
+  const html =
+    typeof window.prksTagSearchIconHtml === 'function' ? window.prksTagSearchIconHtml() : ''
+  if (folderSearchIcon.value) folderSearchIcon.value.innerHTML = html
+  if (filesSearchIcon.value) filesSearchIcon.value.innerHTML = html
+}
+
+function paintExpandToggle(): void {
+  const host = expandToggleInner.value
+  if (!host) return
+  const fn = window.prksFolderLibraryExpandToggleInnerHtml
+  host.innerHTML = typeof fn === 'function' ? fn() : '<span class="ribbon-btn__icon" aria-hidden="true">▾</span>'
+  window.prksRefreshIcons?.(host)
+}
+
 function paintBrowseMode(): void {
-  const root = rootEl.value
-  if (!root) return
-  window.prksBindWorkBrowseMode?.(root)
+  const host = modeHost.value
+  if (!host) return
+  host.innerHTML =
+    window.prksWorkBrowseModeToggleHtml?.('prks-work-browse-mode-recently-added') ?? ''
+  window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
 onMounted(() => {
   syncLegacyDashboardState()
   paintCatalogGlance()
+  paintSearchIcons()
+  paintExpandToggle()
   intents?.scheduleGlance(rootEl.value)
   offlineDispose = intents?.bindFolderOfflineState(props.contentRoot ?? null) ?? null
   paintBrowseMode()
@@ -176,10 +200,17 @@ watch(
     syncLegacyDashboardState()
     await nextTick()
     paintCatalogGlance()
+    paintSearchIcons()
+    paintExpandToggle()
     intents?.scheduleGlance(rootEl.value)
     paintBrowseMode()
   },
 )
+
+watch(hasCollapsible, async () => {
+  await nextTick()
+  paintExpandToggle()
+})
 
 onBeforeUnmount(() => {
   releaseRecentlyAddedResources()
@@ -231,6 +262,7 @@ onBeforeUnmount(() => {
       <div class="prks-folder-library__folders-toolbar" :class="{ 'is-hidden': !foldersActive }">
         <div class="tag-add-shell tag-add-shell--flush prks-folder-library__search">
           <div class="tag-add-shell__field">
+            <span ref="folderSearchIcon" aria-hidden="true"></span>
             <input
               id="prks-folder-library-search"
               v-model="folderFilter"
@@ -264,13 +296,14 @@ onBeforeUnmount(() => {
             :title="expandToggleLabel"
             @click="onExpandAll"
           >
-            <span class="ribbon-btn__icon" aria-hidden="true">▾</span>
+            <span ref="expandToggleInner"></span>
           </button>
         </div>
       </div>
       <div class="prks-folder-library__recently-added-toolbar" :class="{ 'is-hidden': foldersActive }">
         <div class="tag-add-shell tag-add-shell--flush prks-folder-library__search">
           <div class="tag-add-shell__field">
+            <span ref="filesSearchIcon" aria-hidden="true"></span>
             <input
               id="prks-folder-library-files-search"
               v-model="filesFilter"
@@ -294,6 +327,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+        <div ref="modeHost" data-prks-folder-library-mode-host style="display: contents"></div>
       </div>
       <div class="prks-folder-library__body">
         <div

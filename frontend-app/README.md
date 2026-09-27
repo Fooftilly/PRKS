@@ -46,7 +46,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | `src/composables/` | Feature-local Vue logic, when a slice needs it |
 | `frontend/js/` | Legacy runtime. Leave it in place until a slice replaces a specific responsibility |
 
-`@tanstack/vue-query` is the server-state owner for performance diagnostics. `@vueuse/core` is pinned for selective generic helpers (Folder Library debounced search). Do not add Vue Router, Pinia, or a second QueryClient. Do not use VueUse for PRKS route, workspace, durable, or preview ownership. Do not persist the query cache. Do not copy `prksParseRoute` into TypeScript. Future routes should extend the route-instance shape and reuse `src/route-surface/` instead of inventing another TabContext session.
+`@tanstack/vue-query` is the server-state owner for performance diagnostics. `@vueuse/core` is pinned for selective generic helpers (Folder Library: `useDebounceFn` for search/repaint, `useEventListener` for tree/collection clicks). Do not add Vue Router, Pinia, or a second QueryClient. Do not use VueUse for PRKS route, workspace, durable, or preview ownership. Do not persist the query cache. Do not copy `prksParseRoute` into TypeScript. Future routes should extend the route-instance shape and reuse `src/route-surface/` instead of inventing another TabContext session.
 
 ## Components and Storybook
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useEventListener } from '@vueuse/core'
 import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
 import { folderLibraryIntentsKey } from './intents'
 import type { FolderRow } from './types'
@@ -26,7 +27,7 @@ function paintTree(): void {
   window.prksRefreshIcons?.(host)
 }
 
-function onTreeClick(event: MouseEvent): void {
+useEventListener(treeHost, 'click', (event: MouseEvent) => {
   const target = event.target as HTMLElement | null
   if (!target) return
   const createBtn = target.closest('[data-prks-create-folder-query]')
@@ -44,7 +45,7 @@ function onTreeClick(event: MouseEvent): void {
     const folderId = row?.getAttribute('data-folder-id') || ''
     if (folderId) intents?.toggleExpand(folderId)
   }
-}
+})
 
 onMounted(() => {
   paintTree()
@@ -61,6 +62,5 @@ watch(treeHtml, async () => {
     ref="treeHost"
     class="prks-folder-library__scroll"
     data-prks-folder-tree-host
-    @click="onTreeClick"
   ></div>
 </template>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { useDebounceFn, useEventListener } from '@vueuse/core'
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useDebounceFn } from '@vueuse/core'
 import { folderLibraryIntentsKey } from './intents'
 import {
   effectiveRecentlyAddedRows,
@@ -66,25 +66,29 @@ const collectionHtml = computed(() => {
 function paintCollection(): void {
   const el = collectionEl.value
   if (!el) return
+  // #170: release before every DOM replace; always re-init (incl. cached) so
+  // IntersectionObserver prune runs after detach.
   releaseWorkThumbResources(el)
   el.innerHTML = collectionHtml.value
   window.prksRefreshIcons?.(el)
-  if (!props.offlineCached) {
-    initLazyWorkThumbs(el)
-  }
+  initLazyWorkThumbs(el)
 }
 
 const debouncedPaint = useDebounceFn(() => {
   paintCollection()
 }, 0)
 
-function onCollectionClick(event: MouseEvent): void {
-  const btn = (event.target as HTMLElement | null)?.closest('[data-prks-role="new-work-from-recently-added"]')
+// Generic click listener with VueUse scope cleanup (#233). Preview ownership
+// stays in work-thumb-lifecycle / legacy helpers.
+useEventListener(collectionEl, 'click', (event: MouseEvent) => {
+  const btn = (event.target as HTMLElement | null)?.closest(
+    '[data-prks-role="new-work-from-recently-added"]',
+  )
   if (btn) {
     event.preventDefault()
     intents?.openWorkModal()
   }
-}
+})
 
 onMounted(() => {
   paintCollection()
@@ -107,7 +111,6 @@ defineExpose({ releaseThumbs: () => releaseWorkThumbResources(collectionEl.value
       id="prks-folder-library-recently-added"
       ref="collectionEl"
       :class="collectionClass"
-      @click="onCollectionClick"
     ></div>
   </div>
 </template>

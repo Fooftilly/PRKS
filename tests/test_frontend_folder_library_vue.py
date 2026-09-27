@@ -1,0 +1,68 @@
+"""Static contracts for Folder Library Vue route-surface (#261 / #170)."""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND = ROOT / "frontend" / "js"
+FRONTEND_APP = ROOT / "frontend-app" / "src" / "features" / "folder-library"
+
+
+class FolderLibraryVueContracts(unittest.TestCase):
+    def test_coordinator_presents_vue_folder_library(self):
+        app = (FRONTEND / "app.js").read_text()
+        self.assertIn("function prksPresentVueFolderLibrary", app)
+        self.assertIn("prksVuePresentFolderLibrary", app)
+        self.assertIn("sameFolderLibraryWorkspace", app)
+        self.assertIn("__prksRetainFolderLibrarySurface", app)
+        folders_case = app[app.index("case 'folders': {"): app.index("case 'playlists': {")]
+        self.assertIn("prksPresentVueFolderLibrary", folders_case)
+        self.assertNotIn("renderDashboard(", folders_case)
+        self.assertIn("skipPageEnter: sameFolderLibraryWorkspace", folders_case)
+
+    def test_folder_library_route_reuses_host_on_in_place_refresh(self):
+        app = (FRONTEND / "app.js").read_text()
+        present = app[
+            app.index("function prksPresentVueFolderLibrary") : app.index(
+                "function prksPresentVueConcepts"
+            )
+        ]
+        self.assertIn(":scope > [data-prks-vue-route-host]", present)
+        self.assertIn("contentDiv.innerHTML = '';", present)
+        self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
+
+    def test_create_folder_success_navigates_instead_of_legacy_remount(self):
+        app = (FRONTEND / "app.js").read_text()
+        # create-folder success on #/folders must not call renderDashboard.
+        create_region = app[app.index("ownerRoute.name === 'folders'"):]
+        create_block = create_region[: create_region.index("if (typeof prksNavigate === 'function') prksNavigate('#/folders');") + 80]
+        self.assertIn("prksNavigate('#/folders'", create_block)
+        self.assertNotIn("renderDashboard(", create_block)
+
+    def test_vue_feature_owns_preview_lifecycle_helpers(self):
+        lifecycle = (FRONTEND_APP / "work-thumb-lifecycle.ts").read_text()
+        self.assertIn("prksHideWorkThumbPreview", lifecycle)
+        self.assertIn("prksReleaseWorkThumbPreview", lifecycle)
+        self.assertIn("prksReleaseLazyWorkThumbs", lifecycle)
+        self.assertIn("prksInitLazyWorkThumbs", lifecycle)
+        pane = (FRONTEND_APP / "RecentlyAddedPane.vue").read_text()
+        self.assertIn("releaseWorkThumbResources", pane)
+        self.assertIn("initLazyWorkThumbs", pane)
+        # Cached paints must still init so IntersectionObserver prune runs (#170).
+        self.assertNotIn("if (!props.offlineCached)", pane)
+
+    def test_vueuse_is_selective_generic_only(self):
+        route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
+        tree = (FRONTEND_APP / "FolderTree.vue").read_text()
+        pane = (FRONTEND_APP / "RecentlyAddedPane.vue").read_text()
+        combined = route + tree + pane
+        self.assertIn("useDebounceFn", combined)
+        self.assertIn("useEventListener", combined)
+        # Preview ownership must not be handed to VueUse.
+        self.assertNotIn("useIntersectionObserver", combined)
+        self.assertNotIn("useMouseInElement", combined)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -61,6 +61,14 @@ function prksSetFolderNodeCollapsed(folderId, collapsed) {
 }
 
 function prksRerenderFolderDashboard() {
+    /* Vue owns Folder Library presentation (#261). Prefer a same-tab navigate
+     * so the coordinator rebuilds the effective projection and Vue present
+     * reuses the route host. Fall back to legacy renderDashboard only when
+     * the Vue bridge is unavailable. */
+    if (typeof window.prksNavigate === 'function') {
+        window.prksNavigate('#/folders', { replace: true });
+        return;
+    }
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     renderDashboard(st.folders || [], st.container);
