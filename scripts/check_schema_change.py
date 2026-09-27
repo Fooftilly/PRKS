@@ -154,51 +154,55 @@ def _assign_target(node: ast.stmt) -> tuple[str | None, ast.expr | None]:
     return None, None
 
 
+def _migration_targets(value: ast.expr) -> dict[int, str]:
+    targets: dict[int, str] = {}
+    if not isinstance(value, (ast.Tuple, ast.List)):
+        return targets
+    for elt in value.elts:
+        if not isinstance(elt, ast.Call):
+            continue
+        kw = {k.arg: k.value for k in elt.keywords if k.arg}
+        tv = kw.get("target_version")
+        nm = kw.get("name")
+        if isinstance(tv, ast.Constant) and isinstance(tv.value, int):
+            label = nm.value if isinstance(nm, ast.Constant) else "?"
+            targets[tv.value] = str(label)
+    return targets
+
+
+def _literal_table_pks(value: ast.expr, where: str) -> dict[str, tuple[str, ...]]:
+    try:
+        raw = ast.literal_eval(value)
+    except ValueError as exc:
+        raise DiscoveryError(f"{where}: _CURRENT_TABLE_PKS must stay a literal dict") from exc
+    return {str(k): tuple(v) for k, v in raw.items()}
+
+
 def parse_migrations_module(source: str, where: str) -> MigrationInfo:
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         raise DiscoveryError(f"{where}: cannot parse {MIGRATIONS_RELPATH} ({exc.msg})") from exc
-    version: int | None = None
-    version_line = 1
-    targets: dict[int, str] = {}
-    registry_line = 1
-    table_pks: dict[str, tuple[str, ...]] | None = None
-    table_pks_line = 1
+    assigns: dict[str, tuple[int, ast.expr]] = {}
     for node in tree.body:
         name, value = _assign_target(node)
-        if name is None or value is None:
-            continue
-        if name == "LATEST_SCHEMA_VERSION":
-            version_line = node.lineno
-            if isinstance(value, ast.Constant) and isinstance(value.value, int):
-                version = value.value
-        elif name == "MIGRATIONS":
-            registry_line = node.lineno
-            if isinstance(value, (ast.Tuple, ast.List)):
-                for elt in value.elts:
-                    if not isinstance(elt, ast.Call):
-                        continue
-                    kw = {k.arg: k.value for k in elt.keywords if k.arg}
-                    tv = kw.get("target_version")
-                    nm = kw.get("name")
-                    if isinstance(tv, ast.Constant) and isinstance(tv.value, int):
-                        label = nm.value if isinstance(nm, ast.Constant) else "?"
-                        targets[tv.value] = str(label)
-        elif name == "_CURRENT_TABLE_PKS":
-            table_pks_line = node.lineno
-            try:
-                raw = ast.literal_eval(value)
-            except ValueError as exc:
-                raise DiscoveryError(
-                    f"{where}: _CURRENT_TABLE_PKS must stay a literal dict"
-                ) from exc
-            table_pks = {str(k): tuple(v) for k, v in raw.items()}
-    if version is None:
+        if name is not None and value is not None:
+            assigns[name] = (node.lineno, value)
+    version_line, version_node = assigns.get("LATEST_SCHEMA_VERSION", (1, None))
+    if not (isinstance(version_node, ast.Constant) and isinstance(version_node.value, int)):
         raise DiscoveryError(
             f"{where}: LATEST_SCHEMA_VERSION is not an integer literal in {MIGRATIONS_RELPATH}"
         )
-    return MigrationInfo(version, version_line, targets, registry_line, table_pks, table_pks_line)
+    registry_line, registry_node = assigns.get("MIGRATIONS", (1, None))
+    pks_line, pks_node = assigns.get("_CURRENT_TABLE_PKS", (1, None))
+    return MigrationInfo(
+        version_node.value,
+        version_line,
+        {} if registry_node is None else _migration_targets(registry_node),
+        registry_line,
+        None if pks_node is None else _literal_table_pks(pks_node, where),
+        pks_line,
+    )
 
 
 def schema_table_pks(schema_sql: str) -> dict[str, tuple[str, ...]]:
@@ -267,52 +271,11 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
 # Checks
 
 
-def check_companions(
-    base_schema: str | None,
-    head_schema: str,
-    base: MigrationInfo | None,
-    head: MigrationInfo,
-) -> list[Finding]:
-    """Diff-aware: schema edits need a version bump and one migration per bump."""
-    if base_schema is None or base is None:
-        # Greenfield (no base revision of the schema/migrations): nothing to diff.
-        return []
+def _version_step_findings(base: MigrationInfo, head: MigrationInfo) -> list[Finding]:
+    """One new Migration per bumped version, and no migration without a bump."""
     findings: list[Finding] = []
-    schema_changed = normalize_sql(base_schema) != normalize_sql(head_schema)
     if base.version is None or head.version is None:
         raise DiscoveryError("LATEST_SCHEMA_VERSION could not be parsed")
-    if schema_changed and head.version <= base.version:
-        findings.append(
-            Finding(
-                "SCHEMA-GATE-001",
-                MIGRATIONS_RELPATH,
-                head.version_line,
-                (
-                    f"{SCHEMA_RELPATH} changed but LATEST_SCHEMA_VERSION is still "
-                    f"{head.version} (base {base.version}); existing libraries would "
-                    "never receive the change"
-                ),
-                (
-                    f"bump LATEST_SCHEMA_VERSION to {base.version + 1} and add "
-                    f"Migration(target_version={base.version + 1}, ...) to MIGRATIONS "
-                    f"in {MIGRATIONS_RELPATH}, plus fresh-DB and upgraded-DB tests"
-                ),
-            )
-        )
-    for version, name in sorted(base.targets.items()):
-        if head.targets.get(version) != name:
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-002",
-                    MIGRATIONS_RELPATH,
-                    head.registry_line,
-                    (
-                        f"existing Migration(target_version={version}, name={name!r}) "
-                        "was removed or renamed; shipped migrations are append-only"
-                    ),
-                    "restore it and add a new migration for the new change instead",
-                )
-            )
     if head.version < base.version:
         findings.append(
             Finding(
@@ -375,27 +338,62 @@ def check_companions(
     return findings
 
 
-def check_pk_registry(
-    schema_pks: dict[str, tuple[str, ...]],
+def check_companions(
+    base_schema: str | None,
+    head_schema: str,
+    base: MigrationInfo | None,
     head: MigrationInfo,
-    sites: list[UpsertSite],
-    *,
-    allowlist: dict[str, str] | None = None,
 ) -> list[Finding]:
-    """Structural: load-bearing upserts on canonical tables are PK-registered."""
-    allow = PK_REGISTRY_ALLOWLIST if allowlist is None else allowlist
+    """Diff-aware: schema edits need a version bump and one migration per bump."""
+    if base_schema is None or base is None:
+        # Greenfield (no base revision of the schema/migrations): nothing to diff.
+        return []
     findings: list[Finding] = []
-    registry = head.table_pks
-    if registry is None:
-        return [
+    schema_changed = normalize_sql(base_schema) != normalize_sql(head_schema)
+    if base.version is None or head.version is None:
+        raise DiscoveryError("LATEST_SCHEMA_VERSION could not be parsed")
+    if schema_changed and head.version <= base.version:
+        findings.append(
             Finding(
-                "SCHEMA-GATE-004",
+                "SCHEMA-GATE-001",
                 MIGRATIONS_RELPATH,
-                1,
-                "_CURRENT_TABLE_PKS registry is missing",
-                f"restore the literal _CURRENT_TABLE_PKS dict in {MIGRATIONS_RELPATH}",
+                head.version_line,
+                (
+                    f"{SCHEMA_RELPATH} changed but LATEST_SCHEMA_VERSION is still "
+                    f"{head.version} (base {base.version}); existing libraries would "
+                    "never receive the change"
+                ),
+                (
+                    f"bump LATEST_SCHEMA_VERSION to {base.version + 1} and add "
+                    f"Migration(target_version={base.version + 1}, ...) to MIGRATIONS "
+                    f"in {MIGRATIONS_RELPATH}, plus fresh-DB and upgraded-DB tests"
+                ),
             )
-        ]
+        )
+    for version, name in sorted(base.targets.items()):
+        if head.targets.get(version) != name:
+            findings.append(
+                Finding(
+                    "SCHEMA-GATE-002",
+                    MIGRATIONS_RELPATH,
+                    head.registry_line,
+                    (
+                        f"existing Migration(target_version={version}, name={name!r}) "
+                        "was removed or renamed; shipped migrations are append-only"
+                    ),
+                    "restore it and add a new migration for the new change instead",
+                )
+            )
+    findings.extend(_version_step_findings(base, head))
+    return findings
+
+
+def _registry_parity_findings(
+    schema_pks: dict[str, tuple[str, ...]],
+    registry: dict[str, tuple[str, ...]],
+    line: int,
+) -> list[Finding]:
+    findings: list[Finding] = []
     for table, pk in sorted(registry.items()):
         actual = schema_pks.get(table)
         if actual is None:
@@ -403,7 +401,7 @@ def check_pk_registry(
                 Finding(
                     "SCHEMA-GATE-004",
                     MIGRATIONS_RELPATH,
-                    head.table_pks_line,
+                    line,
                     f"_CURRENT_TABLE_PKS[{table!r}] names a table {SCHEMA_RELPATH} does not create",
                     f"create {table} in {SCHEMA_RELPATH} (with its migration) or drop the entry",
                 )
@@ -413,7 +411,7 @@ def check_pk_registry(
                 Finding(
                     "SCHEMA-GATE-004",
                     MIGRATIONS_RELPATH,
-                    head.table_pks_line,
+                    line,
                     (
                         f"_CURRENT_TABLE_PKS[{table!r}] is {pk!r} but {SCHEMA_RELPATH} "
                         f"creates PRIMARY KEY {actual!r}"
@@ -421,35 +419,43 @@ def check_pk_registry(
                     "make the registry and the canonical schema agree (a PK change needs a migration)",
                 )
             )
+    return findings
 
-    upserted: set[str] = set()
-    reported_missing: set[str] = set()
+
+def _missing_registry_finding(site: UpsertSite, schema_pk: tuple[str, ...]) -> Finding:
+    return Finding(
+        "SCHEMA-GATE-003",
+        site.path,
+        site.line,
+        (
+            f"INSERT INTO {site.table} ... ON CONFLICT relies on the "
+            f"{site.table} primary key {schema_pk!r}, but "
+            f"{site.table!r} is missing from _CURRENT_TABLE_PKS"
+        ),
+        (
+            f"add {site.table!r}: {schema_pk!r} to "
+            f"_CURRENT_TABLE_PKS in {MIGRATIONS_RELPATH} (and its "
+            "_CURRENT_TABLE_FKS entry) so startup validation protects it"
+        ),
+    )
+
+
+def _upsert_findings(
+    schema_pks: dict[str, tuple[str, ...]],
+    registry: dict[str, tuple[str, ...]],
+    sites: list[UpsertSite],
+    allow: dict[str, str],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    reported: set[str] = set(allow)
     for site in sorted(sites, key=lambda s: (s.path, s.line)):
         if site.table not in schema_pks:
             continue  # derived/disposable index DBs are out of scope
-        upserted.add(site.table)
         pk = registry.get(site.table)
         if pk is None:
-            if site.table in allow or site.table in reported_missing:
-                continue
-            reported_missing.add(site.table)
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-003",
-                    site.path,
-                    site.line,
-                    (
-                        f"INSERT INTO {site.table} ... ON CONFLICT relies on the "
-                        f"{site.table} primary key {schema_pks[site.table]!r}, but "
-                        f"{site.table!r} is missing from _CURRENT_TABLE_PKS"
-                    ),
-                    (
-                        f"add {site.table!r}: {schema_pks[site.table]!r} to "
-                        f"_CURRENT_TABLE_PKS in {MIGRATIONS_RELPATH} (and its "
-                        "_CURRENT_TABLE_FKS entry) so startup validation protects it"
-                    ),
-                )
-            )
+            if site.table not in reported:
+                reported.add(site.table)
+                findings.append(_missing_registry_finding(site, schema_pks[site.table]))
         elif site.target is not None and set(site.target) != set(pk):
             findings.append(
                 Finding(
@@ -463,7 +469,16 @@ def check_pk_registry(
                     "target the registered primary key, or update the registry with a migration",
                 )
             )
+    return findings
 
+
+def _stale_allowlist_findings(
+    schema_pks: dict[str, tuple[str, ...]],
+    registry: dict[str, tuple[str, ...]],
+    upserted: set[str],
+    allow: dict[str, str],
+) -> list[Finding]:
+    findings: list[Finding] = []
     for table in sorted(allow):
         if table in registry:
             why = "is now registered in _CURRENT_TABLE_PKS"
@@ -483,6 +498,34 @@ def check_pk_registry(
             )
         )
     return findings
+
+
+def check_pk_registry(
+    schema_pks: dict[str, tuple[str, ...]],
+    head: MigrationInfo,
+    sites: list[UpsertSite],
+    *,
+    allowlist: dict[str, str] | None = None,
+) -> list[Finding]:
+    """Structural: load-bearing upserts on canonical tables are PK-registered."""
+    allow = PK_REGISTRY_ALLOWLIST if allowlist is None else allowlist
+    registry = head.table_pks
+    if registry is None:
+        return [
+            Finding(
+                "SCHEMA-GATE-004",
+                MIGRATIONS_RELPATH,
+                1,
+                "_CURRENT_TABLE_PKS registry is missing",
+                f"restore the literal _CURRENT_TABLE_PKS dict in {MIGRATIONS_RELPATH}",
+            )
+        ]
+    upserted = {site.table for site in sites if site.table in schema_pks}
+    return (
+        _registry_parity_findings(schema_pks, registry, head.table_pks_line)
+        + _upsert_findings(schema_pks, registry, sites, allow)
+        + _stale_allowlist_findings(schema_pks, registry, upserted, allow)
+    )
 
 
 def _backend_sources(repo: Path) -> list[tuple[str, str]]:
