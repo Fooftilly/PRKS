@@ -9480,8 +9480,9 @@ class WorkspaceDragDropTests(_BrowserE2E):
         page.set_viewport_size({"width": 1600, "height": 900})
         tree = _build_three_leaf_tree(page, server)  # Main A; Secondary B / (C | D)
 
-        # Instrument call order: prksWorkspaceCancelActiveDrag() must run strictly before the
-        # stale C tile is actually removed from the DOM.
+        # Instrument call order: cancel must run strictly before C's pane subtree
+        # disconnects. Vue removes an ancestor in one removeChild, so the hook
+        # watches that disconnection rather than a direct removeChild of the tile.
         page.evaluate(
             """(cId) => {
                 window.__prksOrder = [];
@@ -9490,16 +9491,15 @@ class WorkspaceDragDropTests(_BrowserE2E):
                     window.__prksOrder.push('cancel');
                     return origCancel.apply(this, arguments);
                 };
+                const tile = document.querySelector('.prks-tile[data-prks-tab-id="' + cId + '"]');
                 const origRemoveChild = Node.prototype.removeChild;
                 Node.prototype.removeChild = function (child) {
                     if (
+                        tile &&
                         child &&
-                        child.getAttribute &&
-                        child.getAttribute('data-prks-tab-id') === cId &&
-                        child.classList &&
-                        child.classList.contains('prks-tile')
+                        (child === tile || (typeof child.contains === 'function' && child.contains(tile)))
                     ) {
-                        window.__prksOrder.push('remove-c-tile');
+                        window.__prksOrder.push('disconnect-c-pane');
                     }
                     return origRemoveChild.call(this, child);
                 };
@@ -9527,11 +9527,11 @@ class WorkspaceDragDropTests(_BrowserE2E):
 
         order = page.evaluate("() => window.__prksOrder")
         self.assertIn("cancel", order)
-        self.assertIn("remove-c-tile", order)
+        self.assertIn("disconnect-c-pane", order)
         self.assertLess(
             order.index("cancel"),
-            order.index("remove-c-tile"),
-            "cancellation must happen strictly before the stale tile is removed from the DOM",
+            order.index("disconnect-c-pane"),
+            "cancellation must happen strictly before the stale pane subtree disconnects",
         )
 
         # The mouseup for the now-cancelled D drag is inert.

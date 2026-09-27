@@ -300,6 +300,14 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("Open split view", _read(_INDEX))
         refresh = src[src.find("function prksWorkspaceRefreshTabStatus") : src.find("function revealWorkspaceTab")]
         self.assertIn("updateTabOverflow()", refresh)
+        self.assertIn("production.refreshTabStatus", refresh)
+        coalesced = src[src.find("function refreshTabStatus") : src.find("function closeTabIds")]
+        self.assertIn("requestAnimationFrame", coalesced)
+        self.assertIn("publishedStatusKey", coalesced)
+        shell = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceShell.vue"))
+        self.assertIn("prksWorkspaceOnShellCommit", shell)
+        effects = src[src.find("function prksWorkspaceApplyShellDomEffects") : src.find("function prksWorkspaceOnShellCommit")]
+        self.assertLess(effects.find("updateTabOverflow()"), effects.find("revealWorkspaceTab("))
         kind = src[src.find("function tabStatusKind") : src.find("function statusLabel")]
         self.assertLess(kind.find("return 'error'"), kind.find("return 'saving'"))
         self.assertLess(kind.find("return 'saving'"), kind.find("return 'drafting'"))

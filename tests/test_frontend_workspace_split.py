@@ -62,6 +62,8 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertIn("prksWorkspaceReapplySplitRatio", tiling)
         # The Vue shell asks that implementation to bind the separator it rendered.
         self.assertIn("prksWorkspaceSyncSplitSeparator", canvas)
+        self.assertIn("prksWorkspaceReleaseRootSeparator", canvas)
+        self.assertNotIn("prksWorkspaceAfterShellRender", canvas)
         self.assertNotIn("function prksWorkspaceSyncTiles", tiling)
         self.assertNotIn("function renderTreeNode", tiling)
         # Pointer/keyboard/ARIA/persistence stay out of the tiling DOM module.
@@ -106,6 +108,7 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         # divider (one separator implementation), parameterized by axis + node-local ratio.
         self.assertIn("prksWorkspaceSyncNestedSeparator", split)
         self.assertIn("prksWorkspaceReleaseNestedSeparator", split)
+        self.assertIn("prksWorkspaceReleaseRootSeparator", split)
         self.assertIn("PRKS_NESTED_MIN_WIDTH_PX", split)
         self.assertIn("PRKS_NESTED_MIN_HEIGHT_PX", split)
         self.assertIn("beginPointerDrag", split)
@@ -125,6 +128,7 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertNotIn("function renderTreeNode", tiling)
         self.assertNotIn("function pruneStale", tiling)
         self.assertIn("prks-workspace-split", tree)
+        self.assertIn("prksWorkspaceReleaseNestedSeparator", tree)
         self.assertIn("data-prks-split-id", tree)
         self.assertIn("data-prks-secondary-root", tree)
         self.assertIn("function renderTreeNode", oracle)

@@ -49,6 +49,8 @@ export interface WorkspaceProjection {
   readonly visualTiled: boolean
   readonly narrowFallback: boolean
   readonly tabStatus: Readonly<Record<string, TabStatusKind>>
+  /** Publish id from the coordinator. Absent on hand-built test projections. */
+  readonly commit?: number
 }
 
 export interface WorkspaceIntents {
@@ -65,7 +67,10 @@ declare global {
   interface Window {
     prksWorkspaceSubscribe?: (listener: (projection: WorkspaceProjection) => void) => () => void
     prksWorkspaceRepublish?: () => void
-    prksWorkspaceAfterShellRender?: () => void
+    prksWorkspaceOnShellCommit?: (projection: WorkspaceProjection) => void
+    prksWorkspaceReleaseRootSeparator?: (canvas: HTMLElement) => void
+    prksWorkspaceReleaseNestedSeparator?: (container: HTMLElement) => void
+    prksNotifyTabHostReparent?: (tabId: string) => void
     prksWorkspaceTabKeydown?: (event: KeyboardEvent) => void
     prksWorkspaceActivateTab?: (tabId: string) => void
     prksWorkspaceCloseTab?: (tabId: string) => void

@@ -2,11 +2,17 @@ import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import hostSource from '../../../frontend/js/workspace-hosts.js?raw'
+import splitSource from '../../../frontend/js/workspace-split.js?raw'
 import WorkspaceShell from './WorkspaceShell.vue'
 import type { ProjectionNode, ProjectionTab, WorkspaceIntents, WorkspaceProjection } from './types'
 
 function installHosts(): void {
   const run = new Function(hostSource)
+  run()
+}
+
+function installSplit(): void {
+  const run = new Function(splitSource)
   run()
 }
 
@@ -356,5 +362,169 @@ describe('Vue workspace shell', () => {
     expect(() => {
       ;(frozen.state as { mainTabId: string }).mainTabId = 'B'
     }).toThrow()
+  })
+
+  it('signals one shell commit after both teleports render', async () => {
+    const seen: WorkspaceProjection[] = []
+    window.prksWorkspaceOnShellCommit = (value) => {
+      seen.push(value)
+    }
+    const value = projection({
+      visualTiled: true,
+      state: {
+        version: 1,
+        mode: 'tiled',
+        mainTabId: 'A',
+        focusedTabId: 'A',
+        secondaryTree: leaf('B'),
+        tabs: [tab('A'), tab('B')],
+        mainSplitRatio: 0.58,
+      },
+    })
+    mountShell(value)
+    await nextTick()
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen[seen.length - 1]?.visualTiled).toBe(true)
+    expect(seen[seen.length - 1]?.state.mainTabId).toBe('A')
+    expect(document.querySelector('#prks-workspace-tabs .prks-workspace-tab')).not.toBeNull()
+    expect(document.querySelector('#page-content .prks-tile')).not.toBeNull()
+    const next = projection({
+      visualTiled: false,
+      narrowFallback: true,
+      state: value.state,
+    })
+    await wrapper?.setProps({ projection: next })
+    await nextTick()
+    expect(seen[seen.length - 1]?.visualTiled).toBe(false)
+    expect(seen[seen.length - 1]?.narrowFallback).toBe(true)
+    delete window.prksWorkspaceOnShellCommit
+  })
+
+  it('ends a root divider drag when the split hides and does not commit further', async () => {
+    installSplit()
+    const commits: number[] = []
+    window.prksWorkspaceSetMainSplitRatio = (ratio) => {
+      commits.push(ratio)
+    }
+    let moves = 0
+    const origAdd = document.addEventListener.bind(document)
+    const origRemove = document.removeEventListener.bind(document)
+    document.addEventListener = ((type: string, fn: EventListener, cap?: boolean | AddEventListenerOptions) => {
+      if (type === 'pointermove') moves += 1
+      origAdd(type, fn, cap)
+    }) as typeof document.addEventListener
+    document.removeEventListener = ((type: string, fn: EventListener, cap?: boolean | EventListenerOptions) => {
+      if (type === 'pointermove') moves -= 1
+      origRemove(type, fn, cap)
+    }) as typeof document.removeEventListener
+    const tree = leaf('B')
+    const shown = projection({
+      visualTiled: true,
+      state: {
+        version: 1,
+        mode: 'tiled',
+        mainTabId: 'A',
+        focusedTabId: 'A',
+        secondaryTree: tree,
+        tabs: [tab('A'), tab('B')],
+        mainSplitRatio: 0.58,
+      },
+    })
+    try {
+      mountShell(shown)
+      await nextTick()
+      const splitter = document.querySelector('.prks-workspace-canvas > .prks-splitter') as HTMLElement
+      expect(splitter).not.toBeNull()
+      splitter.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 1, clientX: 400, clientY: 20 }),
+      )
+      expect(document.body.classList.contains('prks-resizing-split')).toBe(true)
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: 420, clientY: 20 }))
+      const afterMove = commits.length
+      expect(afterMove).toBeGreaterThan(0)
+      await wrapper?.setProps({
+        projection: projection({ visualTiled: false, narrowFallback: true, state: shown.state }),
+      })
+      await nextTick()
+      expect(document.body.classList.contains('prks-resizing-split')).toBe(false)
+      expect(document.querySelector('.is-dragging')).toBeNull()
+      expect(moves).toBe(0)
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 1, clientX: 440, clientY: 20 }))
+      expect(commits.length).toBe(afterMove)
+    } finally {
+      document.addEventListener = origAdd
+      document.removeEventListener = origRemove
+      document.body.classList.remove('prks-resizing-split', 'prks-resizing-split--horizontal')
+      delete window.prksWorkspaceSetMainSplitRatio
+    }
+  })
+
+  it('ends a nested divider drag when that split unmounts', async () => {
+    installSplit()
+    const commits: string[] = []
+    window.prksWorkspaceSetNestedSplitRatio = (splitId) => {
+      commits.push(splitId)
+    }
+    let moves = 0
+    const origAdd = document.addEventListener.bind(document)
+    const origRemove = document.removeEventListener.bind(document)
+    document.addEventListener = ((type: string, fn: EventListener, cap?: boolean | AddEventListenerOptions) => {
+      if (type === 'pointermove') moves += 1
+      origAdd(type, fn, cap)
+    }) as typeof document.addEventListener
+    document.removeEventListener = ((type: string, fn: EventListener, cap?: boolean | EventListenerOptions) => {
+      if (type === 'pointermove') moves -= 1
+      origRemove(type, fn, cap)
+    }) as typeof document.removeEventListener
+    const tree = split('split-1', 'left-right', leaf('B'), leaf('C'), 0.4)
+    const shown = projection({
+      visualTiled: true,
+      state: {
+        version: 1,
+        mode: 'tiled',
+        mainTabId: 'A',
+        focusedTabId: 'A',
+        secondaryTree: tree,
+        tabs: [tab('A'), tab('B'), tab('C')],
+        mainSplitRatio: 0.58,
+      },
+    })
+    try {
+      mountShell(shown)
+      await nextTick()
+      const splitter = document.querySelector('.prks-workspace-split > .prks-splitter') as HTMLElement
+      expect(splitter).not.toBeNull()
+      splitter.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerId: 2, clientX: 200, clientY: 20 }),
+      )
+      expect(document.body.classList.contains('prks-resizing-split')).toBe(true)
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 2, clientX: 220, clientY: 20 }))
+      const afterMove = commits.length
+      expect(afterMove).toBeGreaterThan(0)
+      await wrapper?.setProps({
+        projection: projection({
+          visualTiled: true,
+          state: {
+            version: 1,
+            mode: 'tiled',
+            mainTabId: 'A',
+            focusedTabId: 'A',
+            secondaryTree: leaf('B'),
+            tabs: [tab('A'), tab('B'), tab('C')],
+            mainSplitRatio: 0.58,
+          },
+        }),
+      })
+      await nextTick()
+      expect(document.body.classList.contains('prks-resizing-split')).toBe(false)
+      expect(moves).toBe(0)
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 2, clientX: 240, clientY: 20 }))
+      expect(commits.length).toBe(afterMove)
+    } finally {
+      document.addEventListener = origAdd
+      document.removeEventListener = origRemove
+      document.body.classList.remove('prks-resizing-split', 'prks-resizing-split--horizontal')
+      delete window.prksWorkspaceSetNestedSplitRatio
+    }
   })
 })

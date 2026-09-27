@@ -51,7 +51,11 @@
     function prksWorkspacePlaceContentHost(tabId, slot) {
         const host = prksWorkspaceRetainContentHost(tabId);
         if (!host || !slot) return host;
-        if (host.parentNode !== slot) slot.appendChild(host);
+        if (host.parentNode === slot) return host;
+        slot.appendChild(host);
+        if (typeof root.prksNotifyTabHostReparent === 'function') {
+            root.prksNotifyTabHostReparent(String(tabId));
+        }
         return host;
     }
 

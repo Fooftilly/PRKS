@@ -374,6 +374,8 @@
             if (existing) {
                 releaseDragState(existing, 'left-right');
                 if (existing.parentNode) existing.parentNode.removeChild(existing);
+            } else {
+                releaseDragState(separatorRef, 'left-right');
             }
             if (canvasRef === canvas) {
                 canvasRef = null;
@@ -589,6 +591,16 @@
         return el;
     }
 
+    /** Ends a root Main/Secondary divider drag before Vue removes that separator. */
+    function prksWorkspaceReleaseRootSeparator(canvas) {
+        const el = (canvas && findSeparator(canvas)) || separatorRef;
+        releaseDragState(el, 'left-right');
+        if (!canvas || canvasRef === canvas) {
+            canvasRef = null;
+            separatorRef = null;
+        }
+    }
+
     /** Called by workspace-tiling.js when a split container is about to be removed from the DOM
      * (leaf close/hide collapse, tree normalization). Ensures no mid-drag pointer state leaks. */
     function prksWorkspaceReleaseNestedSeparator(container) {
@@ -617,6 +629,7 @@
 
     const api = {
         prksWorkspaceSyncSplitSeparator: prksWorkspaceSyncSplitSeparator,
+        prksWorkspaceReleaseRootSeparator: prksWorkspaceReleaseRootSeparator,
         prksWorkspaceReapplySplitRatio: prksWorkspaceReapplySplitRatio,
         prksWorkspaceSyncNestedSeparator: prksWorkspaceSyncNestedSeparator,
         prksWorkspaceReleaseNestedSeparator: prksWorkspaceReleaseNestedSeparator,

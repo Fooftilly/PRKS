@@ -589,6 +589,18 @@
         return true;
     }
 
+    /** PDF (and similar) measured the host while it was parked. Reparent into a pane must resize. */
+    function prksNotifyTabHostReparent(tabId) {
+        const ctx = prksGetTabContext(tabId);
+        if (!ctx || ctx.destroyed || !ctx.mounted) return;
+        const pdf = ctx.getResource ? ctx.getResource('pdf') : null;
+        if (pdf && typeof pdf.resize === 'function') {
+            try {
+                pdf.resize();
+            } catch (_e) {}
+        }
+    }
+
     function prksResumeWarmTabContext(tabId, host) {
         const ctx = prksGetTabContext(tabId);
         if (!ctx || !ctx.suspended || !host) return null;
@@ -786,6 +798,7 @@
         prksMountTabContext: prksMountTabContext,
         prksWarmParkTabContext: prksWarmParkTabContext,
         prksResumeWarmTabContext: prksResumeWarmTabContext,
+        prksNotifyTabHostReparent: prksNotifyTabHostReparent,
         prksUnmountTabContext: prksUnmountTabContext,
         prksDestroyTabContext: prksDestroyTabContext,
         prksDestroyAllTabContexts: prksDestroyAllTabContexts,

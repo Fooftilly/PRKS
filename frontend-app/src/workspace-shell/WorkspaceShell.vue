@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, provide, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, onUpdated, provide, ref, shallowRef, watch } from 'vue'
 import WorkspaceCanvas from './WorkspaceCanvas.vue'
 import WorkspaceTabStrip from './WorkspaceTabStrip.vue'
 import { browserWorkspaceIntents, workspaceIntentsKey } from './intents'
@@ -43,6 +43,12 @@ watch(projectionRef, (next, prev) => {
   if (removed) window.prksWorkspaceCancelActiveDrag?.()
 })
 
+function signalShellCommit(): void {
+  const current = projectionRef.value
+  if (!current || !tabsReady.value || !pageReady.value) return
+  window.prksWorkspaceOnShellCommit?.(current)
+}
+
 onMounted(() => {
   tabsReady.value = document.getElementById('prks-workspace-tabs') != null
   pageReady.value = document.getElementById('page-content') != null
@@ -55,6 +61,8 @@ onMounted(() => {
     })
   }
 })
+
+onUpdated(signalShellCommit)
 
 onUnmounted(() => {
   unsubscribe()

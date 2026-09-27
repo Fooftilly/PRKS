@@ -38,7 +38,9 @@ function syncNested(): void {
 onMounted(syncNested)
 onUpdated(syncNested)
 onBeforeUnmount(() => {
-  if (props.node.type === 'split') window.prksWorkspaceUnwatchNestedSplit?.(props.node.id)
+  if (props.node.type !== 'split') return
+  window.prksWorkspaceUnwatchNestedSplit?.(props.node.id)
+  if (splitEl.value) window.prksWorkspaceReleaseNestedSeparator?.(splitEl.value)
 })
 </script>
 

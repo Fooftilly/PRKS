@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUpdated, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import WorkspacePaneFrame from './WorkspacePaneFrame.vue'
 import WorkspaceSplitter from './WorkspaceSplitter.vue'
 import WorkspaceTree from './WorkspaceTree.vue'
@@ -37,12 +37,18 @@ function syncCanvas(): void {
   window.prksWorkspaceWatchCanvas?.(canvas)
   window.prksSyncDenseWorkspaceShell?.(current.visualTiled)
   window.prksWorkspaceSyncSplitSeparator?.(canvas, current.visualTiled, current.state)
-  window.prksWorkspaceAfterShellRender?.()
   releaseClosedHosts()
 }
 
+watch(secondaryTree, (next, prev) => {
+  if (prev && !next && canvasRef.value) window.prksWorkspaceReleaseRootSeparator?.(canvasRef.value)
+})
+
 onMounted(syncCanvas)
 onUpdated(syncCanvas)
+onBeforeUnmount(() => {
+  if (canvasRef.value) window.prksWorkspaceReleaseRootSeparator?.(canvasRef.value)
+})
 </script>
 
 <template>

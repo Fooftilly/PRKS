@@ -605,7 +605,20 @@
             return true;
         }
 
+        function paneSlotForTab(tabId) {
+            if (typeof document === 'undefined' || !tabId || !document.querySelector) return null;
+            const id = String(tabId).replace(/"/g, '');
+            const tile = document.querySelector('.prks-tile[data-prks-tab-id="' + id + '"]');
+            if (!tile || !tile.querySelector) return null;
+            return tile.querySelector('.prks-content-host-slot');
+        }
+
         function hostForTab(tabId) {
+            const slot = paneSlotForTab(tabId);
+            if (slot && typeof root.prksWorkspacePlaceContentHost === 'function') {
+                const placed = root.prksWorkspacePlaceContentHost(tabId, slot);
+                if (placed) return placed;
+            }
             if (typeof root.prksWorkspaceHostForTab === 'function') {
                 const tiled = root.prksWorkspaceHostForTab(tabId);
                 if (tiled) return tiled;
@@ -733,15 +746,36 @@
         }
 
         const projectionListeners = new Set();
+        /* Monotonic id of the projection the shell must finish painting. Schema
+         * `state.version` stays the model version; this commit id is per publish. */
+        let publishSerial = 0;
+        let latestCommit = 0;
+        let shellSeenCommit = 0;
+        let pendingFocusTabId = null;
+        let publishedStatusKey = null;
+        let statusFramePending = false;
+
+        function statusKeyOf(map) {
+            if (!map) return '';
+            const ids = Object.keys(map);
+            let key = '';
+            for (let i = 0; i < ids.length; i++) key += ids[i] + '\0' + (map[ids[i]] || '') + '\n';
+            return key;
+        }
 
         function detachedProjection() {
+            publishSerial += 1;
+            latestCommit = publishSerial;
             const body = {
                 state: copyJson(snapshot()) || emptyProjectionState(),
                 visualTiled: visualTiled(),
                 narrowFallback: !!narrowFallback,
                 tabStatus: tabStatusMap(),
+                commit: publishSerial,
             };
-            return deepFreeze(body);
+            const projection = deepFreeze(body);
+            publishedStatusKey = statusKeyOf(projection.tabStatus);
+            return projection;
         }
 
         function emptyProjectionState() {
@@ -1422,10 +1456,53 @@
         }
 
         function paintAndRestore(tabId) {
+            const id = tabId || state.focusedTabId;
+            if (root.__prksWorkspaceShellOwned) pendingFocusTabId = id;
             paint();
-            if (typeof root.prksWorkspaceRestoreFocus === 'function') {
-                root.prksWorkspaceRestoreFocus(tabId || state.focusedTabId);
+            if (!root.__prksWorkspaceShellOwned && typeof root.prksWorkspaceRestoreFocus === 'function') {
+                root.prksWorkspaceRestoreFocus(id);
             }
+        }
+
+        function queueFocusRestore(tabId) {
+            if (!tabId) return;
+            pendingFocusTabId = tabId;
+            if (shellSeenCommit === latestCommit && latestCommit !== 0) {
+                const id = pendingFocusTabId;
+                pendingFocusTabId = null;
+                if (typeof root.prksWorkspaceApplyRestoredFocus === 'function') {
+                    root.prksWorkspaceApplyRestoredFocus(id);
+                }
+            }
+        }
+
+        /** Vue calls this after both teleports have painted `rendered`. */
+        function onShellCommit(rendered) {
+            if (!rendered || rendered.commit !== latestCommit) return;
+            shellSeenCommit = rendered.commit;
+            if (typeof root.prksWorkspaceApplyShellDomEffects === 'function') {
+                root.prksWorkspaceApplyShellDomEffects(rendered);
+            }
+            if (!pendingFocusTabId) return;
+            const id = pendingFocusTabId;
+            pendingFocusTabId = null;
+            if (typeof root.prksWorkspaceApplyRestoredFocus === 'function') {
+                root.prksWorkspaceApplyRestoredFocus(id);
+            }
+        }
+
+        function refreshTabStatus() {
+            const key = statusKeyOf(tabStatusMap());
+            if (key === publishedStatusKey) return;
+            if (statusFramePending) return;
+            statusFramePending = true;
+            const run = function () {
+                statusFramePending = false;
+                if (statusKeyOf(tabStatusMap()) === publishedStatusKey) return;
+                publishProjection();
+            };
+            if (typeof root.requestAnimationFrame === 'function') root.requestAnimationFrame(run);
+            else setTimeout(run, 16);
         }
 
         function closeTabIds(ids, keepId) {
@@ -1562,7 +1639,7 @@
             if (plan.kind === 'noop') return Promise.resolve(true);
             if (plan.kind === 'show') {
                 commitCanonical(plan.state);
-                paint();
+                paintAndRestore(state.focusedTabId || state.mainTabId);
                 if (narrowFallback) return Promise.resolve(true);
                 return mountAllSecondaryLeaves();
             }
@@ -1620,7 +1697,7 @@
             showWorkspaceStatus('');
             if (state.mode === MODE_TILED && state.secondaryTree) {
                 state.focusedTabId = state.mainTabId;
-                paint();
+                paintAndRestore(state.mainTabId);
                 return mountAllSecondaryLeaves();
             }
             paint();
@@ -1893,6 +1970,9 @@
             visualTiled: visualTiled,
             subscribe: subscribeProjection,
             publish: publishProjection,
+            onShellCommit: onShellCommit,
+            queueFocusRestore: queueFocusRestore,
+            refreshTabStatus: refreshTabStatus,
             getMainTabId: function () {
                 return state.mainTabId;
             },
@@ -2114,8 +2194,8 @@
     }
 
     function prksWorkspaceRefreshTabStatus(tabId) {
-        if (root.__prksWorkspaceShellOwned && production && typeof production.publish === 'function') {
-            production.publish();
+        if (root.__prksWorkspaceShellOwned && production && typeof production.refreshTabStatus === 'function') {
+            production.refreshTabStatus(tabId);
             return;
         }
         if (typeof document === 'undefined' || !tabId) return;
@@ -2212,18 +2292,25 @@
         paintSplitControl();
     }
 
-    function prksWorkspaceAfterShellRender() {
-        if (typeof document === 'undefined' || !production) return;
-        const snap = production.snapshot();
-        const visualTiled =
-            typeof production.visualTiled === 'function' ? production.visualTiled() : snap.mode === MODE_TILED;
-        revealWorkspaceTab(snap.mainTabId);
-        if (visualTiled && snap.focusedTabId && snap.focusedTabId !== snap.mainTabId) {
-            revealWorkspaceTab(snap.focusedTabId);
-        }
+    /**
+     * DOM effects for one painted projection. Overflow is measured before reveal
+     * so showing the overflow control cannot clamp the scroll we just applied.
+     */
+    function prksWorkspaceApplyShellDomEffects(rendered) {
+        if (typeof document === 'undefined' || !rendered || !rendered.state) return;
+        const snap = rendered.state;
         updateTabOverflow();
         syncTrailingTabStops();
         paintSplitControl();
+        revealWorkspaceTab(snap.mainTabId);
+        if (rendered.visualTiled && snap.focusedTabId && snap.focusedTabId !== snap.mainTabId) {
+            revealWorkspaceTab(snap.focusedTabId);
+        }
+    }
+
+    function prksWorkspaceOnShellCommit(rendered) {
+        if (!production || typeof production.onShellCommit !== 'function') return;
+        production.onShellCommit(rendered);
     }
 
     function tabButtons() {
@@ -2285,39 +2372,79 @@
         }
     }
 
-    function prksWorkspaceRestoreFocus(tabId) {
+    /**
+     * Move DOM focus to `tabId`. A tile that is still connected but is not the
+     * restore target is stale (the closed Secondary pane can still be in the
+     * document when this used to run before Vue patched).
+     */
+    function prksWorkspaceApplyRestoredFocus(tabId) {
         if (typeof document === 'undefined' || !tabId) return;
         const d = document;
         const active = d.activeElement;
         if (active && active !== d.body && d.contains(active)) {
-            if (active.closest && active.closest('.prks-tile[data-prks-tab-id]')) return;
-            if (active.closest && active.closest('#prks-command-palette')) return;
-            if (active.closest && active.closest('.prks-workspace-menu')) return;
-            const tabWrap = active.closest && active.closest('.prks-workspace-tab[data-tab-id]');
-            if (tabWrap && tabWrap.getAttribute('data-tab-id') === tabId) return;
+            const tile = active.closest && active.closest('.prks-tile[data-prks-tab-id]');
+            if (tile) {
+                if (tile.getAttribute('data-prks-tab-id') === String(tabId)) return;
+            } else if (active.closest && active.closest('#prks-command-palette')) return;
+            else if (active.closest && active.closest('.prks-workspace-menu')) return;
+            else {
+                const tabWrap = active.closest && active.closest('.prks-workspace-tab[data-tab-id]');
+                if (tabWrap && tabWrap.getAttribute('data-tab-id') === String(tabId)) return;
+            }
         }
-        const run = function () {
-            const tile = d.querySelector(
-                '.prks-tile[data-prks-tab-id="' + String(tabId).replace(/"/g, '') + '"]'
-            );
-            if (tile && typeof tile.focus === 'function') {
-                tile.setAttribute('tabindex', '-1');
+        const tile = d.querySelector(
+            '.prks-tile[data-prks-tab-id="' + String(tabId).replace(/"/g, '') + '"]'
+        );
+        if (tile && typeof tile.focus === 'function') {
+            tile.setAttribute('tabindex', '-1');
+            try {
                 tile.focus({ preventScroll: true });
-                revealWorkspaceTab(tabId);
-                return;
+            } catch (_e) {
+                tile.focus();
             }
-            const btn = d.querySelector(
-                '.prks-workspace-tab[data-tab-id="' +
-                    String(tabId).replace(/"/g, '') +
-                    '"] .prks-workspace-tab__activate'
-            );
-            if (btn && typeof btn.focus === 'function') {
+            revealWorkspaceTab(tabId);
+            return;
+        }
+        const btn = d.querySelector(
+            '.prks-workspace-tab[data-tab-id="' +
+                String(tabId).replace(/"/g, '') +
+                '"] .prks-workspace-tab__activate'
+        );
+        if (btn && typeof btn.focus === 'function') {
+            try {
                 btn.focus({ preventScroll: true });
-                revealWorkspaceTab(tabId);
+            } catch (_e2) {
+                btn.focus();
             }
-        };
-        if (typeof root.requestAnimationFrame === 'function') root.requestAnimationFrame(run);
-        else run();
+            revealWorkspaceTab(tabId);
+        }
+    }
+
+    function prksWorkspaceRestoreFocus(tabId) {
+        if (typeof document === 'undefined' || !tabId) return;
+        if (root.__prksWorkspaceShellOwned && production && typeof production.queueFocusRestore === 'function') {
+            production.queueFocusRestore(tabId);
+            return;
+        }
+        const d = document;
+        const active = d.activeElement;
+        if (active && active !== d.body && d.contains(active)) {
+            const tile = active.closest && active.closest('.prks-tile[data-prks-tab-id]');
+            if (tile && tile.getAttribute('data-prks-tab-id') === String(tabId)) return;
+            if (!tile) {
+                if (active.closest && active.closest('#prks-command-palette')) return;
+                if (active.closest && active.closest('.prks-workspace-menu')) return;
+                const tabWrap = active.closest && active.closest('.prks-workspace-tab[data-tab-id]');
+                if (tabWrap && tabWrap.getAttribute('data-tab-id') === tabId) return;
+            }
+        }
+        if (typeof root.requestAnimationFrame === 'function') {
+            root.requestAnimationFrame(function () {
+                prksWorkspaceApplyRestoredFocus(tabId);
+            });
+            return;
+        }
+        prksWorkspaceApplyRestoredFocus(tabId);
     }
 
     function internalHashFromAnchor(a) {
@@ -2831,11 +2958,13 @@
         prksWorkspaceCloseOtherTabs: prksWorkspaceCloseOtherTabs,
         prksWorkspaceCloseTabsToTheRight: prksWorkspaceCloseTabsToTheRight,
         prksWorkspaceRestoreFocus: prksWorkspaceRestoreFocus,
+        prksWorkspaceApplyRestoredFocus: prksWorkspaceApplyRestoredFocus,
         prksWorkspaceRefreshTabStatus: prksWorkspaceRefreshTabStatus,
         prksWorkspaceSubscribe: prksWorkspaceSubscribe,
         prksWorkspaceRepublish: prksWorkspaceRepublish,
         prksWorkspaceTabKeydown: onTabKeydown,
-        prksWorkspaceAfterShellRender: prksWorkspaceAfterShellRender,
+        prksWorkspaceOnShellCommit: prksWorkspaceOnShellCommit,
+        prksWorkspaceApplyShellDomEffects: prksWorkspaceApplyShellDomEffects,
         prksWorkspaceFocusTab: prksWorkspaceFocusTab,
         prksWorkspaceMakeMain: prksWorkspaceMakeMain,
         prksWorkspaceTileTab: prksWorkspaceTileTab,
