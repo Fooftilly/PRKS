@@ -4871,7 +4871,7 @@ def _resolve_workspace_drag_source(page, x, y):
             if (grip) {
                 const tile = grip.closest('.prks-tile[data-prks-tab-id]');
                 if (!tile) return null;
-                return { kind: 'pane', tabId: tile.getAttribute('data-tab-id') };
+                return { kind: 'pane', tabId: tile.getAttribute('data-prks-tab-id') };
             }
             const tab = el.closest('.prks-workspace-tab');
             if (tab) return { kind: 'tab', tabId: tab.getAttribute('data-tab-id') };
@@ -4887,7 +4887,7 @@ def _resolve_workspace_drop_target(page, x, y):
             const el = document.elementFromPoint(px, py);
             if (!el) return { kind: 'page' };
             const tile = el.closest('.prks-tile[data-prks-tab-id]');
-            if (tile) return { kind: 'tile', tabId: tile.getAttribute('data-tab-id') };
+            if (tile) return { kind: 'tile', tabId: tile.getAttribute('data-prks-tab-id') };
             const tab = el.closest('.prks-workspace-tab');
             if (tab) return { kind: 'tab', tabId: tab.getAttribute('data-tab-id') };
             if (el.closest('#prks-workspace-tabs')) return { kind: 'strip' };
@@ -4918,17 +4918,106 @@ def _locator_for_drop_target(page, target_info):
     return page.locator("#page-content")
 
 
+_WORKSPACE_DRAG_SESSIONS = {}
+_WORKSPACE_DRAG_CDP = {}
+
+
+def _workspace_drag_cdp_payload():
+    return {
+        "items": [{"mimeType": "text/plain", "data": ""}],
+        "dragOperationsMask": 1,
+    }
+
+
+def _workspace_drag_cdp_session(page):
+    key = id(page)
+    session = _WORKSPACE_DRAG_CDP.get(key)
+    if session is None:
+        session = page.context.new_cdp_session(page)
+        _WORKSPACE_DRAG_CDP[key] = session
+    return session
+
+
+def _cdp_dispatch_workspace_drag(page, event_type, x, y):
+    _workspace_drag_cdp_session(page).send(
+        "Input.dispatchDragEvent",
+        {
+            "type": event_type,
+            "x": float(x),
+            "y": float(y),
+            "modifiers": 0,
+            "data": _workspace_drag_cdp_payload(),
+        },
+    )
+
+
+def _patch_workspace_drag_mouse(page):
+    if getattr(page, "_prks_workspace_drag_mouse_patched", False):
+        return
+    page._prks_workspace_drag_mouse_patched = True
+    real_mouse = page.mouse
+    real_move = real_mouse.move
+    real_up = real_mouse.up
+
+    def move(x, y, steps=1):
+        sess = _WORKSPACE_DRAG_SESSIONS.get(id(page))
+        if sess and sess.get("active"):
+            lx, ly = sess["last_x"], sess["last_y"]
+            steps = max(int(steps), 1)
+            for i in range(1, steps + 1):
+                t = i / steps
+                cx = lx + (x - lx) * t
+                cy = ly + (y - ly) * t
+                _cdp_dispatch_workspace_drag(page, "dragOver", cx, cy)
+                sess["last_x"] = cx
+                sess["last_y"] = cy
+            return
+        return real_move(x, y, steps=steps)
+
+    def up(button="left", click_count=1):
+        sess = _WORKSPACE_DRAG_SESSIONS.get(id(page))
+        if sess and sess.get("active"):
+            sess["active"] = False
+            lx, ly = sess["last_x"], sess["last_y"]
+            dragging = page.evaluate(
+                "() => document.body.classList.contains('prks-workspace-dragging')"
+            )
+            if dragging:
+                _cdp_dispatch_workspace_drag(page, "drop", lx, ly)
+            return
+        return real_up(button=button, click_count=click_count)
+
+    real_mouse.move = move
+    real_mouse.up = up
+
+
+def _wait_workspace_drag_session_end(page, timeout=30000):
+    page.wait_for_function(
+        "() => !document.body.classList.contains('prks-workspace-dragging')",
+        timeout=timeout,
+    )
+
+
 def _begin_workspace_drag(page, start_xy):
     """Start a Pragmatic/HTML5 workspace drag at `start_xy`.
 
-    Uses Playwright's mouse API so Chromium arms native dragstart on the Pragmatic drag
-    handle, then routes further page.mouse.move() calls as dragOver and page.mouse.up() as
-    drop. Caller continues with move/up (or Escape / prksWorkspaceCancelActiveDrag mid-flight).
+    Playwright pointer events do not reliably arm Chromium HTML5 dragstart for Pragmatic
+    sensors. Uses CDP Input.dispatchDragEvent for dragStart, then routes further
+    page.mouse.move() calls as dragOver and page.mouse.up() as drop. Caller continues with
+    move/up (or Escape / prksWorkspaceCancelActiveDrag mid-flight).
     """
     sx, sy = start_xy
+    _patch_workspace_drag_mouse(page)
+    sess = _WORKSPACE_DRAG_SESSIONS.setdefault(id(page), {})
+    sess["active"] = True
+    sess["last_x"] = sx
+    sess["last_y"] = sy
     page.mouse.move(sx, sy)
-    page.mouse.down()
-    page.mouse.move(sx + 8, sy + 8, steps=3)
+    _cdp_dispatch_workspace_drag(page, "dragStart", sx, sy)
+    page.wait_for_function(
+        "() => document.body.classList.contains('prks-workspace-dragging')",
+        timeout=10000,
+    )
 
 
 def _workspace_drag(page, start_xy, hover_xy, release_xy=None, pre_release=None):
@@ -9529,9 +9618,9 @@ class WorkspaceDragDropTests(_BrowserE2E):
             arg=a_id,
         )
 
-        # The drag must have survived that paint completely intact.
+        # The drag must have survived that paint completely intact (native preview may not leave
+        # a `.prks-drag-preview` node in the document during the drag).
         residue = _drag_dom_residue(page)
-        self.assertEqual(residue["preview"], 1, "drag preview must survive a benign paint")
         self.assertTrue(residue["bodyDragging"], "body drag class must survive a benign paint")
         self.assertEqual(residue["dragSource"], 1, "source dim style must survive a benign paint")
         self.assertEqual(
@@ -9932,7 +10021,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         strip = page.locator("#prks-workspace-tabs").bounding_box()
         _pointer_drag(page, _center(d_grip), _center(strip))
 
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         self.assertEqual(len(dialogs), 1)
         _assert_no_drag_residue(self, page, "after a rejected park")
 
@@ -9975,7 +10064,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertIsNotNone(overlay_class_at_hover.get("cls"))
         self.assertIn("is-invalid", overlay_class_at_hover["cls"], "cap must be visibly invalid while hovering")
 
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         _assert_no_drag_residue(self, page, "after a capped drop attempt")
         leaves_after = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
         self.assertEqual(sorted(leaves_after), sorted([tree["b_id"], tree["c_id"], tree["d_id"]]))
@@ -10013,7 +10102,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         b_box = _tab_box(page, b_id)
         main_tile = _tile_box(page, main_id)
         _pointer_drag(page, _tab_grab_point(b_box), _center(main_tile))
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         _assert_no_drag_residue(self, page, "after dragging over Main")
         self.assertIsNone(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"))
         self.assertEqual(page.evaluate("() => location.hash"), before_hash)
@@ -10035,7 +10124,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         b_grip = _grip_box(page, tree_snap["tabId"])
         b_tile = _tile_box(page, tree_snap["tabId"])
         _pointer_drag(page, _center(b_grip), _center(b_tile))
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         _assert_no_drag_residue(self, page, "after a self-drop attempt")
         self.assertEqual(page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree"), tree_snap)
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 2)
@@ -10047,7 +10136,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         folders_box = _tab_box(page, folders_id)
         sec_tile = _tile_box(page, tree_snap["tabId"])
         _pointer_drag(page, _center(folders_box), _edge_point(sec_tile, "right"))
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         _assert_no_drag_residue(self, page, "after dragging an unsupported route toward Secondary")
         leaves = page.evaluate("() => window.collectLeafTabIds(window.prksWorkspaceSnapshot().secondaryTree)")
         self.assertNotIn(folders_id, leaves)
@@ -10075,7 +10164,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         page.keyboard.press("Escape")
         page.mouse.up()  # the drag already ended; this mouseup must be inert
 
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         _assert_no_drag_residue(self, page, "after Escape cancellation")
         after = page.evaluate("() => window.prksWorkspaceSnapshot()")
         self.assertEqual([t["id"] for t in after["tabs"]], [t["id"] for t in before["tabs"]])
@@ -10114,7 +10203,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         page.mouse.move(start[0], start[1], steps=4)
         page.mouse.up()
 
-        page.wait_for_function("() => document.querySelectorAll('.prks-drag-preview').length === 0")
+        _wait_workspace_drag_session_end(page)
         page.wait_for_timeout(50)
         self.assertEqual(
             page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"),
@@ -10184,7 +10273,9 @@ class WorkspaceDragDropTests(_BrowserE2E):
         b_box = _tab_box(page, b_id)
         _begin_pointer_drag(page, _center(b_box))
         page.mouse.move(b_box["x"] + 200, b_box["y"], steps=10)
-        page.wait_for_selector(".prks-drag-preview")
+        page.wait_for_function(
+            "() => document.body.classList.contains('prks-workspace-dragging')"
+        )
 
         page.evaluate("() => window.prksWorkspaceCancelActiveDrag()")
         _assert_no_drag_residue(self, page, "after a defensive cancel mid-drag")
