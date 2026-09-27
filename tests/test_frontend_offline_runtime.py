@@ -1025,7 +1025,8 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
     def test_missing_snapshot_is_distinct_from_a_cached_empty_library(self):
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         folders_at = app.index("case 'folders': {")
-<<<<<<< HEAD
+        # Vue present + titleOpts sit past a fixed 1200-char window; extract to
+        # the next case so both the unavailable title and Vue handoff stay in view.
         nxt = app.find("case 'playlists':", folders_at)
         body = app[folders_at: nxt if nxt > folders_at else folders_at + 8000]
         # Vue present paints the host; chrome title still uses titleOpts.
@@ -1035,14 +1036,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
             "titleOpts = { notFound: true, notFoundTitle: 'Folders not available offline' }",
             body,
         )
-=======
-        # Vue present + titleOpts sit past a fixed 1200-char window; extract to
-        # the next case so both the unavailable title and Vue handoff stay in view.
-        next_case = app.index("case 'playlists':", folders_at)
-        body = app[folders_at:next_case]
         self.assertIn("Folders not available offline", body)
-        self.assertIn("prksPresentVueFolderLibrary", body)
->>>>>>> 3aea382 (fix(folder-library): address review isolation and CI blockers)
         # A cached [] resolves truthy through the resolver, so the unavailable
         # branch must be gated on the resolver's null, never on list length.
         self.assertNotIn(".length === 0", body)
