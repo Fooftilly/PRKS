@@ -84,6 +84,9 @@ DEFAULT_MAX_COMPRESSION_RATIO = 200
 DISK_MARGIN_BYTES = 64 * 1024 * 1024
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+# The exact name ``_backup_filename()`` gives a finished archive. Only a direct
+# child of the backup subroot with this name is ever reclaimed as a ready backup.
+_READY_BACKUP_NAME_RE = re.compile(r"^prks-backup-[0-9]{8}T[0-9]{6}Z\.prks-backup$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 _STORED_SUFFIXES = frozenset({".pdf", ".jpg", ".jpeg", ".png", ".webp"})
 _UNIX_IFMT = 0o170000
@@ -299,11 +302,19 @@ def stash_ready_backup(result: BackupResult) -> str:
     token = secrets.token_urlsafe(24)
     with _ready_lock:
         _expire_ready_backups_unlocked()
+        created = time.time()
+        # The archive's mtime is when zipping finished, which precedes
+        # verification. Aligning it with the token's clock lets a later process,
+        # which has no registry, age the file exactly as this one ages the token.
+        try:
+            os.utime(result.archive_path, (created, created))
+        except OSError:
+            pass
         _ready_backups[token] = {
             "path": result.archive_path,
             "filename": result.filename,
             "warnings": list(result.warnings),
-            "created_unix": time.time(),
+            "created_unix": created,
         }
     return token
 
@@ -336,10 +347,88 @@ def _expire_ready_backups_unlocked(*, now: Optional[float] = None) -> None:
             _safe_remove(str(item["path"]))
 
 
+def _reclaim_abandoned_ready_backups_unlocked(
+    config: StorageConfig, *, now: Optional[float] = None
+) -> None:
+    """Remove finished archives that no ready token can reach any more.
+
+    ``_ready_backups`` is process-local, so after a restart -- or for an entry
+    whose removal failed -- an archive can outlive every token that named it.
+    This is the filesystem side of the TTL, and it is deliberately narrow:
+
+    * only direct children of the verified ``.prks-maintenance/backup``
+      subroot are listed, and nothing is ever descended into -- the
+      per-backup work directories (in-progress snapshots and archives) live
+      one level down and are owned by ``create_backup()``'s own cleanup;
+    * an entry qualifies only when its name is exactly what
+      ``_backup_filename()`` produces and ``lstat`` shows a regular file, so
+      symlinks, directories and anything unrecognized are left alone;
+    * it must be at least ``READY_BACKUP_TTL_SECONDS`` old by mtime, which
+      ``stash_ready_backup()`` sets to the token's creation time;
+    * an archive still registered under a live token is never touched.
+
+    The caller holds ``_ready_lock`` so registration and download hand-off
+    cannot interleave with the decision. Removal goes through the maintenance
+    boundary's descriptor-anchored ``_discard_maintenance_child()``.
+    """
+    current = time.time() if now is None else now
+    try:
+        root = _verified_maintenance_subroot(config, *_BACKUP_SUBROOT)
+    except ValueError:
+        LOGGER.error("backup_ready_cleanup_skipped reason=unsafe_root")
+        return
+    if root is None:
+        return
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    protected_paths: set[str] = set()
+    protected_ids: set[tuple[int, int]] = set()
+    for item in _ready_backups.values():
+        path = str(item.get("path") or "")
+        if not path:
+            continue
+        protected_paths.add(os.path.normcase(os.path.abspath(path)))
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        protected_ids.add((st.st_dev, st.st_ino))
+    reclaimed = 0
+    for name in names:
+        if not _READY_BACKUP_NAME_RE.fullmatch(name):
+            continue
+        child = os.path.join(root, name)
+        try:
+            st = os.lstat(child)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode) or _is_directory_reparse_point(child):
+            continue
+        if (st.st_dev, st.st_ino) in protected_ids:
+            continue
+        if os.path.normcase(os.path.abspath(child)) in protected_paths:
+            continue
+        if current - st.st_mtime < READY_BACKUP_TTL_SECONDS:
+            continue
+        _discard_maintenance_child(config, _BACKUP_SUBROOT, child)
+        if not os.path.lexists(child):
+            reclaimed += 1
+    if reclaimed:
+        LOGGER.info("backup_ready_orphan_reclaimed count=%s", reclaimed)
+
+
 def cleanup_expired_backup_jobs(config: StorageConfig, *, now: Optional[float] = None) -> None:
+    """Expire ready tokens, then reclaim archives no token can reach.
+
+    Runs at startup maintenance and after each backup is stashed; the TTL is
+    enforced opportunistically at those boundaries, not by a timer.
+    """
     _assert_testing_safe(config)
     with _ready_lock:
         _expire_ready_backups_unlocked(now=now)
+        _reclaim_abandoned_ready_backups_unlocked(config, now=now)
 
 
 def run_backup_with_progress(
@@ -362,6 +451,10 @@ def run_backup_with_progress(
     try:
         result = create_backup(config, progress=emit, cancel_event=cancel_event)
         token = stash_ready_backup(result)
+        try:
+            cleanup_expired_backup_jobs(config)
+        except Exception as exc:
+            LOGGER.warning("backup_ready_cleanup_skipped error_type=%s", safe_error_type(exc))
         emit(
             {
                 "phase": "ready",
@@ -471,10 +564,13 @@ def journal_path(config: StorageConfig) -> str:
     return os.path.join(maintenance_root(config), JOURNAL_FILENAME)
 
 
-# The three destructive scopes restore cleanup is allowed to touch. Each is a
+# The destructive scopes maintenance cleanup is allowed to touch. Each is a
 # fixed name under the maintenance root, never a caller-supplied string.
 _STAGING_SUBROOT: tuple[str, ...] = ("restore-staging",)
 _ROLLBACK_SUBROOT: tuple[str, ...] = ("rollback",)
+# Ready-backup reclamation removes finished archives from here; see
+# ``_reclaim_abandoned_ready_backups_unlocked()``.
+_BACKUP_SUBROOT: tuple[str, ...] = ("backup",)
 _JOURNAL_SUBROOT: tuple[str, ...] = ()
 
 
