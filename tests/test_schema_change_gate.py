@@ -453,6 +453,19 @@ class GateRepoTests(unittest.TestCase):
         )
         self.assertEqual(self.codes(), [])
 
+    def test_clause_text_and_semicolons_inside_quoted_identifiers_are_ignored(self):
+        self.write(
+            {
+                "backend/alias.py": (
+                    "SQL = ('INSERT INTO sync_entity_revisions (scope_type, scope_id, revision) '\n"
+                    "       'VALUES (?, ?, 1) ON CONFLICT (\"scope_type\", [scope_id]) DO NOTHING '\n"
+                    "       'RETURNING revision AS \"ON CONFLICT(title) DO NOTHING; x\", '\n"
+                    "       'scope_id AS `ON CONFLICT(revision) DO`')\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \

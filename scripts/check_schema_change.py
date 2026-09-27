@@ -106,14 +106,21 @@ def _unquote_ident(raw: str) -> str:
     return raw
 
 
-def _insert_target(match: re.Match[str]) -> str:
+def _span_text(original: str, match: re.Match[str], group: int) -> str | None:
+    """Text of ``group`` read from ``original`` (``match`` ran on the masked copy)."""
+    start, end = match.span(group)
+    return None if start < 0 else original[start:end]
+
+
+def _insert_target(match: re.Match[str], original: str) -> str:
     """Lower-cased INSERT target (SQLite identifiers are case-insensitive).
 
     Only the ``main`` schema is canonical; ``temp.works`` and attached-database
     tables keep their qualifier so they never match a canonical table.
     """
-    table = _unquote_ident(match.group(2)).lower()
-    schema = _unquote_ident(match.group(1)).lower() if match.group(1) else "main"
+    table = _unquote_ident(_span_text(original, match, 2) or "").lower()
+    schema_raw = _span_text(original, match, 1)
+    schema = _unquote_ident(schema_raw).lower() if schema_raw else "main"
     return table if schema == "main" else f"{schema}.{table}"
 
 
@@ -182,10 +189,12 @@ def _comment_end(text: str, i: int) -> int | None:
 
 
 def _mask_sql(text: str) -> str:
-    """Blank string literals and comments (same length), keep identifiers.
+    """Blank the inside of literals, quoted identifiers and comments (same length).
 
-    Structural scans then never read ``'ON CONFLICT(x) DO ...'`` inside a
-    literal or comment as SQL, while quoted table names still parse.
+    Quote delimiters are kept, so structure (and each identifier's span) is
+    unchanged, but nothing inside quotes or comments can look like SQL: no
+    ``ON CONFLICT`` clause and no ``;``. Callers read real identifier text back
+    from the original string at the same offsets.
     """
     out: list[str] = []
     i = 0
@@ -196,15 +205,14 @@ def _mask_sql(text: str) -> str:
             i = comment_end
             continue
         ch = text[i]
-        if ch in "'\"`":
-            j = _quoted_end(text, i)
+        if ch in "'\"`[":
+            if ch == "[":
+                j = text.find("]", i)
+                j = len(text) if j < 0 else j + 1
+            else:
+                j = _quoted_end(text, i)
             body = text[i:j]
-            out.append(ch + " " * (len(body) - 2) + body[-1] if ch == "'" and len(body) >= 2 else body)
-            i = j
-        elif ch == "[":
-            j = text.find("]", i)
-            j = len(text) if j < 0 else j + 1
-            out.append(text[i:j])
+            out.append(ch + " " * (len(body) - 2) + body[-1] if len(body) >= 2 else body)
             i = j
         else:
             out.append(ch)
@@ -411,9 +419,13 @@ def _conflict_columns(raw: str | None) -> tuple[str, ...] | None:
     return tuple(c.strip().strip('"`[]').lower() for c in raw.split(",") if c.strip())
 
 
-def _statement_upserts(stmt: str, relpath: str, line: int) -> list[UpsertSite]:
+def _statement_upserts(
+    stmt: str, original: str, relpath: str, line: int
+) -> list[UpsertSite]:
     """One site per ON CONFLICT clause of an INSERT (SQLite allows several).
 
+    ``stmt`` is the masked statement (see ``_mask_sql``); ``original`` is the
+    same span unmasked, used only to read identifier text back.
     A clause whose target cannot be parsed (e.g. ``ON CONFLICT(lower(x))``) is
     reported with ``table=None`` even when a sibling clause parses.
     """
@@ -430,7 +442,12 @@ def _statement_upserts(stmt: str, relpath: str, line: int) -> list[UpsertSite]:
             sites.append(UpsertSite(relpath, line, None, None))
         else:
             sites.append(
-                UpsertSite(relpath, line, _insert_target(insert), _conflict_columns(upsert.group(1)))
+                UpsertSite(
+                    relpath,
+                    line,
+                    _insert_target(insert, original),
+                    _conflict_columns(_span_text(original, upsert, 1)),
+                )
             )
     return sites
 
@@ -460,8 +477,14 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
         covered.update(id(child) for child in ast.walk(node))
         if "CONFLICT" not in text.upper():
             continue
-        for stmt in _mask_sql(text).split(";"):
-            sites.extend(_statement_upserts(stmt, relpath, getattr(node, "lineno", 1)))
+        masked = _mask_sql(text)
+        start = 0
+        for stmt in masked.split(";"):
+            end = start + len(stmt)
+            sites.extend(
+                _statement_upserts(stmt, text[start:end], relpath, getattr(node, "lineno", 1))
+            )
+            start = end + 1
     return sites
 
 
