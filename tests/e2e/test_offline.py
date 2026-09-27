@@ -2623,11 +2623,38 @@ class OfflineConceptTests(unittest.TestCase):
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")
         _wait_content_contains(page, CONCEPT_UNVISITED_NAME)
+        _wait_offline_banner(page)
+        self.assertGreater(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const root = ctx && ctx.root;
+                    return root
+                        ? root.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length
+                        : 0;
+                }"""
+            ),
+            0,
+        )
         page.locator('.prks-research-row[href$="%s"]' % unvisited).click()
         _wait_offline_unavailable(page)
         body = _content_text(page)
         self.assertIn("not available offline", body)
         self.assertNotIn("Concept not found", body)
+        # Retained Concepts host: prior index provenance banner must not survive
+        # the unavailable detail outcome (coordinator clear via prependBanner null).
+        self.assertEqual(
+            page.evaluate(
+                """() => {
+                    const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+                    const root = ctx && ctx.root;
+                    return root
+                        ? root.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length
+                        : -1;
+                }"""
+            ),
+            0,
+        )
         # The Concept that WAS opened online still works from cache. Reload
         # first so this starts from a clean offline boot rather than inheriting
         # the previous route's in-flight failed request state.

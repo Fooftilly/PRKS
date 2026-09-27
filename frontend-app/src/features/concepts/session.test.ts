@@ -370,75 +370,33 @@ describe('Concepts route bridge', () => {
     expect(routeHost.querySelector('[data-prks-concepts-index-view]')).toBeNull()
   })
 
-  it('retained Concepts host clears stale offline provenance on unavailable', async () => {
-    // Coordinator: banner is a contentDiv sibling of the Vue host (prepend),
-    // so sameConceptsWorkspace reuse does not wipe it. Unavailable/not-found
-    // outcomes must call prksOfflinePrependBanner(contentDiv, null).
+  it('presenter leaves contentDiv sibling provenance banners alone', async () => {
+    // Banner clear is owned by app.js prksOfflinePrependBanner on unavailable /
+    // not-found (see coordinator E2E). Vue present must not wipe contentDiv.
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''
     window.prksPaintScopeHost = () => {}
     window.prksRefreshIcons = () => {}
-    const cleanups = new Set<() => void>()
-    const pane: {
-      tabId: string
-      isCurrent: () => boolean
-      registerCleanup: (fn: () => void) => () => void
-      [CONCEPTS_RETAIN_SURFACE_KEY]?: boolean
-    } = {
-      tabId: 'banner-coord',
-      isCurrent: () => true,
-      registerCleanup(fn: () => void) {
-        cleanups.add(fn)
-        return () => {
-          cleanups.delete(fn)
-        }
-      },
-    }
+    const pane = owner('banner-sibling')
     const contentDiv = document.createElement('div')
     document.body.appendChild(contentDiv)
     const banner = document.createElement('div')
-    banner.className = 'prks-offline-banner'
     banner.setAttribute('data-prks-role', 'offline-provenance-banner')
     banner.textContent = 'Offline · cached earlier'
     contentDiv.appendChild(banner)
     const routeHost = document.createElement('div')
     routeHost.setAttribute('data-prks-vue-route-host', 'true')
     contentDiv.appendChild(routeHost)
-    presentConceptsIndex({
-      owner: pane,
-      host: routeHost,
-      items: [{ id: 'C1', name: 'Alpha', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 }],
-      generation: 1,
-    })
-    await nextTick()
-    expect(contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length).toBe(1)
-
-    pane[CONCEPTS_RETAIN_SURFACE_KEY] = true
-    const beginRouteCleanups = Array.from(cleanups)
-    cleanups.clear()
-    beginRouteCleanups.forEach((fn) => fn())
-    pane[CONCEPTS_RETAIN_SURFACE_KEY] = false
-
-    expect(contentDiv.querySelector(':scope > [data-prks-vue-route-host]')).toBe(routeHost)
-    // Without a contentDiv wipe the sibling banner would survive; prove that,
-    // then apply the coordinator clear used for unavailable outcomes.
-    expect(contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length).toBe(1)
     presentConceptDetail({
       owner: pane,
       host: routeHost,
       availability: 'unavailable',
       conceptId: 'missing',
-      generation: 2,
+      generation: 1,
     })
     await nextTick()
-    // prksOfflinePrependBanner(contentDiv, null) — clear-only path.
-    contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').forEach((el) => {
-      el.remove()
-    })
-    expect(contentDiv.querySelector(':scope > [data-prks-vue-route-host]')).toBe(routeHost)
-    expect(contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length).toBe(0)
+    expect(contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length).toBe(1)
     expect(routeHost.querySelector('[data-prks-role="offline-unavailable"]')).not.toBeNull()
-    expect(routeHost.textContent).toContain('Concept not available offline')
   })
 
   it('unmounts on dismiss without affecting another owner', () => {
