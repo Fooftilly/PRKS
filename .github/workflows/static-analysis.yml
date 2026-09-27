@@ -188,13 +188,15 @@ jobs:
           run_storybook=false
 
           # Capture git diff before matching. Do not pipe it into grep:
-          # under pipefail a SIGPIPE can look like "no match". grep status
-          # 1 is "no match"; any other grep failure fails the step.
+          # under pipefail a SIGPIPE can look like "no match". -z keeps
+          # pathnames unquoted, so a name like Café.stories.ts cannot hide
+          # behind a leading quote. grep -z status 1 is "no match"; any
+          # other grep failure fails the step.
           apply_successful_diff() {
             local left="$1"
             local diff_file diff_status grep_status
             diff_file="$(mktemp)"
-            if git diff --name-only "$left" HEAD >"$diff_file"; then
+            if git diff -z --name-only "$left" HEAD >"$diff_file"; then
               diff_status=0
             else
               diff_status=$?
@@ -204,7 +206,7 @@ jobs:
               rm -f "$diff_file"
               exit 1
             fi
-            if grep -Eq "$pattern" "$diff_file"; then
+            if grep -zEq "$pattern" "$diff_file"; then
               run_storybook=true
             else
               grep_status=$?
