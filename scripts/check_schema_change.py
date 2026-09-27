@@ -87,12 +87,36 @@ EMPTY_TREE_SHA = _git_rev.EMPTY_TREE_SHA
 sanitize_git_revision = _git_rev.sanitize_git_revision
 read_file_at_revision = _git_rev.read_file_at_revision
 
+# One SQL identifier: "double" / `back` / [bracket] quoted (doubled quote
+# escapes), or bare. Quoted names are matched whole, so "works backup" is never
+# read as its canonical-looking prefix.
+_IDENT = r'(?:"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_]*)'
 _INSERT_RE = re.compile(
     r"\bINSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO\s+"
-    r"(?:[\"`\[]?[A-Za-z_][A-Za-z0-9_]*[\"`\]]?\s*\.\s*)?"  # optional schema. prefix
-    r"[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"`\]]?",
+    rf"(?:({_IDENT})\s*\.\s*)?({_IDENT})",
     re.IGNORECASE,
 )
+
+
+def _unquote_ident(raw: str) -> str:
+    if raw[:1] in "\"`" and raw[-1:] == raw[:1]:
+        return raw[1:-1].replace(raw[0] * 2, raw[0])
+    if raw[:1] == "[" and raw[-1:] == "]":
+        return raw[1:-1]
+    return raw
+
+
+def _insert_target(match: re.Match[str]) -> str:
+    """Lower-cased INSERT target (SQLite identifiers are case-insensitive).
+
+    Only the ``main`` schema is canonical; ``temp.works`` and attached-database
+    tables keep their qualifier so they never match a canonical table.
+    """
+    table = _unquote_ident(match.group(2)).lower()
+    schema = _unquote_ident(match.group(1)).lower() if match.group(1) else "main"
+    return table if schema == "main" else f"{schema}.{table}"
+
+
 # Any ON CONFLICT that is not a constraint resolution clause; inside an INSERT
 # it is an upsert even when _UPSERT_RE cannot parse its target.
 _ANY_UPSERT_RE = re.compile(
@@ -356,6 +380,30 @@ def _conflict_columns(raw: str | None) -> tuple[str, ...] | None:
     return tuple(c.strip().strip('"`[]').lower() for c in raw.split(",") if c.strip())
 
 
+def _statement_upserts(stmt: str, relpath: str, line: int) -> list[UpsertSite]:
+    """One site per ON CONFLICT clause of an INSERT (SQLite allows several).
+
+    A clause whose target cannot be parsed (e.g. ``ON CONFLICT(lower(x))``) is
+    reported with ``table=None`` even when a sibling clause parses.
+    """
+    insert = _INSERT_RE.search(stmt)
+    sites: list[UpsertSite] = []
+    for clause in _ANY_UPSERT_RE.finditer(stmt):
+        if insert is None or clause.start() < insert.end():
+            # No INSERT before it: a constructed table name, or not an upsert.
+            if insert is None and _UPSERT_RE.match(stmt, clause.start()):
+                sites.append(UpsertSite(relpath, line, None, None))
+            continue
+        upsert = _UPSERT_RE.match(stmt, clause.start())
+        if upsert is None:
+            sites.append(UpsertSite(relpath, line, None, None))
+        else:
+            sites.append(
+                UpsertSite(relpath, line, _insert_target(insert), _conflict_columns(upsert.group(1)))
+            )
+    return sites
+
+
 def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
     """``INSERT INTO t ... ON CONFLICT[(cols)] DO`` in backend SQL strings.
 
@@ -382,18 +430,7 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
         if "CONFLICT" not in text.upper():
             continue
         for stmt in text.split(";"):
-            upsert = _UPSERT_RE.search(stmt)
-            if upsert is None:
-                if _INSERT_RE.search(stmt) and _ANY_UPSERT_RE.search(stmt):
-                    # e.g. an expression target ON CONFLICT(lower(x)): report, never drop.
-                    sites.append(UpsertSite(relpath, getattr(node, "lineno", 1), None, None))
-                continue
-            insert = _INSERT_RE.search(stmt, 0, upsert.start())
-            # SQLite identifiers are case-insensitive: compare lower-cased.
-            table = insert.group(1).lower() if insert is not None else None
-            sites.append(
-                UpsertSite(relpath, getattr(node, "lineno", 1), table, _conflict_columns(upsert.group(1)))
-            )
+            sites.extend(_statement_upserts(stmt, relpath, getattr(node, "lineno", 1)))
     return sites
 
 

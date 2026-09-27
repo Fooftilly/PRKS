@@ -408,6 +408,38 @@ class GateRepoTests(unittest.TestCase):
             self.findings()
         self.assertFalse(target.exists())
 
+    def test_every_on_conflict_clause_is_checked(self):
+        self.write(
+            {
+                "backend/multi.py": (
+                    "SQL = ('INSERT INTO works (id) VALUES (?) '\n"
+                    "       'ON CONFLICT(lower(title)) DO NOTHING ON CONFLICT(id) DO NOTHING')\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes({"works": "fixture"}), ["SCHEMA-GATE-007"])
+
+    def test_quoted_table_name_is_matched_whole(self):
+        self.write(
+            {
+                "backend/backup.py": (
+                    "SQL = 'INSERT INTO \"works backup\" (id) VALUES (?) "
+                    "ON CONFLICT(title) DO NOTHING'\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
+    def test_temp_schema_table_is_not_the_canonical_table(self):
+        self.write(
+            {
+                "backend/tmp.py": (
+                    "SQL = 'INSERT INTO temp.works (id) VALUES (?) ON CONFLICT(title) DO NOTHING'\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \
