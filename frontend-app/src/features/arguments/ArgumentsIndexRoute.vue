@@ -3,6 +3,7 @@ import { computed, inject, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { argumentIntentsKey } from './intents'
+import { useArgumentPendingAction } from './pending-action'
 import { argumentKindUi, filterArgumentIndexItems, normalizeArgumentSearchQuery } from './match'
 import ArgumentRow from './ArgumentRow.vue'
 import type { ArgumentIndexProjection } from './projection'
@@ -45,7 +46,7 @@ const {
 })
 
 const scopeLabel = computed(() => kindUi.value.plural)
-const pending = ref<string | null>(null)
+const { actionBusy, actionBlocked, withBusy } = useArgumentPendingAction()
 
 /** Header keeps both creates. An empty state exposes one. */
 const emptyActionKind = computed((): ArgumentKind => {
@@ -60,24 +61,6 @@ function tabSelected(kind: 'all' | ArgumentKind): boolean {
 
 function onFilter(kind: 'all' | ArgumentKind): void {
   intents?.filterKind(kind)
-}
-
-function actionBusy(key: string): boolean {
-  return pending.value === key
-}
-
-function actionBlocked(key: string): boolean {
-  return pending.value != null && pending.value !== key
-}
-
-async function withBusy(key: string, action: () => Promise<void>): Promise<void> {
-  if (pending.value) return
-  pending.value = key
-  try {
-    await action()
-  } finally {
-    if (pending.value === key) pending.value = null
-  }
 }
 
 function onCreate(kind: ArgumentKind): void {

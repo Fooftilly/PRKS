@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import { argumentIntentsKey } from './intents'
+import { useArgumentPendingAction } from './pending-action'
 import { defaultArgumentVerdict } from './match'
 import { researchMarkdownHtml } from './markdown'
 import { draftFromArgument, type ArgumentDetailProjection } from './projection'
@@ -35,8 +36,8 @@ const mentionsHeadHost = ref<HTMLElement | null>(null)
 const mentionsHost = ref<HTMLElement | null>(null)
 
 const editing = ref(false)
-const pending = ref<string | null>(null)
 const draft = ref<ArgumentEditorDraft | null>(null)
+const { actionBusy, actionBlocked, withBusy } = useArgumentPendingAction()
 
 const availability = computed(() => props.projection.availability)
 const argument = computed(() => props.projection.argument)
@@ -174,24 +175,6 @@ function leaveEdit(): void {
   editing.value = false
   draft.value = null
   intents?.cancelEdit()
-}
-
-function actionBusy(key: string): boolean {
-  return pending.value === key
-}
-
-function actionBlocked(key: string): boolean {
-  return pending.value != null && pending.value !== key
-}
-
-async function withBusy(key: string, action: () => Promise<void>): Promise<void> {
-  if (pending.value) return
-  pending.value = key
-  try {
-    await action()
-  } finally {
-    if (pending.value === key) pending.value = null
-  }
 }
 
 function verdictChoices(selected: string): { id: string; label: string }[] {

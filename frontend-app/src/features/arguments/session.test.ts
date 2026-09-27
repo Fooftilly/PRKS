@@ -70,6 +70,46 @@ function paintHelpers(): void {
     `<a class="prks-list-row prks-research-row" href="${opts.href}"><span class="prks-research-row__title">${opts.title}</span></a>`
 }
 
+function coordinationOwner() {
+  const cleanups = new Set<() => void>()
+  const pane: {
+    tabId: string
+    isCurrent: () => boolean
+    registerCleanup: (fn: () => void) => () => void
+    [ARGUMENTS_RETAIN_SURFACE_KEY]?: boolean
+  } = {
+    tabId: 'coord',
+    isCurrent: () => true,
+    registerCleanup(fn: () => void) {
+      cleanups.add(fn)
+      return () => {
+        cleanups.delete(fn)
+      }
+    },
+  }
+  return { cleanups, pane }
+}
+
+function presentBaseDetail(el: HTMLElement, pane: ReturnType<typeof owner>, generation = 1): void {
+  presentArgumentDetail({
+    owner: pane,
+    host: el,
+    argument: {
+      id: 'A1',
+      name: 'Base',
+      kind: 'argument',
+      main_text: 'Body',
+      targets: [],
+      sources: [],
+      responses: [],
+      mentions: [],
+      verdicts: [{ id: 'supports', label: 'Supports' }],
+    },
+    argumentId: 'A1',
+    generation,
+  })
+}
+
 const rows = [
   {
     id: 'A1',
@@ -251,23 +291,7 @@ describe('Arguments route bridge', () => {
     window.prksTabContextOwnsEntityRoute = () => true
     const pane = owner()
     const el = host()
-    presentArgumentDetail({
-      owner: pane,
-      host: el,
-      argument: {
-        id: 'A1',
-        name: 'Base',
-        kind: 'argument',
-        main_text: 'Body',
-        targets: [],
-        sources: [],
-        responses: [],
-        mentions: [],
-        verdicts: [{ id: 'supports', label: 'Supports' }],
-      },
-      argumentId: 'A1',
-      generation: 1,
-    })
+    presentBaseDetail(el, pane)
     el.querySelector<HTMLButtonElement>('#prks-arg-edit')?.click()
     await nextTick()
     await Promise.resolve()
@@ -285,22 +309,7 @@ describe('Arguments route bridge', () => {
     await Promise.resolve()
     await nextTick()
     expect(el.querySelector('#prks-arg-form')).not.toBeNull()
-    presentArgumentDetail({
-      owner: pane,
-      host: el,
-      argument: {
-        id: 'A1',
-        name: 'Base',
-        kind: 'argument',
-        main_text: 'Body',
-        targets: [],
-        sources: [],
-        responses: [],
-        mentions: [],
-      },
-      argumentId: 'A1',
-      generation: 2,
-    })
+    presentBaseDetail(el, pane, 2)
     await nextTick()
     expect(el.querySelector('#prks-arg-form')).toBeNull()
     expect(el.querySelector('#prks-arg-edit')).not.toBeNull()
@@ -308,22 +317,7 @@ describe('Arguments route bridge', () => {
 
   it('keeps index search across a retained same-route refresh and clears on leave', async () => {
     paintHelpers()
-    const cleanups = new Set<() => void>()
-    const pane: {
-      tabId: string
-      isCurrent: () => boolean
-      registerCleanup: (fn: () => void) => () => void
-      [ARGUMENTS_RETAIN_SURFACE_KEY]?: boolean
-    } = {
-      tabId: 'coord',
-      isCurrent: () => true,
-      registerCleanup(fn: () => void) {
-        cleanups.add(fn)
-        return () => {
-          cleanups.delete(fn)
-        }
-      },
-    }
+    const { cleanups, pane } = coordinationOwner()
     const routeHost = host()
     presentArgumentsIndex({ owner: pane, host: routeHost, items: rows, generation: 1 })
     const search = routeHost.querySelector<HTMLInputElement>('#prks-argument-search')
@@ -353,22 +347,7 @@ describe('Arguments route bridge', () => {
 
   it('unmounts a failed retained refresh before the retry view and on later leave', async () => {
     paintHelpers()
-    const cleanups = new Set<() => void>()
-    const pane: {
-      tabId: string
-      isCurrent: () => boolean
-      registerCleanup: (fn: () => void) => () => void
-      [ARGUMENTS_RETAIN_SURFACE_KEY]?: boolean
-    } = {
-      tabId: 'coord',
-      isCurrent: () => true,
-      registerCleanup(fn: () => void) {
-        cleanups.add(fn)
-        return () => {
-          cleanups.delete(fn)
-        }
-      },
-    }
+    const { cleanups, pane } = coordinationOwner()
     const contentDiv = document.createElement('div')
     document.body.appendChild(contentDiv)
     const routeHost = document.createElement('div')
@@ -435,23 +414,7 @@ describe('Arguments route bridge', () => {
     window.prksAlertDialog = vi.fn(async () => {})
     const pane = owner()
     const el = host()
-    presentArgumentDetail({
-      owner: pane,
-      host: el,
-      argument: {
-        id: 'A1',
-        name: 'Base',
-        kind: 'argument',
-        main_text: 'Body',
-        targets: [],
-        sources: [],
-        responses: [],
-        mentions: [],
-        verdicts: [{ id: 'supports', label: 'Supports' }],
-      },
-      argumentId: 'A1',
-      generation: 1,
-    })
+    presentBaseDetail(el, pane)
     el.querySelector<HTMLButtonElement>('#prks-arg-edit')?.click()
     await nextTick()
     const editBtn = el.querySelector<HTMLButtonElement>('#prks-arg-edit')
