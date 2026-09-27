@@ -26,8 +26,9 @@ Structural (always, against the working tree):
   not in the reviewed ``PK_REGISTRY_ALLOWLIST`` below.
 - SCHEMA-GATE-004: a ``_CURRENT_TABLE_PKS`` entry disagrees with the primary
   key that ``db_schema.sql`` actually creates, or names a missing table.
-- SCHEMA-GATE-005: an ``ON CONFLICT(cols)`` target on a registered table is
-  not its registered primary key.
+- SCHEMA-GATE-005: an explicit ``ON CONFLICT(cols)`` target on a canonical
+  table repeats a column or is not its primary key (the registered one, or the
+  ``db_schema.sql`` one for unregistered / allowlisted tables).
 - SCHEMA-GATE-006: a ``PK_REGISTRY_ALLOWLIST`` entry is stale (the table is
   now registered, no longer upserted, or no longer canonical).
 - SCHEMA-GATE-007: an ``ON CONFLICT ... DO`` upsert whose ``INSERT INTO`` table
@@ -59,7 +60,8 @@ POLICY = 'backend/AGENTS.md "Database schema changes"'
 # Canonical tables that are upserted with ON CONFLICT but deliberately not in
 # _CURRENT_TABLE_PKS. Registering a table makes startup reject libraries whose
 # PK drifted, so adding one is a reviewed database change, not a lint fix.
-# Keep entries narrow (one table, one reason); never add a wildcard. Entries
+# Keep entries narrow (one table, one reason); never add a wildcard. An entry
+# waives only SCHEMA-GATE-003; explicit conflict targets are still checked. Entries
 # that stop applying fail SCHEMA-GATE-006 so the list only shrinks.
 PK_REGISTRY_ALLOWLIST: dict[str, str] = {
     "app_settings": "pre-#190 key/value upsert; PK validation not yet registered",
@@ -539,52 +541,61 @@ def _missing_registry_finding(site: UpsertSite, schema_pk: tuple[str, ...]) -> F
     )
 
 
+def _unresolved_upsert_finding(site: UpsertSite) -> Finding:
+    return Finding(
+        "SCHEMA-GATE-007",
+        site.path,
+        site.line,
+        "ON CONFLICT upsert whose INSERT INTO table cannot be resolved statically",
+        (
+            "keep INSERT INTO <literal table> and its ON CONFLICT clause in one "
+            "string, concatenation or f-string so the PK registry check can see it"
+        ),
+    )
+
+
+def _conflict_target_finding(
+    site: UpsertSite, pk: tuple[str, ...], registered: bool
+) -> Finding | None:
+    """SCHEMA-GATE-005 when an explicit target is not exactly ``pk`` (order-free)."""
+    target = site.target
+    if target is None:
+        return None
+    if len(set(target)) == len(target) and set(target) == {c.lower() for c in pk}:
+        return None
+    source = "registered" if registered else f"canonical ({SCHEMA_RELPATH})"
+    return Finding(
+        "SCHEMA-GATE-005",
+        site.path,
+        site.line,
+        f"ON CONFLICT{target!r} on {site.table} does not match its {source} primary key {pk!r}",
+        "target the primary key, or change the key (and registry) with a migration",
+    )
+
+
 def _upsert_findings(
     schema_pks: dict[str, tuple[str, ...]],
     registry: dict[str, tuple[str, ...]],
     sites: list[UpsertSite],
     allow: dict[str, str],
 ) -> list[Finding]:
+    """003/005/007 per upsert site. The allowlist waives only 003 (missing registry)."""
     findings: list[Finding] = []
     reported: set[str] = set(allow)
     for site in sorted(sites, key=lambda s: (s.path, s.line)):
         if site.table is None:
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-007",
-                    site.path,
-                    site.line,
-                    "ON CONFLICT upsert whose INSERT INTO table cannot be resolved statically",
-                    (
-                        "keep INSERT INTO <literal table> and its ON CONFLICT clause in one "
-                        "string, concatenation or f-string so the PK registry check can see it"
-                    ),
-                )
-            )
+            findings.append(_unresolved_upsert_finding(site))
             continue
         if site.table not in schema_pks:
             continue  # derived/disposable index DBs are out of scope
-        pk = registry.get(site.table)
-        if pk is None:
-            if site.table not in reported:
-                reported.add(site.table)
-                findings.append(_missing_registry_finding(site, schema_pks[site.table]))
-        elif site.target is not None and (
-            len(set(site.target)) != len(site.target)
-            or set(site.target) != {c.lower() for c in pk}
-        ):
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-005",
-                    site.path,
-                    site.line,
-                    (
-                        f"ON CONFLICT{site.target!r} on {site.table} does not match "
-                        f"its registered primary key {pk!r}"
-                    ),
-                    "target the registered primary key, or update the registry with a migration",
-                )
-            )
+        registered = site.table in registry
+        if not registered and site.table not in reported:
+            reported.add(site.table)
+            findings.append(_missing_registry_finding(site, schema_pks[site.table]))
+        pk = registry[site.table] if registered else schema_pks[site.table]
+        target_finding = _conflict_target_finding(site, pk, registered)
+        if target_finding is not None:
+            findings.append(target_finding)
     return findings
 
 

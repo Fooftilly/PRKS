@@ -322,6 +322,38 @@ class GateRepoTests(unittest.TestCase):
         self.assertEqual([f.code for f in stale], ["SCHEMA-GATE-006"])
         self.assertIn("no longer written with ON CONFLICT", stale[0].message)
 
+    def test_allowlisted_table_still_checks_explicit_conflict_target(self):
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA.replace(
+                    "CREATE TABLE IF NOT EXISTS works",
+                    "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);\n"
+                    "CREATE TABLE IF NOT EXISTS works",
+                ),
+                "backend/settings.py": (
+                    "SQL = ('INSERT INTO app_settings (key, value) VALUES (?, ?) '\n"
+                    "       'ON CONFLICT(key) DO UPDATE SET value = excluded.value')\n"
+                ),
+            }
+        )
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-qm", "app_settings")
+        self.base = _git(self.repo, "rev-parse", "HEAD").strip()
+        allow = {"app_settings": "legacy"}
+        self.assertEqual(self.codes(allow), [])
+        self.write(
+            {
+                "backend/settings.py": (
+                    "SQL = ('INSERT INTO app_settings (key, value) VALUES (?, ?) '\n"
+                    "       'ON CONFLICT(value) DO UPDATE SET value = excluded.value')\n"
+                )
+            }
+        )
+        findings = self.findings(allow)
+        self.assertEqual([f.code for f in findings], ["SCHEMA-GATE-005"])
+        self.assertIn("canonical", findings[0].message)
+        self.assertIn("('key',)", findings[0].message)
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \
