@@ -29,6 +29,17 @@ interface ConceptDetailPresentRequest {
   shell?: boolean
 }
 
+interface FolderLibraryPresentRequest {
+  owner: object
+  host: HTMLElement
+  contentRoot?: HTMLElement | null
+  availability?: 'ready' | 'unavailable'
+  folders?: unknown
+  offlineCached?: boolean
+  generation?: number
+  shell?: boolean
+}
+
 interface PrksPromptTextOptions {
   title: string
   message?: string
@@ -86,6 +97,40 @@ interface Window {
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
   prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
+  prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
+  prksVueDismissFolderLibrary?: (owner: object) => void
+  prksFolderLibraryTreeInnerHtml?: (list: unknown, filterQuery?: string) => string
+  prksFolderLibraryCatalogGlanceParts?: (folders: unknown) => Array<string | null>
+  prksPaintFolderLibraryGlance?: (host: HTMLElement, parts: unknown) => void
+  prksScheduleFolderLibraryGlance?: (root: ParentNode | HTMLElement) => void
+  prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
+  prksFolderLibraryExpandToggleInnerHtml?: () => string
+  prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
+  prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
+  prksRecentlyAddedDateLabel?: (createdAt: unknown) => string
+  prksRecentlyAddedWorkMatchesQuery?: (
+    work: unknown,
+    query: string,
+    foldersById: Map<string, unknown>,
+  ) => boolean
+  prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
+  prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
+  prksToggleFolderNode?: (folderId: string) => void
+  prksToggleAllFolderNodes?: () => void
+  prksOfflineRecentlyAddedFetch?: () => Promise<{
+    source?: string
+    value?: unknown
+  } | null>
+  prksResolveOfflineRecentlyAdded?: (offline: unknown) => unknown[] | null
+  prksEffectiveProjectionRows?: (rows: unknown[], domain: string) => unknown[]
+  prksOfflineDomainGeneration?: (domain: string) => unknown
+  prksRefreshPendingWorkMetadata?: () => Promise<void>
+  prksHideWorkThumbPreview?: () => void
+  prksReleaseWorkThumbPreview?: (root: ParentNode | null) => void
+  prksReleaseLazyWorkThumbs?: (root: ParentNode | null) => void
+  openModal?: (id: string) => void
+  __prksFolderDashboardState?: Record<string, unknown>
+  __prksRecentlyAddedDirty?: boolean
   prksCreateConceptFlow?: (
     initialName?: string,
     ownerOpts?: {
