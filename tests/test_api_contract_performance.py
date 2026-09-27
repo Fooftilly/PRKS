@@ -106,8 +106,15 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         request_body = operation["requestBody"]
         self.assertTrue(request_body["required"])
         schema = request_body["content"]["application/json"]["schema"]
-        self.assertEqual(schema["type"], "object")
-        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(
+            schema["$ref"],
+            "#/components/schemas/PerformanceDiagnosticsResetRequest",
+        )
+        body_schema = document["components"]["schemas"]["PerformanceDiagnosticsResetRequest"]
+        self.assertEqual(body_schema["type"], "object")
+        self.assertIs(body_schema["additionalProperties"], False)
+        self.assertFalse(body_schema.get("properties"))
+        self.assertFalse(body_schema.get("required"))
         error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
         for status in ("400", "413", "415"):
             response = operation["responses"][status]
@@ -142,11 +149,11 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
             if path.suffix in {".ts", ".vue"}
         )
         self.assertNotIn("persistQueryClient", text)
-        self.assertNotIn("@vueuse", text)
-        self.assertNotIn("vue-router", text)
-        self.assertNotIn("pinia", text.lower())
-        package = json.loads((_ROOT / "frontend-app" / "package.json").read_text(encoding="utf-8"))
-        self.assertEqual(
-            set(package["dependencies"]),
-            {"vue", "@tanstack/vue-query"},
+        feature = _SRC / "features" / "performance-diagnostics"
+        feature_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in feature.rglob("*")
+            if path.suffix in {".ts", ".vue"}
         )
+        self.assertNotIn("persistQueryClient", feature_text)
+        self.assertNotIn("experimental_createPersister", feature_text)

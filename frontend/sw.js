@@ -18,7 +18,7 @@
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
     // --repo fails if it drifts. Changing manifest bytes (vendor files or the
     // committed Vue bundle) retires old shell/static caches.
-    const DEPENDENCY_REVISION = 'e2d17be90af8';
+    const DEPENDENCY_REVISION = '54e622c20fb5';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';

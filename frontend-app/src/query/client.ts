@@ -9,6 +9,10 @@ import { prksQueryRetryDelay, prksQueryShouldRetry } from './retry'
  * Focus and reconnect do not refetch: PRKS is a local app, and the first
  * migrated surface (performance diagnostics) must keep its snapshot until
  * Refresh or Reset. Individual queries can still opt in later.
+ *
+ * networkMode is 'always'. Browser online/offline is only a hint in
+ * offline-runtime.js; a same-origin PRKS request must run so its success
+ * or failure stays authoritative. TanStack 'online' would pause that probe.
  */
 export function createPrksQueryClient(): QueryClient {
   return new QueryClient({
@@ -30,11 +34,11 @@ export function createPrksQueryClient(): QueryClient {
         gcTime: 5 * 60 * 1000,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
-        networkMode: 'online',
+        networkMode: 'always',
       },
       mutations: {
         retry: 0,
-        networkMode: 'online',
+        networkMode: 'always',
       },
     },
   })

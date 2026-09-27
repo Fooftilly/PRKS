@@ -54,7 +54,7 @@ from backend.research_index import (
 )
 from backend.research_network import ResearchError
 import backend.research_network as research_network
-from backend.api_contract.boundary import dump_response
+from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.openapi import (
     performance_diagnostics_openapi_document,
@@ -62,6 +62,7 @@ from backend.api_contract.openapi import (
 )
 from backend.api_contract.performance import (
     PerformanceDiagnosticsReset,
+    PerformanceDiagnosticsResetRequest,
     PerformanceSnapshot,
 )
 from backend.api_contract.positions import (
@@ -139,6 +140,8 @@ PRKS_TESTING_DEFAULT_PORT = 8070
 # Minimum uncompressed JSON size before gzip (Accept-Encoding: gzip).
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
 _PRKS_MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
+# Distinct from JSON null. _read_json_body already sent the error response.
+_JSON_BODY_REJECTED = object()
 
 # Get the path to the frontend directory
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -808,7 +811,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         types = self.headers.get_all("Content-Type") or []
         if len(types) != 1 or not json_content_type_allowed(types[0]):
             self._reject_request(415, "unsupported_media_type", "unsupported_media_type")
-            return None
+            return _JSON_BODY_REJECTED
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             return {}
@@ -816,25 +819,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             content_length = int(raw_length)
         except (TypeError, ValueError):
             self.send_json(400, {"error": "invalid Content-Length"})
-            return None
+            return _JSON_BODY_REJECTED
         if content_length < 0:
             self.send_json(400, {"error": "invalid Content-Length"})
-            return None
+            return _JSON_BODY_REJECTED
         if content_length > _PRKS_MAX_JSON_BODY_BYTES:
             self.send_json(413, {"error": "request_too_large"})
-            return None
+            return _JSON_BODY_REJECTED
         try:
             payload = self.rfile.read(content_length) if content_length else b""
         except Exception:
             self.send_json(400, {"error": "request_read_failed"})
-            return None
+            return _JSON_BODY_REJECTED
         if not payload:
             return {}
         try:
             return json.loads(payload)
         except json.JSONDecodeError:
             self.send_json(400, {"error": "invalid_json"})
-            return None
+            return _JSON_BODY_REJECTED
 
     def _parse_client_error_payload(self, data):
         return client_error_log_fields(data)
@@ -999,7 +1002,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self._handle_backup_stage(parsed_path)
                 return
             data = self._read_json_body()
-            if data is None:
+            if data is _JSON_BODY_REJECTED:
                 return
             with self._library_access(parsed_path):
                 self.handle_api_post(parsed_path, data)
@@ -1014,19 +1017,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if not self._validate_mutation_origin():
                 return
             data = self._read_json_body()
-            if data is None:
+            if data is _JSON_BODY_REJECTED:
                 return
             with self._library_access(parsed_path):
                 self.handle_api_patch(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
-    def handle_api_patch(self, parsed_path, data=None):
+    def handle_api_patch(self, parsed_path, data=_JSON_BODY_REJECTED):
         path = parsed_path.path
         try:
-            if data is None:
+            if data is _JSON_BODY_REJECTED:
                 data = self._read_json_body()
-                if data is None:
+                if data is _JSON_BODY_REJECTED:
                     return
             if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
                 pf_id = path.split('/')[-1]
@@ -1332,19 +1335,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if not self._validate_mutation_origin():
                 return
             data = self._read_json_body()
-            if data is None:
+            if data is _JSON_BODY_REJECTED:
                 return
             with self._library_access(parsed_path):
                 self.handle_api_put(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
-    def handle_api_put(self, parsed_path, data=None):
+    def handle_api_put(self, parsed_path, data=_JSON_BODY_REJECTED):
         path = parsed_path.path
         try:
-            if data is None:
+            if data is _JSON_BODY_REJECTED:
                 data = self._read_json_body()
-                if data is None:
+                if data is _JSON_BODY_REJECTED:
                     return
             parts = path.split('/')
             if (
@@ -2593,15 +2596,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def handle_api_post(self, parsed_path, data=None):
+    def handle_api_post(self, parsed_path, data=_JSON_BODY_REJECTED):
         path = parsed_path.path
         try:
             if path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
                 return
-            if data is None:
+            if data is _JSON_BODY_REJECTED:
                 data = self._read_json_body()
-                if data is None:
+                if data is _JSON_BODY_REJECTED:
                     return
             if path == '/api/sync/operations':
                 status, result = process_operation(db, data)
@@ -2652,6 +2655,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             if path == '/api/diagnostics/performance/reset':
+                _request, err = parse_request(PerformanceDiagnosticsResetRequest, data)
+                if err is not None:
+                    self.send_json(400, err)
+                    return
                 reset_performance()
                 self.send_json(
                     200,

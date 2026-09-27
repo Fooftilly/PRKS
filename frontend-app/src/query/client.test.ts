@@ -16,9 +16,9 @@ describe('createPrksQueryClient', () => {
     expect(queries?.gcTime).toBe(5 * 60 * 1000)
     expect(queries?.refetchOnWindowFocus).toBe(false)
     expect(queries?.refetchOnReconnect).toBe(false)
-    expect(queries?.networkMode).toBe('online')
+    expect(queries?.networkMode).toBe('always')
     expect(mutations?.retry).toBe(0)
-    expect(mutations?.networkMode).toBe('online')
+    expect(mutations?.networkMode).toBe('always')
   })
 
   it('shares one in-flight read and does not refetch fresh data', async () => {

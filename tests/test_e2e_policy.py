@@ -114,15 +114,35 @@ class AffectedMappingTests(unittest.TestCase):
         plan = policy.plan_ci_e2e([source, bundle])
         self.assertEqual(plan["mode"], "affected")
         self.assertEqual(plan["features"], ["settings", "smoke"])
-        rebuilt = policy.plan_ci_e2e([
-            source,
-            bundle,
-            "frontend/vue/BUILD-MANIFEST.json",
-            "frontend/vendor/DEPENDENCY-MANIFEST.json",
-            "frontend/sw.js",
-        ])
+        revision_diff = (
+            "diff --git a/frontend/sw.js b/frontend/sw.js\n"
+            "--- a/frontend/sw.js\n"
+            "+++ b/frontend/sw.js\n"
+            "@@ -21 +21 @@\n"
+            "-const DEPENDENCY_REVISION = 'aaaaaaaaaaaa';\n"
+            "+const DEPENDENCY_REVISION = 'bbbbbbbbbbbb';\n"
+        )
+        behavior_diff = revision_diff + "+self.addEventListener('fetch', function () {});\n"
+        rebuilt = policy.plan_ci_e2e(
+            [
+                source,
+                bundle,
+                "frontend/vue/BUILD-MANIFEST.json",
+                "frontend/vendor/DEPENDENCY-MANIFEST.json",
+                "frontend/sw.js",
+            ],
+            path_diffs={"frontend/sw.js": revision_diff},
+        )
         self.assertEqual(rebuilt["mode"], "affected")
         self.assertEqual(rebuilt["features"], ["settings", "smoke"])
+        unknown_sw = policy.plan_ci_e2e([source, bundle, "frontend/sw.js"])
+        self.assertEqual(unknown_sw["mode"], "full")
+        behavior = policy.plan_ci_e2e(
+            [source, bundle, "frontend/sw.js"],
+            path_diffs={"frontend/sw.js": behavior_diff},
+        )
+        self.assertEqual(behavior["mode"], "full")
+        self.assertIn("shared-frontend-core", behavior["reason"])
         bundle_only = policy.plan_ci_e2e([bundle])
         self.assertEqual(bundle_only["mode"], "full")
         self.assertTrue(bundle_only["run"])

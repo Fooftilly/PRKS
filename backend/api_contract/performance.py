@@ -80,6 +80,16 @@ class PerformanceSnapshot(BaseModel):
     counters: PerformanceCounters
 
 
+class PerformanceDiagnosticsResetRequest(BaseModel):
+    """POST /api/diagnostics/performance/reset request.
+
+    Empty object only. The JSON body exists so the request passes the body
+    gate; additional fields are not part of the contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class PerformanceDiagnosticsReset(BaseModel):
     """POST /api/diagnostics/performance/reset body."""
 

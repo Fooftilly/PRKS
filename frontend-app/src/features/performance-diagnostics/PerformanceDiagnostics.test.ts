@@ -1,4 +1,4 @@
-import { VueQueryPlugin } from '@tanstack/vue-query'
+import { VueQueryPlugin, onlineManager } from '@tanstack/vue-query'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { performanceSnapshotFixture } from '../../api/performance-diagnostics.test'
@@ -8,6 +8,7 @@ import PerformanceDiagnostics from './PerformanceDiagnostics.vue'
 
 afterEach(() => {
   resetPerformanceDiagnosticsActivationForTests()
+  onlineManager.setOnline(true)
   vi.unstubAllGlobals()
 })
 
@@ -149,6 +150,24 @@ describe('PerformanceDiagnostics', () => {
     expect(calls.filter((call) => call.startsWith('GET'))).toHaveLength(3)
     expect(window.prksResetRequestCoordinatorDiagnostics).toHaveBeenCalled()
     expect(wrapper.get('#prks-perf-status').text()).toBe('Measurements reset.')
+    wrapper.unmount()
+  })
+
+  it('still probes PRKS when TanStack OnlineManager is offline', async () => {
+    onlineManager.setOnline(false)
+    const calls = installFetch()
+    window.prksResetRequestCoordinatorDiagnostics = vi.fn()
+    const { wrapper } = mountDiagnostics()
+    activatePerformanceDiagnostics()
+    await flushPromises()
+    expect(calls).toEqual(['GET /api/diagnostics/performance'])
+    expect(wrapper.get('#prks-perf-summary').text()).toContain('API requests: 2')
+
+    await wrapper.get('#prks-perf-reset-btn').trigger('click')
+    await flushPromises()
+    expect(calls).toContain('POST /api/diagnostics/performance/reset')
+    expect(wrapper.get('#prks-perf-status').text()).toBe('Measurements reset.')
+    expect(window.prksResetRequestCoordinatorDiagnostics).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

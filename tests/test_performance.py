@@ -311,7 +311,9 @@ class TestPerformanceHTTP(unittest.TestCase):
             return e.code, e.read(), e.headers
 
     def _post(self, path, payload):
-        data = json.dumps(payload).encode("utf-8")
+        return self._post_raw(path, json.dumps(payload).encode("utf-8"))
+
+    def _post_raw(self, path, data):
         req = urllib.request.Request(self._base_url + path, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
         try:
@@ -361,6 +363,18 @@ class TestPerformanceHTTP(unittest.TestCase):
         self.assertEqual(after["requests"]["total"], 0)
         self.assertEqual(after["routes"], [])
         self.assertLessEqual(after["measured_for_seconds"], before["uptime_seconds"])
+
+    def test_reset_rejects_non_object_and_extra_fields(self):
+        self._get("/api/works")
+        before = self._snapshot()
+        self.assertGreaterEqual(before["requests"]["total"], 1)
+        for raw in (b"[]", b'"no"', b"1", b"null", b'{"unexpected":1}'):
+            status, payload = self._post_raw("/api/diagnostics/performance/reset", raw)
+            self.assertEqual(status, 400, raw)
+            self.assertEqual(payload.get("code"), "invalid_request", raw)
+        after = self._snapshot()
+        routes = {row["route"] for row in after["routes"]}
+        self.assertIn("/api/works", routes)
 
     def test_privacy_search_query_and_pdf_name(self):
         self._get("/api/search?q=" + SECRET_QUERY)

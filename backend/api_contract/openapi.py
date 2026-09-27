@@ -12,6 +12,7 @@ from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.performance import (
     PerformanceCounters,
     PerformanceDiagnosticsReset,
+    PerformanceDiagnosticsResetRequest,
     PerformanceRequestTotals,
     PerformanceRouteStat,
     PerformanceSnapshot,
@@ -280,6 +281,7 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
         PerformanceCounters,
         PerformanceSnapshot,
         PerformanceDiagnosticsReset,
+        PerformanceDiagnosticsResetRequest,
     ):
         raw = _schema(model)
         _merge_defs(schemas, raw)
@@ -300,7 +302,7 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
     # Same body-read refusals as Positions POST/PATCH: PRKSHandler._read_json_body.
     mutation_body_read_errors = {
         "400": _json_error(
-            "JSON body gate refusal (invalid Content-Length, unreadable body, or invalid JSON)."
+            "JSON body gate refusal, or a body that is not an empty object."
         ),
         "413": _json_error(
             "Request body larger than the JSON body limit (request_too_large)."
@@ -331,15 +333,9 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
                 "tags": ["diagnostics"],
                 "requestBody": {
                     "required": True,
-                    "description": (
-                        "Empty JSON object. The handler does not read fields; "
-                        "the body exists so the request passes the JSON body gate."
-                    ),
+                    "description": "Empty JSON object. Additional properties are rejected.",
                     "content": _json_content(
-                        {
-                            "type": "object",
-                            "additionalProperties": False,
-                        }
+                        {"$ref": "#/components/schemas/PerformanceDiagnosticsResetRequest"}
                     ),
                 },
                 "responses": {
