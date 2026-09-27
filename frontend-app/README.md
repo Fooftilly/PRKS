@@ -9,7 +9,7 @@ The Python process serves the committed production bundle:
 
 Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the bundle on a hidden `#prks-vue-root`. That app teleports Settings performance diagnostics into `#prks-settings-perf-root`. It is not a router and not a second workspace state model.
 
-The legacy PRKS router stays canonical. `src/route-surface/` is the owner-scoped bridge from a TabContext route instance into a Vue view. Route-local runtime cannot live on `window`. Generations are never compared across TabContexts. Global shell and navigation state belongs to the shell/router. Generic browser lifecycle and this PRKS route-instance lifecycle are different concerns.
+The legacy PRKS router stays canonical. `src/route-surface/` is the owner-scoped bridge from a TabContext route instance into a Vue view. Route-local runtime cannot live on `window`. Generations are never compared across TabContexts. Global shell and navigation state belongs to the shell/router. Generic browser lifecycle and this PRKS route-instance lifecycle are different concerns. Early presentation is feature-scoped: each feature registers its own presenter, and a pending request paints only on the host that stored it.
 
 ## Toolchain
 
@@ -32,7 +32,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 
 | Path | Role |
 | --- | --- |
-| `src/route-surface/` | Typed Vue route-instance lifecycle. Owner-scoped mount, generation, cleanup, and host-local early presentation. Not a router |
+| `src/route-surface/` | Typed Vue route-instance lifecycle. Owner-scoped mount, generation, cleanup, and feature-scoped host-local early presentation. Not a router |
 | `src/features/performance-diagnostics/` | Settings performance diagnostics |
 | `src/features/progress/` | Progress route, first route-surface consumer. Consumes the effective works-browse snapshot; not a Query cache |
 | `src/api/` | Typed PRKS API client used by feature services |

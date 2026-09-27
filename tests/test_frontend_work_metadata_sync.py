@@ -266,6 +266,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         present = app[app.index('function prksPresentVueProgress'):
                       app.index('function prksRenderRouteLoading')]
         self.assertIn('owner: ctx', present)
+        self.assertIn("feature: 'progress'", present)
         self.assertIn('host.__prksVueRouteRequest = request', present)
         self.assertNotIn('prksSyncSidebarActive', present)
         self.assertIn('prksVueDismissProgress(ctx)', app)

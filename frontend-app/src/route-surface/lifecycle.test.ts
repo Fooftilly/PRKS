@@ -7,6 +7,7 @@ import {
   presentRouteSurface,
   publishEarlyRouteRequests,
   readRouteSurface,
+  registerEarlyRoutePresenter,
   resetRouteSurfaceForTests,
   routeSurfaceGenerationCurrent,
   type RouteSurfaceOwner,
@@ -80,6 +81,20 @@ function paint(
 
 function stash(el: PendingHost, request: unknown): void {
   el[VUE_ROUTE_PENDING_KEY] = request
+}
+
+function claimProbe(feature: string): void {
+  registerEarlyRoutePresenter(feature, (request, storageHost) => {
+    const row = request as {
+      owner: RouteSurfaceOwner
+      host: HTMLElement
+      label: string
+      generation: number
+      ownsMainShell?: boolean
+    }
+    paint(row.owner, storageHost, row.label, row.generation, row.ownsMainShell === true)
+    return true
+  })
 }
 
 describe('route surface lifecycle', () => {
@@ -194,25 +209,126 @@ describe('route surface lifecycle', () => {
     const b = cleanupOwner()
     const hostA = host()
     const hostB = host()
-    stash(hostA, { owner: a, host: hostA, label: 'early-a', generation: 1, ownsMainShell: true })
-    stash(hostB, { owner: b, host: hostB, label: 'early-b', generation: 1, ownsMainShell: false })
-    publishEarlyRouteRequests(window, [
-      (request) => {
-        const row = request as {
-          owner: RouteSurfaceOwner
-          host: HTMLElement
-          label: string
-          generation: number
-          ownsMainShell: boolean
-        }
-        paint(row.owner, row.host, row.label, row.generation, row.ownsMainShell)
-      },
-    ])
+    stash(hostA, { feature: 'probe', owner: a, label: 'early-a', generation: 1, ownsMainShell: true })
+    stash(hostB, { feature: 'probe', owner: b, label: 'early-b', generation: 1, ownsMainShell: false })
+    claimProbe('probe')
     expect(hostA[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
     expect(hostB[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
     expect(hostA.querySelector('[data-probe="early-a"]')).not.toBeNull()
     expect(hostB.querySelector('[data-probe="early-b"]')).not.toBeNull()
     expect(hostA.querySelector('[data-probe="early-b"]')).toBeNull()
+  })
+
+  it.each([
+    ['alpha', 'beta'],
+    ['beta', 'alpha'],
+  ])('registering %s first leaves the other feature pending', (first, second) => {
+    const firstOwner = cleanupOwner()
+    const secondOwner = cleanupOwner()
+    const hostA = host()
+    const hostB = host()
+    const firstRequest = {
+      feature: first,
+      owner: firstOwner,
+      label: first,
+      generation: 1,
+      ownsMainShell: false,
+    }
+    const secondRequest = {
+      feature: second,
+      owner: secondOwner,
+      label: second,
+      generation: 1,
+      ownsMainShell: false,
+    }
+    stash(hostA, firstRequest)
+    stash(hostB, secondRequest)
+    let calls = 0
+    registerEarlyRoutePresenter(first, (request, storageHost) => {
+      calls += 1
+      const row = request as { feature: string; owner: RouteSurfaceOwner; label: string; generation: number }
+      expect(row.feature).toBe(first)
+      paint(row.owner, storageHost, row.label, row.generation)
+      return true
+    })
+    expect(calls).toBe(1)
+    expect(hostA[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
+    expect(hostA.querySelector(`[data-probe="${first}"]`)).not.toBeNull()
+    expect(hostB[VUE_ROUTE_PENDING_KEY]).toBe(secondRequest)
+    expect(hostB.querySelector('[data-probe]')).toBeNull()
+    registerEarlyRoutePresenter(second, (request, storageHost) => {
+      const row = request as { owner: RouteSurfaceOwner; label: string; generation: number }
+      paint(row.owner, storageHost, row.label, row.generation)
+      return true
+    })
+    expect(hostB[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
+    expect(hostB.querySelector(`[data-probe="${second}"]`)).not.toBeNull()
+    expect(hostA.querySelector(`[data-probe="${first}"]`)).not.toBeNull()
+    expect(hostA.querySelector(`[data-probe="${second}"]`)).toBeNull()
+  })
+
+  it('paints the storage host when the payload names another host', () => {
+    const hostA = host()
+    const hostB = host()
+    const pane = cleanupOwner()
+    stash(hostA, {
+      feature: 'probe',
+      owner: pane,
+      host: hostB,
+      label: 'affinity',
+      generation: 1,
+      ownsMainShell: false,
+    })
+    registerEarlyRoutePresenter('probe', (request, storageHost) => {
+      const row = request as { host: HTMLElement; owner: RouteSurfaceOwner; label: string; generation: number }
+      expect(storageHost).toBe(hostA)
+      expect(row.host).toBe(hostA)
+      paint(row.owner, row.host, row.label, row.generation)
+      return true
+    })
+    expect(hostA.querySelector('[data-probe="affinity"]')).not.toBeNull()
+    expect(hostB.querySelector('[data-probe]')).toBeNull()
+    expect(hostB[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
+  })
+
+  it('does not delete an early request an unrelated presenter did not claim', () => {
+    const pane = cleanupOwner()
+    const el = host()
+    const pending = { feature: 'alpha', owner: pane, label: 'alpha', generation: 1 }
+    stash(el, pending)
+    let calls = 0
+    registerEarlyRoutePresenter('gamma', () => {
+      calls += 1
+      return true
+    })
+    expect(calls).toBe(0)
+    expect(el[VUE_ROUTE_PENDING_KEY]).toBe(pending)
+    expect(el.querySelector('[data-probe]')).toBeNull()
+    registerEarlyRoutePresenter('alpha', () => false)
+    expect(el[VUE_ROUTE_PENDING_KEY]).toBe(pending)
+  })
+
+  it('clears a claimed slot once and leaves every other slot', () => {
+    const alpha = cleanupOwner()
+    const beta = cleanupOwner()
+    const hostA = host()
+    const hostB = host()
+    const betaRequest = { feature: 'beta', owner: beta, label: 'beta', generation: 1 }
+    stash(hostA, { feature: 'alpha', owner: alpha, label: 'alpha', generation: 1 })
+    stash(hostB, betaRequest)
+    let calls = 0
+    registerEarlyRoutePresenter('alpha', (request, storageHost) => {
+      calls += 1
+      const row = request as { owner: RouteSurfaceOwner; label: string; generation: number }
+      paint(row.owner, storageHost, row.label, row.generation)
+      return true
+    })
+    publishEarlyRouteRequests(window)
+    expect(calls).toBe(1)
+    expect(hostA[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
+    expect(hostA.querySelector('[data-probe="alpha"]')).not.toBeNull()
+    expect(hostB[VUE_ROUTE_PENDING_KEY]).toBe(betaRequest)
+    expect(hostB.querySelector('[data-probe]')).toBeNull()
   })
 
   it('does not paint a stale early request after its owner has left', () => {
@@ -222,46 +338,40 @@ describe('route surface lifecycle', () => {
     const stayingHost = host()
     paint(left, leftHost, 'gone', 3)
     dismissRouteSurface(left)
-    stash(leftHost, { owner: left, host: leftHost, label: 'late', generation: 3, ownsMainShell: true })
+    stash(leftHost, { feature: 'probe', owner: left, label: 'late', generation: 3, ownsMainShell: true })
     stash(stayingHost, {
+      feature: 'probe',
       owner: staying,
-      host: stayingHost,
       label: 'stay',
       generation: 1,
       ownsMainShell: false,
     })
-    publishEarlyRouteRequests(window, [
-      (request) => {
-        const row = request as {
-          owner: RouteSurfaceOwner
-          host: HTMLElement
-          label: string
-          generation: number
-          ownsMainShell: boolean
-        }
-        paint(row.owner, row.host, row.label, row.generation, row.ownsMainShell)
-      },
-    ])
+    claimProbe('probe')
     expect(leftHost.querySelector('[data-probe]')).toBeNull()
+    expect(leftHost[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
     expect(stayingHost.querySelector('[data-probe="stay"]')).not.toBeNull()
+    expect(stayingHost[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
+  })
 
-    const detached = host()
-    const owner = cleanupOwner()
-    stash(detached, { owner, host: detached, label: 'detached', generation: 1, ownsMainShell: false })
-    detached.remove()
-    const pending = detached[VUE_ROUTE_PENDING_KEY]
-    delete detached[VUE_ROUTE_PENDING_KEY]
-    const row = pending as {
-      owner: RouteSurfaceOwner
-      host: HTMLElement
-      label: string
-      generation: number
-      ownsMainShell: boolean
-    }
-    expect(paint(row.owner, row.host, row.label, row.generation, row.ownsMainShell)).toBe(false)
-    document.body.appendChild(detached)
-    expect(detached.querySelector('[data-probe]')).toBeNull()
+  it('discards a disconnected host and does not paint it after reattach', () => {
+    const detached = document.createElement('div') as PendingHost
+    detached.setAttribute(VUE_ROUTE_HOST_ATTR, 'true')
+    const pane = cleanupOwner()
+    stash(detached, { feature: 'probe', owner: pane, label: 'detached', generation: 1 })
+    let calls = 0
+    registerEarlyRoutePresenter('probe', () => {
+      calls += 1
+      return true
+    })
+    publishEarlyRouteRequests({
+      document: { querySelectorAll: () => [detached] } as unknown as Document,
+    })
+    expect(calls).toBe(0)
     expect(detached[VUE_ROUTE_PENDING_KEY]).toBeUndefined()
+    document.body.appendChild(detached)
+    publishEarlyRouteRequests(window)
+    expect(calls).toBe(0)
+    expect(detached.querySelector('[data-probe]')).toBeNull()
   })
 
   it('records Main and Secondary identity as per-owner data', () => {

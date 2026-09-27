@@ -2818,8 +2818,8 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
     host.setAttribute('data-prks-vue-route-host', 'true');
     contentDiv.appendChild(host);
     const request = {
+        feature: 'progress',
         owner: ctx,
-        host: host,
         status: detail.status,
         rows: detail.rows,
         offlineCached: !!detail.offlineCached,
@@ -2829,10 +2829,11 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
     if (typeof window.prksVuePresentProgress === 'function') {
-        window.prksVuePresentProgress(request);
+        window.prksVuePresentProgress(Object.assign({ host: host }, request));
         return;
     }
     // Early paints stash the request on this pane's host, not on window.
+    // The route-surface dispatcher paints that host for feature "progress".
     host.__prksVueRouteRequest = request;
 }
 

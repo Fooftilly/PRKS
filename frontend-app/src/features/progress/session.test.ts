@@ -102,11 +102,14 @@ describe('Progress route bridge', () => {
 
   it('registers the progress bridge and applies a progress request stored on its host', () => {
     const el = host()
+    const decoy = host()
     el.setAttribute('data-prks-vue-route-host', 'true')
+    decoy.setAttribute('data-prks-vue-route-host', 'true')
     const pane = owner()
     ;(el as HTMLElement & { __prksVueRouteRequest?: object }).__prksVueRouteRequest = {
+      feature: 'progress',
       owner: pane,
-      host: el,
+      host: decoy,
       status: 'In Progress',
       rows: [{ id: 'early', title: 'Early', status: 'In Progress' }],
       offlineCached: false,
@@ -120,6 +123,36 @@ describe('Progress route bridge', () => {
     expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('.prks-page-title')?.textContent).toBe('Files · In Progress')
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
+    expect(decoy.querySelector('[data-prks-progress-view]')).toBeNull()
     expect(readRouteSurface(pane)?.name).toBe('progress')
+  })
+
+  it('dismisses one owner through the bridge and leaves the other mounted', () => {
+    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
+    registerProgressBridge(window)
+    const main = owner()
+    const secondary = owner()
+    const mainHost = host()
+    const secondaryHost = host()
+    window.prksVuePresentProgress?.({
+      owner: main,
+      host: mainHost,
+      status: 'Paused',
+      rows: [{ id: 'main', title: 'Main', status: 'Paused' }],
+      generation: 2,
+      shell: true,
+    })
+    window.prksVuePresentProgress?.({
+      owner: secondary,
+      host: secondaryHost,
+      status: 'Completed',
+      rows: [{ id: 'side', title: 'Side', status: 'Completed' }],
+      generation: 1,
+      shell: false,
+    })
+    window.prksVueDismissProgress?.(secondary)
+    expect(secondaryHost.querySelector('[data-work-id="side"]')).toBeNull()
+    expect(mainHost.querySelector('[data-work-id="main"]')).not.toBeNull()
+    expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Files · Paused')
   })
 })

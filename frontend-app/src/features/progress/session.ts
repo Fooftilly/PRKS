@@ -2,7 +2,7 @@ import { createVNode } from 'vue'
 import {
   dismissRouteSurface,
   presentRouteSurface,
-  publishEarlyRouteRequests,
+  registerEarlyRoutePresenter,
   resetRouteSurfaceForTests,
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
@@ -26,10 +26,14 @@ export interface ProgressPresentInput {
   shell?: boolean
 }
 
-function isProgressEarlyRequest(value: unknown): value is ProgressPresentInput {
+const PROGRESS_FEATURE = 'progress'
+
+function isProgressEarlyRequest(
+  value: unknown,
+): value is Omit<ProgressPresentInput, 'host'> & { feature: typeof PROGRESS_FEATURE } {
   if (!value || typeof value !== 'object') return false
-  const record = value as Partial<ProgressPresentInput>
-  return !!record.owner && !!record.host && 'status' in record && 'rows' in record
+  const record = value as Partial<ProgressPresentInput> & { feature?: unknown }
+  return record.feature === PROGRESS_FEATURE && !!record.owner && 'status' in record && 'rows' in record
 }
 
 /**
@@ -76,10 +80,14 @@ export function resetProgressSessionForTests(): void {
 export function registerProgressBridge(target: Window = window): void {
   target.prksVuePresentProgress = presentProgress
   target.prksVueDismissProgress = dismissProgress
-  publishEarlyRouteRequests(target, [
-    (request) => {
-      if (!isProgressEarlyRequest(request)) return
-      presentProgress(request)
+  registerEarlyRoutePresenter(
+    PROGRESS_FEATURE,
+    (request, host) => {
+      if (!isProgressEarlyRequest(request)) return false
+      const { owner, status, rows, offlineCached, generation, shell } = request
+      presentProgress({ owner, host, status, rows, offlineCached, generation, shell })
+      return true
     },
-  ])
+    target,
+  )
 }

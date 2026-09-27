@@ -35,6 +35,15 @@ interface PendingHost extends HTMLElement {
   [VUE_ROUTE_PENDING_KEY]?: unknown
 }
 
+/**
+ * One presenter per route feature. The dispatcher calls only the presenter
+ * registered for the pending request's `feature`. Registration does not need
+ * the other features' presenters.
+ */
+export type EarlyRoutePresenter = (request: unknown, host: HTMLElement) => boolean
+
+const earlyPresenters = new Map<string, EarlyRoutePresenter>()
+
 export interface RouteSurfacePresent {
   owner: RouteSurfaceOwner
   host: HTMLElement
@@ -175,16 +184,44 @@ export function readRouteSurface(owner: object | null | undefined): RouteSurface
   }
 }
 
+function earlyFeatureName(pending: unknown): string | null {
+  if (!pending || typeof pending !== 'object') return null
+  const feature = (pending as { feature?: unknown }).feature
+  if (typeof feature !== 'string' || feature.length === 0) return null
+  return feature
+}
+
 /**
- * Apply host-local early requests once the production bundle can paint.
- * Each host keeps its own request. A disconnected host's request is discarded
- * so a later reattach cannot paint an owner that has already left.
- * Pass every presenter in this one call; the pending slot is consumed once.
+ * Bind the storage host onto a copy of the payload. The stored slot is left
+ * unchanged until a presenter claims it, so a rejected request stays as the
+ * producer wrote it. The payload host is not a second paint target.
  */
-export function publishEarlyRouteRequests(
-  target: { document?: Document | null },
-  apply: ReadonlyArray<(request: unknown, host: HTMLElement) => void>,
+function requestOnStorageHost(pending: object, host: HTMLElement): unknown {
+  return { ...(pending as Record<string, unknown>), host }
+}
+
+/**
+ * Register the presenter for one route feature and claim that feature's
+ * pending hosts. A request for another feature stays on its host until that
+ * feature registers. The same feature name replaces its previous presenter.
+ */
+export function registerEarlyRoutePresenter(
+  feature: string,
+  present: EarlyRoutePresenter,
+  target: { document?: Document | null } = globalThis,
 ): void {
+  if (typeof feature !== 'string' || feature.length === 0 || typeof present !== 'function') return
+  earlyPresenters.set(feature, present)
+  publishEarlyRouteRequests(target)
+}
+
+/**
+ * Deliver host-local early requests to the presenter registered for each
+ * request's feature. The host that stored the request is the host that paints.
+ * A slot is deleted only when that presenter claims it, or when the host is
+ * already disconnected. An unmatched request stays for a later registration.
+ */
+export function publishEarlyRouteRequests(target: { document?: Document | null }): void {
   const doc = target.document
   if (!doc?.querySelectorAll) return
   const hosts = Array.from(doc.querySelectorAll<HTMLElement>(`[${VUE_ROUTE_HOST_ATTR}]`))
@@ -192,15 +229,20 @@ export function publishEarlyRouteRequests(
     const host = node as PendingHost
     if (!(VUE_ROUTE_PENDING_KEY in host)) return
     const pending = host[VUE_ROUTE_PENDING_KEY]
-    delete host[VUE_ROUTE_PENDING_KEY]
-    if (!host.isConnected || pending == null) return
-    apply.forEach((present) => {
-      present(pending, host)
-    })
+    if (!host.isConnected || pending == null) {
+      delete host[VUE_ROUTE_PENDING_KEY]
+      return
+    }
+    const feature = earlyFeatureName(pending)
+    const present = feature ? earlyPresenters.get(feature) : undefined
+    if (!feature || !present) return
+    const claimed = present(requestOnStorageHost(pending, host), host) === true
+    if (claimed) delete host[VUE_ROUTE_PENDING_KEY]
   })
 }
 
 export function resetRouteSurfaceForTests(root: ParentNode = document): void {
+  earlyPresenters.clear()
   root.querySelectorAll<HTMLElement>(`[${VUE_ROUTE_HOST_ATTR}]`).forEach((host) => {
     render(null, host)
   })
