@@ -546,8 +546,12 @@ AFFECTED_RULES = (
     },
     {
         "name": "workspace-drag",
-        "paths": ("frontend/js/workspace-drag.js",),
+        "paths": (
+            "frontend/js/workspace-drag.js",
+            "frontend-app/src/workspace-dnd/**",
+        ),
         "features": ("workspace-drag", "tiling", "tabs"),
+        "note": "WorkspaceShell.vue stays unmapped (fail-closed to full); DnD modules map here.",
     },
     {
         "name": "folders",

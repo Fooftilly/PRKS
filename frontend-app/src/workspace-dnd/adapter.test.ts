@@ -4,7 +4,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import hostSource from '../../../frontend/js/workspace-hosts.js?raw'
 import WorkspaceShell from '../workspace-shell/WorkspaceShell.vue'
 import type { ProjectionNode, ProjectionTab, WorkspaceIntents, WorkspaceProjection } from '../workspace-shell/types'
-import { bindPocAdapter, type PocSnapshot } from './adapter'
+import { bindWorkspaceDnd, buildDragPreviewElement, type WorkspaceDndSnapshot } from './adapter'
 import { commitDropIntent } from './commit'
 import { createHoverController } from './hover'
 import { resolveDropIntent } from './drop-intent'
@@ -63,9 +63,9 @@ function intents(): WorkspaceIntents {
   }
 }
 
-describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
+describe('workspace-dnd adapter on Vue WorkspaceShell DOM', () => {
   let wrapper: VueWrapper | null = null
-  let session: ReturnType<typeof bindPocAdapter> | null = null
+  let session: ReturnType<typeof bindWorkspaceDnd> | null = null
 
   afterEach(() => {
     session?.destroy()
@@ -94,16 +94,39 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     return value
   }
 
-  function snapshotFrom(value: WorkspaceProjection): PocSnapshot {
+  function snapshotFrom(value: WorkspaceProjection): WorkspaceDndSnapshot {
     return {
       mainTabId: value.state.mainTabId,
       secondaryLeafTabIds: ['B', 'C'],
       hasSecondaryTree: true,
       narrowFallback: false,
       canAddSecondaryLeaf: true,
-      tabs: value.state.tabs.map((t) => ({ id: t.id, route: t.route, title: t.title })),
+      tabs: value.state.tabs.map((t) => ({
+        id: t.id,
+        route: t.route,
+        title: t.title,
+        icon: t.icon,
+      })),
     }
   }
+
+  it('buildDragPreviewElement renders icon + truncated title chip', () => {
+    window.prksIcon = (name, options) =>
+      `<i data-lucide="${name}" data-size="${options?.size || ''}"></i>`
+    const snap: WorkspaceDndSnapshot = {
+      mainTabId: 'A',
+      secondaryLeafTabIds: [],
+      hasSecondaryTree: false,
+      narrowFallback: false,
+      canAddSecondaryLeaf: true,
+      tabs: [{ id: 'A', route: '#/folders', title: 'Folders Home', icon: 'folder' }],
+    }
+    const el = buildDragPreviewElement(snap, 'A')
+    expect(el.className).toBe('prks-drag-preview')
+    expect(el.querySelector('.prks-drag-preview__icon')?.innerHTML).toContain('folder')
+    expect(el.querySelector('.prks-drag-preview__label')?.textContent).toBe('Folders Home')
+    delete window.prksIcon
+  })
 
   it('binds to real Vue tab/pane hosts and cleans up on destroy', async () => {
     const value = await mountTiledShell()
@@ -111,7 +134,7 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     expect(document.querySelectorAll('.prks-tile-header__grip').length).toBe(2)
 
     const hover = createHoverController()
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => snapshotFrom(value),
       routeSupportsTile: () => true,
       hover,
@@ -126,11 +149,11 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
 
     const list = document.getElementById('prks-workspace-tabs')!
     hover.showReorderMarker(list, 'C')
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeTruthy()
 
     session.destroy()
     session = null
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
   })
 
@@ -138,7 +161,7 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     const value = await mountTiledShell()
     const movePane = vi.fn(() => true)
     const hover = createHoverController()
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => snapshotFrom(value),
       routeSupportsTile: () => true,
       hover,
@@ -152,9 +175,9 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     })
     const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
     hover.showEdgeOverlay(tile, 'left', true)
-    expect(document.getElementById('prks-dnd-poc-edge-overlay')).toBeTruthy()
+    expect(document.getElementById('prks-drag-edge-overlay')).toBeTruthy()
     session.cancel()
-    expect(document.getElementById('prks-dnd-poc-edge-overlay')).toBeNull()
+    expect(document.getElementById('prks-drag-edge-overlay')).toBeNull()
     expect(movePane).not.toHaveBeenCalled()
   })
 
@@ -163,14 +186,14 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     const hover = createHoverController()
     const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
     hover.showEdgeOverlay(tile, 'left', false, 'cap')
-    const overlay = document.getElementById('prks-dnd-poc-edge-overlay')
+    const overlay = document.getElementById('prks-drag-edge-overlay')
     expect(overlay).toBeTruthy()
     expect(overlay?.classList.contains('is-invalid')).toBe(true)
     expect(overlay?.dataset.reason).toBe('cap')
     expect(overlay?.textContent).toContain('Pane limit')
     expect(overlay?.style.borderStyle).toBe('dashed')
     hover.showEdgeOverlay(tile, 'right', false, 'route')
-    expect(document.getElementById('prks-dnd-poc-edge-overlay')?.textContent).toContain('Cannot split')
+    expect(document.getElementById('prks-drag-edge-overlay')?.textContent).toContain('Cannot split')
     hover.clear()
   })
 

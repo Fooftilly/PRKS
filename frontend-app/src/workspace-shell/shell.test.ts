@@ -400,6 +400,20 @@ describe('Vue workspace shell', () => {
     delete window.prksWorkspaceOnShellCommit
   })
 
+  it('restores prksWorkspaceInitDrag on unmount even when none existed before', async () => {
+    delete window.prksWorkspaceInitDrag
+    mountShell(projection())
+    await nextTick()
+    const installed = window.prksWorkspaceInitDrag as (() => void) | undefined
+    expect(typeof installed).toBe('function')
+    wrapper?.unmount()
+    wrapper = null
+    expect(window.prksWorkspaceInitDrag).toBeUndefined()
+    // Stale hook must not rebind after unmount.
+    expect(() => installed?.()).not.toThrow()
+    expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
+  })
+
   it('ends a root divider drag when the split hides and does not commit further', async () => {
     installSplit()
     const commits: number[] = []

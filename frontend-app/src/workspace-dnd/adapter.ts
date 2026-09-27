@@ -1,15 +1,14 @@
 /**
- * Experimental Pragmatic Drag and Drop adapter for #234.
- *
- * Isolated PoC: not imported by main.ts or production WorkspaceShell.
- * Does not replace frontend/js/workspace-drag.js. Activate only under an
- * explicit experimental flag or from tests/fixtures.
+ * Pragmatic Drag and Drop adapter for workspace shell (#256).
  *
  * Architecture:
  *   Pragmatic sensors/lifecycle/targets/preview/autoscroll/cancel
  *     → pure resolveDropIntent
  *     → commitDropIntent → coordinator commands
  *     → WorkspaceState + Vue WorkspaceShell projection
+ *
+ * Shell wiring calls `reconcile()` after projection commits; `observeDom` defaults
+ * to false so production does not rely on MutationObserver reconciliation.
  */
 import {
   draggable,
@@ -18,7 +17,7 @@ import {
 } from '@atlaskit/pragmatic-drag-and-drop/element/adapter'
 import { setCustomNativeDragPreview } from '@atlaskit/pragmatic-drag-and-drop/element/set-custom-native-drag-preview'
 import { autoScrollForElements } from '@atlaskit/pragmatic-drag-and-drop-auto-scroll/element'
-import { browserCommitHandlers, commitDropIntent, type PocCommitHandlers } from './commit'
+import { browserCommitHandlers, commitDropIntent, type WorkspaceDndCommitHandlers } from './commit'
 import {
   pickNestedLeafHit,
   resolveDropIntent,
@@ -30,32 +29,36 @@ import { createHoverController, type HoverController } from './hover'
 
 type CleanupFn = () => void
 
-export const PRKS_DND_POC_FLAG = 'prksExperimentalPragmaticDnd'
 
 const ZONE_LABEL = { left: 'left of', right: 'right of', above: 'above', below: 'below' } as const
 
-export interface PocSnapshot {
+export interface WorkspaceDndSnapshot {
   readonly mainTabId: string | null
   readonly secondaryLeafTabIds: readonly string[]
   readonly hasSecondaryTree: boolean
   readonly narrowFallback: boolean
   readonly canAddSecondaryLeaf: boolean
-  readonly tabs: readonly { readonly id: string; readonly route: string; readonly title?: string }[]
+  readonly tabs: readonly {
+    readonly id: string
+    readonly route: string
+    readonly title?: string
+    readonly icon?: string
+  }[]
 }
 
-export interface BindPocAdapterOptions {
+export interface BindWorkspaceDndOptions {
   readonly root?: ParentNode
-  readonly getSnapshot: () => PocSnapshot | null
+  readonly getSnapshot: () => WorkspaceDndSnapshot | null
   readonly routeSupportsTile: (route: string) => boolean
-  readonly handlers?: PocCommitHandlers
+  readonly handlers?: WorkspaceDndCommitHandlers
   readonly hover?: HoverController
   readonly onHoverIntent?: (intent: WorkspaceDropIntent | null) => void
   readonly onSessionEnd?: (reason: 'drop' | 'cancel') => void
-  /** When false, skip MutationObserver auto-reconcile (tests may call reconcile()). */
+  /** When true, use MutationObserver auto-reconcile; default false (prefer shell-commit reconcile). */
   readonly observeDom?: boolean
 }
 
-export interface PocAdapterSession {
+export interface WorkspaceDndSession {
   readonly active: boolean
   readonly source: DragSource | null
   readonly intent: WorkspaceDropIntent | null
@@ -63,17 +66,14 @@ export interface PocAdapterSession {
   resolveAt(clientX: number, clientY: number, dragSource?: DragSource | null): WorkspaceDropIntent | null
   /** Re-register draggables/drop targets after Vue projection DOM changes. */
   reconcile(): void
-  /**
-   * Explicit rebind for PoC fixtures. Same as reconcile(); not wired to the
-   * production `prksWorkspaceOnShellCommit` hook (MutationObserver / manual call only).
-   */
+  /** Alias for reconcile(); call after shell projection commits or DOM fixture changes. */
   refresh(): void
   cancel(): void
   destroy(): void
 }
 
 type SourceData = {
-  readonly type: 'prks-workspace-poc'
+  readonly type: 'prks-workspace-dnd'
   readonly source: DragSource
 }
 
@@ -83,7 +83,7 @@ function cssEscape(id: string): string {
 }
 
 function isSourceData(data: Record<string | symbol, unknown>): data is SourceData {
-  return data.type === 'prks-workspace-poc' && !!data.source && typeof data.source === 'object'
+  return data.type === 'prks-workspace-dnd' && !!data.source && typeof data.source === 'object'
 }
 
 function announce(text: string): void {
@@ -118,7 +118,7 @@ export function hitFromPointer(
   source: DragSource,
   clientX: number,
   clientY: number,
-  snap: PocSnapshot,
+  snap: WorkspaceDndSnapshot,
 ): DropHit {
   const list = root.querySelector('#prks-workspace-tabs') as HTMLElement | null
   if (list) {
@@ -184,7 +184,7 @@ export function hitFromPointer(
 
 export function resolveIntentAtPoint(
   root: ParentNode,
-  snap: PocSnapshot,
+  snap: WorkspaceDndSnapshot,
   source: DragSource,
   clientX: number,
   clientY: number,
@@ -203,12 +203,44 @@ export function resolveIntentAtPoint(
   })
 }
 
-function titleFor(snap: PocSnapshot | null, tabId: string): string {
+function titleFor(snap: WorkspaceDndSnapshot | null, tabId: string): string {
   const tab = snap?.tabs.find((t) => t.id === tabId)
   return tab?.title || 'page'
 }
 
-function announceTargetChange(snap: PocSnapshot | null, target: WorkspaceDropIntent | null): void {
+function iconFor(snap: WorkspaceDndSnapshot | null, tabId: string): string {
+  const tab = snap?.tabs.find((t) => t.id === tabId)
+  return tab?.icon || 'file-text'
+}
+
+/** DESIGN.md drag preview: icon + truncated title chip (`.prks-drag-preview`). */
+export function buildDragPreviewElement(
+  snap: WorkspaceDndSnapshot | null,
+  tabId: string,
+  doc: Document = document,
+): HTMLElement {
+  const el = doc.createElement('div')
+  el.className = 'prks-drag-preview'
+  el.setAttribute('aria-hidden', 'true')
+  const icon = doc.createElement('span')
+  icon.className = 'prks-drag-preview__icon'
+  const win = doc.defaultView as (Window & {
+    prksIcon?: (name: string, options?: { size?: string }) => string
+    prksRefreshIcons?: (root?: ParentNode) => void
+  }) | null
+  if (typeof win?.prksIcon === 'function') {
+    icon.innerHTML = win.prksIcon(iconFor(snap, tabId), { size: 'sm' })
+  }
+  const text = doc.createElement('span')
+  text.className = 'prks-drag-preview__label'
+  text.textContent = titleFor(snap, tabId)
+  el.appendChild(icon)
+  el.appendChild(text)
+  if (typeof win?.prksRefreshIcons === 'function') win.prksRefreshIcons(el)
+  return el
+}
+
+function announceTargetChange(snap: WorkspaceDndSnapshot | null, target: WorkspaceDropIntent | null): void {
   if (!target) {
     announce('No drop target.')
     return
@@ -239,7 +271,7 @@ function announceTargetChange(snap: PocSnapshot | null, target: WorkspaceDropInt
 }
 
 function announceDropOutcome(
-  snap: PocSnapshot | null,
+  snap: WorkspaceDndSnapshot | null,
   source: DragSource,
   intent: WorkspaceDropIntent | null,
   ok: boolean,
@@ -302,10 +334,10 @@ function sourceElement(root: ParentNode, dragSource: DragSource): HTMLElement | 
 }
 
 /**
- * Bind the experimental adapter onto a mounted Vue workspace shell DOM.
+ * Bind workspace drag-and-drop onto a mounted Vue workspace shell DOM.
  * Returns a session handle. Call destroy() on unmount.
  */
-export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSession {
+export function bindWorkspaceDnd(options: BindWorkspaceDndOptions): WorkspaceDndSession {
   const root = options.root ?? document
   const hover = options.hover ?? createHoverController()
   const handlers = options.handlers ?? browserCommitHandlers()
@@ -357,7 +389,7 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
     return resolveIntentAtPoint(root, snap, dragSource, clientX, clientY, options.routeSupportsTile)
   }
 
-  function applyIntent(next: WorkspaceDropIntent | null, snap: PocSnapshot | null): void {
+  function applyIntent(next: WorkspaceDropIntent | null, snap: WorkspaceDndSnapshot | null): void {
     if (sameIntent(intent, next)) {
       intent = next
       paintHover(hover, root, next)
@@ -391,25 +423,16 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
           dragHandle: handle,
           canDrag: () => !tabEl.querySelector('.prks-workspace-tab__close:hover'),
           getInitialData: (): SourceData => ({
-            type: 'prks-workspace-poc',
+            type: 'prks-workspace-dnd',
             source: { kind: 'tab', tabId },
           }),
           onGenerateDragPreview: ({ nativeSetDragImage }) => {
             const snap = options.getSnapshot()
-            const label = titleFor(snap, tabId)
             setCustomNativeDragPreview({
               nativeSetDragImage,
               getOffset: () => ({ x: 14, y: 10 }),
               render({ container }) {
-                const el = document.createElement('div')
-                el.className = 'prks-drag-preview'
-                el.setAttribute('aria-hidden', 'true')
-                el.dataset.prksDndPoc = '1'
-                const text = document.createElement('span')
-                text.className = 'prks-drag-preview__label'
-                text.textContent = label
-                el.appendChild(text)
-                container.appendChild(el)
+                container.appendChild(buildDragPreviewElement(snap, tabId))
               },
             })
           },
@@ -427,25 +450,16 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
           element: tile,
           dragHandle: grip,
           getInitialData: (): SourceData => ({
-            type: 'prks-workspace-poc',
+            type: 'prks-workspace-dnd',
             source: { kind: 'pane', tabId },
           }),
           onGenerateDragPreview: ({ nativeSetDragImage }) => {
             const snap = options.getSnapshot()
-            const label = titleFor(snap, tabId)
             setCustomNativeDragPreview({
               nativeSetDragImage,
               getOffset: () => ({ x: 14, y: 10 }),
               render({ container }) {
-                const el = document.createElement('div')
-                el.className = 'prks-drag-preview'
-                el.setAttribute('aria-hidden', 'true')
-                el.dataset.prksDndPoc = '1'
-                const text = document.createElement('span')
-                text.className = 'prks-drag-preview__label'
-                text.textContent = label
-                el.appendChild(text)
-                container.appendChild(el)
+                container.appendChild(buildDragPreviewElement(snap, tabId))
               },
             })
           },
@@ -553,7 +567,7 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
 
   bindElements()
 
-  if (options.observeDom !== false && typeof MutationObserver !== 'undefined') {
+  if (options.observeDom === true && typeof MutationObserver !== 'undefined') {
     const observer = new MutationObserver(() => scheduleReconcile())
     const tabs = root.querySelector('#prks-workspace-tabs')
     const page = root.querySelector('#page-content')
@@ -682,14 +696,3 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
   }
 }
 
-export function isPocEnabled(win: Window = window): boolean {
-  try {
-    return (
-      win.sessionStorage?.getItem(PRKS_DND_POC_FLAG) === '1' ||
-      (win as Window & { __prksExperimentalPragmaticDnd?: boolean }).__prksExperimentalPragmaticDnd ===
-        true
-    )
-  } catch {
-    return false
-  }
-}

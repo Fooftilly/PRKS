@@ -1,12 +1,12 @@
 /**
- * Confirmed-drop bridge for the #234 PoC.
+ * Confirmed-drop bridge for workspace DnD (#256).
  * Hover never calls these. Only a completed drag session may invoke commit.
  */
 import type { DragSource, WorkspaceDropIntent } from './drop-intent'
 import { dropIntentToCommand } from './drop-intent'
 import type { WorkspaceCommand } from '../workspace/commands'
 
-export interface PocCommitHandlers {
+export interface WorkspaceDndCommitHandlers {
   reorderTab(tabId: string, beforeTabId: string | null): boolean | void
   hideLeaf(tabId: string): boolean | Promise<boolean> | void
   tileTab(tabId: string): boolean | Promise<boolean> | void
@@ -33,7 +33,7 @@ export async function commitDropIntent(
   source: DragSource,
   intent: WorkspaceDropIntent | null,
   secondaryLeafTabIds: readonly string[],
-  handlers: PocCommitHandlers,
+  handlers: WorkspaceDndCommitHandlers,
 ): Promise<{ ok: boolean; command: WorkspaceCommand | null }> {
   if (!intent) return { ok: false, command: null }
 
@@ -100,7 +100,7 @@ type CoordinatorWindow = Window & {
 }
 
 /** Browser handlers that call the same coordinator APIs as production drag. */
-export function browserCommitHandlers(): PocCommitHandlers {
+export function browserCommitHandlers(): WorkspaceDndCommitHandlers {
   const win = window as CoordinatorWindow
   return {
     reorderTab(tabId, beforeTabId) {

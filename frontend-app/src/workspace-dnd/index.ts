@@ -1,8 +1,8 @@
 /**
- * #234 Pragmatic Drag and Drop PoC (experimental).
- * Not imported by production main.ts / WorkspaceShell.
+ * Workspace drag-and-drop (#256): Pragmatic adapter + pure drop-intent resolver.
  */
 export { computeEdgeZone, computeReorderIndex, EDGE_BAND, EDGE_ZONE_TO_SPLIT } from './geometry'
+export type { EdgeZone, RectLike, TabRect } from './geometry'
 export {
   resolveDropIntent,
   dropIntentToCommand,
@@ -12,12 +12,19 @@ export {
   type DropHit,
 } from './drop-intent'
 export { commitDropIntent, browserCommitHandlers } from './commit'
+export type { WorkspaceDndCommitHandlers } from './commit'
 export { createHoverController } from './hover'
+export type { HoverController } from './hover'
 export {
-  bindPocAdapter,
-  isPocEnabled,
-  PRKS_DND_POC_FLAG,
+  bindWorkspaceDnd,
   resolveIntentAtPoint,
   hitFromPointer,
+  buildDragPreviewElement,
+} from './adapter'
+export type {
+  WorkspaceDndSnapshot,
+  BindWorkspaceDndOptions,
+  WorkspaceDndSession,
 } from './adapter'
 export { KEYBOARD_EQUIVALENT_PATHS, keyboardEquivalentSummary } from './a11y'
+export { snapshotFromProjection } from './snapshot'

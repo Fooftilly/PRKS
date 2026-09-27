@@ -1,5 +1,5 @@
 /**
- * Accessibility notes for #234 — keyboard-equivalent paths.
+ * Accessibility notes for workspace DnD (#256) — keyboard-equivalent paths.
  *
  * Pragmatic Drag and Drop's optional assistive-technology package is tied to
  * the Atlassian Design System. PRKS does not adopt Atlaskit UI. Keyboard users
@@ -30,7 +30,7 @@ export const KEYBOARD_EQUIVALENT_PATHS = [
   },
   {
     dragGesture: 'Cancel in-progress drag',
-    keyboardPath: 'Escape (PoC adapter + production workspace-drag.js)',
+    keyboardPath: 'Escape (workspace-dnd adapter)',
     canonicalApi: 'no canonical mutation',
   },
 ] as const

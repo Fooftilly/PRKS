@@ -1,5 +1,5 @@
 /**
- * Pure workspace drag geometry (#234 PoC).
+ * Pure workspace drag geometry (#256).
  *
  * Ported from frontend/js/workspace-drag.js so drop-intent resolution can be
  * unit-tested without DOM or Pragmatic sensors. Band / midpoint rules must

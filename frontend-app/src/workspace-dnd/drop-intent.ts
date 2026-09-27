@@ -1,5 +1,5 @@
 /**
- * Pure typed WorkspaceDropIntent resolver (#234).
+ * Pure typed WorkspaceDropIntent resolver (#256).
  *
  * Sensors / hit geometry feed this module; it never mutates WorkspaceState.
  * Confirmed drops map intents to WorkspaceCommand values for the coordinator.
