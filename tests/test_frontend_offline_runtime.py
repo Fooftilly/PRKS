@@ -1351,9 +1351,20 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
     def test_semantic_helpers_are_the_only_invalidation_path(self):
         """A future sync coordinator needs ONE place to turn "discard" into
         "apply the pending operation optimistically"."""
-        for name in ("app.js", "ui.js", "components/folders.js", "components/works.js",
-                     "components/progress.js", "components/types.js", "components/search.js"):
-            src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
+        progress_vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "rows.ts"))
+        progress_vue += _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "session.ts"))
+        named = {
+            "app.js": _read(os.path.join(_FRONTEND, "js", "app.js")),
+            "ui.js": _read(os.path.join(_FRONTEND, "js", "ui.js")),
+            "components/folders.js": _read(os.path.join(_FRONTEND, "js", "components", "folders.js")),
+            "components/works.js": _read(os.path.join(_FRONTEND, "js", "components", "works.js")),
+            "features/progress": progress_vue,
+            "components/types.js": _read(os.path.join(_FRONTEND, "js", "components", "types.js")),
+            "components/search.js": _read(os.path.join(_FRONTEND, "js", "components", "search.js")),
+        }
+        for name, src in named.items():
             with self.subTest(module=name):
                 for key in ("works-browse:index", "recent:index", "recently-added:index"):
                     self.assertNotIn("deleteList('%s')" % key, src)
@@ -1418,15 +1429,21 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         self.assertIn("hasOwnProperty.call(row, 'folder_id')", folder_id)
 
     def test_cached_browse_renders_suppress_thumbnails(self):
-        for name, fn in (("components/progress.js", "function renderProgressByStatus("),
-                         ("components/search.js", "function renderRecent("),
+        progress = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "legacy-work-card.ts"))
+        with self.subTest(module="features/progress/legacy-work-card.ts"):
+            self.assertIn("offlineCached", progress)
+            self.assertIn("suppressThumbnail", progress)
+        for name, fn in (("components/search.js", "function renderRecent("),
                          ("components/types.js", "function renderWorksByDocType(")):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
-                self.assertIn("offlineCached", src)
-                self.assertIn("suppressThumbnail", src)
+                body = _fn_body(src, fn)
+                self.assertIn("offlineCached", body)
+                self.assertIn("suppressThumbnail", body)
 
     def test_progress_reads_the_bounded_excerpt(self):
-        src = _read(os.path.join(_FRONTEND, "js", "components", "progress.js"))
-        body = _fn_body(src, "function renderProgressByStatus(")
-        self.assertIn("abstract_excerpt", body)
+        src = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "progress", "rows.ts"))
+        self.assertIn("abstract_excerpt", src)
+        self.assertIn("prksAbstractExcerpt", src)

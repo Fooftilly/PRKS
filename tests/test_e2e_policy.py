@@ -199,6 +199,105 @@ class AffectedMappingTests(unittest.TestCase):
                 # Affected CI always unions smoke. The path rule itself does not.
                 self.assertEqual(plan["features"], ["settings", "smoke"])
 
+    def test_progress_vue_maps_to_browse(self):
+        paths = (
+            "frontend-app/src/features/progress/ProgressView.vue",
+            "frontend-app/src/features/progress/session.ts",
+            "frontend-app/src/features/progress/rows.ts",
+            "frontend-app/src/features/progress/legacy-work-card.ts",
+            "frontend-app/src/features/progress/status.ts",
+            "frontend-app/src/features/progress/ProgressView.test.ts",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "progress-vue")
+                self.assertFalse(skip)
+                self.assertEqual(feats, ("browse",))
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "affected")
+                self.assertEqual(plan["features"], ["browse", "smoke"])
+
+        source = "frontend-app/src/features/progress/ProgressView.vue"
+        bundle = "frontend/vue/prks-vue.js"
+        mapped = policy.plan_ci_e2e([source, bundle, "frontend/vue/BUILD-MANIFEST.json"])
+        self.assertEqual(mapped["mode"], "affected")
+        self.assertEqual(mapped["features"], ["browse", "smoke"])
+        self.assertTrue(policy._is_mapped_vue_feature_source(source, policy.classify_affected_path(source)))
+        self.assertFalse(policy._is_vue_production_source_path(
+            "frontend-app/src/features/progress/ProgressView.test.ts"
+        ))
+        test_only = policy.plan_ci_e2e([
+            "frontend-app/src/features/progress/ProgressView.test.ts",
+            bundle,
+        ])
+        self.assertEqual(test_only["mode"], "full")
+        spec_only = policy.plan_ci_e2e([
+            "frontend-app/src/features/progress/progress.spec.ts",
+            bundle,
+        ])
+        self.assertEqual(spec_only["mode"], "full")
+
+        story_paths = (
+            "frontend-app/src/features/progress/ProgressView.stories.ts",
+            "frontend-app/src/features/progress/nested/Panel.stories.vue",
+        )
+        for path in story_paths:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "storybook-catalog")
+                self.assertTrue(skip)
+                self.assertEqual(feats, ())
+                self.assertFalse(policy._is_vue_production_source_path(path))
+                self.assertFalse(policy._is_mapped_vue_feature_source(
+                    path, policy.classify_affected_path(path)
+                ))
+        self.assertEqual(
+            policy.plan_ci_e2e([story_paths[0], bundle])["mode"],
+            "full",
+        )
+        with_story = policy.plan_ci_e2e([source, story_paths[0], bundle])
+        self.assertEqual(with_story["mode"], "affected")
+        self.assertEqual(with_story["features"], ["browse", "smoke"])
+
+        button = "frontend-app/src/components/PrksButton.vue"
+        self.assertEqual(policy.match_affected_path(button)[0], "unmapped-production")
+        self.assertEqual(policy.plan_ci_e2e([source, button, bundle])["mode"], "full")
+        self.assertEqual(
+            policy.plan_ci_e2e([source, "frontend-app/src/main.ts", bundle])["mode"],
+            "full",
+        )
+        self.assertEqual(
+            policy.plan_ci_e2e([source, "frontend-app/src/api/http.ts", bundle])["mode"],
+            "full",
+        )
+        self.assertEqual(policy.plan_ci_e2e([bundle])["mode"], "full")
+
+        revision_diff = (
+            "diff --git a/frontend/sw.js b/frontend/sw.js\n"
+            "--- a/frontend/sw.js\n"
+            "+++ b/frontend/sw.js\n"
+            "@@ -21 +21 @@\n"
+            "-const DEPENDENCY_REVISION = 'aaaaaaaaaaaa';\n"
+            "+const DEPENDENCY_REVISION = 'bbbbbbbbbbbb';\n"
+        )
+        behavior_diff = revision_diff + "+self.addEventListener('fetch', function () {});\n"
+        stamp = policy.plan_ci_e2e(
+            [source, bundle, "frontend/sw.js", "frontend/vendor/DEPENDENCY-MANIFEST.json"],
+            path_diffs={"frontend/sw.js": revision_diff},
+        )
+        self.assertEqual(stamp["mode"], "affected")
+        self.assertEqual(stamp["features"], ["browse", "smoke"])
+        behavior = policy.plan_ci_e2e(
+            [source, bundle, "frontend/sw.js"],
+            path_diffs={"frontend/sw.js": behavior_diff},
+        )
+        self.assertEqual(behavior["mode"], "full")
+        self.assertIn("shared-frontend-core", behavior["reason"])
+        for rule in policy.AFFECTED_RULES:
+            for pattern in rule["paths"]:
+                self.assertNotEqual(pattern, "frontend-app/src/**")
+
     def test_shared_vue_transport_and_query_fail_closed(self):
         for path in (
             "frontend-app/src/api/http.ts",

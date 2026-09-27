@@ -3558,11 +3558,6 @@ a.tag {
     flex-shrink: 0;
 }
 
-.progress-empty-msg {
-    color: var(--text-secondary);
-    font-size: var(--text-md);
-}
-
 /* Sidebar progress: icon style + same status colors as segmented controls */
 .prks-status-icon,
 .prks-status-icon svg {
