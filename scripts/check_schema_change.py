@@ -13,9 +13,10 @@ schema version pass untouched):
 
 - SCHEMA-GATE-001: ``backend/db_schema.sql`` changed (ignoring SQL comments
   and whitespace) but ``LATEST_SCHEMA_VERSION`` was not bumped.
-- SCHEMA-GATE-002: ``LATEST_SCHEMA_VERSION`` moved, but ``MIGRATIONS`` did not
-  gain exactly one ``Migration(target_version=N)`` for each new version, or
-  lost/changed an existing one.
+- SCHEMA-GATE-002: ``MIGRATIONS`` did not gain exactly one
+  ``Migration(target_version=N)`` per bumped version, appended in order; a
+  shipped entry was removed, reordered, renamed or re-pointed to another
+  ``apply``; a target repeats; or a migration was added without a bump.
 
 Structural (always, against the working tree):
 
@@ -29,6 +30,8 @@ Structural (always, against the working tree):
   not its registered primary key.
 - SCHEMA-GATE-006: a ``PK_REGISTRY_ALLOWLIST`` entry is stale (the table is
   now registered, no longer upserted, or no longer canonical).
+- SCHEMA-GATE-007: an ``ON CONFLICT ... DO`` upsert whose ``INSERT INTO`` table
+  cannot be resolved statically (the registry check would otherwise miss it).
 
 Tables that are not created by ``db_schema.sql`` (the disposable text/research
 index databases) are out of scope.
@@ -86,9 +89,11 @@ _INSERT_RE = re.compile(
     r"\bINSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.IGNORECASE,
 )
-_ON_CONFLICT_RE = re.compile(
-    r"\bON\s+CONFLICT\s*(?:\(([^)]*)\))?",
-    re.IGNORECASE,
+# Upsert clause only (``DO`` required): ``UNIQUE ... ON CONFLICT REPLACE``
+# constraint clauses in CREATE TABLE are not upserts.
+_UPSERT_RE = re.compile(
+    r"\bON\s+CONFLICT\s*(?:\(([^)]*)\))?(?:\s*WHERE\b.*?)?\s*DO\b",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -118,30 +123,76 @@ def resolve_base(repo: Path, explicit: str | None) -> str:
 # Parsing helpers (AST only: never import either revision of db_migrations)
 
 
+def _quoted_end(text: str, i: int) -> int:
+    """Index just past the quoted token starting at ``i`` (doubled quotes escape)."""
+    quote, j = text[i], i + 1
+    while j < len(text):
+        if text[j] != quote:
+            j += 1
+        elif text.startswith(quote * 2, j):
+            j += 2
+        else:
+            return j + 1
+    return len(text)
+
+
+def _comment_end(text: str, i: int) -> int | None:
+    """Index just past the SQL comment starting at ``i``, or None if none starts there."""
+    if text.startswith("--", i):
+        end = text.find("\n", i)
+        return len(text) if end < 0 else end
+    if text.startswith("/*", i):
+        end = text.find("*/", i + 2)
+        return len(text) if end < 0 else end + 2
+    return None
+
+
 def normalize_sql(text: str) -> str:
-    """Strip ``--`` comments and collapse whitespace; comment edits are not schema."""
-    out = []
-    for line in text.splitlines():
-        in_str = False
-        cut = len(line)
-        for i, ch in enumerate(line):
-            if ch == "'":
-                in_str = not in_str
-            elif not in_str and line.startswith("--", i):
-                cut = i
-                break
-        out.append(line[:cut])
-    return " ".join(" ".join(out).split())
+    """Drop SQL comments and insignificant whitespace; keep quoted text verbatim.
+
+    Comment and layout edits are not schema changes, but whitespace inside a
+    string literal or quoted identifier is (for example a changed DEFAULT).
+    """
+    out: list[str] = []
+    i = 0
+    pending_space = False
+    while i < len(text):
+        comment_end = _comment_end(text, i)
+        if comment_end is not None or text[i].isspace():
+            i = comment_end if comment_end is not None else i + 1
+            pending_space = True
+            continue
+        j = _quoted_end(text, i) if text[i] in "'\"`" else i + 1
+        if pending_space and out:
+            out.append(" ")
+        out.append(text[i:j])
+        pending_space = False
+        i = j
+    return "".join(out)
+
+
+@dataclass(frozen=True)
+class MigrationEntry:
+    target: int
+    name: str
+    apply: str
+
+    def render(self) -> str:
+        return f"Migration(target_version={self.target}, name={self.name!r}, apply={self.apply})"
 
 
 @dataclass(frozen=True)
 class MigrationInfo:
-    version: int | None
+    version: int
     version_line: int
-    targets: dict[int, str]
+    entries: tuple[MigrationEntry, ...]
     registry_line: int
     table_pks: dict[str, tuple[str, ...]] | None
     table_pks_line: int
+
+    @property
+    def targets(self) -> dict[int, str]:
+        return {e.target: e.name for e in self.entries}
 
 
 def _assign_target(node: ast.stmt) -> tuple[str | None, ast.expr | None]:
@@ -154,20 +205,35 @@ def _assign_target(node: ast.stmt) -> tuple[str | None, ast.expr | None]:
     return None, None
 
 
-def _migration_targets(value: ast.expr) -> dict[int, str]:
-    targets: dict[int, str] = {}
+_MIGRATION_FIELDS = ("target_version", "name", "apply")
+
+
+def _migration_entries(value: ast.expr, where: str) -> tuple[MigrationEntry, ...]:
+    """Ordered ``MIGRATIONS`` entries; positional or keyword ``Migration`` args."""
     if not isinstance(value, (ast.Tuple, ast.List)):
-        return targets
-    for elt in value.elts:
-        if not isinstance(elt, ast.Call):
-            continue
-        kw = {k.arg: k.value for k in elt.keywords if k.arg}
-        tv = kw.get("target_version")
-        nm = kw.get("name")
-        if isinstance(tv, ast.Constant) and isinstance(tv.value, int):
-            label = nm.value if isinstance(nm, ast.Constant) else "?"
-            targets[tv.value] = str(label)
-    return targets
+        raise DiscoveryError(f"{where}: MIGRATIONS must stay a literal tuple of Migration(...)")
+    entries: list[MigrationEntry] = []
+    for index, elt in enumerate(value.elts):
+        args: dict[str, ast.expr] = {}
+        if isinstance(elt, ast.Call):
+            args = dict(zip(_MIGRATION_FIELDS, elt.args))
+            args.update({k.arg: k.value for k in elt.keywords if k.arg})
+        tv = args.get("target_version")
+        if not (isinstance(tv, ast.Constant) and isinstance(tv.value, int)):
+            raise DiscoveryError(
+                f"{where}: MIGRATIONS entry {index} is not a Migration(...) call with a "
+                "literal integer target_version"
+            )
+        nm = args.get("name")
+        apply = args.get("apply")
+        entries.append(
+            MigrationEntry(
+                tv.value,
+                str(nm.value) if isinstance(nm, ast.Constant) else "?",
+                ast.unparse(apply) if apply is not None else "?",
+            )
+        )
+    return tuple(entries)
 
 
 def _literal_table_pks(value: ast.expr, where: str) -> dict[str, tuple[str, ...]]:
@@ -198,7 +264,7 @@ def parse_migrations_module(source: str, where: str) -> MigrationInfo:
     return MigrationInfo(
         version_node.value,
         version_line,
-        {} if registry_node is None else _migration_targets(registry_node),
+        () if registry_node is None else _migration_entries(registry_node, where),
         registry_line,
         None if pks_node is None else _literal_table_pks(pks_node, where),
         pks_line,
@@ -236,34 +302,74 @@ def schema_table_pks(schema_sql: str) -> dict[str, tuple[str, ...]]:
 class UpsertSite:
     path: str
     line: int
-    table: str
+    table: str | None  # None: the INSERT target could not be resolved statically
     target: tuple[str, ...] | None
 
 
+def _static_sql(node: ast.AST) -> str | None:
+    """Best-effort static text of a string expression; ``{}`` marks dynamic parts."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "{}"
+            for v in node.values
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _static_sql(node.left), _static_sql(node.right)
+        if left is None and right is None:
+            return None
+        return (left if left is not None else "{}") + (right if right is not None else "{}")
+    return None
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def _conflict_columns(raw: str | None) -> tuple[str, ...] | None:
+    if raw is None:
+        return None
+    return tuple(c.strip().strip('"`[]').lower() for c in raw.split(",") if c.strip())
+
+
 def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
-    """``INSERT INTO t ... ON CONFLICT[(cols)]`` in Python string literals."""
+    """``INSERT INTO t ... ON CONFLICT[(cols)] DO`` in backend SQL strings.
+
+    String concatenation and f-strings are joined before matching, so a split
+    INSERT / ON CONFLICT is still seen. An upsert whose INSERT table cannot be
+    resolved statically is returned with ``table=None`` (reported, not skipped).
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
+    covered = _docstring_ids(tree)
     sites: list[UpsertSite] = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+        if id(node) in covered:
             continue
-        text = node.value
+        text = _static_sql(node)
+        if text is None:
+            continue
+        covered.update(id(child) for child in ast.walk(node))
         if "CONFLICT" not in text.upper():
             continue
         for stmt in text.split(";"):
-            insert = _INSERT_RE.search(stmt)
-            if insert is None:
+            upsert = _UPSERT_RE.search(stmt)
+            if upsert is None:
                 continue
-            conflict = _ON_CONFLICT_RE.search(stmt, insert.end())
-            if conflict is None:
-                continue
-            target = None
-            if conflict.group(1) is not None:
-                target = tuple(c.strip() for c in conflict.group(1).split(",") if c.strip())
-            sites.append(UpsertSite(relpath, node.lineno, insert.group(1), target))
+            insert = _INSERT_RE.search(stmt, 0, upsert.start())
+            table = insert.group(1) if insert is not None else None
+            sites.append(
+                UpsertSite(relpath, getattr(node, "lineno", 1), table, _conflict_columns(upsert.group(1)))
+            )
     return sites
 
 
@@ -271,13 +377,46 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
 # Checks
 
 
-def _version_step_findings(base: MigrationInfo, head: MigrationInfo) -> list[Finding]:
-    """One new Migration per bumped version, and no migration without a bump."""
+def _registry_order_findings(base: MigrationInfo, head: MigrationInfo) -> list[Finding]:
+    """Shipped entries stay in place unchanged; no target appears twice."""
     findings: list[Finding] = []
-    if base.version is None or head.version is None:
-        raise DiscoveryError("LATEST_SCHEMA_VERSION could not be parsed")
+    seen: set[int] = set()
+    for entry in head.entries:
+        if entry.target in seen:
+            findings.append(
+                Finding(
+                    "SCHEMA-GATE-002",
+                    MIGRATIONS_RELPATH,
+                    head.registry_line,
+                    f"MIGRATIONS lists target_version={entry.target} more than once",
+                    "keep exactly one Migration per target_version",
+                )
+            )
+        seen.add(entry.target)
+    for index, shipped in enumerate(base.entries):
+        current = head.entries[index] if index < len(head.entries) else None
+        if current != shipped:
+            now = current.render() if current is not None else "nothing"
+            findings.append(
+                Finding(
+                    "SCHEMA-GATE-002",
+                    MIGRATIONS_RELPATH,
+                    head.registry_line,
+                    (
+                        f"shipped {shipped.render()} at MIGRATIONS[{index}] was removed, "
+                        f"reordered, renamed or re-pointed (now {now}); shipped "
+                        "migrations are append-only"
+                    ),
+                    "restore the shipped entry in place and append a new migration instead",
+                )
+            )
+    return findings
+
+
+def _version_step_findings(base: MigrationInfo, head: MigrationInfo) -> list[Finding]:
+    """One new Migration per bumped version, in order, and none without a bump."""
     if head.version < base.version:
-        findings.append(
+        return [
             Finding(
                 "SCHEMA-GATE-002",
                 MIGRATIONS_RELPATH,
@@ -285,57 +424,32 @@ def _version_step_findings(base: MigrationInfo, head: MigrationInfo) -> list[Fin
                 f"LATEST_SCHEMA_VERSION went backwards ({base.version} -> {head.version})",
                 "never lower the schema version; add a forward migration instead",
             )
+        ]
+    added = [e.target for e in head.entries[len(base.entries):]]
+    expected = list(range(base.version + 1, head.version + 1))
+    if added == expected:
+        return []
+    if not expected:
+        message = (
+            "MIGRATIONS gained "
+            + ", ".join(f"target_version={v}" for v in added)
+            + f" but LATEST_SCHEMA_VERSION is still {head.version}"
         )
-    elif head.version > base.version:
-        expected = set(range(base.version + 1, head.version + 1))
-        added = set(head.targets) - set(base.targets)
-        for version in sorted(expected - added):
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-002",
-                    MIGRATIONS_RELPATH,
-                    head.registry_line,
-                    (
-                        f"LATEST_SCHEMA_VERSION is {head.version} (base {base.version}) "
-                        f"but MIGRATIONS has no new Migration(target_version={version})"
-                    ),
-                    (
-                        f"append Migration(target_version={version}, name=..., apply=...) "
-                        f"to MIGRATIONS in {MIGRATIONS_RELPATH}"
-                    ),
-                )
-            )
-        for version in sorted(added - expected):
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-002",
-                    MIGRATIONS_RELPATH,
-                    head.registry_line,
-                    (
-                        f"new Migration(target_version={version}) is outside the bumped "
-                        f"range {base.version + 1}..{head.version}"
-                    ),
-                    "make LATEST_SCHEMA_VERSION equal the last migration target",
-                )
-            )
-    elif set(head.targets) - set(base.targets):
-        findings.append(
-            Finding(
-                "SCHEMA-GATE-002",
-                MIGRATIONS_RELPATH,
-                head.registry_line,
-                (
-                    "MIGRATIONS gained "
-                    + ", ".join(
-                        f"target_version={v}"
-                        for v in sorted(set(head.targets) - set(base.targets))
-                    )
-                    + f" but LATEST_SCHEMA_VERSION is still {head.version}"
-                ),
-                "bump LATEST_SCHEMA_VERSION to the new migration's target_version",
-            )
+        fix = "bump LATEST_SCHEMA_VERSION to the new migration's target_version"
+    elif added == expected[: len(added)]:
+        missing = ", ".join(f"Migration(target_version={v})" for v in expected[len(added):])
+        message = (
+            f"LATEST_SCHEMA_VERSION is {head.version} (base {base.version}) "
+            f"but MIGRATIONS has no new {missing}"
         )
-    return findings
+        fix = f"append {missing} (name=..., apply=...) to MIGRATIONS in {MIGRATIONS_RELPATH}"
+    else:
+        message = (
+            f"new MIGRATIONS entries target {added} but bumping {base.version} -> "
+            f"{head.version} needs exactly {expected}, appended in order"
+        )
+        fix = "append one Migration per bumped version, in order, after the shipped entries"
+    return [Finding("SCHEMA-GATE-002", MIGRATIONS_RELPATH, head.registry_line, message, fix)]
 
 
 def check_companions(
@@ -350,8 +464,6 @@ def check_companions(
         return []
     findings: list[Finding] = []
     schema_changed = normalize_sql(base_schema) != normalize_sql(head_schema)
-    if base.version is None or head.version is None:
-        raise DiscoveryError("LATEST_SCHEMA_VERSION could not be parsed")
     if schema_changed and head.version <= base.version:
         findings.append(
             Finding(
@@ -370,20 +482,7 @@ def check_companions(
                 ),
             )
         )
-    for version, name in sorted(base.targets.items()):
-        if head.targets.get(version) != name:
-            findings.append(
-                Finding(
-                    "SCHEMA-GATE-002",
-                    MIGRATIONS_RELPATH,
-                    head.registry_line,
-                    (
-                        f"existing Migration(target_version={version}, name={name!r}) "
-                        "was removed or renamed; shipped migrations are append-only"
-                    ),
-                    "restore it and add a new migration for the new change instead",
-                )
-            )
+    findings.extend(_registry_order_findings(base, head))
     findings.extend(_version_step_findings(base, head))
     return findings
 
@@ -449,6 +548,20 @@ def _upsert_findings(
     findings: list[Finding] = []
     reported: set[str] = set(allow)
     for site in sorted(sites, key=lambda s: (s.path, s.line)):
+        if site.table is None:
+            findings.append(
+                Finding(
+                    "SCHEMA-GATE-007",
+                    site.path,
+                    site.line,
+                    "ON CONFLICT upsert whose INSERT INTO table cannot be resolved statically",
+                    (
+                        "keep INSERT INTO <literal table> and its ON CONFLICT clause in one "
+                        "string, concatenation or f-string so the PK registry check can see it"
+                    ),
+                )
+            )
+            continue
         if site.table not in schema_pks:
             continue  # derived/disposable index DBs are out of scope
         pk = registry.get(site.table)
@@ -456,7 +569,10 @@ def _upsert_findings(
             if site.table not in reported:
                 reported.add(site.table)
                 findings.append(_missing_registry_finding(site, schema_pks[site.table]))
-        elif site.target is not None and set(site.target) != set(pk):
+        elif site.target is not None and (
+            len(set(site.target)) != len(site.target)
+            or set(site.target) != {c.lower() for c in pk}
+        ):
             findings.append(
                 Finding(
                     "SCHEMA-GATE-005",
@@ -520,7 +636,7 @@ def check_pk_registry(
                 f"restore the literal _CURRENT_TABLE_PKS dict in {MIGRATIONS_RELPATH}",
             )
         ]
-    upserted = {site.table for site in sites if site.table in schema_pks}
+    upserted = {site.table for site in sites if site.table is not None and site.table in schema_pks}
     return (
         _registry_parity_findings(schema_pks, registry, head.table_pks_line)
         + _upsert_findings(schema_pks, registry, sites, allow)

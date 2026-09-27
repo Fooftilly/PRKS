@@ -144,7 +144,95 @@ class GateRepoTests(unittest.TestCase):
 
     def test_removing_shipped_migration_fails(self):
         self.write({"backend/db_migrations.py": _migrations(3, [(3, "second")], BASE_PKS)})
-        self.assertIn("removed or renamed", " ".join(f.message for f in self.findings()))
+        self.assertIn("removed, reordered, renamed or re-pointed", " ".join(f.message for f in self.findings()))
+
+    # review follow-ups (Qodo on #265) ------------------------------------
+
+    def test_whitespace_inside_quoted_default_is_a_schema_change(self):
+        self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "title TEXT DEFAULT 'a  b'")})
+        _git(self.repo, "commit", "-qam", "default")
+        self.base = _git(self.repo, "rev-parse", "HEAD").strip()
+        self.write({"backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "title TEXT DEFAULT 'a b'")})
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-001"])
+
+    def test_block_comments_are_not_schema_changes(self):
+        self.write({"backend/db_schema.sql": "/* header */\n" + BASE_SCHEMA})
+        self.assertEqual(self.codes(), [])
+
+    def test_duplicate_migration_target_fails(self):
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "title TEXT, year INTEGER"),
+                "backend/db_migrations.py": _migrations(3, [(2, "first"), (3, "a"), (3, "b")], BASE_PKS),
+            }
+        )
+        self.assertIn("target_version=3 more than once", " ".join(f.message for f in self.findings()))
+
+    def test_reordered_shipped_migrations_fail(self):
+        self.write({"backend/db_migrations.py": _migrations(3, [(2, "first"), (3, "second")], BASE_PKS)})
+        _git(self.repo, "commit", "-qam", "v3")
+        self.base = _git(self.repo, "rev-parse", "HEAD").strip()
+        self.write({"backend/db_migrations.py": _migrations(3, [(3, "second"), (2, "first")], BASE_PKS)})
+        self.assertIn("SCHEMA-GATE-002", self.codes())
+
+    def test_repointed_shipped_migration_apply_fails(self):
+        self.write(
+            {"backend/db_migrations.py": BASE_MIGRATIONS.replace("apply=_noop", "apply=_other")}
+        )
+        findings = self.findings()
+        self.assertEqual([f.code for f in findings], ["SCHEMA-GATE-002"])
+        self.assertIn("apply=_other", findings[0].message)
+
+    def test_positional_migration_arguments_are_understood(self):
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA.replace("title TEXT", "title TEXT, year INTEGER"),
+                "backend/db_migrations.py": _migrations(3, [(2, "first")], BASE_PKS).replace(
+                    ")\n", "    Migration(3, 'add_year', _noop),\n)\n"
+                ),
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
+    def test_split_concatenated_upsert_is_still_checked(self):
+        self.write(
+            {
+                "backend/membership.py": (
+                    "def f(conn, clause):\n"
+                    "    conn.execute('INSERT INTO works (id) VALUES (?) ' + clause + "
+                    "' ON CONFLICT DO NOTHING', ('x',))\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-003"])
+
+    def test_unresolvable_upsert_table_fails(self):
+        self.write(
+            {
+                "backend/dyn.py": (
+                    "def f(conn, table):\n"
+                    "    conn.execute(f'INSERT INTO {table} (id) VALUES (?) "
+                    "ON CONFLICT(id) DO NOTHING', ('x',))\n"
+                )
+            }
+        )
+        findings = self.findings()
+        self.assertEqual([f.code for f in findings], ["SCHEMA-GATE-007"])
+        self.assertEqual((findings[0].path, findings[0].line), ("backend/dyn.py", 2))
+
+    def test_docstrings_mentioning_upserts_are_ignored(self):
+        self.write({"backend/doc.py": 'def f():\n    """Uses ``ON CONFLICT DO NOTHING``."""\n'})
+        self.assertEqual(self.codes(), [])
+
+    def test_repeated_conflict_target_column_fails(self):
+        self.write(
+            {
+                "backend/sync.py": BASE_SYNC.replace(
+                    "ON CONFLICT (scope_type, scope_id)", "ON CONFLICT (scope_type, scope_id, scope_id)"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-005"])
 
     # 3. complete change passes --------------------------------------------
 
