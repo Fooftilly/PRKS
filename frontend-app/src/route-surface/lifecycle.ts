@@ -50,6 +50,11 @@ export interface RouteSurfacePresent {
   route: RouteInstanceInput
   /** Called only after this owner's generation is accepted. */
   render: (generation: number) => VNode
+  /**
+   * When false, skip TabContext beginRoute cleanup registration.
+   * The caller must dismiss explicitly on leave/destroy (Concepts in-place refresh).
+   */
+  armBeginRouteCleanup?: boolean
 }
 
 export interface RouteSurfaceState {
@@ -140,7 +145,9 @@ export function presentRouteSurface(input: RouteSurfacePresent): boolean {
   }
   session.paintedGeneration = generation
   session.route = route
-  armOwnerCleanup(input.owner, session)
+  if (input.armBeginRouteCleanup !== false) {
+    armOwnerCleanup(input.owner, session)
+  }
   if (session.mountedHost !== input.host) {
     unmountHost(session.mountedHost)
     session.mountedHost = input.host

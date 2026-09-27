@@ -22,8 +22,33 @@ import type { ConceptDetailAvailability, ConceptIndexAvailability } from './type
 const CONCEPTS_FEATURE = 'concepts'
 const CONCEPT_DETAIL_FEATURE = 'concept-detail'
 
+/** Set by the route coordinator before beginRoute when staying on Concepts. */
+export const CONCEPTS_RETAIN_SURFACE_KEY = '__prksRetainConceptsSurface'
+const CONCEPTS_CLEANUP_ARMED_KEY = '__prksConceptsCleanupArmed'
+
+type ConceptsOwner = RouteSurfaceOwner &
+  ConceptIntentOwner & {
+    [CONCEPTS_RETAIN_SURFACE_KEY]?: boolean
+    [CONCEPTS_CLEANUP_ARMED_KEY]?: boolean
+  }
+
+/**
+ * Concepts dismisses on leave/destroy, not on every beginRoute.
+ * Retained refreshes set CONCEPTS_RETAIN_SURFACE_KEY so cleanup is a no-op;
+ * the next present re-arms because beginRoute clears the cleanup set.
+ */
+function armConceptsOwnerCleanup(owner: ConceptsOwner): void {
+  if (owner[CONCEPTS_CLEANUP_ARMED_KEY] || typeof owner.registerCleanup !== 'function') return
+  owner[CONCEPTS_CLEANUP_ARMED_KEY] = true
+  owner.registerCleanup(() => {
+    owner[CONCEPTS_CLEANUP_ARMED_KEY] = false
+    if (owner[CONCEPTS_RETAIN_SURFACE_KEY]) return
+    dismissConcepts(owner)
+  })
+}
+
 export interface ConceptsIndexPresentInput {
-  owner: RouteSurfaceOwner & ConceptIntentOwner
+  owner: ConceptsOwner
   host: HTMLElement
   availability?: ConceptIndexAvailability
   items?: unknown
@@ -32,7 +57,7 @@ export interface ConceptsIndexPresentInput {
 }
 
 export interface ConceptDetailPresentInput {
-  owner: RouteSurfaceOwner & ConceptIntentOwner
+  owner: ConceptsOwner
   host: HTMLElement
   availability?: ConceptDetailAvailability
   concept?: unknown
@@ -61,6 +86,9 @@ export function presentConceptsIndex(input: ConceptsIndexPresentInput): void {
     owner: input.owner,
     host: input.host,
     route,
+    // Coordinator retains the host across Concepts→Concepts beginRoute; dismiss
+    // is explicit on leave (and via retain-aware owner cleanup on destroy).
+    armBeginRouteCleanup: false,
     render: (generation) => {
       const projection: ConceptIndexProjection = buildConceptIndexProjection({
         availability,
@@ -76,6 +104,7 @@ export function presentConceptsIndex(input: ConceptsIndexPresentInput): void {
       )
     },
   })
+  armConceptsOwnerCleanup(input.owner)
 }
 
 /** Paint one owner's Concept detail from an already-effective projection. */
@@ -103,6 +132,7 @@ export function presentConceptDetail(input: ConceptDetailPresentInput): void {
     owner: input.owner,
     host: input.host,
     route,
+    armBeginRouteCleanup: false,
     render: (generation) => {
       const projection: ConceptDetailProjection = buildConceptDetailProjection({
         availability,
@@ -116,6 +146,7 @@ export function presentConceptDetail(input: ConceptDetailPresentInput): void {
       )
     },
   })
+  armConceptsOwnerCleanup(input.owner)
 }
 
 /** Drop the Vue Concepts tree owned by this pane. Other owners stay mounted. */

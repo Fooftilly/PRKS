@@ -2,6 +2,7 @@ import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readRouteSurface } from '../../route-surface/lifecycle'
 import {
+  CONCEPTS_RETAIN_SURFACE_KEY,
   dismissConcepts,
   presentConceptDetail,
   presentConceptsIndex,
@@ -287,6 +288,86 @@ describe('Concepts route bridge', () => {
     expect(searchAfter?.value).toBe('alp')
     expect(el.textContent).toContain('Alpha')
     expect(el.textContent).not.toContain('Beta')
+  })
+
+  it('keeps searchQuery across production-style retain + same-host Concepts refresh', async () => {
+    // Mirrors prksRenderTabRoute: beginRoute runs owner cleanups with the
+    // retain flag set, then presents again into the same host with a new
+    // generation — without wiping contentDiv / minting a replacement host.
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    window.prksPaintScopeHost = () => {}
+    window.prksRefreshIcons = () => {}
+    const cleanups = new Set<() => void>()
+    const pane: {
+      tabId: string
+      isCurrent: () => boolean
+      registerCleanup: (fn: () => void) => () => void
+      [CONCEPTS_RETAIN_SURFACE_KEY]?: boolean
+    } = {
+      tabId: 'coord',
+      isCurrent: () => true,
+      registerCleanup(fn: () => void) {
+        cleanups.add(fn)
+        return () => {
+          cleanups.delete(fn)
+        }
+      },
+    }
+    const contentDiv = document.createElement('div')
+    document.body.appendChild(contentDiv)
+    const routeHost = document.createElement('div')
+    routeHost.setAttribute('data-prks-vue-route-host', 'true')
+    contentDiv.appendChild(routeHost)
+    const items = [
+      { id: 'C1', name: 'Alpha', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+      { id: 'C2', name: 'Beta', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+    ]
+    presentConceptsIndex({
+      owner: pane,
+      host: routeHost,
+      items,
+      generation: 1,
+    })
+    const search = routeHost.querySelector<HTMLInputElement>('#prks-concept-search')
+    expect(search).not.toBeNull()
+    search!.value = 'alp'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(search!.value).toBe('alp')
+    expect(routeHost.querySelector('[data-prks-concepts-index-view]')).not.toBeNull()
+
+    pane[CONCEPTS_RETAIN_SURFACE_KEY] = true
+    const beginRouteCleanups = Array.from(cleanups)
+    cleanups.clear()
+    beginRouteCleanups.forEach((fn) => fn())
+    pane[CONCEPTS_RETAIN_SURFACE_KEY] = false
+
+    expect(routeHost.querySelector('[data-prks-concepts-index-view]')).not.toBeNull()
+    expect(routeHost.querySelector<HTMLInputElement>('#prks-concept-search')?.value).toBe('alp')
+    // Production reuses :scope > [data-prks-vue-route-host] — same node.
+    const reused =
+      contentDiv.querySelector(':scope > [data-prks-vue-route-host]') === routeHost
+    expect(reused).toBe(true)
+    presentConceptsIndex({
+      owner: pane,
+      host: routeHost,
+      items: [
+        ...items,
+        { id: 'C3', name: 'Gamma', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+      ],
+      generation: 2,
+    })
+    await nextTick()
+    expect(routeHost.querySelector<HTMLInputElement>('#prks-concept-search')?.value).toBe('alp')
+    expect(routeHost.textContent).toContain('Alpha')
+    expect(routeHost.textContent).not.toContain('Beta')
+
+    // Leave Concepts: cleanup without retain tears the tree down.
+    const leaveCleanups = Array.from(cleanups)
+    cleanups.clear()
+    leaveCleanups.forEach((fn) => fn())
+    expect(routeHost.querySelector('[data-prks-concepts-index-view]')).toBeNull()
   })
 
   it('unmounts on dismiss without affecting another owner', () => {

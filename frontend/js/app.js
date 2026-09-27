@@ -2840,12 +2840,20 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
 /**
  * Mount the Vue Concepts index or detail surface in this pane.
  * `detail` must already be the authoritative effective Concept projection.
+ * Same-owner Concepts refresh reuses the existing host so local index state
+ * (searchQuery) survives an in-place projection update.
  */
 function prksPresentVueConcepts(ctx, contentDiv, detail) {
-    contentDiv.innerHTML = '';
-    const host = document.createElement('div');
-    host.setAttribute('data-prks-vue-route-host', 'true');
-    contentDiv.appendChild(host);
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
     const feature = detail.feature === 'concept-detail' ? 'concept-detail' : 'concepts';
     const request = {
         feature: feature,
@@ -3117,7 +3125,23 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonGroup = ctx.getEntity && ctx.getEntity('personGroup');
     const previousPersonGroupId = previousPersonGroup ? String(previousPersonGroup.id) : '';
     const previousPersonGroupMembersEditing = !!(ctx.ui && ctx.ui.personGroupMembersEditing);
+    /* Concepts→Concepts (index or detail) in the same mounted TabContext keeps
+     * the Vue host mounted so local search/filter state survives an accepted
+     * in-place refresh. Flag the owner before beginRoute: TabContext cleanups
+     * run there, and Concepts' retain-aware cleanup must see the flag. */
+    const sameConceptsWorkspace = !!(
+        (route.name === 'concepts' || route.name === 'concept-detail') &&
+        contentDiv.querySelector(
+            '[data-prks-concepts-index-view], [data-prks-concept-detail-view]'
+        )
+    );
+    if (sameConceptsWorkspace) {
+        ctx.__prksRetainConceptsSurface = true;
+    }
     const generation = ctx.beginRoute(route);
+    if (sameConceptsWorkspace) {
+        ctx.__prksRetainConceptsSurface = false;
+    }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
     const stale = function () {
@@ -3149,7 +3173,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
     // Drop lazy-thumb observations for this pane before the route paint replaces
     // its DOM — otherwise never-intersected cards stay retained by the singleton
     // IntersectionObserver after the subtree is detached.
-    if (!sameFolderWorkspace && typeof window.prksReleaseLazyWorkThumbs === 'function') {
+    if (
+        !sameFolderWorkspace &&
+        !sameConceptsWorkspace &&
+        typeof window.prksReleaseLazyWorkThumbs === 'function'
+    ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
     }
     // Keyboard/hover quick preview is body-mounted but keyed to a thumb in this
@@ -3161,7 +3189,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
@@ -3169,7 +3197,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
             window.prksVueDismissConcepts(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
-    } else {
+    } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
         // aria-busy alone does not block activation. Retained Delete (in main),
         // New Folder (tree head), and the owned right panel must not mutate the
@@ -3178,6 +3206,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
+    } else {
+        // Concepts in-place refresh: keep the Vue host; mark busy until paint.
+        contentDiv.setAttribute('aria-busy', 'true');
     }
 
     let titleOpts = {};
@@ -3954,7 +3985,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         items: [],
                         generation: generation,
                     });
-                    titleOpts = { notFound: true, notFoundTitle: 'Concepts not available offline' };
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Concepts not available offline',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                     break;
                 }
                 prksPresentVueConcepts(ctx, contentDiv, {
@@ -3964,6 +3999,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     generation: generation,
                 });
                 prksOfflinePrependBanner(contentDiv, offlineConcepts);
+                titleOpts = { skipPageEnter: sameConceptsWorkspace };
                 break;
             }
             case 'concept-detail': {
@@ -4010,7 +4046,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         conceptId: conceptId,
                         generation: generation,
                     });
-                    titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Concept not available offline',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                     break;
                 }
                 const item = resolvedConcept.concept;
@@ -4021,7 +4061,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         conceptId: conceptId,
                         generation: generation,
                     });
-                    titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Concept not found',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                 } else {
                     /* Backlink rows name a Work's Title, so a pending rename
                      * has to reach them. The overlay is applied here, so the
@@ -4049,7 +4093,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         generation: generation,
                     });
                     prksOfflinePrependBanner(contentDiv, offlineConcept);
-                    titleOpts = { entityTitle: effective.name || 'Concept' };
+                    titleOpts = {
+                        entityTitle: effective.name || 'Concept',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                 }
                 break;
             }

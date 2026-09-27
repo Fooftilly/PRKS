@@ -204,6 +204,7 @@ FEATURES = {
             "tests.e2e.test_app.ResearchIndexAndDetailPolishTests",
             "tests.e2e.test_app.ResearchPickerTests",
             "tests.e2e.test_concepts_durable",
+            "tests.e2e.test_concepts_route_surface",
             "tests.e2e.test_offline.OfflineConceptTests",
         ),
     },
