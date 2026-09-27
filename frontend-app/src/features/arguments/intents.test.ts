@@ -141,7 +141,15 @@ describe('Argument intents', () => {
     window.prksConfirmDestructive = vi.fn(async () => false)
     window.prksDeleteArgumentDurably = vi.fn()
     await browserArgumentIntents(detailOwner(), 1).remove(argument())
+    expect(window.prksConfirmDestructive).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmLabel: 'Delete Argument', title: 'Delete Argument?' }),
+    )
     expect(window.prksDeleteArgumentDurably).not.toHaveBeenCalled()
+
+    await browserArgumentIntents(detailOwner(), 1).remove(argument({ kind: 'stance' }))
+    expect(window.prksConfirmDestructive).toHaveBeenLastCalledWith(
+      expect.objectContaining({ confirmLabel: 'Delete Stance', title: 'Delete Stance?' }),
+    )
 
     window.prksConfirmDestructive = vi.fn(async () => true)
     window.prksDeleteArgumentDurably = vi.fn(async () => {

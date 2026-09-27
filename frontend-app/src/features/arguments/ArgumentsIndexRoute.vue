@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { argumentIntentsKey } from './intents'
 import { argumentKindUi, filterArgumentIndexItems, normalizeArgumentSearchQuery } from './match'
@@ -44,6 +45,14 @@ const {
 })
 
 const scopeLabel = computed(() => kindUi.value.plural)
+const pending = ref<string | null>(null)
+
+/** Header keeps both creates. An empty state exposes one. */
+const emptyActionKind = computed((): ArgumentKind => {
+  const kinds = kindUi.value.creationKinds
+  if (kinds.length === 1 && kinds[0]) return kinds[0]
+  return 'argument'
+})
 
 function tabSelected(kind: 'all' | ArgumentKind): boolean {
   return props.projection.kind === kind
@@ -53,8 +62,26 @@ function onFilter(kind: 'all' | ArgumentKind): void {
   intents?.filterKind(kind)
 }
 
+function actionBusy(key: string): boolean {
+  return pending.value === key
+}
+
+function actionBlocked(key: string): boolean {
+  return pending.value != null && pending.value !== key
+}
+
+async function withBusy(key: string, action: () => Promise<void>): Promise<void> {
+  if (pending.value) return
+  pending.value = key
+  try {
+    await action()
+  } finally {
+    if (pending.value === key) pending.value = null
+  }
+}
+
 function onCreate(kind: ArgumentKind): void {
-  void intents?.create(kind)
+  void withBusy(`create:${kind}`, () => intents?.create(kind) ?? Promise.resolve())
 }
 </script>
 
@@ -76,24 +103,26 @@ function onCreate(kind: ArgumentKind): void {
             Arguments &amp; Stances
           </h2>
           <div class="page-header__actions">
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
+            <PrksButton
               id="prks-argument-new"
               :data-prks-role="MUTATION_ROLE"
+              :busy="actionBusy('create:argument')"
+              :disabled="actionBlocked('create:argument')"
+              busy-label="Creating…"
               @click="onCreate('argument')"
             >
               New Argument
-            </button>
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary"
+            </PrksButton>
+            <PrksButton
               id="prks-stance-new"
               :data-prks-role="MUTATION_ROLE"
+              :busy="actionBusy('create:stance')"
+              :disabled="actionBlocked('create:stance')"
+              busy-label="Creating…"
               @click="onCreate('stance')"
             >
               New Stance
-            </button>
+            </PrksButton>
           </div>
         </div>
         <div ref="scopeHost" data-prks-role="index-scope-host"></div>
@@ -154,26 +183,28 @@ function onCreate(kind: ArgumentKind): void {
         <div v-else-if="showEmptyData" class="prks-research-index__empty">
           <p class="meta-row">{{ kindUi.empty }}</p>
           <p>
-            <button
-              v-if="kindUi.creationKinds.includes('argument')"
-              type="button"
-              class="prks-btn prks-btn--secondary"
+            <PrksButton
+              v-if="emptyActionKind === 'argument'"
               id="prks-argument-new-empty"
               :data-prks-role="MUTATION_ROLE"
+              :busy="actionBusy('create:argument')"
+              :disabled="actionBlocked('create:argument')"
+              busy-label="Creating…"
               @click="onCreate('argument')"
             >
               New Argument
-            </button>
-            <button
-              v-if="kindUi.creationKinds.includes('stance')"
-              type="button"
-              class="prks-btn prks-btn--secondary"
+            </PrksButton>
+            <PrksButton
+              v-else
               id="prks-stance-new-empty"
               :data-prks-role="MUTATION_ROLE"
+              :busy="actionBusy('create:stance')"
+              :disabled="actionBlocked('create:stance')"
+              busy-label="Creating…"
               @click="onCreate('stance')"
             >
               New Stance
-            </button>
+            </PrksButton>
           </p>
         </div>
         <div v-else-if="showSearchEmpty" class="prks-research-index__empty">

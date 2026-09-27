@@ -88,3 +88,20 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn(':id="`prks-arg-verdict-${index}`"', detail)
         self.assertIn(">Verdict</label>", detail)
         self.assertIn('aria-label="Verdict"', detail)
+        self.assertIn('busy-label="Saving…"', detail)
+        self.assertIn('busy-label="Editing…"', detail)
+        self.assertIn('busy-label="Deleting…"', detail)
+        self.assertIn('busy-label="Creating…"', detail)
+        self.assertIn('busy-label="Choosing…"', detail)
+        self.assertIn('busy-label="Adding…"', detail)
+        self.assertIn("finally", detail)
+        index = (FEATURE / "ArgumentsIndexRoute.vue").read_text()
+        self.assertIn('busy-label="Creating…"', index)
+        self.assertIn('id="prks-argument-new"', index)
+        self.assertIn('id="prks-stance-new"', index)
+        self.assertIn('id="prks-argument-new-empty"', index)
+        self.assertIn('id="prks-stance-new-empty"', index)
+        self.assertIn(
+            "confirmLabel: argument.kind === 'stance' ? 'Delete Stance' : 'Delete Argument'",
+            intents,
+        )

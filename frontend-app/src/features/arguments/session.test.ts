@@ -27,6 +27,8 @@ afterEach(() => {
   delete window.prksEscapeHtml
   delete window.prksPrepareArgumentEdit
   delete window.prksCommitArgumentEditorDraft
+  delete window.prksPromptTextDialog
+  delete window.prksConfirmDestructive
   delete window.prksTabContextOwnsEntityRoute
   delete window.prksNavigate
   delete window.prksAlertDialog
@@ -172,6 +174,13 @@ describe('Arguments route bridge', () => {
     expect(el.textContent).toContain('This list has not been cached on this device.')
     expect(el.textContent).not.toContain('Alienation')
     expect(el.querySelector('#prks-argument-new')).toBeNull()
+
+    presentArgumentsIndex({ owner: pane, host: el, kind: 'all', items: [], generation: 4 })
+    expect(el.textContent).toContain('No Arguments or Stances yet.')
+    expect(el.querySelector('#prks-argument-new')).not.toBeNull()
+    expect(el.querySelector('#prks-stance-new')).not.toBeNull()
+    expect(el.querySelector('#prks-argument-new-empty')).not.toBeNull()
+    expect(el.querySelector('#prks-stance-new-empty')).toBeNull()
   })
 
   it('paints detail overlays, unavailable, and not-found without fetch', () => {
@@ -200,6 +209,10 @@ describe('Arguments route bridge', () => {
       generation: 1,
     })
     expect(el.querySelector('#prks-arg-view-graph')).not.toBeNull()
+    expect(el.querySelector('#prks-arg-edit')?.getAttribute('data-prks-role')).toBe(
+      'argument-mutation-control',
+    )
+    expect(el.querySelector('#prks-arg-delete')?.className).toContain('prks-btn--quiet-danger')
     expect(el.textContent).toContain('Pending position')
     expect(el.textContent).toContain('Pending argument')
     expect(el.textContent).toContain('Pending response')
@@ -377,6 +390,101 @@ describe('Arguments route bridge', () => {
     cleanups.clear()
     leave.forEach((fn) => fn())
     expect(document.body.querySelector('[data-prks-arguments-index-view]')).toBeNull()
+  })
+
+  it('marks awaited creates busy and restores them after the prompt', async () => {
+    paintHelpers()
+    let release: (value: string | null) => void = () => {}
+    window.prksPromptTextDialog = () =>
+      new Promise((resolve) => {
+        release = resolve
+      })
+    const pane = {
+      ...owner(),
+      lastResolvedRoute: { name: 'arguments' as const },
+    }
+    const el = host()
+    presentArgumentsIndex({ owner: pane, host: el, items: rows, generation: 1 })
+    el.querySelector<HTMLButtonElement>('#prks-argument-new')?.click()
+    await nextTick()
+    const argumentBtn = el.querySelector<HTMLButtonElement>('#prks-argument-new')
+    const stanceBtn = el.querySelector<HTMLButtonElement>('#prks-stance-new')
+    expect(argumentBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(argumentBtn?.disabled).toBe(true)
+    expect(argumentBtn?.textContent).toContain('Creating…')
+    expect(stanceBtn?.disabled).toBe(true)
+    expect(stanceBtn?.textContent).toContain('New Stance')
+    release(null)
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    expect(argumentBtn?.getAttribute('aria-busy')).toBeNull()
+    expect(argumentBtn?.disabled).toBe(false)
+    expect(argumentBtn?.textContent).toContain('New Argument')
+    expect(stanceBtn?.disabled).toBe(false)
+  })
+
+  it('marks edit and save busy, then restores save after a failed commit', async () => {
+    paintHelpers()
+    let releaseEdit: () => void = () => {}
+    window.prksPrepareArgumentEdit = () =>
+      new Promise((resolve) => {
+        releaseEdit = resolve
+      })
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksAlertDialog = vi.fn(async () => {})
+    const pane = owner()
+    const el = host()
+    presentArgumentDetail({
+      owner: pane,
+      host: el,
+      argument: {
+        id: 'A1',
+        name: 'Base',
+        kind: 'argument',
+        main_text: 'Body',
+        targets: [],
+        sources: [],
+        responses: [],
+        mentions: [],
+        verdicts: [{ id: 'supports', label: 'Supports' }],
+      },
+      argumentId: 'A1',
+      generation: 1,
+    })
+    el.querySelector<HTMLButtonElement>('#prks-arg-edit')?.click()
+    await nextTick()
+    const editBtn = el.querySelector<HTMLButtonElement>('#prks-arg-edit')
+    expect(editBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(editBtn?.disabled).toBe(true)
+    expect(editBtn?.textContent).toContain('Editing…')
+    expect(el.querySelector<HTMLButtonElement>('#prks-arg-response')?.disabled).toBe(true)
+    releaseEdit()
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    expect(el.querySelector('#prks-arg-form')).not.toBeNull()
+
+    let rejectSave: (err: Error) => void = () => {}
+    window.prksCommitArgumentEditorDraft = () =>
+      new Promise((_, reject) => {
+        rejectSave = reject
+      })
+    el.querySelector<HTMLButtonElement>('#prks-arg-form button[type=submit]')?.click()
+    await nextTick()
+    const saveBtn = el.querySelector<HTMLButtonElement>('#prks-arg-form button[type=submit]')
+    expect(saveBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(saveBtn?.disabled).toBe(true)
+    expect(saveBtn?.textContent).toContain('Saving…')
+    rejectSave(new Error('revision'))
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve()
+      await nextTick()
+    }
+    expect(saveBtn?.getAttribute('aria-busy')).toBeNull()
+    expect(saveBtn?.disabled).toBe(false)
+    expect(saveBtn?.textContent).toContain('Save')
+    expect(el.querySelector('#prks-arg-form')).not.toBeNull()
   })
 
   it('registers bridges and unmounts one owner without affecting the other', () => {

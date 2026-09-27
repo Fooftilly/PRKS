@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { argumentIntentsKey } from './intents'
 import { defaultArgumentVerdict } from './match'
 import { researchMarkdownHtml } from './markdown'
@@ -34,7 +35,7 @@ const mentionsHeadHost = ref<HTMLElement | null>(null)
 const mentionsHost = ref<HTMLElement | null>(null)
 
 const editing = ref(false)
-const saving = ref(false)
+const pending = ref<string | null>(null)
 const draft = ref<ArgumentEditorDraft | null>(null)
 
 const availability = computed(() => props.projection.availability)
@@ -175,6 +176,24 @@ function leaveEdit(): void {
   intents?.cancelEdit()
 }
 
+function actionBusy(key: string): boolean {
+  return pending.value === key
+}
+
+function actionBlocked(key: string): boolean {
+  return pending.value != null && pending.value !== key
+}
+
+async function withBusy(key: string, action: () => Promise<void>): Promise<void> {
+  if (pending.value) return
+  pending.value = key
+  try {
+    await action()
+  } finally {
+    if (pending.value === key) pending.value = null
+  }
+}
+
 function verdictChoices(selected: string): { id: string; label: string }[] {
   const verdicts = argument.value?.verdicts ?? []
   const choices = verdicts.map((verdict) => ({ id: verdict.id, label: verdict.label || verdict.id }))
@@ -194,10 +213,12 @@ async function onEdit(): Promise<void> {
   const current = argument.value
   if (!current || !intents) return
   const generation = props.projection.generation
-  const ok = await intents.enterEdit(current.id)
-  if (!ok || props.projection.generation !== generation || argument.value?.id !== current.id) return
-  draft.value = draftFromArgument(current)
-  editing.value = true
+  await withBusy('edit', async () => {
+    const ok = await intents.enterEdit(current.id)
+    if (!ok || props.projection.generation !== generation || argument.value?.id !== current.id) return
+    draft.value = draftFromArgument(current)
+    editing.value = true
+  })
 }
 
 function onCancel(): void {
@@ -207,9 +228,8 @@ function onCancel(): void {
 async function onSave(): Promise<void> {
   const current = argument.value
   const body = draft.value
-  if (!current || !body || !intents || saving.value) return
-  saving.value = true
-  try {
+  if (!current || !body || !intents) return
+  await withBusy('save', async () => {
     const ok = await intents.save(current.id, {
       name: body.name,
       kind: body.kind,
@@ -221,9 +241,7 @@ async function onSave(): Promise<void> {
       editing.value = false
       draft.value = null
     }
-  } finally {
-    saving.value = false
-  }
+  })
 }
 
 function onViewGraph(): void {
@@ -231,42 +249,50 @@ function onViewGraph(): void {
 }
 
 function onResponse(): void {
-  if (argument.value) void intents?.createResponse(argument.value)
+  const current = argument.value
+  if (!current) return
+  void withBusy('response', () => intents?.createResponse(current) ?? Promise.resolve())
 }
 
 function onDelete(): void {
-  if (argument.value) void intents?.remove(argument.value)
+  const current = argument.value
+  if (!current) return
+  void withBusy('delete', () => intents?.remove(current) ?? Promise.resolve())
 }
 
 function addTarget(): void {
   const body = draft.value
   const current = argument.value
   if (!body || !current) return
-  const verdict = defaultArgumentVerdict(body.kind)
-  const row: ArgumentEditorTarget = {
-    type: 'position',
-    id: '',
-    name: 'Choose…',
-    kind: '',
-    verdict_id: verdict,
-  }
-  body.targets.push(row)
-  void intents?.pickTarget(current.id, (picked) => {
-    row.type = picked.type
-    row.id = picked.id
-    row.name = picked.name || picked.id
-    row.kind = picked.kind
+  void withBusy('add-target', async () => {
+    const verdict = defaultArgumentVerdict(body.kind)
+    const row: ArgumentEditorTarget = {
+      type: 'position',
+      id: '',
+      name: 'Choose…',
+      kind: '',
+      verdict_id: verdict,
+    }
+    body.targets.push(row)
+    await intents?.pickTarget(current.id, (picked) => {
+      row.type = picked.type
+      row.id = picked.id
+      row.name = picked.name || picked.id
+      row.kind = picked.kind
+    })
   })
 }
 
 function addSource(): void {
   const body = draft.value
   if (!body) return
-  const row: ArgumentEditorSource = { work_id: '', work_title: 'Choose a work…', pages: '' }
-  body.sources.push(row)
-  void intents?.pickSource((picked) => {
-    row.work_id = picked.work_id
-    row.work_title = picked.work_title || picked.work_id
+  void withBusy('add-source', async () => {
+    const row: ArgumentEditorSource = { work_id: '', work_title: 'Choose a work…', pages: '' }
+    body.sources.push(row)
+    await intents?.pickSource((picked) => {
+      row.work_id = picked.work_id
+      row.work_title = picked.work_title || picked.work_id
+    })
   })
 }
 
@@ -278,19 +304,23 @@ function removeSource(index: number): void {
   draft.value?.sources.splice(index, 1)
 }
 
-function repaintTarget(row: ArgumentEditorTarget): void {
-  void intents?.pickTarget(argument.value?.id || '', (picked) => {
-    row.type = picked.type
-    row.id = picked.id
-    row.name = picked.name || picked.id
-    row.kind = picked.kind
+function repaintTarget(row: ArgumentEditorTarget, index: number): void {
+  void withBusy(`target:${index}`, async () => {
+    await intents?.pickTarget(argument.value?.id || '', (picked) => {
+      row.type = picked.type
+      row.id = picked.id
+      row.name = picked.name || picked.id
+      row.kind = picked.kind
+    })
   })
 }
 
-function repaintSource(row: ArgumentEditorSource): void {
-  void intents?.pickSource((picked) => {
-    row.work_id = picked.work_id
-    row.work_title = picked.work_title || picked.work_id
+function repaintSource(row: ArgumentEditorSource, index: number): void {
+  void withBusy(`source:${index}`, async () => {
+    await intents?.pickSource((picked) => {
+      row.work_id = picked.work_id
+      row.work_title = picked.work_title || picked.work_id
+    })
   })
 }
 
@@ -366,33 +396,38 @@ watch(
               >
                 View in graph
               </button>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary"
+              <PrksButton
                 id="prks-arg-edit"
                 :data-prks-role="MUTATION_ROLE"
+                :busy="actionBusy('edit')"
+                :disabled="actionBlocked('edit')"
+                busy-label="Editing…"
                 @click="onEdit"
               >
                 Edit
-              </button>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary"
+              </PrksButton>
+              <PrksButton
                 id="prks-arg-response"
                 :data-prks-role="MUTATION_ROLE"
+                :busy="actionBusy('response')"
+                :disabled="actionBlocked('response')"
+                busy-label="Creating…"
                 @click="onResponse"
               >
                 New response
-              </button>
-              <button
-                type="button"
-                class="prks-btn prks-btn--quiet-danger prks-page-action--destructive"
+              </PrksButton>
+              <PrksButton
                 id="prks-arg-delete"
+                variant="ghost"
+                class="prks-btn--quiet-danger prks-page-action--destructive"
                 :data-prks-role="MUTATION_ROLE"
+                :busy="actionBusy('delete')"
+                :disabled="actionBlocked('delete')"
+                busy-label="Deleting…"
                 @click="onDelete"
               >
                 Delete
-              </button>
+              </PrksButton>
             </template>
           </div>
         </div>
@@ -438,14 +473,16 @@ watch(
           <p v-if="!draft.targets.length" class="meta-row">None yet.</p>
           <div v-for="(row, index) in draft.targets" :key="index" class="prks-arg-row">
             <span class="prks-research-row__kicker">{{ targetKindLabel(row) }}</span>
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary prks-arg-rel__pick"
+            <PrksButton
+              class="prks-arg-rel__pick"
               data-pick="target"
-              @click="repaintTarget(row)"
+              :busy="actionBusy(`target:${index}`)"
+              :disabled="actionBlocked(`target:${index}`)"
+              busy-label="Choosing…"
+              @click="repaintTarget(row, index)"
             >
               {{ row.name || row.id || 'Choose…' }}
-            </button>
+            </PrksButton>
             <label class="form-field-label" :for="`prks-arg-verdict-${index}`">Verdict</label>
             <select
               :id="`prks-arg-verdict-${index}`"
@@ -467,27 +504,31 @@ watch(
             </button>
           </div>
         </div>
-        <button
-          type="button"
-          class="prks-btn prks-btn--secondary prks-btn--sm"
+        <PrksButton
           id="prks-arg-add-target"
+          size="sm"
+          :busy="actionBusy('add-target')"
+          :disabled="actionBlocked('add-target')"
+          busy-label="Adding…"
           @click="addTarget"
         >
           Add target
-        </button>
+        </PrksButton>
         <h3>Sources</h3>
         <p class="meta-row">Works where this was made or taken.</p>
         <div id="prks-arg-sources">
           <p v-if="!draft.sources.length" class="meta-row">None yet.</p>
           <div v-for="(row, index) in draft.sources" :key="index" class="prks-arg-row">
-            <button
-              type="button"
-              class="prks-btn prks-btn--secondary prks-arg-rel__pick"
+            <PrksButton
+              class="prks-arg-rel__pick"
               data-pick="source"
-              @click="repaintSource(row)"
+              :busy="actionBusy(`source:${index}`)"
+              :disabled="actionBlocked(`source:${index}`)"
+              busy-label="Choosing…"
+              @click="repaintSource(row, index)"
             >
               {{ row.work_title || row.work_id || 'Choose a work…' }}
-            </button>
+            </PrksButton>
             <input
               v-model="row.pages"
               type="text"
@@ -506,16 +547,20 @@ watch(
             </button>
           </div>
         </div>
-        <button
-          type="button"
-          class="prks-btn prks-btn--secondary prks-btn--sm"
+        <PrksButton
           id="prks-arg-add-source"
+          size="sm"
+          :busy="actionBusy('add-source')"
+          :disabled="actionBlocked('add-source')"
+          busy-label="Adding…"
           @click="addSource"
         >
           Add source
-        </button>
+        </PrksButton>
         <p class="prks-arg-form__actions">
-          <button type="submit" class="prks-btn prks-btn--primary" :disabled="saving">Save</button>
+          <PrksButton type="submit" variant="primary" class="prks-btn prks-btn--primary" :busy="actionBusy('save')" busy-label="Saving…">
+            Save
+          </PrksButton>
         </p>
       </form>
     </template>

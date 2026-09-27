@@ -261,9 +261,9 @@ export function browserArgumentIntents(
       const ok =
         typeof confirmFn === 'function'
           ? await confirmFn({
-              title: 'Delete Argument?',
+              title: argument.kind === 'stance' ? 'Delete Stance?' : 'Delete Argument?',
               message: 'Remove note references and incoming responses first if deletion is blocked.',
-              confirmLabel: 'Delete',
+              confirmLabel: argument.kind === 'stance' ? 'Delete Stance' : 'Delete Argument',
             })
           : true
       if (!ok) return
