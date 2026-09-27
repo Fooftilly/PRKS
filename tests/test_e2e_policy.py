@@ -148,6 +148,14 @@ class AffectedMappingTests(unittest.TestCase):
             bundle,
         ])
         self.assertEqual(test_only["mode"], "full")
+        spec_only = policy.plan_ci_e2e([
+            "frontend-app/src/features/performance-diagnostics/diagnostics.spec.ts",
+            bundle,
+        ])
+        self.assertEqual(spec_only["mode"], "full")
+        self.assertTrue(spec_only["run"])
+        sw_without_bundle = policy.plan_ci_e2e([source, "frontend/sw.js"])
+        self.assertEqual(sw_without_bundle["mode"], "full")
         for rule in policy.AFFECTED_RULES:
             for pattern in rule["paths"]:
                 self.assertNotEqual(pattern, "frontend-app/src/**")

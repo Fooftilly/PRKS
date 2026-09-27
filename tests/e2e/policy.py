@@ -1100,10 +1100,31 @@ def _is_vue_build_companion(rel: str) -> bool:
     }
 
 
+_VUE_PRODUCTION_SOURCE_SUFFIXES = (".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs")
+
+
+def _is_vue_production_source_path(rel: str) -> bool:
+    """Known Vue production source. Test and spec files do not qualify."""
+    rel = _posix(rel)
+    if not rel.startswith("frontend-app/src/"):
+        return False
+    name = rel.rsplit("/", 1)[-1].lower()
+    if name.endswith(".d.ts"):
+        return False
+    suffix = ""
+    for candidate in _VUE_PRODUCTION_SOURCE_SUFFIXES:
+        if name.endswith(candidate):
+            suffix = candidate
+            break
+    if not suffix:
+        return False
+    stem = name[: -len(suffix)]
+    return not stem.endswith((".test", ".spec"))
+
+
 def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:
     """Explicit feature-owned production Vue source. Not shared core, not a test."""
-    rel = _posix(rel)
-    if not rel.startswith("frontend-app/src/") or rel.endswith((".test.ts", ".test.js")):
+    if not _is_vue_production_source_path(rel):
         return False
     if classified.get("skip") or classified.get("unmapped") or classified.get("ci_full"):
         return False
