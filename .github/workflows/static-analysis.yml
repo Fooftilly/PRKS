@@ -170,11 +170,12 @@ jobs:
             exit 1
           fi
 
-      # Storybook is maintainer-only. Build only after a successful diff
-      # against a defined baseline (PR base, or a fetched nonzero push
-      # before SHA) that touches frontend-app/ or this workflow. A missing
-      # baseline, a failed fetch, or a failed diff fails the step. A
-      # readable diff with no matching path is the only skip.
+      # Storybook is maintainer-only. pull_request and push build only
+      # after a successful diff against a defined baseline (PR base, or a
+      # fetched nonzero push before SHA) that touches frontend-app/ or this
+      # workflow. A missing baseline, a failed fetch, or a failed diff fails
+      # the step. A readable diff with no matching path is the only skip.
+      # workflow_dispatch builds with no diff and does not invent a baseline.
       - name: Storybook build when frontend tooling changes
         shell: bash
         env:
@@ -241,6 +242,9 @@ jobs:
             fi
             fetch_baseline "${PRKS_PUSH_BEFORE}"
             apply_successful_diff "${PRKS_PUSH_BEFORE}"
+          elif [[ "$event_name" == "workflow_dispatch" ]]; then
+            echo "Manual Fast Static Analysis run; building Storybook."
+            run_storybook=true
           else
             echo "No Storybook diff baseline for event ${event_name}." >&2
             exit 1

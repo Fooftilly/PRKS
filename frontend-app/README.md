@@ -60,7 +60,7 @@ npm run storybook          # http://localhost:6006
 npm run build-storybook    # writes frontend-app/storybook-static (gitignored)
 ```
 
-CI runs `build-storybook` from the Vue job only after a successful diff against the PR base or a fetched nonzero push-before SHA touches `frontend-app/` or `.github/workflows/static-analysis.yml`. A missing or unreadable baseline fails that step. Typecheck and Vitest still cover the primitives. Storybook 10.6 has no lightweight story or accessibility command that avoids a browser runner, so CI does not add `@storybook/test-runner` or the Vitest browser addon. The accessibility addon checks stories in the Storybook UI.
+CI runs `build-storybook` from the Vue job after a successful diff against the PR base or a fetched nonzero push-before SHA touches `frontend-app/` or `.github/workflows/static-analysis.yml`. A missing or unreadable baseline fails that step. A manual `workflow_dispatch` run builds Storybook without a diff. Typecheck and Vitest still cover the primitives. Storybook 10.6 has no lightweight story or accessibility command that avoids a browser runner, so CI does not add `@storybook/test-runner` or the Vitest browser addon. The accessibility addon checks stories in the Storybook UI.
 
 Storybook MCP (`@storybook/addon-mcp`) is preview and needs a running Storybook dev server plus a user-level agent connection. It is not committed. Maintainer setup:
 
