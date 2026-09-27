@@ -4919,36 +4919,6 @@ def _locator_for_drop_target(page, target_info):
 
 
 _WORKSPACE_DRAG_SESSIONS = {}
-_WORKSPACE_DRAG_CDP = {}
-
-
-def _workspace_drag_cdp_payload():
-    return {
-        "items": [{"mimeType": "text/plain", "data": ""}],
-        "dragOperationsMask": 1,
-    }
-
-
-def _workspace_drag_cdp_session(page):
-    key = id(page)
-    session = _WORKSPACE_DRAG_CDP.get(key)
-    if session is None:
-        session = page.context.new_cdp_session(page)
-        _WORKSPACE_DRAG_CDP[key] = session
-    return session
-
-
-def _cdp_dispatch_workspace_drag(page, event_type, x, y):
-    _workspace_drag_cdp_session(page).send(
-        "Input.dispatchDragEvent",
-        {
-            "type": event_type,
-            "x": float(x),
-            "y": float(y),
-            "modifiers": 0,
-            "data": _workspace_drag_cdp_payload(),
-        },
-    )
 
 
 def _patch_workspace_drag_mouse(page):
@@ -4968,9 +4938,10 @@ def _patch_workspace_drag_mouse(page):
                 t = i / steps
                 cx = lx + (x - lx) * t
                 cy = ly + (y - ly) * t
-                _cdp_dispatch_workspace_drag(page, "dragOver", cx, cy)
+                _dispatch_workspace_drag_at(page, "dragover", cx, cy)
                 sess["last_x"] = cx
                 sess["last_y"] = cy
+            _flush_workspace_drag_frames(page)
             return
         return real_move(x, y, steps=steps)
 
@@ -4983,10 +4954,38 @@ def _patch_workspace_drag_mouse(page):
                 "() => document.body.classList.contains('prks-workspace-dragging')"
             )
             if dragging:
-                _cdp_dispatch_workspace_drag(page, "drop", lx, ly)
+                _dispatch_workspace_drag_at(page, "drop", lx, ly)
+            page.evaluate(
+                """() => {
+                    const source = window.__prksE2eDragSource;
+                    const dt = window.__prksE2eDragDataTransfer;
+                    if (source && dt) {
+                        source.dispatchEvent(new DragEvent('dragend', {
+                            bubbles: true,
+                            cancelable: true,
+                            dataTransfer: dt,
+                        }));
+                    }
+                    delete window.__prksE2eDragSource;
+                    delete window.__prksE2eDragDataTransfer;
+                    // Pragmatic honey-pot cleanup after a cancelled synthetic drag.
+                    const move = new PointerEvent('pointermove', {
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: 8,
+                        clientY: 8,
+                        pointerId: 1,
+                        pointerType: 'mouse',
+                    });
+                    window.dispatchEvent(move);
+                    document.dispatchEvent(move);
+                }"""
+            )
+            page._prks_real_mouse_move(8, 8)
             return
         return real_up(button=button, click_count=click_count)
 
+    page._prks_real_mouse_move = real_move
     real_mouse.move = move
     real_mouse.up = up
 
@@ -4998,22 +4997,88 @@ def _wait_workspace_drag_session_end(page, timeout=30000):
     )
 
 
+def _flush_workspace_drag_frames(page):
+    page.evaluate(
+        "() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+    )
+
+
+def _dispatch_workspace_drag_at(page, event_type, x, y):
+    page.evaluate(
+        """([type, px, py]) => {
+            const dt = window.__prksE2eDragDataTransfer;
+            if (!dt) throw new Error('no active workspace drag DataTransfer');
+            const target = document.elementFromPoint(px, py) || document.body;
+            if (type === 'dragover') {
+                target.dispatchEvent(new DragEvent('dragenter', {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: px,
+                    clientY: py,
+                    dataTransfer: dt,
+                }));
+            }
+            target.dispatchEvent(new DragEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                clientX: px,
+                clientY: py,
+                dataTransfer: dt,
+            }));
+        }""",
+        [event_type, x, y],
+    )
+
+
+def _dispatch_workspace_dragstart(page, x, y):
+    """Fire a native-shaped dragstart on the Pragmatic-registered source at (x, y)."""
+    started = page.evaluate(
+        """([px, py]) => {
+            const el = document.elementFromPoint(px, py);
+            if (!el) return false;
+            let source = null;
+            const grip = el.closest('.prks-tile-header__grip');
+            if (grip) {
+                source = grip.closest('.prks-tile[data-prks-tab-id]');
+            } else {
+                source = el.closest('.prks-workspace-tab');
+            }
+            if (!source) return false;
+            const dt = new DataTransfer();
+            window.__prksE2eDragDataTransfer = dt;
+            window.__prksE2eDragSource = source;
+            const event = new DragEvent('dragstart', {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clientX: px,
+                clientY: py,
+                dataTransfer: dt,
+            });
+            return source.dispatchEvent(event);
+        }""",
+        [x, y],
+    )
+    if not started:
+        raise RuntimeError("workspace dragstart did not dispatch at (%s, %s)" % (x, y))
+
+
 def _begin_workspace_drag(page, start_xy):
     """Start a Pragmatic/HTML5 workspace drag at `start_xy`.
 
     Playwright pointer events do not reliably arm Chromium HTML5 dragstart for Pragmatic
-    sensors. Uses CDP Input.dispatchDragEvent for dragStart, then routes further
-    page.mouse.move() calls as dragOver and page.mouse.up() as drop. Caller continues with
-    move/up (or Escape / prksWorkspaceCancelActiveDrag mid-flight).
+    sensors. Dispatches dragstart on the registered source, then routes further
+    page.mouse.move() calls as dragover and page.mouse.up() as drop. Caller continues
+    with move/up (or Escape / prksWorkspaceCancelActiveDrag mid-flight).
     """
     sx, sy = start_xy
     _patch_workspace_drag_mouse(page)
     sess = _WORKSPACE_DRAG_SESSIONS.setdefault(id(page), {})
-    sess["active"] = True
     sess["last_x"] = sx
     sess["last_y"] = sy
-    page.mouse.move(sx, sy)
-    _cdp_dispatch_workspace_drag(page, "dragStart", sx, sy)
+    page._prks_real_mouse_move(sx, sy)
+    _dispatch_workspace_dragstart(page, sx, sy)
+    sess["active"] = True
     page.wait_for_function(
         "() => document.body.classList.contains('prks-workspace-dragging')",
         timeout=10000,
