@@ -13,6 +13,12 @@ _API = os.path.join(_FRONTEND, "js", "api.js")
 _PALETTE = os.path.join(_FRONTEND, "js", "command-palette.js")
 _GRAPH = os.path.join(_FRONTEND, "js", "components", "research-graph.js")
 _CONCEPTS = os.path.join(_FRONTEND, "js", "components", "concepts.js")
+_CONCEPTS_VUE_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptDetailRoute.vue"
+)
+_CONCEPTS_VUE_INTENTS = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "intents.ts"
+)
 _POSITIONS = os.path.join(_FRONTEND, "js", "components", "positions.js")
 _ARGS = os.path.join(_FRONTEND, "js", "components", "arguments.js")
 _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
@@ -102,11 +108,11 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("route.name === 'research-graph'", nav)
 
     def test_view_in_graph_actions(self):
-        self.assertIn("prks-concept-view-graph", _read(_CONCEPTS))
+        self.assertIn("prks-concept-view-graph", _read(_CONCEPTS_VUE_DETAIL))
         self.assertIn("prks-position-view-graph", _read(_POSITIONS))
         self.assertIn("prks-arg-view-graph", _read(_ARGS))
         self.assertIn("prks-person-view-graph", _read(_PEOPLE))
-        self.assertIn("prksGraphFocusHash", _read(_CONCEPTS))
+        self.assertIn("prksGraphFocusHash", _read(_CONCEPTS_VUE_INTENTS))
         self.assertIn("prksGraphFocusHash('person'", _read(_PEOPLE))
         self.assertIn("navigate-research-graph", _read(_PALETTE))
         self.assertIn("View this record in graph", _read(_PALETTE))

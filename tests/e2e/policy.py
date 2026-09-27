@@ -601,6 +601,18 @@ AFFECTED_RULES = (
         "note": "Vue Progress route (#248) → browse. Stories stay catalog-only. Shared Vue infrastructure stays unmapped.",
     },
     {
+        "name": "concepts-vue",
+        "paths": ("frontend-app/src/features/concepts/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("concepts",),
+        "note": "Vue Concepts index/detail (#259) → concepts. Shared route-surface stays unmapped (CI full).",
+    },
+    {
         "name": "settings",
         "paths": (
             "frontend/js/components/settings.js",

@@ -2837,6 +2837,37 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Concepts index or detail surface in this pane.
+ * `detail` must already be the authoritative effective Concept projection.
+ */
+function prksPresentVueConcepts(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const feature = detail.feature === 'concept-detail' ? 'concept-detail' : 'concepts';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        concept: detail.concept,
+        conceptId: detail.conceptId,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'concept-detail' && typeof window.prksVuePresentConceptDetail === 'function') {
+        window.prksVuePresentConceptDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'concepts' && typeof window.prksVuePresentConceptsIndex === 'function') {
+        window.prksVuePresentConceptsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3133,6 +3164,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (!sameFolderWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
+        }
+        if (typeof window.prksVueDismissConcepts === 'function') {
+            window.prksVueDismissConcepts(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {
@@ -3914,13 +3948,21 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     cachedConcepts || [], conceptOps);
                 if (stale()) return;
                 if (!cachedConcepts && !(conceptItems && conceptItems.length)) {
-                    if (typeof renderConceptsIndexUnavailable === 'function') renderConceptsIndexUnavailable(contentDiv);
-                    else prksOfflineRenderUnavailable(contentDiv, 'Concepts not available offline');
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concepts',
+                        availability: 'unavailable',
+                        items: [],
+                        generation: generation,
+                    });
                     titleOpts = { notFound: true, notFoundTitle: 'Concepts not available offline' };
                     break;
                 }
-                if (typeof renderConceptsIndex === 'function') renderConceptsIndex(ctx, conceptItems, contentDiv);
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concepts</h2></div>';
+                prksPresentVueConcepts(ctx, contentDiv, {
+                    feature: 'concepts',
+                    availability: 'ready',
+                    items: conceptItems,
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineConcepts);
                 break;
             }
@@ -3962,19 +4004,28 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     resolvedConcept.unavailable = !pendingConcept;
                 }
                 if (resolvedConcept.unavailable) {
-                    prksOfflineRenderUnavailable(contentDiv, 'Concept not available offline');
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concept-detail',
+                        availability: 'unavailable',
+                        conceptId: conceptId,
+                        generation: generation,
+                    });
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
                     break;
                 }
                 const item = resolvedConcept.concept;
                 if (!item) {
-                    if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concept-detail',
+                        availability: 'not-found',
+                        conceptId: conceptId,
+                        generation: generation,
+                    });
                     titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
                 } else {
                     /* Backlink rows name a Work's Title, so a pending rename
                      * has to reach them. The overlay is applied here, so the
-                     * component stays ignorant of durable operations and the
+                     * Vue surface stays ignorant of durable operations and the
                      * cached Concept is never rewritten. */
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
@@ -3990,7 +4041,13 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     const effective = typeof prksEffectiveWorkReferences === 'function'
                         ? prksEffectiveWorkReferences('concept', overlaid) : overlaid;
                     ctx.setEntity('concept', effective);
-                    if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, effective, contentDiv);
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concept-detail',
+                        availability: 'ready',
+                        concept: effective,
+                        conceptId: conceptId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, offlineConcept);
                     titleOpts = { entityTitle: effective.name || 'Concept' };
                 }

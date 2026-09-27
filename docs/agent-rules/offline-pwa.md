@@ -162,10 +162,9 @@ found." Index search stays entirely client-side over the already-loaded array
 Work Research Notes — Rename, Delete, Definition, aliases, parents) is durable
 and carries **no** connectivity guard. What they can still refuse is an unknown
 base, via `prksConceptBaseUnavailable()`. "View in graph" navigates normally;
-the Graph route owns snapshot availability. `prksBindConceptOfflineState()`
-survives with an empty server-bound selector: adding one back means asserting
-that the action genuinely cannot be represented offline, not that disabling it
-is easier.
+the Graph route owns snapshot availability. Concept mutation controls are not
+connectivity-gated in the Vue Concepts surface; a future server-bound Concept
+action would need an explicit offline decision rather than a default disable.
 
 An unavailable cached list is not an empty one. A cached `[]` that the server
 genuinely returned may render the ordinary "No Concepts yet." empty state (with
@@ -221,9 +220,8 @@ rule: an embedded summary in one entity's read model is not a cache of the
 entity it summarises — a cached Position row is not a promise that the Argument
 detail behind it was cached.
 
-`prksBindPositionOfflineState()` settles all of that live, on the same
-TabContext-owned, one-binding-per-container contract as
-`prksBindConceptOfflineState()`.
+`prksBindPositionOfflineState()` settles all of that live on a
+TabContext-owned, one-binding-per-container contract.
 
 Arguments/Stances are **local-first**. Their five durable operations are
 `CREATE_ARGUMENT`, `SET_ARGUMENT_FIELD`, `SET_ARGUMENT_SOURCES`,

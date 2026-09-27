@@ -11,6 +11,12 @@ _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _LINKS = os.path.join(_FRONTEND, "js", "research-links.js")
 _ARGS = os.path.join(_FRONTEND, "js", "components", "arguments.js")
 _CONCEPTS = os.path.join(_FRONTEND, "js", "components", "concepts.js")
+_CONCEPTS_VUE_INDEX = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptsIndexRoute.vue"
+)
+_CONCEPTS_VUE_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptDetailRoute.vue"
+)
 _POSITIONS = os.path.join(_FRONTEND, "js", "components", "positions.js")
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
 
@@ -149,21 +155,23 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_index_empty_states_are_distinct(self):
         concepts = _read(_CONCEPTS)
+        concepts_vue = _read(_CONCEPTS_VUE_INDEX)
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
-        self.assertIn("function conceptsEmptyDataHtml", concepts)
         self.assertIn("function researchIndexSearchEmptyHtml", concepts)
         self.assertIn("data-research-search-clear", concepts)
-        self.assertIn("prks-concept-new-empty", concepts)
+        self.assertIn("prks-concept-new-empty", concepts_vue)
+        self.assertIn("No Concepts yet.", concepts_vue)
+        self.assertIn("data-research-search-clear", concepts_vue)
         self.assertIn("prks-position-new-empty", positions)
         self.assertIn("prks-argument-new-empty", args)
         self.assertIn("prks-stance-new-empty", args)
-        self.assertIn("No Concepts yet.", concepts)
         self.assertIn("No Positions yet.", positions)
         self.assertIn("No Arguments or Stances yet.", args)
 
     def test_research_entity_sections_use_shared_head_pattern(self):
         concepts = _read(_CONCEPTS)
+        concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
         self.assertIn("function researchSectionHeadHtml", concepts)
@@ -171,7 +179,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("prksResearchSectionHeadHtml: researchSectionHeadHtml", concepts)
         self.assertIn("root.prksResearchSectionHeadHtml", positions)
         self.assertIn("root.prksResearchSectionHeadHtml", args)
-        # Concept detail: canonical section set, each a real .research-entity__section.
+        # Concept detail (Vue): canonical section set, each a real .research-entity__section.
         for heading in (
             "Definition",
             "Search keys / aliases",
@@ -179,17 +187,14 @@ class FrontendResearchLinksTests(unittest.TestCase):
             "Subconcepts",
             "Mentioned in research notes",
         ):
-            self.assertIn(heading, concepts)
-        self.assertIn("research-entity__chips", concepts)
-        self.assertIn("research-entity__alias-chip", concepts)
-        self.assertIn("research-entity__mentions", concepts)
-        self.assertIn("research-entity__mention-title", concepts)
+            self.assertIn(heading, concepts_detail)
+        self.assertIn("research-entity__chips", concepts_detail)
+        self.assertIn("research-entity__alias-chip", concepts_detail)
+        self.assertIn("research-entity__mentions", concepts_detail)
+        self.assertIn("research-entity__mention-title", concepts_detail)
         # Parent/child rows are canonical research rows, not raw <li> anchors.
-        detail = concepts.split("function renderConceptDetail", 1)[1].split(
-            "async function renameConcept", 1
-        )[0]
-        self.assertNotIn("<li><a href=", detail)
-        self.assertIn("researchIndexRowHtml({", detail)
+        self.assertNotIn("<li><a href=", concepts_detail)
+        self.assertIn("prks-list-row prks-research-row", concepts_detail)
         # Position detail uses the same research-entity shell.
         self.assertIn("research-entity", positions)
         self.assertIn("No description yet.", positions)
@@ -205,12 +210,12 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("count: mentionList.length", args)
 
     def test_destructive_actions_are_visually_subordinate(self):
-        concepts = _read(_CONCEPTS)
+        concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
         args = _read(_ARGS)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
         self.assertIn(".prks-btn--quiet-danger", css)
-        self.assertIn("prks-concept-delete", concepts)
-        self.assertIn("prks-btn--quiet-danger", concepts)
+        self.assertIn("prks-concept-delete", concepts_detail)
+        self.assertIn("prks-btn--quiet-danger", concepts_detail)
         self.assertIn("prks-arg-delete", args)
         self.assertIn("prks-btn--quiet-danger", args)
         # New response stays a prominent, always-visible primary action -- not moved

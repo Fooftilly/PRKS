@@ -6131,8 +6131,10 @@ class WorkspaceTilingTests(_BrowserE2E):
         main_id = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
         page.evaluate(
             """() => {
-                window.__prksOriginalRenderConceptDetail = window.renderConceptDetail;
-                window.renderConceptDetail = function () { throw new Error('forced secondary render failure'); };
+                window.__prksOriginalPresentConceptDetail = window.prksVuePresentConceptDetail;
+                window.prksVuePresentConceptDetail = function () {
+                    throw new Error('forced secondary render failure');
+                };
             }"""
         )
         try:
@@ -6151,7 +6153,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
             page.evaluate(
                 """(id) => {
-                    window.renderConceptDetail = window.__prksOriginalRenderConceptDetail;
+                    window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
                     window.prksGetTabContext(id).query('#prks-route-retry').click();
                 }""",
                 arg=secondary_id,
@@ -6171,8 +6173,8 @@ class WorkspaceTilingTests(_BrowserE2E):
         finally:
             page.evaluate(
                 """() => {
-                    if (window.__prksOriginalRenderConceptDetail) {
-                        window.renderConceptDetail = window.__prksOriginalRenderConceptDetail;
+                    if (window.__prksOriginalPresentConceptDetail) {
+                        window.prksVuePresentConceptDetail = window.__prksOriginalPresentConceptDetail;
                     }
                 }"""
             )
