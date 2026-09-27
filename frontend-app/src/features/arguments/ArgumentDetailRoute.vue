@@ -446,7 +446,13 @@ watch(
             >
               {{ row.name || row.id || 'Choose…' }}
             </button>
-            <select v-model="row.verdict_id" data-field="verdict">
+            <label class="form-field-label" :for="`prks-arg-verdict-${index}`">Verdict</label>
+            <select
+              :id="`prks-arg-verdict-${index}`"
+              v-model="row.verdict_id"
+              data-field="verdict"
+              aria-label="Verdict"
+            >
               <option v-for="choice in verdictChoices(row.verdict_id)" :key="choice.id" :value="choice.id">
                 {{ choice.label }}
               </option>

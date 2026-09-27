@@ -27,19 +27,30 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         concepts_detail = (ROOT / 'frontend-app/src/features/concepts/ConceptDetailRoute.vue').read_text()
         positions_vue = (ROOT / 'frontend-app/src/features/positions/PositionsIndexRoute.vue').read_text()
         positions_detail = (ROOT / 'frontend-app/src/features/positions/PositionDetailRoute.vue').read_text()
-        for source in (concepts_vue, concepts_detail, positions_vue, positions_detail):
+        arguments_vue = (ROOT / 'frontend-app/src/features/arguments/ArgumentsIndexRoute.vue').read_text()
+        arguments_detail = (ROOT / 'frontend-app/src/features/arguments/ArgumentDetailRoute.vue').read_text()
+        for source in (
+            concepts_vue, concepts_detail, positions_vue, positions_detail,
+            arguments_vue, arguments_detail,
+        ):
             self.assertNotIn('_ONLINE_ONLY_ROLE', source)
             self.assertNotIn('Graph requires a connection', source)
-        for source in (concepts_vue, concepts_detail, positions_vue):
+        # Mutation controls moved with the Vue surfaces. People still tags them
+        # in the legacy script. The role string must stay on the owner that paints.
+        for source in (
+            concepts_vue, concepts_detail, positions_vue,
+            arguments_vue, arguments_detail,
+        ):
             self.assertIn('MUTATION_ROLE', source)
-        for name in ('arguments', 'people'):
-            source = (ROOT / ('frontend/js/components/%s.js' % name)).read_text()
-            self.assertNotIn('_ONLINE_ONLY_ROLE', source)
-            self.assertNotIn('Graph requires a connection', source)
-            self.assertIn('_MUTATION_ROLE', source)
-        positions_stub = (ROOT / 'frontend/js/components/positions.js').read_text()
-        self.assertNotIn('_ONLINE_ONLY_ROLE', positions_stub)
-        self.assertNotIn('Graph requires a connection', positions_stub)
+            self.assertIn('mutation-control', source)
+        people = (ROOT / 'frontend/js/components/people.js').read_text()
+        self.assertNotIn('_ONLINE_ONLY_ROLE', people)
+        self.assertNotIn('Graph requires a connection', people)
+        self.assertIn('_MUTATION_ROLE', people)
+        for stub_name in ('positions', 'arguments'):
+            stub = (ROOT / ('frontend/js/components/%s.js' % stub_name)).read_text()
+            self.assertNotIn('_ONLINE_ONLY_ROLE', stub)
+            self.assertNotIn('Graph requires a connection', stub)
         for name in ('playlists', 'people-groups', 'works-pdf'):
             source = (ROOT / ('frontend/js/components/%s.js' % name)).read_text()
             self.assertNotIn('prksMarkResearchGraph', source)

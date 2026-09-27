@@ -83,3 +83,8 @@ class ArgumentsVueContracts(unittest.TestCase):
         self.assertIn("async function commitArgumentEditorDraft(", state)
         self.assertIn("prksPrepareArgumentEdit: prepareArgumentEdit", state)
         self.assertIn("prksCommitArgumentEditorDraft: commitArgumentEditorDraft", state)
+        detail = (FEATURE / "ArgumentDetailRoute.vue").read_text()
+        self.assertIn('for="`prks-arg-verdict-${index}`"', detail)
+        self.assertIn(':id="`prks-arg-verdict-${index}`"', detail)
+        self.assertIn(">Verdict</label>", detail)
+        self.assertIn('aria-label="Verdict"', detail)
