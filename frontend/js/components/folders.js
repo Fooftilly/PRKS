@@ -940,9 +940,13 @@ function prksSwitchFolderLibraryTab(tab) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     const want = tab === 'recently-added' ? 'recently-added' : 'folders';
-    // Vue owns tab + Recently Added rows; drive the mounted tab button so
-    // activeTab / works stay authoritative (E2E helpers still call this).
+    // Vue owns tab + Recently Added rows. Prefer the awaitable bridge so
+    // callers (and Playwright `page.evaluate`) settle after load+paint —
+    // a bare button click returned before the first card existed.
     if (st.vueOwned) {
+        if (typeof st.switchTab === 'function') {
+            return st.switchTab(want);
+        }
         const root = st.container.querySelector('[data-prks-folder-library-view]');
         const btn =
             root &&

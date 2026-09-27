@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useDebounceFn, useEventListener } from '@vueuse/core'
+import { useEventListener } from '@vueuse/core'
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { folderLibraryIntentsKey } from './intents'
 import {
@@ -77,10 +77,6 @@ function paintCollection(): void {
   initLazyWorkThumbs(el)
 }
 
-const debouncedPaint = useDebounceFn(() => {
-  paintCollection()
-}, 0)
-
 // Generic click listener with VueUse scope cleanup (#233). Preview ownership
 // stays in work-thumb-lifecycle / legacy helpers.
 useEventListener(collectionEl, 'click', (event: MouseEvent) => {
@@ -101,8 +97,10 @@ onBeforeUnmount(() => {
   releaseWorkThumbResources(collectionEl.value)
 })
 
+// Paint in the same flush as prop updates so an awaited tab switch can resolve
+// after cards exist (debounce(0) raced offline metadata E2E helpers).
 watch(collectionHtml, () => {
-  void debouncedPaint()
+  paintCollection()
 }, { flush: 'post' })
 
 defineExpose({ releaseThumbs: () => releaseWorkThumbResources(collectionEl.value) })

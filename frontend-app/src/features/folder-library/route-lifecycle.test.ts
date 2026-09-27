@@ -147,4 +147,38 @@ describe('Folder Library route lifecycle hardening', () => {
     expect(sessionStorage.getItem(FOLDER_LIBRARY_FILES_FILTER_KEY)).toBe('')
     wrapper.unmount()
   })
+
+  it('same-tab Recently Added switch still awaits load via bridge', async () => {
+    sessionStorage.setItem('prks-folder-library-tab', 'recently-added')
+    window.prksWorkCardHtml = (w) =>
+      `<article data-work-id="${String((w as { id?: string }).id || '')}">${String((w as { title?: string }).title || '')}</article>`
+    window.prksWorkBrowseCollectionClass = () => 'card-grid'
+    let loads = 0
+    const load = vi.fn(async () => {
+      loads += 1
+      return {
+        works: [{ id: 'W1', title: loads === 1 ? 'First' : 'Second' }],
+        offlineCached: false,
+        unavailable: false,
+        generation: loads,
+        pendingGeneration: null,
+        reused: false,
+      }
+    })
+    const contentRoot = document.createElement('div')
+    document.body.appendChild(contentRoot)
+    const wrapper = mountRoute({
+      contentRoot,
+      intents: { ...baseIntents, loadRecentlyAdded: load },
+    })
+    await flushPromises()
+    expect(load).toHaveBeenCalledTimes(1)
+    const switchTab = window.__prksFolderDashboardState?.switchTab
+    expect(typeof switchTab).toBe('function')
+    await switchTab?.('recently-added')
+    await flushPromises()
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('#prks-folder-library-recently-added').html()).toContain('Second')
+    wrapper.unmount()
+  })
 })

@@ -192,9 +192,8 @@ describe('Folder Library preview lifecycle (#170)', () => {
     initLazy.mockClear()
     overlayTitle = 'Overlay Title'
     await wrapper.setProps({ overlayRevision: 1 })
-    await vi.waitFor(() => {
-      expect(releasePreview).toHaveBeenCalled()
-    })
+    await nextTick()
+    expect(releasePreview).toHaveBeenCalled()
     expect(initLazy).toHaveBeenCalled()
     expect(wrapper.find('#prks-folder-library-recently-added').html()).toContain('Overlay Title')
   })

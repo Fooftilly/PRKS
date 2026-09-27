@@ -65,11 +65,14 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertIn("delegateToggle", folders)
         tree = (FRONTEND_APP / "FolderTree.vue").read_text()
         self.assertIn("delegateToggle: true", tree)
-        # Legacy tab helper must click the Vue tab when the surface is Vue-owned.
+        # Legacy tab helper must await the Vue switchTab bridge (load+paint).
         switch = folders[folders.index("function prksSwitchFolderLibraryTab") :]
         switch = switch[: switch.index("\nfunction prksFolderLibraryCatalogGlanceParts")]
-        self.assertIn("btn.click()", switch)
+        self.assertIn("st.switchTab", switch)
         self.assertIn("vueOwned", switch)
+        route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
+        self.assertIn("switchTab: (tab: string) =>", route)
+        self.assertIn("Re-entering Recently Added always awaits load", route)
 
     def test_vueuse_is_selective_generic_only(self):
         route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()

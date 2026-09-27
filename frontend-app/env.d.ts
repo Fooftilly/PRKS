@@ -144,7 +144,14 @@ interface Window {
   prksReleaseWorkThumbPreview?: (root: ParentNode | null) => void
   prksReleaseLazyWorkThumbs?: (root: ParentNode | null) => void
   openModal?: (id: string) => void
-  __prksFolderDashboardState?: Record<string, unknown>
+  __prksFolderDashboardState?: {
+    vueOwned?: boolean
+    container?: HTMLElement | null
+    recentlyAddedLoading?: boolean
+    recentlyAddedWorks?: unknown[] | null
+    switchTab?: (tab: string) => void | Promise<void>
+    [key: string]: unknown
+  }
   __prksRecentlyAddedDirty?: boolean
   __prksFolderLibraryBrandHomeReset?: boolean
   prksSync?: { subscribe?: (listener: () => void) => () => void }

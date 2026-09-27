@@ -118,6 +118,9 @@ function syncLegacyDashboardState(): void {
     recentlyAddedCached: recentlyAddedCached.value,
     recentlyAddedLoading: recentlyAddedLoading.value,
     vueOwned: true,
+    // Awaitable entry for `prksSwitchFolderLibraryTab` / E2E helpers.
+    switchTab: (tab: string) =>
+      setActiveTab(tab === 'recently-added' ? 'recently-added' : 'folders'),
   }
 }
 
@@ -158,14 +161,21 @@ function releaseRecentlyAddedResources(): void {
   if (root) releaseWorkThumbResources(root.querySelector('#prks-folder-library-recently-added'))
 }
 
+/**
+ * Switch tabs. Re-entering Recently Added always awaits load — same as legacy
+ * `prksSwitchFolderLibraryTab`, which re-ran the fetch even when already on
+ * that tab. A same-tab no-op left the loading placeholder as the only child
+ * and made offline metadata E2E helpers race the first paint.
+ */
 async function setActiveTab(tab: FolderLibraryTab): Promise<void> {
-  if (tab === activeTab.value) return
-  if (activeTab.value === 'recently-added') {
-    releaseRecentlyAddedResources()
+  if (tab !== activeTab.value) {
+    if (activeTab.value === 'recently-added') {
+      releaseRecentlyAddedResources()
+    }
+    activeTab.value = tab
+    intents?.switchTab(tab)
+    syncLegacyDashboardState()
   }
-  activeTab.value = tab
-  intents?.switchTab(tab)
-  syncLegacyDashboardState()
   if (tab === 'recently-added') {
     await loadRecentlyAdded(false)
   }
@@ -206,6 +216,7 @@ async function loadRecentlyAdded(force: boolean): Promise<void> {
       overlayRevision.value += 1
     }
     syncLegacyDashboardState()
+    // Flush child RecentlyAddedPane paint (flush:post) before callers resume.
     await nextTick()
     if (!surfaceStillOwned() || epoch !== loadEpoch) return
     // #170: always re-init after paint (including cached) so prune runs.
