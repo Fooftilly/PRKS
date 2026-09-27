@@ -1116,6 +1116,8 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
             self._fake_archive(root, "prks-backup-20240101T000000Z.prks-backup.part"),
             self._fake_archive(root, ".prks-backup-20240101T000000Z.prks-backup"),
             self._fake_archive(root, "prks-backup-20240101T000000.prks-backup"),
+            self._fake_archive(root, "prks-backup-99999999T999999Z.prks-backup"),
+            self._fake_archive(root, "prks-backup-20241340T250000Z.prks-backup"),
         ]
         named_dir = os.path.join(root, self._generated_name(1))
         os.makedirs(named_dir)

@@ -433,6 +433,22 @@ def _registered_ready_backups_unlocked() -> tuple[set[str], set[tuple[int, int]]
     return paths, identities
 
 
+def _is_generated_backup_name(name: str) -> bool:
+    """Whether ``name`` round-trips through ``_backup_filename()``.
+
+    The pattern alone admits digits that are no real timestamp; a name PRKS
+    could never have produced is somebody else's file.
+    """
+    if not _READY_BACKUP_NAME_RE.fullmatch(name):
+        return False
+    stamp = name[len("prks-backup-"):-len(BACKUP_EXTENSION)]
+    try:
+        parsed = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ")
+    except ValueError:
+        return False
+    return _backup_filename(parsed) == name
+
+
 def _abandoned_ready_backup_stat(
     child: str,
     name: str,
@@ -444,7 +460,7 @@ def _abandoned_ready_backup_stat(
     The result is the identity removal must still find; see
     ``_unlink_proven_file()``.
     """
-    if not _READY_BACKUP_NAME_RE.fullmatch(name):
+    if not _is_generated_backup_name(name):
         return None
     try:
         st = os.lstat(child)
