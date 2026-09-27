@@ -354,6 +354,25 @@ class GateRepoTests(unittest.TestCase):
         self.assertIn("canonical", findings[0].message)
         self.assertIn("('key',)", findings[0].message)
 
+    def test_canonical_table_matching_ignores_identifier_case_and_quotes(self):
+        self.write(
+            {
+                "backend/upper.py": (
+                    "SQL = 'INSERT INTO WORKS (id) VALUES (?) ON CONFLICT(ID) DO NOTHING'\n"
+                ),
+                "backend/quoted.py": (
+                    "SQL = 'INSERT INTO \"Works\" (id) VALUES (?) ON CONFLICT(title) DO NOTHING'\n"
+                ),
+            }
+        )
+        findings = self.findings()
+        self.assertEqual(
+            [(f.code, f.path) for f in findings],
+            [("SCHEMA-GATE-003", "backend/quoted.py"), ("SCHEMA-GATE-005", "backend/quoted.py")],
+        )
+        self.assertIn("'works' is missing from _CURRENT_TABLE_PKS", findings[0].message)
+        self.assertEqual(self.codes({"WORKS": "fixture"}), ["SCHEMA-GATE-005"])
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \

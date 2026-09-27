@@ -88,7 +88,7 @@ sanitize_git_revision = _git_rev.sanitize_git_revision
 read_file_at_revision = _git_rev.read_file_at_revision
 
 _INSERT_RE = re.compile(
-    r"\bINSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)",
+    r"\bINSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO\s+[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"`\]]?",
     re.IGNORECASE,
 )
 # Upsert clause only (``DO`` required): ``UNIQUE ... ON CONFLICT REPLACE``
@@ -294,7 +294,7 @@ def schema_table_pks(schema_sql: str) -> dict[str, tuple[str, ...]]:
         for name in names:
             cols = conn.execute(f'PRAGMA table_info("{name}")').fetchall()
             pk = sorted((c[5], c[1]) for c in cols if c[5])
-            pks[name] = tuple(col for _, col in pk)
+            pks[name.lower()] = tuple(col for _, col in pk)
         return pks
     finally:
         conn.close()
@@ -368,7 +368,8 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
             if upsert is None:
                 continue
             insert = _INSERT_RE.search(stmt, 0, upsert.start())
-            table = insert.group(1) if insert is not None else None
+            # SQLite identifiers are case-insensitive: compare lower-cased.
+            table = insert.group(1).lower() if insert is not None else None
             sites.append(
                 UpsertSite(relpath, getattr(node, "lineno", 1), table, _conflict_columns(upsert.group(1)))
             )
@@ -635,8 +636,12 @@ def check_pk_registry(
     allowlist: dict[str, str] | None = None,
 ) -> list[Finding]:
     """Structural: load-bearing upserts on canonical tables are PK-registered."""
-    allow = PK_REGISTRY_ALLOWLIST if allowlist is None else allowlist
-    registry = head.table_pks
+    allow = {
+        k.lower(): v for k, v in (PK_REGISTRY_ALLOWLIST if allowlist is None else allowlist).items()
+    }
+    registry = (
+        None if head.table_pks is None else {k.lower(): v for k, v in head.table_pks.items()}
+    )
     if registry is None:
         return [
             Finding(
