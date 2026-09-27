@@ -154,8 +154,13 @@ describe('Folder Library route lifecycle hardening', () => {
       `<article data-work-id="${String((w as { id?: string }).id || '')}">${String((w as { title?: string }).title || '')}</article>`
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
     let loads = 0
+    let releaseSecond: (() => void) | null = null
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve
+    })
     const load = vi.fn(async () => {
       loads += 1
+      if (loads > 1) await secondGate
       return {
         works: [{ id: 'W1', title: loads === 1 ? 'First' : 'Second' }],
         offlineCached: false,
@@ -175,9 +180,19 @@ describe('Folder Library route lifecycle hardening', () => {
     expect(load).toHaveBeenCalledTimes(1)
     const switchTab = window.__prksFolderDashboardState?.switchTab
     expect(typeof switchTab).toBe('function')
-    await switchTab?.('recently-added')
+    const switchPromise = switchTab?.('recently-added')
+    expect(switchPromise).toBeInstanceOf(Promise)
+    let settled = false
+    void switchPromise?.then(() => {
+      settled = true
+    })
     await flushPromises()
     expect(load).toHaveBeenCalledTimes(2)
+    expect(settled).toBe(false)
+    expect(wrapper.find('#prks-folder-library-recently-added').html()).not.toContain('Second')
+    releaseSecond?.()
+    await switchPromise
+    expect(settled).toBe(true)
     expect(wrapper.find('#prks-folder-library-recently-added').html()).toContain('Second')
     wrapper.unmount()
   })
