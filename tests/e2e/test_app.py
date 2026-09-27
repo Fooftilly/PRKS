@@ -4948,8 +4948,8 @@ def _patch_workspace_drag_mouse(page):
     def up(button="left", click_count=1):
         sess = _WORKSPACE_DRAG_SESSIONS.get(id(page))
         if sess and sess.get("active"):
-            sess["active"] = False
             lx, ly = sess["last_x"], sess["last_y"]
+            _WORKSPACE_DRAG_SESSIONS.pop(id(page), None)
             dragging = page.evaluate(
                 "() => document.body.classList.contains('prks-workspace-dragging')"
             )

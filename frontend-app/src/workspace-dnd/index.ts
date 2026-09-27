@@ -19,6 +19,7 @@ export {
   bindWorkspaceDnd,
   resolveIntentAtPoint,
   hitFromPointer,
+  buildDragPreviewElement,
 } from './adapter'
 export type {
   WorkspaceDndSnapshot,

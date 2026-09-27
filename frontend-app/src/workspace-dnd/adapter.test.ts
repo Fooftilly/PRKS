@@ -4,7 +4,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import hostSource from '../../../frontend/js/workspace-hosts.js?raw'
 import WorkspaceShell from '../workspace-shell/WorkspaceShell.vue'
 import type { ProjectionNode, ProjectionTab, WorkspaceIntents, WorkspaceProjection } from '../workspace-shell/types'
-import { bindWorkspaceDnd, type WorkspaceDndSnapshot } from './adapter'
+import { bindWorkspaceDnd, buildDragPreviewElement, type WorkspaceDndSnapshot } from './adapter'
 import { commitDropIntent } from './commit'
 import { createHoverController } from './hover'
 import { resolveDropIntent } from './drop-intent'
@@ -101,9 +101,32 @@ describe('workspace-dnd adapter on Vue WorkspaceShell DOM', () => {
       hasSecondaryTree: true,
       narrowFallback: false,
       canAddSecondaryLeaf: true,
-      tabs: value.state.tabs.map((t) => ({ id: t.id, route: t.route, title: t.title })),
+      tabs: value.state.tabs.map((t) => ({
+        id: t.id,
+        route: t.route,
+        title: t.title,
+        icon: t.icon,
+      })),
     }
   }
+
+  it('buildDragPreviewElement renders icon + truncated title chip', () => {
+    window.prksIcon = (name, options) =>
+      `<i data-lucide="${name}" data-size="${options?.size || ''}"></i>`
+    const snap: WorkspaceDndSnapshot = {
+      mainTabId: 'A',
+      secondaryLeafTabIds: [],
+      hasSecondaryTree: false,
+      narrowFallback: false,
+      canAddSecondaryLeaf: true,
+      tabs: [{ id: 'A', route: '#/folders', title: 'Folders Home', icon: 'folder' }],
+    }
+    const el = buildDragPreviewElement(snap, 'A')
+    expect(el.className).toBe('prks-drag-preview')
+    expect(el.querySelector('.prks-drag-preview__icon')?.innerHTML).toContain('folder')
+    expect(el.querySelector('.prks-drag-preview__label')?.textContent).toBe('Folders Home')
+    delete window.prksIcon
+  })
 
   it('binds to real Vue tab/pane hosts and cleans up on destroy', async () => {
     const value = await mountTiledShell()

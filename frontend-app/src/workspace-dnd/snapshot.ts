@@ -26,6 +26,7 @@ export function snapshotFromProjection(
       id: tab.id,
       route: tab.route,
       title: tab.title,
+      icon: tab.icon,
     })),
   }
 }

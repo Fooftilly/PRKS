@@ -38,7 +38,12 @@ export interface WorkspaceDndSnapshot {
   readonly hasSecondaryTree: boolean
   readonly narrowFallback: boolean
   readonly canAddSecondaryLeaf: boolean
-  readonly tabs: readonly { readonly id: string; readonly route: string; readonly title?: string }[]
+  readonly tabs: readonly {
+    readonly id: string
+    readonly route: string
+    readonly title?: string
+    readonly icon?: string
+  }[]
 }
 
 export interface BindWorkspaceDndOptions {
@@ -201,6 +206,38 @@ export function resolveIntentAtPoint(
 function titleFor(snap: WorkspaceDndSnapshot | null, tabId: string): string {
   const tab = snap?.tabs.find((t) => t.id === tabId)
   return tab?.title || 'page'
+}
+
+function iconFor(snap: WorkspaceDndSnapshot | null, tabId: string): string {
+  const tab = snap?.tabs.find((t) => t.id === tabId)
+  return tab?.icon || 'file-text'
+}
+
+/** DESIGN.md drag preview: icon + truncated title chip (`.prks-drag-preview`). */
+export function buildDragPreviewElement(
+  snap: WorkspaceDndSnapshot | null,
+  tabId: string,
+  doc: Document = document,
+): HTMLElement {
+  const el = doc.createElement('div')
+  el.className = 'prks-drag-preview'
+  el.setAttribute('aria-hidden', 'true')
+  const icon = doc.createElement('span')
+  icon.className = 'prks-drag-preview__icon'
+  const win = doc.defaultView as (Window & {
+    prksIcon?: (name: string, options?: { size?: string }) => string
+    prksRefreshIcons?: (root?: ParentNode) => void
+  }) | null
+  if (typeof win?.prksIcon === 'function') {
+    icon.innerHTML = win.prksIcon(iconFor(snap, tabId), { size: 'sm' })
+  }
+  const text = doc.createElement('span')
+  text.className = 'prks-drag-preview__label'
+  text.textContent = titleFor(snap, tabId)
+  el.appendChild(icon)
+  el.appendChild(text)
+  if (typeof win?.prksRefreshIcons === 'function') win.prksRefreshIcons(el)
+  return el
 }
 
 function announceTargetChange(snap: WorkspaceDndSnapshot | null, target: WorkspaceDropIntent | null): void {
@@ -391,19 +428,11 @@ export function bindWorkspaceDnd(options: BindWorkspaceDndOptions): WorkspaceDnd
           }),
           onGenerateDragPreview: ({ nativeSetDragImage }) => {
             const snap = options.getSnapshot()
-            const label = titleFor(snap, tabId)
             setCustomNativeDragPreview({
               nativeSetDragImage,
               getOffset: () => ({ x: 14, y: 10 }),
               render({ container }) {
-                const el = document.createElement('div')
-                el.className = 'prks-drag-preview'
-                el.setAttribute('aria-hidden', 'true')
-                const text = document.createElement('span')
-                text.className = 'prks-drag-preview__label'
-                text.textContent = label
-                el.appendChild(text)
-                container.appendChild(el)
+                container.appendChild(buildDragPreviewElement(snap, tabId))
               },
             })
           },
@@ -426,19 +455,11 @@ export function bindWorkspaceDnd(options: BindWorkspaceDndOptions): WorkspaceDnd
           }),
           onGenerateDragPreview: ({ nativeSetDragImage }) => {
             const snap = options.getSnapshot()
-            const label = titleFor(snap, tabId)
             setCustomNativeDragPreview({
               nativeSetDragImage,
               getOffset: () => ({ x: 14, y: 10 }),
               render({ container }) {
-                const el = document.createElement('div')
-                el.className = 'prks-drag-preview'
-                el.setAttribute('aria-hidden', 'true')
-                const text = document.createElement('span')
-                text.className = 'prks-drag-preview__label'
-                text.textContent = label
-                el.appendChild(text)
-                container.appendChild(el)
+                container.appendChild(buildDragPreviewElement(snap, tabId))
               },
             })
           },
