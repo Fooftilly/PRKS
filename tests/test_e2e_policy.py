@@ -298,6 +298,88 @@ class AffectedMappingTests(unittest.TestCase):
             for pattern in rule["paths"]:
                 self.assertNotEqual(pattern, "frontend-app/src/**")
 
+    def test_route_surface_infrastructure_fails_closed(self):
+        production = (
+            "frontend-app/src/route-surface/lifecycle.ts",
+            "frontend-app/src/route-surface/route-instance.ts",
+        )
+        bundle = "frontend/vue/prks-vue.js"
+        for path in production:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "unmapped-production")
+                self.assertFalse(skip)
+                self.assertNotIn("browse", feats)
+                classified = policy.classify_affected_path(path)
+                self.assertTrue(classified["unmapped"])
+                self.assertTrue(policy._is_vue_production_source_path(path))
+                self.assertFalse(policy._is_mapped_vue_feature_source(path, classified))
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertTrue(plan["run"])
+
+        test_path = "frontend-app/src/route-surface/lifecycle.test.ts"
+        self.assertFalse(policy._is_vue_production_source_path(test_path))
+        self.assertFalse(policy._is_mapped_vue_feature_source(
+            test_path, policy.classify_affected_path(test_path)
+        ))
+        self.assertEqual(policy.plan_ci_e2e([test_path, bundle])["mode"], "full")
+
+        story = "frontend-app/src/route-surface/Surface.stories.ts"
+        rule, feats, skip, _note = policy.match_affected_path(story)
+        self.assertEqual(rule, "storybook-catalog")
+        self.assertTrue(skip)
+        self.assertEqual(feats, ())
+        self.assertFalse(policy._is_vue_production_source_path(story))
+        self.assertFalse(policy._is_mapped_vue_feature_source(
+            story, policy.classify_affected_path(story)
+        ))
+        self.assertEqual(policy.plan_ci_e2e([story, bundle])["mode"], "full")
+
+        progress = "frontend-app/src/features/progress/ProgressView.vue"
+        self.assertEqual(
+            policy.plan_ci_e2e([progress, production[0], bundle])["mode"],
+            "full",
+        )
+        progress_only = policy.plan_ci_e2e([
+            progress,
+            bundle,
+            "frontend/vue/BUILD-MANIFEST.json",
+        ])
+        self.assertEqual(progress_only["mode"], "affected")
+        self.assertEqual(progress_only["features"], ["browse", "smoke"])
+
+        revision_diff = (
+            "diff --git a/frontend/sw.js b/frontend/sw.js\n"
+            "--- a/frontend/sw.js\n"
+            "+++ b/frontend/sw.js\n"
+            "@@ -21 +21 @@\n"
+            "-const DEPENDENCY_REVISION = 'aaaaaaaaaaaa';\n"
+            "+const DEPENDENCY_REVISION = 'bbbbbbbbbbbb';\n"
+        )
+        shared_stamp = policy.plan_ci_e2e(
+            [production[0], bundle, "frontend/sw.js", "frontend/vendor/DEPENDENCY-MANIFEST.json"],
+            path_diffs={"frontend/sw.js": revision_diff},
+        )
+        self.assertEqual(shared_stamp["mode"], "full")
+        progress_stamp = policy.plan_ci_e2e(
+            [progress, bundle, "frontend/sw.js", "frontend/vendor/DEPENDENCY-MANIFEST.json"],
+            path_diffs={"frontend/sw.js": revision_diff},
+        )
+        self.assertEqual(progress_stamp["mode"], "affected")
+        self.assertEqual(progress_stamp["features"], ["browse", "smoke"])
+
+        module = "tests/e2e/test_progress_route_surface.py"
+        module_rule, module_feats, module_skip, _note = policy.match_affected_path(module)
+        self.assertEqual(module_rule, "e2e-module")
+        self.assertFalse(module_skip)
+        self.assertEqual(module_feats, ("browse",))
+
+        for rule_entry in policy.AFFECTED_RULES:
+            for pattern in rule_entry["paths"]:
+                self.assertNotEqual(pattern, "frontend-app/src/**")
+                self.assertNotIn("route-surface", pattern)
+
     def test_shared_vue_transport_and_query_fail_closed(self):
         for path in (
             "frontend-app/src/api/http.ts",

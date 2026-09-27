@@ -1,12 +1,5 @@
 /// <reference types="vite/client" />
 
-interface ProgressSidebarRoute {
-  name: string
-  hash?: string
-  canonicalHash?: string
-  params?: { status?: string }
-}
-
 interface ProgressPresentRequest {
   owner: object
   host: HTMLElement
@@ -44,7 +37,6 @@ interface Window {
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
-  prksSyncSidebarActive?: (route: ProgressSidebarRoute) => void
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
   prksVueDismissProgress?: (owner: object) => void
 }

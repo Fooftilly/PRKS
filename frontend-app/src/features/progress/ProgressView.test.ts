@@ -11,7 +11,6 @@ afterEach(() => {
   delete window.prksWorkBrowseModeToggleHtml
   delete window.prksWorkBrowseCollectionClass
   delete window.prksBindWorkBrowseMode
-  delete window.prksSyncSidebarActive
   delete window.prksAbstractExcerpt
 })
 
@@ -36,7 +35,6 @@ function installCardSpy() {
     '<div class="work-browse-mode" data-prks-role="work-browse-mode"></div>'
   window.prksWorkBrowseCollectionClass = () => 'work-browse-collection work-browse-collection--cards card-grid'
   window.prksBindWorkBrowseMode = () => {}
-  window.prksSyncSidebarActive = () => {}
   return calls
 }
 
