@@ -292,11 +292,14 @@ export function browserFolderLibraryIntents(
       if (!sync || typeof sync.subscribe !== 'function') return () => {}
       return sync.subscribe(() => {
         void (async () => {
-          if (typeof window.prksRefreshPendingWorkMetadata === 'function') {
-            await window.prksRefreshPendingWorkMetadata()
+          try {
+            if (typeof window.prksRefreshPendingWorkMetadata === 'function') {
+              await window.prksRefreshPendingWorkMetadata()
+            }
+          } finally {
+            onChange()
           }
-          onChange()
-        })()
+        })().catch(() => {})
       })
     },
   }
