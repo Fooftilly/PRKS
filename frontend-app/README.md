@@ -40,13 +40,15 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | `src/route-surface/` | Typed Vue route-instance lifecycle. Owner-scoped mount, generation, cleanup, and feature-scoped host-local early presentation. Not a router |
 | `src/features/performance-diagnostics/` | Settings performance diagnostics |
 | `src/features/progress/` | Progress route, first route-surface consumer. Consumes the effective works-browse snapshot; not a Query cache |
+| `src/features/concepts/` | Concepts index + detail Vue routes |
+| `src/features/folder-library/` | Folder Library (`#/folders`) Vue route; selective VueUse for search debounce / listeners; preview/thumb ownership for #170 |
 | `src/api/` | Typed PRKS API client used by feature services |
 | `src/query/` | Application QueryClient |
 | `src/components/` | Shared primitives (`PrksButton`, `PrksStatusText`, `PrksSectionHeader`) and their stories |
 | `src/composables/` | Feature-local Vue logic, when a slice needs it |
 | `frontend/js/` | Legacy runtime. Leave it in place until a slice replaces a specific responsibility |
 
-`@tanstack/vue-query` is the server-state owner for performance diagnostics. Do not add Vue Router, Pinia, VueUse, or a second QueryClient until a later slice requires it. Do not persist the query cache. Do not copy `prksParseRoute` into TypeScript. Future routes should extend the route-instance shape and reuse `src/route-surface/` instead of inventing another TabContext session.
+`@tanstack/vue-query` is the server-state owner for performance diagnostics. `@vueuse/core` is adopted selectively for generic browser lifecycle (#233); do not hand PRKS durable/route/preview semantics to VueUse. Do not add Vue Router, Pinia, or a second QueryClient until a later slice requires it. Do not persist the query cache. Do not copy `prksParseRoute` into TypeScript. Future routes should extend the route-instance shape and reuse `src/route-surface/` instead of inventing another TabContext session.
 
 ## Components and Storybook
 

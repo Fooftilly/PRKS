@@ -29,6 +29,16 @@ interface ConceptDetailPresentRequest {
   shell?: boolean
 }
 
+interface FolderLibraryPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable'
+  folders?: unknown
+  offlineCached?: boolean
+  generation?: number
+  shell?: boolean
+}
+
 interface PrksPromptTextOptions {
   title: string
   message?: string
@@ -80,12 +90,63 @@ interface Window {
   prksWorkBrowseCollectionClass?: (extraClass?: string) => string
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
+  prksReleaseLazyWorkThumbs?: (root: ParentNode | null) => void
+  prksReleaseWorkThumbPreview?: (root: ParentNode | null) => void
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
   prksVueDismissProgress?: (owner: object) => void
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
   prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
+  prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
+  prksVueDismissFolderLibrary?: (owner: object) => void
+  prksPresentVueFolderLibrary?: (
+    ctx: object | null,
+    contentDiv: HTMLElement,
+    detail: {
+      availability?: 'ready' | 'unavailable'
+      folders?: unknown
+      offlineCached?: boolean
+      generation?: number
+    },
+  ) => void
+  prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
+  openModal?: (id: string) => void
+  prksToggleFolderNode?: (folderId: string) => void
+  prksToggleAllFolderNodes?: () => void
+  prksFolderLibraryTreeInnerHtml?: (folders: unknown, filterQuery?: string) => string
+  prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
+  prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
+  prksFolderLibraryExpandToggleInnerHtml?: () => string
+  prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
+  prksCollectFolderLibraryGlanceExtras?: () => Promise<
+    Array<string | { text: string; href?: string }>
+  >
+  prksPageSummaryHtml?: (opts: {
+    parts?: Array<string | { text: string; href?: string } | null | undefined>
+    ariaLabel?: string
+  }) => string
+  prksTagSearchIconHtml?: () => string
+  prksEffectiveProjectionRows?: (rows: unknown[], domain: string) => unknown[]
+  prksOfflineDomainGeneration?: (domain: string) => unknown
+  prksPendingWorkMetadataGeneration?: () => unknown
+  prksRefreshPendingWorkMetadata?: () => Promise<void>
+  prksOfflineRecentlyAddedFetch?: () => Promise<{ source?: string } | null>
+  prksResolveOfflineRecentlyAdded?: (offline: unknown) => unknown[] | null
+  __prksRecentlyAddedDirty?: boolean
+  __prksFolderDashboardState?: {
+    folders?: unknown
+    container?: HTMLElement | null
+    activeTab?: string
+    filterQuery?: string
+    recentlyAddedFilterQuery?: string
+    recentlyAddedWorks?: unknown
+    recentlyAddedGeneration?: unknown
+    recentlyAddedPendingGeneration?: unknown
+    recentlyAddedCached?: boolean
+    recentlyAddedLoading?: boolean
+  } | null
+  prksSync?: { subscribe?: (fn: () => void) => () => void }
   prksCreateConceptFlow?: (
     initialName?: string,
     ownerOpts?: {

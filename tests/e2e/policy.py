@@ -296,6 +296,7 @@ FEATURES = {
             "tests.e2e.test_folders_offline",
             "tests.e2e.test_folders_durable",
             "tests.e2e.test_library_nav_folders",
+            "tests.e2e.test_folder_library_route_surface",
         ),
     },
     "playlists": {
@@ -612,6 +613,18 @@ AFFECTED_RULES = (
         ),
         "features": ("concepts",),
         "note": "Vue Concepts index/detail (#259) → concepts. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "folder-library-vue",
+        "paths": ("frontend-app/src/features/folder-library/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("folders", "browse"),
+        "note": "Vue Folder Library (#262) → folders + browse preview lifecycle. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "settings",

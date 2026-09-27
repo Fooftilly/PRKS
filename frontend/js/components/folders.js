@@ -63,7 +63,18 @@ function prksSetFolderNodeCollapsed(folderId, collapsed) {
 function prksRerenderFolderDashboard() {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
-    renderDashboard(st.folders || [], st.container);
+    /* Folder Library paint is Vue-owned (#262). Re-enter the route so the
+     * coordinator rebuilds the effective projection and retains the host. */
+    if (typeof prksNavigate === 'function') {
+        prksNavigate('#/folders', { replace: true });
+        return;
+    }
+    if (typeof window.prksPresentVueFolderLibrary === 'function') {
+        window.prksPresentVueFolderLibrary(null, st.container, {
+            folders: st.folders || [],
+        });
+        return;
+    }
 }
 
 function prksFolderLibraryFilterFromStorage() {
@@ -1905,3 +1916,13 @@ window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
 window.prksRerenderFolderDashboard = prksRerenderFolderDashboard;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
 window.prksFillFolderDetailTree = prksFillFolderDetailTree;
+/* Shared hierarchy helpers consumed by the Vue Folder Library surface. */
+window.prksFolderLibraryTreeInnerHtml = prksFolderLibraryTreeInnerHtml;
+window.prksFolderTreeHasCollapsibleNodes = prksFolderTreeHasCollapsibleNodes;
+window.prksFolderLibraryExpandToggleLabel = prksFolderLibraryExpandToggleLabel;
+window.prksFolderLibraryExpandToggleInnerHtml = prksFolderLibraryExpandToggleInnerHtml;
+window.prksFolderTreeAllCollapsed = prksFolderTreeAllCollapsed;
+window.prksCollectFolderLibraryGlanceExtras = prksCollectFolderLibraryGlanceExtras;
+window.prksScheduleFolderLibraryGlance = prksScheduleFolderLibraryGlance;
+/** @deprecated Folder Library index paint lives in Vue (#262). Kept for tests. */
+window.renderDashboard = renderDashboard;

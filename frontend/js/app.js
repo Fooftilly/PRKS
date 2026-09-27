@@ -2876,6 +2876,40 @@ function prksPresentVueConcepts(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Folder Library surface in this pane.
+ * `detail` must already be the authoritative effective folders:index projection.
+ * Same-owner Folders refresh reuses the existing host so local tab/filter/
+ * recently-added runtime survives an in-place projection update.
+ */
+function prksPresentVueFolderLibrary(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const request = {
+        feature: 'folders',
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        folders: detail.folders,
+        offlineCached: !!detail.offlineCached,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentFolderLibrary === 'function') {
+        window.prksVuePresentFolderLibrary(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+window.prksPresentVueFolderLibrary = prksPresentVueFolderLibrary;
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3135,12 +3169,24 @@ async function prksRenderTabRoute(ctx, hash, options) {
             '[data-prks-concepts-index-view], [data-prks-concept-detail-view]'
         )
     );
+    /* Folder Library→Folder Library keeps the Vue host so tab/filter/recently-
+     * added runtime survives an in-place projection refresh (#262 / #170). */
+    const sameFolderLibraryWorkspace = !!(
+        route.name === 'folders' &&
+        contentDiv.querySelector('[data-prks-folder-library-view]')
+    );
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = true;
+    }
+    if (sameFolderLibraryWorkspace) {
+        ctx.__prksRetainFolderLibrarySurface = true;
     }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
+    }
+    if (sameFolderLibraryWorkspace) {
+        ctx.__prksRetainFolderLibrarySurface = false;
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3176,6 +3222,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (
         !sameFolderWorkspace &&
         !sameConceptsWorkspace &&
+        !sameFolderLibraryWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3185,16 +3232,20 @@ async function prksRenderTabRoute(ctx, hash, options) {
     // (including Folder→Folder preserve, which keeps contentDiv/shell but swaps
     // the card subtree). Scoped release leaves another tile's preview alone.
     // Unlike lazy thumbs, preview has no prune-on-init, so do not skip this on
-    // sameFolderWorkspace.
+    // sameFolderWorkspace. Folder Library same-route retain still releases
+    // preview so create-folder / projection refresh cannot orphan an overlay (#170).
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
         if (typeof window.prksVueDismissConcepts === 'function') {
             window.prksVueDismissConcepts(ctx);
+        }
+        if (typeof window.prksVueDismissFolderLibrary === 'function') {
+            window.prksVueDismissFolderLibrary(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
@@ -3207,7 +3258,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
     } else {
-        // Concepts in-place refresh: keep the Vue host; mark busy until paint.
+        // Concepts / Folder Library in-place refresh: keep the Vue host; mark busy.
         contentDiv.setAttribute('aria-busy', 'true');
     }
 
@@ -3234,13 +3285,29 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (!folders) {
                     // A cached [] is a real empty library; only a MISSING
                     // snapshot is an unavailable state.
-                    prksOfflineRenderUnavailable(contentDiv, 'Folders not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Folders not available offline' };
+                    publishSidebar({ folderCount: 0 });
+                    prksPresentVueFolderLibrary(ctx, contentDiv, {
+                        availability: 'unavailable',
+                        folders: [],
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, offlineFolders);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Folders not available offline',
+                        skipPageEnter: sameFolderLibraryWorkspace,
+                    };
                     break;
                 }
                 publishSidebar({ folderCount: folders.length });
-                renderDashboard(folders, contentDiv, { offlineCached: offlineFolders.source === 'cache', ctx: ctx });
+                prksPresentVueFolderLibrary(ctx, contentDiv, {
+                    availability: 'ready',
+                    folders: folders,
+                    offlineCached: offlineFolders && offlineFolders.source === 'cache',
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineFolders);
+                titleOpts = { skipPageEnter: sameFolderLibraryWorkspace };
                 break;
             }
             case 'playlists': {
@@ -5243,15 +5310,14 @@ function initForms() {
             }
             closeModals();
             const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
-            if (
-                ownerRoute &&
-                ownerRoute.name === 'folders' &&
-                typeof fetchFolders === 'function' &&
-                typeof renderDashboard === 'function'
-            ) {
-                const folders = await fetchFolders();
-                if (ownerCtx && ownerCtx.root && ownerCtx.mounted) {
-                    renderDashboard(folders, ownerCtx.root);
+            if (ownerRoute && ownerRoute.name === 'folders') {
+                /* Re-enter Folder Library through the route coordinator so the
+                 * Vue surface retains local runtime and #170 teardown runs. */
+                if (typeof prksNavigate === 'function') {
+                    prksNavigate('#/folders', {
+                        replace: true,
+                        tabId: ownerCtx && ownerCtx.tabId,
+                    });
                 }
                 return;
             }
