@@ -1,6 +1,7 @@
 /**
- * Workspace divider mechanics. Owns every separator's DOM presentation and
- * interaction only; canonical ratio state lives in workspace-tabs.js
+ * Workspace divider mechanics. The Vue shell renders each `.prks-splitter`.
+ * This module binds pointer, keyboard, and double-click, and writes the
+ * effective CSS variable and ARIA. Canonical ratio state lives in workspace-tabs.js
  * (`mainSplitRatio` for the root Main/Secondary divider, `secondaryTree`
  * split-node `ratio` for nested Secondary dividers). This is the one
  * separator implementation: pointer drag, keyboard resize, ARIA, and
@@ -336,7 +337,14 @@
         el.setAttribute('aria-label', 'Resize split view');
         el.setAttribute('aria-orientation', 'vertical');
         bindSeparatorEvents(el);
+        el.setAttribute('data-prks-splitter-bound', '1');
         return el;
+    }
+
+    function ensureRootSplitterBound(el) {
+        if (!el || el.getAttribute('data-prks-splitter-bound') === '1') return;
+        bindSeparatorEvents(el);
+        el.setAttribute('data-prks-splitter-bound', '1');
     }
 
     function findSeparator(canvas) {
@@ -366,6 +374,8 @@
             if (existing) {
                 releaseDragState(existing, 'left-right');
                 if (existing.parentNode) existing.parentNode.removeChild(existing);
+            } else {
+                releaseDragState(separatorRef, 'left-right');
             }
             if (canvasRef === canvas) {
                 canvasRef = null;
@@ -374,6 +384,7 @@
             return;
         }
         const el = existing || createSeparator();
+        ensureRootSplitterBound(el);
         positionSeparator(canvas, el);
         canvasRef = canvas;
         separatorRef = el;
@@ -530,6 +541,12 @@
         el.setAttribute('tabindex', '0');
         el.setAttribute('aria-label', 'Resize split pane');
         el.setAttribute('aria-orientation', axis === 'top-bottom' ? 'horizontal' : 'vertical');
+        bindNestedSeparatorEvents(el, splitId, axis);
+        return el;
+    }
+
+    function bindNestedSeparatorEvents(el, splitId, axis) {
+        if (!el || el.getAttribute('data-prks-splitter-bound') === '1') return;
         el.addEventListener('pointerdown', function (e) {
             onNestedPointerDown(splitId, axis, el, e);
         });
@@ -539,7 +556,7 @@
         el.addEventListener('dblclick', function (e) {
             onNestedDblClick(splitId, axis, el, e);
         });
-        return el;
+        el.setAttribute('data-prks-splitter-bound', '1');
     }
 
     /** Called by workspace-tiling.js once per split node while walking the Secondary tree.
@@ -560,6 +577,7 @@
             el = null;
         }
         if (!el) el = createNestedSeparator(node.id, node.axis);
+        bindNestedSeparatorEvents(el, node.id, node.axis);
         if (firstEl.parentNode !== container || container.children[0] !== firstEl) {
             container.insertBefore(firstEl, container.firstChild);
         }
@@ -571,6 +589,16 @@
         }
         applyNestedRatioToDom(container, el, node.axis, node.ratio);
         return el;
+    }
+
+    /** Ends a root Main/Secondary divider drag before Vue removes that separator. */
+    function prksWorkspaceReleaseRootSeparator(canvas) {
+        const el = (canvas && findSeparator(canvas)) || separatorRef;
+        releaseDragState(el, 'left-right');
+        if (!canvas || canvasRef === canvas) {
+            canvasRef = null;
+            separatorRef = null;
+        }
     }
 
     /** Called by workspace-tiling.js when a split container is about to be removed from the DOM
@@ -601,6 +629,7 @@
 
     const api = {
         prksWorkspaceSyncSplitSeparator: prksWorkspaceSyncSplitSeparator,
+        prksWorkspaceReleaseRootSeparator: prksWorkspaceReleaseRootSeparator,
         prksWorkspaceReapplySplitRatio: prksWorkspaceReapplySplitRatio,
         prksWorkspaceSyncNestedSeparator: prksWorkspaceSyncNestedSeparator,
         prksWorkspaceReleaseNestedSeparator: prksWorkspaceReleaseNestedSeparator,

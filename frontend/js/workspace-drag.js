@@ -18,8 +18,9 @@
  *   - workspace-tiling.js's `applyNarrow()` calls it right before an actual physical wide<->
  *     narrow transition (the real source of truth for PRKS responsive fallback, not a raw
  *     window resize event).
- *   - workspace-tiling.js's `pruneStale()` calls it right before removing any stale tile/split
- *     DOM, in case the node being pruned is the live drag source.
+ *   - The Vue workspace shell calls it before a paint removes a stale tile or
+ *     split, in case that node is the live drag source. The frozen tiling
+ *     oracle's `pruneStale()` does the same for the Node selftest.
  * This module never calls back into responsive-fallback or canonical mutation APIs from either
  * integration point -- it only tears down its own transient state.
  */

@@ -182,7 +182,9 @@ function makeHarness(opts) {
             life.destroy.push(tabId);
             delete mounted[tabId];
         },
-        onChange: function () {},
+        onChange: function () {
+            if (typeof opts.onPaint === 'function') opts.onPaint(ws);
+        },
         announce: function () {},
         publishMainShell: function () {},
     });
@@ -688,16 +690,15 @@ async function run() {
 
     const tileSyncs = [];
     const prevNarrowFn = global.prksWorkspaceCanvasIsNarrow;
-    const prevSyncFn = global.prksWorkspaceSyncTiles;
     global.prksWorkspaceCanvasIsNarrow = function () { return true; };
-    global.prksWorkspaceSyncTiles = function (_snap, opts) {
-        tileSyncs.push(opts && opts.visualMode);
-    };
     try {
         const narrowStart = makeHarness({
             hash: '#/works/WA',
             loadSnapshot: function () {
                 return persist.prksValidateWorkspaceSnapshot(validSnapshot());
+            },
+            onPaint: function (ws) {
+                tileSyncs.push(ws.visualTiled() ? 'tiled' : 'stacked');
             },
         });
         const bootstrapSyncs = tileSyncs.slice();
@@ -720,8 +721,6 @@ async function run() {
     } finally {
         if (prevNarrowFn) global.prksWorkspaceCanvasIsNarrow = prevNarrowFn;
         else delete global.prksWorkspaceCanvasIsNarrow;
-        if (prevSyncFn) global.prksWorkspaceSyncTiles = prevSyncFn;
-        else delete global.prksWorkspaceSyncTiles;
     }
 
     /* ---- Real writer: live unknown-route persistence must never freeze on a stale snapshot ----

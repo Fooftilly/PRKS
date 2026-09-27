@@ -30,6 +30,11 @@ export default defineConfig({
       },
     },
   },
+  server: {
+    fs: {
+      allow: ['..'],
+    },
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts', 'css-inject.integration.test.mjs'],

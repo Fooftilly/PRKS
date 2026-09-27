@@ -1440,6 +1440,12 @@ body.prks-workspace-dragging * {
     pointer-events: none;
 }
 
+/* Layout-transparent slot. The stable `.prks-tile__body` host is reparented
+ * into this element and participates in the tile flex column. */
+.prks-tile > .prks-content-host-slot {
+    display: contents;
+}
+
 .prks-tile__body {
     container-type: inline-size;
     min-width: 0;

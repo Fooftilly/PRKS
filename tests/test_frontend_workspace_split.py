@@ -55,10 +55,17 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
 
     def test_tiling_module_delegates_and_stays_narrow(self):
         tiling = _read(_TILING)
-        # Tiling calls into the one separator implementation instead of owning it.
-        self.assertIn("prksWorkspaceSyncSplitSeparator", tiling)
+        canvas = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceCanvas.vue")
+        )
+        # Resize still reclamps through the one separator implementation.
         self.assertIn("prksWorkspaceReapplySplitRatio", tiling)
-        self.assertIn("prks-splitter", tiling)
+        # The Vue shell asks that implementation to bind the separator it rendered.
+        self.assertIn("prksWorkspaceSyncSplitSeparator", canvas)
+        self.assertIn("prksWorkspaceReleaseRootSeparator", canvas)
+        self.assertNotIn("prksWorkspaceAfterShellRender", canvas)
+        self.assertNotIn("function prksWorkspaceSyncTiles", tiling)
+        self.assertNotIn("function renderTreeNode", tiling)
         # Pointer/keyboard/ARIA/persistence stay out of the tiling DOM module.
         self.assertNotIn("aria-valuenow", tiling)
         self.assertNotIn("pointermove", tiling)
@@ -101,6 +108,7 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         # divider (one separator implementation), parameterized by axis + node-local ratio.
         self.assertIn("prksWorkspaceSyncNestedSeparator", split)
         self.assertIn("prksWorkspaceReleaseNestedSeparator", split)
+        self.assertIn("prksWorkspaceReleaseRootSeparator", split)
         self.assertIn("PRKS_NESTED_MIN_WIDTH_PX", split)
         self.assertIn("PRKS_NESTED_MIN_HEIGHT_PX", split)
         self.assertIn("beginPointerDrag", split)
@@ -111,11 +119,20 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
         self.assertIn("--prks-split-first-size", split)
         self.assertIn("--prks-main-split-width", split)
         tiling = _read(_TILING)
-        self.assertIn("renderTreeNode", tiling)
-        self.assertIn("prks-workspace-split", tiling)
-        self.assertIn("data-prks-split-id", tiling)
-        self.assertIn("data-prks-secondary-root", tiling)
-        self.assertIn("pruneStale", tiling)
+        tree = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceTree.vue")
+        )
+        oracle = _read(
+            os.path.join(_PROJECT_DIR, "tests", "browser", "fixtures", "workspace-tiling-legacy-painter.js")
+        )
+        self.assertNotIn("function renderTreeNode", tiling)
+        self.assertNotIn("function pruneStale", tiling)
+        self.assertIn("prks-workspace-split", tree)
+        self.assertIn("prksWorkspaceReleaseNestedSeparator", tree)
+        self.assertIn("data-prks-split-id", tree)
+        self.assertIn("data-prks-secondary-root", tree)
+        self.assertIn("function renderTreeNode", oracle)
+        self.assertIn("function pruneStale", oracle)
 
     def test_nested_tiling_recursive_selftest(self):
         node = shutil.which("node")

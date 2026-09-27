@@ -74,6 +74,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         nav_at = html.find('src="/js/navigation.js"')
         ws_at = html.find('src="/js/workspace-tabs.js"')
         tc_at = html.find('src="/js/tab-context.js"')
+        hosts_at = html.find('src="/js/workspace-hosts.js"')
         model_at = html.find('src="/js/workspace-model.js"')
         tree_at = html.find('src="/js/workspace-tree.js"')
         persist_at = html.find('src="/js/workspace-persistence.js"')
@@ -85,6 +86,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         api_at = html.find('src="/js/api.js"')
         app_at = html.find('src="/js/app.js"')
         self.assertNotEqual(nav_at, -1)
+        self.assertNotEqual(hosts_at, -1)
         self.assertNotEqual(model_at, -1)
         self.assertNotEqual(ws_at, -1)
         self.assertNotEqual(tree_at, -1)
@@ -101,6 +103,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         # modules' canonical/DOM APIs, so it must load after all of them and before app.js wires
         # up initialization.
         self.assertLess(nav_at, ws_at)
+        self.assertLess(hosts_at, ws_at)
         self.assertLess(model_at, tree_at)
         self.assertLess(ws_at, tc_at)
         self.assertLess(tree_at, persist_at)
@@ -161,7 +164,13 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("flex: 0 0 54px", css)
         self.assertIn("margin-right: -196px", css)
         self.assertIn("position: fixed", css[css.find("#app-container.app-container--tiled #right-panel") :])
-        self.assertIn("prksSyncDenseWorkspaceShell(visualTiled)", tiling)
+        shell = _read(
+            os.path.join(
+                _PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceCanvas.vue"
+            )
+        )
+        self.assertIn("prksSyncDenseWorkspaceShell", shell)
+        self.assertNotIn("prksSyncDenseWorkspaceShell", tiling)
         self.assertIn("prksIsTiledWorkspace", ui)
         self.assertIn("prksOpenSidebarDrawer", ui)
         self.assertIn("prksOpenRightPanelOverlay", ui)
@@ -291,14 +300,29 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("Open split view", _read(_INDEX))
         refresh = src[src.find("function prksWorkspaceRefreshTabStatus") : src.find("function revealWorkspaceTab")]
         self.assertIn("updateTabOverflow()", refresh)
+        self.assertIn("production.refreshTabStatus", refresh)
+        coalesced = src[src.find("function refreshTabStatus") : src.find("function closeTabIds")]
+        self.assertIn("requestAnimationFrame", coalesced)
+        self.assertIn("publishedStatusKey", coalesced)
+        shell = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceShell.vue"))
+        self.assertIn("prksWorkspaceOnShellCommit", shell)
+        effects = src[src.find("function prksWorkspaceApplyShellDomEffects") : src.find("function prksWorkspaceOnShellCommit")]
+        self.assertLess(effects.find("updateTabOverflow()"), effects.find("revealWorkspaceTab("))
         kind = src[src.find("function tabStatusKind") : src.find("function statusLabel")]
         self.assertLess(kind.find("return 'error'"), kind.find("return 'saving'"))
         self.assertLess(kind.find("return 'saving'"), kind.find("return 'drafting'"))
         self.assertIn("prks-workspace-canvas", tiling)
         self.assertIn("observedCanvas", tiling)
-        self.assertIn("prks-tile--main", tiling)
-        self.assertIn("prks-tile--secondary", tiling)
-        self.assertIn("prks-tile--focused", tiling)
+        frame = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspacePaneFrame.vue")
+        )
+        header = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspacePaneHeader.vue")
+        )
+        self.assertIn("prks-tile--main", frame)
+        self.assertIn("prks-tile--secondary", frame)
+        self.assertIn("prks-tile--focused", frame)
+        self.assertNotIn("prks-tile--main", tiling)
         self.assertNotIn("type: 'split'", tiling)
         self.assertNotIn("aria-valuenow", tiling)
         self.assertNotIn("pointermove", tiling)
@@ -307,9 +331,11 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotIn("buildSplitDropdown", tiling)
         self.assertNotIn("prks-tile-header__make-main", tiling)
         self.assertNotIn("prks-tile-header__split-menu", tiling)
-        self.assertIn("prks-tile-header__menu", tiling)
-        self.assertIn("prksWorkspaceOpenTabMenu", tiling)
-        self.assertIn("Pane actions", tiling)
+        self.assertIn("prks-tile-header__menu", header)
+        self.assertIn("prksWorkspaceOpenTabMenu", _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "intents.ts")
+        ))
+        self.assertIn("Pane actions", header)
         menu = _read(os.path.join(_FRONTEND, "js", "workspace-tab-menu.js"))
         self.assertNotIn("type: 'split'", menu)
         self.assertIn("Open in split view", menu)
@@ -559,6 +585,23 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 
+    def test_workspace_projection_subscription_selftest(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace projection tests")
+        runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_projection_selftest.js")
+        self.assertTrue(os.path.isfile(runner))
+        proc = subprocess.run(
+            [node, runner],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
     def test_persistence_module_and_selftest(self):
         self.assertTrue(os.path.isfile(_PERSIST))
         self.assertTrue(os.path.isfile(_PERSIST_RUNNER))
@@ -576,6 +619,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotIn("new BroadcastChannel", persist_src)
         for name in (
             "workspace-model.js",
+            "workspace-hosts.js",
             "workspace-tabs.js",
             "workspace-tree.js",
             "workspace-tiling.js",
@@ -660,7 +704,15 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("prksWorkspaceCancelActiveDrag", tiling)
         applied_narrow = tiling[tiling.find("function applyNarrow") : tiling.find("function applyNarrow") + 1600]
         self.assertIn("prksWorkspaceCancelActiveDrag", applied_narrow)
-        prune_stale = tiling[tiling.find("function pruneStale") : tiling.find("function pruneStale") + 1500]
+        shell = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceShell.vue")
+        )
+        self.assertIn("prksWorkspaceCancelActiveDrag", shell)
+        oracle = _read(
+            os.path.join(_PROJECT_DIR, "tests", "browser", "fixtures", "workspace-tiling-legacy-painter.js")
+        )
+        prune_at = oracle.find("function pruneStale")
+        prune_stale = oracle[prune_at : prune_at + 1500]
         self.assertIn("prksWorkspaceCancelActiveDrag", prune_stale)
         # pruneStale() must only cancel when it actually found stale DOM to remove -- not
         # unconditionally on every ordinary paint.
