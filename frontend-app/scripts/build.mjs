@@ -81,3 +81,11 @@ const gate = spawnSync(
 if (gate.status !== 0) {
   process.exit(gate.status || 1);
 }
+
+const modelBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-workspace-model.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (modelBuild.status !== 0) {
+  process.exit(modelBuild.status || 1);
+}
