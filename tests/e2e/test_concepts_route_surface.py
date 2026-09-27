@@ -36,10 +36,10 @@ class ConceptsRouteSurfaceTests(unittest.TestCase):
         )
         self.addCleanup(context.close)
         self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
-        return server, page
+        return server, page, context
 
     def test_index_search_survives_same_tab_concepts_refresh(self):
-        _server, page = self.start()
+        _server, page, _context = self.start()
         page.evaluate("() => prksNavigate('#/concepts')")
         page.wait_for_selector("#prks-concept-search", timeout=15000)
         page.wait_for_selector("#prks-concept-rows .prks-research-row", timeout=15000)
@@ -106,13 +106,7 @@ class ConceptsRouteSurfaceTests(unittest.TestCase):
             0,
         )
 
-    def test_retained_concepts_clear_stale_provenance_banner_on_not_found(self):
-        """Retained contentDiv must not keep a prior route's offline provenance banner."""
-        _server, page = self.start()
-        page.evaluate("() => prksNavigate('#/concepts')")
-        page.wait_for_selector("#prks-concept-search", timeout=15000)
-        page.wait_for_selector("#prks-concept-rows .prks-research-row", timeout=15000)
-
+    def _seed_stale_provenance_banner(self, page):
         seeded = page.evaluate(
             """() => {
                 const tile = document.querySelector('.prks-tile--main');
@@ -134,16 +128,8 @@ class ConceptsRouteSurfaceTests(unittest.TestCase):
         self.assertTrue(seeded["ok"])
         self.assertEqual(seeded["banners"], 1)
 
-        page.evaluate("() => prksNavigate('#/concepts/no-such-concept-id-xyz')")
-        page.wait_for_function(
-            """() => {
-                const tile = document.querySelector('.prks-tile--main');
-                const title = tile && tile.querySelector('.prks-page-title');
-                return !!(title && /Concept not found/i.test(title.textContent || ''));
-            }""",
-            timeout=15000,
-        )
-        state = page.evaluate(
+    def _retained_banner_state(self, page):
+        return page.evaluate(
             """() => {
                 const tile = document.querySelector('.prks-tile--main');
                 const root = tile && tile.querySelector('.prks-tab-root');
@@ -154,9 +140,64 @@ class ConceptsRouteSurfaceTests(unittest.TestCase):
                     banners: root
                         ? root.querySelectorAll('[data-prks-role="offline-provenance-banner"]').length
                         : -1,
+                    unavailable: !!(
+                        tile && tile.querySelector('[data-prks-role="offline-unavailable"]')
+                    ),
                 };
             }"""
         )
+
+    def test_retained_concepts_clear_stale_provenance_banner_on_not_found(self):
+        """Retained contentDiv must not keep a prior route's offline provenance banner."""
+        _server, page, _context = self.start()
+        page.evaluate("() => prksNavigate('#/concepts')")
+        page.wait_for_selector("#prks-concept-search", timeout=15000)
+        page.wait_for_selector("#prks-concept-rows .prks-research-row", timeout=15000)
+
+        self._seed_stale_provenance_banner(page)
+
+        page.evaluate("() => prksNavigate('#/concepts/no-such-concept-id-xyz')")
+        page.wait_for_function(
+            """() => {
+                const tile = document.querySelector('.prks-tile--main');
+                const title = tile && tile.querySelector('.prks-page-title');
+                return !!(title && /Concept not found/i.test(title.textContent || ''));
+            }""",
+            timeout=15000,
+        )
+        state = self._retained_banner_state(page)
         self.assertEqual(state["marker"], "concepts-host")
         self.assertTrue(state["detail"])
+        self.assertEqual(state["banners"], 0)
+
+    def test_retained_concepts_clear_stale_provenance_banner_on_unavailable(self):
+        """Same retained-host clear as not-found, for the offline unavailable outcome."""
+        _server, page, context = self.start()
+        page.evaluate("() => prksNavigate('#/concepts')")
+        page.wait_for_selector("#prks-concept-search", timeout=15000)
+        page.wait_for_selector("#prks-concept-rows .prks-research-row", timeout=15000)
+
+        self._seed_stale_provenance_banner(page)
+
+        # Go offline without reload so the Concepts Vue host is retained.
+        context.set_offline(True)
+        page.evaluate("() => prksOfflineNoteRequestFailure()")
+        page.wait_for_function(
+            "() => typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online'",
+            timeout=20000,
+        )
+
+        page.evaluate("() => prksNavigate('#/concepts/no-such-concept-id-xyz')")
+        page.wait_for_function(
+            """() => {
+                const tile = document.querySelector('.prks-tile--main');
+                const title = tile && tile.querySelector('.prks-page-title');
+                return !!(title && /not available offline/i.test(title.textContent || ''));
+            }""",
+            timeout=20000,
+        )
+        state = self._retained_banner_state(page)
+        self.assertEqual(state["marker"], "concepts-host")
+        self.assertTrue(state["detail"])
+        self.assertTrue(state["unavailable"])
         self.assertEqual(state["banners"], 0)
