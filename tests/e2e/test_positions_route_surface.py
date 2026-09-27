@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from urllib.parse import urlparse
 
 from tests.e2e.fixtures import seed_positions_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
@@ -201,3 +202,134 @@ class PositionsRouteSurfaceTests(unittest.TestCase):
         self.assertTrue(state["detail"])
         self.assertTrue(state["unavailable"])
         self.assertEqual(state["banners"], 0)
+
+    def test_retained_refresh_error_unmounts_positions_before_retry(self):
+        """A same-route Positions refresh that receives a non-404 response must
+        unmount the Vue tree before the retry view replaces the host. Later
+        leave/destroy must dismiss that surface rather than keep it."""
+        _server, page, _context = self.start()
+        page.evaluate("() => prksNavigate('#/positions')")
+        page.wait_for_selector("[data-prks-positions-index-view]", timeout=15000)
+        page.wait_for_selector("#prks-position-rows .prks-research-row", timeout=15000)
+
+        def non_404(route):
+            path = urlparse(route.request.url).path
+            if route.request.method == "GET" and path == "/api/positions":
+                route.fulfill(
+                    status=500,
+                    content_type="application/json",
+                    body='{"error":"positions unavailable"}',
+                )
+                return
+            route.fallback()
+
+        page.route("**/api/positions", non_404)
+        try:
+            page.evaluate(
+                """() => {
+                    const tile = document.querySelector('.prks-tile--main');
+                    const host = tile && tile.querySelector('[data-prks-vue-route-host]');
+                    window.__prksPositionsErrorProbe = { host: host, dismisses: 0, steps: [] };
+                    const dismiss = window.prksVueDismissPositions;
+                    window.prksVueDismissPositions = function (ctx) {
+                        const probe = window.__prksPositionsErrorProbe;
+                        const saved = probe.host;
+                        probe.dismisses += 1;
+                        probe.steps.push({
+                            step: 'dismiss',
+                            view: !!(saved && saved.querySelector('[data-prks-positions-index-view]')),
+                            retry: !!document.querySelector('#prks-route-retry'),
+                        });
+                        const result = dismiss(ctx);
+                        probe.steps.push({
+                            step: 'dismissed',
+                            view: !!(saved && saved.querySelector('[data-prks-positions-index-view]')),
+                            retry: !!document.querySelector('#prks-route-retry'),
+                        });
+                        return result;
+                    };
+                    const renderError = window.prksRenderRouteError;
+                    window.prksRenderRouteError = function () {
+                        const probe = window.__prksPositionsErrorProbe;
+                        const saved = probe.host;
+                        probe.steps.push({
+                            step: 'retry',
+                            view: !!(saved && saved.querySelector('[data-prks-positions-index-view]')),
+                            retry: !!document.querySelector('#prks-route-retry'),
+                        });
+                        return renderError.apply(this, arguments);
+                    };
+                }"""
+            )
+            page.evaluate(
+                """() => {
+                    const ctx = prksGetMainTabContext();
+                    return prksRenderTabRoute(ctx, '#/positions', {
+                        leaveApproved: true,
+                        internalRefresh: true,
+                    });
+                }"""
+            )
+            page.wait_for_selector("#prks-route-retry", timeout=15000)
+            report = page.evaluate(
+                """() => {
+                    const probe = window.__prksPositionsErrorProbe;
+                    const ctx = prksGetMainTabContext();
+                    const session = ctx && ctx.__prksRouteSurface;
+                    return {
+                        steps: probe.steps,
+                        dismisses: probe.dismisses,
+                        cleanupCount: ctx.debugSnapshot().cleanupCount,
+                        cleanupArmed: !!ctx.__prksPositionsCleanupArmed,
+                        mountedHost: !!(session && session.mountedHost),
+                        retry: !!document.querySelector('#prks-route-retry'),
+                        viewInDocument: !!document.querySelector('[data-prks-positions-index-view]'),
+                        viewOnSavedHost: !!(
+                            probe.host && probe.host.querySelector('[data-prks-positions-index-view]')
+                        ),
+                    };
+                }"""
+            )
+            self.assertGreaterEqual(report["dismisses"], 1)
+            self.assertEqual(report["steps"][0]["step"], "dismiss")
+            self.assertTrue(report["steps"][0]["view"])
+            self.assertFalse(report["steps"][0]["retry"])
+            dismissed = next(step for step in report["steps"] if step["step"] == "dismissed")
+            retry = next(step for step in report["steps"] if step["step"] == "retry")
+            self.assertLess(
+                report["steps"].index(dismissed),
+                report["steps"].index(retry),
+            )
+            self.assertFalse(dismissed["view"])
+            self.assertFalse(dismissed["retry"])
+            self.assertFalse(retry["view"])
+            self.assertFalse(retry["retry"])
+            self.assertTrue(report["retry"])
+            self.assertFalse(report["viewInDocument"])
+            self.assertFalse(report["viewOnSavedHost"])
+            self.assertFalse(report["mountedHost"])
+            self.assertGreater(report["cleanupCount"], 0)
+            self.assertTrue(report["cleanupArmed"])
+
+            left = page.evaluate(
+                """() => {
+                    const probe = window.__prksPositionsErrorProbe;
+                    const ctx = prksGetMainTabContext();
+                    ctx.destroy();
+                    const session = ctx.__prksRouteSurface;
+                    return {
+                        cleanupArmed: !!ctx.__prksPositionsCleanupArmed,
+                        mountedHost: !!(session && session.mountedHost),
+                        viewOnSavedHost: !!(
+                            probe.host && probe.host.querySelector('[data-prks-positions-index-view]')
+                        ),
+                        viewInDocument: !!document.querySelector('[data-prks-positions-index-view]'),
+                    };
+                }"""
+            )
+            self.assertFalse(left["cleanupArmed"])
+            self.assertFalse(left["mountedHost"])
+            self.assertFalse(left["viewOnSavedHost"])
+            self.assertFalse(left["viewInDocument"])
+        finally:
+            page.unroute("**/api/positions", non_404)

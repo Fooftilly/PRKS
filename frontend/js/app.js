@@ -4623,6 +4623,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (sameConceptsWorkspace && typeof window.prksVueDismissConcepts === 'function') {
             window.prksVueDismissConcepts(ctx);
         }
+        if (samePositionsWorkspace && typeof window.prksVueDismissPositions === 'function') {
+            window.prksVueDismissPositions(ctx);
+        }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);
         }

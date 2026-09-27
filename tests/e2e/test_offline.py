@@ -1129,8 +1129,15 @@ class OfflineFoundationTests(unittest.TestCase):
             else None,
         )
 
+        # The connectivity probe can mark the runtime online again after this
+        # test has already observed 'offline' (a cached or in-flight /api/settings
+        # response). guardMutation is synchronous, so pin the refusal in the
+        # same turn as bulk organize. Positions Vue does not own this path.
         page.evaluate(
             """async (wid) => {
+                if (typeof prksOfflineNoteRequestFailure === 'function') {
+                    prksOfflineNoteRequestFailure();
+                }
                 try {
                     await bulkUpdateWorks({ action: 'set_status', work_ids: [wid], status: 'Completed' });
                 } catch (e) { /* offline guard throws */ }

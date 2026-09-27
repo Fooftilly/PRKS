@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, inject, ref } from 'vue'
+import { useResearchIndexList } from '../../research-index/useResearchIndexList'
 import { positionIntentsKey } from './intents'
 import { filterPositionIndexItems, normalizePositionSearchQuery } from './match'
 import PositionRow from './PositionRow.vue'
@@ -12,81 +13,37 @@ const props = defineProps<{
 }>()
 
 const intents = inject(positionIntentsKey)
-
-const searchQuery = ref('')
-const searchInput = ref<HTMLInputElement | null>(null)
-const scopeHost = ref<HTMLElement | null>(null)
-const titleIconHost = ref<HTMLElement | null>(null)
-const rootEl = ref<HTMLElement | null>(null)
-
 const unavailable = computed(() => props.projection.availability === 'unavailable')
-const items = computed(() => props.projection.items)
-const filtered = computed(() => filterPositionIndexItems(items.value, searchQuery.value))
-const normalizedQuery = computed(() => normalizePositionSearchQuery(searchQuery.value))
-const showToolbar = computed(() => !unavailable.value && items.value.length > 0)
-const showEmptyData = computed(
-  () => !unavailable.value && !filtered.value.length && !normalizedQuery.value,
-)
-const showSearchEmpty = computed(
-  () => !unavailable.value && !filtered.value.length && !!normalizedQuery.value,
-)
-
-const rowIconHtml = computed(() => {
-  void props.projection.generation
-  return typeof window.prksIcon === 'function' ? window.prksIcon('flag', { size: 'sm' }) : ''
+const rootEl = ref<HTMLElement | null>(null)
+const titleIconHost = ref<HTMLElement | null>(null)
+const scopeHost = ref<HTMLElement | null>(null)
+const searchInput = ref<HTMLInputElement | null>(null)
+const {
+  searchQuery,
+  filtered,
+  normalizedQuery,
+  showToolbar,
+  showEmptyData,
+  showSearchEmpty,
+  rowIconHtml,
+  clearSearch,
+} = useResearchIndexList({
+  icon: 'flag',
+  scopeLabel: 'Positions',
+  filter: filterPositionIndexItems,
+  normalizeQuery: normalizePositionSearchQuery,
+  items: computed(() => props.projection.items),
+  unavailable,
+  generation: computed(() => props.projection.generation),
+  rootEl,
+  titleIconHost,
+  scopeHost,
+  searchInput,
 })
-
-function paintTitleIcon(): void {
-  const host = titleIconHost.value
-  if (!host) return
-  host.innerHTML =
-    typeof window.prksPageHeaderIconHtml === 'function' ? window.prksPageHeaderIconHtml('flag') : ''
-}
-
-function paintScope(): void {
-  const host = scopeHost.value
-  if (!host || unavailable.value) return
-  if (typeof window.prksPaintScopeHost === 'function') {
-    window.prksPaintScopeHost(host, {
-      shown: filtered.value.length,
-      total: items.value.length,
-      filter: normalizedQuery.value,
-      label: 'Positions',
-    })
-  }
-}
-
-function refreshIcons(): void {
-  const root = rootEl.value
-  if (root && typeof window.prksRefreshIcons === 'function') window.prksRefreshIcons(root)
-}
-
-function clearSearch(): void {
-  searchQuery.value = ''
-  void nextTick(() => {
-    searchInput.value?.focus()
-  })
-}
 
 function onCreate(): void {
   void intents?.create()
 }
-
-onMounted(() => {
-  paintTitleIcon()
-  paintScope()
-  refreshIcons()
-})
-
-watch(
-  () =>
-    [props.projection.generation, filtered.value.length, normalizedQuery.value, items.value.length] as const,
-  async () => {
-    await nextTick()
-    paintScope()
-    refreshIcons()
-  },
-)
 </script>
 
 <template>

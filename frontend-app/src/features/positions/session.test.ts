@@ -81,15 +81,15 @@ describe('Positions route bridge', () => {
       generation: 1,
       shell: false,
     })
-    expect(mainHost.querySelector('.prks-page-title')?.textContent).toContain('Positions')
+    const mainTitle = mainHost.querySelector('.prks-page-title')?.textContent || ''
+    expect(mainTitle).toContain('Positions')
     expect(mainHost.textContent).toContain('Main Position')
-    expect(secondaryHost.textContent).toContain('Side Position')
-    expect(mainHost.textContent).not.toContain('Side Position')
-    expect(readRouteSurface(main)).toMatchObject({
-      name: 'positions',
-      canonicalHash: '#/positions',
-      ownsMainShell: true,
-    })
+    expect(secondaryHost.textContent?.includes('Side Position')).toBe(true)
+    expect(mainHost.textContent?.includes('Side Position')).toBe(false)
+    const mainSurface = readRouteSurface(main)
+    expect(mainSurface?.name).toBe('positions')
+    expect(mainSurface?.canonicalHash).toBe('#/positions')
+    expect(mainSurface?.ownsMainShell).toBe(true)
     expect(readRouteSurface(secondary)?.ownsMainShell).toBe(false)
   })
 
@@ -311,6 +311,59 @@ describe('Positions route bridge', () => {
     cleanups.clear()
     leaveCleanups.forEach((fn) => fn())
     expect(routeHost.querySelector('[data-prks-positions-index-view]')).toBeNull()
+  })
+
+  it('unmounts a failed retained refresh before the retry view and on later leave', async () => {
+    paintHelpers()
+    const cleanups = new Set<() => void>()
+    const pane: {
+      tabId: string
+      isCurrent: () => boolean
+      registerCleanup: (fn: () => void) => () => void
+      [POSITIONS_RETAIN_SURFACE_KEY]?: boolean
+    } = {
+      tabId: 'coord',
+      isCurrent: () => true,
+      registerCleanup(fn: () => void) {
+        cleanups.add(fn)
+        return () => {
+          cleanups.delete(fn)
+        }
+      },
+    }
+    const contentDiv = document.createElement('div')
+    document.body.appendChild(contentDiv)
+    const routeHost = document.createElement('div')
+    routeHost.setAttribute('data-prks-vue-route-host', 'true')
+    contentDiv.appendChild(routeHost)
+    presentPositionsIndex({
+      owner: pane,
+      host: routeHost,
+      items: [{ id: 'P1', name: 'Kept', description: 'still here' }],
+      generation: 1,
+    })
+    expect(routeHost.querySelector('[data-prks-positions-index-view]')).not.toBeNull()
+
+    pane[POSITIONS_RETAIN_SURFACE_KEY] = true
+    const drained = Array.from(cleanups)
+    cleanups.clear()
+    drained.forEach((fn) => fn())
+    pane[POSITIONS_RETAIN_SURFACE_KEY] = false
+    expect(cleanups.size).toBe(1)
+    expect(routeHost.textContent).toContain('Kept')
+
+    dismissPositions(pane)
+    expect(routeHost.querySelector('[data-prks-positions-index-view]')).toBeNull()
+    expect(readRouteSurface(pane)?.mounted).toBe(false)
+    contentDiv.innerHTML = '<p><button type="button" id="prks-route-retry">Retry</button></p>'
+    expect(contentDiv.querySelector('#prks-route-retry')).not.toBeNull()
+    expect(contentDiv.querySelector('[data-prks-positions-index-view]')).toBeNull()
+
+    const leave = Array.from(cleanups)
+    cleanups.clear()
+    leave.forEach((fn) => fn())
+    expect(readRouteSurface(pane)?.mounted).toBe(false)
+    expect(document.body.querySelector('[data-prks-positions-index-view]')).toBeNull()
   })
 
   it('registers bridges and applies host-local early requests', () => {

@@ -34,15 +34,19 @@ type PositionsOwner = RouteSurfaceOwner &
 
 /**
  * Positions dismisses on leave/destroy, not on every beginRoute.
- * Retained refreshes set POSITIONS_RETAIN_SURFACE_KEY so cleanup is a no-op;
- * the next present re-arms because beginRoute clears the cleanup set.
+ * A retained refresh sets POSITIONS_RETAIN_SURFACE_KEY so this cleanup does
+ * not unmount, then re-arms immediately: beginRoute already drained the set,
+ * and a failed refresh never reaches present to register another callback.
  */
 function armPositionsOwnerCleanup(owner: PositionsOwner): void {
   if (owner[POSITIONS_CLEANUP_ARMED_KEY] || typeof owner.registerCleanup !== 'function') return
   owner[POSITIONS_CLEANUP_ARMED_KEY] = true
   owner.registerCleanup(() => {
     owner[POSITIONS_CLEANUP_ARMED_KEY] = false
-    if (owner[POSITIONS_RETAIN_SURFACE_KEY]) return
+    if (owner[POSITIONS_RETAIN_SURFACE_KEY]) {
+      armPositionsOwnerCleanup(owner)
+      return
+    }
     dismissPositions(owner)
   })
 }

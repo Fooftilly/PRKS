@@ -39,6 +39,10 @@ class PositionsVueContracts(unittest.TestCase):
         self.assertIn("contentDiv.innerHTML = '';", present)
         self.assertLess(present.index("querySelector"), present.index("contentDiv.innerHTML = '';"))
         self.assertIn("prksVueDismissPositions", app)
+        self.assertIn(
+            "samePositionsWorkspace && typeof window.prksVueDismissPositions",
+            app,
+        )
 
     def test_vue_does_not_own_durable_position_state(self):
         combined = "\n".join(path.read_text() for path in FEATURE.rglob("*") if path.is_file())
