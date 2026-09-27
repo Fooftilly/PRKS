@@ -251,21 +251,29 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
     def test_progress_filters_effective_rows_and_stays_ignorant_of_operations(self):
         """Status is the first synchronized field that changes which GROUP a
         Work belongs to, not merely what its card says. The route must hand
-        `renderProgressByStatus` the OVERLAID rows and the component must keep
-        filtering them by value -- teaching the component about durable
-        operations would give it a second opinion about pending state, and it
-        would drift from every other surface the first time either changed."""
+        the Vue Progress surface the OVERLAID rows and that surface must keep
+        filtering them by value -- teaching it about durable operations would
+        give it a second opinion about pending state, and it would drift from
+        every other surface the first time either changed."""
         app = (FRONTEND / 'app.js').read_text()
         at = app.index("case 'progress': {")
         body = app[at: app.index("case 'processing-files': {", at)]
         self.assertIn("prksEffectiveBrowseRows(base, 'works-browse')", body)
         self.assertIn('prksRefreshPendingWorkMetadata', body)
-        # The overlaid rows, not the acknowledged snapshot, are what it renders.
-        self.assertIn('renderProgressByStatus(works,', body)
+        # The overlaid rows, not the acknowledged snapshot, are what Vue renders.
+        self.assertIn('rows: works', body)
+        self.assertIn('prksPresentVueProgress(contentDiv', body)
+        self.assertNotIn('renderProgressByStatus', body)
 
-        progress = (FRONTEND / 'components' / 'progress.js').read_text()
-        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync',
-                          'payload.field', 'prksEffective'):
+        progress_dir = ROOT / 'frontend-app' / 'src' / 'features' / 'progress'
+        progress = '\n'.join(
+            path.read_text()
+            for path in sorted(progress_dir.iterdir())
+            if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name
+        )
+        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync.',
+                          'payload.field', 'prksEffective', 'useQuery',
+                          '@tanstack/vue-query', 'works-browse:index'):
             self.assertNotIn(forbidden, progress, forbidden)
         # It selects on the value it was given -- that is the whole mechanism.
         self.assertIn('w.status === status', progress)
@@ -455,8 +463,15 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         """The overlay rules live in the metadata-state layer. A component that
         grew its own `if (field === 'abstract')` would be a second opinion about
         operation semantics, drifting the moment either side changed."""
-        for name in ('components/progress.js', 'components/folders.js'):
-            source = (FRONTEND / name).read_text()
+        sources = {
+            'components/folders.js': (FRONTEND / 'components' / 'folders.js').read_text(),
+            'features/progress': '\n'.join(
+                path.read_text()
+                for path in sorted((ROOT / 'frontend-app' / 'src' / 'features' / 'progress').iterdir())
+                if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name
+            ),
+        }
+        for name, source in sources.items():
             with self.subTest(module=name):
                 for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations',
                                   'payload.field', "=== 'abstract'"):

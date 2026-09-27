@@ -1350,9 +1350,9 @@ function statusMembership() {
 
     /* 3. GROUP MEMBERSHIP. This is what makes Status different from every
      * earlier synchronized field: Progress does not merely render the value,
-     * it selects on it. The filter below is exactly what
-     * `renderProgressByStatus` applies to the rows it is handed, so a Work
-     * must LEAVE the group the server put it in and JOIN the pending one. */
+     * it selects on it. The filter below is exactly what the Vue Progress
+     * surface applies to the rows it is handed, so a Work must LEAVE the
+     * group the server put it in and JOIN the pending one. */
     const catalog = [
         { id: 'W-S', status: 'Planned' },
         { id: 'W-STAY', status: 'Planned' },

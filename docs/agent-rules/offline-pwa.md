@@ -1174,10 +1174,10 @@ The families are deliberately different in kind, and that is the point:
   Status must make a Work LEAVE its acknowledged group and JOIN the pending
   one, before sync and across a reload.
 - That needed no new mechanism: the route already overlays
-  `works-browse:index` with `prksEffectiveBrowseRows()` before calling
-  `renderProgressByStatus()`. Adding `status` to `FIELD_PROJECTIONS`,
+  `works-browse:index` with `prksEffectiveBrowseRows()` before handing the
+  rows to the Vue Progress surface. Adding `status` to `FIELD_PROJECTIONS`,
   `PROJECTION_COLUMNS` and `SUMMARY_FIELDS` was the whole propagation change.
-  **`progress.js` must never learn what a durable operation is** -- a second
+  **The Progress view must never learn what a durable operation is** -- a second
   opinion about pending state drifts from every other surface.
 - **The bulk action is a canonical mutation like any other.**
   `bulk_update_works(action="set_status")` routes each Work through

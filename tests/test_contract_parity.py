@@ -542,7 +542,7 @@ class ContractParityTests(unittest.TestCase):
                 read("frontend/js/navigation.js"), "PRKS_PROGRESS_STATUS_VALUES"
             ),
             "Progress page": js_string_array(
-                read("frontend/js/components/progress.js"), "PRKS_PROGRESS_STATUSES"
+                read("frontend-app/src/features/progress/status.ts"), "PROGRESS_STATUSES"
             ),
         }
         for label, actual in mirrors.items():

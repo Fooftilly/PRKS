@@ -123,7 +123,7 @@ class AbstractExcerptContractTests(unittest.TestCase):
     def test_progress_consumes_the_server_excerpt_without_re_truncating(self):
         """The bug this replaced: a second `substring(0, 100)` over an already
         bounded excerpt cut it by UTF-16 units and could split a pair."""
-        progress = (ROOT / "frontend" / "js" / "components" / "progress.js").read_text()
+        progress = (ROOT / "frontend-app" / "src" / "features" / "progress" / "rows.ts").read_text()
         at = progress.index("const excerpt =")
         body = progress[at: at + 400]
         self.assertNotIn("substring(0, 100)", body)

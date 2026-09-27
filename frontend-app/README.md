@@ -31,6 +31,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | Path | Role |
 | --- | --- |
 | `src/features/performance-diagnostics/` | Settings performance diagnostics |
+| `src/features/progress/` | Progress route. Consumes the effective works-browse snapshot; not a Query cache |
 | `src/api/` | Typed PRKS API client used by feature services |
 | `src/query/` | Application QueryClient |
 | `src/components/` | Shared primitives (`PrksButton`, `PrksStatusText`, `PrksSectionHeader`) and their stories |

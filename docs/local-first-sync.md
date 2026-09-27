@@ -546,10 +546,10 @@ server put it in and **join** the pending one -- before synchronization, and
 across a reload.
 
 That needs no new mechanism. The route already fetches `works-browse:index`,
-overlays it with `prksEffectiveBrowseRows()` and hands the result to
-`renderProgressByStatus()`, which filters `w.status === status`. Adding
+overlays it with `prksEffectiveBrowseRows()` and hands the result to the Vue
+Progress surface, which filters `w.status === status`. Adding
 `status` to `FIELD_PROJECTIONS` and `PROJECTION_COLUMNS` is therefore the whole
-change: `progress.js` never learns what a durable operation is, and could not
+change: the Progress view never learns what a durable operation is, and could not
 disagree with any other surface about pending state if it wanted to.
 
 ### Where Status is read

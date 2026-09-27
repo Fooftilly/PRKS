@@ -2808,6 +2808,29 @@ function prksRouteTitleFromHash(hash) {
     return 'Loading';
 }
 
+/**
+ * Mount the Vue Progress surface in this pane.
+ * `detail.rows` must already be the effective works-browse projection.
+ */
+function prksPresentVueProgress(contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-progress-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        host: host,
+        status: detail.status,
+        rows: detail.rows,
+        offlineCached: !!detail.offlineCached,
+        generation: detail.generation,
+    };
+    if (typeof window.prksVuePresentProgress === 'function') {
+        window.prksVuePresentProgress(request);
+        return;
+    }
+    window.__prksProgressPresentRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3102,6 +3125,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
     if (!sameFolderWorkspace) {
+        if (typeof window.prksVueDismissProgress === 'function') {
+            window.prksVueDismissProgress();
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -3553,19 +3579,23 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Progress not available offline' };
                     break;
                 }
-                // Acknowledged catalog + pending Abstract edits, through the
-                // projection's own derivation: what reaches this row is not the
-                // Abstract but its excerpt, exactly as the server would derive
-                // it. The cached catalog itself is never rewritten.
+                // Acknowledged catalog + pending edits, through the projection's
+                // own derivation. Vue filters these effective rows. It does not
+                // read the cache or the durable queue, and the cached catalog
+                // itself is never rewritten.
                 if (typeof prksRefreshPendingWorkMetadata === 'function') {
                     await prksRefreshPendingWorkMetadata();
                     if (stale()) return;
                 }
                 const works = prksEffectiveBrowseRows(base, 'works-browse');
                 publishSidebar({ status });
-                // Pure local projection of the cached catalog -- no request.
-                renderProgressByStatus(works, status, contentDiv,
-                    { offlineCached: offlineBrowse.source === 'cache' });
+                if (stale()) return;
+                prksPresentVueProgress(contentDiv, {
+                    status: status,
+                    rows: works,
+                    offlineCached: offlineBrowse.source === 'cache',
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineBrowse);
                 break;
             }

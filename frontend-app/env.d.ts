@@ -1,5 +1,20 @@
 /// <reference types="vite/client" />
 
+interface ProgressSidebarRoute {
+  name: string
+  hash?: string
+  canonicalHash?: string
+  params?: { status?: string }
+}
+
+interface ProgressPresentRequest {
+  host: HTMLElement
+  status: string | null | undefined
+  rows: unknown
+  offlineCached?: boolean
+  generation?: number
+}
+
 interface Window {
   prksVueActivatePerformanceDiagnostics?: () => void
   __prksPerformanceDiagnosticsRequested?: boolean
@@ -11,4 +26,24 @@ interface Window {
   } | null
   prksResetRequestCoordinatorDiagnostics?: () => void
   PRKS_REQUEST_MAX_READS?: number
+  prksAbstractExcerpt?: (value: unknown) => string
+  prksWorkCardHtml?: (
+    work: {
+      id?: unknown
+      title?: unknown
+      status?: unknown
+      abstract_excerpt?: unknown
+      abstract?: unknown
+    },
+    options: { subtitle?: string; suppressThumbnail?: boolean },
+  ) => string
+  prksWorkBrowseModeToggleHtml?: (hiddenId?: string) => string
+  prksWorkBrowseCollectionClass?: (extraClass?: string) => string
+  prksBindWorkBrowseMode?: (root: ParentNode | null) => void
+  prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
+  prksRefreshIcons?: (root: ParentNode | Document | null) => void
+  prksSyncSidebarActive?: (route: ProgressSidebarRoute) => void
+  prksVuePresentProgress?: (input: ProgressPresentRequest) => void
+  prksVueDismissProgress?: () => void
+  __prksProgressPresentRequest?: ProgressPresentRequest
 }

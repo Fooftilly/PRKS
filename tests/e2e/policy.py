@@ -573,13 +573,27 @@ AFFECTED_RULES = (
     {
         "name": "browse",
         "paths": (
-            "frontend/js/components/progress.js",
             "frontend/js/components/types.js",
             "frontend/js/components/recent.js",
             "frontend/js/components/search.js",
             "frontend/js/components/work-cards.js",
         ),
         "features": ("browse",),
+    },
+    # Progress Vue production files only. Shared Vue bootstrap, query client,
+    # transport, and src/components stay unmapped (CI full). Stories under
+    # this tree stay on storybook-catalog.
+    {
+        "name": "progress-vue",
+        "paths": ("frontend-app/src/features/progress/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue Progress route (#248) → browse. Stories stay catalog-only. Shared Vue infrastructure stays unmapped.",
     },
     {
         "name": "settings",
