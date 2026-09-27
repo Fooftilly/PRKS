@@ -167,6 +167,10 @@ class TestSafeRoute(unittest.TestCase):
             safe_route("/api/openapi/positions.json"),
             "/api/openapi/positions.json",
         )
+        self.assertEqual(
+            safe_route("/api/openapi/performance-diagnostics.json"),
+            "/api/openapi/performance-diagnostics.json",
+        )
         self.assertEqual(safe_route("/api/argument-verdicts"), "/api/argument-verdicts")
         self.assertEqual(safe_route("/api/research-graph"), "/api/research-graph")
         self.assertEqual(safe_route("/api/research-graph?people=1"), "/api/research-graph")

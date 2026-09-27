@@ -61,7 +61,7 @@ SQLite connections are operation-scoped; PRKS does not rely on a general-purpose
 
 Important frontend areas include:
 
-- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle, mounted from a hidden host in the legacy shell.
+- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle. The app mounts from a hidden host and teleports Settings performance diagnostics into the legacy shell. TanStack Query holds that disposable server snapshot only.
 - `frontend/js/app.js` and `navigation.js` — legacy app shell and route/navigation behavior.
 - `components/` — route-level UI surfaces.
 - `tab-context.js` and `workspace-*.js` — in-app tabs, split view, pane layout, and persistence.

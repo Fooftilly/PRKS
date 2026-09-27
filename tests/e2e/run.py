@@ -74,6 +74,7 @@ from tests.e2e.policy import (
     select_affected,
     select_features,
     select_smoke,
+    service_worker_diff_for_plan,
 )
 from tests.e2e.sharding import (
     BASELINE_TIMINGS_PATH,
@@ -1791,7 +1792,12 @@ def _main(argv=None) -> int:
             }
             print(json.dumps(shape_plan, sort_keys=True))
             return 0
-        plan = plan_ci_e2e(paths, force_full=force_full)
+        path_diffs = None
+        if any(path.replace("\\", "/") == "frontend/sw.js" for path in paths):
+            path_diffs = {
+                "frontend/sw.js": service_worker_diff_for_plan(REPO, args.base),
+            }
+        plan = plan_ci_e2e(paths, force_full=force_full, path_diffs=path_diffs)
         if plan["mode"] == "affected":
             # Resolve feature → IDs so empty/broken mappings fail closed to full
             # and so the workflow can size shards from test_count.

@@ -1,4 +1,5 @@
 import contextvars
+import http.client
 import json
 import os
 import socket
@@ -311,7 +312,9 @@ class TestPerformanceHTTP(unittest.TestCase):
             return e.code, e.read(), e.headers
 
     def _post(self, path, payload):
-        data = json.dumps(payload).encode("utf-8")
+        return self._post_raw(path, json.dumps(payload).encode("utf-8"))
+
+    def _post_raw(self, path, data):
         req = urllib.request.Request(self._base_url + path, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
         try:
@@ -319,6 +322,17 @@ class TestPerformanceHTTP(unittest.TestCase):
                 return res.status, json.loads(res.read().decode())
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read().decode())
+
+    def _post_json_without_content_length(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        conn.putrequest("POST", path, skip_accept_encoding=True)
+        conn.putheader("Content-Type", "application/json")
+        conn.endheaders()
+        response = conn.getresponse()
+        raw = response.read()
+        status = response.status
+        conn.close()
+        return status, json.loads(raw.decode())
 
     def _snapshot(self):
         status, body, _headers = self._get("/api/diagnostics/performance")
@@ -361,6 +375,23 @@ class TestPerformanceHTTP(unittest.TestCase):
         self.assertEqual(after["requests"]["total"], 0)
         self.assertEqual(after["routes"], [])
         self.assertLessEqual(after["measured_for_seconds"], before["uptime_seconds"])
+
+    def test_reset_rejects_non_object_and_extra_fields(self):
+        self._get("/api/works")
+        before = self._snapshot()
+        self.assertGreaterEqual(before["requests"]["total"], 1)
+        for raw in (b"[]", b'"no"', b"1", b"null", b'{"unexpected":1}', b""):
+            status, payload = self._post_raw("/api/diagnostics/performance/reset", raw)
+            self.assertEqual(status, 400, raw)
+            self.assertEqual(payload.get("code"), "invalid_request", raw)
+        status, payload = self._post_json_without_content_length(
+            "/api/diagnostics/performance/reset"
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload.get("code"), "invalid_request")
+        after = self._snapshot()
+        routes = {row["route"] for row in after["routes"]}
+        self.assertIn("/api/works", routes)
 
     def test_privacy_search_query_and_pdf_name(self):
         self._get("/api/search?q=" + SECRET_QUERY)

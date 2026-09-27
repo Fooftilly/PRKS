@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -383,9 +384,11 @@ AFFECTED_RULES = (
         "ci_mode": "full",
         "note": "Shared core → smoke + shell/tabs/offline/sync/modals (CI: full)",
     },
-    # Vue foundation only. index.html/sw.js stay on shared-frontend-core.
-    # New screens under frontend-app/src/ are not listed, so they stay
-    # unmapped production (local smoke, CI full) until a feature rule names them.
+    # Shared Vue bootstrap and dependency pins. CI fails closed to full until
+    # a deliberate shared-Vue-core mapping exists. The generated bundle
+    # (frontend/vue/**) is not in this rule; plan_ci_e2e treats it separately.
+    # New screens under frontend-app/src/ stay unmapped (CI full) until a
+    # feature rule names them. index.html/sw.js stay on shared-frontend-core.
     {
         "name": "vue-frontend",
         "paths": (
@@ -400,10 +403,10 @@ AFFECTED_RULES = (
             "frontend-app/src/mount.ts",
             "frontend-app/src/mount.test.ts",
             "frontend-app/src/App.vue",
-            "frontend/vue/**",
         ),
         "features": ("smoke",),
-        "note": "Vue bootstrap and committed bundle → smoke. New src screens are unmapped (CI: full).",
+        "ci_mode": "full",
+        "note": "Shared Vue bootstrap and dependency pins (CI: full). Not a feature owner.",
     },
     {
         "name": "graph",
@@ -582,6 +585,19 @@ AFFECTED_RULES = (
             "frontend/js/sync-diagnostics.js",
         ),
         "features": ("settings",),
+    },
+    # Performance diagnostics feature files only. Shared Vue transport
+    # (api/http.ts), query/**, bootstrap, and dependency pins are not owned
+    # here. Do not map frontend-app/src/** to smoke or to settings.
+    {
+        "name": "settings-performance-diagnostics",
+        "paths": (
+            "frontend-app/src/features/performance-diagnostics/**",
+            "frontend-app/src/api/performance-diagnostics.ts",
+            "frontend-app/src/api/performance-diagnostics.test.ts",
+        ),
+        "features": ("settings",),
+        "note": "Vue performance diagnostics feature files (#232) → settings. Shared Vue transport and query client stay unmapped.",
     },
     {
         "name": "offline-runtime",
@@ -1068,7 +1084,85 @@ def aggregate_ci_gate_outcome(
     )
 
 
-def plan_ci_e2e(changed_paths, *, force_full: bool = False):
+def _is_generated_vue_bundle(rel: str) -> bool:
+    """Committed Vite output. Not a feature owner and not shared Vue source."""
+    return _path_matches(_posix(rel), "frontend/vue/**")
+
+
+def _is_vue_build_companion(rel: str) -> bool:
+    """Files ``npm run build --prefix frontend-app`` rewrites with the bundle.
+
+    ``DEPENDENCY-MANIFEST.json`` is generated in full. ``frontend/sw.js`` is
+    excused only when the diff is the ``DEPENDENCY_REVISION`` stamp; any other
+    service-worker change stays shared-core full CI.
+    """
+    return _posix(rel) in {
+        "frontend/sw.js",
+        "frontend/vendor/DEPENDENCY-MANIFEST.json",
+    }
+
+
+_SW_REVISION_LINE = re.compile(r"^const DEPENDENCY_REVISION = '[0-9a-f]{12}';$")
+
+
+def sw_js_diff_is_dependency_revision_only(diff_text: str | None) -> bool:
+    """True when a unified diff of ``frontend/sw.js`` changes only the stamp.
+
+    Missing or unreadable diffs fail closed. The build writes exactly
+    ``const DEPENDENCY_REVISION = '<12 hex>';``.
+    """
+    if not diff_text or not str(diff_text).strip():
+        return False
+    removed = []
+    added = []
+    for line in str(diff_text).splitlines():
+        if line.startswith(
+            ("diff ", "index ", "@@", "\\", "new file", "deleted file", "old mode", "new mode")
+        ):
+            continue
+        if line.startswith("--- ") or line.startswith("+++ "):
+            continue
+        if line.startswith("-"):
+            removed.append(line[1:].strip())
+        elif line.startswith("+"):
+            added.append(line[1:].strip())
+    if len(removed) != 1 or len(added) != 1:
+        return False
+    return bool(_SW_REVISION_LINE.match(removed[0]) and _SW_REVISION_LINE.match(added[0]))
+
+
+_VUE_PRODUCTION_SOURCE_SUFFIXES = (".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs")
+
+
+def _is_vue_production_source_path(rel: str) -> bool:
+    """Known Vue production source. Test and spec files do not qualify."""
+    rel = _posix(rel)
+    if not rel.startswith("frontend-app/src/"):
+        return False
+    name = rel.rsplit("/", 1)[-1].lower()
+    if name.endswith(".d.ts"):
+        return False
+    suffix = ""
+    for candidate in _VUE_PRODUCTION_SOURCE_SUFFIXES:
+        if name.endswith(candidate):
+            suffix = candidate
+            break
+    if not suffix:
+        return False
+    stem = name[: -len(suffix)]
+    return not stem.endswith((".test", ".spec"))
+
+
+def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:
+    """Explicit feature-owned production Vue source. Not shared core, not a test."""
+    if not _is_vue_production_source_path(rel):
+        return False
+    if classified.get("skip") or classified.get("unmapped") or classified.get("ci_full"):
+        return False
+    return bool(classified.get("features"))
+
+
+def plan_ci_e2e(changed_paths, *, force_full: bool = False, path_diffs=None):
     """Authoritative CI gate plan for ``--ci-plan`` / e2e-gate.yml.
 
     Single source of truth — path tables live only in ``AFFECTED_RULES`` /
@@ -1090,6 +1184,13 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
     - feature production or E2E module paths → ``affected`` = mapped ∪ smoke
     - high-risk rules (``ci_mode: "full"``), unmapped production, requirements*,
       empty path list, or ``force_full`` → ``full``
+    - ``frontend/vue/**`` and ``frontend/vendor/DEPENDENCY-MANIFEST.json``
+      are not full-CI reasons when the same diff also contains explicitly
+      mapped production Vue source. ``frontend/sw.js`` is excused only in
+      that same case and only when ``path_diffs`` shows the change is the
+      generated ``DEPENDENCY_REVISION`` stamp. Any other service-worker
+      change, a missing diff, bundle-only changes, and shared Vue source
+      stay full.
     """
     if force_full:
         shape = ci_execution_shape("full")
@@ -1116,6 +1217,8 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
     seen_f = set()
     any_relevant = False
     full_reasons = []
+    generated_vue = []
+    has_mapped_vue_source = False
 
     for raw in paths:
         rel = _posix(raw)
@@ -1124,6 +1227,11 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
             continue
         any_relevant = True
         token = ci_reason_path_token(rel)
+        if _is_generated_vue_bundle(rel) or _is_vue_build_companion(rel):
+            generated_vue.append((rel, classified, token))
+            continue
+        if _is_mapped_vue_feature_source(rel, classified):
+            has_mapped_vue_source = True
         rule_label = "+".join(classified["rules"]) or "?"
         if classified["ci_full"]:
             full_reasons.append("%s (%s)" % (token, rule_label))
@@ -1136,6 +1244,31 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
             if feat not in seen_f:
                 seen_f.add(feat)
                 features.append(feat)
+
+    bundle_present = any(_is_generated_vue_bundle(rel) for rel, _classified, _token in generated_vue)
+    bundle_explained = has_mapped_vue_source and bundle_present
+    diffs = path_diffs or {}
+    for rel, classified, token in generated_vue:
+        revision_only_sw = rel == "frontend/sw.js" and sw_js_diff_is_dependency_revision_only(
+            diffs.get(rel)
+        )
+        if bundle_explained and (
+            _is_generated_vue_bundle(rel)
+            or rel == "frontend/vendor/DEPENDENCY-MANIFEST.json"
+            or revision_only_sw
+        ):
+            continue
+        if _is_generated_vue_bundle(rel):
+            full_reasons.append(
+                "%s (generated Vue bundle without mapped source → CI full)" % token
+            )
+            continue
+        rule_label = "+".join(classified["rules"]) or "?"
+        if classified["ci_full"]:
+            full_reasons.append("%s (%s)" % (token, rule_label))
+            continue
+        if classified["unmapped"]:
+            full_reasons.append("%s (unmapped production → CI full)" % token)
 
     if full_reasons:
         shape = ci_execution_shape("full")
@@ -1385,6 +1518,23 @@ def _git_stdout(repo: Path, args, what: str) -> str:
 def _git_lines(repo: Path, args, what: str) -> list:
     """Newline-oriented wrapper around ``_git_stdout`` (ls-files, rev-parse)."""
     return [line.strip() for line in _git_stdout(repo, args, what).splitlines() if line.strip()]
+
+
+def service_worker_diff_for_plan(repo: Path, base: str | None) -> str | None:
+    """Unified diff of ``frontend/sw.js`` vs the CI plan base.
+
+    ``None`` when git cannot show the diff. The planner then refuses to treat
+    the service worker as a generated revision stamp.
+    """
+    ref = base or "HEAD"
+    try:
+        return _git_stdout(
+            repo,
+            ["diff", "--unified=3", ref, "--", "frontend/sw.js"],
+            "service worker diff vs %s" % ref,
+        )
+    except ChangeDiscoveryError:
+        return None
 
 
 def paths_from_name_status_z(raw: str) -> list[str]:

@@ -9,6 +9,15 @@ from __future__ import annotations
 from typing import Any
 
 from backend.api_contract.errors import ApiErrorEnvelope
+from backend.api_contract.performance import (
+    PerformanceCounters,
+    PerformanceDiagnosticsReset,
+    PerformanceDiagnosticsResetRequest,
+    PerformanceRequestTotals,
+    PerformanceRouteStat,
+    PerformanceSnapshot,
+    PerformanceSpanStat,
+)
 from backend.api_contract.positions import (
     PositionCreateRequest,
     PositionDeleted,
@@ -245,6 +254,111 @@ def positions_openapi_document() -> dict[str, Any]:
                 "(#180 / #45). Not the full PRKS surface. Request/response "
                 "schemas are generated from Pydantic boundary models; "
                 "canonical mutations remain in research_network/position_sync."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION = "0.1.0"
+
+
+def performance_diagnostics_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the performance-diagnostics HTTP family (#45 / #232).
+
+    Same Pydantic-generated contract style as the Positions slice. Not a
+    second API model and not the full PRKS surface.
+    """
+    schemas: dict[str, Any] = {}
+    for model in (
+        ApiErrorEnvelope,
+        PerformanceRequestTotals,
+        PerformanceRouteStat,
+        PerformanceSpanStat,
+        PerformanceCounters,
+        PerformanceSnapshot,
+        PerformanceDiagnosticsReset,
+        PerformanceDiagnosticsResetRequest,
+    ):
+        raw = _schema(model)
+        _merge_defs(schemas, raw)
+
+    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
+    snapshot_ref = {"$ref": "#/components/schemas/PerformanceSnapshot"}
+    reset_ref = {"$ref": "#/components/schemas/PerformanceDiagnosticsReset"}
+
+    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
+        return {"application/json": {"schema": schema_ref}}
+
+    def _json_error(description: str) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": _json_content(error_ref),
+        }
+
+    # Same body-read refusals as Positions POST/PATCH: PRKSHandler._read_json_body.
+    mutation_body_read_errors = {
+        "400": _json_error(
+            "JSON body gate refusal, or a body that is not an empty object."
+        ),
+        "413": _json_error(
+            "Request body larger than the JSON body limit (request_too_large)."
+        ),
+        "415": _json_error(
+            "Missing or unsupported Content-Type (unsupported_media_type)."
+        ),
+    }
+
+    paths: dict[str, Any] = {
+        "/api/diagnostics/performance": {
+            "get": {
+                "operationId": "getPerformanceDiagnostics",
+                "summary": "Runtime performance diagnostics snapshot",
+                "tags": ["diagnostics"],
+                "responses": {
+                    "200": {
+                        "description": "Aggregate in-process measurements.",
+                        "content": _json_content(snapshot_ref),
+                    },
+                },
+            },
+        },
+        "/api/diagnostics/performance/reset": {
+            "post": {
+                "operationId": "resetPerformanceDiagnostics",
+                "summary": "Clear the in-process performance window",
+                "tags": ["diagnostics"],
+                "requestBody": {
+                    "required": True,
+                    "description": "Empty JSON object. Additional properties are rejected.",
+                    "content": _json_content(
+                        {"$ref": "#/components/schemas/PerformanceDiagnosticsResetRequest"}
+                    ),
+                },
+                "responses": {
+                    "200": {
+                        "description": "Measurements were reset.",
+                        "content": _json_content(reset_ref),
+                    },
+                    **mutation_body_read_errors,
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Performance diagnostics slice",
+            "version": PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for performance diagnostics "
+                "(#45 / #232). Schemas are generated from the same Pydantic "
+                "boundary as the rest of backend/api_contract. The snapshot "
+                "is disposable process metadata, not canonical library data."
             ),
         },
         "paths": paths,
