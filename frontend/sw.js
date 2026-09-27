@@ -93,6 +93,7 @@
         '/js/icons.js',
         '/js/date-format.js',
         '/js/navigation.js',
+        '/js/workspace-model.js',
         '/js/workspace-tree.js',
         '/js/workspace-persistence.js',
         '/js/workspace-tabs.js',
@@ -262,7 +263,7 @@
     }
 
     function advanceWholeFilePdfGeneration(pathname) {
-        const next = wholeFilePdfGeneration(pathname) + 1;
+        const next = pdfWholeFileGeneration[pathname] + 1;
         pdfWholeFileGeneration[pathname] = next;
         return next;
     }
