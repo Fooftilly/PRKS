@@ -263,7 +263,7 @@
     }
 
     function advanceWholeFilePdfGeneration(pathname) {
-        const next = pdfWholeFileGeneration[pathname] + 1;
+        const next = wholeFilePdfGeneration(pathname) + 1;
         pdfWholeFileGeneration[pathname] = next;
         return next;
     }
