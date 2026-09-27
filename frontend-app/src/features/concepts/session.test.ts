@@ -195,6 +195,59 @@ describe('Concepts route bridge', () => {
     expect(decoy.textContent).not.toContain('Early')
   })
 
+  it('repaints the relation summary when parents/mentions change in place', async () => {
+    window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
+    window.prksResearchSectionHeadHtml = () => '<div class="research-entity__section-head"></div>'
+    window.prksRefreshIcons = () => {}
+    const summaries: string[] = []
+    window.prksRelSummaryHtml = (opts) => {
+      const text = (opts.parts || []).filter(Boolean).join(' · ')
+      summaries.push(text)
+      return `<p class="prks-rel-summary" data-summary="${text}"></p>`
+    }
+    const pane = owner()
+    const el = host()
+    presentConceptDetail({
+      owner: pane,
+      host: el,
+      concept: {
+        id: 'C9',
+        name: 'Nine',
+        description: 'Def',
+        aliases: [],
+        parents: [],
+        children: [],
+        mentions: [],
+        mention_count: 0,
+      },
+      generation: 7,
+    })
+    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary') || '').toBe('')
+    presentConceptDetail({
+      owner: pane,
+      host: el,
+      concept: {
+        id: 'C9',
+        name: 'Nine',
+        description: 'Def',
+        aliases: [],
+        parents: [{ id: 'P1', name: 'Parent' }],
+        children: [],
+        mentions: [],
+        mention_count: 3,
+      },
+      generation: 7,
+    })
+    await nextTick()
+    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary')).toContain('1 parent')
+    expect(el.querySelector('[data-summary]')?.getAttribute('data-summary')).toContain(
+      '3 note mentions',
+    )
+    expect(summaries.some((s) => s.includes('1 parent') && s.includes('3 note mentions'))).toBe(
+      true,
+    )
+  })
+
   it('unmounts on dismiss without affecting another owner', () => {
     window.prksPageHeaderIconHtml = () => ''
     window.prksIcon = () => ''

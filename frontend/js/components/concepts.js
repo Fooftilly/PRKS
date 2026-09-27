@@ -198,11 +198,20 @@
         });
         if (name == null || !String(name).trim()) return null;
         if (typeof root.createConcept !== 'function') return null;
+        const opts = ownerOpts || {};
+        const gen = opts.generation;
+        /* When the Vue Concepts owner supplied a generation guard, ignore the
+         * rest of the flow after the prompt if that owner is no longer current
+         * (route replaced / pane dismissed) — do not create or navigate. */
+        if (
+            typeof opts.isCurrent === 'function' &&
+            !(typeof gen === 'number' && opts.isCurrent(gen))
+        ) {
+            return null;
+        }
         try {
             const created = await root.createConcept({ name: String(name).trim() });
             if (created && created.id && typeof root.prksNavigate === 'function') {
-                const opts = ownerOpts || {};
-                const gen = opts.generation;
                 const stillCurrent =
                     typeof opts.isCurrent !== 'function' ||
                     (typeof gen === 'number' && opts.isCurrent(gen));

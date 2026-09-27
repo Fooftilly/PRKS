@@ -6,11 +6,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksConfirmDestructive
   delete window.prksAlertDialog
+  delete window.prksPromptTextDialog
   delete window.deleteConcept
   delete window.prksNavigate
   delete window.prksTabContextOwnsEntityRoute
   delete window.prksCreateConceptFlow
   delete window.updateConcept
+  delete window.putConceptAliases
+  delete window.putConceptParents
 })
 
 function concept(partial?: Partial<ConceptDetail>): ConceptDetail {
@@ -81,5 +84,40 @@ describe('browserConceptIntents', () => {
       generation: 9,
       isCurrent: expect.any(Function),
     })
+  })
+
+  it('fails closed when updateConcept is missing after an edit prompt', async () => {
+    window.prksPromptTextDialog = vi.fn(async () => 'Updated definition')
+    window.prksTabContextOwnsEntityRoute = () => true
+    const navigate = vi.fn()
+    window.prksNavigate = navigate
+    const alerts: Array<{ title: string; message: string }> = []
+    window.prksAlertDialog = vi.fn(async (opts) => {
+      alerts.push(opts)
+    })
+    delete window.updateConcept
+    const intents = browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 4)
+    await intents.editDefinition(concept({ description: 'old' }))
+    expect(navigate).not.toHaveBeenCalled()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]?.title).toBe('Could not save the definition')
+    expect(alerts[0]?.message).toContain('updateConcept is unavailable')
+  })
+
+  it('fails closed when deleteConcept is missing after confirm', async () => {
+    window.prksConfirmDestructive = vi.fn(async () => true)
+    delete window.deleteConcept
+    const navigate = vi.fn()
+    window.prksNavigate = navigate
+    const alerts: Array<{ title: string; message: string }> = []
+    window.prksAlertDialog = vi.fn(async (opts) => {
+      alerts.push(opts)
+    })
+    const intents = browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 5)
+    await intents.remove(concept())
+    expect(navigate).not.toHaveBeenCalled()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]?.title).toBe('Cannot delete Concept')
+    expect(alerts[0]?.message).toContain('deleteConcept is unavailable')
   })
 })

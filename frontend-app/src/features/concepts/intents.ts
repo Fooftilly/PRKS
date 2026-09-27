@@ -72,6 +72,16 @@ function refreshDetail(owner: ConceptIntentOwner | null | undefined, generation:
   })
 }
 
+/** Fail closed when a required durable Concept API is not on window. */
+function requireDurableApi<T>(fn: T | undefined, label: string): T {
+  if (typeof fn !== 'function') {
+    const err = new Error(`${label} is unavailable`) as Error & { code?: string }
+    err.code = 'durable_api_missing'
+    throw err
+  }
+  return fn
+}
+
 /**
  * Typed intents → existing durable Concept APIs and dialog helpers.
  * No fetch(), no TanStack mutations, no second durable queue.
@@ -103,7 +113,8 @@ export function browserConceptIntents(
       if (next == null || !String(next).trim()) return
       if (!owner || typeof owner.isCurrent !== 'function' || !owner.isCurrent(generation)) return
       try {
-        await window.updateConcept?.(concept.id, { name: String(next).trim() })
+        const update = requireDurableApi(window.updateConcept, 'updateConcept')
+        await update(concept.id, { name: String(next).trim() })
         refreshDetail(owner, generation, concept.id)
       } catch (err) {
         if (!owner.isCurrent(generation)) return
@@ -134,7 +145,8 @@ export function browserConceptIntents(
       if (!ok) return
       if (!owner || typeof owner.isCurrent !== 'function' || !owner.isCurrent(generation)) return
       try {
-        await window.deleteConcept?.(concept.id)
+        const del = requireDurableApi(window.deleteConcept, 'deleteConcept')
+        await del(concept.id)
         if (ownsDetail(owner, generation, concept.id) && typeof window.prksNavigate === 'function') {
           window.prksNavigate('#/concepts', { replace: true, tabId: owner.tabId })
         }
@@ -168,7 +180,8 @@ export function browserConceptIntents(
       if (next == null) return
       if (!ownsDetail(owner, generation, concept.id)) return
       try {
-        await window.updateConcept?.(concept.id, { description: next })
+        const update = requireDurableApi(window.updateConcept, 'updateConcept')
+        await update(concept.id, { description: next })
       } catch (err) {
         await reportFailure(owner, generation, concept.id, err, 'Could not save the definition')
         return
@@ -191,7 +204,8 @@ export function browserConceptIntents(
         .map((s) => s.trim())
         .filter(Boolean)
       try {
-        await window.putConceptAliases?.(concept.id, aliases)
+        const put = requireDurableApi(window.putConceptAliases, 'putConceptAliases')
+        await put(concept.id, aliases)
       } catch (err) {
         await reportFailure(owner, generation, concept.id, err, 'Could not save these aliases')
         return
@@ -213,7 +227,8 @@ export function browserConceptIntents(
         .map((s) => s.trim())
         .filter(Boolean)
       try {
-        await window.putConceptParents?.(concept.id, ids)
+        const put = requireDurableApi(window.putConceptParents, 'putConceptParents')
+        await put(concept.id, ids)
       } catch (err) {
         await reportFailure(owner, generation, concept.id, err, 'Could not save these parents')
         return
