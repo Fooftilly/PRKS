@@ -383,40 +383,57 @@ def _reclaim_abandoned_ready_backups_unlocked(
         names = os.listdir(root)
     except OSError:
         return
-    protected_paths: set[str] = set()
-    protected_ids: set[tuple[int, int]] = set()
-    for item in _ready_backups.values():
-        path = str(item.get("path") or "")
-        if not path:
-            continue
-        protected_paths.add(os.path.normcase(os.path.abspath(path)))
-        try:
-            st = os.stat(path)
-        except OSError:
-            continue
-        protected_ids.add((st.st_dev, st.st_ino))
+    protected = _registered_ready_backups_unlocked()
     reclaimed = 0
     for name in names:
-        if not _READY_BACKUP_NAME_RE.fullmatch(name):
-            continue
         child = os.path.join(root, name)
-        try:
-            st = os.lstat(child)
-        except OSError:
-            continue
-        if not stat.S_ISREG(st.st_mode) or _is_directory_reparse_point(child):
-            continue
-        if (st.st_dev, st.st_ino) in protected_ids:
-            continue
-        if os.path.normcase(os.path.abspath(child)) in protected_paths:
-            continue
-        if current - st.st_mtime < READY_BACKUP_TTL_SECONDS:
+        if not _is_abandoned_ready_backup(child, name, protected, current):
             continue
         _discard_maintenance_child(config, _BACKUP_SUBROOT, child)
         if not os.path.lexists(child):
             reclaimed += 1
     if reclaimed:
         LOGGER.info("backup_ready_orphan_reclaimed count=%s", reclaimed)
+
+
+def _registered_ready_backups_unlocked() -> tuple[set[str], set[tuple[int, int]]]:
+    """Normalized paths and file identities of archives with a live token."""
+    paths: set[str] = set()
+    identities: set[tuple[int, int]] = set()
+    for item in _ready_backups.values():
+        path = str(item.get("path") or "")
+        if not path:
+            continue
+        paths.add(os.path.normcase(os.path.abspath(path)))
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        identities.add((st.st_dev, st.st_ino))
+    return paths, identities
+
+
+def _is_abandoned_ready_backup(
+    child: str,
+    name: str,
+    protected: tuple[set[str], set[tuple[int, int]]],
+    current: float,
+) -> bool:
+    """Whether one backup-subroot entry is a generated archive past its TTL."""
+    if not _READY_BACKUP_NAME_RE.fullmatch(name):
+        return False
+    try:
+        st = os.lstat(child)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or _is_directory_reparse_point(child):
+        return False
+    protected_paths, protected_ids = protected
+    if (st.st_dev, st.st_ino) in protected_ids:
+        return False
+    if os.path.normcase(os.path.abspath(child)) in protected_paths:
+        return False
+    return current - st.st_mtime >= READY_BACKUP_TTL_SECONDS
 
 
 def cleanup_expired_backup_jobs(config: StorageConfig, *, now: Optional[float] = None) -> None:
@@ -429,6 +446,14 @@ def cleanup_expired_backup_jobs(config: StorageConfig, *, now: Optional[float] =
     with _ready_lock:
         _expire_ready_backups_unlocked(now=now)
         _reclaim_abandoned_ready_backups_unlocked(config, now=now)
+
+
+def _cleanup_after_stash(config: StorageConfig) -> None:
+    """Opportunistic TTL sweep at the backup lifecycle boundary; never fails a backup."""
+    try:
+        cleanup_expired_backup_jobs(config)
+    except Exception as exc:
+        LOGGER.warning("backup_ready_cleanup_skipped error_type=%s", safe_error_type(exc))
 
 
 def run_backup_with_progress(
@@ -451,10 +476,7 @@ def run_backup_with_progress(
     try:
         result = create_backup(config, progress=emit, cancel_event=cancel_event)
         token = stash_ready_backup(result)
-        try:
-            cleanup_expired_backup_jobs(config)
-        except Exception as exc:
-            LOGGER.warning("backup_ready_cleanup_skipped error_type=%s", safe_error_type(exc))
+        _cleanup_after_stash(config)
         emit(
             {
                 "phase": "ready",
