@@ -546,7 +546,11 @@ AFFECTED_RULES = (
     },
     {
         "name": "workspace-drag",
-        "paths": ("frontend/js/workspace-drag.js",),
+        "paths": (
+            "frontend/js/workspace-drag.js",
+            "frontend-app/src/workspace-dnd/",
+            "frontend-app/src/workspace-shell/WorkspaceShell.vue",
+        ),
         "features": ("workspace-drag", "tiling", "tabs"),
     },
     {

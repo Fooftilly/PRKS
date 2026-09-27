@@ -4798,9 +4798,9 @@ def _drag_divider(page, dx):
     page.mouse.up()
 
 
-# ---- workspace-drag.js E2E helpers: real Playwright pointer gestures, never a direct call into
-# prksWorkspaceReorderTab/prksWorkspaceMovePane/etc. -- those are exercised by the drag controller
-# itself, exactly the way a user would trigger them. ----
+# ---- Workspace DnD E2E helpers: Chromium HTML5 drag (Pragmatic sensors in Vue workspace-dnd),
+# never a direct call into prksWorkspaceReorderTab/prksWorkspaceMovePane/etc. -- those are
+# exercised by the drag controller on drop, exactly the way a user would trigger them. ----
 
 
 def _tab_box(page, tab_id):
@@ -4858,28 +4858,117 @@ def _edge_point(box, zone):
     raise ValueError(zone)
 
 
-def _begin_pointer_drag(page, start_xy):
-    """pointerdown + enough movement to cross workspace-drag.js's 6px threshold and arm an
-    active drag. Caller continues with further page.mouse.move()/page.mouse.up() calls."""
+def _position_in_box(box, xy):
+    return {"x": xy[0] - box["x"], "y": xy[1] - box["y"]}
+
+
+def _resolve_workspace_drag_source(page, x, y):
+    return page.evaluate(
+        """([px, py]) => {
+            const el = document.elementFromPoint(px, py);
+            if (!el) return null;
+            const grip = el.closest('.prks-tile-header__grip');
+            if (grip) {
+                const tile = grip.closest('.prks-tile[data-prks-tab-id]');
+                if (!tile) return null;
+                return { kind: 'pane', tabId: tile.getAttribute('data-tab-id') };
+            }
+            const tab = el.closest('.prks-workspace-tab');
+            if (tab) return { kind: 'tab', tabId: tab.getAttribute('data-tab-id') };
+            return null;
+        }""",
+        [x, y],
+    )
+
+
+def _resolve_workspace_drop_target(page, x, y):
+    return page.evaluate(
+        """([px, py]) => {
+            const el = document.elementFromPoint(px, py);
+            if (!el) return { kind: 'page' };
+            const tile = el.closest('.prks-tile[data-prks-tab-id]');
+            if (tile) return { kind: 'tile', tabId: tile.getAttribute('data-tab-id') };
+            const tab = el.closest('.prks-workspace-tab');
+            if (tab) return { kind: 'tab', tabId: tab.getAttribute('data-tab-id') };
+            if (el.closest('#prks-workspace-tabs')) return { kind: 'strip' };
+            if (el.closest('.prks-workspace-canvas')) return { kind: 'canvas' };
+            return { kind: 'page' };
+        }""",
+        [x, y],
+    )
+
+
+def _locator_for_drag_source(page, source_info):
+    tab_id = source_info["tabId"]
+    if source_info["kind"] == "pane":
+        return page.locator('.prks-tile[data-prks-tab-id="%s"]' % tab_id)
+    return page.locator('.prks-workspace-tab[data-tab-id="%s"]' % tab_id)
+
+
+def _locator_for_drop_target(page, target_info):
+    kind = target_info["kind"]
+    if kind == "tile":
+        return page.locator('.prks-tile[data-prks-tab-id="%s"]' % target_info["tabId"])
+    if kind == "tab":
+        return page.locator('.prks-workspace-tab[data-tab-id="%s"]' % target_info["tabId"])
+    if kind == "strip":
+        return page.locator("#prks-workspace-tabs")
+    if kind == "canvas":
+        return page.locator(".prks-workspace-canvas")
+    return page.locator("#page-content")
+
+
+def _begin_workspace_drag(page, start_xy):
+    """Start a Pragmatic/HTML5 workspace drag at `start_xy`.
+
+    Uses Playwright's mouse API so Chromium arms native dragstart on the Pragmatic drag
+    handle, then routes further page.mouse.move() calls as dragOver and page.mouse.up() as
+    drop. Caller continues with move/up (or Escape / prksWorkspaceCancelActiveDrag mid-flight).
+    """
     sx, sy = start_xy
     page.mouse.move(sx, sy)
     page.mouse.down()
-    page.mouse.move(sx + 12, sy + 12, steps=3)
+    page.mouse.move(sx + 8, sy + 8, steps=3)
 
 
-def _pointer_drag(page, start_xy, hover_xy, release_xy=None, pre_release=None):
-    """A full drag gesture: down at `start_xy`, cross the movement threshold, move to
-    `hover_xy` (where a caller-supplied `pre_release` callback can inspect live drag state),
-    then move to `release_xy` (defaults to `hover_xy`) and release there."""
-    _begin_pointer_drag(page, start_xy)
+def _workspace_drag(page, start_xy, hover_xy, release_xy=None, pre_release=None):
+    """Full workspace drag: HTML5 drag from `start_xy` to `release_xy` (defaults to `hover_xy`).
+
+    When `pre_release` is omitted, prefers locator.drag_to with explicit source/target
+    positions (reliable Pragmatic/HTML5). Stepped drags with `pre_release` or distinct
+    release coordinates use the mouse+native-drag session instead.
+    """
+    release_xy = release_xy if release_xy is not None else hover_xy
+    if pre_release is None:
+        src_info = _resolve_workspace_drag_source(page, start_xy[0], start_xy[1])
+        tgt_info = _resolve_workspace_drop_target(page, release_xy[0], release_xy[1])
+        if src_info and tgt_info:
+            src_loc = _locator_for_drag_source(page, src_info)
+            tgt_loc = _locator_for_drop_target(page, tgt_info)
+            src_box = src_loc.bounding_box()
+            tgt_box = tgt_loc.bounding_box()
+            if src_box and tgt_box:
+                src_loc.drag_to(
+                    tgt_loc,
+                    source_position=_position_in_box(src_box, start_xy),
+                    target_position=_position_in_box(tgt_box, release_xy),
+                    steps=12,
+                )
+                return
+    _begin_workspace_drag(page, start_xy)
     hx, hy = hover_xy
     page.mouse.move(hx, hy, steps=10)
     if pre_release is not None:
         pre_release()
-    rx, ry = release_xy if release_xy is not None else (hx, hy)
+    rx, ry = release_xy
     if (rx, ry) != (hx, hy):
         page.mouse.move(rx, ry, steps=6)
     page.mouse.up()
+
+
+# Legacy names used throughout this module's workspace-drag tests.
+_begin_pointer_drag = _begin_workspace_drag
+_pointer_drag = _workspace_drag
 
 
 def _drag_dom_residue(page):
@@ -8158,7 +8247,7 @@ class WorkspaceTilingTests(_BrowserE2E):
         pointerdown, so it can never fire for a genuine pane drag (started on
         `.prks-tile-header__grip`, never on the button) whose pointerup happens to land over
         Pane actions or Close. A pane drag releasing over its own header (self-drop) is an
-        invalid spatial target under workspace-drag.js's own contract, so the drag itself must
+        invalid spatial target under the workspace DnD contract, so the drag itself must
         just cancel -- not close the pane, and not open the pane menu."""
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
@@ -8314,12 +8403,10 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.wait_for_selector("#prks-workspace-menu[hidden]", state="attached")
 
     def test_stale_click_candidate_does_not_survive_into_later_drag(self):
-        """Regression for the pointerId-reuse lifecycle gap: a pointerdown on Pane actions
-        whose pointerup releases outside every tile entirely (so a tile-scoped listener would
-        never observe it) must not leave a stale click-fallback candidate behind for a later,
-        completely unrelated gesture -- e.g. a genuine grip drag released over Close -- to
-        accidentally consume, given that a mouse's pointerId is typically reused across
-        separate gestures."""
+        """Regression: an incomplete Pane-actions press (pointerdown with pointerup outside
+        the button and every tile) must not leave a stale click-fallback candidate that a
+        later unrelated HTML5 workspace drag (grip released over Close) could accidentally
+        consume as a Close click."""
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         b_id = self._reparented_secondary_leaf(page, server)
@@ -8335,10 +8422,9 @@ class WorkspaceTilingTests(_BrowserE2E):
         page.mouse.up()
         self.assertFalse(page.locator("#prks-workspace-menu").is_visible())
 
-        # A later, unrelated gesture reusing the same mouse pointerId: a genuine grip drag
-        # released over Close. Under the bug this protects against, the stale Pane-actions
-        # candidate above could be consumed here instead, synthesizing a Close click
-        # regardless of what button the drag actually released over.
+        # A later, unrelated HTML5 grip drag released over Close. Under the bug this protects
+        # against, the stale Pane-actions candidate above could be consumed here instead,
+        # synthesizing a Close click regardless of what the drag actually released over.
         grip_box = _grip_box(page, b_id)
         close_box = page.locator('.prks-tile[data-prks-tab-id="%s"] .prks-tile-header__close' % b_id).bounding_box()
         self.assertIsNotNone(grip_box)
@@ -9308,11 +9394,11 @@ class WorkspacePersistenceTests(_BrowserE2E):
 
 
 class WorkspaceDragDropTests(_BrowserE2E):
-    """Real-pointer coverage for workspace-drag.js. Every test drives an actual
-    page.mouse down/move/up sequence through the DOM -- never a direct call into
+    """HTML5 / Pragmatic workspace DnD coverage (Vue workspace-dnd sensors). Every test drives
+    real Chromium drag gestures via the helpers above -- never a direct call into
     prksWorkspaceReorderTab/prksWorkspaceMovePane/prksWorkspaceHideLeaf/prksWorkspaceSplitLeaf,
     which would only prove those canonical APIs work (already covered by the state/tree
-    selftests), not that the drag controller's geometry/targeting correctly drives them."""
+    selftests), not that drop-intent geometry/targeting correctly drives them."""
 
     def test_tab_reorder_with_real_pointer_and_close_to_the_right(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
@@ -9336,7 +9422,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         seen_gets = []
         page.on("request", lambda req: seen_gets.append(req.url) if req.method == "GET" else None)
 
-        # Real pointer drag: D onto the strip, dropped just inside B's leading edge -> A, D, B, C.
+        # HTML5 tab drag: D onto the strip, dropped just inside B's leading edge -> A, D, B, C.
         d_box = _tab_box(page, d_id)
         b_box = _tab_box(page, b_id)
         _pointer_drag(page, _tab_grab_point(d_box), (b_box["x"] + 4, b_box["y"] + b_box["height"] / 2))
@@ -10019,14 +10105,12 @@ class WorkspaceDragDropTests(_BrowserE2E):
         main_id_before = page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId")
         b_id = page.evaluate("() => window.prksWorkspaceSnapshot().tabs[1].id")
 
-        # A real drag that crosses the movement threshold but releases back over its own tab
-        # wrap -- mousedown and mouseup target the same element, exactly the case click
-        # suppression exists for: a drag happened, so the browser's own synthesized click on
+        # A real HTML5 tab drag that moves away and drops back on the same tab wrap -- the case
+        # click suppression exists for: a drag happened, so the browser's synthesized click on
         # that same element (which would otherwise activate a parked tab as Main) must not fire.
-        start = _center(_tab_box(page, b_id))
-        page.mouse.move(*start)
-        page.mouse.down()
-        page.mouse.move(start[0] + 10, start[1] - 10, steps=4)
+        start = _tab_grab_point(_tab_box(page, b_id))
+        _begin_workspace_drag(page, start)
+        page.mouse.move(start[0] + 16, start[1] - 12, steps=4)
         page.mouse.move(start[0], start[1], steps=4)
         page.mouse.up()
 
@@ -10035,7 +10119,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertEqual(
             page.evaluate("() => window.prksWorkspaceSnapshot().mainTabId"),
             main_id_before,
-            "the pointerup-synthesized click on the drag source must not also activate it",
+            "the post-drag synthesized click on the drag source must not also activate it",
         )
 
     def test_drag_responsive_cancellation_before_narrow_fallback(self):
@@ -10080,12 +10164,10 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertEqual(page.evaluate("() => window.prksTabContextDebugSnapshot().mountedCount"), 3)
 
     def test_drag_cancel_active_drag_cleans_up_without_mutation(self):
-        """Covers the pointercancel/lostpointercapture paths: both handlers simply call the
-        same cancel() this test invokes directly (workspace-drag.js exports it specifically so
-        other lifecycle code can call it defensively -- see prksWorkspaceCancelActiveDrag's own
-        callers in workspace-tiling.js). A literal browser pointercancel/lostpointercapture
-        event is not reliably synthesizable through Playwright's mouse API, which always
-        completes a normal gesture."""
+        """Covers defensive cancellation: prksWorkspaceCancelActiveDrag (also used when the
+        shell tears down stale tiles or crosses responsive fallback) must end an in-flight HTML5
+        drag without mutating workspace state. Native pointercancel is not reliably
+        synthesizable in Playwright; this asserts the exported cancel hook directly."""
         server, page, _collector = self._start_app()
         page.set_viewport_size({"width": 1600, "height": 900})
         person_id = server.ids["person"]
