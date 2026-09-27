@@ -145,6 +145,7 @@ interface Window {
     recentlyAddedPendingGeneration?: unknown
     recentlyAddedCached?: boolean
     recentlyAddedLoading?: boolean
+    vueOwned?: boolean
   } | null
   prksSync?: { subscribe?: (fn: () => void) => () => void }
   prksCreateConceptFlow?: (

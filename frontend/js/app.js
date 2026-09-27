@@ -4520,6 +4520,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
     } catch (_e) {
         if (stale()) return;
         if (typeof prksIsAbortError === 'function' && prksIsAbortError(_e)) return;
+        /* Retained Vue surfaces skip beginRoute dismiss. An error path that
+         * replaces contentDiv must still tear them down so unmount/cleanup run. */
+        if (sameFolderLibraryWorkspace && typeof window.prksVueDismissFolderLibrary === 'function') {
+            window.prksVueDismissFolderLibrary(ctx);
+        }
+        if (sameConceptsWorkspace && typeof window.prksVueDismissConcepts === 'function') {
+            window.prksVueDismissConcepts(ctx);
+        }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);
         }

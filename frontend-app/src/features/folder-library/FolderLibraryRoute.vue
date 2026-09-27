@@ -74,8 +74,16 @@ const recentlyAddedPendingGeneration = ref<unknown>(null)
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const folders = computed(() => props.projection.folders)
 const hasCollapsible = computed(() => folderTreeHasCollapsibleNodes(folders.value))
-const expandLabel = computed(() => folderLibraryExpandToggleLabel(folders.value))
-const expandCollapseAll = computed(() => !folderTreeAllCollapsed(folders.value))
+/** Bumped when collapse map changes so expand-all chrome re-reads helpers. */
+const collapseTick = ref(0)
+const expandLabel = computed(() => {
+  void collapseTick.value
+  return folderLibraryExpandToggleLabel(folders.value)
+})
+const expandCollapseAll = computed(() => {
+  void collapseTick.value
+  return !folderTreeAllCollapsed(folders.value)
+})
 const searchIconHtml = computed(() => {
   void props.projection.generation
   return tagSearchIconHtml()
@@ -85,9 +93,18 @@ const collectionClass = computed(() => {
   return workBrowseCollectionClass('prks-folder-library__grid')
 })
 
+/** Drop async completions from a dismissed instance (leave / remount). */
+let surfaceAlive = true
+let loadEpoch = 0
+
+function surfaceStillOwned(): boolean {
+  return surfaceAlive && !!rootEl.value?.isConnected
+}
+
 function syncDashboardCompatState(): void {
-  // Legacy helpers (toggle/glance/overlay subscribe) still read this shim.
-  // Vue owns ephemeral UI; acknowledged recently-added rows stay server-shaped.
+  if (!surfaceStillOwned()) return
+  // Legacy helpers (toggle/glance) still read this shim. Folder Library is
+  // main-only, so one mounted owner is the expected production case.
   window.__prksFolderDashboardState = {
     folders: folders.value,
     container: rootEl.value?.closest('[data-prks-vue-route-host]')?.parentElement || rootEl.value,
@@ -99,6 +116,7 @@ function syncDashboardCompatState(): void {
     recentlyAddedPendingGeneration: recentlyAddedPendingGeneration.value,
     recentlyAddedCached: recentlyAddedCached.value,
     recentlyAddedLoading: recentlyAddedLoading.value,
+    vueOwned: true,
   }
 }
 
@@ -135,6 +153,7 @@ function paintTree(): void {
 }
 
 function syncExpandToggle(): void {
+  collapseTick.value += 1
   const btn = expandToggleEl.value
   if (!btn) return
   if (!btn.querySelector('.ribbon-btn__icon')) {
@@ -197,7 +216,7 @@ function paintRecentlyAdded(): void {
 }
 
 async function loadRecentlyAdded(force = false): Promise<void> {
-  if (unavailable.value) return
+  if (unavailable.value || !surfaceStillOwned()) return
   const generation =
     typeof window.prksOfflineDomainGeneration === 'function'
       ? window.prksOfflineDomainGeneration('recently-added')
@@ -215,43 +234,60 @@ async function loadRecentlyAdded(force = false): Promise<void> {
     paintRecentlyAdded()
     return
   }
+  const epoch = ++loadEpoch
   recentlyAddedLoading.value = true
   syncDashboardCompatState()
-  if (typeof window.prksRefreshPendingWorkMetadata === 'function') {
-    await window.prksRefreshPendingWorkMetadata()
-  }
-  const offlineRecentlyAdded =
-    typeof window.prksOfflineRecentlyAddedFetch === 'function'
-      ? await window.prksOfflineRecentlyAddedFetch()
-      : null
-  const works =
-    typeof window.prksResolveOfflineRecentlyAdded === 'function'
-      ? window.prksResolveOfflineRecentlyAdded(offlineRecentlyAdded)
-      : null
-  recentlyAddedLoading.value = false
-  if (!works) {
+  try {
+    if (typeof window.prksRefreshPendingWorkMetadata === 'function') {
+      await window.prksRefreshPendingWorkMetadata()
+    }
+    if (!surfaceStillOwned() || epoch !== loadEpoch) return
+    const offlineRecentlyAdded =
+      typeof window.prksOfflineRecentlyAddedFetch === 'function'
+        ? await window.prksOfflineRecentlyAddedFetch()
+        : null
+    if (!surfaceStillOwned() || epoch !== loadEpoch) return
+    const works =
+      typeof window.prksResolveOfflineRecentlyAdded === 'function'
+        ? window.prksResolveOfflineRecentlyAdded(offlineRecentlyAdded)
+        : null
+    if (!works) {
+      recentlyAddedWorks.value = null
+      recentlyAddedGeneration.value = null
+      recentlyAddedPendingGeneration.value = null
+      recentlyAddedUnavailable.value = true
+      paintRecentlyAdded()
+      syncDashboardCompatState()
+      return
+    }
+    recentlyAddedUnavailable.value = false
+    recentlyAddedWorks.value = works as RecentlyAddedWork[]
+    recentlyAddedCached.value = !!(offlineRecentlyAdded && offlineRecentlyAdded.source === 'cache')
+    recentlyAddedGeneration.value =
+      typeof window.prksOfflineDomainGeneration === 'function'
+        ? window.prksOfflineDomainGeneration('recently-added')
+        : null
+    recentlyAddedPendingGeneration.value =
+      typeof window.prksPendingWorkMetadataGeneration === 'function'
+        ? window.prksPendingWorkMetadataGeneration()
+        : null
+    window.__prksRecentlyAddedDirty = false
+    paintRecentlyAdded()
+    syncDashboardCompatState()
+  } catch {
+    if (!surfaceStillOwned() || epoch !== loadEpoch) return
     recentlyAddedWorks.value = null
     recentlyAddedGeneration.value = null
     recentlyAddedPendingGeneration.value = null
     recentlyAddedUnavailable.value = true
     paintRecentlyAdded()
     syncDashboardCompatState()
-    return
+  } finally {
+    if (epoch === loadEpoch) {
+      recentlyAddedLoading.value = false
+      if (surfaceStillOwned()) syncDashboardCompatState()
+    }
   }
-  recentlyAddedUnavailable.value = false
-  recentlyAddedWorks.value = works as RecentlyAddedWork[]
-  recentlyAddedCached.value = !!(offlineRecentlyAdded && offlineRecentlyAdded.source === 'cache')
-  recentlyAddedGeneration.value =
-    typeof window.prksOfflineDomainGeneration === 'function'
-      ? window.prksOfflineDomainGeneration('recently-added')
-      : null
-  recentlyAddedPendingGeneration.value =
-    typeof window.prksPendingWorkMetadataGeneration === 'function'
-      ? window.prksPendingWorkMetadataGeneration()
-      : null
-  window.__prksRecentlyAddedDirty = false
-  paintRecentlyAdded()
-  syncDashboardCompatState()
 }
 
 function switchTab(tab: FolderLibraryTab): void {
@@ -265,18 +301,24 @@ function switchTab(tab: FolderLibraryTab): void {
   intents?.persistTab(want)
   syncDashboardCompatState()
   if (want === 'recently-added') {
-    void loadRecentlyAdded(false)
+    void loadRecentlyAdded(false).catch(() => {})
   }
 }
 
-const persistFolderFilterDebounced = useDebounceFn((q: string) => {
+/** Invalidate in-flight debounced filter writes (VueUse 14 has no .cancel). */
+let folderFilterEpoch = 0
+let filesFilterEpoch = 0
+
+const persistFolderFilterDebounced = useDebounceFn((q: string, epoch: number) => {
+  if (epoch !== folderFilterEpoch || !surfaceStillOwned()) return
   writeFolderLibraryFilter(q)
   intents?.persistFolderFilter(q)
   paintTree()
   syncDashboardCompatState()
 }, 150)
 
-const persistFilesFilterDebounced = useDebounceFn((q: string) => {
+const persistFilesFilterDebounced = useDebounceFn((q: string, epoch: number) => {
+  if (epoch !== filesFilterEpoch || !surfaceStillOwned()) return
   writeFolderLibraryFilesFilter(q)
   intents?.persistFilesFilter(q)
   paintRecentlyAdded()
@@ -286,16 +328,19 @@ const persistFilesFilterDebounced = useDebounceFn((q: string) => {
 function onFolderFilterInput(): void {
   const q = String(folderSearchInput.value?.value || '')
   folderFilter.value = q
-  persistFolderFilterDebounced(q)
+  const epoch = ++folderFilterEpoch
+  void persistFolderFilterDebounced(q, epoch)
 }
 
 function onFilesFilterInput(): void {
   const q = String(filesSearchInput.value?.value || '')
   filesFilter.value = q
-  persistFilesFilterDebounced(q)
+  const epoch = ++filesFilterEpoch
+  void persistFilesFilterDebounced(q, epoch)
 }
 
 function clearFolderFilter(): void {
+  folderFilterEpoch += 1
   folderFilter.value = ''
   if (folderSearchInput.value) folderSearchInput.value.value = ''
   writeFolderLibraryFilter('')
@@ -305,6 +350,7 @@ function clearFolderFilter(): void {
 }
 
 function clearFilesFilter(): void {
+  filesFilterEpoch += 1
   filesFilter.value = ''
   if (filesSearchInput.value) filesSearchInput.value.value = ''
   writeFolderLibraryFilesFilter('')
@@ -346,9 +392,11 @@ function onExpandAll(): void {
 }
 
 async function refreshRecentlyAddedOverlay(): Promise<void> {
-  if (!Array.isArray(recentlyAddedWorks.value)) return
+  if (!surfaceStillOwned() || !Array.isArray(recentlyAddedWorks.value)) return
   if (typeof window.prksRefreshPendingWorkMetadata !== 'function') return
+  const epoch = loadEpoch
   await window.prksRefreshPendingWorkMetadata()
+  if (!surfaceStillOwned() || epoch !== loadEpoch) return
   recentlyAddedPendingGeneration.value =
     typeof window.prksPendingWorkMetadataGeneration === 'function'
       ? window.prksPendingWorkMetadataGeneration()
@@ -360,6 +408,7 @@ async function refreshRecentlyAddedOverlay(): Promise<void> {
 let unsubscribeSync: (() => void) | null = null
 
 onMounted(() => {
+  surfaceAlive = true
   paintGlanceCatalog()
   void scheduleGlanceExtras()
   paintTree()
@@ -369,7 +418,7 @@ onMounted(() => {
   })
   syncDashboardCompatState()
   if (activeTab.value === 'recently-added') {
-    void loadRecentlyAdded(false)
+    void loadRecentlyAdded(false).catch(() => {})
   }
   window.prksRefreshIcons?.(rootEl.value)
   if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
@@ -380,6 +429,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  surfaceAlive = false
+  loadEpoch += 1
+  folderFilterEpoch += 1
+  filesFilterEpoch += 1
   releaseFolderLibraryBrowseResources(rootEl.value)
   if (typeof unsubscribeSync === 'function') {
     try {
@@ -389,7 +442,7 @@ onBeforeUnmount(() => {
     }
   }
   const st = window.__prksFolderDashboardState
-  if (st && st.container && rootEl.value && st.container.contains(rootEl.value)) {
+  if (st && st.vueOwned && st.container && rootEl.value && st.container.contains(rootEl.value)) {
     window.__prksFolderDashboardState = null
   }
 })

@@ -751,6 +751,8 @@ function prksRenderFolderLibraryRecentlyAdded(works, paneEl) {
 async function prksRefreshRecentlyAddedOverlay() {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container || !Array.isArray(st.recentlyAddedWorks)) return;
+    /* Vue Folder Library owns its sync repaint + #170 release path. */
+    if (st.vueOwned || st.container.querySelector('[data-prks-folder-library-view]')) return;
     if (typeof prksRefreshPendingWorkMetadata !== 'function') return;
     await prksRefreshPendingWorkMetadata();
     st.recentlyAddedPendingGeneration =
