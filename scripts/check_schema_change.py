@@ -422,9 +422,23 @@ def _docstring_ids(tree: ast.AST) -> set[int]:
 
 
 def _conflict_columns(raw: str | None) -> tuple[str, ...] | None:
+    """Lower-cased, unquoted conflict-target columns.
+
+    Commas are split in the masked copy, so a quoted name like ``"id,part"``
+    stays one column; each column is then read back from ``raw``.
+    """
     if raw is None:
         return None
-    return tuple(c.strip().strip('"`[]').lower() for c in raw.split(",") if c.strip())
+    masked = _mask_sql(raw)
+    columns: list[str] = []
+    start = 0
+    for part in masked.split(","):
+        end = start + len(part)
+        column = raw[start:end].strip()
+        if column:
+            columns.append(_unquote_ident(column).lower())
+        start = end + 1
+    return tuple(columns)
 
 
 def _statement_upserts(

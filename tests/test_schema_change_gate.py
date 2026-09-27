@@ -481,6 +481,24 @@ class GateRepoTests(unittest.TestCase):
         )
         self.assertEqual(self.codes(), [])
 
+    def test_quoted_conflict_column_containing_comma_is_one_column(self):
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA
+                + 'CREATE TABLE odd ("id,part" TEXT PRIMARY KEY);\n',
+                "backend/db_migrations.py": _migrations(
+                    3,
+                    [(2, "first"), (3, "odd")],
+                    '{"sync_entity_revisions": ("scope_type", "scope_id"), "odd": ("id,part",)}',
+                ),
+                "backend/odd.py": (
+                    "SQL = 'INSERT INTO odd (\"id,part\") VALUES (?) "
+                    "ON CONFLICT(\"ID,PART\") DO NOTHING'\n"
+                ),
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \
