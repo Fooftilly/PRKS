@@ -383,11 +383,11 @@ AFFECTED_RULES = (
         "ci_mode": "full",
         "note": "Shared core → smoke + shell/tabs/offline/sync/modals (CI: full)",
     },
-    # Shared Vue bootstrap, dependency pins, and the committed bundle.
-    # CI fails closed to full until a deliberate shared-Vue-core mapping
-    # exists. Feature slices must not claim these paths. New screens under
-    # frontend-app/src/ stay unmapped (CI full) until a feature rule names them.
-    # index.html/sw.js stay on shared-frontend-core.
+    # Shared Vue bootstrap and dependency pins. CI fails closed to full until
+    # a deliberate shared-Vue-core mapping exists. The generated bundle
+    # (frontend/vue/**) is not in this rule; plan_ci_e2e treats it separately.
+    # New screens under frontend-app/src/ stay unmapped (CI full) until a
+    # feature rule names them. index.html/sw.js stay on shared-frontend-core.
     {
         "name": "vue-frontend",
         "paths": (
@@ -402,11 +402,10 @@ AFFECTED_RULES = (
             "frontend-app/src/mount.ts",
             "frontend-app/src/mount.test.ts",
             "frontend-app/src/App.vue",
-            "frontend/vue/**",
         ),
         "features": ("smoke",),
         "ci_mode": "full",
-        "note": "Shared Vue bootstrap and committed bundle (CI: full). Not a feature owner.",
+        "note": "Shared Vue bootstrap and dependency pins (CI: full). Not a feature owner.",
     },
     {
         "name": "graph",
@@ -587,9 +586,8 @@ AFFECTED_RULES = (
         "features": ("settings",),
     },
     # Performance diagnostics feature files only. Shared Vue transport
-    # (api/http.ts), query/**, bootstrap, dependency pins, and frontend/vue/**
-    # are not owned here — they stay fail-closed (CI full).
-    # Do not map frontend-app/src/** to smoke or to settings.
+    # (api/http.ts), query/**, bootstrap, and dependency pins are not owned
+    # here. Do not map frontend-app/src/** to smoke or to settings.
     {
         "name": "settings-performance-diagnostics",
         "paths": (
@@ -1085,6 +1083,33 @@ def aggregate_ci_gate_outcome(
     )
 
 
+def _is_generated_vue_bundle(rel: str) -> bool:
+    """Committed Vite output. Not a feature owner and not shared Vue source."""
+    return _path_matches(_posix(rel), "frontend/vue/**")
+
+
+def _is_vue_build_companion(rel: str) -> bool:
+    """Files ``npm run build --prefix frontend-app`` rewrites with the bundle.
+
+    Excused only together with ``frontend/vue/**`` and mapped Vue source.
+    Alone, they stay fail-closed (service worker shared core, or unmapped).
+    """
+    return _posix(rel) in {
+        "frontend/sw.js",
+        "frontend/vendor/DEPENDENCY-MANIFEST.json",
+    }
+
+
+def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:
+    """Explicit feature-owned production Vue source. Not shared core, not a test."""
+    rel = _posix(rel)
+    if not rel.startswith("frontend-app/src/") or rel.endswith((".test.ts", ".test.js")):
+        return False
+    if classified.get("skip") or classified.get("unmapped") or classified.get("ci_full"):
+        return False
+    return bool(classified.get("features"))
+
+
 def plan_ci_e2e(changed_paths, *, force_full: bool = False):
     """Authoritative CI gate plan for ``--ci-plan`` / e2e-gate.yml.
 
@@ -1107,6 +1132,11 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
     - feature production or E2E module paths → ``affected`` = mapped ∪ smoke
     - high-risk rules (``ci_mode: "full"``), unmapped production, requirements*,
       empty path list, or ``force_full`` → ``full``
+    - ``frontend/vue/**`` is not a full-CI reason when the same diff also
+      contains explicitly mapped production Vue source. The build companions
+      ``frontend/sw.js`` and ``frontend/vendor/DEPENDENCY-MANIFEST.json`` are
+      excused only in that same case. Bundle-only, companion-only, and
+      shared Vue source (transport, query, bootstrap, dependency pins) stay full.
     """
     if force_full:
         shape = ci_execution_shape("full")
@@ -1133,6 +1163,8 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
     seen_f = set()
     any_relevant = False
     full_reasons = []
+    generated_vue = []
+    has_mapped_vue_source = False
 
     for raw in paths:
         rel = _posix(raw)
@@ -1141,6 +1173,11 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
             continue
         any_relevant = True
         token = ci_reason_path_token(rel)
+        if _is_generated_vue_bundle(rel) or _is_vue_build_companion(rel):
+            generated_vue.append((rel, classified, token))
+            continue
+        if _is_mapped_vue_feature_source(rel, classified):
+            has_mapped_vue_source = True
         rule_label = "+".join(classified["rules"]) or "?"
         if classified["ci_full"]:
             full_reasons.append("%s (%s)" % (token, rule_label))
@@ -1153,6 +1190,23 @@ def plan_ci_e2e(changed_paths, *, force_full: bool = False):
             if feat not in seen_f:
                 seen_f.add(feat)
                 features.append(feat)
+
+    bundle_present = any(_is_generated_vue_bundle(rel) for rel, _classified, _token in generated_vue)
+    bundle_explained = has_mapped_vue_source and bundle_present
+    for rel, classified, token in generated_vue:
+        if bundle_explained:
+            continue
+        if _is_generated_vue_bundle(rel):
+            full_reasons.append(
+                "%s (generated Vue bundle without mapped source → CI full)" % token
+            )
+            continue
+        rule_label = "+".join(classified["rules"]) or "?"
+        if classified["ci_full"]:
+            full_reasons.append("%s (%s)" % (token, rule_label))
+            continue
+        if classified["unmapped"]:
+            full_reasons.append("%s (unmapped production → CI full)" % token)
 
     if full_reasons:
         shape = ci_execution_shape("full")

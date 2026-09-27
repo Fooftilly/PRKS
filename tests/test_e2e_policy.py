@@ -98,8 +98,6 @@ class AffectedMappingTests(unittest.TestCase):
             "frontend-app/src/App.vue",
             "frontend-app/src/main.ts",
             "frontend-app/src/mount.ts",
-            "frontend/vue/prks-vue.js",
-            "frontend/vue/BUILD-MANIFEST.json",
         ):
             with self.subTest(path=path):
                 rule, feats, skip, _note = policy.match_affected_path(path)
@@ -109,6 +107,51 @@ class AffectedMappingTests(unittest.TestCase):
                 plan = policy.plan_ci_e2e([path])
                 self.assertEqual(plan["mode"], "full")
                 self.assertTrue(plan["run"])
+
+    def test_mapped_vue_source_plus_rebuilt_bundle_stays_affected(self):
+        source = "frontend-app/src/features/performance-diagnostics/usePerformanceDiagnostics.ts"
+        bundle = "frontend/vue/prks-vue.js"
+        plan = policy.plan_ci_e2e([source, bundle])
+        self.assertEqual(plan["mode"], "affected")
+        self.assertEqual(plan["features"], ["settings", "smoke"])
+        rebuilt = policy.plan_ci_e2e([
+            source,
+            bundle,
+            "frontend/vue/BUILD-MANIFEST.json",
+            "frontend/vendor/DEPENDENCY-MANIFEST.json",
+            "frontend/sw.js",
+        ])
+        self.assertEqual(rebuilt["mode"], "affected")
+        self.assertEqual(rebuilt["features"], ["settings", "smoke"])
+        bundle_only = policy.plan_ci_e2e([bundle])
+        self.assertEqual(bundle_only["mode"], "full")
+        self.assertTrue(bundle_only["run"])
+        manifest_only = policy.plan_ci_e2e(["frontend/vue/BUILD-MANIFEST.json"])
+        self.assertEqual(manifest_only["mode"], "full")
+        sw_only = policy.plan_ci_e2e(["frontend/sw.js"])
+        self.assertEqual(sw_only["mode"], "full")
+        shared = policy.plan_ci_e2e([
+            "frontend-app/src/api/http.ts",
+            "frontend-app/src/query/client.ts",
+            bundle,
+        ])
+        self.assertEqual(shared["mode"], "full")
+        shared_with_feature = policy.plan_ci_e2e([
+            source,
+            "frontend-app/src/api/http.ts",
+            bundle,
+            "frontend/sw.js",
+        ])
+        self.assertEqual(shared_with_feature["mode"], "full")
+        test_only = policy.plan_ci_e2e([
+            "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.test.ts",
+            bundle,
+        ])
+        self.assertEqual(test_only["mode"], "full")
+        for rule in policy.AFFECTED_RULES:
+            for pattern in rule["paths"]:
+                self.assertNotEqual(pattern, "frontend-app/src/**")
+                self.assertNotEqual(pattern, "frontend/vue/**")
 
     def test_performance_diagnostics_vue_maps_to_settings(self):
         paths = (
