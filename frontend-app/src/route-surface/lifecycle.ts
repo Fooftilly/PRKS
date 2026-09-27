@@ -218,8 +218,10 @@ export function registerEarlyRoutePresenter(
 /**
  * Deliver host-local early requests to the presenter registered for each
  * request's feature. The host that stored the request is the host that paints.
- * A slot is deleted only when that presenter claims it, or when the host is
- * already disconnected. An unmatched request stays for a later registration.
+ * A slot is deleted only when that presenter claims it and the host still
+ * holds that same request, or when the host is already disconnected. A
+ * follow-up written onto the host during delivery stays queued. An unmatched
+ * request stays for a later registration.
  */
 export function publishEarlyRouteRequests(target: { document?: Document | null }): void {
   const doc = target.document
@@ -237,7 +239,9 @@ export function publishEarlyRouteRequests(target: { document?: Document | null }
     const present = feature ? earlyPresenters.get(feature) : undefined
     if (!feature || !present) return
     const claimed = present(requestOnStorageHost(pending, host), host) === true
-    if (claimed) delete host[VUE_ROUTE_PENDING_KEY]
+    if (claimed && host[VUE_ROUTE_PENDING_KEY] === pending) {
+      delete host[VUE_ROUTE_PENDING_KEY]
+    }
   })
 }
 

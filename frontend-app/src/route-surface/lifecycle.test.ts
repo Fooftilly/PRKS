@@ -331,6 +331,19 @@ describe('route surface lifecycle', () => {
     expect(hostB.querySelector('[data-probe]')).toBeNull()
   })
 
+  it('keeps a follow-up request the presenter queued during delivery', () => {
+    const el = host()
+    const delivered = { feature: 'alpha', owner: cleanupOwner(), label: 'first' }
+    const followUp = { feature: 'beta', owner: cleanupOwner(), label: 'next' }
+    stash(el, delivered)
+    registerEarlyRoutePresenter('alpha', (request, storageHost) => {
+      expect(request).not.toBe(followUp)
+      ;(storageHost as PendingHost)[VUE_ROUTE_PENDING_KEY] = followUp
+      return true
+    })
+    expect(el[VUE_ROUTE_PENDING_KEY]).toBe(followUp)
+  })
+
   it('does not paint a stale early request after its owner has left', () => {
     const left = cleanupOwner()
     const staying = cleanupOwner()
