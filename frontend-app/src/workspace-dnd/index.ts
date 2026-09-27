@@ -26,3 +26,4 @@ export type {
   WorkspaceDndSession,
 } from './adapter'
 export { KEYBOARD_EQUIVALENT_PATHS, keyboardEquivalentSummary } from './a11y'
+export { snapshotFromProjection } from './snapshot'

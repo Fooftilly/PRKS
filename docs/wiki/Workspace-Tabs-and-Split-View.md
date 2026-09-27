@@ -65,7 +65,7 @@ Cold-parked tabs do no rendering or network work until activated. Ordinary switc
 
 ## Drag and drop
 
-Dragging is an optional shortcut for the same actions above — every menu command still works without it.
+Dragging is an optional shortcut for the same actions above — every menu command still works without it. Sensors use the workspace shell drag layer; layout changes only on a confirmed drop.
 
 - Reorder tabs: drag a tab along the workspace tab bar. Dragging near either edge of an overflowing strip scrolls it.
 - Create the first split: drag a parked tab into the drop region on the right side of the workspace canvas.

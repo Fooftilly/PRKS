@@ -668,38 +668,36 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         html = _read(_INDEX)
         self.assertIn('src="/js/workspace-drag.js"', html)
         src = _read(_DRAG)
-        # Production wiring: workspace-tabs.js must actually call the init function, not just
-        # define it in isolation.
+        dnd_dir = os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-dnd")
+        adapter = _read(os.path.join(dnd_dir, "adapter.ts"))
+        commit = _read(os.path.join(dnd_dir, "commit.ts"))
+        # Production wiring: workspace-tabs.js must still call the init hook; Vue overwrites it.
         ws = _read(_WS)
         self.assertIn("prksWorkspaceInitDrag()", ws)
-        # Exported canonical APIs this module drives on drop must exist on workspace-tabs.js.
+        # Canonical APIs the Vue adapter drives on drop must exist on workspace-tabs.js.
         self.assertIn("prksWorkspaceMovePane", ws)
         self.assertIn("prksWorkspaceReorderTab", ws)
         self.assertIn("prksWorkspaceMoveTabStep", ws)
         self.assertIn("prksWorkspaceIsNarrowFallback", ws)
-        # workspace-drag.js itself only ever calls those canonical APIs to mutate state; it does
-        # not reimplement tree/tab mutation.
-        self.assertIn("root.prksWorkspaceMovePane", src)
-        self.assertIn("root.prksWorkspaceReorderTab", src)
-        self.assertIn("root.prksWorkspaceHideLeaf", src)
-        self.assertIn("root.prksWorkspaceSplitLeaf", src)
-        self.assertIn("root.prksWorkspaceTileTab", src)
-        self.assertIn("root.prksWorkspaceIsNarrowFallback", src)
-        # Pointer Events, not native HTML5 drag/drop.
-        self.assertIn("pointerdown", src)
-        self.assertIn("pointermove", src)
-        self.assertIn("pointerup", src)
-        self.assertIn("pointercancel", src)
-        self.assertIn("lostpointercapture", src)
-        self.assertNotIn("dragstart", src)
-        self.assertNotIn('"dragover"', src)
-        self.assertNotIn("ondrop", src)
-        # Drag state is transient only -- never persisted.
+        # Classic workspace-drag.js is a geometry + API-surface shim only (no sensor machinery).
+        self.assertIn("prksWorkspaceComputeEdgeZone", src)
+        self.assertIn("prksWorkspaceComputeTabReorderIndex", src)
+        self.assertIn("prksWorkspaceInitDrag", src)
+        self.assertIn("prksWorkspaceCancelActiveDrag", src)
+        self.assertNotIn("pointerdown", src)
+        self.assertNotIn("THRESHOLD_PX", src)
         self.assertNotIn("localStorage", src)
         self.assertNotIn("sessionStorage", src)
         self.assertNotIn("indexedDB", src)
-        # Two defensive lifecycle integration points call back into this module, and this module
-        # never mutates responsive/canonical state from either of them.
+        # Production sensors live in workspace-dnd and commit through coordinator APIs.
+        self.assertIn("bindWorkspaceDnd", adapter)
+        self.assertIn("@atlaskit/pragmatic-drag-and-drop", adapter)
+        self.assertIn("prksWorkspaceReorderTab", commit)
+        self.assertIn("prksWorkspaceHideLeaf", commit)
+        self.assertIn("prksWorkspaceSplitLeaf", commit)
+        self.assertIn("prksWorkspaceMovePane", commit)
+        self.assertIn("prksWorkspaceTileTab", commit)
+        # Two defensive lifecycle integration points call cancel; never mutate responsive state.
         tiling = _read(_TILING)
         self.assertIn("prksWorkspaceCancelActiveDrag", tiling)
         applied_narrow = tiling[tiling.find("function applyNarrow") : tiling.find("function applyNarrow") + 1600]
@@ -708,6 +706,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
             os.path.join(_PROJECT_DIR, "frontend-app", "src", "workspace-shell", "WorkspaceShell.vue")
         )
         self.assertIn("prksWorkspaceCancelActiveDrag", shell)
+        self.assertIn("bindWorkspaceDnd", shell)
+        self.assertIn("reconcile()", shell)
         oracle = _read(
             os.path.join(_PROJECT_DIR, "tests", "browser", "fixtures", "workspace-tiling-legacy-painter.js")
         )

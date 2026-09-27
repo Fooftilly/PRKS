@@ -737,7 +737,7 @@ A recursive DOM renderer mounts exactly one stable host per visible leaf (keyed 
 
 ### Workspace drag and drop
 
-Drag is an alternate input path for the same canonical workflows above (reorder, split placement, pane move, hide/park) — never a parallel layout model, never persisted, never canonical state. `workspace-drag.js` owns one transient session (source, origin, pointer ID, live target) and computes/previews the user's spatial intent; on a successful drop it calls exactly the same state APIs the menus already use. Pointer Events (`pointerdown`/`pointermove`/`pointerup`/`pointercancel`/`lostpointercapture`) are used throughout — no native HTML5 DnD.
+Drag is an alternate input path for the same canonical workflows above (reorder, split placement, pane move, hide/park) — never a parallel layout model, never persisted, never canonical state. Production sensors use Atlassian Pragmatic Drag and Drop (HTML5 DnD) in `frontend-app/src/workspace-dnd/`, bound by the Vue WorkspaceShell; PRKS owns drop-intent resolution and commits through the same state APIs the menus already use. Classic `workspace-drag.js` retains pure edge/reorder geometry helpers and the cancel/init window contract only.
 
 Interaction contract:
 
@@ -762,7 +762,7 @@ Visual states (all restrained, flat/square — no heavy shadows or cards beyond 
 - **Park target**: the tab bar gets an inset accent outline (`.is-drop-target-park`) only while dragging a pane by its grip.
 - No drop-zone chrome of any kind exists outside an active, eligible drag.
 
-Lifecycle: one idempotent `cleanup()` tears down pointer capture, every document/window listener, the preview element, every overlay/marker, the autoscroll animation frame, source styling, and the body drag class — safe to call more than once. `cancel()` (exported as `prksWorkspaceCancelActiveDrag`) runs that same cleanup and leaves canonical state completely untouched; it fires on Escape, `pointercancel`, `lostpointercapture`, window blur, and is also called defensively (and harmlessly, when nothing is active) by `workspace-tiling.js` right before a real narrow/wide transition and right before pruning any stale tile that could contain the live drag source. A drag only ever begins after the pointer clears a small movement threshold (distinguishing it from a plain click), and click suppression is armed only for the click a completed `pointerup` gesture synthesizes — a cancelled drag never swallows the user's next intentional click.
+Lifecycle: one idempotent session end tears down the preview element, every overlay/marker, source styling, and the body drag class — safe to call more than once. `cancel()` (exported as `prksWorkspaceCancelActiveDrag`) runs that same cleanup and leaves canonical state completely untouched; it fires on Escape, native drag cancel/empty drop targets, window blur, source-element removal, and is also called defensively (and harmlessly, when nothing is active) by `workspace-tiling.js` right before a real narrow/wide transition and by the Vue shell before pruning a live drag source. HTML5 drag arming replaces the old pointer-threshold/click-suppression controller; cancelled or incomplete gestures must not swallow the user's next intentional click or block tab/pane context menus.
 
 ### Workspace persistence
 

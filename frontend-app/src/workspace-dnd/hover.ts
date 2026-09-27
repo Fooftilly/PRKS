@@ -35,9 +35,9 @@ function bandRect(
 
 export function createHoverController(doc: Document = document): HoverController {
   function clear(): void {
-    doc.getElementById('prks-workspace-dnd-insertion-marker')?.remove()
-    doc.getElementById('prks-workspace-dnd-edge-overlay')?.remove()
-    doc.getElementById('prks-workspace-dnd-empty-overlay')?.remove()
+    doc.getElementById('prks-drag-insertion-marker')?.remove()
+    doc.getElementById('prks-drag-edge-overlay')?.remove()
+    doc.getElementById('prks-drag-empty-overlay')?.remove()
     doc.getElementById('prks-workspace-tabs')?.classList.remove('is-drop-target-park')
   }
 
@@ -46,7 +46,7 @@ export function createHoverController(doc: Document = document): HoverController
     showReorderMarker(list, beforeTabId) {
       clear()
       const marker = doc.createElement('div')
-      marker.id = 'prks-workspace-dnd-insertion-marker'
+      marker.id = 'prks-drag-insertion-marker'
       marker.className = 'prks-drag-insertion-marker'
       marker.setAttribute('aria-hidden', 'true')
       let ref: Element | null = null
@@ -64,7 +64,7 @@ export function createHoverController(doc: Document = document): HoverController
       clear()
       const rect = bandRect(tile.getBoundingClientRect(), zone)
       const overlay = doc.createElement('div')
-      overlay.id = 'prks-workspace-dnd-edge-overlay'
+      overlay.id = 'prks-drag-edge-overlay'
       overlay.className = 'prks-drag-edge-overlay' + (valid ? '' : ' is-invalid')
       overlay.setAttribute('aria-hidden', 'true')
       if (!valid) {
@@ -92,7 +92,7 @@ export function createHoverController(doc: Document = document): HoverController
       clear()
       const rect = canvas.getBoundingClientRect()
       const overlay = doc.createElement('div')
-      overlay.id = 'prks-workspace-dnd-empty-overlay'
+      overlay.id = 'prks-drag-empty-overlay'
       overlay.className = 'prks-drag-empty-overlay'
       overlay.setAttribute('aria-hidden', 'true')
       overlay.textContent = 'Open in split view'

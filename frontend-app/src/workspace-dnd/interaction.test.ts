@@ -257,7 +257,7 @@ describe('workspace-dnd Pragmatic interaction on Vue WorkspaceShell DOM', () => 
     await Promise.resolve()
     expect(h.reorderTab).not.toHaveBeenCalled()
     expect(h.movePane).not.toHaveBeenCalled()
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
   })
 
   it('3b. dragEnd without drop commits nothing (native cancel path)', async () => {
@@ -278,7 +278,7 @@ describe('workspace-dnd Pragmatic interaction on Vue WorkspaceShell DOM', () => 
     expect(h.hideLeaf).not.toHaveBeenCalled()
     expect(h.splitLeaf).not.toHaveBeenCalled()
     expect(h.tileTab).not.toHaveBeenCalled()
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
   })
 
@@ -348,12 +348,12 @@ describe('workspace-dnd Pragmatic interaction on Vue WorkspaceShell DOM', () => 
     fireDrag('dragover', strip, { clientX: 20, clientY: 20 })
     flushAnimationFrames(1)
     expect(session?.active).toBe(true)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeTruthy()
 
     window.prksWorkspaceCancelActiveDrag?.()
     dragEnd(window)
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
     expect(h.reorderTab).not.toHaveBeenCalled()
 
@@ -365,7 +365,7 @@ describe('workspace-dnd Pragmatic interaction on Vue WorkspaceShell DOM', () => 
     source2.remove()
     session!.reconcile()
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
     dragEnd(window)
   })
 

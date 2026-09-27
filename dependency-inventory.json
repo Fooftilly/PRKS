@@ -256,11 +256,13 @@
       "authoritative_source": "frontend-app/package.json -> dependencies.@atlaskit/pragmatic-drag-and-drop",
       "manifest": "frontend-app/package.json",
       "lockfile": "frontend-app/package-lock.json",
-      "generated_assets": [],
+      "generated_assets": [
+        "frontend/vue/prks-vue.js"
+      ],
       "version_metadata": null,
       "exact_installed_version_check": false,
       "dependabot_monitored": true,
-      "notes": "#234 research-only (workspace-dnd-poc); must not land in prks-vue.js until #256 migration."
+      "notes": "#256 production workspace DnD sensors (frontend-app/src/workspace-dnd/); bundled into prks-vue.js via WorkspaceShell. Hitbox package not adopted."
     },
     {
       "name": "@atlaskit/pragmatic-drag-and-drop-auto-scroll",
@@ -268,11 +270,13 @@
       "authoritative_source": "frontend-app/package.json -> dependencies.@atlaskit/pragmatic-drag-and-drop-auto-scroll",
       "manifest": "frontend-app/package.json",
       "lockfile": "frontend-app/package-lock.json",
-      "generated_assets": [],
+      "generated_assets": [
+        "frontend/vue/prks-vue.js"
+      ],
       "version_metadata": null,
       "exact_installed_version_check": false,
       "dependabot_monitored": true,
-      "notes": "#234 research-only (workspace-dnd-poc); must not land in prks-vue.js until #256 migration."
+      "notes": "#256 production tab-strip autoscroll for workspace DnD; bundled into prks-vue.js."
     },
     {
       "name": "@atlaskit/pragmatic-drag-and-drop-unit-testing",
@@ -284,7 +288,7 @@
       "version_metadata": null,
       "exact_installed_version_check": false,
       "dependabot_monitored": true,
-      "notes": "#234 PoC test harness (DragEvent/DOMRect polyfills for jsdom); never ships in prks-vue.js."
+      "notes": "Vitest/jsdom DragEvent harness for workspace-dnd tests; never ships in prks-vue.js."
     },
     {
       "name": "vite",

@@ -30,7 +30,7 @@ export const KEYBOARD_EQUIVALENT_PATHS = [
   },
   {
     dragGesture: 'Cancel in-progress drag',
-    keyboardPath: 'Escape (workspace-dnd adapter + production workspace-drag.js)',
+    keyboardPath: 'Escape (workspace-dnd adapter)',
     canonicalApi: 'no canonical mutation',
   },
 ] as const

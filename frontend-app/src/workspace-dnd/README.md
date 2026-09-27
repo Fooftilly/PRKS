@@ -2,11 +2,11 @@
 
 **Production module (#256).** Pragmatic Drag and Drop sensors and lifecycle bind to the Vue
 WorkspaceShell DOM; PRKS-specific drop semantics live in pure TypeScript (`drop-intent.ts`,
-`geometry.ts`). Confirmed drops commit through the same coordinator APIs as
-`frontend/js/workspace-drag.js`.
+`geometry.ts`). Confirmed drops commit through coordinator APIs (`reorder` / `movePane` /
+`splitLeaf` / `hideLeaf` / `tileTab`). Classic `frontend/js/workspace-drag.js` is a geometry +
+init/cancel shim only.
 
-Historical research and ADOPT decision: #234. Cutover wiring (disable legacy drag, import from
-`main.ts` / `WorkspaceShell`) is tracked separately — never run two drag systems at once.
+Historical research and ADOPT decision: #234 / #257. Exactly one production drag system.
 
 ## Architecture
 

@@ -83,6 +83,8 @@ declare global {
     prksWorkspaceReleaseContentHost?: (tabId: string) => void
     prksWorkspaceContentHostIds?: () => string[]
     prksWorkspaceCancelActiveDrag?: () => void
+    prksWorkspaceInitDrag?: () => void
+    prksWorkspaceCanAddSecondaryLeaf?: () => boolean
     prksWorkspaceWatchCanvas?: (canvas: HTMLElement) => void
     prksWorkspaceWatchNestedSplit?: (splitId: string, container: HTMLElement) => void
     prksWorkspaceUnwatchNestedSplit?: (splitId: string) => void

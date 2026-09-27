@@ -126,11 +126,11 @@ describe('workspace-dnd adapter on Vue WorkspaceShell DOM', () => {
 
     const list = document.getElementById('prks-workspace-tabs')!
     hover.showReorderMarker(list, 'C')
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeTruthy()
 
     session.destroy()
     session = null
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
   })
 
@@ -152,9 +152,9 @@ describe('workspace-dnd adapter on Vue WorkspaceShell DOM', () => {
     })
     const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
     hover.showEdgeOverlay(tile, 'left', true)
-    expect(document.getElementById('prks-workspace-dnd-edge-overlay')).toBeTruthy()
+    expect(document.getElementById('prks-drag-edge-overlay')).toBeTruthy()
     session.cancel()
-    expect(document.getElementById('prks-workspace-dnd-edge-overlay')).toBeNull()
+    expect(document.getElementById('prks-drag-edge-overlay')).toBeNull()
     expect(movePane).not.toHaveBeenCalled()
   })
 
@@ -163,14 +163,14 @@ describe('workspace-dnd adapter on Vue WorkspaceShell DOM', () => {
     const hover = createHoverController()
     const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
     hover.showEdgeOverlay(tile, 'left', false, 'cap')
-    const overlay = document.getElementById('prks-workspace-dnd-edge-overlay')
+    const overlay = document.getElementById('prks-drag-edge-overlay')
     expect(overlay).toBeTruthy()
     expect(overlay?.classList.contains('is-invalid')).toBe(true)
     expect(overlay?.dataset.reason).toBe('cap')
     expect(overlay?.textContent).toContain('Pane limit')
     expect(overlay?.style.borderStyle).toBe('dashed')
     hover.showEdgeOverlay(tile, 'right', false, 'route')
-    expect(document.getElementById('prks-workspace-dnd-edge-overlay')?.textContent).toContain('Cannot split')
+    expect(document.getElementById('prks-drag-edge-overlay')?.textContent).toContain('Cannot split')
     hover.clear()
   })
 

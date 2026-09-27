@@ -177,7 +177,7 @@ describe('workspace-dnd adapter Pragmatic monitor lifecycle', () => {
       source: src as ElementDragType['payload'],
       location: locationAt(20, 20),
     } as never)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeTruthy()
     expect(document.getElementById('prks-workspace-live')?.textContent).toMatch(/Move tab/)
 
     monitor.onDrop?.({
@@ -190,7 +190,7 @@ describe('workspace-dnd adapter Pragmatic monitor lifecycle', () => {
     expect(onSessionEnd).toHaveBeenCalledTimes(1)
     expect(onSessionEnd).toHaveBeenCalledWith('drop')
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
   })
 
   it('start → cancel → drop is idempotent (single onSessionEnd, no commit)', async () => {
@@ -204,13 +204,13 @@ describe('workspace-dnd adapter Pragmatic monitor lifecycle', () => {
       source: src as ElementDragType['payload'],
       location: locationAt(20, 20),
     } as never)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeTruthy()
 
     session!.cancel()
     expect(onSessionEnd).toHaveBeenCalledTimes(1)
     expect(onSessionEnd).toHaveBeenCalledWith('cancel')
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-drag-insertion-marker')).toBeNull()
 
     // Pragmatic still fires onDrop after cancel — must not double-end or commit.
     monitor.onDrop?.({

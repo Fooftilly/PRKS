@@ -85,7 +85,7 @@ The canonical workspace model is `frontend-app/src/workspace/` (TypeScript), bui
 
 Production no longer paints the tab strip or the recursive tree. Removed from `workspace-tabs.js`: `tabRoleFlags`, `syncTabTrailing`, `createTabWrap`, `applyTabWrap`, and `paintProduction`'s DOM reconciliation. Removed from `workspace-tiling.js`: `renderTreeNode`, `createTile`, `ensureTile`, `fillHeader`, `applyTileClasses`, `pruneStale`, and the tree-reconciling bodies of `prksWorkspaceSyncTiles` / `prksWorkspaceApplyFocus` (those two exports remain no-ops). The frozen DOM oracle for the Node split/menu selftest is `tests/browser/fixtures/workspace-tiling-legacy-painter.js`. `workspace-tiling.js` still owns the narrow-width predicate, canvas and nested ResizeObservers, and pane focus gestures.
 
-Drag hover/preview (#234) is not canonical — a drop commits through the same commands. Production still uses `workspace-drag.js` on the Vue DOM hooks (`#prks-workspace-tabs`, `.prks-workspace-tab`, `.prks-tile[data-prks-tab-id]`, `.prks-tile-header__grip`, `.prks-workspace-canvas`). The #234 PoC lives in `frontend-app/src/workspace-dnd-poc/` and must not be imported by production until a dedicated migration replaces `workspace-drag.js` (never run two drag systems). Context menus still open through `prksWorkspaceOpenTabMenu`. Named workspaces (#58) will serialize this model later; do not add that format here. The #251 route-surface stays per TabContext. Workspace state stores canonical hashes only and does not own feature Vue trees.
+Drag hover/preview is not canonical — a drop commits through the same commands. Production sensors live in `frontend-app/src/workspace-dnd/` (Pragmatic DnD), bound by Vue `WorkspaceShell` onto `#prks-workspace-tabs`, `.prks-workspace-tab`, `.prks-tile[data-prks-tab-id]`, `.prks-tile-header__grip`, and `.prks-workspace-canvas`. Shell projection commit calls `reconcile()`; do not add a second shell subscription or prefer MutationObserver sync. `frontend/js/workspace-drag.js` is a geometry + `prksWorkspaceInitDrag` / `prksWorkspaceCancelActiveDrag` shim only. Never run two drag systems. Context menus still open through `prksWorkspaceOpenTabMenu`. Named workspaces (#58) will serialize this model later; do not add that format here. The #251 route-surface stays per TabContext. Workspace state stores canonical hashes only and does not own feature Vue trees.
 
 Pure transforms (`planHideLeaf`, `planMakeMain`, `planCloseTab`, `planReorder`, `planMovePane`, `planSplitLeaf`, ratio/focus/mode planners, tree helpers) take immutable inputs and return the next state. They do not touch DOM, history, async leave, or TabContext. Those planners are the shipped structural contract. Effectful steps stay in `workspace-tabs.js`. `prksWorkspaceSnapshot()` still returns the external shape, including ephemeral `titleRouteGen` reattached from the live tabs; the typed snapshot itself does not store that field.
 
@@ -208,20 +208,19 @@ is `ctx.getResource('researchGraph')`; no module-level singleton fallback.
 
 ### Workspace drag and drop
 
-`workspace-drag.js` is an alternate input path for existing canonical workflows, never a
-parallel layout model. Drag state (`active`, `source`, `origin`, `pointerId`, `target`) is
-transient and lives only in that module's own closure; it is never canonical/persisted and
+Workspace drag is an alternate input path for existing canonical workflows, never a parallel
+layout model. Pragmatic DnD owns sensors/lifecycle/targets/preview/autoscroll/cancel in
+`frontend-app/src/workspace-dnd/`. PRKS owns the pure `WorkspaceDropIntent` resolver, edge-band
+geometry (28% bands; center = no-drop; no Atlaskit hitbox), and commit through coordinator APIs.
+Transient drag state lives only in the adapter session; it is never canonical/persisted and
 never written to `localStorage`, `sessionStorage`, or IndexedDB.
 
 `workspace-tree.js` owns recursive tree transformations (including drag-driven pane moves, via
 `moveLeafRelativeToTarget`); `workspace-tabs.js` owns global tab ordering (via
-`prksWorkspaceReorderTab`). `workspace-drag.js` only computes/previews user intent and invokes
+`prksWorkspaceReorderTab`). The DnD adapter only computes/previews user intent and invokes
 those same canonical APIs on drop — it must never mutate `secondaryTree` or `state.tabs`
 directly, and must never mutate either while the pointer is merely moving/hovering (preview
 only; the DOM insertion marker/edge overlay are pure visual feedback with no state effect).
-The production drag sensor still uses the stable Vue hooks listed above.
-`frontend-app/src/workspace-dnd-poc/` is the #234 research adapter only — do not wire it
-into production beside `workspace-drag.js`.
 
 A pane move is one atomic tree transaction. Moving a visible pane is spatial repositioning, not
 a leave operation — it must not run PDF leave confirmation, must not flush-for-unmount Research
@@ -235,14 +234,14 @@ drag; only the existing "Make main" action changes Main ownership. The pane cap
 (`PRKS_MAX_VISIBLE_TABS`) blocks new visible leaves being added by drag, not existing panes
 being moved.
 
-Drag cancellation (Escape, `pointercancel`, `lostpointercapture`, window blur, responsive
-transition, external tile removal) must run through one idempotent cleanup that removes every
-transient listener, the preview element, every overlay/marker, the autoscroll animation frame,
-source styling, and the body drag class, and must leave canonical workspace state completely
-untouched. `prksWorkspaceCancelActiveDrag` exists specifically so `workspace-tiling.js` can
-defensively end an active drag before a real narrow/wide transition and before pruning any
-stale tile that could contain the live drag source — it is always safe to call when nothing is
-active. `workspace-drag.js` must never itself mutate responsive/narrow-fallback state.
+Drag cancellation (Escape, native drag end with empty targets, window blur, responsive
+transition, external tile/source removal, shell prune) must run through one idempotent cleanup
+that removes every overlay/marker, source styling, and the body drag class, and must leave
+canonical workspace state completely untouched. `prksWorkspaceCancelActiveDrag` exists
+specifically so `workspace-tiling.js` can defensively end an active drag before a real
+narrow/wide transition and before pruning any stale tile that could contain the live drag
+source — it is always safe to call when idle. The adapter must never itself mutate
+responsive/narrow-fallback state.
 
 ## Settings
 
