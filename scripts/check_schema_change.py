@@ -70,7 +70,8 @@ _E2E_WAIT_CHECKER = Path(__file__).resolve().parent / "check_e2e_wait_for_timeou
 _SPEC = importlib.util.spec_from_file_location(
     "prks_check_e2e_wait_for_timeout", _E2E_WAIT_CHECKER
 )
-assert _SPEC and _SPEC.loader
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"cannot load {_E2E_WAIT_CHECKER}")
 _git_rev = importlib.util.module_from_spec(_SPEC)
 sys.modules.setdefault(_SPEC.name, _git_rev)
 _SPEC.loader.exec_module(_git_rev)
@@ -278,7 +279,8 @@ def check_companions(
         return []
     findings: list[Finding] = []
     schema_changed = normalize_sql(base_schema) != normalize_sql(head_schema)
-    assert base.version is not None and head.version is not None
+    if base.version is None or head.version is None:
+        raise DiscoveryError("LATEST_SCHEMA_VERSION could not be parsed")
     if schema_changed and head.version <= base.version:
         findings.append(
             Finding(
