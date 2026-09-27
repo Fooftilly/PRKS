@@ -20,6 +20,11 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertIn("prksPresentVueFolderLibrary", folders_case)
         self.assertNotIn("renderDashboard(", folders_case)
         self.assertIn("skipPageEnter: sameFolderLibraryWorkspace", folders_case)
+        # Retained surfaces must still dismiss on same-route error after retain.
+        self.assertIn(
+            "sameFolderLibraryWorkspace && typeof window.prksVueDismissFolderLibrary",
+            app,
+        )
 
     def test_folder_library_route_reuses_host_on_in_place_refresh(self):
         app = (FRONTEND / "app.js").read_text()
