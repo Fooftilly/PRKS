@@ -8,11 +8,13 @@ interface ProgressSidebarRoute {
 }
 
 interface ProgressPresentRequest {
+  owner: object
   host: HTMLElement
   status: string | null | undefined
   rows: unknown
   offlineCached?: boolean
   generation?: number
+  shell?: boolean
 }
 
 interface Window {
@@ -44,6 +46,5 @@ interface Window {
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
   prksSyncSidebarActive?: (route: ProgressSidebarRoute) => void
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
-  prksVueDismissProgress?: () => void
-  __prksProgressPresentRequest?: ProgressPresentRequest
+  prksVueDismissProgress?: (owner: object) => void
 }

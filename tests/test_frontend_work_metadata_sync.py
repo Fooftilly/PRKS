@@ -262,7 +262,11 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('prksRefreshPendingWorkMetadata', body)
         # The overlaid rows, not the acknowledged snapshot, are what Vue renders.
         self.assertIn('rows: works', body)
-        self.assertIn('prksPresentVueProgress(contentDiv', body)
+        self.assertIn('prksPresentVueProgress(ctx, contentDiv', body)
+        self.assertIn('owner: ctx', app[app.index('function prksPresentVueProgress'):
+                                        app.index('function prksRenderRouteLoading')])
+        self.assertIn('prksVueDismissProgress(ctx)', app)
+        self.assertNotIn('window.__prksProgressPresentRequest', app)
         self.assertNotIn('renderProgressByStatus', body)
 
         progress_dir = ROOT / 'frontend-app' / 'src' / 'features' / 'progress'

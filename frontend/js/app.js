@@ -2812,23 +2812,26 @@ function prksRouteTitleFromHash(hash) {
  * Mount the Vue Progress surface in this pane.
  * `detail.rows` must already be the effective works-browse projection.
  */
-function prksPresentVueProgress(contentDiv, detail) {
+function prksPresentVueProgress(ctx, contentDiv, detail) {
     contentDiv.innerHTML = '';
     const host = document.createElement('div');
     host.setAttribute('data-prks-progress-host', 'true');
     contentDiv.appendChild(host);
     const request = {
+        owner: ctx,
         host: host,
         status: detail.status,
         rows: detail.rows,
         offlineCached: !!detail.offlineCached,
         generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
     if (typeof window.prksVuePresentProgress === 'function') {
         window.prksVuePresentProgress(request);
         return;
     }
-    window.__prksProgressPresentRequest = request;
+    // Early paints stash the request on this pane's host, not on window.
+    host.__prksProgressPresentRequest = request;
 }
 
 function prksRenderRouteLoading(contentDiv, hash) {
@@ -3126,7 +3129,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
     if (!sameFolderWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
-            window.prksVueDismissProgress();
+            window.prksVueDismissProgress(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else {
@@ -3590,7 +3593,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const works = prksEffectiveBrowseRows(base, 'works-browse');
                 publishSidebar({ status });
                 if (stale()) return;
-                prksPresentVueProgress(contentDiv, {
+                prksPresentVueProgress(ctx, contentDiv, {
                     status: status,
                     rows: works,
                     offlineCached: offlineBrowse.source === 'cache',

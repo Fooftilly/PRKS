@@ -17,8 +17,13 @@ afterEach(() => {
 
 function host(): HTMLElement {
   const el = document.createElement('div')
+  el.setAttribute('data-prks-progress-host', 'true')
   document.body.appendChild(el)
   return el
+}
+
+function owner(): Record<string, unknown> {
+  return {}
 }
 
 function installCardSpy() {
@@ -39,12 +44,13 @@ describe('ProgressView', () => {
   it('renders each status, alphabetical cards, the file count, and the empty state', async () => {
     const calls = installCardSpy()
     const el = host()
+    const pane = owner()
     const rows = [
       { id: 'b', title: 'b', status: 'Paused', abstract_excerpt: 'second' },
       { id: 'a', title: 'A', status: 'Paused', abstract_excerpt: 'first' },
       { id: 'other', title: 'Other', status: 'Planned', abstract_excerpt: 'no' },
     ]
-    presentProgress({ host: el, status: 'Paused', rows, offlineCached: false, generation: 1 })
+    presentProgress({ owner: pane, host: el, status: 'Paused', rows, offlineCached: false, generation: 1 })
     expect(el.querySelector('.prks-page-title')?.textContent).toBe('Files · Paused')
     expect(el.querySelector('.prks-scope-line')?.textContent).toBe('2 files')
     expect(Array.from(el.querySelectorAll('[data-work-id]')).map((node) => node.getAttribute('data-work-id'))).toEqual([
@@ -58,6 +64,7 @@ describe('ProgressView', () => {
     for (const status of PROGRESS_STATUSES) {
       calls.length = 0
       presentProgress({
+        owner: pane,
         host: el,
         status,
         rows: [{ id: status, title: 'Only', status, abstract_excerpt: 'x' }],
@@ -71,9 +78,12 @@ describe('ProgressView', () => {
       expect(el.querySelector('[data-work-id]')?.getAttribute('data-work-id')).toBe(status)
     }
 
-    presentProgress({ host: el, status: 'Not Started', rows: [], offlineCached: false, generation: 20 })
+    presentProgress({ owner: pane, host: el, status: 'Not Started', rows: [], offlineCached: false, generation: 20 })
     await nextTick()
-    expect(el.querySelector('.progress-empty-msg')?.textContent).toBe('No files with this progress status yet.')
+    expect(el.querySelector('.prks-state.prks-state--empty .prks-state__heading')?.textContent).toBe(
+      'No files with this progress status yet.',
+    )
+    expect(el.querySelector('.progress-empty-msg')).toBeNull()
     expect(el.querySelector('[data-work-id]')).toBeNull()
     expect(el.querySelector('.prks-scope-line')?.textContent).toBe('0 files')
   })
@@ -81,7 +91,9 @@ describe('ProgressView', () => {
   it('suppresses cached thumbnails and drops stale rows when the status changes', async () => {
     const calls = installCardSpy()
     const el = host()
+    const pane = owner()
     presentProgress({
+      owner: pane,
       host: el,
       status: 'Planned',
       rows: [
@@ -95,6 +107,7 @@ describe('ProgressView', () => {
 
     calls.length = 0
     presentProgress({
+      owner: pane,
       host: el,
       status: 'Completed',
       rows: [
@@ -115,8 +128,10 @@ describe('ProgressView', () => {
   it('canonicalizes an invalid status and ignores an older generation', async () => {
     installCardSpy()
     const el = host()
+    const pane = owner()
     const hash = window.location.hash
     presentProgress({
+      owner: pane,
       host: el,
       status: 'Finished',
       rows: [{ id: 'n', title: 'None', status: 'Not Started' }],
@@ -127,6 +142,7 @@ describe('ProgressView', () => {
     expect(window.location.hash).toBe(hash)
 
     presentProgress({
+      owner: pane,
       host: el,
       status: 'Paused',
       rows: [{ id: 'late', title: 'Late', status: 'Paused' }],
