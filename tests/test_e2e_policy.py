@@ -290,6 +290,42 @@ class AffectedMappingTests(unittest.TestCase):
             for pattern in rule["paths"]:
                 self.assertNotEqual(pattern, "frontend-app/src/**")
 
+    def test_diagnostics_stories_do_not_select_settings(self):
+        story_paths = (
+            "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.stories.ts",
+            "frontend-app/src/features/performance-diagnostics/nested/Panel.stories.tsx",
+            "frontend-app/src/features/performance-diagnostics/Panel.stories.vue",
+            "frontend-app/src/features/performance-diagnostics/panel.stories.js",
+        )
+        for path in story_paths:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "storybook-catalog")
+                self.assertTrue(skip)
+                self.assertEqual(feats, ())
+                self.assertFalse(policy._is_vue_production_source_path(path))
+                classified = policy.classify_affected_path(path)
+                self.assertFalse(policy._is_mapped_vue_feature_source(path, classified))
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "skip")
+                self.assertFalse(plan["run"])
+        story = story_paths[0]
+        story_and_bundle = policy.plan_ci_e2e([story, "frontend/vue/prks-vue.js"])
+        self.assertEqual(story_and_bundle["mode"], "full")
+        self.assertTrue(story_and_bundle["run"])
+        production = "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.vue"
+        rule, feats, skip, _note = policy.match_affected_path(production)
+        self.assertEqual(rule, "settings-performance-diagnostics")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("settings",))
+        with_story = policy.plan_ci_e2e([
+            production,
+            story,
+            "frontend/vue/prks-vue.js",
+        ])
+        self.assertEqual(with_story["mode"], "affected")
+        self.assertEqual(with_story["features"], ["settings", "smoke"])
+
     def test_shared_core_is_broad(self):
         _rule, feats, skip, _note = policy.match_affected_path("frontend/js/app.js")
         self.assertFalse(skip)

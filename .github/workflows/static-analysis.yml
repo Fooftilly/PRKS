@@ -170,9 +170,11 @@ jobs:
             exit 1
           fi
 
-      # Storybook is maintainer-only. A readable diff that does not touch
-      # frontend-app/ or this workflow skips the build. A failed fetch or
-      # diff fails the step. Skipping is not the fallback.
+      # Storybook is maintainer-only. Build only after a successful diff
+      # against a defined baseline (PR base, or a fetched nonzero push
+      # before SHA) that touches frontend-app/ or this workflow. A missing
+      # baseline, a failed fetch, or a failed diff fails the step. A
+      # readable diff with no matching path is the only skip.
       - name: Storybook build when frontend tooling changes
         shell: bash
         env:
@@ -183,42 +185,63 @@ jobs:
           pattern='^(frontend-app/|\.github/workflows/static-analysis\.yml$)'
           zero_sha="0000000000000000000000000000000000000000"
           event_name="${{ github.event_name }}"
+          run_storybook=false
 
-          # git diff must succeed before any path match. grep status 1 is
-          # "no match"; any other grep failure fails the step.
+          # Capture git diff before matching. Do not pipe it into grep:
+          # under pipefail a SIGPIPE can look like "no match". grep status
+          # 1 is "no match"; any other grep failure fails the step.
           apply_successful_diff() {
             local left="$1"
-            local diff_file status
+            local diff_file diff_status grep_status
             diff_file="$(mktemp)"
-            git diff --name-only "$left" HEAD >"$diff_file"
+            if git diff --name-only "$left" HEAD >"$diff_file"; then
+              diff_status=0
+            else
+              diff_status=$?
+            fi
+            if [[ "$diff_status" -ne 0 ]]; then
+              echo "Storybook path diff failed (status ${diff_status})" >&2
+              rm -f "$diff_file"
+              exit 1
+            fi
             if grep -Eq "$pattern" "$diff_file"; then
               run_storybook=true
             else
-              status=$?
-              if [[ "$status" -ne 1 ]]; then
-                echo "Storybook path match failed (status ${status})" >&2
+              grep_status=$?
+              if [[ "$grep_status" -ne 1 ]]; then
+                echo "Storybook path match failed (status ${grep_status})" >&2
+                rm -f "$diff_file"
                 exit 1
               fi
-              run_storybook=false
             fi
             rm -f "$diff_file"
           }
 
+          fetch_baseline() {
+            local sha="$1"
+            if ! git fetch --no-tags --depth=1 origin "$sha"; then
+              echo "Failed to fetch Storybook diff baseline ${sha}" >&2
+              exit 1
+            fi
+          }
+
           if [[ "$event_name" == "pull_request" ]]; then
-            base="${PRKS_PR_BASE_SHA:?missing pull_request.base.sha}"
-            git fetch --no-tags --depth=1 origin "$base"
-            apply_successful_diff "$base"
+            if [[ -z "${PRKS_PR_BASE_SHA:-}" ]]; then
+              echo "Pull request has no base SHA; cannot resolve Storybook diff." >&2
+              exit 1
+            fi
+            fetch_baseline "${PRKS_PR_BASE_SHA}"
+            apply_successful_diff "${PRKS_PR_BASE_SHA}"
           elif [[ "$event_name" == "push" ]]; then
             if [[ -z "${PRKS_PUSH_BEFORE:-}" || "${PRKS_PUSH_BEFORE}" == "$zero_sha" ]]; then
-              echo "Push has no previous commit; building Storybook."
-              run_storybook=true
-            else
-              git fetch --no-tags --depth=1 origin "${PRKS_PUSH_BEFORE}"
-              apply_successful_diff "${PRKS_PUSH_BEFORE}"
+              echo "Push before SHA is missing or zero; cannot resolve Storybook diff." >&2
+              exit 1
             fi
+            fetch_baseline "${PRKS_PUSH_BEFORE}"
+            apply_successful_diff "${PRKS_PUSH_BEFORE}"
           else
-            echo "Building Storybook for event ${event_name}."
-            run_storybook=true
+            echo "No Storybook diff baseline for event ${event_name}." >&2
+            exit 1
           fi
           if [[ "$run_storybook" != "true" ]]; then
             echo "Skipping Storybook build: diff does not touch frontend-app or this workflow."

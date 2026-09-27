@@ -592,6 +592,7 @@ AFFECTED_RULES = (
     # Performance diagnostics feature files only. Shared Vue transport
     # (api/http.ts), query/**, bootstrap, and dependency pins are not owned
     # here. Do not map frontend-app/src/** to smoke or to settings.
+    # Stories under this tree are catalog files, not settings source.
     {
         "name": "settings-performance-diagnostics",
         "paths": (
@@ -599,8 +600,14 @@ AFFECTED_RULES = (
             "frontend-app/src/api/performance-diagnostics.ts",
             "frontend-app/src/api/performance-diagnostics.test.ts",
         ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
         "features": ("settings",),
-        "note": "Vue performance diagnostics feature files (#232) → settings. Shared Vue transport and query client stay unmapped.",
+        "note": "Vue performance diagnostics feature files (#232) → settings. Stories stay on storybook-catalog. Shared Vue transport and query client stay unmapped.",
     },
     {
         "name": "offline-runtime",
@@ -847,13 +854,17 @@ def classify_affected_path(rel: str) -> dict:
       rules (list[str]), features (list[str]), skip (bool), note (str),
       ci_full (bool), unmapped (bool)
 
-    Skip rules apply only when no non-skip rule matches. ``ci_mode: "full"`` on
+    Skip rules apply only when no non-skip rule matches. A rule with
+    ``exclude_paths`` does not match those paths, so a story under a feature
+    tree can fall through to ``storybook-catalog``. ``ci_mode: "full"`` on
     any matching take rule sets ``ci_full``.
     """
     rel = _posix(rel)
     take_rules = []
     skip_rule = None
     for rule in AFFECTED_RULES:
+        if any(_path_matches(rel, pattern) for pattern in rule.get("exclude_paths") or ()):
+            continue
         if not any(_path_matches(rel, pattern) for pattern in rule["paths"]):
             continue
         if rule.get("skip"):
