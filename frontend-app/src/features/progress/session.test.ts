@@ -1,6 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { dismissProgress, presentProgress, registerProgressBridge, resetProgressSessionForTests, type ProgressOwner } from './session'
+import { readRouteSurface } from '../../route-surface/lifecycle'
+import { dismissProgress, presentProgress, registerProgressBridge, resetProgressSessionForTests } from './session'
 
 afterEach(() => {
   resetProgressSessionForTests()
@@ -8,77 +9,59 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentProgress
   delete window.prksVueDismissProgress
-  delete window.prksSyncSidebarActive
   delete window.prksWorkCardHtml
+  delete (window as Window & { prksSyncSidebarActive?: unknown }).prksSyncSidebarActive
 })
 
 function host(): HTMLElement {
   const el = document.createElement('div')
-  el.setAttribute('data-prks-progress-host', 'true')
   document.body.appendChild(el)
   return el
 }
 
-function owner(): ProgressOwner {
+function owner() {
   return {}
 }
 
-interface CleanupOwner extends ProgressOwner {
-  beginRoute(): void
-}
-
-function cleanupOwner(): CleanupOwner {
-  const cleanups = new Set<() => void>()
-  return {
-    registerCleanup(fn: () => void) {
-      cleanups.add(fn)
-    },
-    beginRoute() {
-      const fns = Array.from(cleanups)
-      cleanups.clear()
-      fns.forEach((fn) => fn())
-    },
-  }
-}
-
-describe('Progress session bridge', () => {
-  it('syncs the sidebar through the existing navigation function', () => {
-    const calls: { name?: string; canonicalHash?: string; status?: string }[] = []
-    window.prksSyncSidebarActive = (route) => {
-      calls.push({
-        name: route.name,
-        canonicalHash: route.canonicalHash,
-        status: route.params?.status,
-      })
+describe('Progress route bridge', () => {
+  it('renders the effective rows and does not publish shell state', () => {
+    const calls: string[] = []
+    ;(window as Window & { prksSyncSidebarActive?: () => void }).prksSyncSidebarActive = () => {
+      calls.push('sidebar')
     }
-    window.prksWorkCardHtml = () => '<div data-work-id="x"></div>'
-    const pane = owner()
-    const el = host()
+    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
+    const main = owner()
+    const secondary = owner()
+    const mainHost = host()
+    const secondaryHost = host()
     presentProgress({
-      owner: pane,
-      host: el,
+      owner: main,
+      host: mainHost,
       status: 'Paused',
-      rows: [{ id: 'x', title: 'X', status: 'Paused' }],
+      rows: [{ id: 'main', title: 'Main', status: 'Paused' }],
       offlineCached: false,
       generation: 4,
+      shell: true,
     })
-    expect(calls).toEqual([
-      { name: 'progress', canonicalHash: '#/progress?status=Paused', status: 'Paused' },
-    ])
-    expect(el.querySelector('.progress-filter')).toBeNull()
     presentProgress({
-      owner: pane,
-      host: el,
+      owner: secondary,
+      host: secondaryHost,
       status: 'Completed',
-      rows: [],
+      rows: [{ id: 'side', title: 'Side', status: 'Completed' }],
       offlineCached: false,
-      generation: 5,
+      generation: 1,
+      shell: false,
     })
-    expect(calls[1]).toEqual({
+    expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Files · Paused')
+    expect(secondaryHost.querySelector('[data-work-id="side"]')).not.toBeNull()
+    expect(mainHost.querySelector('.progress-filter')).toBeNull()
+    expect(readRouteSurface(main)).toMatchObject({
       name: 'progress',
-      canonicalHash: '#/progress?status=Completed',
-      status: 'Completed',
+      canonicalHash: '#/progress?status=Paused',
+      ownsMainShell: true,
     })
+    expect(readRouteSurface(secondary)?.ownsMainShell).toBe(false)
+    expect(calls).toEqual([])
   })
 
   it('does not fetch and does not repaint a dismissed generation', async () => {
@@ -117,164 +100,59 @@ describe('Progress session bridge', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('keeps Main mounted when an unrelated Secondary route dismisses', () => {
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
-    const main = cleanupOwner()
-    const secondary = cleanupOwner()
-    const mainHost = host()
-    const secondaryHost = host()
-    const calls: string[] = []
-    window.prksSyncSidebarActive = () => {
-      calls.push('sidebar')
-    }
-    presentProgress({
-      owner: main,
-      host: mainHost,
-      status: 'In Progress',
-      rows: [{ id: 'main', title: 'Main', status: 'In Progress' }],
-      generation: 4,
-      shell: true,
-    })
-    presentProgress({
-      owner: secondary,
-      host: secondaryHost,
-      status: 'Paused',
-      rows: [{ id: 'side', title: 'Side', status: 'Paused' }],
-      generation: 1,
-      shell: false,
-    })
-    secondary.beginRoute()
-    dismissProgress(secondary)
-    expect(mainHost.querySelector('[data-work-id="main"]')).not.toBeNull()
-    expect(secondaryHost.querySelector('[data-prks-progress-view]')).toBeNull()
-    expect(calls).toEqual(['sidebar'])
-  })
-
-  it('accepts generation 1 on a new owner after an older owner reached a higher generation', () => {
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
-    const older = owner()
-    const newer = owner()
-    const olderHost = host()
-    const newerHost = host()
-    presentProgress({
-      owner: older,
-      host: olderHost,
-      status: 'Completed',
-      rows: [{ id: 'old', title: 'Old', status: 'Completed' }],
-      generation: 8,
-    })
-    dismissProgress(older)
-    presentProgress({
-      owner: newer,
-      host: newerHost,
-      status: 'Planned',
-      rows: [{ id: 'new', title: 'New', status: 'Planned' }],
-      generation: 1,
-    })
-    expect(newerHost.querySelector('[data-work-id="new"]')).not.toBeNull()
-    expect(newerHost.querySelector('.prks-page-title')?.textContent).toBe('Files · Planned')
-    expect(olderHost.querySelector('[data-prks-progress-view]')).toBeNull()
-  })
-
-  it('dismisses only the owner that is leaving', () => {
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
-    const main = owner()
-    const other = owner()
-    const mainHost = host()
-    const otherHost = host()
-    presentProgress({
-      owner: main,
-      host: mainHost,
-      status: 'Not Started',
-      rows: [{ id: 'main', title: 'Main', status: 'Not Started' }],
-      generation: 2,
-    })
-    presentProgress({
-      owner: other,
-      host: otherHost,
-      status: 'Paused',
-      rows: [{ id: 'other', title: 'Other', status: 'Paused' }],
-      generation: 2,
-    })
-    dismissProgress(other)
-    expect(otherHost.querySelector('[data-prks-progress-view]')).toBeNull()
-    expect(mainHost.querySelector('[data-work-id="main"]')).not.toBeNull()
-    dismissProgress(main)
-    expect(mainHost.querySelector('[data-prks-progress-view]')).toBeNull()
-  })
-
-  it('rejects a stale generation only within the same owner', async () => {
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
-    const pane = owner()
+  it('registers the progress bridge and applies a progress request stored on its host', () => {
     const el = host()
-    presentProgress({
-      owner: pane,
-      host: el,
-      status: 'Planned',
-      rows: [{ id: 'current', title: 'Current', status: 'Planned' }],
-      generation: 3,
-    })
-    presentProgress({
-      owner: pane,
-      host: el,
-      status: 'Completed',
-      rows: [{ id: 'stale', title: 'Stale', status: 'Completed' }],
-      generation: 2,
-    })
-    await nextTick()
-    expect(el.querySelector('[data-work-id="current"]')).not.toBeNull()
-    expect(el.querySelector('[data-work-id="stale"]')).toBeNull()
-  })
-
-  it('follows the owning context lifecycle and does not fetch', () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
-    const main = cleanupOwner()
-    const secondary = cleanupOwner()
-    const mainHost = host()
-    presentProgress({
-      owner: main,
-      host: mainHost,
-      status: 'In Progress',
-      rows: [{ id: 'main', title: 'Main', status: 'In Progress' }],
-      generation: 2,
-    })
-    secondary.beginRoute()
-    expect(mainHost.querySelector('[data-work-id="main"]')).not.toBeNull()
-    main.beginRoute()
-    expect(mainHost.querySelector('[data-prks-progress-view]')).toBeNull()
-    presentProgress({
-      owner: main,
-      host: mainHost,
-      status: 'Completed',
-      rows: [{ id: 'next', title: 'Next', status: 'Completed' }],
-      generation: 1,
-    })
-    expect(mainHost.querySelector('[data-work-id="next"]')).toBeNull()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('registers one bridge and applies a request stored on its host', () => {
-    const el = host()
+    const decoy = host()
+    el.setAttribute('data-prks-vue-route-host', 'true')
+    decoy.setAttribute('data-prks-vue-route-host', 'true')
     const pane = owner()
-    const target = window
-    ;(el as HTMLElement & { __prksProgressPresentRequest?: object }).__prksProgressPresentRequest = {
+    ;(el as HTMLElement & { __prksVueRouteRequest?: object }).__prksVueRouteRequest = {
+      feature: 'progress',
       owner: pane,
-      host: el,
+      host: decoy,
       status: 'In Progress',
       rows: [{ id: 'early', title: 'Early', status: 'In Progress' }],
       offlineCached: false,
       generation: 1,
+      shell: true,
     }
     window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
-    registerProgressBridge(target)
-    expect(target.prksVuePresentProgress).toBeTypeOf('function')
-    expect(target.prksVueDismissProgress).toBeTypeOf('function')
-    expect(
-      (el as HTMLElement & { __prksProgressPresentRequest?: unknown }).__prksProgressPresentRequest,
-    ).toBeUndefined()
+    registerProgressBridge(window)
+    expect(window.prksVuePresentProgress).toBeTypeOf('function')
+    expect(window.prksVueDismissProgress).toBeTypeOf('function')
+    expect((el as HTMLElement & { __prksVueRouteRequest?: unknown }).__prksVueRouteRequest).toBeUndefined()
     expect(el.querySelector('.prks-page-title')?.textContent).toBe('Files · In Progress')
     expect(el.querySelector('[data-work-id="early"]')).not.toBeNull()
+    expect(decoy.querySelector('[data-prks-progress-view]')).toBeNull()
+    expect(readRouteSurface(pane)?.name).toBe('progress')
+  })
+
+  it('dismisses one owner through the bridge and leaves the other mounted', () => {
+    window.prksWorkCardHtml = (work) => `<div data-work-id="${String(work.id)}"></div>`
+    registerProgressBridge(window)
+    const main = owner()
+    const secondary = owner()
+    const mainHost = host()
+    const secondaryHost = host()
+    window.prksVuePresentProgress?.({
+      owner: main,
+      host: mainHost,
+      status: 'Paused',
+      rows: [{ id: 'main', title: 'Main', status: 'Paused' }],
+      generation: 2,
+      shell: true,
+    })
+    window.prksVuePresentProgress?.({
+      owner: secondary,
+      host: secondaryHost,
+      status: 'Completed',
+      rows: [{ id: 'side', title: 'Side', status: 'Completed' }],
+      generation: 1,
+      shell: false,
+    })
+    window.prksVueDismissProgress?.(secondary)
+    expect(secondaryHost.querySelector('[data-work-id="side"]')).toBeNull()
+    expect(mainHost.querySelector('[data-work-id="main"]')).not.toBeNull()
+    expect(mainHost.querySelector('.prks-page-title')?.textContent).toBe('Files · Paused')
   })
 })

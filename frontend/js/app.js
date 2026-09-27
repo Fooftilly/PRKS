@@ -2815,23 +2815,26 @@ function prksRouteTitleFromHash(hash) {
 function prksPresentVueProgress(ctx, contentDiv, detail) {
     contentDiv.innerHTML = '';
     const host = document.createElement('div');
-    host.setAttribute('data-prks-progress-host', 'true');
+    host.setAttribute('data-prks-vue-route-host', 'true');
     contentDiv.appendChild(host);
     const request = {
+        feature: 'progress',
         owner: ctx,
-        host: host,
         status: detail.status,
         rows: detail.rows,
         offlineCached: !!detail.offlineCached,
         generation: detail.generation,
+        // Main/Secondary is data for the route instance. Sidebar publication
+        // already happened for Main in prksRenderTabRoute.
         shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
     };
     if (typeof window.prksVuePresentProgress === 'function') {
-        window.prksVuePresentProgress(request);
+        window.prksVuePresentProgress(Object.assign({ host: host }, request));
         return;
     }
     // Early paints stash the request on this pane's host, not on window.
-    host.__prksProgressPresentRequest = request;
+    // The route-surface dispatcher paints that host for feature "progress".
+    host.__prksVueRouteRequest = request;
 }
 
 function prksRenderRouteLoading(contentDiv, hash) {

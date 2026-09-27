@@ -309,6 +309,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_browse_offline",
             "tests.e2e.test_work_browsing",
+            "tests.e2e.test_progress_route_surface",
         ),
     },
     "offline": {

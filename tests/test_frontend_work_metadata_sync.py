@@ -263,10 +263,15 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         # The overlaid rows, not the acknowledged snapshot, are what Vue renders.
         self.assertIn('rows: works', body)
         self.assertIn('prksPresentVueProgress(ctx, contentDiv', body)
-        self.assertIn('owner: ctx', app[app.index('function prksPresentVueProgress'):
-                                        app.index('function prksRenderRouteLoading')])
+        present = app[app.index('function prksPresentVueProgress'):
+                      app.index('function prksRenderRouteLoading')]
+        self.assertIn('owner: ctx', present)
+        self.assertIn("feature: 'progress'", present)
+        self.assertIn('host.__prksVueRouteRequest = request', present)
+        self.assertNotIn('prksSyncSidebarActive', present)
         self.assertIn('prksVueDismissProgress(ctx)', app)
         self.assertNotIn('window.__prksProgressPresentRequest', app)
+        self.assertNotIn('window.__prksVueRouteRequest', app)
         self.assertNotIn('renderProgressByStatus', body)
 
         progress_dir = ROOT / 'frontend-app' / 'src' / 'features' / 'progress'
@@ -277,8 +282,19 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         )
         for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'prksSync.',
                           'payload.field', 'prksEffective', 'useQuery',
-                          '@tanstack/vue-query', 'works-browse:index'):
+                          '@tanstack/vue-query', 'works-browse:index',
+                          'prksSyncSidebarActive', '__prksProgressSession'):
             self.assertNotIn(forbidden, progress, forbidden)
+        surface_dir = ROOT / 'frontend-app' / 'src' / 'route-surface'
+        surface = '\n'.join(
+            path.read_text()
+            for path in sorted(surface_dir.iterdir())
+            if path.suffix == '.ts' and '.test.' not in path.name
+        )
+        for forbidden in ('prksSyncSidebarActive', 'works-browse', 'SET_WORK_METADATA_FIELD',
+                          'useQuery', 'ProgressView', 'progressCanonicalHash',
+                          'window.__prks'):
+            self.assertNotIn(forbidden, surface, forbidden)
         # It selects on the value it was given -- that is the whole mechanism.
         self.assertIn('w.status === status', progress)
 
