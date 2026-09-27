@@ -10,6 +10,12 @@ These rules apply to frontend work in addition to the repository-root `AGENTS.md
 
 The hidden `#prks-vue-root` mount proves the bundle loads and hosts the Vue app. The first product surface is Settings performance diagnostics, teleported into `#prks-settings-perf-root`. TanStack Query owns that disposable server snapshot. Do not add a second QueryClient, Pinia, Vue Router, or VueUse until a later slice needs them. Do not persist the query cache or use it as an offline queue.
 
+Vue primitives live in `frontend-app/src/components/` (`PrksButton`, `PrksStatusText`, `PrksSectionHeader`). Stories live beside them as `*.stories.ts`. Storybook config is `frontend-app/.storybook/`. `DESIGN.md` remains authoritative. Reuse these primitives before inventing another button, status, or section-heading component. They must keep the existing `.prks-btn`, `.prks-settings-hint`, and `.prks-settings-section__title` classes. Do not split `frontend/css/style.css` or copy it into a single-file component.
+
+Storybook is maintainer/build-time only. Commands, from `frontend-app` after `npm ci --ignore-scripts`: `npm run storybook`, `npm run build-storybook`. CI builds Storybook only when `frontend-app/` or the static-analysis workflow changes. Do not commit `frontend-app/storybook-static/` or put Storybook output in `frontend/`. Accessibility checks run in the Storybook UI via `@storybook/addon-a11y`. Do not add a Playwright story runner beside Vitest.
+
+Storybook MCP is not committed. `@storybook/addon-mcp@10.6.0` is preview, peers on the browser Vitest addon, needs Storybook running, and the agent connection is user-level. The exact setup is in `frontend-app/README.md`. Official Vue ESLint is also deferred there: the checked-in ESLint config is the legacy JavaScript bug-rule set, and a Vue/TypeScript config would be a separate lint family.
+
 The Vue HTTP transport is a real `fetch` boundary for PRKS reachability. A resolved response, of any HTTP status, calls `prksOfflineNoteRequestSuccess`. A non-abort transport failure calls `prksOfflineNoteRequestFailure` only after that query's retries are exhausted; mutations are not retried, so their transport failure is final. Managed PDF GETs (`/api/pdfs/...`) are not a reachability signal. Abort, HTTP error envelopes, and JSON/domain failures are not connectivity changes.
 
 ## Cross-boundary bulk mutations

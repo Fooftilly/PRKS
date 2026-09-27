@@ -388,7 +388,10 @@ AFFECTED_RULES = (
     # a deliberate shared-Vue-core mapping exists. The generated bundle
     # (frontend/vue/**) is not in this rule; plan_ci_e2e treats it separately.
     # New screens under frontend-app/src/ stay unmapped (CI full) until a
-    # feature rule names them. index.html/sw.js stay on shared-frontend-core.
+    # feature rule names them. Shared primitives in src/components/ stay
+    # unmapped too: they are not owned by one feature. Storybook config and
+    # *.stories.* are the storybook-catalog skip rule, not production source.
+    # index.html/sw.js stay on shared-frontend-core.
     {
         "name": "vue-frontend",
         "paths": (
@@ -684,6 +687,22 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # Storybook is a maintainer catalog. It is not the Vue app and must not
+    # explain a rebuilt frontend/vue bundle or select a feature suite.
+    {
+        "name": "storybook-catalog",
+        "paths": (
+            "frontend-app/.storybook/**",
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+            "frontend-app/storybook-static/**",
+        ),
+        "features": (),
+        "skip": True,
+        "note": "Storybook catalog only. Not production application source.",
     },
 )
 
@@ -1135,7 +1154,7 @@ _VUE_PRODUCTION_SOURCE_SUFFIXES = (".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs")
 
 
 def _is_vue_production_source_path(rel: str) -> bool:
-    """Known Vue production source. Test and spec files do not qualify."""
+    """Known Vue production source. Tests, specs, and stories do not qualify."""
     rel = _posix(rel)
     if not rel.startswith("frontend-app/src/"):
         return False
@@ -1150,7 +1169,7 @@ def _is_vue_production_source_path(rel: str) -> bool:
     if not suffix:
         return False
     stem = name[: -len(suffix)]
-    return not stem.endswith((".test", ".spec"))
+    return not stem.endswith((".test", ".spec", ".stories"))
 
 
 def _is_mapped_vue_feature_source(rel: str, classified: dict) -> bool:

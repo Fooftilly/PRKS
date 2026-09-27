@@ -169,3 +169,42 @@ jobs:
             git status --porcelain -- frontend/vue frontend/vendor/DEPENDENCY-MANIFEST.json frontend/sw.js >&2
             exit 1
           fi
+
+      # Storybook is maintainer-only. Backend-only diffs skip the build.
+      # An unreadable diff fails the job instead of skipping the build.
+      - name: Storybook build when frontend tooling changes
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          pattern='^(frontend-app/|\.github/workflows/static-analysis\.yml$)'
+          run_storybook=true
+          zero_sha="0000000000000000000000000000000000000000"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${PRKS_PR_BASE_SHA:?missing pull_request.base.sha}"
+            git fetch --no-tags --depth=1 origin "$base"
+            if git diff --name-only "$base" HEAD | grep -Eq "$pattern"; then
+              run_storybook=true
+            else
+              run_storybook=false
+            fi
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            if [[ -n "${PRKS_PUSH_BEFORE:-}" && "${PRKS_PUSH_BEFORE}" != "$zero_sha" ]] && git cat-file -e "${PRKS_PUSH_BEFORE}^{commit}" 2>/dev/null; then
+              if git diff --name-only "${PRKS_PUSH_BEFORE}" HEAD | grep -Eq "$pattern"; then
+                run_storybook=true
+              else
+                run_storybook=false
+              fi
+            fi
+          fi
+          if [[ "$run_storybook" != "true" ]]; then
+            echo "Skipping Storybook build: diff does not touch frontend-app or this workflow."
+            exit 0
+          fi
+          npm run build-storybook --prefix frontend-app
+          if [[ -e frontend/storybook-static || -e frontend/vue/index.html || -e frontend/vue/iframe.html ]]; then
+            echo "Storybook wrote into the PRKS runtime tree" >&2
+            exit 1
+          fi

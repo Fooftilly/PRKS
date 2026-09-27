@@ -237,6 +237,59 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertNotEqual(readme_rule, "vue-frontend")
         self.assertTrue(readme_skip)
 
+    def test_storybook_catalog_is_not_production_source(self):
+        catalog_paths = (
+            "frontend-app/.storybook/main.ts",
+            "frontend-app/.storybook/preview.ts",
+            "frontend-app/src/components/PrksButton.stories.ts",
+            "frontend-app/src/components/PrksStatusText.stories.ts",
+            "frontend-app/storybook-static/index.html",
+        )
+        for path in catalog_paths:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "storybook-catalog")
+                self.assertTrue(skip)
+                self.assertEqual(feats, ())
+                self.assertFalse(policy._is_vue_production_source_path(path))
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "skip")
+                self.assertFalse(plan["run"])
+        stories_and_bundle = policy.plan_ci_e2e([
+            "frontend-app/src/components/PrksButton.stories.ts",
+            "frontend/vue/prks-vue.js",
+        ])
+        self.assertEqual(stories_and_bundle["mode"], "full")
+        self.assertTrue(stories_and_bundle["run"])
+        button = "frontend-app/src/components/PrksButton.vue"
+        rule, feats, skip, _note = policy.match_affected_path(button)
+        self.assertEqual(rule, "unmapped-production")
+        self.assertFalse(skip)
+        self.assertNotIn("settings", feats)
+        self.assertEqual(policy.plan_ci_e2e([button])["mode"], "full")
+        self.assertEqual(
+            policy.plan_ci_e2e([button, "frontend/vue/prks-vue.js"])["mode"],
+            "full",
+        )
+        feature_with_catalog = policy.plan_ci_e2e([
+            "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.vue",
+            "frontend-app/src/components/PrksButton.stories.ts",
+            "frontend-app/.storybook/main.ts",
+            "frontend/vue/prks-vue.js",
+            "frontend/vue/BUILD-MANIFEST.json",
+        ])
+        self.assertEqual(feature_with_catalog["mode"], "affected")
+        self.assertEqual(feature_with_catalog["features"], ["settings", "smoke"])
+        shared_primitive = policy.plan_ci_e2e([
+            "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.vue",
+            button,
+            "frontend/vue/prks-vue.js",
+        ])
+        self.assertEqual(shared_primitive["mode"], "full")
+        for rule in policy.AFFECTED_RULES:
+            for pattern in rule["paths"]:
+                self.assertNotEqual(pattern, "frontend-app/src/**")
+
     def test_shared_core_is_broad(self):
         _rule, feats, skip, _note = policy.match_affected_path("frontend/js/app.js")
         self.assertFalse(skip)

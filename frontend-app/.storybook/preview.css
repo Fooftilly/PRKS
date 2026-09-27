@@ -1,0 +1,11 @@
+/*
+ * Catalog canvas only. The application shell locks body to the viewport
+ * (display:flex; height:100vh; overflow:hidden). Stories reuse style.css;
+ * this file does not copy tokens or component rules.
+ */
+body {
+  display: block;
+  height: auto;
+  min-height: 100vh;
+  overflow: auto;
+}
