@@ -38,6 +38,26 @@ interface PositionsIndexPresentRequest {
   shell?: boolean
 }
 
+interface ArgumentsIndexPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable'
+  kind?: string
+  items?: unknown
+  generation?: number
+  shell?: boolean
+}
+
+interface ArgumentDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable' | 'not-found'
+  argument?: unknown
+  argumentId?: string
+  generation?: number
+  shell?: boolean
+}
+
 interface PositionDetailPresentRequest {
   owner: object
   host: HTMLElement
@@ -120,6 +140,9 @@ interface Window {
   prksVuePresentPositionsIndex?: (input: PositionsIndexPresentRequest) => void
   prksVuePresentPositionDetail?: (input: PositionDetailPresentRequest) => void
   prksVueDismissPositions?: (owner: object) => void
+  prksVuePresentArgumentsIndex?: (input: ArgumentsIndexPresentRequest) => void
+  prksVuePresentArgumentDetail?: (input: ArgumentDetailPresentRequest) => void
+  prksVueDismissArguments?: (owner: object) => void
   prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
   prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (
@@ -255,6 +278,40 @@ interface Window {
     entityId: string,
     routeName: string,
   ) => boolean
+  prksPrepareArgumentEdit?: (argumentId: string) => Promise<void>
+  prksCommitArgumentEditorDraft?: (
+    argumentId: string,
+    draft: {
+      name: string
+      kind: 'argument' | 'stance'
+      main_text: string
+      targets: Array<{
+        type: 'position' | 'argument'
+        id: string
+        name: string
+        kind: string
+        verdict_id: string
+      }>
+      sources: Array<{ work_id: string; work_title: string; pages: string }>
+    },
+  ) => Promise<{ id?: string } | null>
+  prksDeleteArgumentDurably?: (argumentId: string) => Promise<unknown>
+  prksArgumentSaveMessage?: (err: unknown, fallback: string) => string
+  createArgument?: (body: {
+    name: string
+    kind?: string
+    main_text?: string
+    targets?: Array<{ type: string; id: string; verdict_id: string }>
+    sources?: Array<{ work_id: string; pages?: string }>
+  }) => Promise<{ id?: string } | null>
+  fetchArguments?: () => Promise<Array<{ id?: string; name?: string; kind?: string }>>
+  fetchPositions?: () => Promise<Array<{ id?: string; name?: string }>>
+  fetchWorks?: () => Promise<Array<{ id?: string; title?: string }>>
+  prksOpenResearchPicker?: (opts: {
+    title: string
+    items: () => Array<{ id: string; label: string; kind: string; pickType: string; haystack: string }>
+    onPick: (id: string, pickType?: string) => void
+  }) => void
   createPosition?: (body: { name: string; description?: string }) => Promise<{ id?: string } | null>
   createConcept?: (body: { name: string }) => Promise<{ id?: string } | null>
   updateConcept?: (id: string, body: { name?: string; description?: string }) => Promise<unknown>

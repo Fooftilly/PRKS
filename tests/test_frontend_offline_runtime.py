@@ -694,7 +694,8 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("PRKS_ARGUMENTS_LIST_KEY", index_body)
         self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", index_body)
         self.assertIn("validate: prksIsArgumentIndexShape", index_body)
-        self.assertIn("renderArgumentsIndexUnavailable", index_body)
+        self.assertIn("prksPresentVueArguments(", index_body)
+        self.assertIn("availability: 'unavailable'", index_body)
         self.assertIn("prksOfflinePrependBanner(", index_body)
         # The COMPLETE collection is fetched and cached under one key; ?kind= is
         # a local subset of it, never a separately cached server-filtered list.
@@ -709,11 +710,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("'argument',", detail_body)
         self.assertIn("domain: PRKS_ARGUMENTS_DOMAIN", detail_body)
         self.assertIn("prksIsArgumentShape(value, argumentId)", detail_body)
-        self.assertIn(
-            "prksOfflineRenderUnavailable(contentDiv, 'Argument or Stance not available offline')", detail_body
-        )
+        self.assertIn("availability: 'unavailable'", detail_body)
+        self.assertIn("notFoundTitle: 'Argument or Stance not available offline'", detail_body)
         # A reachable-server 404 keeps its own distinct meaning.
-        self.assertIn("renderArgumentNotFound", detail_body)
+        self.assertIn("availability: 'not-found'", detail_body)
+        self.assertIn("notFoundTitle: 'Argument not found'", detail_body)
         self.assertNotIn("fetchArgument(", detail_body)
         # A freshly mounted route resets stale edit-mode UI, but mutation stays
         # available offline through the durable queue.

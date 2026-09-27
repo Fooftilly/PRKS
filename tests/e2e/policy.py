@@ -219,11 +219,16 @@ FEATURES = {
         ),
     },
     "arguments": {
-        "description": "Arguments/Stances durable ops + offline Arguments",
+        "description": "Arguments/Stances index/detail Vue surface + durable ops + offline Arguments",
         "selectors": (
             "tests.e2e.test_arguments_durable",
+            "tests.e2e.test_arguments_route_surface",
             "tests.e2e.test_offline.OfflineArgumentTests",
             "tests.e2e.test_offline.OfflineArgumentCoherenceTests",
+            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_index_search_respects_kind_filter",
+            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_detail_counts_and_contextual_empty_wording",
+            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_filtered_true_empty_state_describes_active_kind",
+            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_filtered_search_empty_is_kind_aware",
         ),
     },
     "people": {
@@ -640,6 +645,18 @@ AFFECTED_RULES = (
         ),
         "features": ("positions",),
         "note": "Vue Positions index/detail (#266) → positions. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "arguments-vue",
+        "paths": ("frontend-app/src/features/arguments/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("arguments",),
+        "note": "Vue Arguments index/detail (#269) → arguments. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "settings",

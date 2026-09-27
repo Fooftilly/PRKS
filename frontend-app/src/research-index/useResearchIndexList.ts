@@ -11,7 +11,8 @@ export function useResearchIndexList<T>(options: {
   filter: (items: readonly T[], query: string) => readonly T[]
   normalizeQuery: (query: string) => string
   icon: string
-  scopeLabel: string
+  /** Plain string, or a ref when the label changes with the same mounted list. */
+  scopeLabel: string | ComputedRef<string>
   rootEl: Ref<HTMLElement | null>
   titleIconHost: Ref<HTMLElement | null>
   scopeHost: Ref<HTMLElement | null>
@@ -44,6 +45,10 @@ export function useResearchIndexList<T>(options: {
         : ''
   }
 
+  function currentScopeLabel(): string {
+    return typeof options.scopeLabel === 'string' ? options.scopeLabel : options.scopeLabel.value
+  }
+
   function paintScope(): void {
     const host = scopeHost.value
     if (!host || options.unavailable.value) return
@@ -52,7 +57,7 @@ export function useResearchIndexList<T>(options: {
         shown: filtered.value.length,
         total: options.items.value.length,
         filter: normalizedQuery.value,
-        label: options.scopeLabel,
+        label: currentScopeLabel(),
       })
     }
   }
@@ -83,6 +88,7 @@ export function useResearchIndexList<T>(options: {
         filtered.value.length,
         normalizedQuery.value,
         options.items.value.length,
+        currentScopeLabel(),
       ] as const,
     async () => {
       await nextTick()

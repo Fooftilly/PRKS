@@ -2950,6 +2950,46 @@ function prksPresentVuePositions(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Arguments index or detail surface in this pane.
+ * `detail` must already be the authoritative effective Argument projection.
+ * Same-owner Arguments refresh reuses the existing host so local index
+ * search survives an in-place projection update.
+ */
+function prksPresentVueArguments(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const feature = detail.feature === 'argument-detail' ? 'argument-detail' : 'arguments';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        kind: detail.kind,
+        argument: detail.argument,
+        argumentId: detail.argumentId,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'argument-detail' && typeof window.prksVuePresentArgumentDetail === 'function') {
+        window.prksVuePresentArgumentDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'arguments' && typeof window.prksVuePresentArgumentsIndex === 'function') {
+        window.prksVuePresentArgumentsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3231,6 +3271,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (samePositionsWorkspace) {
         ctx.__prksRetainPositionsSurface = true;
     }
+    /* Arguments→Arguments in the same mounted TabContext keeps the Vue host
+     * so local index search and kind-filter chrome survive an in-place
+     * refresh. Flag before beginRoute: TabContext cleanups run there. */
+    const sameArgumentsWorkspace = !!(
+        (route.name === 'arguments' || route.name === 'argument-detail') &&
+        contentDiv.querySelector(
+            '[data-prks-arguments-index-view], [data-prks-argument-detail-view]'
+        )
+    );
+    if (sameArgumentsWorkspace) {
+        ctx.__prksRetainArgumentsSurface = true;
+    }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
@@ -3240,6 +3292,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
     if (samePositionsWorkspace) {
         ctx.__prksRetainPositionsSurface = false;
+    }
+    if (sameArgumentsWorkspace) {
+        ctx.__prksRetainArgumentsSurface = false;
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3277,6 +3332,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         !sameConceptsWorkspace &&
         !sameFolderLibraryWorkspace &&
         !samePositionsWorkspace &&
+        !sameArgumentsWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3290,7 +3346,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
@@ -3303,6 +3359,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissPositions === 'function') {
             window.prksVueDismissPositions(ctx);
         }
+        if (typeof window.prksVueDismissArguments === 'function') {
+            window.prksVueDismissArguments(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -3313,8 +3372,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
-    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace) {
-        // Folder Library / Concepts / Positions in-place refresh: keep the Vue host; mark busy until paint.
+    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace) {
+        // Folder Library / Concepts / Positions / Arguments in-place refresh: keep the Vue host; mark busy until paint.
         contentDiv.setAttribute('aria-busy', 'true');
     }
 
@@ -4381,15 +4440,31 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const allArguments = await prksEffectiveArgumentRows(
                     cachedArguments || [], argumentOps);
                 if (!cachedArguments && !(allArguments && allArguments.length)) {
-                    if (typeof renderArgumentsIndexUnavailable === 'function') renderArgumentsIndexUnavailable(contentDiv);
-                    else prksOfflineRenderUnavailable(contentDiv, 'Arguments & Stances not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Arguments & Stances not available offline' };
+                    prksPresentVueArguments(ctx, contentDiv, {
+                        feature: 'arguments',
+                        availability: 'unavailable',
+                        items: [],
+                        kind: kind || 'all',
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Arguments & Stances not available offline',
+                        skipPageEnter: sameArgumentsWorkspace,
+                    };
                     break;
                 }
                 const argumentItems = prksFilterArgumentsByKind(allArguments, kind);
-                if (typeof renderArgumentsIndex === 'function') renderArgumentsIndex(ctx, argumentItems, contentDiv, kind || 'all');
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Arguments &amp; Stances</h2></div>';
+                prksPresentVueArguments(ctx, contentDiv, {
+                    feature: 'arguments',
+                    availability: 'ready',
+                    items: argumentItems,
+                    kind: kind || 'all',
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineArguments);
+                titleOpts = { skipPageEnter: sameArgumentsWorkspace };
                 break;
             }
             case 'argument-detail': {
@@ -4430,15 +4505,34 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     resolvedArgument.unavailable = !pendingArgument;
                 }
                 if (resolvedArgument.unavailable) {
-                    prksOfflineRenderUnavailable(contentDiv, 'Argument or Stance not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Argument or Stance not available offline' };
+                    prksPresentVueArguments(ctx, contentDiv, {
+                        feature: 'argument-detail',
+                        availability: 'unavailable',
+                        argumentId: argumentId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Argument or Stance not available offline',
+                        skipPageEnter: sameArgumentsWorkspace,
+                    };
                     break;
                 }
                 const item = resolvedArgument.argument;
                 if (!item) {
-                    if (typeof renderArgumentNotFound === 'function') renderArgumentNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Argument not found.</h2></div>';
-                    titleOpts = { notFound: true, notFoundTitle: 'Argument not found' };
+                    prksPresentVueArguments(ctx, contentDiv, {
+                        feature: 'argument-detail',
+                        availability: 'not-found',
+                        argumentId: argumentId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Argument not found',
+                        skipPageEnter: sameArgumentsWorkspace,
+                    };
                 } else {
                     // Source and mention rows both name a Work's Title.
                     await prksHydratePendingWorkMetadata();
@@ -4480,9 +4574,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     // A freshly rendered route always starts read-only, even if a
                     // previous mount left an edit session behind.
                     ctx.ui.argumentEditing = false;
-                    if (typeof renderArgumentDetail === 'function') renderArgumentDetail(ctx, effectiveArgument, contentDiv);
+                    prksPresentVueArguments(ctx, contentDiv, {
+                        feature: 'argument-detail',
+                        availability: 'ready',
+                        argument: effectiveArgument,
+                        argumentId: argumentId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, offlineArgument);
-                    titleOpts = { entityTitle: effectiveArgument.name || 'Argument' };
+                    titleOpts = {
+                        entityTitle: effectiveArgument.name || 'Argument',
+                        skipPageEnter: sameArgumentsWorkspace,
+                    };
                 }
                 break;
             }
@@ -4625,6 +4728,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         }
         if (samePositionsWorkspace && typeof window.prksVueDismissPositions === 'function') {
             window.prksVueDismissPositions(ctx);
+        }
+        if (sameArgumentsWorkspace && typeof window.prksVueDismissArguments === 'function') {
+            window.prksVueDismissArguments(ctx);
         }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);

@@ -184,7 +184,7 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertIn('__prksRetainConceptsSurface', app)
         # Folder Library Vue (#261) shares the same dismiss/loading wipe gate.
         self.assertIn(
-            '!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace',
+            '!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace',
             app,
         )
         present = app[app.index('function prksPresentVueConcepts'):
