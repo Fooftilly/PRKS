@@ -100,7 +100,11 @@ interface Window {
   prksVueDismissConcepts?: (owner: object) => void
   prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
   prksVueDismissFolderLibrary?: (owner: object) => void
-  prksFolderLibraryTreeInnerHtml?: (list: unknown, filterQuery?: string) => string
+  prksFolderLibraryTreeInnerHtml?: (
+    list: unknown,
+    filterQuery?: string,
+    options?: { delegateToggle?: boolean },
+  ) => string
   prksFolderLibraryCatalogGlanceParts?: (folders: unknown) => Array<string | null>
   prksPaintFolderLibraryGlance?: (host: HTMLElement, parts: unknown) => void
   prksScheduleFolderLibraryGlance?: (root: ParentNode | HTMLElement) => void

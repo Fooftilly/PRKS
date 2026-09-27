@@ -62,6 +62,14 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertIn("prksToggleFolderNodeInHost", folders)
         self.assertIn("prksToggleAllFolderNodesInHost", folders)
         self.assertIn("st.vueOwned", folders)
+        self.assertIn("delegateToggle", folders)
+        tree = (FRONTEND_APP / "FolderTree.vue").read_text()
+        self.assertIn("delegateToggle: true", tree)
+        # Legacy tab helper must click the Vue tab when the surface is Vue-owned.
+        self.assertIn('st.vueOwned', folders)
+        switch = folders[folders.index("function prksSwitchFolderLibraryTab") :]
+        switch = switch[: switch.index("\nfunction prksFolderLibraryCatalogGlanceParts")]
+        self.assertIn("btn.click()", switch)
 
     def test_vueuse_is_selective_generic_only(self):
         route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()

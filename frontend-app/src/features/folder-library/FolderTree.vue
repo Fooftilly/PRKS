@@ -21,7 +21,8 @@ const treeHtml = computed(() => {
   void props.generation
   const fn = window.prksFolderLibraryTreeInnerHtml
   if (typeof fn !== 'function') return ''
-  return fn(props.folders, props.filterQuery)
+  // Omit inline onclick so host-scoped Vue click delegation owns expand.
+  return fn(props.folders, props.filterQuery, { delegateToggle: true })
 })
 
 function paintTree(): void {

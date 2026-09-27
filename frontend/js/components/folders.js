@@ -82,7 +82,8 @@ function prksFolderLibraryFilterFromStorage() {
     }
 }
 
-function prksFolderLibraryTreeInnerHtml(list, filterQuery) {
+function prksFolderLibraryTreeInnerHtml(list, filterQuery, options) {
+    const opts = options && typeof options === 'object' ? options : {};
     if (!list || !list.length) {
         return (
             '<div class="prks-folder-tree__empty-state">' +
@@ -91,7 +92,10 @@ function prksFolderLibraryTreeInnerHtml(list, filterQuery) {
             '</div>'
         );
     }
-    return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, { filterQuery })}</div>`;
+    return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, {
+        filterQuery,
+        delegateToggle: !!opts.delegateToggle,
+    })}</div>`;
 }
 
 function prksRerenderFolderTreeOnly() {
@@ -326,10 +330,15 @@ function prksFolderTreeRowHtml(node, depth, options = {}) {
             ? ` aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}"`
             : '';
 
+    // Vue Folder Library hosts own toggles via delegated click (no inline
+    // stopPropagation that would block the host listener).
+    const toggleOnclick = opts.delegateToggle
+        ? ''
+        : ` onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');"`;
     const toggleHtml = expandable
         ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
               collapsed ? 'Expand subfolders' : 'Collapse subfolders'
-          }" onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');">${
+          }"${toggleOnclick}>${
               typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸'
           }</button>`
         : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
@@ -565,6 +574,7 @@ function renderFolderTreeRoots(folders, options = {}) {
             collapsed,
             matchClass,
             selectedId: options.selectedId,
+            delegateToggle: !!options.delegateToggle,
         });
 
         if (hasChildren) {
@@ -928,6 +938,18 @@ function prksSwitchFolderLibraryTab(tab) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
     const want = tab === 'recently-added' ? 'recently-added' : 'folders';
+    // Vue owns tab + Recently Added rows; drive the mounted tab button so
+    // activeTab / works stay authoritative (E2E helpers still call this).
+    if (st.vueOwned) {
+        const root = st.container.querySelector('[data-prks-folder-library-view]');
+        const btn =
+            root &&
+            root.querySelector(`.prks-folder-library__tab-btn[data-tab="${want}"]`);
+        if (btn && typeof btn.click === 'function') {
+            btn.click();
+            return;
+        }
+    }
     st.activeTab = want;
     try {
         sessionStorage.setItem(PRKS_FOLDER_LIBRARY_TAB_KEY, want);
