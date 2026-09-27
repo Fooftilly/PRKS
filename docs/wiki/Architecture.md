@@ -100,7 +100,7 @@ The implementation details and current operation families are documented in:
 
 ## Workspace architecture
 
-Each visible PRKS page runs inside a TabContext. Main and Secondary panes have separate route state, DOM roots, async generations, and live resources. This prevents split-view pages from accidentally sharing document-scoped state.
+Each visible PRKS page runs inside a TabContext. Main and Secondary panes have separate route state, DOM roots, async generations, and live resources. This prevents split-view pages from accidentally sharing document-scoped state. Logical workspace structure (tabs, Main, focus, and the Secondary tree) is one typed model; TabContext remains the per-pane runtime and is not serialized with that model.
 
 See [Workspace Tabs and Split View](Workspace-Tabs-and-Split-View.md).
 
