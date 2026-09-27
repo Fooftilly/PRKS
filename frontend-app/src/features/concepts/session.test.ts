@@ -23,6 +23,8 @@ afterEach(() => {
   delete window.prksPaintScopeHost
   delete window.prksRefreshIcons
   delete window.prksRelSummaryHtml
+  delete window.prksResearchSectionHeadHtml
+  delete window.prksResearchIndexRowHtml
 })
 
 function host(): HTMLElement {
@@ -246,6 +248,45 @@ describe('Concepts route bridge', () => {
     expect(summaries.some((s) => s.includes('1 parent') && s.includes('3 note mentions'))).toBe(
       true,
     )
+  })
+
+  it('keeps index searchQuery across same-generation in-place projection updates', async () => {
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    window.prksPaintScopeHost = () => {}
+    window.prksRefreshIcons = () => {}
+    const pane = owner('stable')
+    const el = host()
+    presentConceptsIndex({
+      owner: pane,
+      host: el,
+      items: [
+        { id: 'C1', name: 'Alpha', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+        { id: 'C2', name: 'Beta', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+      ],
+      generation: 1,
+    })
+    const search = el.querySelector<HTMLInputElement>('#prks-concept-search')
+    expect(search).not.toBeNull()
+    search!.value = 'alp'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(search!.value).toBe('alp')
+    presentConceptsIndex({
+      owner: pane,
+      host: el,
+      items: [
+        { id: 'C1', name: 'Alpha', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+        { id: 'C2', name: 'Beta', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+        { id: 'C3', name: 'Gamma', aliases: [], parents: [], subconcept_count: 0, mention_count: 0 },
+      ],
+      generation: 1,
+    })
+    await nextTick()
+    const searchAfter = el.querySelector<HTMLInputElement>('#prks-concept-search')
+    expect(searchAfter?.value).toBe('alp')
+    expect(el.textContent).toContain('Alpha')
+    expect(el.textContent).not.toContain('Beta')
   })
 
   it('unmounts on dismiss without affecting another owner', () => {

@@ -223,7 +223,10 @@
             }
             return created;
         } catch (err) {
-            if (typeof root.prksAlertDialog === 'function') {
+            const stillCurrent =
+                typeof opts.isCurrent !== 'function' ||
+                (typeof gen === 'number' && opts.isCurrent(gen));
+            if (stillCurrent && typeof root.prksAlertDialog === 'function') {
                 await root.prksAlertDialog({
                     title: 'Could not create Concept',
                     message: (err && err.message) || 'Could not create Concept.',

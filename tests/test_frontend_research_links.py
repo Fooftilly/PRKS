@@ -1,5 +1,6 @@
 """Structural regressions for research-note semantic links and Research UI."""
 import os
+import subprocess
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +20,9 @@ _CONCEPTS_VUE_DETAIL = os.path.join(
 )
 _POSITIONS = os.path.join(_FRONTEND, "js", "components", "positions.js")
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
+_CREATE_FLOW_SELFTEST = os.path.join(
+    _PROJECT_DIR, "tests", "browser", "run_concept_create_flow_selftest.js"
+)
 
 
 def _read(path: str) -> str:
@@ -199,9 +203,11 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("research-entity__alias-chip", concepts_detail)
         self.assertIn("research-entity__mentions", concepts_detail)
         self.assertIn("research-entity__mention-title", concepts_detail)
-        # Parent/child rows are canonical research rows, not raw <li> anchors.
+        # Parent/child rows and section heads go through the shared helpers
+        # (DESIGN.md), not hand-built Vue markup that can drift from Positions.
         self.assertNotIn("<li><a href=", concepts_detail)
-        self.assertIn("prks-list-row prks-research-row", concepts_detail)
+        self.assertIn("prksResearchIndexRowHtml", concepts_detail)
+        self.assertIn("prksResearchSectionHeadHtml", concepts_detail)
         # Position detail uses the same research-entity shell.
         self.assertIn("research-entity", positions)
         self.assertIn("No description yet.", positions)
@@ -215,6 +221,18 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("count: sourceList.length", args)
         self.assertIn("count: responseList.length", args)
         self.assertIn("count: mentionList.length", args)
+
+
+    def test_concept_create_flow_owner_scoping_selftest(self):
+        proc = subprocess.run(
+            ["node", _CREATE_FLOW_SELFTEST],
+            cwd=_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("concept create-flow selftest ok", proc.stdout)
 
     def test_destructive_actions_are_visually_subordinate(self):
         concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
