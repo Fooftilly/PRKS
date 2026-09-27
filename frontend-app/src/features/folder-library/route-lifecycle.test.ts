@@ -34,10 +34,19 @@ beforeEach(() => {
   window.prksRefreshIcons = () => {}
 })
 
-function projection(generation = 1) {
+function projection(
+  generation = 1,
+  folders: Array<{
+    id: string
+    title: string
+    parent_id: string | null
+    work_count: number
+    child_count: number
+  }> = [{ id: 'F1', title: 'Alpha', parent_id: null, work_count: 0, child_count: 0 }],
+) {
   return buildFolderLibraryProjection({
     availability: 'ready',
-    folders: [{ id: 'F1', title: 'Alpha', parent_id: null, work_count: 0, child_count: 0 }],
+    folders,
     generation,
   })
 }
@@ -47,10 +56,20 @@ describe('Folder Library route lifecycle hardening', () => {
     contentRoot: HTMLElement
     intents: Record<string, unknown>
     generation?: number
+    folders?: Array<{
+      id: string
+      title: string
+      parent_id: string | null
+      work_count: number
+      child_count: number
+    }>
   }) {
     return mount(FolderLibraryRoute, {
       attachTo: opts.contentRoot,
-      props: { projection: projection(opts.generation ?? 1), contentRoot: opts.contentRoot },
+      props: {
+        projection: projection(opts.generation ?? 1, opts.folders),
+        contentRoot: opts.contentRoot,
+      },
       global: {
         provide: {
           [folderLibraryIntentsKey as symbol]: opts.intents,
@@ -154,13 +173,16 @@ describe('Folder Library route lifecycle hardening', () => {
       `<article data-work-id="${String((w as { id?: string }).id || '')}">${String((w as { title?: string }).title || '')}</article>`
     window.prksWorkBrowseCollectionClass = () => 'card-grid'
     let loads = 0
-    let releaseSecond: (() => void) | null = null
-    const secondGate = new Promise<void>((resolve) => {
-      releaseSecond = resolve
-    })
+    const secondGate = (() => {
+      let release!: () => void
+      const promise = new Promise<void>((resolve) => {
+        release = () => resolve()
+      })
+      return { promise, release: () => release() }
+    })()
     const load = vi.fn(async () => {
       loads += 1
-      if (loads > 1) await secondGate
+      if (loads > 1) await secondGate.promise
       return {
         works: [{ id: 'W1', title: loads === 1 ? 'First' : 'Second' }],
         offlineCached: false,
@@ -190,10 +212,126 @@ describe('Folder Library route lifecycle hardening', () => {
     expect(load).toHaveBeenCalledTimes(2)
     expect(settled).toBe(false)
     expect(wrapper.find('#prks-folder-library-recently-added').html()).not.toContain('Second')
-    releaseSecond?.()
+    secondGate.release()
     await switchPromise
     expect(settled).toBe(true)
     expect(wrapper.find('#prks-folder-library-recently-added').html()).toContain('Second')
     wrapper.unmount()
+  })
+
+  it('two owners keep independent glance rows after both schedules settle', async () => {
+    const owners = new Map<object, { folders: unknown[]; recentlyAddedWorks: unknown[] | null }>()
+    window.prksPublishFolderDashboardState = (state) => {
+      if (state?.container) owners.set(state.container, state as never)
+      window.__prksFolderDashboardState = state
+    }
+    window.prksUnpublishFolderDashboardState = (container) => {
+      owners.delete(container)
+      if (window.__prksFolderDashboardState?.container === container) {
+        const next = owners.values().next()
+        window.__prksFolderDashboardState = next.done ? undefined : (next.value as never)
+      }
+    }
+    window.prksFolderLibraryCatalogGlanceParts = (folders) => {
+      const list = Array.isArray(folders) ? folders : []
+      return list.length ? [`${list.length} folders`] : []
+    }
+    window.prksPaintFolderLibraryGlance = (host, parts) => {
+      const texts = (Array.isArray(parts) ? parts : [])
+        .map((p) => (typeof p === 'string' ? p : String((p as { text?: string })?.text || '')))
+        .filter(Boolean)
+      host.textContent = texts.join(' · ')
+    }
+
+    const settled: Array<{ rootId: string; folders: unknown[]; ra: unknown[] | null }> = []
+    const scheduleGlance = vi.fn(async (root: HTMLElement | null, options?: {
+      folders?: readonly unknown[]
+      recentlyAddedWorks?: unknown[] | null
+    }) => {
+      const host = root?.querySelector(
+        '[data-prks-role="folder-library-glance-host"]',
+      ) as HTMLElement | null
+      if (!host || !root) return
+      const token = `${Date.now()}-${Math.random()}`
+      host.dataset.glanceToken = token
+      await new Promise((r) => setTimeout(r, 15))
+      if (!host.isConnected || host.dataset.glanceToken !== token) return
+      const folders = options?.folders ? [...options.folders] : []
+      const ra = options && 'recentlyAddedWorks' in (options || {})
+        ? (options.recentlyAddedWorks ?? null)
+        : null
+      const parts = [
+        ...(window.prksFolderLibraryCatalogGlanceParts?.(folders) || []),
+        Array.isArray(ra) && ra.length ? `${ra.length} recently added` : null,
+      ].filter(Boolean)
+      window.prksPaintFolderLibraryGlance?.(host, parts)
+      settled.push({ rootId: root.id, folders, ra })
+    })
+
+    const main = document.createElement('div')
+    main.id = 'main-folders'
+    const secondary = document.createElement('div')
+    secondary.id = 'secondary-folders'
+    document.body.append(main, secondary)
+
+    const mainWrapper = mountRoute({
+      contentRoot: main,
+      folders: [
+        { id: 'FA', title: 'MainOnly', parent_id: null, work_count: 0, child_count: 0 },
+      ],
+      intents: {
+        ...baseIntents,
+        scheduleGlance,
+        loadRecentlyAdded: async () => ({
+          works: [{ id: 'WM', title: 'MainWork' }],
+          offlineCached: false,
+          unavailable: false,
+          generation: 1,
+          pendingGeneration: null,
+          reused: false,
+        }),
+      },
+    })
+    const secondaryWrapper = mountRoute({
+      contentRoot: secondary,
+      folders: [
+        { id: 'FB', title: 'SecondaryA', parent_id: null, work_count: 0, child_count: 0 },
+        { id: 'FC', title: 'SecondaryB', parent_id: null, work_count: 0, child_count: 0 },
+      ],
+      intents: {
+        ...baseIntents,
+        scheduleGlance,
+        loadRecentlyAdded: async () => ({
+          works: [
+            { id: 'WS1', title: 'Sec1' },
+            { id: 'WS2', title: 'Sec2' },
+          ],
+          offlineCached: false,
+          unavailable: false,
+          generation: 1,
+          pendingGeneration: null,
+          reused: false,
+        }),
+      },
+    })
+    await flushPromises()
+    await vi.waitFor(() => expect(settled.length).toBeGreaterThanOrEqual(2))
+
+    const mainHost = main.querySelector('[data-prks-role="folder-library-glance-host"]')
+    const secondaryHost = secondary.querySelector(
+      '[data-prks-role="folder-library-glance-host"]',
+    )
+    expect(mainHost?.textContent).toContain('1 folders')
+    expect(secondaryHost?.textContent).toContain('2 folders')
+    expect(mainHost?.textContent).not.toContain('2 folders')
+    expect(secondaryHost?.textContent).not.toContain('1 folders')
+
+    secondaryWrapper.unmount()
+    expect(window.__prksFolderDashboardState?.container).toBe(main)
+    expect(owners.has(main)).toBe(true)
+    expect(owners.has(secondary)).toBe(false)
+
+    mainWrapper.unmount()
+    expect(window.__prksFolderDashboardState).toBeUndefined()
   })
 })

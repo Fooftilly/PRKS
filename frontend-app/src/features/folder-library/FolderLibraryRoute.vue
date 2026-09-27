@@ -99,12 +99,13 @@ function treeHostEl(): HTMLElement | null {
  * Publish a thin bridge for legacy helpers that still read dashboard chrome
  * (offline banner binding, expand-toggle patch). Mark vueOwned so the legacy
  * metadata-sync subscriber does not replace Vue-owned Recently Added DOM.
+ * Multi-owner: register per contentRoot so Main/Secondary do not clobber each other.
  */
 function syncLegacyDashboardState(): void {
   if (!surfaceStillOwned()) return
   const content = props.contentRoot
   if (!content) return
-  window.__prksFolderDashboardState = {
+  const state = {
     folders: [...folders.value],
     container: content,
     activeTab: activeTab.value,
@@ -122,6 +123,18 @@ function syncLegacyDashboardState(): void {
     switchTab: (tab: string) =>
       setActiveTab(tab === 'recently-added' ? 'recently-added' : 'folders'),
   }
+  if (typeof window.prksPublishFolderDashboardState === 'function') {
+    window.prksPublishFolderDashboardState(state)
+  } else {
+    window.__prksFolderDashboardState = state
+  }
+}
+
+function scheduleOwnerGlance(): void {
+  intents?.scheduleGlance(rootEl.value, {
+    folders: folders.value,
+    recentlyAddedWorks: recentlyAddedWorks.value,
+  })
 }
 
 function paintCatalogGlance(): void {
@@ -307,7 +320,7 @@ onMounted(() => {
   paintCatalogGlance()
   paintSearchIcons()
   paintExpandToggle()
-  intents?.scheduleGlance(rootEl.value)
+  scheduleOwnerGlance()
   offlineDispose = intents?.bindFolderOfflineState(props.contentRoot ?? null) ?? null
   overlayDispose =
     intents?.subscribeMetadataOverlay(() => {
@@ -337,7 +350,7 @@ watch(
     paintCatalogGlance()
     paintSearchIcons()
     paintExpandToggle()
-    intents?.scheduleGlance(rootEl.value)
+    scheduleOwnerGlance()
     paintBrowseMode()
     if (activeTab.value === 'recently-added') {
       void loadRecentlyAdded(false).catch(() => {})
@@ -366,16 +379,21 @@ onBeforeUnmount(() => {
   offlineDispose = null
   overlayDispose?.()
   overlayDispose = null
-  const st = window.__prksFolderDashboardState
-  if (
-    st &&
-    st.vueOwned &&
-    st.container &&
-    rootEl.value &&
-    typeof (st.container as ParentNode).contains === 'function' &&
-    (st.container as ParentNode).contains(rootEl.value)
-  ) {
-    window.__prksFolderDashboardState = undefined
+  const content = props.contentRoot
+  if (content && typeof window.prksUnpublishFolderDashboardState === 'function') {
+    window.prksUnpublishFolderDashboardState(content)
+  } else {
+    const st = window.__prksFolderDashboardState
+    if (
+      st &&
+      st.vueOwned &&
+      st.container &&
+      rootEl.value &&
+      typeof (st.container as ParentNode).contains === 'function' &&
+      (st.container as ParentNode).contains(rootEl.value)
+    ) {
+      window.__prksFolderDashboardState = undefined
+    }
   }
 })
 </script>

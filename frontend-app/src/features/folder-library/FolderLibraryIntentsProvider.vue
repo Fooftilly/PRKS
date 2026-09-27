@@ -18,7 +18,7 @@ provide(folderLibraryIntentsKey, {
   toggleExpand: (id, host, folders) => current.value.toggleExpand(id, host, folders),
   toggleExpandAll: (host, folders) => current.value.toggleExpandAll(host, folders),
   bindFolderOfflineState: (root) => current.value.bindFolderOfflineState(root),
-  scheduleGlance: (root) => current.value.scheduleGlance(root),
+  scheduleGlance: (root, options) => current.value.scheduleGlance(root, options),
   subscribeMetadataOverlay: (onChange) => current.value.subscribeMetadataOverlay(onChange),
 })
 </script>

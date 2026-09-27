@@ -107,7 +107,30 @@ interface Window {
   ) => string
   prksFolderLibraryCatalogGlanceParts?: (folders: unknown) => Array<string | null>
   prksPaintFolderLibraryGlance?: (host: HTMLElement, parts: unknown) => void
-  prksScheduleFolderLibraryGlance?: (root: ParentNode | HTMLElement) => void
+  prksScheduleFolderLibraryGlance?: (
+    root: ParentNode | HTMLElement,
+    options?: {
+      folders?: unknown[]
+      recentlyAddedWorks?: unknown[] | null
+    },
+  ) => void
+  prksPublishFolderDashboardState?: (state: {
+    container?: HTMLElement | null
+    vueOwned?: boolean
+    recentlyAddedLoading?: boolean
+    recentlyAddedWorks?: unknown[] | null
+    switchTab?: (tab: string) => void | Promise<void>
+    [key: string]: unknown
+  }) => void
+  prksUnpublishFolderDashboardState?: (container: HTMLElement) => void
+  prksFolderDashboardStateForRoot?: (root: ParentNode | HTMLElement | null) =>
+    | {
+        container?: HTMLElement | null
+        folders?: unknown[]
+        recentlyAddedWorks?: unknown[] | null
+        [key: string]: unknown
+      }
+    | undefined
   prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
   prksFolderLibraryExpandToggleInnerHtml?: () => string
   prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean

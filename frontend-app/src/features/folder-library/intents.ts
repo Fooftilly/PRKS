@@ -44,7 +44,13 @@ export interface FolderLibraryIntents {
   ): void
   toggleExpandAll(treeHost: HTMLElement | null, folders: readonly unknown[]): void
   bindFolderOfflineState(contentRoot: HTMLElement | null): () => void
-  scheduleGlance(root: HTMLElement | null): void
+  scheduleGlance(
+    root: HTMLElement | null,
+    options?: {
+      folders?: readonly unknown[]
+      recentlyAddedWorks?: RecentlyAddedWork[] | null
+    },
+  ): void
   subscribeMetadataOverlay(onChange: () => void): () => void
 }
 
@@ -282,9 +288,19 @@ export function browserFolderLibraryIntents(
       }
     },
 
-    scheduleGlance(root) {
+    scheduleGlance(root, options) {
       const fn = window.prksScheduleFolderLibraryGlance
-      if (typeof fn === 'function' && root) fn(root)
+      if (typeof fn !== 'function' || !root) return
+      if (!options) {
+        fn(root)
+        return
+      }
+      fn(root, {
+        folders: options.folders ? [...options.folders] : undefined,
+        recentlyAddedWorks: Array.isArray(options.recentlyAddedWorks)
+          ? [...options.recentlyAddedWorks]
+          : (options.recentlyAddedWorks ?? null),
+      })
     },
 
     subscribeMetadataOverlay(onChange) {

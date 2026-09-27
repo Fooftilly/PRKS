@@ -89,19 +89,28 @@ class FolderLibraryVueContracts(unittest.TestCase):
         """Retained refresh must keep rows for glance; vueOwned blocks legacy DOM paint."""
         route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
         sync = route[route.index("function syncLegacyDashboardState") :]
-        sync = sync[: sync.index("\nfunction paintCatalogGlance")]
+        sync = sync[: sync.index("\nfunction scheduleOwnerGlance")]
         self.assertIn("recentlyAddedWorks: recentlyAddedWorks.value", sync)
         self.assertNotIn("recentlyAddedWorks: null", sync)
         self.assertIn("vueOwned: true", sync)
+        self.assertIn("prksPublishFolderDashboardState", sync)
+        self.assertIn("scheduleOwnerGlance", route)
         folders = (FRONTEND / "components" / "folders.js").read_text()
         rerender = folders[
             folders.index("function prksRerenderFolderLibraryRecentlyAddedOnly") :
         ]
         rerender = rerender[: rerender.index("\nfunction prksApplyFolderLibraryFilesSearchFilter")]
         self.assertIn("if (st.vueOwned) return;", rerender)
+        self.assertIn("function prksPublishFolderDashboardState", folders)
+        self.assertIn("function prksUnpublishFolderDashboardState", folders)
+        self.assertIn("prksFolderDashboardStateForRoot", folders)
         glance = folders[folders.index("async function prksCollectFolderLibraryGlanceExtras") :]
         glance = glance[: glance.index("\nasync function prksScheduleFolderLibraryGlance")]
-        self.assertIn("stMem.recentlyAddedWorks.length", glance)
+        self.assertIn("opts.recentlyAddedWorks", glance)
+        schedule = folders[folders.index("async function prksScheduleFolderLibraryGlance") :]
+        schedule = schedule[: schedule.index("\nfunction renderDashboard")]
+        self.assertIn("opts.folders", schedule)
+        self.assertIn("recentlyAddedWorks", schedule)
 
     def test_e2e_preview_seed_owns_source_under_recently_added_pane(self):
         e2e = (ROOT / "tests" / "e2e" / "test_folder_library_route_surface.py").read_text()
