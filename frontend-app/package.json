@@ -17,6 +17,8 @@
     "build-storybook": "storybook build --output-dir storybook-static --disable-telemetry"
   },
   "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "4.0.0",
+    "@atlaskit/pragmatic-drag-and-drop-auto-scroll": "3.2.1",
     "@tanstack/vue-query": "5.104.0",
     "vue": "3.5.43"
   },
