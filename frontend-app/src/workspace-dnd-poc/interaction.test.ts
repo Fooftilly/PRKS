@@ -270,8 +270,8 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
     fireDrag('dragover', strip, { clientX: 20, clientY: 20 })
     flushAnimationFrames(1)
     expect(session?.active).toBe(true)
-    // End the native drag without a drop event — no coordinator commit.
-    dragEnd(window)
+    // End the native drag from the dragged element (no drop) — no coordinator commit.
+    dragEnd(source)
     await Promise.resolve()
     expect(h.reorderTab).not.toHaveBeenCalled()
     expect(h.movePane).not.toHaveBeenCalled()
