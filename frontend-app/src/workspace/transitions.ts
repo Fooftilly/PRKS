@@ -262,10 +262,13 @@ export function planCloseTab(state: WorkspaceState, tabId: string, homeTab: Work
       const sibling = findSiblingLeafTabId(state.secondaryTree, closing.id)
       secondaryTree = normalizeTree(removeLeaf(state.secondaryTree, closing.id))
       if (!secondaryTree) mode = 'stacked'
-      const nextLeaves = collectLeafTabIds(secondaryTree)
-      const preferred = sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null
-      focusedTabId = (preferred || state.mainTabId) as WorkspaceState['focusedTabId']
+      if (focusedTabId === closing.id) {
+        const nextLeaves = collectLeafTabIds(secondaryTree)
+        const preferred = sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null
+        focusedTabId = (preferred || state.mainTabId) as WorkspaceState['focusedTabId']
+      }
     }
+    if (mode === 'stacked') focusedTabId = state.mainTabId
     return {
       ok: true,
       needsHomeTab: false,
@@ -287,7 +290,7 @@ export function planCloseTab(state: WorkspaceState, tabId: string, homeTab: Work
   if (!successor) successor = state.tabs[idx + 1] || state.tabs[idx - 1] || null
   if (successor && successor.id === closing.id) successor = null
   if (!successor) {
-    if (!homeTab) return { ok: true, needsHomeTab: true, state, successorId: null, promotedLeaf: false }
+    if (!homeTab) return { ok: false, needsHomeTab: true, state, successorId: null, promotedLeaf: false }
     return {
       ok: true,
       needsHomeTab: false,

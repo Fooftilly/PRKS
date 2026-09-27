@@ -1273,6 +1273,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
                 }
             )
 
+    model_path = root / "frontend" / "js" / "workspace-model.js"
+    if model_path.is_file():
+        entries.append(
+            {
+                "name": "prks-workspace-model",
+                "version": "1",
+                "source_category": "frontend-app:workspace-model",
+                "runtime_files": [
+                    {
+                        "path": "/js/workspace-model.js",
+                        "sha256": sha256_file(model_path),
+                    }
+                ],
+            }
+        )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,

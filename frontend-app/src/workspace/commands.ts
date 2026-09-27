@@ -1,7 +1,12 @@
 /**
- * Command boundary. A command names a pure transition plus the preflight and
- * effects the coordinator must run around it. This module does not perform
- * those effects: no leave prompts, no history writes, no TabContext calls.
+ * Leave preflights for workspace-tabs.js, plus an internal effect sketch.
+ *
+ * The shipped structural contract is the pure `plan*` functions. This module
+ * does not perform effects: no leave prompts, no history writes, no TabContext
+ * calls. `applyWorkspaceCommand` is not exported and is not the effect
+ * boundary — activate, show-split, and split-leaf still mount, resume, and
+ * render in workspace-tabs.js. Do not treat its effect list as that boundary
+ * until those effects are complete.
  *
  * Drag hover and preview are not commands. #234 may later emit `reorder-tab`
  * or `move-pane` on drop only.
@@ -86,6 +91,8 @@ export interface CommandResult {
   readonly state: WorkspaceState
   readonly preflight: WorkspacePreflight
   readonly effects: readonly WorkspaceEffect[]
+  /** Set when closing the last tab cannot proceed until the adapter mints Home. */
+  readonly needsHomeTab?: boolean
 }
 
 function none(state: WorkspaceState, ok = false): CommandResult {
@@ -145,10 +152,24 @@ export function preflightCloseTab(state: WorkspaceState, tabId: string, context:
   return { type: 'leave-tab', tabId: tab.id, nextHash: closeSuccessorRoute(state, tab.id, context.homeHash) }
 }
 
+/** Mounted TabContexts that are Secondary leaves. Main is never one of them. */
+function mountedSecondaryIds(state: WorkspaceState, context: CommandContext): string[] {
+  const leaves = collectLeafTabIds(state.secondaryTree)
+  const mounted = context.mountedTabIds || []
+  const ids: string[] = []
+  for (let i = 0; i < mounted.length; i++) {
+    const id = mounted[i]
+    if (!id || id === state.mainTabId) continue
+    if (leaves.indexOf(id) === -1) continue
+    ids.push(id)
+  }
+  return ids
+}
+
 export function preflightSetMode(state: WorkspaceState, mode: string, context: CommandContext): WorkspacePreflight {
   if (mode !== 'stacked') return { type: 'none' }
   if (state.mode === 'stacked' && !visualTiled(state, context)) return { type: 'none' }
-  const ids = visualTiled(state, context) ? (context.mountedTabIds || []) : []
+  const ids = visualTiled(state, context) ? mountedSecondaryIds(state, context) : []
   if (!ids.length) return { type: 'none' }
   return { type: 'leave-tabs', tabIds: ids, nextHash: context.homeHash }
 }
@@ -160,8 +181,8 @@ function factory(context: CommandContext): SplitIdFactory {
 }
 
 /**
- * Decide the next canonical state. The coordinator runs `preflight` first
- * (a rejected leave commits nothing) and then the `effects` after commit.
+ * Internal sketch of a later effect list. Not the coordinator: workspace-tabs.js
+ * calls the pure planners and runs mount, resume, and render itself.
  */
 export function applyWorkspaceCommand(
   state: WorkspaceState,
@@ -266,9 +287,10 @@ export function applyWorkspaceCommand(
       if (plan.kind === 'noop') return { ok: true, changed: false, state, preflight, effects: [] }
       const focusId = plan.state.focusedTabId || ''
       const effects: WorkspaceEffect[] = []
-      if (plan.kind === 'hide' && context.mountedTabIds) {
-        for (let i = 0; i < context.mountedTabIds.length; i++) {
-          effects.push({ type: 'cold-park', tabId: context.mountedTabIds[i] })
+      if (plan.kind === 'hide' && visualTiled(state, context)) {
+        const secondaryIds = mountedSecondaryIds(state, context)
+        for (let i = 0; i < secondaryIds.length; i++) {
+          effects.push({ type: 'cold-park', tabId: secondaryIds[i] })
         }
       }
       effects.push({ type: 'paint-and-restore', tabId: focusId })
@@ -278,10 +300,10 @@ export function applyWorkspaceCommand(
     case 'close-tab': {
       const preflight = preflightCloseTab(state, command.tabId, context)
       const plan = planCloseTab(state, command.tabId, command.homeTab)
-      if (!plan.ok) return none(state)
       if (plan.needsHomeTab) {
-        return { ok: true, changed: false, state, preflight, effects: [] }
+        return { ok: false, changed: false, state, preflight, effects: [], needsHomeTab: true }
       }
+      if (!plan.ok) return none(state)
       const effects: WorkspaceEffect[] = [{ type: 'destroy-context', tabId: command.tabId }]
       const successor = plan.successorId
       if (successor) {

@@ -8,7 +8,6 @@ export {
   WORKSPACE_STATE_VERSION,
 } from './constants'
 export {
-  applyWorkspaceCommand,
   preflightCloseTab,
   preflightHideLeaf,
   preflightMakeMain,

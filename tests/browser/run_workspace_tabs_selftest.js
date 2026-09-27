@@ -5,6 +5,7 @@ const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
 const nav = require(path.join(rootDir, 'frontend/js/navigation.js'));
+const model = require(path.join(rootDir, 'frontend/js/workspace-model.js'));
 const tree = require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
 const persist = require(path.join(rootDir, 'frontend/js/workspace-persistence.js'));
 const wsApi = require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
@@ -269,6 +270,8 @@ async function run() {
     assertEq('bootstrap no render', boot.renders.length, 0);
     assertEq('home route', snap0.tabs[0].route, '#/folders');
     assert('snapshot copied tabs', snap0.tabs !== boot.ws.snapshot().tabs);
+    assert('bootstrap titleRouteGen key', Object.prototype.hasOwnProperty.call(snap0.tabs[0], 'titleRouteGen'));
+    assertEq('bootstrap titleRouteGen null', snap0.tabs[0].titleRouteGen, null);
 
     await boot.ws.navigate('#/works/W1');
     await boot.ws.navigate('#/people/P1');
@@ -380,7 +383,19 @@ async function run() {
 
     const last = makeHarness();
     const only = last.ws.snapshot().mainTabId;
-    await last.ws.closeTab(only);
+    const onlyPlan = model.planCloseTab({
+        version: 1,
+        mode: 'stacked',
+        mainTabId: 'only',
+        focusedTabId: 'only',
+        secondaryTree: null,
+        mainSplitRatio: 0.58,
+        tabs: [{ id: 'only', route: '#/folders', title: 'Folders', icon: 'folder', history: ['#/folders'], historyIndex: 0 }],
+    }, 'only', null);
+    assertEq('one-tab close needsHomeTab', onlyPlan.needsHomeTab, true);
+    assertEq('one-tab close is not success', onlyPlan.ok, false);
+    const closedLast = await last.ws.closeTab(only);
+    assert('final close accepted', closedLast === true);
     const snapLast = last.ws.snapshot();
     assertEq('final close one tab', snapLast.tabs.length, 1);
     assertEq('final close home', snapLast.tabs[0].route, '#/folders');
@@ -483,6 +498,13 @@ async function run() {
     assertEq('resolved main title', titles.ws.snapshot().tabs[0] && titles.ws.snapshot().tabs.find(function (t) {
         return t.id === workTab;
     }).title, 'My Work');
+    const titledSnap = titles.ws.snapshot();
+    assert('snapshot tabs always include titleRouteGen', titledSnap.tabs.every(function (t) {
+        return Object.prototype.hasOwnProperty.call(t, 'titleRouteGen');
+    }));
+    assertEq('resolved titleRouteGen', titledSnap.tabs.find(function (t) {
+        return t.id === workTab;
+    }).titleRouteGen, gen);
     titles.setTitleGen(gen);
     const stale = titles.ws.setResolvedTitle('#/works/W1', 'Stale Name', gen - 1);
     assert('stale gen rejected', !stale);
@@ -1408,7 +1430,7 @@ async function run() {
         assertEq('close C no redundant node', snap.secondaryTree.second.type, 'leaf');
         assert('close C context destroyed', !h.isMounted(C));
         assertEq('close C mounted now 3', h.mountedCount(), 3);
-        assertEq('close C focus moved to sibling A', snap.focusedTabId, A);
+        assertEq('close C keeps focus on main', snap.focusedTabId, D);
 
         /* Hide/park B: B stays open as a parked tab, removed from the tree, tree normalizes to bare A leaf. */
         await h.ws.focusTab(B);
@@ -1467,6 +1489,75 @@ async function run() {
         assertEq('show split remounts both leaves', h.mountedCount(), 3);
         assert('show split B remounted', h.isMounted(B));
         assert('show split C remounted', h.isMounted(C));
+    }
+
+    {
+        /* Closing an unfocused Secondary leaf must not steal focus. Hidden split stays on Main. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const B = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(B, 'top-bottom', { hash: '#/works/WC' });
+        const C = h.ws.snapshot().secondaryTree.second.tabId;
+        assertEq('tiled close setup focus', h.ws.snapshot().focusedTabId, C);
+        await h.ws.closeTab(B);
+        let snap = h.ws.snapshot();
+        assertEq('tiled unfocused close keeps focus', snap.focusedTabId, C);
+        assert('tiled unfocused close validates', model.validateWorkspace(snap).ok);
+        const hidden = makeHarness({ hash: '#/works/WA' });
+        await hidden.ws.navigate('#/works/WB', { target: 'tile' });
+        const hiddenMain = hidden.ws.snapshot().mainTabId;
+        const hiddenLeaf = hidden.ws.snapshot().secondaryTree.tabId;
+        await hidden.ws.splitLeaf(hiddenLeaf, 'top-bottom', { hash: '#/works/WC' });
+        const hiddenOther = hidden.ws.snapshot().secondaryTree.second.tabId;
+        await hidden.ws.setMode('stacked');
+        await hidden.ws.closeTab(hiddenLeaf);
+        snap = hidden.ws.snapshot();
+        assertEq('hidden unfocused close focus is main', snap.focusedTabId, hiddenMain);
+        assertEq('hidden unfocused close stays stacked', snap.mode, 'stacked');
+        assert('hidden unfocused close kept other leaf', model.collectLeafTabIds(snap.secondaryTree).indexOf(hiddenOther) !== -1);
+        assert('hidden unfocused close validates', model.validateWorkspace(snap).ok);
+    }
+
+    {
+        /* Hide split must replan after leave approval. A ratio edit during the prompt survives. */
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        let releaseHide = null;
+        h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { releaseHide = resolve; });
+        });
+        const pendingHide = h.ws.setMode('stacked');
+        await Promise.resolve();
+        assertEq('ratio during hide approval', h.ws.setMainSplitRatio(0.42), 0.42);
+        assertEq('still tiled during hide approval', h.ws.snapshot().mode, 'tiled');
+        releaseHide(true);
+        const hideAfterEdit = await pendingHide;
+        assert('hide after deferred leave', hideAfterEdit === true);
+        let snap = h.ws.snapshot();
+        assertEq('deferred hide stacked', snap.mode, 'stacked');
+        assertEq('deferred hide kept newer ratio', snap.mainSplitRatio, 0.42);
+        assertEq('deferred hide focus main', snap.focusedTabId, snap.mainTabId);
+        assert('deferred hide validates', model.validateWorkspace(snap).ok);
+
+        const raced = makeHarness({ hash: '#/works/WA' });
+        await raced.ws.navigate('#/works/WB', { target: 'tile' });
+        const racedLeaf = raced.ws.snapshot().secondaryTree.tabId;
+        let releaseRaced = null;
+        raced.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { releaseRaced = resolve; });
+        });
+        const pendingRaced = raced.ws.setMode('stacked');
+        await Promise.resolve();
+        raced.setCanLeave(true);
+        const closedDuringHide = await raced.ws.closeTab(racedLeaf);
+        assert('close during hide approval', closedDuringHide === true);
+        releaseRaced(true);
+        const hideAfterClose = await pendingRaced;
+        assertEq('hide does not commit stale plan', hideAfterClose, false);
+        snap = raced.ws.snapshot();
+        assert('closed leaf stayed gone', snap.tabs.every(function (t) { return t.id !== racedLeaf; }));
+        assertEq('close during hide left no tree', snap.secondaryTree, null);
+        assertEq('close during hide mode', snap.mode, 'stacked');
     }
 
     {

@@ -532,7 +532,7 @@
             const snap = workspaceModelApi.workspaceSnapshot(state);
             for (let i = 0; i < snap.tabs.length; i++) {
                 const live = getTab(snap.tabs[i].id);
-                if (live && live.titleRouteGen != null) snap.tabs[i].titleRouteGen = live.titleRouteGen;
+                snap.tabs[i].titleRouteGen = live && live.titleRouteGen != null ? live.titleRouteGen : null;
             }
             return snap;
         }
@@ -1316,11 +1316,8 @@
                 if (!ok) return false;
                 if (tabIndex(tabId) < 0) return false;
                 const preview = workspaceModelApi.planCloseTab(state, tabId, null);
-                if (!preview.ok) return false;
-                const successor = preview.successorId ? getTab(preview.successorId) : null;
-                const wasMountedSuccessor = !!(successor && contextMounted(successor.id));
-                destroyContext(tabId);
                 if (preview.needsHomeTab) {
+                    destroyContext(tabId);
                     const home = makeTab(homeHash);
                     const planned = workspaceModelApi.planCloseTab(state, tabId, home);
                     if (!planned.ok) return false;
@@ -1335,6 +1332,10 @@
                         return true;
                     });
                 }
+                if (!preview.ok) return false;
+                const successor = preview.successorId ? getTab(preview.successorId) : null;
+                const wasMountedSuccessor = !!(successor && contextMounted(successor.id));
+                destroyContext(tabId);
                 commitCanonical(preview.state);
                 const resumedSuccessor = !wasMountedSuccessor && mountContext(preview.successorId);
                 commitUrl(successor, 'replace');
@@ -1498,12 +1499,22 @@
                 return mountAllSecondaryLeaves();
             }
             /* Global Hide split parks every visible leaf at once; this must be atomic (spec:
-             * depth-first preflight, stop at first rejection, no partial unmounting). */
+             * depth-first preflight, stop at first rejection, no partial unmounting).
+             * Leave approval is async. Replan from the live state afterward so a workspace
+             * edit that landed during the prompt is not overwritten by the pre-await plan.
+             * A changed mounted Secondary set was not the set that approved leave, so that
+             * newer state stays and this hide does not park or commit. Close, hide-leaf,
+             * make-main, narrow fallback, and popstate already re-read or replan after
+             * approval; they do not commit a pre-await snapshot. */
             const mountedLeaves = visualTiled() ? plan.leafIds.filter(contextMounted) : [];
             return preflightLeaves(mountedLeaves, homeHash).then(function (ok) {
                 if (!ok) return false;
-                mountedLeaves.forEach(coldParkContext);
-                commitCanonical(plan.state);
+                const fresh = workspaceModelApi.planSetMode(state, mode, presentation());
+                if (!fresh.ok || fresh.kind !== 'hide') return false;
+                const stillMounted = fresh.leafIds.filter(contextMounted);
+                if (stillMounted.join(',') !== mountedLeaves.join(',')) return false;
+                stillMounted.forEach(coldParkContext);
+                commitCanonical(fresh.state);
                 paintAndRestore(state.mainTabId);
                 refreshFocusedPanel();
                 return true;

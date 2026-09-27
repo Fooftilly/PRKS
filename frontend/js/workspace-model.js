@@ -564,9 +564,12 @@ var prksWorkspaceModel = (function(exports) {
 				const sibling = findSiblingLeafTabId(state.secondaryTree, closing.id);
 				secondaryTree = normalizeTree(removeLeaf(state.secondaryTree, closing.id));
 				if (!secondaryTree) mode = "stacked";
-				const nextLeaves = collectLeafTabIds(secondaryTree);
-				focusedTabId = (sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null) || state.mainTabId;
+				if (focusedTabId === closing.id) {
+					const nextLeaves = collectLeafTabIds(secondaryTree);
+					focusedTabId = (sibling && nextLeaves.indexOf(sibling) !== -1 ? sibling : nextLeaves[0] || null) || state.mainTabId;
+				}
 			}
+			if (mode === "stacked") focusedTabId = state.mainTabId;
 			return {
 				ok: true,
 				needsHomeTab: false,
@@ -588,7 +591,7 @@ var prksWorkspaceModel = (function(exports) {
 		if (successor && successor.id === closing.id) successor = null;
 		if (!successor) {
 			if (!homeTab) return {
-				ok: true,
+				ok: false,
 				needsHomeTab: true,
 				state,
 				successorId: null,
@@ -796,22 +799,18 @@ var prksWorkspaceModel = (function(exports) {
 	//#endregion
 	//#region src/workspace/commands.ts
 	/**
-	* Command boundary. A command names a pure transition plus the preflight and
-	* effects the coordinator must run around it. This module does not perform
-	* those effects: no leave prompts, no history writes, no TabContext calls.
+	* Leave preflights for workspace-tabs.js, plus an internal effect sketch.
+	*
+	* The shipped structural contract is the pure `plan*` functions. This module
+	* does not perform effects: no leave prompts, no history writes, no TabContext
+	* calls. `applyWorkspaceCommand` is not exported and is not the effect
+	* boundary — activate, show-split, and split-leaf still mount, resume, and
+	* render in workspace-tabs.js. Do not treat its effect list as that boundary
+	* until those effects are complete.
 	*
 	* Drag hover and preview are not commands. #234 may later emit `reorder-tab`
 	* or `move-pane` on drop only.
 	*/
-	function none(state, ok = false) {
-		return {
-			ok,
-			changed: false,
-			state,
-			preflight: { type: "none" },
-			effects: []
-		};
-	}
 	function preflightHideLeaf(state, tabId, context) {
 		if (!containsTab(state.secondaryTree, tabId)) return { type: "none" };
 		if (visualTiled(state, context) && context.mounted) return {
@@ -831,306 +830,6 @@ var prksWorkspaceModel = (function(exports) {
 			requiresLeave: !supports,
 			nextHash: oldMain.route
 		};
-	}
-	function closeSuccessorRoute(state, tabId, homeHash) {
-		let idx = -1;
-		for (let i = 0; i < state.tabs.length; i++) if (state.tabs[i].id === tabId) {
-			idx = i;
-			break;
-		}
-		if (idx < 0) return homeHash;
-		const leaves = collectLeafTabIds(state.secondaryTree);
-		const secId = leaves.length ? leaves[0] : null;
-		let successor = secId ? findTab(state, secId) : null;
-		if (!successor) successor = state.tabs[idx + 1] || state.tabs[idx - 1] || null;
-		if (successor && successor.id === tabId) successor = null;
-		return successor ? successor.route : homeHash;
-	}
-	function preflightCloseTab(state, tabId, context) {
-		const tab = findTab(state, tabId);
-		if (!tab) return { type: "none" };
-		if (tab.id !== state.mainTabId) {
-			if (containsTab(state.secondaryTree, tab.id) && visualTiled(state, context)) return {
-				type: "leave-tab",
-				tabId: tab.id,
-				nextHash: context.homeHash
-			};
-			return { type: "none" };
-		}
-		return {
-			type: "leave-tab",
-			tabId: tab.id,
-			nextHash: closeSuccessorRoute(state, tab.id, context.homeHash)
-		};
-	}
-	function preflightSetMode(state, mode, context) {
-		if (mode !== "stacked") return { type: "none" };
-		if (state.mode === "stacked" && !visualTiled(state, context)) return { type: "none" };
-		const ids = visualTiled(state, context) ? context.mountedTabIds || [] : [];
-		if (!ids.length) return { type: "none" };
-		return {
-			type: "leave-tabs",
-			tabIds: ids,
-			nextHash: context.homeHash
-		};
-	}
-	function factory(context) {
-		return context.nextSplitId || (() => {
-			throw new Error("workspace command needs nextSplitId");
-		});
-	}
-	/**
-	* Decide the next canonical state. The coordinator runs `preflight` first
-	* (a rejected leave commits nothing) and then the `effects` after commit.
-	*/
-	function applyWorkspaceCommand(state, command, context) {
-		switch (command.type) {
-			case "focus": {
-				const plan = planFocus(state, command.tabId, context);
-				if (!plan.ok) return none(state);
-				if (!plan.changed) return {
-					ok: true,
-					changed: false,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: []
-				};
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: [{ type: "paint-focus" }, { type: "refresh-focused-panel" }]
-				};
-			}
-			case "reorder-tab": {
-				const plan = planReorder(state, command.tabId, command.beforeTabId);
-				if (!plan.ok) return none(state);
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: [{ type: "paint" }]
-				};
-			}
-			case "make-main": {
-				const preflight = preflightMakeMain(state, command.tabId, context);
-				const plan = planMakeMain(state, command.tabId, !!context.oldMainSupportsTile);
-				if (!plan.ok) return none(state);
-				const effects = [];
-				if (plan.coldParkTabId) effects.push({
-					type: "cold-park",
-					tabId: plan.coldParkTabId
-				});
-				const focusId = plan.state.focusedTabId || command.tabId;
-				effects.push({
-					type: "commit-main-url",
-					tabId: focusId,
-					history: "replace"
-				});
-				effects.push({
-					type: "paint-and-restore",
-					tabId: focusId
-				});
-				effects.push({
-					type: "publish-shell",
-					tabId: focusId
-				});
-				effects.push({ type: "refresh-focused-panel" });
-				return {
-					ok: true,
-					changed: plan.changed,
-					state: plan.state,
-					preflight,
-					effects
-				};
-			}
-			case "hide-leaf": {
-				const preflight = preflightHideLeaf(state, command.tabId, context);
-				const plan = planHideLeaf(state, command.tabId);
-				if (!plan.ok) return none(state);
-				const effects = [];
-				if (context.mounted && visualTiled(state, context)) effects.push({
-					type: "cold-park",
-					tabId: command.tabId
-				});
-				const focusId = plan.state.focusedTabId || "";
-				effects.push({
-					type: "paint-and-restore",
-					tabId: focusId
-				});
-				effects.push({ type: "refresh-focused-panel" });
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight,
-					effects
-				};
-			}
-			case "move-pane": {
-				const plan = planMovePane(state, command.sourceTabId, command.targetTabId, command.axis, command.placement, context, factory(context));
-				if (!plan.ok) return none(state);
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: [{ type: "paint" }]
-				};
-			}
-			case "set-main-split-ratio": {
-				const plan = planMainSplitRatio(state, command.ratio);
-				return {
-					ok: true,
-					changed: plan.state !== state,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: [{ type: "paint" }]
-				};
-			}
-			case "set-nested-split-ratio": {
-				const plan = planNestedSplitRatio(state, command.splitId, command.ratio);
-				if (!plan.ok) return none(state);
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: [{ type: "paint" }]
-				};
-			}
-			case "set-mode": {
-				const preflight = preflightSetMode(state, command.mode, context);
-				const plan = planSetMode(state, command.mode, context);
-				if (!plan.ok) return none(state);
-				if (plan.kind === "noop") return {
-					ok: true,
-					changed: false,
-					state,
-					preflight,
-					effects: []
-				};
-				const focusId = plan.state.focusedTabId || "";
-				const effects = [];
-				if (plan.kind === "hide" && context.mountedTabIds) for (let i = 0; i < context.mountedTabIds.length; i++) effects.push({
-					type: "cold-park",
-					tabId: context.mountedTabIds[i]
-				});
-				effects.push({
-					type: "paint-and-restore",
-					tabId: focusId
-				});
-				if (plan.kind === "hide") effects.push({ type: "refresh-focused-panel" });
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight,
-					effects
-				};
-			}
-			case "close-tab": {
-				const preflight = preflightCloseTab(state, command.tabId, context);
-				const plan = planCloseTab(state, command.tabId, command.homeTab);
-				if (!plan.ok) return none(state);
-				if (plan.needsHomeTab) return {
-					ok: true,
-					changed: false,
-					state,
-					preflight,
-					effects: []
-				};
-				const effects = [{
-					type: "destroy-context",
-					tabId: command.tabId
-				}];
-				const successor = plan.successorId;
-				if (successor) {
-					effects.push({
-						type: "commit-main-url",
-						tabId: successor,
-						history: "replace"
-					});
-					effects.push({
-						type: "paint-and-restore",
-						tabId: successor
-					});
-				} else {
-					const focusId = plan.state.focusedTabId || "";
-					effects.push({
-						type: "paint-and-restore",
-						tabId: focusId
-					});
-				}
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight,
-					effects
-				};
-			}
-			case "activate-tab": {
-				const plan = planActivate(state, command.tabId, context, {
-					fromPopstate: !!context.fromPopstate,
-					oldMainSupportsTile: !!context.oldMainSupportsTile
-				});
-				if (!plan.ok) return none(state);
-				if (plan.kind === "focus-main" || plan.kind === "focus-secondary") {
-					const effects = plan.changed ? [{ type: "paint-focus" }, { type: "refresh-focused-panel" }] : plan.kind === "focus-main" ? [{ type: "paint" }, { type: "refresh-focused-panel" }] : [];
-					return {
-						ok: true,
-						changed: plan.changed,
-						state: plan.state,
-						preflight: { type: "none" },
-						effects
-					};
-				}
-				const oldMain = findTab(state, plan.previousMainId);
-				const preflight = oldMain && oldMain.id !== command.tabId ? {
-					type: "leave-tab",
-					tabId: oldMain.id,
-					nextHash: findTab(state, command.tabId)?.route || context.homeHash
-				} : { type: "none" };
-				const effects = [];
-				if (plan.previousMainId && plan.previousMainId !== command.tabId) effects.push({
-					type: "warm-park",
-					tabId: plan.previousMainId
-				});
-				if (plan.kind === "promote" && plan.coldParkTabId) effects.push({
-					type: "cold-park",
-					tabId: plan.coldParkTabId
-				});
-				effects.push({
-					type: "commit-main-url",
-					tabId: command.tabId,
-					history: "replace"
-				});
-				effects.push({ type: "paint" });
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight,
-					effects
-				};
-			}
-			case "split-leaf": {
-				if (!context.nextSplitId) return none(state);
-				const plan = planSplitLeaf(state, command.targetTabId, command.newTabId, command.axis, command.placement, context.nextSplitId);
-				if (!plan.ok) return none(state);
-				return {
-					ok: true,
-					changed: true,
-					state: plan.state,
-					preflight: { type: "none" },
-					effects: [{ type: "paint" }]
-				};
-			}
-			default: return none(state);
-		}
 	}
 	//#endregion
 	//#region src/workspace/invariants.ts
@@ -1236,7 +935,6 @@ var prksWorkspaceModel = (function(exports) {
 	exports.DEFAULT_MAIN_SPLIT_RATIO = DEFAULT_MAIN_SPLIT_RATIO;
 	exports.MAX_VISIBLE_PANES = MAX_VISIBLE_PANES;
 	exports.WORKSPACE_STATE_VERSION = WORKSPACE_STATE_VERSION;
-	exports.applyWorkspaceCommand = applyWorkspaceCommand;
 	exports.clampMainSplitRatio = clampMainSplitRatio;
 	exports.collectLeafTabIds = collectLeafTabIds;
 	exports.collectSplitIds = collectSplitIds;

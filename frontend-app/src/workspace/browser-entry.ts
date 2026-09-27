@@ -7,7 +7,6 @@ export {
   DEFAULT_MAIN_SPLIT_RATIO,
   MAX_VISIBLE_PANES,
   WORKSPACE_STATE_VERSION,
-  applyWorkspaceCommand,
   clampMainSplitRatio,
   collectLeafTabIds,
   collectSplitIds,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyWorkspaceCommand, preflightHideLeaf, preflightMakeMain } from './commands'
+import { applyWorkspaceCommand, preflightHideLeaf, preflightMakeMain, preflightSetMode } from './commands'
 import { MAX_SECONDARY_LEAVES } from './constants'
 import { hiddenSecondaryTabIds, logicalTabRole, parkedTabIds, visibleTabIds } from './derive'
 import { validateWorkspace } from './invariants'
@@ -300,18 +300,44 @@ describe('workspace transitions', () => {
     const closed = planCloseTab(current, 'tab-2', null)
     expect(closed.ok).toBe(true)
     expect(closed.state.mainTabId).toBe('tab-1')
+    expect(closed.state.focusedTabId).toBe('tab-3')
     expect(collectLeafTabIds(closed.state.secondaryTree)).toEqual(['tab-3', 'tab-4'])
     expect(closed.state.tabs.map((item) => item.id)).not.toContain('tab-2')
+    expect(validateWorkspace(closed.state).ok).toBe(true)
     const promoted = planCloseTab(current, 'tab-1', null)
     expect(promoted.promotedLeaf).toBe(true)
     expect(promoted.state.mainTabId).toBe('tab-2')
     expect(collectLeafTabIds(promoted.state.secondaryTree)).toEqual(['tab-3', 'tab-4'])
     const only = state({ tabs: [main], mainTabId: main.id, focusedTabId: main.id })
-    expect(planCloseTab(only, 'tab-1', null).needsHomeTab).toBe(true)
+    const last = planCloseTab(only, 'tab-1', null)
+    expect(last.needsHomeTab).toBe(true)
+    expect(last.ok).toBe(false)
+    expect(last.state).toBe(only)
     const home = tab('tab-9', '#/folders')
     const replaced = planCloseTab(only, 'tab-1', home)
+    expect(replaced.ok).toBe(true)
+    expect(replaced.needsHomeTab).toBe(false)
     expect(replaced.state.mainTabId).toBe('tab-9')
     expect(replaced.state.tabs).toEqual([home])
+  })
+
+  it('keeps focus when closing an unfocused secondary and forces main in stacked mode', () => {
+    const current = tiled()
+    const unfocused = planCloseTab(current, 'tab-4', null)
+    expect(unfocused.ok).toBe(true)
+    expect(unfocused.state.mode).toBe('tiled')
+    expect(unfocused.state.focusedTabId).toBe('tab-3')
+    expect(validateWorkspace(unfocused.state).ok).toBe(true)
+    const owned = planCloseTab(current, 'tab-3', null)
+    expect(owned.state.focusedTabId).toBe('tab-4')
+    expect(validateWorkspace(owned.state).ok).toBe(true)
+    const hidden = { ...tiled(), mode: 'stacked' as const, focusedTabId: main.id }
+    const closedHidden = planCloseTab(hidden, 'tab-2', null)
+    expect(closedHidden.ok).toBe(true)
+    expect(closedHidden.state.mode).toBe('stacked')
+    expect(closedHidden.state.focusedTabId).toBe(main.id)
+    expect(collectLeafTabIds(closedHidden.state.secondaryTree)).toEqual(['tab-3', 'tab-4'])
+    expect(validateWorkspace(closedHidden.state).ok).toBe(true)
   })
 
   it('activates a visible secondary by focus and a parked tab by making it main', () => {
@@ -423,5 +449,38 @@ describe('command boundary', () => {
     })
     expect(hidden.ok).toBe(false)
     expect(hidden.state).toBe(current)
+  })
+
+  it('preflights and parks only mounted secondary leaves when hiding split', () => {
+    const current = base()
+    const context = {
+      narrowFallback: false,
+      homeHash: '#/folders',
+      mountedTabIds: [main.id, second.id, 'tab-parked'],
+    }
+    expect(preflightSetMode(current, 'stacked', context)).toEqual({
+      type: 'leave-tabs',
+      tabIds: [second.id],
+      nextHash: '#/folders',
+    })
+    const hidden = applyWorkspaceCommand(current, { type: 'set-mode', mode: 'stacked' }, context)
+    expect(hidden.ok).toBe(true)
+    expect(hidden.preflight).toEqual({ type: 'leave-tabs', tabIds: ['tab-2'], nextHash: '#/folders' })
+    expect(hidden.effects.filter((effect) => effect.type === 'cold-park')).toEqual([
+      { type: 'cold-park', tabId: 'tab-2' },
+    ])
+  })
+
+  it('reports last-tab close as an explicit non-success', () => {
+    const only = state({ tabs: [main], mainTabId: main.id, focusedTabId: main.id })
+    const result = applyWorkspaceCommand(only, { type: 'close-tab', tabId: main.id, homeTab: null }, {
+      narrowFallback: false,
+      homeHash: '#/folders',
+    })
+    expect(result.ok).toBe(false)
+    expect(result.needsHomeTab).toBe(true)
+    expect(result.changed).toBe(false)
+    expect(result.state).toBe(only)
+    expect(result.effects).toEqual([])
   })
 })
