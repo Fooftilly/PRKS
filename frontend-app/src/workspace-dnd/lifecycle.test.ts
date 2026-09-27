@@ -1,5 +1,5 @@
 /**
- * Lifecycle callback tests for the PoC adapter (#234 / CodeRabbit).
+ * Lifecycle callback tests for the workspace-dnd adapter (#256).
  *
  * Captures monitorForElements onDragStart/onDrag/onDrop and exercises
  * start→drag→drop and start→cancel→drop without bypassing adapter callbacks.
@@ -45,7 +45,7 @@ vi.mock('@atlaskit/pragmatic-drag-and-drop/element/set-custom-native-drag-previe
   },
 }))
 
-const { bindPocAdapter } = await import('./adapter')
+const { bindWorkspaceDnd } = await import('./adapter')
 const { createHoverController } = await import('./hover')
 
 function locationAt(clientX: number, clientY: number): DragLocationHistory {
@@ -74,14 +74,14 @@ function sourcePayload(
   element: HTMLElement = document.body,
 ) {
   return {
-    data: { type: 'prks-workspace-poc', source: { kind, tabId } },
+    data: { type: 'prks-workspace-dnd', source: { kind, tabId } },
     element,
     dragHandle: null,
   }
 }
 
-describe('PoC adapter Pragmatic monitor lifecycle', () => {
-  let session: ReturnType<typeof bindPocAdapter> | null = null
+describe('workspace-dnd adapter Pragmatic monitor lifecycle', () => {
+  let session: ReturnType<typeof bindWorkspaceDnd> | null = null
   let onSessionEnd: ReturnType<typeof vi.fn>
   let reorderTab: ReturnType<typeof vi.fn>
   let movePane: ReturnType<typeof vi.fn>
@@ -122,7 +122,7 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
     onSessionEnd = vi.fn()
     reorderTab = vi.fn(() => true)
     movePane = vi.fn(() => true)
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => ({
         mainTabId: 'A',
         secondaryLeafTabIds: ['B'],
@@ -177,7 +177,7 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
       source: src as ElementDragType['payload'],
       location: locationAt(20, 20),
     } as never)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
     expect(document.getElementById('prks-workspace-live')?.textContent).toMatch(/Move tab/)
 
     monitor.onDrop?.({
@@ -190,7 +190,7 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
     expect(onSessionEnd).toHaveBeenCalledTimes(1)
     expect(onSessionEnd).toHaveBeenCalledWith('drop')
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
   })
 
   it('start → cancel → drop is idempotent (single onSessionEnd, no commit)', async () => {
@@ -204,13 +204,13 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
       source: src as ElementDragType['payload'],
       location: locationAt(20, 20),
     } as never)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
 
     session!.cancel()
     expect(onSessionEnd).toHaveBeenCalledTimes(1)
     expect(onSessionEnd).toHaveBeenCalledWith('cancel')
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
 
     // Pragmatic still fires onDrop after cancel — must not double-end or commit.
     monitor.onDrop?.({
@@ -261,7 +261,7 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
       originalTile.setAttribute('data-prks-tab-id', 'B')
       page.appendChild(originalTile)
     }
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => ({
         mainTabId: 'A',
         secondaryLeafTabIds: ['B'],

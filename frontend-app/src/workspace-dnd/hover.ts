@@ -1,5 +1,5 @@
 /**
- * Ephemeral hover / preview DOM for the #234 PoC. Never touches WorkspaceState.
+ * Ephemeral hover / preview DOM for workspace DnD (#256). Never touches WorkspaceState.
  * Cleanup is idempotent; safe after cancel, drop, or unmount.
  */
 
@@ -35,9 +35,9 @@ function bandRect(
 
 export function createHoverController(doc: Document = document): HoverController {
   function clear(): void {
-    doc.getElementById('prks-dnd-poc-insertion-marker')?.remove()
-    doc.getElementById('prks-dnd-poc-edge-overlay')?.remove()
-    doc.getElementById('prks-dnd-poc-empty-overlay')?.remove()
+    doc.getElementById('prks-workspace-dnd-insertion-marker')?.remove()
+    doc.getElementById('prks-workspace-dnd-edge-overlay')?.remove()
+    doc.getElementById('prks-workspace-dnd-empty-overlay')?.remove()
     doc.getElementById('prks-workspace-tabs')?.classList.remove('is-drop-target-park')
   }
 
@@ -46,10 +46,9 @@ export function createHoverController(doc: Document = document): HoverController
     showReorderMarker(list, beforeTabId) {
       clear()
       const marker = doc.createElement('div')
-      marker.id = 'prks-dnd-poc-insertion-marker'
+      marker.id = 'prks-workspace-dnd-insertion-marker'
       marker.className = 'prks-drag-insertion-marker'
       marker.setAttribute('aria-hidden', 'true')
-      marker.dataset.prksDndPoc = '1'
       let ref: Element | null = null
       if (beforeTabId) {
         ref = list.querySelector('.prks-workspace-tab[data-tab-id="' + cssEscape(beforeTabId) + '"]')
@@ -65,10 +64,9 @@ export function createHoverController(doc: Document = document): HoverController
       clear()
       const rect = bandRect(tile.getBoundingClientRect(), zone)
       const overlay = doc.createElement('div')
-      overlay.id = 'prks-dnd-poc-edge-overlay'
+      overlay.id = 'prks-workspace-dnd-edge-overlay'
       overlay.className = 'prks-drag-edge-overlay' + (valid ? '' : ' is-invalid')
       overlay.setAttribute('aria-hidden', 'true')
-      overlay.dataset.prksDndPoc = '1'
       if (!valid) {
         // Non-color cue (DESIGN: state must not rely on color alone). Live region
         // also announces the cap/route reason via announceTargetChange.
@@ -94,10 +92,9 @@ export function createHoverController(doc: Document = document): HoverController
       clear()
       const rect = canvas.getBoundingClientRect()
       const overlay = doc.createElement('div')
-      overlay.id = 'prks-dnd-poc-empty-overlay'
+      overlay.id = 'prks-workspace-dnd-empty-overlay'
       overlay.className = 'prks-drag-empty-overlay'
       overlay.setAttribute('aria-hidden', 'true')
-      overlay.dataset.prksDndPoc = '1'
       overlay.textContent = 'Open in split view'
       overlay.style.left = Math.round(rect.left + rect.width * 0.6) + 'px'
       overlay.style.top = Math.round(rect.top) + 'px'

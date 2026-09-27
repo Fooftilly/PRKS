@@ -1,5 +1,5 @@
 /**
- * Focused browser-level PoC interaction tests (#234).
+ * Focused Pragmatic interaction tests on Vue WorkspaceShell DOM (#256).
  *
  * Uses the official Pragmatic jsdom DragEvent polyfill harness so adapter
  * monitor/draggable/drop-target callbacks run. Not a full production E2E suite.
@@ -10,7 +10,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import hostSource from '../../../frontend/js/workspace-hosts.js?raw'
 import WorkspaceShell from '../workspace-shell/WorkspaceShell.vue'
 import type { ProjectionNode, ProjectionTab, WorkspaceIntents, WorkspaceProjection } from '../workspace-shell/types'
-import { bindPocAdapter, type PocSnapshot } from './adapter'
+import { bindWorkspaceDnd, type WorkspaceDndSnapshot } from './adapter'
 import {
   dragEnd,
   dropOn,
@@ -76,10 +76,10 @@ function intents(): WorkspaceIntents {
   }
 }
 
-describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
+describe('workspace-dnd Pragmatic interaction on Vue WorkspaceShell DOM', () => {
   let wrapper: VueWrapper | null = null
-  let session: ReturnType<typeof bindPocAdapter> | null = null
-  let snap: PocSnapshot
+  let session: ReturnType<typeof bindWorkspaceDnd> | null = null
+  let snap: WorkspaceDndSnapshot
   let value: WorkspaceProjection
 
   beforeEach(() => {
@@ -192,7 +192,7 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
   type TestHandlers = ReturnType<typeof handlers>
 
   function bind(h: TestHandlers) {
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => snap,
       routeSupportsTile: () => true,
       observeDom: false,
@@ -257,7 +257,7 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
     await Promise.resolve()
     expect(h.reorderTab).not.toHaveBeenCalled()
     expect(h.movePane).not.toHaveBeenCalled()
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
   })
 
   it('3b. dragEnd without drop commits nothing (native cancel path)', async () => {
@@ -278,7 +278,7 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
     expect(h.hideLeaf).not.toHaveBeenCalled()
     expect(h.splitLeaf).not.toHaveBeenCalled()
     expect(h.tileTab).not.toHaveBeenCalled()
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
   })
 
@@ -348,12 +348,12 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
     fireDrag('dragover', strip, { clientX: 20, clientY: 20 })
     flushAnimationFrames(1)
     expect(session?.active).toBe(true)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
 
     window.prksWorkspaceCancelActiveDrag?.()
     dragEnd(window)
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
     expect(h.reorderTab).not.toHaveBeenCalled()
 
@@ -365,7 +365,7 @@ describe('PoC Pragmatic interaction on Vue WorkspaceShell DOM', () => {
     source2.remove()
     session!.reconcile()
     expect(session?.active).toBe(false)
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
     dragEnd(window)
   })
 

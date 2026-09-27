@@ -4,7 +4,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import hostSource from '../../../frontend/js/workspace-hosts.js?raw'
 import WorkspaceShell from '../workspace-shell/WorkspaceShell.vue'
 import type { ProjectionNode, ProjectionTab, WorkspaceIntents, WorkspaceProjection } from '../workspace-shell/types'
-import { bindPocAdapter, type PocSnapshot } from './adapter'
+import { bindWorkspaceDnd, type WorkspaceDndSnapshot } from './adapter'
 import { commitDropIntent } from './commit'
 import { createHoverController } from './hover'
 import { resolveDropIntent } from './drop-intent'
@@ -63,9 +63,9 @@ function intents(): WorkspaceIntents {
   }
 }
 
-describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
+describe('workspace-dnd adapter on Vue WorkspaceShell DOM', () => {
   let wrapper: VueWrapper | null = null
-  let session: ReturnType<typeof bindPocAdapter> | null = null
+  let session: ReturnType<typeof bindWorkspaceDnd> | null = null
 
   afterEach(() => {
     session?.destroy()
@@ -94,7 +94,7 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     return value
   }
 
-  function snapshotFrom(value: WorkspaceProjection): PocSnapshot {
+  function snapshotFrom(value: WorkspaceProjection): WorkspaceDndSnapshot {
     return {
       mainTabId: value.state.mainTabId,
       secondaryLeafTabIds: ['B', 'C'],
@@ -111,7 +111,7 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     expect(document.querySelectorAll('.prks-tile-header__grip').length).toBe(2)
 
     const hover = createHoverController()
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => snapshotFrom(value),
       routeSupportsTile: () => true,
       hover,
@@ -126,11 +126,11 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
 
     const list = document.getElementById('prks-workspace-tabs')!
     hover.showReorderMarker(list, 'C')
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeTruthy()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeTruthy()
 
     session.destroy()
     session = null
-    expect(document.getElementById('prks-dnd-poc-insertion-marker')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-insertion-marker')).toBeNull()
     expect(document.body.classList.contains('prks-workspace-dragging')).toBe(false)
   })
 
@@ -138,7 +138,7 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     const value = await mountTiledShell()
     const movePane = vi.fn(() => true)
     const hover = createHoverController()
-    session = bindPocAdapter({
+    session = bindWorkspaceDnd({
       getSnapshot: () => snapshotFrom(value),
       routeSupportsTile: () => true,
       hover,
@@ -152,9 +152,9 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     })
     const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
     hover.showEdgeOverlay(tile, 'left', true)
-    expect(document.getElementById('prks-dnd-poc-edge-overlay')).toBeTruthy()
+    expect(document.getElementById('prks-workspace-dnd-edge-overlay')).toBeTruthy()
     session.cancel()
-    expect(document.getElementById('prks-dnd-poc-edge-overlay')).toBeNull()
+    expect(document.getElementById('prks-workspace-dnd-edge-overlay')).toBeNull()
     expect(movePane).not.toHaveBeenCalled()
   })
 
@@ -163,14 +163,14 @@ describe('pragmatic dnd poc adapter on Vue WorkspaceShell DOM', () => {
     const hover = createHoverController()
     const tile = document.querySelector('.prks-tile[data-prks-tab-id="C"]') as HTMLElement
     hover.showEdgeOverlay(tile, 'left', false, 'cap')
-    const overlay = document.getElementById('prks-dnd-poc-edge-overlay')
+    const overlay = document.getElementById('prks-workspace-dnd-edge-overlay')
     expect(overlay).toBeTruthy()
     expect(overlay?.classList.contains('is-invalid')).toBe(true)
     expect(overlay?.dataset.reason).toBe('cap')
     expect(overlay?.textContent).toContain('Pane limit')
     expect(overlay?.style.borderStyle).toBe('dashed')
     hover.showEdgeOverlay(tile, 'right', false, 'route')
-    expect(document.getElementById('prks-dnd-poc-edge-overlay')?.textContent).toContain('Cannot split')
+    expect(document.getElementById('prks-workspace-dnd-edge-overlay')?.textContent).toContain('Cannot split')
     hover.clear()
   })
 

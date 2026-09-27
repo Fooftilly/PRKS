@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeEdgeZone, computeReorderIndex } from './geometry'
 
-describe('workspace-dnd-poc geometry', () => {
+describe('workspace-dnd geometry', () => {
   const RECT = { left: 100, top: 200, width: 300, height: 150 }
 
   it('treats the center as no-drop', () => {

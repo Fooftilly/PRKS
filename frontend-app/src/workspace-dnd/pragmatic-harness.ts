@@ -1,5 +1,5 @@
 /**
- * Closest supported Pragmatic test harness for jsdom (#234).
+ * Pragmatic test harness for jsdom workspace-dnd tests (#256).
  *
  * Official guidance: https://atlassian.design/components/pragmatic-drag-and-drop/core-package/testing/jest-and-jsdom
  * jsdom lacks DragEvent/DOMRect; polyfills come from
