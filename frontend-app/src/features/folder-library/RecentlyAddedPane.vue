@@ -49,8 +49,11 @@ const collectionHtml = computed(() => {
   if (props.unavailable) {
     return '<p class="prks-inline-message">Recently added is not available offline.</p>'
   }
+  // Match legacy: leave the pane empty while the first fetch is in flight so
+  // E2E `children.length > 0` waits for real cards (or empty/filter states),
+  // not a loading placeholder that resolves the wait early.
   if (props.loading && !props.works) {
-    return '<p class="meta-row" role="status">Loading recently added…</p>'
+    return ''
   }
   if (!filtered.value.length) {
     const q = props.filterQuery.trim()
@@ -97,8 +100,8 @@ onBeforeUnmount(() => {
   releaseWorkThumbResources(collectionEl.value)
 })
 
-// Paint in the same flush as prop updates so an awaited tab switch can resolve
-// after cards exist (debounce(0) raced offline metadata E2E helpers).
+// Paint synchronously so awaited tab switches and fill+150ms filter waits see
+// cards in the same turn (debounce(0) raced offline metadata E2E helpers).
 watch(collectionHtml, () => {
   paintCollection()
 }, { flush: 'post' })

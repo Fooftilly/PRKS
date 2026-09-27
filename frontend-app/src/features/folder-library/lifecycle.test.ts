@@ -157,6 +157,36 @@ describe('Folder Library preview lifecycle (#170)', () => {
     expect(initLazy).toHaveBeenCalled()
   })
 
+  it('keeps the pane empty while the first Recently Added fetch is in flight', async () => {
+    window.prksReleaseWorkThumbPreview = () => {}
+    window.prksReleaseLazyWorkThumbs = () => {}
+    window.prksInitLazyWorkThumbs = () => {}
+    window.prksWorkCardHtml = () => '<article class="work-card" data-work-id="W1">card</article>'
+    window.prksWorkBrowseCollectionClass = () => 'card-grid'
+
+    const wrapper = mount(RecentlyAddedPane, {
+      props: {
+        folders: [],
+        filterQuery: '',
+        works: null,
+        offlineCached: false,
+        unavailable: false,
+        loading: true,
+        generation: 1,
+        overlayRevision: 0,
+      },
+      global: {
+        provide: {
+          [folderLibraryIntentsKey as symbol]: noopIntents,
+        },
+      },
+    })
+    await nextTick()
+    const pane = wrapper.find('#prks-folder-library-recently-added')
+    expect(pane.element.children.length).toBe(0)
+    expect(pane.text()).toBe('')
+  })
+
   it('repaints when overlayRevision bumps after metadata edits', async () => {
     const releasePreview = vi.fn()
     const initLazy = vi.fn()
