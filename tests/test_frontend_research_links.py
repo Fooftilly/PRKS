@@ -1,5 +1,6 @@
 """Structural regressions for research-note semantic links and Research UI."""
 import os
+import subprocess
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,8 +12,17 @@ _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _LINKS = os.path.join(_FRONTEND, "js", "research-links.js")
 _ARGS = os.path.join(_FRONTEND, "js", "components", "arguments.js")
 _CONCEPTS = os.path.join(_FRONTEND, "js", "components", "concepts.js")
+_CONCEPTS_VUE_INDEX = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptsIndexRoute.vue"
+)
+_CONCEPTS_VUE_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptDetailRoute.vue"
+)
 _POSITIONS = os.path.join(_FRONTEND, "js", "components", "positions.js")
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
+_CREATE_FLOW_SELFTEST = os.path.join(
+    _PROJECT_DIR, "tests", "browser", "run_concept_create_flow_selftest.js"
+)
 
 
 def _read(path: str) -> str:
@@ -109,13 +119,16 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_indexes_use_dense_rows(self):
         concepts = _read(_CONCEPTS)
+        concepts_row = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptRow.vue")
+        )
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
         self.assertIn("prks-research-row", concepts)
         self.assertIn("prksResearchIndexRowHtml", concepts)
-        self.assertIn("Top-level concept", concepts)
-        self.assertNotIn("No parent", concepts)
-        self.assertNotIn("Parents:", concepts.split("function conceptRowHtml", 1)[1].split("function matchConcept", 1)[0])
+        self.assertIn("Top-level concept", concepts_row)
+        self.assertNotIn("No parent", concepts_row)
+        self.assertNotIn("Parents:", concepts_row)
         self.assertIn("prks-research-row", positions)
         self.assertIn("prks-research-row", args)
         self.assertIn("prks-tab", args)
@@ -123,10 +136,13 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_index_search_is_shared_and_client_only(self):
         concepts = _read(_CONCEPTS)
+        concepts_match = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "match.ts")
+        )
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
-        # One shared helper, reused by the other two index modules -- not three
-        # unrelated search implementations.
+        # Shared helper remains for Positions/Arguments; Concepts Vue owns its own
+        # local filter with the same match semantics.
         self.assertIn("function bindResearchIndexSearch", concepts)
         self.assertIn("function normalizeSearchQuery", concepts)
         self.assertIn("prksBindResearchIndexSearch: bindResearchIndexSearch", concepts)
@@ -144,26 +160,29 @@ class FrontendResearchLinksTests(unittest.TestCase):
         # Argument kind filter stays a real route/query param; search only narrows within it.
         self.assertIn("k === 'all' ? '#/arguments' : '#/arguments?kind=", args)
         self.assertIn("matchArgument", args)
-        self.assertIn("function matchConcept", concepts)
+        self.assertIn("export function matchConceptIndexItem", concepts_match)
+        self.assertNotIn("fetch", concepts_match)
         self.assertIn("function matchPosition", positions)
 
     def test_research_index_empty_states_are_distinct(self):
         concepts = _read(_CONCEPTS)
+        concepts_vue = _read(_CONCEPTS_VUE_INDEX)
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
-        self.assertIn("function conceptsEmptyDataHtml", concepts)
         self.assertIn("function researchIndexSearchEmptyHtml", concepts)
         self.assertIn("data-research-search-clear", concepts)
-        self.assertIn("prks-concept-new-empty", concepts)
+        self.assertIn("prks-concept-new-empty", concepts_vue)
+        self.assertIn("No Concepts yet.", concepts_vue)
+        self.assertIn("data-research-search-clear", concepts_vue)
         self.assertIn("prks-position-new-empty", positions)
         self.assertIn("prks-argument-new-empty", args)
         self.assertIn("prks-stance-new-empty", args)
-        self.assertIn("No Concepts yet.", concepts)
         self.assertIn("No Positions yet.", positions)
         self.assertIn("No Arguments or Stances yet.", args)
 
     def test_research_entity_sections_use_shared_head_pattern(self):
         concepts = _read(_CONCEPTS)
+        concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
         positions = _read(_POSITIONS)
         args = _read(_ARGS)
         self.assertIn("function researchSectionHeadHtml", concepts)
@@ -171,7 +190,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("prksResearchSectionHeadHtml: researchSectionHeadHtml", concepts)
         self.assertIn("root.prksResearchSectionHeadHtml", positions)
         self.assertIn("root.prksResearchSectionHeadHtml", args)
-        # Concept detail: canonical section set, each a real .research-entity__section.
+        # Concept detail (Vue): canonical section set, each a real .research-entity__section.
         for heading in (
             "Definition",
             "Search keys / aliases",
@@ -179,17 +198,16 @@ class FrontendResearchLinksTests(unittest.TestCase):
             "Subconcepts",
             "Mentioned in research notes",
         ):
-            self.assertIn(heading, concepts)
-        self.assertIn("research-entity__chips", concepts)
-        self.assertIn("research-entity__alias-chip", concepts)
-        self.assertIn("research-entity__mentions", concepts)
-        self.assertIn("research-entity__mention-title", concepts)
-        # Parent/child rows are canonical research rows, not raw <li> anchors.
-        detail = concepts.split("function renderConceptDetail", 1)[1].split(
-            "async function renameConcept", 1
-        )[0]
-        self.assertNotIn("<li><a href=", detail)
-        self.assertIn("researchIndexRowHtml({", detail)
+            self.assertIn(heading, concepts_detail)
+        self.assertIn("research-entity__chips", concepts_detail)
+        self.assertIn("research-entity__alias-chip", concepts_detail)
+        self.assertIn("research-entity__mentions", concepts_detail)
+        self.assertIn("research-entity__mention-title", concepts_detail)
+        # Parent/child rows and section heads go through the shared helpers
+        # (DESIGN.md), not hand-built Vue markup that can drift from Positions.
+        self.assertNotIn("<li><a href=", concepts_detail)
+        self.assertIn("prksResearchIndexRowHtml", concepts_detail)
+        self.assertIn("prksResearchSectionHeadHtml", concepts_detail)
         # Position detail uses the same research-entity shell.
         self.assertIn("research-entity", positions)
         self.assertIn("No description yet.", positions)
@@ -204,13 +222,25 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("count: responseList.length", args)
         self.assertIn("count: mentionList.length", args)
 
+
+    def test_concept_create_flow_owner_scoping_selftest(self):
+        proc = subprocess.run(
+            ["node", _CREATE_FLOW_SELFTEST],
+            cwd=_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("concept create-flow selftest ok", proc.stdout)
+
     def test_destructive_actions_are_visually_subordinate(self):
-        concepts = _read(_CONCEPTS)
+        concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
         args = _read(_ARGS)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
         self.assertIn(".prks-btn--quiet-danger", css)
-        self.assertIn("prks-concept-delete", concepts)
-        self.assertIn("prks-btn--quiet-danger", concepts)
+        self.assertIn("prks-concept-delete", concepts_detail)
+        self.assertIn("prks-btn--quiet-danger", concepts_detail)
         self.assertIn("prks-arg-delete", args)
         self.assertIn("prks-btn--quiet-danger", args)
         # New response stays a prominent, always-visible primary action -- not moved

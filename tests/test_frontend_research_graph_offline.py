@@ -23,7 +23,13 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         self.assertIn('PRKS_RESEARCH_GRAPH_MAX_EDGES = %d;' % MAX_GRAPH_EDGES, app)
 
     def test_exclusions_and_navigation(self):
-        for name in ('concepts', 'positions', 'arguments', 'people'):
+        concepts_vue = (ROOT / 'frontend-app/src/features/concepts/ConceptsIndexRoute.vue').read_text()
+        concepts_detail = (ROOT / 'frontend-app/src/features/concepts/ConceptDetailRoute.vue').read_text()
+        for source in (concepts_vue, concepts_detail):
+            self.assertNotIn('_ONLINE_ONLY_ROLE', source)
+            self.assertNotIn('Graph requires a connection', source)
+            self.assertIn('MUTATION_ROLE', source)
+        for name in ('positions', 'arguments', 'people'):
             source = (ROOT / ('frontend/js/components/%s.js' % name)).read_text()
             self.assertNotIn('_ONLINE_ONLY_ROLE', source)
             self.assertNotIn('Graph requires a connection', source)

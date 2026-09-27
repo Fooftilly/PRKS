@@ -170,6 +170,31 @@ describe('route surface lifecycle', () => {
     expect(el.querySelector('[data-probe="next"]')).not.toBeNull()
   })
 
+  it('skips beginRoute cleanup when armBeginRouteCleanup is false', () => {
+    const pane = cleanupOwner()
+    const el = host()
+    const Comp = probe('kept')
+    expect(
+      presentRouteSurface({
+        owner: pane,
+        host: el,
+        route: {
+          name: 'probe',
+          canonicalHash: '#/kept',
+          ownsMainShell: false,
+          generation: 1,
+        },
+        armBeginRouteCleanup: false,
+        render: () => h(Comp),
+      }),
+    ).toBe(true)
+    expect(el.querySelector('[data-probe="kept"]')).not.toBeNull()
+    pane.beginRoute()
+    expect(el.querySelector('[data-probe="kept"]')).not.toBeNull()
+    dismissRouteSurface(pane)
+    expect(el.querySelector('[data-probe]')).toBeNull()
+  })
+
   it('unmounts only the owner whose cleanup runs', () => {
     const unmounted: string[] = []
     const main = cleanupOwner()

@@ -177,6 +177,58 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         body = app[at: app.index('\n}', at)]
         self.assertIn('prksRefreshPendingConceptNames', body)
 
+    def test_concepts_route_reuses_host_on_in_place_refresh(self):
+        """Same-owner Concepts refresh must not wipe the Vue host (P2 on #260)."""
+        app = (FRONTEND / 'app.js').read_text()
+        self.assertIn('sameConceptsWorkspace', app)
+        self.assertIn('__prksRetainConceptsSurface', app)
+        self.assertIn('!sameFolderWorkspace && !sameConceptsWorkspace', app)
+        present = app[app.index('function prksPresentVueConcepts'):
+                      app.index('function prksRenderRouteLoading')]
+        self.assertIn(':scope > [data-prks-vue-route-host]', present)
+        # Fresh mount still clears; reuse must not always wipe.
+        self.assertIn("contentDiv.innerHTML = '';", present)
+        self.assertLess(present.index('querySelector'), present.index("contentDiv.innerHTML = '';"))
+        concepts_case = app[app.index("case 'concepts': {"):
+                            app.index("case 'concept-detail': {")]
+        self.assertIn('skipPageEnter: sameConceptsWorkspace', concepts_case)
+
+    def test_concepts_unavailable_outcomes_clear_stale_offline_banner(self):
+        """Retained Concepts host: unavailable/not-found must clear provenance (P2 on #260)."""
+        app = (FRONTEND / 'app.js').read_text()
+        concepts_case = app[app.index("case 'concepts': {"):
+                            app.index("case 'concept-detail': {")]
+        detail_case = app[app.index("case 'concept-detail': {"):
+                          app.index("case 'positions': {")]
+        # Ready paths still prepend from the offline read.
+        self.assertIn('prksOfflinePrependBanner(contentDiv, offlineConcepts)', concepts_case)
+        self.assertIn('prksOfflinePrependBanner(contentDiv, offlineConcept)', detail_case)
+        # Outcomes that do not prepend a cached banner must still clear.
+        self.assertEqual(
+            concepts_case.count('prksOfflinePrependBanner(contentDiv, null)'),
+            1,
+        )
+        self.assertEqual(
+            detail_case.count('prksOfflinePrependBanner(contentDiv, null)'),
+            2,
+        )
+        # Each clear sits on the unavailable / not-found present path.
+        unavail_idx = concepts_case.index("availability: 'unavailable'")
+        self.assertIn(
+            'prksOfflinePrependBanner(contentDiv, null)',
+            concepts_case[unavail_idx:unavail_idx + 400],
+        )
+        detail_unavail = detail_case.index("availability: 'unavailable'")
+        self.assertIn(
+            'prksOfflinePrependBanner(contentDiv, null)',
+            detail_case[detail_unavail:detail_unavail + 400],
+        )
+        detail_missing = detail_case.index("availability: 'not-found'")
+        self.assertIn(
+            'prksOfflinePrependBanner(contentDiv, null)',
+            detail_case[detail_missing:detail_missing + 400],
+        )
+
     def test_a_graph_node_is_patched_never_invented(self):
         """Graph is a projection. A Concept the snapshot does not contain is one
         the server did not put there."""

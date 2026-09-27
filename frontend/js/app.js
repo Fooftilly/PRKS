@@ -2837,6 +2837,45 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Concepts index or detail surface in this pane.
+ * `detail` must already be the authoritative effective Concept projection.
+ * Same-owner Concepts refresh reuses the existing host so local index state
+ * (searchQuery) survives an in-place projection update.
+ */
+function prksPresentVueConcepts(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const feature = detail.feature === 'concept-detail' ? 'concept-detail' : 'concepts';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        concept: detail.concept,
+        conceptId: detail.conceptId,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'concept-detail' && typeof window.prksVuePresentConceptDetail === 'function') {
+        window.prksVuePresentConceptDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'concepts' && typeof window.prksVuePresentConceptsIndex === 'function') {
+        window.prksVuePresentConceptsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3086,7 +3125,23 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonGroup = ctx.getEntity && ctx.getEntity('personGroup');
     const previousPersonGroupId = previousPersonGroup ? String(previousPersonGroup.id) : '';
     const previousPersonGroupMembersEditing = !!(ctx.ui && ctx.ui.personGroupMembersEditing);
+    /* Concepts→Concepts (index or detail) in the same mounted TabContext keeps
+     * the Vue host mounted so local search/filter state survives an accepted
+     * in-place refresh. Flag the owner before beginRoute: TabContext cleanups
+     * run there, and Concepts' retain-aware cleanup must see the flag. */
+    const sameConceptsWorkspace = !!(
+        (route.name === 'concepts' || route.name === 'concept-detail') &&
+        contentDiv.querySelector(
+            '[data-prks-concepts-index-view], [data-prks-concept-detail-view]'
+        )
+    );
+    if (sameConceptsWorkspace) {
+        ctx.__prksRetainConceptsSurface = true;
+    }
     const generation = ctx.beginRoute(route);
+    if (sameConceptsWorkspace) {
+        ctx.__prksRetainConceptsSurface = false;
+    }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
     const stale = function () {
@@ -3118,7 +3173,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
     // Drop lazy-thumb observations for this pane before the route paint replaces
     // its DOM — otherwise never-intersected cards stay retained by the singleton
     // IntersectionObserver after the subtree is detached.
-    if (!sameFolderWorkspace && typeof window.prksReleaseLazyWorkThumbs === 'function') {
+    if (
+        !sameFolderWorkspace &&
+        !sameConceptsWorkspace &&
+        typeof window.prksReleaseLazyWorkThumbs === 'function'
+    ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
     }
     // Keyboard/hover quick preview is body-mounted but keyed to a thumb in this
@@ -3130,12 +3189,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
+        if (typeof window.prksVueDismissConcepts === 'function') {
+            window.prksVueDismissConcepts(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
-    } else {
+    } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
         // aria-busy alone does not block activation. Retained Delete (in main),
         // New Folder (tree head), and the owned right panel must not mutate the
@@ -3144,6 +3206,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
+    } else {
+        // Concepts in-place refresh: keep the Vue host; mark busy until paint.
+        contentDiv.setAttribute('aria-busy', 'true');
     }
 
     let titleOpts = {};
@@ -3914,14 +3979,30 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     cachedConcepts || [], conceptOps);
                 if (stale()) return;
                 if (!cachedConcepts && !(conceptItems && conceptItems.length)) {
-                    if (typeof renderConceptsIndexUnavailable === 'function') renderConceptsIndexUnavailable(contentDiv);
-                    else prksOfflineRenderUnavailable(contentDiv, 'Concepts not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Concepts not available offline' };
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concepts',
+                        availability: 'unavailable',
+                        items: [],
+                        generation: generation,
+                    });
+                    /* Retained Concepts host keeps contentDiv; clear any prior
+                     * cached-provenance banner so it cannot describe the previous route. */
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Concepts not available offline',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                     break;
                 }
-                if (typeof renderConceptsIndex === 'function') renderConceptsIndex(ctx, conceptItems, contentDiv);
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concepts</h2></div>';
+                prksPresentVueConcepts(ctx, contentDiv, {
+                    feature: 'concepts',
+                    availability: 'ready',
+                    items: conceptItems,
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineConcepts);
+                titleOpts = { skipPageEnter: sameConceptsWorkspace };
                 break;
             }
             case 'concept-detail': {
@@ -3962,19 +4043,38 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     resolvedConcept.unavailable = !pendingConcept;
                 }
                 if (resolvedConcept.unavailable) {
-                    prksOfflineRenderUnavailable(contentDiv, 'Concept not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Concept not available offline' };
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concept-detail',
+                        availability: 'unavailable',
+                        conceptId: conceptId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Concept not available offline',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                     break;
                 }
                 const item = resolvedConcept.concept;
                 if (!item) {
-                    if (typeof renderConceptNotFound === 'function') renderConceptNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Concept not found.</h2></div>';
-                    titleOpts = { notFound: true, notFoundTitle: 'Concept not found' };
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concept-detail',
+                        availability: 'not-found',
+                        conceptId: conceptId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Concept not found',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                 } else {
                     /* Backlink rows name a Work's Title, so a pending rename
                      * has to reach them. The overlay is applied here, so the
-                     * component stays ignorant of durable operations and the
+                     * Vue surface stays ignorant of durable operations and the
                      * cached Concept is never rewritten. */
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
@@ -3990,9 +4090,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     const effective = typeof prksEffectiveWorkReferences === 'function'
                         ? prksEffectiveWorkReferences('concept', overlaid) : overlaid;
                     ctx.setEntity('concept', effective);
-                    if (typeof renderConceptDetail === 'function') renderConceptDetail(ctx, effective, contentDiv);
+                    prksPresentVueConcepts(ctx, contentDiv, {
+                        feature: 'concept-detail',
+                        availability: 'ready',
+                        concept: effective,
+                        conceptId: conceptId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, offlineConcept);
-                    titleOpts = { entityTitle: effective.name || 'Concept' };
+                    titleOpts = {
+                        entityTitle: effective.name || 'Concept',
+                        skipPageEnter: sameConceptsWorkspace,
+                    };
                 }
                 break;
             }

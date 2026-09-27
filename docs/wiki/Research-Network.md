@@ -67,6 +67,6 @@ Relevant code is primarily in:
 - `backend/concept_sync.py`, `position_sync.py`, `argument_sync.py`;
 - `backend/research_graph.py`, `research_network.py`, `research_index.py`;
 - `frontend/js/concept-state.js`, `position-state.js`, `argument-state.js`;
-- `frontend/js/components/concepts.js`, `positions.js`, `arguments.js`, `research-graph.js`.
+- `frontend-app/src/features/concepts/` (Vue Concepts index/detail), `frontend/js/components/concepts.js` (shared research-index helpers + create flow), `positions.js`, `arguments.js`, `research-graph.js`.
 
 Use those modules plus [DESIGN.md](https://github.com/Fooftilly/PRKS/blob/master/DESIGN.md) when changing behavior; this page is an orientation map.
