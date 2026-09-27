@@ -373,6 +373,41 @@ class GateRepoTests(unittest.TestCase):
         self.assertIn("'works' is missing from _CURRENT_TABLE_PKS", findings[0].message)
         self.assertEqual(self.codes({"WORKS": "fixture"}), ["SCHEMA-GATE-005"])
 
+    def test_schema_qualified_insert_target_is_checked(self):
+        self.write(
+            {"backend/q.py": "SQL = 'INSERT INTO main.works (id) VALUES (?) ON CONFLICT(title) DO NOTHING'\n"}
+        )
+        self.assertEqual(self.codes({"works": "fixture"}), ["SCHEMA-GATE-005"])
+
+    def test_expression_conflict_target_is_reported_not_dropped(self):
+        self.write(
+            {
+                "backend/e.py": (
+                    "SQL = 'INSERT INTO works (id) VALUES (?) "
+                    "ON CONFLICT(lower(title)) DO NOTHING'\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-007"])
+
+    def test_unparseable_backend_source_fails_closed(self):
+        self.write({"backend/broken.py": "def f(:\n"})
+        with self.assertRaises(gate.DiscoveryError) as ctx:
+            self.findings()
+        self.assertIn("backend/broken.py:1", str(ctx.exception))
+
+    def test_schema_load_cannot_attach_files(self):
+        target = self.repo / "attached.db"
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA
+                + f"ATTACH DATABASE '{target}' AS x;\nCREATE TABLE x.t (a);\n"
+            }
+        )
+        with self.assertRaises(gate.DiscoveryError):
+            self.findings()
+        self.assertFalse(target.exists())
+
     def test_cli_exit_codes(self):
         def run(base: str) -> int:
             with mock.patch.object(gate, "PK_REGISTRY_ALLOWLIST", {}), \

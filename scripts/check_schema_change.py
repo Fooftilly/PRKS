@@ -88,7 +88,15 @@ sanitize_git_revision = _git_rev.sanitize_git_revision
 read_file_at_revision = _git_rev.read_file_at_revision
 
 _INSERT_RE = re.compile(
-    r"\bINSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO\s+[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"`\]]?",
+    r"\bINSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO\s+"
+    r"(?:[\"`\[]?[A-Za-z_][A-Za-z0-9_]*[\"`\]]?\s*\.\s*)?"  # optional schema. prefix
+    r"[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"`\]]?",
+    re.IGNORECASE,
+)
+# Any ON CONFLICT that is not a constraint resolution clause; inside an INSERT
+# it is an upsert even when _UPSERT_RE cannot parse its target.
+_ANY_UPSERT_RE = re.compile(
+    r"\bON\s+CONFLICT\b(?!\s*(?:ROLLBACK|ABORT|FAIL|IGNORE|REPLACE)\b)",
     re.IGNORECASE,
 )
 # Upsert clause only (``DO`` required): ``UNIQUE ... ON CONFLICT REPLACE``
@@ -276,6 +284,13 @@ def parse_migrations_module(source: str, where: str) -> MigrationInfo:
 def schema_table_pks(schema_sql: str) -> dict[str, tuple[str, ...]]:
     """Primary key of every table the canonical schema creates (fresh DB)."""
     conn = sqlite3.connect(":memory:")
+    # The schema text comes from the PR under test: allow DDL into this private
+    # in-memory database only, never ATTACH (which could write runner files).
+    conn.set_authorizer(
+        lambda action, *_: sqlite3.SQLITE_DENY
+        if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH)
+        else sqlite3.SQLITE_OK
+    )
     try:
         try:
             conn.executescript(schema_sql)
@@ -350,8 +365,11 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
     """
     try:
         tree = ast.parse(source)
-    except SyntaxError:
-        return []
+    except SyntaxError as exc:
+        raise DiscoveryError(
+            f"{relpath}:{exc.lineno}: cannot parse backend source ({exc.msg}); "
+            "upsert sites cannot be checked"
+        ) from exc
     covered = _docstring_ids(tree)
     sites: list[UpsertSite] = []
     for node in ast.walk(tree):
@@ -366,6 +384,9 @@ def iter_upsert_sites(source: str, relpath: str) -> list[UpsertSite]:
         for stmt in text.split(";"):
             upsert = _UPSERT_RE.search(stmt)
             if upsert is None:
+                if _INSERT_RE.search(stmt) and _ANY_UPSERT_RE.search(stmt):
+                    # e.g. an expression target ON CONFLICT(lower(x)): report, never drop.
+                    sites.append(UpsertSite(relpath, getattr(node, "lineno", 1), None, None))
                 continue
             insert = _INSERT_RE.search(stmt, 0, upsert.start())
             # SQLite identifiers are case-insensitive: compare lower-cased.
@@ -547,10 +568,10 @@ def _unresolved_upsert_finding(site: UpsertSite) -> Finding:
         "SCHEMA-GATE-007",
         site.path,
         site.line,
-        "ON CONFLICT upsert whose INSERT INTO table cannot be resolved statically",
+        "ON CONFLICT upsert whose INSERT INTO table or conflict target cannot be resolved statically",
         (
-            "keep INSERT INTO <literal table> and its ON CONFLICT clause in one "
-            "string, concatenation or f-string so the PK registry check can see it"
+            "keep INSERT INTO <literal table> and an ON CONFLICT(<plain columns>) clause in "
+            "one string, concatenation or f-string so the PK registry check can see it"
         ),
     )
 
