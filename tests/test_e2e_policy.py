@@ -89,44 +89,33 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(feats, ("graph",))
         self.assertFalse(skip)
 
-    def test_vue_frontend_maps_to_smoke(self):
+    def test_vue_frontend_fails_closed_in_ci(self):
         for path in (
             "frontend-app/vite.config.ts",
             "frontend-app/scripts/build.mjs",
-        ):
-            with self.subTest(path=path):
-                rule, feats, skip, _note = policy.match_affected_path(path)
-                self.assertEqual(rule, "vue-frontend")
-                self.assertEqual(feats, ("smoke",))
-                self.assertFalse(skip)
-                plan = policy.plan_ci_e2e([path])
-                self.assertEqual(plan["mode"], "affected")
-                self.assertEqual(plan["features"], ["smoke"])
-
-    def test_vue_bundle_and_dependency_inputs_include_settings(self):
-        for path in (
             "frontend-app/package.json",
             "frontend-app/package-lock.json",
+            "frontend-app/src/App.vue",
+            "frontend-app/src/main.ts",
+            "frontend-app/src/mount.ts",
             "frontend/vue/prks-vue.js",
             "frontend/vue/BUILD-MANIFEST.json",
         ):
             with self.subTest(path=path):
                 rule, feats, skip, _note = policy.match_affected_path(path)
                 self.assertFalse(skip)
-                self.assertEqual(rule, "vue-frontend+settings-performance-diagnostics")
-                self.assertEqual(feats, ("smoke", "settings"))
+                self.assertEqual(rule, "vue-frontend")
+                self.assertNotIn("settings", feats)
                 plan = policy.plan_ci_e2e([path])
-                self.assertEqual(plan["mode"], "affected")
-                self.assertEqual(plan["features"], ["smoke", "settings"])
+                self.assertEqual(plan["mode"], "full")
+                self.assertTrue(plan["run"])
 
     def test_performance_diagnostics_vue_maps_to_settings(self):
         paths = (
             "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.vue",
             "frontend-app/src/features/performance-diagnostics/usePerformanceDiagnostics.ts",
             "frontend-app/src/api/performance-diagnostics.ts",
-            "frontend-app/src/api/http.ts",
-            "frontend-app/src/query/client.ts",
-            "frontend-app/src/query/retry.ts",
+            "frontend-app/src/api/performance-diagnostics.test.ts",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -139,18 +128,25 @@ class AffectedMappingTests(unittest.TestCase):
                 # Affected CI always unions smoke. The path rule itself does not.
                 self.assertEqual(plan["features"], ["settings", "smoke"])
 
-    def test_vue_shell_files_that_mount_diagnostics_include_settings(self):
+    def test_shared_vue_transport_and_query_fail_closed(self):
         for path in (
-            "frontend-app/src/App.vue",
-            "frontend-app/src/main.ts",
-            "frontend-app/src/mount.ts",
-            "frontend-app/src/mount.test.ts",
+            "frontend-app/src/api/http.ts",
+            "frontend-app/src/api/http.test.ts",
+            "frontend-app/src/query/client.ts",
+            "frontend-app/src/query/retry.ts",
+            "frontend-app/src/query/client.test.ts",
         ):
             with self.subTest(path=path):
                 rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "unmapped-production")
                 self.assertFalse(skip)
-                self.assertEqual(rule, "vue-frontend+settings-performance-diagnostics")
-                self.assertEqual(feats, ("smoke", "settings"))
+                self.assertNotIn("settings", feats)
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertTrue(plan["run"])
+        for rule in policy.AFFECTED_RULES:
+            for pattern in rule["paths"]:
+                self.assertNotEqual(pattern, "frontend-app/src/**")
 
     def test_unmapped_vue_screen_is_full_ci_even_with_bundle(self):
         screen = "frontend-app/src/components/Works.vue"

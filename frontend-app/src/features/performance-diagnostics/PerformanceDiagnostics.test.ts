@@ -58,6 +58,80 @@ describe('PerformanceDiagnostics', () => {
     wrapper.unmount()
   })
 
+  it('reports Reset reachability through the mutation cache', async () => {
+    const success = vi.fn()
+    const failure = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
+    window.prksResetRequestCoordinatorDiagnostics = vi.fn()
+    let postMode: 'network' | 'abort' | 'http' | 'domain' | 'ok' = 'network'
+    const posts: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET'
+        if (method === 'POST') {
+          posts.push(String(url))
+          if (postMode === 'network') throw new TypeError('Failed to fetch')
+          if (postMode === 'abort') throw new DOMException('Aborted', 'AbortError')
+          if (postMode === 'http') {
+            return new Response(JSON.stringify({ error: 'no', code: 'invalid_request' }), { status: 400 })
+          }
+          if (postMode === 'domain') return new Response(JSON.stringify({ status: 'nope' }), { status: 200 })
+          return new Response(JSON.stringify({ status: 'reset' }), { status: 200 })
+        }
+        return new Response(JSON.stringify(performanceSnapshotFixture()), { status: 200 })
+      }),
+    )
+    const { wrapper } = mountDiagnostics()
+    activatePerformanceDiagnostics()
+    await flushPromises()
+    success.mockClear()
+    failure.mockClear()
+
+    await wrapper.get('#prks-perf-reset-btn').trigger('click')
+    await flushPromises()
+    expect(posts).toEqual(['/api/diagnostics/performance/reset'])
+    expect(failure).toHaveBeenCalledTimes(1)
+    expect(success).not.toHaveBeenCalled()
+    expect(wrapper.get('#prks-perf-status').text()).toBe('Could not reset measurements.')
+    expect(window.prksResetRequestCoordinatorDiagnostics).not.toHaveBeenCalled()
+
+    postMode = 'abort'
+    failure.mockClear()
+    await wrapper.get('#prks-perf-reset-btn').trigger('click')
+    await flushPromises()
+    expect(posts).toHaveLength(2)
+    expect(failure).not.toHaveBeenCalled()
+    expect(success).not.toHaveBeenCalled()
+
+    postMode = 'http'
+    await wrapper.get('#prks-perf-reset-btn').trigger('click')
+    await flushPromises()
+    expect(failure).not.toHaveBeenCalled()
+    expect(success).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('#prks-perf-status').text()).toBe('no')
+
+    postMode = 'domain'
+    success.mockClear()
+    await wrapper.get('#prks-perf-reset-btn').trigger('click')
+    await flushPromises()
+    expect(failure).not.toHaveBeenCalled()
+    expect(success).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('#prks-perf-status').text()).toBe('Could not reset performance diagnostics.')
+
+    postMode = 'ok'
+    success.mockClear()
+    await wrapper.get('#prks-perf-reset-btn').trigger('click')
+    await flushPromises()
+    expect(posts).toHaveLength(5)
+    expect(failure).not.toHaveBeenCalled()
+    expect(success).toHaveBeenCalledTimes(2)
+    expect(window.prksResetRequestCoordinatorDiagnostics).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('#prks-perf-status').text()).toBe('Measurements reset.')
+    wrapper.unmount()
+  })
+
   it('invalidates on Refresh and again after Reset', async () => {
     const calls = installFetch()
     window.prksResetRequestCoordinatorDiagnostics = vi.fn()

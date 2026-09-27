@@ -1,5 +1,5 @@
 import { ref, watch } from 'vue'
-import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import {
   getPerformanceDiagnostics,
   performanceDiagnosticsErrorMessage,
@@ -50,6 +50,15 @@ export function usePerformanceDiagnostics() {
     await queryClient.invalidateQueries({ queryKey: performanceDiagnosticsQueryKey })
   }
 
+  const resetMutation = useMutation({
+    retry: 0,
+    mutationFn: resetPerformanceDiagnostics,
+    onSuccess: async () => {
+      resetClientRequestCoordinator()
+      await reloadFromServer()
+    },
+  })
+
   function applyLoadError(error: unknown, fallback: string): void {
     if (isAbortError(error)) return
     statusText.value = performanceDiagnosticsErrorMessage(error, fallback)
@@ -69,9 +78,7 @@ export function usePerformanceDiagnostics() {
   async function resetMeasurements(): Promise<void> {
     statusText.value = ''
     try {
-      await resetPerformanceDiagnostics()
-      resetClientRequestCoordinator()
-      await reloadFromServer()
+      await resetMutation.mutateAsync()
     } catch (error) {
       applyLoadError(error, RESET_ERROR)
       return

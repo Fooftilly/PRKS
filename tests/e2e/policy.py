@@ -383,11 +383,11 @@ AFFECTED_RULES = (
         "ci_mode": "full",
         "note": "Shared core → smoke + shell/tabs/offline/sync/modals (CI: full)",
     },
-    # Vue foundation only. index.html/sw.js stay on shared-frontend-core.
-    # New screens under frontend-app/src/ are not listed, so they stay
-    # unmapped production (local smoke, CI full) until a feature rule names them.
-    # package.json, the lockfile, and frontend/vue/** also match
-    # settings-performance-diagnostics: the committed bundle ships that surface.
+    # Shared Vue bootstrap, dependency pins, and the committed bundle.
+    # CI fails closed to full until a deliberate shared-Vue-core mapping
+    # exists. Feature slices must not claim these paths. New screens under
+    # frontend-app/src/ stay unmapped (CI full) until a feature rule names them.
+    # index.html/sw.js stay on shared-frontend-core.
     {
         "name": "vue-frontend",
         "paths": (
@@ -405,7 +405,8 @@ AFFECTED_RULES = (
             "frontend/vue/**",
         ),
         "features": ("smoke",),
-        "note": "Vue bootstrap and committed bundle → smoke. New src screens are unmapped (CI: full).",
+        "ci_mode": "full",
+        "note": "Shared Vue bootstrap and committed bundle (CI: full). Not a feature owner.",
     },
     {
         "name": "graph",
@@ -585,27 +586,19 @@ AFFECTED_RULES = (
         ),
         "features": ("settings",),
     },
-    # Performance diagnostics Vue slice. Explicit paths only — do not map
-    # frontend-app/src/** to smoke or to settings.
+    # Performance diagnostics feature files only. Shared Vue transport
+    # (api/http.ts), query/**, bootstrap, dependency pins, and frontend/vue/**
+    # are not owned here — they stay fail-closed (CI full).
+    # Do not map frontend-app/src/** to smoke or to settings.
     {
         "name": "settings-performance-diagnostics",
         "paths": (
-            "frontend-app/src/App.vue",
-            "frontend-app/src/main.ts",
-            "frontend-app/src/mount.ts",
-            "frontend-app/src/mount.test.ts",
             "frontend-app/src/features/performance-diagnostics/**",
-            "frontend-app/src/api/http.ts",
-            "frontend-app/src/api/http.test.ts",
             "frontend-app/src/api/performance-diagnostics.ts",
             "frontend-app/src/api/performance-diagnostics.test.ts",
-            "frontend-app/src/query/**",
-            "frontend-app/package.json",
-            "frontend-app/package-lock.json",
-            "frontend/vue/**",
         ),
         "features": ("settings",),
-        "note": "Vue performance diagnostics (#232) → settings, including the committed bundle and Vue dependency pins. Other frontend-app/src files stay unmapped.",
+        "note": "Vue performance diagnostics feature files (#232) → settings. Shared Vue transport and query client stay unmapped.",
     },
     {
         "name": "offline-runtime",

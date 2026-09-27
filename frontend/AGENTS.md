@@ -234,9 +234,12 @@ chosen restore file, or any control's in-progress value.
 Performance diagnostics loads only on first activation of the Diagnostics
 category, not whenever Settings opens. TanStack Query retains that disposable
 server snapshot; revisiting the category does not re-fetch. Refresh and Reset
-invalidate it. The offline-cache status in the same category is a separate
-read and is not query state. The query cache is not canonical library data
-and is not an offline queue.
+invalidate it. Reset is an online `useMutation` on the application QueryClient
+(retries disabled) so a failed POST still reports PRKS reachability. Do not
+move durable semantic or offline mutations into TanStack Query. The
+offline-cache status in the same category is a separate read and is not query
+state. The query cache is not canonical library data and is not an offline
+queue.
 
 ## Saved Views
 
