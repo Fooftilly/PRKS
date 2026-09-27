@@ -74,6 +74,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         nav_at = html.find('src="/js/navigation.js"')
         ws_at = html.find('src="/js/workspace-tabs.js"')
         tc_at = html.find('src="/js/tab-context.js"')
+        model_at = html.find('src="/js/workspace-model.js"')
         tree_at = html.find('src="/js/workspace-tree.js"')
         persist_at = html.find('src="/js/workspace-persistence.js"')
         tiling_at = html.find('src="/js/workspace-tiling.js"')
@@ -84,6 +85,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         api_at = html.find('src="/js/api.js"')
         app_at = html.find('src="/js/app.js"')
         self.assertNotEqual(nav_at, -1)
+        self.assertNotEqual(model_at, -1)
         self.assertNotEqual(ws_at, -1)
         self.assertNotEqual(tree_at, -1)
         self.assertNotEqual(persist_at, -1)
@@ -99,6 +101,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         # modules' canonical/DOM APIs, so it must load after all of them and before app.js wires
         # up initialization.
         self.assertLess(nav_at, ws_at)
+        self.assertLess(model_at, tree_at)
         self.assertLess(ws_at, tc_at)
         self.assertLess(tree_at, persist_at)
         self.assertLess(persist_at, ws_at)
@@ -264,10 +267,11 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("mainTabId", src)
         self.assertIn("focusedTabId", src)
         self.assertIn("secondaryTree", src)
-        self.assertIn("type: 'leaf'", src)
-        # Recursive split nodes are now legitimate (Recursive Secondary Splits); the tree
-        # helper module owns split-node construction/mutation, workspace-tabs.js only clones.
-        self.assertIn("root.splitLeaf(", src)
+        self.assertIn("workspaceModelApi.workspaceSnapshot(", src)
+        # Recursive split structure is owned by the typed model. workspace-tabs.js
+        # commits planSplitLeaf / planCloseTab results and still uses the tree
+        # adapter for batch close and restore validation.
+        self.assertIn("workspaceModelApi.planSplitLeaf(", src)
         self.assertIn("root.removeLeaf(", src)
         self.assertIn("root.validateTree(", src)
         self.assertIn("PRKS_MAX_VISIBLE_TABS", src)
@@ -535,6 +539,26 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn(", 0 failed", proc.stdout)
         self.assertNotIn("FAIL  ", proc.stdout)
 
+    def test_workspace_model_differential_selftest(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is required for workspace model tests")
+        runner = os.path.join(
+            _PROJECT_DIR, "tests", "browser", "run_workspace_model_differential_selftest.js"
+        )
+        self.assertTrue(os.path.isfile(runner))
+        proc = subprocess.run(
+            [node, runner],
+            cwd=_PROJECT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
+        self.assertIn("passed", proc.stdout)
+        self.assertIn(", 0 failed", proc.stdout)
+        self.assertNotIn("FAIL  ", proc.stdout)
+
     def test_persistence_module_and_selftest(self):
         self.assertTrue(os.path.isfile(_PERSIST))
         self.assertTrue(os.path.isfile(_PERSIST_RUNNER))
@@ -551,6 +575,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("last-writer-wins", persist_src)
         self.assertNotIn("new BroadcastChannel", persist_src)
         for name in (
+            "workspace-model.js",
             "workspace-tabs.js",
             "workspace-tree.js",
             "workspace-tiling.js",

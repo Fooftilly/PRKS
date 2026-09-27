@@ -14,6 +14,7 @@ const vm = require('vm');
 const rootDir = path.resolve(__dirname, '../..');
 const tilingSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tiling.js'), 'utf8');
 const splitSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-split.js'), 'utf8');
+const modelSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-model.js'), 'utf8');
 const treeSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tree.js'), 'utf8');
 const menuSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/workspace-tab-menu.js'), 'utf8');
 
@@ -422,6 +423,7 @@ function makeSandbox() {
     sandbox.window = sandbox;
     sandbox.globalThis = sandbox;
 
+    vm.runInNewContext(modelSrc, sandbox);
     vm.runInNewContext(treeSrc, sandbox);
     vm.runInNewContext(splitSrc, sandbox);
     vm.runInNewContext(tilingSrc, sandbox);

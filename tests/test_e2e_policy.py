@@ -380,6 +380,62 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertNotEqual(pattern, "frontend-app/src/**")
                 self.assertNotIn("route-surface", pattern)
 
+    def test_workspace_model_infrastructure_fails_closed(self):
+        production = (
+            "frontend-app/src/workspace/types.ts",
+            "frontend-app/src/workspace/tree.ts",
+            "frontend-app/src/workspace/transitions.ts",
+            "frontend-app/src/workspace/commands.ts",
+            "frontend/js/workspace-model.js",
+        )
+        for path in production:
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "unmapped-production")
+                self.assertFalse(skip)
+                self.assertNotIn("tiling", feats)
+                self.assertNotIn("tabs", feats)
+                classified = policy.classify_affected_path(path)
+                self.assertTrue(classified["unmapped"])
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertTrue(plan["run"])
+
+        tree = "frontend/js/workspace-tree.js"
+        tree_rule, tree_feats, tree_skip, _tree_note = policy.match_affected_path(tree)
+        self.assertEqual(tree_rule, "workspace-tiling")
+        self.assertFalse(tree_skip)
+        self.assertIn("tiling", tree_feats)
+        tabs = "frontend/js/workspace-tabs.js"
+        tabs_rule, tabs_feats, tabs_skip, _tabs_note = policy.match_affected_path(tabs)
+        self.assertEqual(tabs_rule, "workspace-tabs")
+        self.assertFalse(tabs_skip)
+        self.assertIn("tabs", tabs_feats)
+
+        combined = policy.plan_ci_e2e([production[0], production[-1], tree, tabs])
+        self.assertEqual(combined["mode"], "full")
+        self.assertTrue(combined["run"])
+
+        for rule_entry in policy.AFFECTED_RULES:
+            for pattern in rule_entry["paths"]:
+                self.assertNotEqual(pattern, "frontend-app/src/**")
+
+        revision_diff = (
+            "diff --git a/frontend/sw.js b/frontend/sw.js\n"
+            "--- a/frontend/sw.js\n"
+            "+++ b/frontend/sw.js\n"
+            "@@ -21 +21 @@\n"
+            "-const DEPENDENCY_REVISION = 'aaaaaaaaaaaa';\n"
+            "+const DEPENDENCY_REVISION = 'bbbbbbbbbbbb';\n"
+        )
+        progress = "frontend-app/src/features/progress/ProgressView.vue"
+        bundle = "frontend/vue/prks-vue.js"
+        with_progress = policy.plan_ci_e2e(
+            [production[0], progress, bundle, "frontend/sw.js"],
+            path_diffs={"frontend/sw.js": revision_diff},
+        )
+        self.assertEqual(with_progress["mode"], "full")
+
     def test_shared_vue_transport_and_query_fail_closed(self):
         for path in (
             "frontend-app/src/api/http.ts",

@@ -539,14 +539,14 @@ async function run() {
     assert('tiled mode literal', src.indexOf("'tiled'") !== -1 || src.indexOf('"tiled"') !== -1);
     assert('secondaryTree leaf shape', src.indexOf('secondaryTree') !== -1);
     assert('no splitRatio', src.indexOf('splitRatio') === -1);
-    /* Recursive split-node construction/mutation is delegated to workspace-tree.js; workspace-tabs.js
-     * must not reimplement its own ad hoc split-node literals for state mutation (the one exception is
-     * copySecondaryTree's snapshot clone, which is a plain deep copy, not a mutation). */
-    assert('delegates splitLeaf to tree module', src.indexOf('root.splitLeaf(') !== -1);
+    /* Structural commands go through the typed workspace model. Batch close and
+     * restore validation still call the tree adapter, which delegates to that model. */
+    assert('plans splitLeaf through the typed model', src.indexOf('workspaceModelApi.planSplitLeaf(') !== -1);
     assert('delegates removeLeaf to tree module', src.indexOf('root.removeLeaf(') !== -1);
-    assert('delegates replaceTabId to tree module', src.indexOf('root.replaceTabId(') !== -1);
+    assert('plans makeMain through the typed model', src.indexOf('workspaceModelApi.planMakeMain(') !== -1);
     assert('delegates normalizeTree to tree module', src.indexOf('root.normalizeTree(') !== -1);
     assert('delegates validateTree to tree module', src.indexOf('root.validateTree(') !== -1);
+    assert('snapshot comes from the typed model', src.indexOf('workspaceModelApi.workspaceSnapshot(') !== -1);
     assert('max visible tabs constant', src.indexOf('PRKS_MAX_VISIBLE_TABS') !== -1);
 
     record('exports prksRouteSupportsTile', typeof nav.prksRouteSupportsTile === 'function', '');
