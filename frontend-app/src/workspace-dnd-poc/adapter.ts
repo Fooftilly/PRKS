@@ -612,6 +612,14 @@ export function bindPocAdapter(options: BindPocAdapterOptions): PocAdapterSessio
           endSession('cancel')
           return
         }
+        // Source may already be gone (e.g. hideLeaf parked the pane before deferred
+        // reconcile cancel) — do not resolve/commit or a stale drop can remount via split-leaf.
+        const liveSource = sourceElement(root, dropSource)
+        if (!liveSource || !document.contains(liveSource)) {
+          announce('Move cancelled.')
+          endSession('cancel')
+          return
+        }
         // Final-pointer re-resolve only when drop targets are still active.
         const finalIntent = resolveIntentAtPoint(
           root,

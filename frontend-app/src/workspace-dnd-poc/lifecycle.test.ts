@@ -246,6 +246,76 @@ describe('PoC adapter Pragmatic monitor lifecycle', () => {
     expect(session?.active).toBe(false)
   })
 
+  it('onDrop cancels when the dragged source element left the document', async () => {
+    const splitLeaf = vi.fn(() => true)
+    // Rebind with a tracked splitLeaf so a remount path would be visible.
+    session!.destroy()
+    // Restore the pane tile that destroy/cleanup may have left; setup already appended it.
+    if (!document.querySelector('.prks-tile[data-prks-tab-id="B"]')) {
+      const page = document.getElementById('page-content')!
+      const tile = document.createElement('div')
+      tile.className = 'prks-tile'
+      tile.setAttribute('data-prks-tab-id', 'B')
+      page.appendChild(tile)
+    }
+    session = bindPocAdapter({
+      getSnapshot: () => ({
+        mainTabId: 'A',
+        // Stale snapshot still lists B — the remount bug if we commit after hideLeaf.
+        secondaryLeafTabIds: ['B'],
+        hasSecondaryTree: true,
+        narrowFallback: false,
+        canAddSecondaryLeaf: true,
+        tabs: [
+          { id: 'A', route: '#/folders', title: 'Main' },
+          { id: 'B', route: '#/folders', title: 'Left' },
+        ],
+      }),
+      routeSupportsTile: () => true,
+      observeDom: false,
+      hover: createHoverController(),
+      onSessionEnd: onSessionEnd as (reason: 'drop' | 'cancel') => void,
+      handlers: {
+        reorderTab: reorderTab as (tabId: string, beforeTabId: string | null) => boolean,
+        hideLeaf: vi.fn(() => true),
+        tileTab: vi.fn(() => true),
+        movePane: movePane as (
+          sourceTabId: string,
+          targetTabId: string,
+          axis: string,
+          placement: string,
+        ) => boolean,
+        splitLeaf: splitLeaf as (
+          targetTabId: string,
+          axis: string,
+          options: { tabId: string; placement: string },
+        ) => boolean,
+      },
+    })
+    onSessionEnd.mockClear()
+    const monitor = monitorCapture.args!
+
+    const src = sourcePayload('B', 'pane')
+    monitor.onDragStart?.({
+      source: src as ElementDragType['payload'],
+      location: locationAt(10, 60),
+    } as never)
+    // Simulate hideLeaf parking the pane before deferred reconcile cancel.
+    document.querySelector('.prks-tile[data-prks-tab-id="B"]')?.remove()
+    expect(document.querySelector('.prks-tile[data-prks-tab-id="B"]')).toBeNull()
+
+    monitor.onDrop?.({
+      source: src as ElementDragType['payload'],
+      location: locationAt(20, 20),
+    } as never)
+    await Promise.resolve()
+    expect(onSessionEnd).toHaveBeenCalledWith('cancel')
+    expect(document.getElementById('prks-workspace-live')?.textContent).toBe('Move cancelled.')
+    expect(splitLeaf).not.toHaveBeenCalled()
+    expect(movePane).not.toHaveBeenCalled()
+    expect(reorderTab).not.toHaveBeenCalled()
+  })
+
   it('refresh() rebinds without touching production shell commit hooks', () => {
     const win = window as Window & { prksWorkspaceOnShellCommit?: unknown }
     const prior = win.prksWorkspaceOnShellCommit
