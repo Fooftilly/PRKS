@@ -1095,7 +1095,14 @@ def _unlink_proven_file(
     and nothing here ever recurses. ``leaf`` is already a bare basename, so it
     is addressed directly instead of by enumerating the whole subroot.
     """
-    target = leaf if dir_fd is not None else os.path.join(root, leaf)
+    # CodeQL py/path-injection documented sanitizer: rebuild against the proven
+    # subroot with join+normpath, then require a direct child of it before the
+    # sink. The descriptor branch addresses the proven basename relative to it.
+    base = os.path.normpath(root)
+    fullpath = os.path.normpath(os.path.join(base, leaf))
+    if not fullpath.startswith(base + os.sep) or os.path.dirname(fullpath) != base:
+        raise ValueError("removal leaf is not a direct child of its maintenance root")
+    target = os.path.basename(fullpath) if dir_fd is not None else fullpath
     try:
         st = os.lstat(target, dir_fd=dir_fd)
     except FileNotFoundError:
