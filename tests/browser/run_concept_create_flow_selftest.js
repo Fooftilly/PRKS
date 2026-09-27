@@ -3,28 +3,30 @@
 
 const assert = require('assert');
 const path = require('path');
-const vm = require('vm');
-const fs = require('fs');
 
 const conceptsPath = path.join(__dirname, '../../frontend/js/components/concepts.js');
-const source = fs.readFileSync(conceptsPath, 'utf8');
 
 function loadApi(root) {
-    const sandbox = {
-        module: { exports: {} },
-        exports: {},
-        window: root,
-        global: root,
-        document: {
-            createElement: () => ({ hidden: false, appendChild: () => {} }),
-            body: { appendChild: () => {} },
-            documentElement: { appendChild: () => {} },
-        },
-        EasyMDE: undefined,
-        console,
+    const prevWindow = global.window;
+    const prevDocument = global.document;
+    const prevEasyMDE = global.EasyMDE;
+    global.window = root;
+    global.document = {
+        createElement: () => ({ hidden: false, appendChild: () => {} }),
+        body: { appendChild: () => {} },
+        documentElement: { appendChild: () => {} },
     };
-    vm.runInNewContext(source, sandbox, { filename: conceptsPath });
-    return sandbox.module.exports;
+    global.EasyMDE = undefined;
+    try {
+        const resolved = require.resolve(conceptsPath);
+        delete require.cache[resolved];
+        return require(conceptsPath);
+    } finally {
+        global.window = prevWindow;
+        global.document = prevDocument;
+        global.EasyMDE = prevEasyMDE;
+        delete require.cache[require.resolve(conceptsPath)];
+    }
 }
 
 async function main() {
@@ -45,7 +47,6 @@ async function main() {
             generation: 4,
             isCurrent: (g) => g === 4,
         });
-        // JSON compare: vm-sandbox objects are another realm vs assert's expected literals.
         assert.strictEqual(JSON.stringify(creates), JSON.stringify([{ name: 'Side Concept' }]));
         assert.strictEqual(
             JSON.stringify(navigate),
