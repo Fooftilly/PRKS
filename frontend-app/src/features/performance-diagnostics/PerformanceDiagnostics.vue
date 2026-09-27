@@ -5,6 +5,8 @@ import { usePerformanceDiagnostics } from './usePerformanceDiagnostics'
 
 const diagnostics = usePerformanceDiagnostics()
 const statusText = diagnostics.statusText
+const refreshBusy = computed(() => diagnostics.isRefreshPending.value || diagnostics.isResetPending.value)
+const resetBusy = computed(() => diagnostics.isResetPending.value)
 
 const summaryText = computed(() => {
   const snap = diagnostics.data.value
@@ -83,11 +85,25 @@ async function onCopy(): Promise<void> {
     <p id="prks-perf-client-body" class="prks-settings-hint">{{ clientText }}</p>
   </div>
   <div class="prks-backup-restore-row">
-    <button id="prks-perf-refresh-btn" type="button" class="prks-btn prks-btn--secondary" @click="onRefresh">
-      Refresh
+    <button
+      id="prks-perf-refresh-btn"
+      type="button"
+      class="prks-btn prks-btn--secondary"
+      :disabled="refreshBusy"
+      :aria-busy="refreshBusy ? 'true' : undefined"
+      @click="onRefresh"
+    >
+      {{ refreshBusy && !resetBusy ? 'Refreshing…' : 'Refresh' }}
     </button>
-    <button id="prks-perf-reset-btn" type="button" class="prks-btn prks-btn--secondary" @click="onReset">
-      Reset
+    <button
+      id="prks-perf-reset-btn"
+      type="button"
+      class="prks-btn prks-btn--secondary"
+      :disabled="resetBusy"
+      :aria-busy="resetBusy ? 'true' : undefined"
+      @click="onReset"
+    >
+      {{ resetBusy ? 'Resetting…' : 'Reset' }}
     </button>
     <button id="prks-perf-copy-btn" type="button" class="prks-btn prks-btn--secondary" @click="onCopy">
       Copy report

@@ -1,4 +1,4 @@
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import {
   getPerformanceDiagnostics,
@@ -24,6 +24,8 @@ export function usePerformanceDiagnostics() {
   const queryClient = useQueryClient()
   const clientSnapshot = ref<ClientRequestSnapshot | null>(null)
   const statusText = ref('')
+  const refreshLocked = ref(false)
+  const resetLocked = ref(false)
   const enabled = performanceDiagnosticsEnabled()
 
   const query = useQuery({
@@ -65,23 +67,31 @@ export function usePerformanceDiagnostics() {
   }
 
   async function refresh(): Promise<void> {
+    if (refreshLocked.value || resetLocked.value) return
+    refreshLocked.value = true
     statusText.value = ''
     try {
       await reloadFromServer()
     } catch (error) {
       applyLoadError(error, LOAD_ERROR)
       return
+    } finally {
+      refreshLocked.value = false
     }
     if (query.isError.value) applyLoadError(query.error.value, LOAD_ERROR)
   }
 
   async function resetMeasurements(): Promise<void> {
+    if (resetLocked.value) return
+    resetLocked.value = true
     statusText.value = ''
     try {
       await resetMutation.mutateAsync()
     } catch (error) {
       applyLoadError(error, RESET_ERROR)
       return
+    } finally {
+      resetLocked.value = false
     }
     if (query.isError.value) {
       applyLoadError(query.error.value, RESET_ERROR)
@@ -90,9 +100,15 @@ export function usePerformanceDiagnostics() {
     statusText.value = 'Measurements reset.'
   }
 
+  const isRefreshPending = computed(() => refreshLocked.value)
+  const isResetPending = computed(() => resetLocked.value || resetMutation.isPending.value)
+
   return {
     data: query.data,
     isPending: query.isPending,
+    isFetching: query.isFetching,
+    isRefreshPending,
+    isResetPending,
     isError: query.isError,
     clientSnapshot,
     statusText,

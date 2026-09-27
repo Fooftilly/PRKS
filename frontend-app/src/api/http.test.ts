@@ -97,4 +97,40 @@ describe('prksApiRequest', () => {
   it('refuses a query string on the path', async () => {
     await expect(prksApiRequest('/api/diagnostics/performance?q=secret')).rejects.toBeInstanceOf(TypeError)
   })
+
+  it('rejects paths that normalize outside /api/', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const rejected = [
+      '/api/../x',
+      '/api/%2e%2e/x',
+      '/api/%2E%2E/x',
+      '/api/foo/../../x',
+      '/api/..',
+      '/api/%2e%2e',
+      '//evil.example/api/x',
+      'https://evil.example/api/x',
+      `${location.origin.replace(/:\d+$/, '')}:9/api/x`,
+      '/api/diagnostics/performance#secret',
+      '/\\api/../x',
+    ]
+    for (const path of rejected) {
+      await expect(prksApiRequest(path), path).rejects.toBeInstanceOf(TypeError)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('fetches the normalized pathname when it stays under /api/', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(prksApiRequest('/api/./diagnostics/performance')).resolves.toEqual({})
+    await expect(prksApiRequest('/api/diagnostics/../diagnostics/performance')).resolves.toEqual({})
+    await expect(prksApiRequest('/%2e%2e/api/diagnostics/performance')).resolves.toEqual({})
+    const urls = (fetchMock.mock.calls as unknown as [string][]).map((call) => call[0])
+    expect(urls).toEqual([
+      '/api/diagnostics/performance',
+      '/api/diagnostics/performance',
+      '/api/diagnostics/performance',
+    ])
+  })
 })

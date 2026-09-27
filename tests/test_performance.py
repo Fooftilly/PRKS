@@ -1,4 +1,5 @@
 import contextvars
+import http.client
 import json
 import os
 import socket
@@ -322,6 +323,17 @@ class TestPerformanceHTTP(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read().decode())
 
+    def _post_json_without_content_length(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self._test_port, timeout=5)
+        conn.putrequest("POST", path, skip_accept_encoding=True)
+        conn.putheader("Content-Type", "application/json")
+        conn.endheaders()
+        response = conn.getresponse()
+        raw = response.read()
+        status = response.status
+        conn.close()
+        return status, json.loads(raw.decode())
+
     def _snapshot(self):
         status, body, _headers = self._get("/api/diagnostics/performance")
         self.assertEqual(status, 200)
@@ -368,10 +380,15 @@ class TestPerformanceHTTP(unittest.TestCase):
         self._get("/api/works")
         before = self._snapshot()
         self.assertGreaterEqual(before["requests"]["total"], 1)
-        for raw in (b"[]", b'"no"', b"1", b"null", b'{"unexpected":1}'):
+        for raw in (b"[]", b'"no"', b"1", b"null", b'{"unexpected":1}', b""):
             status, payload = self._post_raw("/api/diagnostics/performance/reset", raw)
             self.assertEqual(status, 400, raw)
             self.assertEqual(payload.get("code"), "invalid_request", raw)
+        status, payload = self._post_json_without_content_length(
+            "/api/diagnostics/performance/reset"
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload.get("code"), "invalid_request")
         after = self._snapshot()
         routes = {row["route"] for row in after["routes"]}
         self.assertIn("/api/works", routes)

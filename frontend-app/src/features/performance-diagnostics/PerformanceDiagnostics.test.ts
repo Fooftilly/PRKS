@@ -171,6 +171,58 @@ describe('PerformanceDiagnostics', () => {
     wrapper.unmount()
   })
 
+  it('a second Reset click does not start another reset', async () => {
+    let releasePost: (response: Response) => void = () => {}
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET'
+        calls.push(`${method} ${url}`)
+        if (method === 'POST') {
+          return await new Promise<Response>((resolve) => {
+            releasePost = resolve
+          })
+        }
+        return new Response(JSON.stringify(performanceSnapshotFixture()), { status: 200 })
+      }),
+    )
+    window.prksResetRequestCoordinatorDiagnostics = vi.fn()
+    const { wrapper } = mountDiagnostics()
+    activatePerformanceDiagnostics()
+    await flushPromises()
+    expect(calls).toEqual(['GET /api/diagnostics/performance'])
+
+    const reset = wrapper.get('#prks-perf-reset-btn')
+    const refresh = wrapper.get('#prks-perf-refresh-btn')
+    const first = reset.trigger('click')
+    const second = reset.trigger('click')
+    await flushPromises()
+    expect(calls.filter((call) => call.startsWith('POST'))).toEqual(['POST /api/diagnostics/performance/reset'])
+    expect(reset.attributes('disabled')).toBe('')
+    expect(reset.attributes('aria-busy')).toBe('true')
+    expect(reset.text()).toBe('Resetting…')
+    expect(refresh.attributes('disabled')).toBe('')
+    expect(refresh.attributes('aria-busy')).toBe('true')
+    expect(refresh.text()).toBe('Refresh')
+
+    releasePost(new Response(JSON.stringify({ status: 'reset' }), { status: 200 }))
+    await Promise.all([first, second])
+    await flushPromises()
+    expect(calls).toEqual([
+      'GET /api/diagnostics/performance',
+      'POST /api/diagnostics/performance/reset',
+      'GET /api/diagnostics/performance',
+    ])
+    expect(window.prksResetRequestCoordinatorDiagnostics).toHaveBeenCalledTimes(1)
+    expect(reset.attributes('disabled')).toBeUndefined()
+    expect(reset.attributes('aria-busy')).toBeUndefined()
+    expect(reset.text()).toBe('Reset')
+    expect(refresh.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('#prks-perf-status').text()).toBe('Measurements reset.')
+    wrapper.unmount()
+  })
+
   it('shows a normalized load error after retryable failures settle', async () => {
     const fetchMock = vi.fn(
       async () => new Response(JSON.stringify({ error: 'unavailable', code: 'busy' }), { status: 503 }),

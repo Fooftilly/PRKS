@@ -58,6 +58,21 @@ function readErrorEnvelope(payload: unknown): { error: string; code: string | nu
   return { error: record.error, code }
 }
 
+const API_PATH_ERROR = 'PRKS API paths must be same-origin /api/ paths without a query.'
+
+function resolvePrksApiPath(path: string): string {
+  let url: URL
+  try {
+    url = new URL(path, location.origin)
+  } catch {
+    throw new TypeError(API_PATH_ERROR)
+  }
+  if (url.origin !== location.origin || url.search || url.hash || !url.pathname.startsWith('/api/')) {
+    throw new TypeError(API_PATH_ERROR)
+  }
+  return url.pathname
+}
+
 export async function prksApiRequest(
   path: string,
   init: {
@@ -66,13 +81,11 @@ export async function prksApiRequest(
     signal?: AbortSignal
   } = {},
 ): Promise<unknown> {
-  if (!path.startsWith('/api/') || path.startsWith('//') || path.includes('?')) {
-    throw new TypeError('PRKS API paths must be same-origin /api/ paths without a query.')
-  }
+  const apiPath = resolvePrksApiPath(path)
   const method = init.method ?? 'GET'
   let response: Response
   try {
-    response = await fetch(path, {
+    response = await fetch(apiPath, {
       method,
       body: init.body,
       signal: init.signal,
@@ -85,10 +98,10 @@ export async function prksApiRequest(
   } catch (error) {
     if (isAbortError(error)) throw error
     const transport = error instanceof TypeError ? error : new TypeError('PRKS API request failed.')
-    if (!isManagedPdfPath(path)) reportableTransportFailures.add(transport)
+    if (!isManagedPdfPath(apiPath)) reportableTransportFailures.add(transport)
     throw transport
   }
-  if (!isManagedPdfPath(path)) callReachabilityHook('prksOfflineNoteRequestSuccess')
+  if (!isManagedPdfPath(apiPath)) callReachabilityHook('prksOfflineNoteRequestSuccess')
 
   const text = await response.text()
   let payload: unknown = null

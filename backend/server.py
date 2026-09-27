@@ -140,6 +140,8 @@ PRKS_TESTING_DEFAULT_PORT = 8070
 # Minimum uncompressed JSON size before gzip (Accept-Encoding: gzip).
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
 _PRKS_MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
+# No Content-Length, or a zero-length document. Distinct from {} and from JSON null.
+_JSON_BODY_ABSENT = object()
 # Distinct from JSON null. _read_json_body already sent the error response.
 _JSON_BODY_REJECTED = object()
 
@@ -814,7 +816,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return _JSON_BODY_REJECTED
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
-            return {}
+            return _JSON_BODY_ABSENT
         try:
             content_length = int(raw_length)
         except (TypeError, ValueError):
@@ -832,7 +834,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(400, {"error": "request_read_failed"})
             return _JSON_BODY_REJECTED
         if not payload:
-            return {}
+            return _JSON_BODY_ABSENT
         try:
             return json.loads(payload)
         except json.JSONDecodeError:
@@ -1031,6 +1033,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is _JSON_BODY_REJECTED:
                     return
+            if data is _JSON_BODY_ABSENT:
+                data = {}
             if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
                 pf_id = path.split('/')[-1]
                 if not isinstance(data, dict):
@@ -1349,6 +1353,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is _JSON_BODY_REJECTED:
                     return
+            if data is _JSON_BODY_ABSENT:
+                data = {}
             parts = path.split('/')
             if (
                 path.startswith('/api/concepts/')
@@ -2606,6 +2612,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = self._read_json_body()
                 if data is _JSON_BODY_REJECTED:
                     return
+            json_body_absent = data is _JSON_BODY_ABSENT
+            if json_body_absent:
+                data = {}
             if path == '/api/sync/operations':
                 status, result = process_operation(db, data)
                 if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
@@ -2655,6 +2664,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             if path == '/api/diagnostics/performance/reset':
+                if json_body_absent:
+                    self.send_json(
+                        400,
+                        {
+                            "error": "JSON object body required",
+                            "code": "invalid_request",
+                        },
+                    )
+                    return
                 _request, err = parse_request(PerformanceDiagnosticsResetRequest, data)
                 if err is not None:
                     self.send_json(400, err)
