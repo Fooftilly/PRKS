@@ -746,10 +746,11 @@
         }
 
         const projectionListeners = new Set();
-        /* Monotonic id of the projection the shell must finish painting. Schema
-         * `state.version` stays the model version; this commit id is per publish. */
+        /* Monotonic id of a real publication. Subscribing does not advance it.
+         * Schema `state.version` stays the model version. */
         let publishSerial = 0;
         let latestCommit = 0;
+        let cachedProjection = null;
         let shellSeenCommit = 0;
         let pendingFocusTabId = null;
         let publishedStatusKey = null;
@@ -763,19 +764,27 @@
             return key;
         }
 
-        function detachedProjection() {
-            publishSerial += 1;
-            latestCommit = publishSerial;
+        function projectionAt(commit) {
             const body = {
                 state: copyJson(snapshot()) || emptyProjectionState(),
                 visualTiled: visualTiled(),
                 narrowFallback: !!narrowFallback,
                 tabStatus: tabStatusMap(),
-                commit: publishSerial,
+                commit: commit,
             };
             const projection = deepFreeze(body);
+            cachedProjection = projection;
             publishedStatusKey = statusKeyOf(projection.tabStatus);
             return projection;
+        }
+
+        /* One current projection until the next publish. The first subscriber
+         * with an empty cache establishes it. Later subscribers reuse it. */
+        function currentProjection() {
+            if (cachedProjection) return cachedProjection;
+            publishSerial += 1;
+            latestCommit = publishSerial;
+            return projectionAt(publishSerial);
         }
 
         function emptyProjectionState() {
@@ -817,7 +826,9 @@
          */
         function publishProjection() {
             if (!projectionListeners.size) return;
-            const projection = detachedProjection();
+            publishSerial += 1;
+            latestCommit = publishSerial;
+            const projection = projectionAt(publishSerial);
             const listeners = Array.from(projectionListeners);
             for (let i = 0; i < listeners.length; i++) {
                 try {
@@ -830,7 +841,7 @@
             if (typeof listener !== 'function') return function () {};
             projectionListeners.add(listener);
             try {
-                listener(detachedProjection());
+                listener(currentProjection());
             } catch (_e) {}
             return function unsubscribe() {
                 projectionListeners.delete(listener);

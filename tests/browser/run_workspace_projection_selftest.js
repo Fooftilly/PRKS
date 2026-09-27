@@ -91,7 +91,8 @@ function makeWorkspace() {
         second.push(projection);
     });
     assert('subscribe delivers the current projection', first.length === 1 && second.length === 1);
-    assert('immediate snapshots are detached copies', first[0] !== second[0]);
+    assert('a later subscriber reuses the current projection', first[0] === second[0]);
+    assert('subscription does not advance the publish commit', first[0].commit === second[0].commit);
     assert('snapshot state is frozen', Object.isFrozen(first[0]) && Object.isFrozen(first[0].state));
     let threw = false;
     try {
@@ -130,6 +131,46 @@ function makeWorkspace() {
     assert('rejected leave returns false', activated === false);
     assert('rejected leave keeps Main', h.ws.snapshot().mainTabId === mainBefore);
     assert('rejected leave does not replace the published main', afterReject.state.mainTabId === mainBefore);
+
+    const focusHost = makeWorkspace();
+    const appliedFocus = [];
+    const prevApplyFocus = global.prksWorkspaceApplyRestoredFocus;
+    global.prksWorkspaceApplyRestoredFocus = function (id) {
+        appliedFocus.push(id);
+    };
+    try {
+        const shellSeen = [];
+        focusHost.ws.subscribe(function (projection) {
+            shellSeen.push(projection);
+        });
+        const commitN = shellSeen[0].commit;
+        const otherSeen = [];
+        focusHost.ws.subscribe(function (projection) {
+            otherSeen.push(projection);
+        });
+        assert('second subscriber receives the cached projection', otherSeen[0] === shellSeen[0]);
+        assert('second subscriber keeps commit N', otherSeen[0].commit === commitN);
+        const mainId = focusHost.ws.snapshot().mainTabId;
+        focusHost.ws.queueFocusRestore(mainId);
+        assert('focus stays queued until the shell acks commit N', appliedFocus.length === 0);
+        focusHost.ws.onShellCommit(shellSeen[0]);
+        assert(
+            'shell ack of N applies queued focus after another subscriber attaches',
+            appliedFocus.length === 1 && appliedFocus[0] === mainId
+        );
+        focusHost.ws.setResolvedTitle('#/folders', 'After subscribe');
+        assert('next publish is commit N+1 for the shell', shellSeen[shellSeen.length - 1].commit === commitN + 1);
+        assert(
+            'next publish is the same commit N+1 for the other subscriber',
+            otherSeen[otherSeen.length - 1].commit === commitN + 1
+        );
+        assert(
+            'next publish is one shared projection',
+            shellSeen[shellSeen.length - 1] === otherSeen[otherSeen.length - 1]
+        );
+    } finally {
+        global.prksWorkspaceApplyRestoredFocus = prevApplyFocus;
+    }
 
     const status = makeWorkspace();
     let statusPublishes = 0;
