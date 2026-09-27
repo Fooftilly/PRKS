@@ -36,6 +36,7 @@ npm run build-storybook   # catalog only; gitignored storybook-static/
 | --- | --- |
 | `src/workspace/` | Canonical typed workspace state and pure transforms. Built to `frontend/js/workspace-model.js`. Not a Vue renderer and not a second state owner |
 | `src/workspace-shell/` | Vue presentation for the tab strip, pane frames, and recursive Secondary tree. Renders a detached projection and sends coordinator intents. Not a state owner |
+| `src/workspace-dnd-poc/` | #234 experimental Pragmatic DnD adapter + pure `WorkspaceDropIntent` resolver. Not imported by production. Production drag stays `frontend/js/workspace-drag.js` until a dedicated migration |
 | `src/route-surface/` | Typed Vue route-instance lifecycle. Owner-scoped mount, generation, cleanup, and feature-scoped host-local early presentation. Not a router |
 | `src/features/performance-diagnostics/` | Settings performance diagnostics |
 | `src/features/progress/` | Progress route, first route-surface consumer. Consumes the effective works-browse snapshot; not a Query cache |

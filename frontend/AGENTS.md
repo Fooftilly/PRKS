@@ -85,7 +85,7 @@ The canonical workspace model is `frontend-app/src/workspace/` (TypeScript), bui
 
 Production no longer paints the tab strip or the recursive tree. Removed from `workspace-tabs.js`: `tabRoleFlags`, `syncTabTrailing`, `createTabWrap`, `applyTabWrap`, and `paintProduction`'s DOM reconciliation. Removed from `workspace-tiling.js`: `renderTreeNode`, `createTile`, `ensureTile`, `fillHeader`, `applyTileClasses`, `pruneStale`, and the tree-reconciling bodies of `prksWorkspaceSyncTiles` / `prksWorkspaceApplyFocus` (those two exports remain no-ops). The frozen DOM oracle for the Node split/menu selftest is `tests/browser/fixtures/workspace-tiling-legacy-painter.js`. `workspace-tiling.js` still owns the narrow-width predicate, canvas and nested ResizeObservers, and pane focus gestures.
 
-Drag hover/preview (#234) is not canonical — a drop commits through the same commands. Until that slice, `workspace-drag.js` binds the Vue DOM: `#prks-workspace-tabs`, `.prks-workspace-tab`, `.prks-tile[data-prks-tab-id]`, `.prks-tile-header__grip`, and `.prks-workspace-canvas`. Context menus still open through `prksWorkspaceOpenTabMenu`. Named workspaces (#58) will serialize this model later; do not add that format here. The #251 route-surface stays per TabContext. Workspace state stores canonical hashes only and does not own feature Vue trees.
+Drag hover/preview (#234) is not canonical — a drop commits through the same commands. Production still uses `workspace-drag.js` on the Vue DOM hooks (`#prks-workspace-tabs`, `.prks-workspace-tab`, `.prks-tile[data-prks-tab-id]`, `.prks-tile-header__grip`, `.prks-workspace-canvas`). The #234 PoC lives in `frontend-app/src/workspace-dnd-poc/` and must not be imported by production until a dedicated migration replaces `workspace-drag.js` (never run two drag systems). Context menus still open through `prksWorkspaceOpenTabMenu`. Named workspaces (#58) will serialize this model later; do not add that format here. The #251 route-surface stays per TabContext. Workspace state stores canonical hashes only and does not own feature Vue trees.
 
 Pure transforms (`planHideLeaf`, `planMakeMain`, `planCloseTab`, `planReorder`, `planMovePane`, `planSplitLeaf`, ratio/focus/mode planners, tree helpers) take immutable inputs and return the next state. They do not touch DOM, history, async leave, or TabContext. Those planners are the shipped structural contract. Effectful steps stay in `workspace-tabs.js`. `prksWorkspaceSnapshot()` still returns the external shape, including ephemeral `titleRouteGen` reattached from the live tabs; the typed snapshot itself does not store that field.
 
@@ -219,8 +219,9 @@ never written to `localStorage`, `sessionStorage`, or IndexedDB.
 those same canonical APIs on drop — it must never mutate `secondaryTree` or `state.tabs`
 directly, and must never mutate either while the pointer is merely moving/hovering (preview
 only; the DOM insertion marker/edge overlay are pure visual feedback with no state effect).
-The drag sensor still uses the stable Vue hooks listed above. Do not rewrite it in this
-shell (#234).
+The production drag sensor still uses the stable Vue hooks listed above.
+`frontend-app/src/workspace-dnd-poc/` is the #234 research adapter only — do not wire it
+into production beside `workspace-drag.js`.
 
 A pane move is one atomic tree transaction. Moving a visible pane is spatial repositioning, not
 a leave operation — it must not run PDF leave confirmation, must not flush-for-unmount Research

@@ -251,6 +251,42 @@
       "dependabot_monitored": true
     },
     {
+      "name": "@atlaskit/pragmatic-drag-and-drop",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> dependencies.@atlaskit/pragmatic-drag-and-drop",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "#234 research-only (workspace-dnd-poc); must not land in prks-vue.js until #256 migration."
+    },
+    {
+      "name": "@atlaskit/pragmatic-drag-and-drop-auto-scroll",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> dependencies.@atlaskit/pragmatic-drag-and-drop-auto-scroll",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "#234 research-only (workspace-dnd-poc); must not land in prks-vue.js until #256 migration."
+    },
+    {
+      "name": "@atlaskit/pragmatic-drag-and-drop-unit-testing",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> devDependencies.@atlaskit/pragmatic-drag-and-drop-unit-testing",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "#234 PoC test harness (DragEvent/DOMRect polyfills for jsdom); never ships in prks-vue.js."
+    },
+    {
       "name": "vite",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> devDependencies.vite",
