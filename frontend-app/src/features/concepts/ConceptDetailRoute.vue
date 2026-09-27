@@ -13,9 +13,14 @@ const props = defineProps<{
 const intents = inject(conceptIntentsKey)
 const rootEl = ref<HTMLElement | null>(null)
 const summaryHost = ref<HTMLElement | null>(null)
+const definitionHeadHost = ref<HTMLElement | null>(null)
 const definitionHost = ref<HTMLElement | null>(null)
+const aliasesHeadHost = ref<HTMLElement | null>(null)
+const parentsHeadHost = ref<HTMLElement | null>(null)
+const childrenHeadHost = ref<HTMLElement | null>(null)
 const parentsHost = ref<HTMLElement | null>(null)
 const childrenHost = ref<HTMLElement | null>(null)
+const mentionsHeadHost = ref<HTMLElement | null>(null)
 
 const availability = computed(() => props.projection.availability)
 const concept = computed(() => props.projection.concept)
@@ -64,6 +69,36 @@ function researchRelationRowsHtml(
     .join('')
 }
 
+/** DESIGN.md: section heads via shared `prksResearchSectionHeadHtml`. */
+function paintSectionHead(
+  host: HTMLElement | null,
+  title: string,
+  opts: {
+    headingId?: string
+    actionId?: string
+    actionLabel?: string
+    actionRole?: string
+    count?: number
+    sub?: string
+  },
+  onAction?: () => void,
+): void {
+  if (!host) return
+  const fn = window.prksResearchSectionHeadHtml
+  if (typeof fn !== 'function') {
+    host.innerHTML = ''
+    return
+  }
+  host.innerHTML = fn(title, opts)
+  if (opts.actionId && onAction) {
+    // Action ids are static PRKS tokens (hyphenated); avoid CSS.escape for jsdom.
+    const btn = host.querySelector(`[id="${opts.actionId}"]`)
+    if (btn instanceof HTMLElement) {
+      btn.addEventListener('click', onAction)
+    }
+  }
+}
+
 function paintSummary(): void {
   const host = summaryHost.value
   const c = concept.value
@@ -103,6 +138,57 @@ function paintRelations(): void {
   }
 }
 
+function paintSectionHeads(): void {
+  paintSectionHead(
+    definitionHeadHost.value,
+    'Definition',
+    {
+      headingId: 'prks-concept-def-h',
+      actionId: 'prks-concept-edit-def',
+      actionLabel: 'Edit',
+      actionRole: MUTATION_ROLE,
+    },
+    () => {
+      if (concept.value) void intents?.editDefinition(concept.value)
+    },
+  )
+  paintSectionHead(
+    aliasesHeadHost.value,
+    'Search keys / aliases',
+    {
+      headingId: 'prks-concept-aliases-h',
+      actionId: 'prks-concept-edit-aliases',
+      actionLabel: 'Edit',
+      actionRole: MUTATION_ROLE,
+      sub: aliasSub.value || undefined,
+    },
+    () => {
+      if (concept.value) void intents?.editAliases(concept.value)
+    },
+  )
+  paintSectionHead(
+    parentsHeadHost.value,
+    'Parent concepts',
+    {
+      headingId: 'prks-concept-parents-h',
+      actionId: 'prks-concept-edit-parents',
+      actionLabel: 'Edit',
+      actionRole: MUTATION_ROLE,
+      sub: parentSub.value || undefined,
+    },
+    () => {
+      if (concept.value) void intents?.editParents(concept.value)
+    },
+  )
+  paintSectionHead(childrenHeadHost.value, 'Subconcepts', {
+    headingId: 'prks-concept-children-h',
+  })
+  paintSectionHead(mentionsHeadHost.value, 'Mentioned in research notes', {
+    headingId: 'prks-concept-mentions-h',
+    count: mentionCount.value,
+  })
+}
+
 function refreshIcons(): void {
   const root = rootEl.value
   if (root && typeof window.prksRefreshIcons === 'function') window.prksRefreshIcons(root)
@@ -117,21 +203,17 @@ function onRename(): void {
 function onDelete(): void {
   if (concept.value) void intents?.remove(concept.value)
 }
-function onEditDef(): void {
-  if (concept.value) void intents?.editDefinition(concept.value)
-}
-function onEditAliases(): void {
-  if (concept.value) void intents?.editAliases(concept.value)
-}
-function onEditParents(): void {
-  if (concept.value) void intents?.editParents(concept.value)
-}
 
-onMounted(() => {
+function paintAll(): void {
   paintSummary()
+  paintSectionHeads()
   paintDefinition()
   paintRelations()
   refreshIcons()
+}
+
+onMounted(() => {
+  paintAll()
 })
 
 watch(
@@ -141,15 +223,15 @@ watch(
       concept.value?.id,
       concept.value?.name,
       concept.value?.description,
+      concept.value?.aliases,
       concept.value?.parents,
       concept.value?.children,
+      concept.value?.mention_count,
     ] as const,
   () => {
-    paintSummary()
-    paintDefinition()
-    paintRelations()
-    refreshIcons()
+    paintAll()
   },
+  { flush: 'post' },
 )
 </script>
 
@@ -211,39 +293,12 @@ watch(
       </div>
       <div class="research-entity">
         <section class="research-entity__section" aria-labelledby="prks-concept-def-h">
-          <div class="research-entity__section-head">
-            <h3 id="prks-concept-def-h">Definition</h3>
-            <div class="research-entity__section-head-actions">
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm"
-                id="prks-concept-edit-def"
-                :data-prks-role="MUTATION_ROLE"
-                @click="onEditDef"
-              >
-                Edit
-              </button>
-            </div>
-          </div>
+          <div ref="definitionHeadHost"></div>
           <div ref="definitionHost" class="research-md"></div>
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-aliases-h">
-          <div class="research-entity__section-head">
-            <h3 id="prks-concept-aliases-h">Search keys / aliases</h3>
-            <div class="research-entity__section-head-actions">
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm"
-                id="prks-concept-edit-aliases"
-                :data-prks-role="MUTATION_ROLE"
-                @click="onEditAliases"
-              >
-                Edit
-              </button>
-            </div>
-          </div>
-          <p v-if="aliasSub" class="research-entity__section-sub meta-row">{{ aliasSub }}</p>
+          <div ref="aliasesHeadHost"></div>
           <div v-if="concept.aliases.length" class="research-entity__chips">
             <span
               v-for="alias in concept.aliases"
@@ -255,21 +310,7 @@ watch(
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-parents-h">
-          <div class="research-entity__section-head">
-            <h3 id="prks-concept-parents-h">Parent concepts</h3>
-            <div class="research-entity__section-head-actions">
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm"
-                id="prks-concept-edit-parents"
-                :data-prks-role="MUTATION_ROLE"
-                @click="onEditParents"
-              >
-                Edit
-              </button>
-            </div>
-          </div>
-          <p v-if="parentSub" class="research-entity__section-sub meta-row">{{ parentSub }}</p>
+          <div ref="parentsHeadHost"></div>
           <div
             v-if="concept.parents.length"
             ref="parentsHost"
@@ -279,9 +320,7 @@ watch(
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-children-h">
-          <div class="research-entity__section-head">
-            <h3 id="prks-concept-children-h">Subconcepts</h3>
-          </div>
+          <div ref="childrenHeadHost"></div>
           <div
             v-if="concept.children.length"
             ref="childrenHost"
@@ -291,12 +330,7 @@ watch(
         </section>
 
         <section class="research-entity__section" aria-labelledby="prks-concept-mentions-h">
-          <div class="research-entity__section-head">
-            <h3 id="prks-concept-mentions-h">Mentioned in research notes</h3>
-            <div class="research-entity__section-head-actions">
-              <span class="research-entity__section-count">{{ mentionCount }}</span>
-            </div>
-          </div>
+          <div ref="mentionsHeadHost"></div>
           <div v-if="concept.mentions.length" class="research-entity__mentions">
             <div
               v-for="mention in concept.mentions"

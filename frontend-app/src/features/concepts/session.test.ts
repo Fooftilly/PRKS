@@ -112,6 +112,24 @@ describe('Concepts route bridge', () => {
     vi.stubGlobal('fetch', fetchMock)
     window.prksResearchMarkdownHtml = (text) => `<p>${text || ''}</p>`
     window.prksRelSummaryHtml = () => '<p class="prks-rel-summary"></p>'
+    window.prksResearchSectionHeadHtml = (title, opts) => {
+      const o = opts || {}
+      const action = o.actionId
+        ? `<button type="button" id="${o.actionId}" data-prks-role="${o.actionRole || ''}">${
+            o.actionLabel || 'Edit'
+          }</button>`
+        : ''
+      const count =
+        o.count != null ? `<span class="research-entity__section-count">${o.count}</span>` : ''
+      return (
+        `<div class="research-entity__section-head"><h3 id="${o.headingId || ''}">${title}</h3>` +
+        (action || count
+          ? `<div class="research-entity__section-head-actions">${count}${action}</div>`
+          : '') +
+        `</div>` +
+        (o.sub ? `<p class="research-entity__section-sub meta-row">${o.sub}</p>` : '')
+      )
+    }
     window.prksRefreshIcons = () => {}
     const pane = owner()
     const el = host()
@@ -133,6 +151,7 @@ describe('Concepts route bridge', () => {
     expect(el.querySelector('#prks-concept-edit-def')).not.toBeNull()
     expect(el.querySelector('#prks-concept-view-graph')).not.toBeNull()
     expect(el.querySelector('#prks-concept-delete')?.className).toContain('prks-btn--quiet-danger')
+    expect(el.querySelector('.research-entity__section-head')).not.toBeNull()
     dismissConcepts(pane)
     presentConceptDetail({
       owner: pane,
