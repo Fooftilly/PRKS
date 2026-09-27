@@ -29,6 +29,25 @@ interface ConceptDetailPresentRequest {
   shell?: boolean
 }
 
+interface PositionsIndexPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable'
+  items?: unknown
+  generation?: number
+  shell?: boolean
+}
+
+interface PositionDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable' | 'not-found'
+  position?: unknown
+  positionId?: string
+  generation?: number
+  shell?: boolean
+}
+
 interface FolderLibraryPresentRequest {
   owner: object
   host: HTMLElement
@@ -98,6 +117,9 @@ interface Window {
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
   prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
+  prksVuePresentPositionsIndex?: (input: PositionsIndexPresentRequest) => void
+  prksVuePresentPositionDetail?: (input: PositionDetailPresentRequest) => void
+  prksVueDismissPositions?: (owner: object) => void
   prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
   prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (
@@ -233,6 +255,7 @@ interface Window {
     entityId: string,
     routeName: string,
   ) => boolean
+  createPosition?: (body: { name: string; description?: string }) => Promise<{ id?: string } | null>
   createConcept?: (body: { name: string }) => Promise<{ id?: string } | null>
   updateConcept?: (id: string, body: { name?: string; description?: string }) => Promise<unknown>
   deleteConcept?: (id: string) => Promise<unknown>

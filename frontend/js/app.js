@@ -2911,6 +2911,45 @@ function prksPresentVueConcepts(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Positions index or detail surface in this pane.
+ * `detail` must already be the authoritative effective Position projection.
+ * Same-owner Positions refresh reuses the existing host so local index search
+ * survives an in-place projection update.
+ */
+function prksPresentVuePositions(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const feature = detail.feature === 'position-detail' ? 'position-detail' : 'positions';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        position: detail.position,
+        positionId: detail.positionId,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'position-detail' && typeof window.prksVuePresentPositionDetail === 'function') {
+        window.prksVuePresentPositionDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'positions' && typeof window.prksVuePresentPositionsIndex === 'function') {
+        window.prksVuePresentPositionsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3180,12 +3219,27 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (sameFolderLibraryWorkspace) {
         ctx.__prksRetainFolderLibrarySurface = true;
     }
+    /* Positions→Positions in the same mounted TabContext keeps the Vue host
+     * so local index search survives an in-place refresh. Flag before
+     * beginRoute: TabContext cleanups run there. */
+    const samePositionsWorkspace = !!(
+        (route.name === 'positions' || route.name === 'position-detail') &&
+        contentDiv.querySelector(
+            '[data-prks-positions-index-view], [data-prks-position-detail-view]'
+        )
+    );
+    if (samePositionsWorkspace) {
+        ctx.__prksRetainPositionsSurface = true;
+    }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
     }
     if (sameFolderLibraryWorkspace) {
         ctx.__prksRetainFolderLibrarySurface = false;
+    }
+    if (samePositionsWorkspace) {
+        ctx.__prksRetainPositionsSurface = false;
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3222,6 +3276,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         !sameFolderWorkspace &&
         !sameConceptsWorkspace &&
         !sameFolderLibraryWorkspace &&
+        !samePositionsWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3235,7 +3290,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
@@ -3244,6 +3299,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         }
         if (typeof window.prksVueDismissFolderLibrary === 'function') {
             window.prksVueDismissFolderLibrary(ctx);
+        }
+        if (typeof window.prksVueDismissPositions === 'function') {
+            window.prksVueDismissPositions(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
@@ -3255,8 +3313,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
-    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace) {
-        // Folder Library / Concepts in-place refresh: keep the Vue host; mark busy until paint.
+    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace) {
+        // Folder Library / Concepts / Positions in-place refresh: keep the Vue host; mark busy until paint.
         contentDiv.setAttribute('aria-busy', 'true');
     }
 
@@ -4181,14 +4239,28 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     cachedPositions || [], positionOps);
                 if (stale()) return;
                 if (!cachedPositions && !(positionItems && positionItems.length)) {
-                    if (typeof renderPositionsIndexUnavailable === 'function') renderPositionsIndexUnavailable(contentDiv);
-                    else prksOfflineRenderUnavailable(contentDiv, 'Positions not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Positions not available offline' };
+                    prksPresentVuePositions(ctx, contentDiv, {
+                        feature: 'positions',
+                        availability: 'unavailable',
+                        items: [],
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Positions not available offline',
+                        skipPageEnter: samePositionsWorkspace,
+                    };
                     break;
                 }
-                if (typeof renderPositionsIndex === 'function') renderPositionsIndex(ctx, positionItems, contentDiv);
-                else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Positions</h2></div>';
+                prksPresentVuePositions(ctx, contentDiv, {
+                    feature: 'positions',
+                    availability: 'ready',
+                    items: positionItems,
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlinePositions);
+                titleOpts = { skipPageEnter: samePositionsWorkspace };
                 break;
             }
             case 'position-detail': {
@@ -4229,16 +4301,38 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     resolvedPosition.unavailable = !pendingPosition;
                 }
                 if (resolvedPosition.unavailable) {
-                    prksOfflineRenderUnavailable(contentDiv, 'Position not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Position not available offline' };
+                    prksPresentVuePositions(ctx, contentDiv, {
+                        feature: 'position-detail',
+                        availability: 'unavailable',
+                        positionId: positionId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Position not available offline',
+                        skipPageEnter: samePositionsWorkspace,
+                    };
                     break;
                 }
                 const item = resolvedPosition.position;
                 if (!item) {
-                    if (typeof renderPositionNotFound === 'function') renderPositionNotFound(contentDiv);
-                    else contentDiv.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Position not found.</h2></div>';
-                    titleOpts = { notFound: true, notFoundTitle: 'Position not found' };
+                    prksPresentVuePositions(ctx, contentDiv, {
+                        feature: 'position-detail',
+                        availability: 'not-found',
+                        positionId: positionId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Position not found',
+                        skipPageEnter: samePositionsWorkspace,
+                    };
                 } else {
+                    /* Argument rows and any Work-derived values are overlaid
+                     * here, so Vue stays ignorant of the durable queue and the
+                     * cached Position is never rewritten. */
                     await prksHydratePendingWorkMetadata();
                     if (stale()) return;
                     let item2 = typeof prksEffectivePositionDetail === 'function'
@@ -4251,9 +4345,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         }
                     }
                     ctx.setEntity('position', item2);
-                    if (typeof renderPositionDetail === 'function') renderPositionDetail(ctx, item2, contentDiv);
+                    prksPresentVuePositions(ctx, contentDiv, {
+                        feature: 'position-detail',
+                        availability: 'ready',
+                        position: item2,
+                        positionId: positionId,
+                        generation: generation,
+                    });
                     prksOfflinePrependBanner(contentDiv, offlinePosition);
-                    titleOpts = { entityTitle: item2.name || 'Position' };
+                    titleOpts = {
+                        entityTitle: item2.name || 'Position',
+                        skipPageEnter: samePositionsWorkspace,
+                    };
                 }
                 break;
             }
@@ -4519,6 +4622,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         }
         if (sameConceptsWorkspace && typeof window.prksVueDismissConcepts === 'function') {
             window.prksVueDismissConcepts(ctx);
+        }
+        if (samePositionsWorkspace && typeof window.prksVueDismissPositions === 'function') {
+            window.prksVueDismissPositions(ctx);
         }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);

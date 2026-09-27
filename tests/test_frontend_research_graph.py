@@ -19,7 +19,12 @@ _CONCEPTS_VUE_DETAIL = os.path.join(
 _CONCEPTS_VUE_INTENTS = os.path.join(
     _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "intents.ts"
 )
-_POSITIONS = os.path.join(_FRONTEND, "js", "components", "positions.js")
+_POSITIONS_VUE_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "positions", "PositionDetailRoute.vue"
+)
+_POSITIONS_VUE_INTENTS = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "positions", "intents.ts"
+)
 _ARGS = os.path.join(_FRONTEND, "js", "components", "arguments.js")
 _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
 _VENDOR = os.path.join(_FRONTEND, "vendor", "cytoscape")
@@ -109,7 +114,8 @@ class FrontendResearchGraphTests(unittest.TestCase):
 
     def test_view_in_graph_actions(self):
         self.assertIn("prks-concept-view-graph", _read(_CONCEPTS_VUE_DETAIL))
-        self.assertIn("prks-position-view-graph", _read(_POSITIONS))
+        self.assertIn("prks-position-view-graph", _read(_POSITIONS_VUE_DETAIL))
+        self.assertIn("prksGraphFocusHash", _read(_POSITIONS_VUE_INTENTS))
         self.assertIn("prks-arg-view-graph", _read(_ARGS))
         self.assertIn("prks-person-view-graph", _read(_PEOPLE))
         self.assertIn("prksGraphFocusHash", _read(_CONCEPTS_VUE_INTENTS))

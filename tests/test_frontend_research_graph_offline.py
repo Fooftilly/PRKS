@@ -25,15 +25,21 @@ class ResearchGraphOfflineTests(unittest.TestCase):
     def test_exclusions_and_navigation(self):
         concepts_vue = (ROOT / 'frontend-app/src/features/concepts/ConceptsIndexRoute.vue').read_text()
         concepts_detail = (ROOT / 'frontend-app/src/features/concepts/ConceptDetailRoute.vue').read_text()
-        for source in (concepts_vue, concepts_detail):
+        positions_vue = (ROOT / 'frontend-app/src/features/positions/PositionsIndexRoute.vue').read_text()
+        positions_detail = (ROOT / 'frontend-app/src/features/positions/PositionDetailRoute.vue').read_text()
+        for source in (concepts_vue, concepts_detail, positions_vue, positions_detail):
             self.assertNotIn('_ONLINE_ONLY_ROLE', source)
             self.assertNotIn('Graph requires a connection', source)
+        for source in (concepts_vue, concepts_detail, positions_vue):
             self.assertIn('MUTATION_ROLE', source)
-        for name in ('positions', 'arguments', 'people'):
+        for name in ('arguments', 'people'):
             source = (ROOT / ('frontend/js/components/%s.js' % name)).read_text()
             self.assertNotIn('_ONLINE_ONLY_ROLE', source)
             self.assertNotIn('Graph requires a connection', source)
             self.assertIn('_MUTATION_ROLE', source)
+        positions_stub = (ROOT / 'frontend/js/components/positions.js').read_text()
+        self.assertNotIn('_ONLINE_ONLY_ROLE', positions_stub)
+        self.assertNotIn('Graph requires a connection', positions_stub)
         for name in ('playlists', 'people-groups', 'works-pdf'):
             source = (ROOT / ('frontend/js/components/%s.js' % name)).read_text()
             self.assertNotIn('prksMarkResearchGraph', source)

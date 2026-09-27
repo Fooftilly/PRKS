@@ -222,7 +222,8 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("PRKS_POSITIONS_LIST_KEY", index_body)
         self.assertIn("domain: PRKS_POSITIONS_DOMAIN", index_body)
         self.assertIn("validate: prksIsPositionIndexShape", index_body)
-        self.assertIn("renderPositionsIndexUnavailable", index_body)
+        self.assertIn("prksPresentVuePositions(", index_body)
+        self.assertIn("availability: 'unavailable'", index_body)
         self.assertIn("prksOfflinePrependBanner(", index_body)
         # The plain online-only fetch helper is no longer the route's read path.
         self.assertNotIn("fetchPositions(", index_body)
@@ -233,9 +234,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("'position',", detail_body)
         self.assertIn("domain: PRKS_POSITIONS_DOMAIN", detail_body)
         self.assertIn("prksIsPositionShape(value, positionId)", detail_body)
-        self.assertIn("prksOfflineRenderUnavailable(contentDiv, 'Position not available offline')", detail_body)
+        self.assertIn("availability: 'unavailable'", detail_body)
+        self.assertIn("notFoundTitle: 'Position not available offline'", detail_body)
         # A reachable-server 404 keeps its own distinct meaning.
-        self.assertIn("renderPositionNotFound", detail_body)
+        self.assertIn("availability: 'not-found'", detail_body)
+        self.assertIn("notFoundTitle: 'Position not found'", detail_body)
         self.assertNotIn("fetchPosition(", detail_body)
 
         self.assertIn(

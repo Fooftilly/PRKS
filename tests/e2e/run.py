@@ -110,6 +110,7 @@ E2E_MODULES = (
     "tests.e2e.test_work_browsing",
     "tests.e2e.test_progress_route_surface",
     "tests.e2e.test_concepts_route_surface",
+    "tests.e2e.test_positions_route_surface",
     "tests.e2e.test_folder_library_route_surface",
     "tests.e2e.test_local_store_durability",
     "tests.e2e.test_folders_offline",

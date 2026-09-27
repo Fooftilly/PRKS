@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
-import ConceptRow from './ConceptRow.vue'
-import { conceptIntentsKey } from './intents'
-import { filterConceptIndexItems, normalizeConceptSearchQuery } from './match'
-import type { ConceptIndexProjection } from './projection'
+import { positionIntentsKey } from './intents'
+import { filterPositionIndexItems, normalizePositionSearchQuery } from './match'
+import PositionRow from './PositionRow.vue'
+import type { PositionIndexProjection } from './projection'
 
-const MUTATION_ROLE = 'concept-mutation-control'
+const MUTATION_ROLE = 'position-mutation-control'
 
 const props = defineProps<{
-  projection: ConceptIndexProjection
+  projection: PositionIndexProjection
 }>()
 
-const intents = inject(conceptIntentsKey)
+const intents = inject(positionIntentsKey)
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const rootEl = ref<HTMLElement | null>(null)
 const titleIconHost = ref<HTMLElement | null>(null)
@@ -28,13 +28,13 @@ const {
   rowIconHtml,
   clearSearch,
 } = useResearchIndexList({
+  icon: 'flag',
+  scopeLabel: 'Positions',
+  filter: filterPositionIndexItems,
+  normalizeQuery: normalizePositionSearchQuery,
   items: computed(() => props.projection.items),
   unavailable,
   generation: computed(() => props.projection.generation),
-  filter: filterConceptIndexItems,
-  normalizeQuery: normalizeConceptSearchQuery,
-  icon: 'network',
-  scopeLabel: 'Concepts',
   rootEl,
   titleIconHost,
   scopeHost,
@@ -47,10 +47,10 @@ function onCreate(): void {
 </script>
 
 <template>
-  <div ref="rootEl" data-prks-concepts-index-view>
+  <div ref="rootEl" data-prks-positions-index-view>
     <template v-if="unavailable">
       <div class="prks-page-header page-header">
-        <h2 class="prks-page-title">Concepts not available offline</h2>
+        <h2 class="prks-page-title">Positions not available offline</h2>
       </div>
       <p class="prks-inline-message" data-prks-role="offline-unavailable">
         This list has not been cached on this device.
@@ -61,17 +61,17 @@ function onCreate(): void {
         <div class="page-header__title-row">
           <h2 class="prks-page-title">
             <span ref="titleIconHost" aria-hidden="true"></span>
-            Concepts
+            Positions
           </h2>
           <div class="page-header__actions">
             <button
               type="button"
               class="prks-btn prks-btn--secondary"
-              id="prks-concept-new"
+              id="prks-position-new"
               :data-prks-role="MUTATION_ROLE"
               @click="onCreate"
             >
-              New Concept
+              New Position
             </button>
           </div>
         </div>
@@ -79,19 +79,19 @@ function onCreate(): void {
       </div>
       <div v-if="showToolbar" class="prks-toolbar prks-research-index__toolbar">
         <input
-          id="prks-concept-search"
+          id="prks-position-search"
           ref="searchInput"
           v-model="searchQuery"
           type="search"
           class="prks-input"
           autocomplete="off"
-          placeholder="Search concepts…"
-          aria-label="Search concepts…"
+          placeholder="Search positions…"
+          aria-label="Search positions…"
         >
       </div>
-      <div id="prks-concept-rows" class="list-view prks-research-index">
+      <div id="prks-position-rows" class="list-view prks-research-index">
         <template v-if="filtered.length">
-          <ConceptRow
+          <PositionRow
             v-for="item in filtered"
             :key="item.id"
             :item="item"
@@ -99,25 +99,21 @@ function onCreate(): void {
           />
         </template>
         <div v-else-if="showEmptyData" class="prks-research-index__empty">
-          <p class="meta-row">No Concepts yet.</p>
+          <p class="meta-row">No Positions yet.</p>
           <p>
             <button
               type="button"
               class="prks-btn prks-btn--secondary"
-              id="prks-concept-new-empty"
+              id="prks-position-new-empty"
               :data-prks-role="MUTATION_ROLE"
               @click="onCreate"
             >
-              New Concept
+              New Position
             </button>
-          </p>
-          <p class="meta-row prks-research-index__empty-hint">
-            Concepts are also created automatically when you type
-            <code>[[concept:Name]]</code> in research notes.
           </p>
         </div>
         <div v-else-if="showSearchEmpty" class="prks-research-index__empty">
-          <p class="meta-row">No Concepts match “{{ normalizedQuery }}”.</p>
+          <p class="meta-row">No Positions match “{{ normalizedQuery }}”.</p>
           <p>
             <button
               type="button"
