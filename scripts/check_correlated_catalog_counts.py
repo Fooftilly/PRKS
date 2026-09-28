@@ -19,35 +19,46 @@ Heuristic (bounded; not a SQL parser):
 2. In each literal, find parenthesized ``(SELECT ...)`` subqueries whose own
    top-level select list calls a counting aggregate (``COUNT``, ``SUM`` or
    ``TOTAL``, including ``COUNT(DISTINCT ...)``).
-3. Report the subquery only when it references a qualifier (``x.col``) that is
-   declared by a ``FROM`` / ``JOIN`` of the *enclosing* ``SELECT`` and is not
-   re-declared inside the subquery. That is the strong evidence of per-row
-   correlation; ``WHERE person_id = ?`` or a ``GROUP BY`` derived table joined
-   ``ON counts.parent_id = parent.id`` does not qualify.
+3. Report the subquery when a qualifier (``x.col``) inside it is not declared
+   by any of its own scopes (each nested ``(SELECT ...)`` resolves against its
+   own top-level ``FROM`` / ``JOIN``, then outward) and either:
+
+   - is declared by a ``FROM`` / ``JOIN`` of the *enclosing* ``SELECT``
+     (a table, or a ``(SELECT ...) alias`` derived table); or
+   - the literal is a bare projection *fragment* with no statement of its own
+     (a helper returning ``"(SELECT COUNT(*) ... WHERE c.pid = {alias}.id)"``
+     for a caller to splice into its SELECT). Its outer is ``fragment:<q>``.
+
+   That is the strong evidence of per-row correlation; ``WHERE person_id = ?``
+   or a ``GROUP BY`` derived table joined ``ON counts.parent_id = parent.id``
+   does not qualify. ``UPDATE ... SET n = (SELECT COUNT ...)`` is out of scope.
 
 Every hit has a structural identity: path, outer relation + alias, inner
 relation(s), output alias, aggregate and a fingerprint of the normalized
-subquery text (case/whitespace insensitive). Checked-in debt lives in
-``scripts/correlated_catalog_counts_allowlist.json`` with its owning issue.
+subquery text (case/whitespace insensitive, SQL comments removed). Checked-in
+debt lives in ``scripts/correlated_catalog_counts_allowlist.json`` with its
+owning issue.
 
 Rules (all evaluated against the working tree; ``--base`` supplies history):
 
 - SQL-CATALOG-001: a hit with no matching allowlist entry fails.
 - SQL-CATALOG-002: an allowlist entry that matches no current hit is stale
   and fails until the entry is removed, so the list only shrinks.
-- SQL-CATALOG-003: an allowlist entry whose fingerprint does not exist in the
+- SQL-CATALOG-003: an allowlist entry whose structural identity *minus path*
+  (outer, inner, output alias, aggregate, fingerprint) did not exist in the
   production sources at ``--base`` fails. Occurrences are counted: each entry
-  consumes one historical occurrence, so N entries need N base occurrences. Grandfathering therefore covers only
-  debt that already existed; adding a new query together with a new entry, or
-  rewriting a grandfathered query into another correlated aggregate and
-  re-blessing it, is rejected. Moving an unchanged query to another file keeps
-  its fingerprint and passes.
+  consumes one historical occurrence, so N entries need N base occurrences.
+  Grandfathering therefore covers only debt that already existed; adding a
+  new query with a new entry, copying grandfathered SQL, transplanting it
+  under a different outer relation, or rewriting it and re-blessing it are all
+  rejected. Moving an unchanged query to another file passes.
 - SQL-CATALOG-004: the allowlist file is malformed.
 
 Reviewed escape hatch for a deliberate non-catalogue use (diagnostics, a
 single-row read the heuristic cannot see is bounded): put a SQL comment
-``-- prks-allow-correlated-count: <reason>`` inside the subquery. The reason is
-required and the exemption covers only that subquery.
+``-- prks-allow-correlated-count: <reason>`` (or ``/* ... */``) directly in the
+subquery, not in a nested one. Marker text in quoted values does not count.
+The reason is required and the exemption covers only that subquery.
 
 A base revision that cannot be inspected fails closed (exit 2).
 """
@@ -92,6 +103,11 @@ _RELATION_RE = re.compile(
     rf"\b(?:from|join)\s+(?:(?:main|temp)\.)?({_IDENT})"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
+)
+# FROM/JOIN (<derived table>) [AS] <alias>. Only meaningful on _top_level()
+# text, where the derived table's body is already blanked to spaces.
+_DERIVED_RE = re.compile(
+    rf"\b(?:from|join)\s*\(\s*\)\s*(?:as\s+)?({_IDENT})", re.IGNORECASE
 )
 _QUALIFIED_RE = re.compile(rf"\b({_IDENT})\s*\.\s*(?:{_IDENT}|\*)")
 _AS_ALIAS_RE = re.compile(rf"\s*(?:as\s+)?({_IDENT})", re.IGNORECASE)
@@ -148,8 +164,12 @@ class Finding:
 # --------------------------------------------------------------------------
 
 
-def _mask_sql(sql: str) -> str:
-    """Blank quoted strings and comments (same length) so structure is safe."""
+def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
+    """Blank quoted strings and comments (same length) so structure is safe.
+
+    When ``comments`` is given, every ``--`` / ``/* */`` comment is appended
+    to it as ``(start_offset, text)``.
+    """
     out = list(sql)
     i = 0
     n = len(sql)
@@ -171,12 +191,16 @@ def _mask_sql(sql: str) -> str:
         elif sql.startswith("--", i):
             j = sql.find("\n", i)
             j = n if j < 0 else j
+            if comments is not None:
+                comments.append((i, sql[i:j]))
             for k in range(i, j):
                 out[k] = " "
             i = j
         elif sql.startswith("/*", i):
             j = sql.find("*/", i + 2)
             j = n if j < 0 else j + 2
+            if comments is not None:
+                comments.append((i, sql[i:j]))
             for k in range(i, j):
                 if out[k] != "\n":
                     out[k] = " "
@@ -228,6 +252,10 @@ def _declared(masked: str) -> dict[str, str]:
         # An aliased relation is only addressable by its alias (SQLite hides
         # the table name), so ``FROM folders c`` does not shadow ``folders.id``.
         names.setdefault(alias or table, f"{table} {alias}".strip())
+    for m in _DERIVED_RE.finditer(masked):
+        alias = m.group(1).lower()
+        if alias not in _KEYWORDS:
+            names.setdefault(alias, f"(subquery) {alias}")
     return names
 
 
@@ -245,6 +273,12 @@ def _aggregate_in_select_list(body_masked: str) -> str | None:
 
 
 _STATEMENT_START_RE = re.compile(r"\s*(?:with|select)\b", re.IGNORECASE)
+# Any of these at a literal's top level means it is (part of) a statement,
+# not a bare projection fragment.
+_STATEMENT_WORD_RE = re.compile(
+    r"\b(?:select|from|update|insert|delete|replace|with|set|values|where)\b",
+    re.IGNORECASE,
+)
 
 
 def _enclosing_span(masked: str, start: int, end: int) -> tuple[int, int]:
@@ -272,9 +306,73 @@ def _normalize(text: str) -> str:
     return re.sub(r" ?([(),=<>!*+/-]) ?", r"\1", text)
 
 
+def _nested_select_spans(text: str) -> list[tuple[int, int]]:
+    """``(open, close)`` offsets of every ``(SELECT ...)`` inside ``text``."""
+    spans = []
+    for m in _SUBQUERY_START_RE.finditer(text):
+        close = _match_paren(text, m.start())
+        if close >= 0:
+            spans.append((m.start(), close))
+    return spans
+
+
+def _has_marker(
+    comments: list[tuple[int, str]],
+    start: int,
+    end: int,
+    nested: list[tuple[int, int]],
+) -> bool:
+    """True when a SQL comment owned by ``[start, end]`` carries MARKER + reason.
+
+    Comments inside a nested ``(SELECT ...)`` (absolute ``nested`` spans)
+    belong to that nested query and do not exempt the enclosing aggregate.
+    """
+    for offset, text in comments:
+        if not start <= offset <= end or MARKER not in text:
+            continue
+        if any(s <= offset <= e for s, e in nested):
+            continue
+        reason = text[text.find(MARKER) + len(MARKER) :]
+        if reason.strip().rstrip("*/").strip():
+            return True
+    return False
+
+
+def _unresolved_refs(body_masked: str) -> set[str]:
+    """Qualifiers in the subquery that none of its own scopes declare.
+
+    Each reference resolves against the innermost ``(SELECT ...)`` scope
+    around it, then outward up to the aggregate subquery itself. Aliases are
+    visible only at their own scope's top level, so ``EXISTS (SELECT 1 FROM
+    works p ...)`` does not hide a sibling ``p.id`` that points outside.
+    """
+    inner_text = body_masked[1:-1]
+    scopes: list[tuple[int, int, dict[str, str]]] = [
+        (0, len(inner_text), _declared(_top_level(inner_text)))
+    ]
+    for s, e in _nested_select_spans(inner_text):
+        scopes.append((s, e, _declared(_top_level(inner_text[s + 1 : e]))))
+    unresolved: set[str] = set()
+    for q in _QUALIFIED_RE.finditer(inner_text):
+        name = q.group(1).lower()
+        pos = q.start()
+        if not any(s <= pos <= e and name in decl for s, e, decl in scopes):
+            unresolved.add(name)
+    return unresolved
+
+
 def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
     """Return ``(offset, facts)`` for each correlated aggregate subquery."""
-    masked = _mask_sql(sql)
+    comments: list[tuple[int, str]] = []
+    masked = _mask_sql(sql, comments)
+    # Raw SQL with comments blanked: fingerprints ignore comment-only edits
+    # but keep quoted values (which can change semantics).
+    uncommented = list(sql)
+    for offset, text in comments:
+        for k in range(offset, offset + len(text)):
+            if uncommented[k] != "\n":
+                uncommented[k] = " "
+    sql_uncommented = "".join(uncommented)
     results: list[tuple[int, dict[str, str]]] = []
     for m in _SUBQUERY_START_RE.finditer(masked):
         open_idx = m.start()
@@ -282,29 +380,34 @@ def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
         if close < 0:
             continue
         body_masked = masked[open_idx : close + 1]
-        body_raw = sql[open_idx : close + 1]
+        body_raw = sql_uncommented[open_idx : close + 1]
         aggregate = _aggregate_in_select_list(body_masked)
         if aggregate is None:
             continue
-        if MARKER in body_raw:
-            idx = body_raw.find(MARKER)
-            reason = body_raw[idx + len(MARKER) :].split("\n", 1)[0].strip()
-            if reason:
-                continue
-        inner = _declared(body_masked)
+        nested = [
+            (open_idx + 1 + s, open_idx + 1 + e)
+            for s, e in _nested_select_spans(body_masked[1:-1])
+        ]
+        if _has_marker(comments, open_idx, close, nested):
+            continue
+        inner = _declared(_top_level(body_masked[1:-1]))
+        unresolved = _unresolved_refs(body_masked)
         enc_start, enc_end = _enclosing_span(masked, open_idx, close)
         # Enclosing statement text with every nested (...) blanked, so sibling
         # subqueries do not contribute their own aliases to the outer scope.
         outer_text = _top_level(masked[enc_start:enc_end])
-        # The enclosing statement must be a SELECT (skip UPDATE ... SET x =).
-        if not re.match(r"\s*(?:with\b.*?)?select\b", outer_text, re.IGNORECASE | re.DOTALL):
+        if re.match(r"\s*(?:with\b.*?)?select\b", outer_text, re.IGNORECASE | re.DOTALL):
+            outer = _declared(outer_text)
+            correlated = sorted(r for r in unresolved if r in outer)
+            outer_label = ", ".join(sorted({outer[r] for r in correlated}))
+        elif enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
+            # A bare projection fragment for a caller to splice into its own
+            # SELECT; any outward reference is the per-row correlation.
+            correlated = sorted(unresolved)
+            outer_label = "fragment:" + ", ".join(correlated)
+        else:
+            # UPDATE ... SET n = (SELECT COUNT ...) and other statements.
             continue
-        outer = _declared(outer_text)
-        refs = {
-            q.group(1).lower()
-            for q in _QUALIFIED_RE.finditer(body_masked)
-        }
-        correlated = sorted(r for r in refs if r in outer and r not in inner)
         if not correlated:
             continue
         after = _AS_ALIAS_RE.match(masked, close + 1)
@@ -315,7 +418,7 @@ def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
             {label.split(" ")[0] for label in inner.values()}
         )
         facts = {
-            "outer": ", ".join(sorted({outer[r] for r in correlated})),
+            "outer": outer_label,
             "inner": ", ".join(inner_tables),
             "output_alias": output_alias,
             "aggregate": aggregate,
@@ -559,16 +662,19 @@ def evaluate(hits: list[Hit], entries: list[dict], base_hits: list[Hit]) -> list
         else:
             valid.append(entry)
 
-    # Multiset: each valid entry consumes one historical occurrence, so
-    # copying grandfathered SQL and adding a second entry cannot raise the
-    # count of exempted occurrences above what existed at the base.
-    base_fingerprints: Counter[str] = Counter(h.fingerprint for h in base_hits)
+    # Multiset over the structural identity minus path: each valid entry
+    # consumes one historical occurrence. Copying grandfathered SQL, or moving
+    # the same subquery under a different outer relation, cannot raise the
+    # exempted count above what existed at the base; a file move still can.
+    base_provenance: Counter[tuple[str, ...]] = Counter(
+        h.identity[1:] for h in base_hits
+    )
     allowed: Counter[tuple[str, ...]] = Counter()
     for entry in valid:
         key = tuple(entry[k] for k in _ENTRY_KEYS)
         allowed[key] += 1
-        if base_fingerprints[entry["fingerprint"]] > 0:
-            base_fingerprints[entry["fingerprint"]] -= 1
+        if base_provenance[key[1:]] > 0:
+            base_provenance[key[1:]] -= 1
         else:
             findings.append(
                 Finding(

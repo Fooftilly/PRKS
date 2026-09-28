@@ -115,6 +115,38 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].outer, "folders")
 
+    def test_nested_alias_reusing_outer_name_does_not_hide_correlation(self):
+        sql = """
+        SELECT p.*,
+            (SELECT COUNT(*) FROM playlist_items i
+             WHERE i.playlist_id = p.id
+               AND EXISTS (SELECT 1 FROM works p WHERE p.id = i.work_id)) AS item_count
+        FROM playlists p
+        """
+        hits = _hits(sql)
+        self.assertEqual([h.output_alias for h in hits], ["item_count"])
+        self.assertEqual(hits[0].inner, "playlist_items")
+
+    def test_correlation_through_nested_subquery_detected(self):
+        sql = """
+        SELECT p.id,
+            (SELECT COUNT(*) FROM works w
+             WHERE w.id IN (SELECT i.work_id FROM playlist_items i WHERE i.playlist_id = p.id))
+                AS n
+        FROM playlists p
+        """
+        self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
+    def test_nested_references_to_own_scopes_are_not_correlated(self):
+        sql = """
+        SELECT p.id,
+            (SELECT COUNT(*) FROM works w
+             WHERE w.id IN (SELECT p.work_id FROM playlist_items p WHERE p.kind = w.kind))
+                AS n
+        FROM playlists p
+        """
+        self.assertEqual(_hits(sql), [])
+
     def test_independent_counts_pass(self):
         for sql in (
             "SELECT COUNT(*) FROM pending_pdf_cleanup",
@@ -129,6 +161,41 @@ class DetectionTests(unittest.TestCase):
 
     def test_set_based_replacement_passes(self):
         self.assertEqual(_hits(SET_BASED_SQL), [])
+
+    def test_correlation_to_outer_derived_table_alias_detected(self):
+        sql = """
+        SELECT p.id,
+            (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n
+        FROM (SELECT id FROM parent WHERE visible = 1) AS p
+        """
+        hits = _hits(sql)
+        self.assertEqual([h.outer for h in hits], ["(subquery) p"])
+
+    def test_helper_projection_fragment_detected(self):
+        src = (
+            "def member_count_sql(alias):\n"
+            '    return f"(SELECT COUNT(*) FROM person_group_members m '
+            'WHERE m.group_id = {alias}.id) AS member_count"\n'
+            "\n"
+            'FRAGMENT = "(SELECT COUNT(*) FROM work_tags wt WHERE wt.tag_id = t.id) AS n"\n'
+        )
+        hits = checker.scan_source("backend/x.py", src)
+        self.assertEqual(
+            [(h.outer, h.output_alias) for h in hits],
+            [("fragment:__expr__", "member_count"), ("fragment:t", "n")],
+        )
+
+    def test_independent_fragment_passes(self):
+        src = 'F = "(SELECT COUNT(*) FROM roles r WHERE r.person_id = ?) AS n"\n'
+        self.assertEqual(checker.scan_source("backend/x.py", src), [])
+
+    def test_sql_comments_do_not_change_fingerprint(self):
+        base = _hits(PLAYLIST_SQL)[0]
+        commented = PLAYLIST_SQL.replace(
+            "WHERE i.playlist_id = p.id",
+            "-- counts every item\n WHERE /* per playlist */ i.playlist_id = p.id",
+        )
+        self.assertEqual(_hits(commented)[0].fingerprint, base.fingerprint)
 
     def test_quoted_text_and_docstrings_ignored(self):
         src = (
@@ -168,6 +235,30 @@ class DetectionTests(unittest.TestCase):
             "(SELECT COUNT(*) -- prks-allow-correlated-count:\n FROM",
         )
         self.assertEqual(len(_hits(no_reason)), 1)
+        block = PLAYLIST_SQL.replace(
+            "(SELECT COUNT(*) FROM",
+            "(SELECT COUNT(*) /* prks-allow-correlated-count: one-row diagnostics */ FROM",
+        )
+        self.assertEqual(_hits(block), [])
+
+    def test_marker_text_outside_a_sql_comment_does_not_exempt(self):
+        for sql in (
+            PLAYLIST_SQL.replace(
+                "WHERE i.playlist_id = p.id",
+                "WHERE i.playlist_id = p.id AND i.kind = 'prks-allow-correlated-count: normal'",
+            ),
+            PLAYLIST_SQL.replace(
+                "FROM playlists p",
+                "FROM playlists p -- prks-allow-correlated-count: outside the subquery",
+            ),
+            PLAYLIST_SQL.replace(
+                "WHERE i.playlist_id = p.id",
+                "WHERE i.playlist_id = p.id AND EXISTS (SELECT 1 -- "
+                "prks-allow-correlated-count: nested only\n FROM works w WHERE w.id = i.work_id)",
+            ),
+        ):
+            with self.subTest(sql=sql):
+                self.assertEqual(len(_hits(sql)), 1)
 
 
 class RepoGateTests(unittest.TestCase):
@@ -310,6 +401,32 @@ class RepoGateTests(unittest.TestCase):
         )
         self.allowlist_current()
         base = self.commit("seed with two identical historical copies")
+        rc, out = self.run_gate(base)
+        self.assertEqual(rc, 0, out)
+
+    def test_transplanting_subquery_to_other_outer_relation_fails_provenance(self):
+        base = self.seed_debt()
+        self.write(
+            "backend/db.py",
+            _py(PLAYLIST_SQL.replace("FROM playlists p", "FROM archived_playlists p"), "PLAYLISTS"),
+        )
+        self.allowlist_current()
+        rc, out = self.run_gate(base)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.count("SQL-CATALOG-003"), 1)
+
+    def test_comment_only_edit_to_grandfathered_debt_passes(self):
+        base = self.seed_debt()
+        self.write(
+            "backend/db.py",
+            _py(
+                PLAYLIST_SQL.replace(
+                    "WHERE i.playlist_id = p.id",
+                    "-- per playlist\n WHERE i.playlist_id = p.id",
+                ),
+                "PLAYLISTS",
+            ),
+        )
         rc, out = self.run_gate(base)
         self.assertEqual(rc, 0, out)
 
