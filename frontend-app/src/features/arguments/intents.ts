@@ -102,6 +102,17 @@ async function alertArgument(title: string, err: unknown, fallback: string): Pro
   await alertFn({ title, message })
 }
 
+/**
+ * `createArgument` already turns a durable failure into a user-facing Error.
+ * Mapping that Error again sees no code and replaces the message with the
+ * generic default. Show the message the create API already produced.
+ */
+async function alertCreateFailure(title: string, err: unknown, fallback: string): Promise<void> {
+  const alertFn = window.prksAlertDialog
+  if (typeof alertFn !== 'function') return
+  await alertFn({ title, message: messageOf(err).trim() || fallback })
+}
+
 /** Positions and other Arguments/Stances. The Argument being edited is excluded. */
 export function argumentTargetPickerItems(
   args: readonly { id?: string; name?: string; kind?: string }[],
@@ -179,7 +190,7 @@ export function browserArgumentIntents(
         created = await create({ name: String(name).trim(), kind })
       } catch (err) {
         if (!ownsIndex(owner, generation)) return
-        await alertArgument(`Could not create ${label}`, err, `create this ${label}`)
+        await alertCreateFailure(`Could not create ${label}`, err, `create this ${label}`)
         return
       }
       if (created?.id && ownsIndex(owner, generation) && typeof window.prksNavigate === 'function') {
@@ -254,7 +265,7 @@ export function browserArgumentIntents(
         })
       } catch (err) {
         if (!ownsGeneration(owner, generation)) return
-        await alertArgument('Could not create response', err, 'create this Argument')
+        await alertCreateFailure('Could not create response', err, 'create this Argument')
         return
       }
       if (
@@ -304,9 +315,11 @@ export function browserArgumentIntents(
       const open = window.prksOpenResearchPicker
       if (typeof open !== 'function') return
       if (!editorStillCurrent(owner, generation, selfId)) return
-      const args = typeof window.fetchArguments === 'function' ? await window.fetchArguments() : []
-      const positions =
-        typeof window.fetchPositions === 'function' ? await window.fetchPositions() : []
+      const argsPromise =
+        typeof window.fetchArguments === 'function' ? window.fetchArguments() : Promise.resolve([])
+      const positionsPromise =
+        typeof window.fetchPositions === 'function' ? window.fetchPositions() : Promise.resolve([])
+      const [args, positions] = await Promise.all([argsPromise, positionsPromise])
       if (!editorStillCurrent(owner, generation, selfId)) return
       const items = argumentTargetPickerItems(args || [], positions || [], selfId)
       open({

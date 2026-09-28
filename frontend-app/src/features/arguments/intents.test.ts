@@ -84,6 +84,28 @@ describe('Argument intents', () => {
     expect(window.createArgument).toHaveBeenLastCalledWith({ name: 'Local stance', kind: 'stance' })
   })
 
+  it('shows the create API message instead of mapping it again', async () => {
+    const useful = 'That part of this Argument is syncing or needs a decision. Try again shortly.'
+    window.prksPromptTextDialog = vi.fn(async () => 'Reply')
+    window.createArgument = vi.fn(async () => {
+      throw new Error(useful)
+    })
+    window.prksArgumentSaveMessage = () => 'Could not create this Argument locally. Please retry.'
+    const alertFn = vi.fn(async () => {})
+    window.prksAlertDialog = alertFn
+    window.prksTabContextOwnsEntityRoute = () => true
+    await browserArgumentIntents(detailOwner(), 4).createResponse(argument())
+    expect(alertFn).toHaveBeenCalledWith({ title: 'Could not create response', message: useful })
+
+    alertFn.mockClear()
+    window.prksPromptTextDialog = vi.fn(async () => 'Named')
+    await browserArgumentIntents(
+      { tabId: 'tab-main', isCurrent: () => true, lastResolvedRoute: { name: 'arguments' } },
+      1,
+    ).create('stance')
+    expect(alertFn).toHaveBeenCalledWith({ title: 'Could not create Stance', message: useful })
+  })
+
   it('does not create a response after the pane leaves while the prompt is open', async () => {
     let release = (_name: string | null) => {}
     window.prksPromptTextDialog = () =>
@@ -208,6 +230,29 @@ describe('Argument intents', () => {
     await browserArgumentIntents(editing, 1).pickSource('A1', () => {})
     expect(window.prksOpenResearchPicker).toHaveBeenCalledTimes(2)
     expect(window.fetchWorks).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts the Positions catalogue without waiting for Arguments', async () => {
+    const open = vi.fn()
+    window.prksOpenResearchPicker = open
+    let releaseArgs = () => {}
+    let positionsStarted = false
+    window.fetchArguments = () =>
+      new Promise((resolve) => {
+        releaseArgs = () => resolve([{ id: 'A2', name: 'Other', kind: 'argument' }])
+      })
+    window.fetchPositions = () => {
+      positionsStarted = true
+      return Promise.resolve([{ id: 'P1', name: 'Position' }])
+    }
+    const pending = browserArgumentIntents(detailOwner({ ui: { argumentEditing: true } }), 1).pickTarget(
+      'A1',
+      () => {},
+    )
+    expect(positionsStarted).toBe(true)
+    releaseArgs()
+    await pending
+    expect(open).toHaveBeenCalledTimes(1)
   })
 
   it('does not open a picker when edit ends before the catalogue resolves', async () => {
