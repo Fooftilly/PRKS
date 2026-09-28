@@ -611,13 +611,13 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # snapshots for a change whose shape is already known would be the
         # opposite of what the reconciler exists to do -- and there is no
         # PATCH left here to invalidate after.
-        pl = _read(os.path.join(_FRONTEND, "js", "components", "playlists.js"))
-        rename_at = pl.index("if (renSave) {")
-        rename_body = pl[rename_at : rename_at + 2200]
-        self.assertIn("prksSaveWorkFieldDurably(wid, 'title'", rename_body)
-        self.assertNotIn("prksMarkWorkTitleChanged", rename_body)
-        self.assertNotIn("method: 'PATCH'", rename_body)
-        self.assertNotIn("prksPlaylistsChanged()", rename_body)
+        intents = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "playlists", "intents.ts"))
+        self.assertIn("prksSaveWorkFieldDurably", intents)
+        self.assertIn("save(workId, 'title', next", intents)
+        self.assertNotIn("prksMarkWorkTitleChanged", intents)
+        self.assertNotIn("method: 'PATCH'", intents)
+        self.assertNotIn("prksPlaylistsChanged()", intents)
 
     def test_group_mutations_are_durable_and_never_raw_requests(self):
         """Every Person Group mutation is a semantic operation now.

@@ -111,10 +111,10 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn("PLAYLIST_FIELDS.indexOf(field) === -1", body)
         self.assertIn('Not an editable playlist field: ', body)
-        pl = (FRONTEND / 'components' / 'playlists.js').read_text()
-        at = pl.index("if (renSave) {")
-        body = pl[at: pl.index('return;\n        }', at)]
-        self.assertIn("prksSaveWorkFieldDurably(wid, 'title', nextTitle", body)
+        intents = (ROOT / 'frontend-app' / 'src' / 'features' / 'playlists' / 'intents.ts').read_text()
+        self.assertIn('prksSaveWorkFieldDurably', intents)
+        self.assertIn("save(workId, 'title', next", intents)
+        self.assertNotIn("method: 'PATCH'", intents)
 
     def test_deletion_cancels_only_what_was_never_sent(self):
         at = self.store.index('function deletePlaylist(')
@@ -132,14 +132,21 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         that path, warn that videos survive, and stay off the online-only
         mutation selector (Add-video search)."""
         pl = (FRONTEND / 'components' / 'playlists.js').read_text()
-        self.assertIn('id="prks-playlist-delete-btn"', pl)
-        self.assertIn('Delete playlist', pl)
+        vue = (ROOT / 'frontend-app' / 'src' / 'features' / 'playlists' / 'PlaylistDetailRoute.vue').read_text()
+        self.assertIn('id="prks-playlist-delete-btn"', vue)
+        self.assertIn('Delete playlist', vue)
         at = pl.index('async function deletePlaylistFromDetail(')
         body = pl[at: pl.index('\nfunction ', at)]
         self.assertIn('prksConfirmDestructive', body)
         self.assertIn('deletePlaylistCanonical', body)
         self.assertIn('will stay in your library', body)
         self.assertIn("prksNavigate('#/playlists'", body)
+        after_confirm = body[body.index("await prksConfirmDestructive"):]
+        self.assertLess(after_confirm.index("stillOwnsPlaylist()"), after_confirm.index("await deletePlaylistCanonical"))
+        after_delete = after_confirm[after_confirm.index("await deletePlaylistCanonical"):]
+        self.assertLess(after_delete.index("stillOwnsPlaylist()"), after_delete.index("prksNavigate('#/playlists'"))
+        self.assertIn("prksTabContextOwnsEntityRoute(", body)
+        self.assertIn("'playlist-detail'", body)
         sel_at = pl.index('const PRKS_PLAYLIST_MUTATION_SELECTOR')
         sel = pl[sel_at: pl.index('].join', sel_at)]
         self.assertNotIn('prks-playlist-delete-btn', sel)

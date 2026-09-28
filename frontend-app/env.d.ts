@@ -58,6 +58,27 @@ interface ArgumentDetailPresentRequest {
   shell?: boolean
 }
 
+interface PlaylistsIndexPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable'
+  items?: unknown
+  generation?: number
+  shell?: boolean
+}
+
+interface PlaylistDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable' | 'not-found'
+  playlist?: unknown
+  playlistId?: string
+  editing?: boolean
+  renaming?: unknown
+  generation?: number
+  shell?: boolean
+}
+
 interface PositionDetailPresentRequest {
   owner: object
   host: HTMLElement
@@ -143,6 +164,9 @@ interface Window {
   prksVuePresentArgumentsIndex?: (input: ArgumentsIndexPresentRequest) => void
   prksVuePresentArgumentDetail?: (input: ArgumentDetailPresentRequest) => void
   prksVueDismissArguments?: (owner: object) => void
+  prksVuePresentPlaylistsIndex?: (input: PlaylistsIndexPresentRequest) => void
+  prksVuePresentPlaylistDetail?: (input: PlaylistDetailPresentRequest) => void
+  prksVueDismissPlaylists?: (owner: object) => void
   prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
   prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (
@@ -307,7 +331,39 @@ interface Window {
   }) => Promise<{ id?: string } | null>
   fetchArguments?: () => Promise<Array<{ id?: string; name?: string; kind?: string }>>
   fetchPositions?: () => Promise<Array<{ id?: string; name?: string }>>
-  fetchWorks?: () => Promise<Array<{ id?: string; title?: string }>>
+  fetchWorks?: (options?: {
+    signal?: AbortSignal
+    errorOwner?: object
+  }) => Promise<Array<{ id?: string; title?: string }>>
+  prksConsumeApiError?: (owner: object) => { message?: string } | null
+  prksInferWorkSourceKind?: (work: unknown) => string
+  prksOfflineRuntimeState?: () => string
+  prksOfflineRuntimeSubscribe?: (listener: (state: string) => void) => () => void
+  prksAlertMessage?: (message: string, title?: string) => Promise<void> | void
+  prksApplyPlaylistOfflineState?: (container: ParentNode | null) => void
+  prksOpenNewPlaylistModalFromPlaylistsPage?: (owner?: object) => void
+  prksReloadPlaylistDetail?: (ctx: unknown, playlistId: string) => Promise<unknown>
+  updatePlaylist?: (
+    playlistId: string,
+    fields: Record<string, string>,
+    options?: object,
+  ) => Promise<unknown>
+  reorderPlaylist?: (playlistId: string, workIds: string[]) => Promise<unknown>
+  addWorkToPlaylist?: (playlistId: string, workId: string) => Promise<unknown>
+  removeWorkFromPlaylist?: (playlistId: string, workId: string) => Promise<unknown>
+  deletePlaylistFromDetail?: (
+    ctx: unknown,
+    playlist: { id: string; title?: string; items?: ReadonlyArray<{ id: string }> },
+    generation?: number,
+  ) => Promise<void>
+  renderPlaylistDetail?: (ctx: unknown, playlist: unknown, container: HTMLElement) => void
+  updatePanelContent?: (tab?: string) => void
+  prksSaveWorkFieldDurably?: (
+    workId: string,
+    field: string,
+    value: string,
+    options?: { label?: string },
+  ) => Promise<{ code?: string; error?: string } | null>
   prksOpenResearchPicker?: (opts: {
     title: string
     items: () => Array<{ id: string; label: string; kind: string; pickType: string; haystack: string }>

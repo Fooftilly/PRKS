@@ -121,6 +121,7 @@ E2E_MODULES = (
     "tests.e2e.test_person_groups_durable",
     "tests.e2e.test_playlists_offline",
     "tests.e2e.test_playlists_durable",
+    "tests.e2e.test_playlists_route_surface",
     "tests.e2e.test_concepts_durable",
     "tests.e2e.test_positions_durable",
     "tests.e2e.test_arguments_durable",

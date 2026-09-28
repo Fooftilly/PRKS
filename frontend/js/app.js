@@ -2990,6 +2990,46 @@ function prksPresentVueArguments(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Playlists index or detail surface in this pane.
+ * `detail` must already be the authoritative effective Playlist projection.
+ * Same-owner Playlists refresh reuses the existing host.
+ */
+function prksPresentVuePlaylists(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const feature = detail.feature === 'playlist-detail' ? 'playlist-detail' : 'playlists';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        playlist: detail.playlist,
+        playlistId: detail.playlistId,
+        editing: detail.editing === true,
+        renaming: detail.renaming,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'playlist-detail' && typeof window.prksVuePresentPlaylistDetail === 'function') {
+        window.prksVuePresentPlaylistDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'playlists' && typeof window.prksVuePresentPlaylistsIndex === 'function') {
+        window.prksVuePresentPlaylistsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3283,6 +3323,18 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (sameArgumentsWorkspace) {
         ctx.__prksRetainArgumentsSurface = true;
     }
+    /* Playlists→Playlists in the same mounted TabContext keeps the Vue host
+     * so an in-place refresh does not detach the editor. Flag before
+     * beginRoute: TabContext cleanups run there. */
+    const samePlaylistsWorkspace = !!(
+        (route.name === 'playlists' || route.name === 'playlist-detail') &&
+        contentDiv.querySelector(
+            '[data-prks-playlists-index-view], [data-prks-playlist-detail-view]'
+        )
+    );
+    if (samePlaylistsWorkspace) {
+        ctx.__prksRetainPlaylistsSurface = true;
+    }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
@@ -3295,6 +3347,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
     if (sameArgumentsWorkspace) {
         ctx.__prksRetainArgumentsSurface = false;
+    }
+    if (samePlaylistsWorkspace) {
+        ctx.__prksRetainPlaylistsSurface = false;
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3333,6 +3388,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         !sameFolderLibraryWorkspace &&
         !samePositionsWorkspace &&
         !sameArgumentsWorkspace &&
+        !samePlaylistsWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3346,7 +3402,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
@@ -3362,6 +3418,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissArguments === 'function') {
             window.prksVueDismissArguments(ctx);
         }
+        if (typeof window.prksVueDismissPlaylists === 'function') {
+            window.prksVueDismissPlaylists(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -3372,8 +3431,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
-    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace) {
-        // Folder Library / Concepts / Positions / Arguments in-place refresh: keep the Vue host; mark busy until paint.
+    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace || samePlaylistsWorkspace) {
+        // Folder Library / Concepts / Positions / Arguments / Playlists in-place refresh: keep the Vue host; mark busy until paint.
         contentDiv.setAttribute('aria-busy', 'true');
     }
 
@@ -3437,11 +3496,23 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         : await prksEffectivePlaylistRows([], playlistOps);
                     if (stale()) return;
                     if (!cachedPlaylists && !(pls && pls.length)) {
-                        prksOfflineRenderUnavailable(contentDiv, 'Playlists not available offline');
+                        prksPresentVuePlaylists(ctx, contentDiv, {
+                            feature: 'playlists',
+                            availability: 'unavailable',
+                            items: [],
+                            generation: generation,
+                        });
+                        prksOfflinePrependBanner(contentDiv, null);
+                        titleOpts = {
+                            notFound: true,
+                            notFoundTitle: 'Playlists not available offline',
+                            skipPageEnter: samePlaylistsWorkspace,
+                        };
                         break;
                     }
                     renderPlaylistsIndex(pls, contentDiv, ctx);
                     prksOfflinePrependBanner(contentDiv, offlinePlaylists);
+                    titleOpts = { skipPageEnter: samePlaylistsWorkspace };
                 } else {
                     contentDiv.innerHTML =
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
@@ -3494,8 +3565,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         ctx.setEntity('playlist', null);
                         ctx.ui.playlistEditing = false;
                         ctx.ui.playlistRename = {};
-                        prksOfflineRenderUnavailable(contentDiv, 'Playlist not available offline');
-                        titleOpts = { notFound: true, notFoundTitle: 'Playlist not available offline' };
+                        prksPresentVuePlaylists(ctx, contentDiv, {
+                            feature: 'playlist-detail',
+                            availability: 'unavailable',
+                            playlist: null,
+                            playlistId: plId,
+                            generation: generation,
+                        });
+                        prksOfflinePrependBanner(contentDiv, null);
+                        titleOpts = {
+                            notFound: true,
+                            notFoundTitle: 'Playlist not available offline',
+                            skipPageEnter: samePlaylistsWorkspace,
+                        };
                         break;
                     }
                     const pl = typeof prksEffectivePlaylistDetail === 'function'
@@ -3517,8 +3599,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     renderPlaylistDetail(ctx, pl, contentDiv);
                     prksOfflinePrependBanner(contentDiv, offlinePlaylist);
                     titleOpts = pl
-                        ? { entityTitle: pl.title || 'Playlist' }
-                        : { notFound: true, notFoundTitle: 'Playlist not found' };
+                        ? { entityTitle: pl.title || 'Playlist', skipPageEnter: samePlaylistsWorkspace }
+                        : { notFound: true, notFoundTitle: 'Playlist not found', skipPageEnter: samePlaylistsWorkspace };
                 } else {
                     contentDiv.innerHTML =
                         '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlists</h2></div><p class="meta-row">Playlist UI unavailable.</p>';
@@ -4732,6 +4814,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (sameArgumentsWorkspace && typeof window.prksVueDismissArguments === 'function') {
             window.prksVueDismissArguments(ctx);
         }
+        if (samePlaylistsWorkspace && typeof window.prksVueDismissPlaylists === 'function') {
+            window.prksVueDismissPlaylists(ctx);
+        }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);
         }
@@ -5587,12 +5672,14 @@ function initForms() {
                     await window.__prksRefreshAllPlaylistSelects(newId);
                 }
                 // Navigate only when playlist creation came from the playlists index (not from New File flow).
+                const attachedWork = !!(pending && pending.workId);
+                const createTabId = typeof window.prksTakePlaylistIndexCreateTabId === 'function'
+                    ? window.prksTakePlaylistIndexCreateTabId()
+                    : '';
                 if (window.__prksReturnToWorkModalAfterPlaylist === true) {
                     // closeModals() will restore the New File modal.
-                } else if ((window.location.hash || '') === '#/playlists') {
-                    if (typeof prksNavigate === 'function') {
-                        prksNavigate('#/playlists/' + encodeURIComponent(newId));
-                    }
+                } else if (!attachedWork && createTabId && typeof prksNavigate === 'function') {
+                    prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId });
                 }
             } catch (e) {
                 console.error(e);

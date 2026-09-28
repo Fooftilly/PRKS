@@ -2282,7 +2282,7 @@ function renderRouteContextSidebar(mode) {
         return `
             <div class="route-sidebar">
                 <h2 class="route-sidebar__title">${name}</h2>
-                <p class="route-sidebar__lede">Edit title/description and add videos from the Details panel.</p>
+                <p class="route-sidebar__lede">Edit the title, description, and videos in the playlist. Details stays a summary.</p>
                 ${extra}
                 ${link('#/playlists', 'All playlists')}
             </div>`;
@@ -3100,21 +3100,8 @@ function updatePanelContent(tabId) {
         }
     } else if (_cpl && routeName === 'playlist-detail') {
         const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.playlistEditing);
-        panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(_cpl) : renderPlaylistSummarySidebarHtml(_cpl);
-        if (editing) {
-            void mountPlaylistEditSidebar(_cpl, focusedCtx);
-        } else {
-            const btn = document.getElementById('prks-playlist-edit-btn');
-            if (btn && btn.dataset.bound !== '1') {
-                btn.dataset.bound = '1';
-                btn.onclick = () => {
-                    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-                    if (ctx && ctx.ui) ctx.ui.playlistEditing = true;
-                    updatePanelContent('details');
-                    if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
-                };
-            }
-        }
+        panel.innerHTML = renderPlaylistSummarySidebarHtml(_cpl, editing);
+        prksBindPlaylistSummaryEditBtn();
         // The panel was just repainted, so re-settle its controls: a Playlist
         // page mounted while online must not expose live mutation controls
         // after the runtime has already left 'online'.
@@ -3193,11 +3180,9 @@ function updatePanelContent(tabId) {
             const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.playlistEditing);
             const panel = document.getElementById('panel-content');
             if (!panel) return;
-            panel.innerHTML = editing ? renderPlaylistEditSidebarHtml(pl) : renderPlaylistSummarySidebarHtml(pl);
+            panel.innerHTML = renderPlaylistSummarySidebarHtml(pl, editing);
             prksBindAutosizeTextareas(panel);
-            if (editing) {
-                void mountPlaylistEditSidebar(pl, focusedCtx);
-            }
+            prksBindPlaylistSummaryEditBtn();
             if (typeof prksApplyPlaylistPanelOfflineState === 'function') {
                 prksApplyPlaylistPanelOfflineState(focusedCtx);
             }
@@ -3221,7 +3206,26 @@ function updatePanelContent(tabId) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
 }
 
-function renderPlaylistSummarySidebarHtml(pl) {
+function prksBindPlaylistSummaryEditBtn() {
+    const btn = document.getElementById('prks-playlist-edit-btn');
+    if (!btn || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.onclick = () => {
+        const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+        if (ctx && ctx.ui) {
+            if (ctx.ui.playlistEditing) {
+                ctx.ui.playlistEditing = false;
+                if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState(ctx);
+            } else {
+                ctx.ui.playlistEditing = true;
+            }
+        }
+        updatePanelContent('details');
+        if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
+    };
+}
+
+function renderPlaylistSummarySidebarHtml(pl, editing) {
     if (!pl) return '<p class="meta-row">Playlist not found.</p>';
     const title = escapeHtml(pl.title || 'Playlist');
     const desc = escapeHtml(pl.description || '').trim();
@@ -3230,12 +3234,13 @@ function renderPlaylistSummarySidebarHtml(pl) {
         ? `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> <a href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrl)}</a></p>`
         : '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>';
     const count = Array.isArray(pl.items) ? pl.items.length : 0;
+    const editLabel = editing ? 'Done' : 'Edit';
     return `
         <div class="right-panel-stack">
             <div class="doc-meta-card">
                 <div class="card-heading-row">
                     <h3>Playlist</h3>
-                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-playlist-edit-btn">Edit</button>
+                    <button type="button" class="prks-btn prks-btn--secondary" id="prks-playlist-edit-btn">${editLabel}</button>
                 </div>
                 <p class="card-title">${title}</p>
                 ${desc ? `<p class="meta-row meta-row--compact">${desc}</p>` : '<p class="meta-row meta-row--compact meta-row--muted-italic">No description.</p>'}

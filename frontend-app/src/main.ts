@@ -2,6 +2,7 @@ import { mountPrksVue, PRKS_VUE_ROOT_ID } from './mount'
 import { registerConceptsBridge } from './features/concepts/session'
 import { registerFolderLibraryBridge } from './features/folder-library/session'
 import { registerArgumentsBridge } from './features/arguments/session'
+import { registerPlaylistsBridge } from './features/playlists/session'
 import { registerPositionsBridge } from './features/positions/session'
 import { registerPerformanceDiagnosticsBridge } from './features/performance-diagnostics/activation'
 import { registerProgressBridge } from './features/progress/session'
@@ -17,3 +18,4 @@ registerConceptsBridge(window)
 registerFolderLibraryBridge(window)
 registerPositionsBridge(window)
 registerArgumentsBridge(window)
+registerPlaylistsBridge(window)
