@@ -1684,6 +1684,18 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    unlink = (Path(pdfs_dir) / name).unlink\n"
                 "    unlink()\n"
             ),
+            "path_glob_loop": (
+                "from pathlib import Path\n"
+                "def purge(pdfs_dir):\n"
+                "    for path in Path(pdfs_dir).glob('*.pdf'):\n"
+                "        path.unlink()\n"
+            ),
+            "path_iterdir_comprehension": (
+                "from pathlib import Path\n"
+                "def purge(db):\n"
+                "    for path in [p for p in Path(db.storage.pdfs_dir).iterdir()]:\n"
+                "        path.unlink()\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -1771,6 +1783,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "import os\n"
                 "def f(safe_pdf_path_under_dir, cache, n):\n"
                 "    os.remove(safe_pdf_path_under_dir(cache, n))\n"
+            ),
+            "cache_dir_glob": (
+                "from pathlib import Path\n"
+                "def purge(thumbs_dir):\n"
+                "    for path in Path(thumbs_dir).glob('*.webp'):\n"
+                "        path.unlink()\n"
             ),
             "unrelated_unlink_method": (
                 "def f(pdfs_dir, link):\n"
@@ -2078,6 +2096,28 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    run = conn.execute\n"
                 "    run('UPDATE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
             ),
+            "raw_sql_upsert_do_update": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO works (id) VALUES (?) '\n"
+                "        'ON CONFLICT(id) DO UPDATE SET file_path = ?', (w_id, fp))\n"
+            ),
+            "guarded_dict_mutated_via_alias": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    fields = body\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        fields['file_path'] = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated_via_alias": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, extra, pdfs_dir):\n"
+                "    fields = body\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        fields.update(extra)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2259,6 +2299,12 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
             "sql_other_columns": (
                 "def f(conn, w, t):\n"
                 "    conn.execute('UPDATE works SET title = ? WHERE id = ?', (t, w))\n"
+            ),
+            "sql_upsert_other_columns": (
+                "def f(conn, w, t):\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO works (id, title) VALUES (?, ?) '\n"
+                "        'ON CONFLICT(id) DO UPDATE SET title = excluded.title', (w, t))\n"
             ),
             "sql_read": (
                 "def f(conn, w):\n"

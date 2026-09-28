@@ -109,6 +109,8 @@ _PATH_RETURNING_METHODS = frozenset(
     }
 )
 _PATH_RETURNING_ATTRS = frozenset({"parent"})
+# Path methods yielding Paths under the receiver (``for p in d.glob("*")``).
+_PATH_ITERATOR_METHODS = frozenset({"glob", "iterdir", "rglob", "walk"})
 # Stdlib calls whose string result is built from their arguments; a managed
 # PDF / weak-alias provenance survives them (a Path value does not).
 _PATH_STRING_FUNCS = frozenset(
@@ -222,6 +224,9 @@ _SQL_WORKS_INSERT_RE = re.compile(
 )
 _SQL_WORKS_UPDATE_RE = re.compile(
     r"\bUPDATE\s+works\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
+)
+_SQL_UPSERT_SET_RE = re.compile(
+    r"\bDO\s+UPDATE\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
 )
 _SQL_FILE_PATH_ASSIGN_RE = re.compile(r"\bfile_path\s*=\s*([^,\s]+)", re.IGNORECASE)
 _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
@@ -717,20 +722,36 @@ def _sql_write_targets(text: str) -> set[str]:
     if _SQL_PENDING_CLEANUP_WRITE_RE.search(text):
         targets.add("pending_pdf_cleanup")
     for match in _SQL_WORKS_INSERT_RE.finditer(text):
-        columns = [c.strip().lower() for c in match.group(1).split(",")]
-        if "file_path" not in columns:
-            continue
-        values = [v.strip() for v in (match.group(2) or "").split(",")]
-        if len(values) == len(columns) and (
-            values[columns.index("file_path")].upper() in _SQL_CLEARING_VALUES
-        ):
-            continue
-        targets.add("works.file_path")
+        if _insert_writes_file_path(match) or _upsert_writes_file_path(text[match.end() :]):
+            targets.add("works.file_path")
     for match in _SQL_WORKS_UPDATE_RE.finditer(text):
-        for assigned in _SQL_FILE_PATH_ASSIGN_RE.finditer(match.group(1)):
-            if assigned.group(1).upper() not in _SQL_CLEARING_VALUES:
-                targets.add("works.file_path")
+        if _set_clause_writes_file_path(match.group(1)):
+            targets.add("works.file_path")
     return targets
+
+
+def _insert_writes_file_path(match: re.Match[str]) -> bool:
+    columns = [c.strip().lower() for c in match.group(1).split(",")]
+    if "file_path" not in columns:
+        return False
+    values = [v.strip() for v in (match.group(2) or "").split(",")]
+    return not (
+        len(values) == len(columns)
+        and values[columns.index("file_path")].upper() in _SQL_CLEARING_VALUES
+    )
+
+
+def _upsert_writes_file_path(tail: str) -> bool:
+    """``ON CONFLICT ... DO UPDATE SET file_path = ...`` after an insert."""
+    upsert = _SQL_UPSERT_SET_RE.search(tail.split(";", 1)[0])
+    return upsert is not None and _set_clause_writes_file_path(upsert.group(1))
+
+
+def _set_clause_writes_file_path(clause: str) -> bool:
+    return any(
+        assigned.group(1).upper() not in _SQL_CLEARING_VALUES
+        for assigned in _SQL_FILE_PATH_ASSIGN_RE.finditer(clause)
+    )
 
 
 def _facts_of(bindings: Iterable[_Binding]) -> set[_Binding]:
@@ -740,6 +761,11 @@ def _facts_of(bindings: Iterable[_Binding]) -> set[_Binding]:
 def _without_path(facts: set[_Binding]) -> set[_Binding]:
     """Provenance that survives conversion to a string / path component."""
     return {f for f in facts if f != _PATH}
+
+
+def _iteration_facts(facts: set[_Binding]) -> set[_Binding]:
+    """What iterating a collection / Path iterator yields: all but SQL text."""
+    return {f for f in facts if f[0] != "sql_write"}
 
 
 def _element_facts(facts: set[_Binding]) -> set[_Binding]:
@@ -821,6 +847,19 @@ def _string_facts(
     return _sql_facts(node)
 
 
+def _comprehension_facts(
+    node: ast.ListComp | ast.SetComp | ast.GeneratorExp, scopes: list[_Scope]
+) -> set[_Binding]:
+    """Element facts, plus a generator iterable's facts when the element uses
+    that generator's target (``[p for p in d.iterdir()]``)."""
+    facts = _expr_facts(node.elt, scopes)
+    used = {sub.id for sub in ast.walk(node.elt) if isinstance(sub, ast.Name)}
+    for generator in node.generators:
+        if used & set(_stored_names(generator.target)):
+            facts |= _expr_facts(generator.iter, scopes)
+    return _iteration_facts(facts)
+
+
 def _container_facts(node: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     """Collections, comprehensions and element access carry their elements' facts."""
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
@@ -828,7 +867,7 @@ def _container_facts(node: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     if isinstance(node, ast.Dict):
         parts: list[ast.expr | None] = [*node.keys, *node.values]
     elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
-        parts = [node.elt]
+        return _comprehension_facts(node, scopes)
     elif isinstance(node, ast.DictComp):
         parts = [node.key, node.value]
     elif isinstance(node, (ast.Starred, ast.Subscript)):
@@ -865,6 +904,9 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
         if func.attr in _PATH_CLASS_FACTORIES and _is_path_class_expr(func.value, scopes):
             return {_PATH}
         receiver = _expr_facts(func.value, scopes)
+        if _PATH in receiver and func.attr in _PATH_ITERATOR_METHODS:
+            # An iterator of Paths under the receiver; loops carry the facts.
+            return receiver
         if _PATH in receiver and func.attr in _PATH_RETURNING_METHODS:
             return receiver | _element_facts(_call_argument_facts(node, scopes))
         if func.attr in _STR_TRANSFORM_METHODS:
@@ -988,10 +1030,10 @@ def _loop_target_pairs(
     key = target.id if isinstance(target, ast.Name) else _attr_key(target)
     if key is not None and _iterable_yields_archive(iterable, scopes):
         return [(key, {_ARCHIVE})]
-    # Elements of a collection carry its managed / weak provenance.
+    # Elements of a collection (or a Path iterator) carry its provenance.
     carried = {_OTHER}
     if key is not None:
-        carried |= _element_facts(_expr_facts(iterable, scopes))
+        carried |= _iteration_facts(_expr_facts(iterable, scopes))
     return [(name, set(carried)) for name in _stored_names(target)]
 
 
@@ -1767,8 +1809,12 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _check_guarded_dict_store(self, target: ast.expr, value: ast.expr | None) -> None:
         """``body["file_path"] = <owned>`` keeps a guarded dict protected; any
-        other write to (possibly) that entry invalidates it."""
-        if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+        other write to (possibly) that entry invalidates it.
+
+        Dict identity is not tracked, so a write through *any* other
+        expression (``fields = body; fields["file_path"] = x``) may alias a
+        guarded dict and invalidates every one."""
+        if not isinstance(target, ast.Subscript):
             return
         key = target.slice
         if isinstance(key, ast.Constant) and key.value != "file_path":
@@ -1779,17 +1825,18 @@ class _InvariantVisitor(ast.NodeVisitor):
             and self._is_owned_value(value)
         ):
             return
-        self._forget_guarded_dict(target.value.id)
+        self._forget_all_guarded_dicts()
 
     def _check_guarded_dict_mutation(self, node: ast.Call) -> None:
-        """``body.update(...)`` / ``setdefault`` / ``__setitem__`` may replace file_path."""
+        """``d.update(...)`` / ``setdefault`` / ``__setitem__`` on any (possibly
+        aliasing) receiver may replace a guarded dict's file_path."""
         func = node.func
-        if (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.attr in _DICT_MUTATORS
-        ):
-            self._forget_guarded_dict(func.value.id)
+        if isinstance(func, ast.Attribute) and func.attr in _DICT_MUTATORS:
+            self._forget_all_guarded_dicts()
+
+    def _forget_all_guarded_dicts(self) -> None:
+        for guard in self._active_adoption_guards():
+            guard.fields_dicts.clear()
 
     def _active_adoption_guards(self) -> list[_AdoptionGuard]:
         guards: list[_AdoptionGuard] = []
