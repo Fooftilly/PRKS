@@ -342,7 +342,29 @@ def _call_returns_archive(node: ast.Call, scopes: list[_Scope]) -> bool:
             info.method_returns_archive(fn.attr)
             for info in _class_infos(_resolve(scopes, fn.value.id))
         )
+    if isinstance(fn, ast.Attribute) and _is_super_call(fn.value):
+        return _super_method_returns_archive(fn.attr, scopes)
     return False
+
+
+def _super_method_returns_archive(method: str, scopes: list[_Scope]) -> bool:
+    """``super().method()`` resolves through the enclosing class's bases."""
+    class_info = _enclosing_class(scopes)
+    return class_info is not None and any(
+        base.method_returns_archive(method) for base in class_info.bases
+    )
+
+
+def _is_super_call(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "super"
+    )
+
+
+def _enclosing_class(scopes: list[_Scope]) -> _ClassInfo | None:
+    return next((scope.class_info for scope in reversed(scopes) if scope.class_info), None)
 
 
 def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
@@ -1089,15 +1111,9 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _is_archive_super(self, node: ast.expr) -> bool:
         """``super()`` inside a method of a zipfile archive subclass."""
-        if not (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "super"
-        ):
+        if not _is_super_call(node):
             return False
-        class_info = next(
-            (scope.class_info for scope in reversed(self.scopes) if scope.class_info), None
-        )
+        class_info = _enclosing_class(self.scopes)
         return class_info is not None and class_info.is_archive_class()
 
     def visit_Attribute(self, node: ast.Attribute) -> None:

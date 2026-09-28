@@ -669,6 +669,15 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "        with self._open() as archive:\n"
                 "            archive.extractall(dest)\n"
             ),
+            "super_method_helper": (
+                "import zipfile\n"
+                "class Base:\n"
+                "    def _open(self):\n"
+                "        return zipfile.ZipFile(self.path)\n"
+                "class Restore(Base):\n"
+                "    def run(self, dest):\n"
+                "        super()._open().extractall(dest)\n"
+            ),
             "async_helper": (
                 "import zipfile\n"
                 "async def open_backup(path):\n"
@@ -934,6 +943,17 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    with zipfile.ZipFile(path) as archive:\n"
                 "        return Bundle(archive.read('manifest.json'))\n"
                 "load(path).extractall(dest)\n"
+            ),
+            "super_method_returns_unrelated_value": (
+                "import zipfile\n"
+                "class Base:\n"
+                "    def _open(self):\n"
+                "        return load_bundle(self.path)\n"
+                "class Restore(Base):\n"
+                "    def _open(self):\n"
+                "        return zipfile.ZipFile(self.path)\n"
+                "    def run(self, dest):\n"
+                "        super()._open().extractall(dest)\n"
             ),
             "helper_name_shadowed_by_parameter": (
                 "import zipfile\n"
