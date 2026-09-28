@@ -109,6 +109,8 @@ _PATH_RETURNING_METHODS = frozenset(
     }
 )
 _PATH_RETURNING_ATTRS = frozenset({"parent"})
+# Path methods returning the same location as a string.
+_PATH_STRING_METHODS = frozenset({"__fspath__", "__str__", "as_posix", "as_uri"})
 # Path methods yielding Paths under the receiver (``for p in d.glob("*")``).
 _PATH_ITERATOR_METHODS = frozenset({"glob", "iterdir", "rglob", "walk"})
 # Stdlib calls whose string result is built from their arguments; a managed
@@ -223,14 +225,15 @@ _SQL_WORKS_INSERT_RE = re.compile(
     re.IGNORECASE,
 )
 _SQL_WORKS_UPDATE_RE = re.compile(
-    r"\bUPDATE\s+works\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
+    r"\bUPDATE\s+(?:OR\s+\w+\s+)?works\s+SET\b(.*?)(?:\bWHERE\b|$)",
+    re.IGNORECASE | re.DOTALL,
 )
 _SQL_UPSERT_SET_RE = re.compile(
     r"\bDO\s+UPDATE\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
 )
 _SQL_FILE_PATH_ASSIGN_RE = re.compile(r"\bfile_path\s*=\s*([^,\s]+)", re.IGNORECASE)
 _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
-    r"\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO|UPDATE|DELETE\s+FROM)"
+    r"\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)"
     r"\s+pending_pdf_cleanup\b",
     re.IGNORECASE,
 )
@@ -904,6 +907,9 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
         if func.attr in _PATH_CLASS_FACTORIES and _is_path_class_expr(func.value, scopes):
             return {_PATH}
         receiver = _expr_facts(func.value, scopes)
+        if _PATH in receiver and func.attr in _PATH_STRING_METHODS:
+            # ``p.as_posix()`` is the same file as a string.
+            return _without_path(receiver)
         if _PATH in receiver and func.attr in _PATH_ITERATOR_METHODS:
             # An iterator of Paths under the receiver; loops carry the facts.
             return receiver
@@ -1615,6 +1621,9 @@ class _InvariantVisitor(ast.NodeVisitor):
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self.generic_visit(node)
         self._check_guarded_dict_store(node.target, None)
+        if isinstance(node.op, ast.BitOr):
+            # ``d |= {...}`` updates in place, possibly through an alias.
+            self._forget_all_guarded_dicts()
         self._bind_node(node)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:

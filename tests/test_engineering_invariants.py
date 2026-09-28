@@ -1696,6 +1696,13 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    for path in [p for p in Path(db.storage.pdfs_dir).iterdir()]:\n"
                 "        path.unlink()\n"
             ),
+            "path_as_posix_string": (
+                "import os\n"
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    path = (Path(pdfs_dir) / name).as_posix()\n"
+                "    os.remove(path)\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2116,6 +2123,18 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    fields = body\n"
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
                 "        fields.update(extra)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "raw_sql_update_or_replace": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE OR REPLACE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "guarded_dict_union_via_alias": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    fields = body\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        fields |= {'file_path': other}\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
             "raw_sql_under_guard": (
