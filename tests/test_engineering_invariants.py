@@ -1678,6 +1678,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    victim = target\n"
                 "    victim.unlink()\n"
             ),
+            "path_unlink_bound_method": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    unlink = (Path(pdfs_dir) / name).unlink\n"
+                "    unlink()\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2010,6 +2016,14 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def adopt(conn, w_id, fp, key):\n"
                 "    query = ('UPDATE works SET file_path = ? WHERE %s = ?' % key).strip()\n"
                 "    conn.execute(query, (fp, w_id))\n"
+            ),
+            "raw_sql_quoted_identifiers": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE \"works\" SET \"file_path\" = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_bracket_and_schema": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO main.[works] ([id], `file_path`) VALUES (?, ?)', (w_id, fp))\n"
             ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"

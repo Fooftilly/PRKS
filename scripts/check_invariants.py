@@ -227,6 +227,8 @@ _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
     re.IGNORECASE,
 )
 _SQL_CLEARING_VALUES = frozenset({"NULL", "''"})
+_SQL_IDENTIFIER_QUOTES_RE = re.compile(r'["`\[\]]')
+_SQL_SCHEMA_PREFIX_RE = re.compile(r"\b(?:main|temp)\.(?=\w)", re.IGNORECASE)
 
 # INV-STORAGE-004: operations that treat a basename as ownership, cleanup
 # claim, or deletion authority. A weak-alias value must never reach them.
@@ -685,6 +687,9 @@ def _sql_write_targets(text: str) -> set[str]:
     """Which ownership tables a SQL literal writes: ``works.file_path`` (to a
     bound value -- ``NULL``/``''`` clears are not adoption) and
     ``pending_pdf_cleanup``."""
+    # SQLite identifier quoting ("x", `x`, [x]) and a schema prefix name the
+    # same table/column; '' stays (it is a string literal, not an identifier).
+    text = _SQL_SCHEMA_PREFIX_RE.sub("", _SQL_IDENTIFIER_QUOTES_RE.sub("", text))
     targets: set[str] = set()
     if _SQL_PENDING_CLEANUP_WRITE_RE.search(text):
         targets.add("pending_pdf_cleanup")
@@ -1799,6 +1804,13 @@ class _InvariantVisitor(ast.NodeVisitor):
             and self._is_path_receiver(node.value)
         ):
             self._report_replace(node, "pathlib.Path.replace()")
+        if (
+            node.attr == "unlink"
+            and not _is_path_class_expr(node.value, self.scopes)
+            and _PATH in _expr_facts(node.value, self.scopes)
+        ):
+            # Covers ``p.unlink()`` and a bound method saved for later.
+            self._check_removal_of(node, "pathlib.Path.unlink()", node.value)
         self.generic_visit(node)
 
     def _is_path_receiver(self, node: ast.expr) -> bool:
@@ -1834,18 +1846,22 @@ class _InvariantVisitor(ast.NodeVisitor):
                 (kw.value for kw in node.keywords if kw.arg == "path"), None
             )
             return f"{sorted(primitives)[0]}()", target
-        if isinstance(func, ast.Attribute) and func.attr == "unlink":
-            if _is_path_class_expr(func.value, self.scopes):
-                return "pathlib.Path.unlink()", node.args[0] if node.args else None
-            if _PATH in _expr_facts(func.value, self.scopes):
-                return "pathlib.Path.unlink()", func.value
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "unlink"
+            and _is_path_class_expr(func.value, self.scopes)
+        ):
+            return "pathlib.Path.unlink()", node.args[0] if node.args else None
+        # ``path.unlink`` on a Path value is checked at the attribute itself
+        # (visit_Attribute), so a saved bound method is covered too.
         return None
 
     def _check_managed_pdf_removal(self, node: ast.Call) -> None:
         removal = self._removal_target(node)
-        if removal is None:
-            return
-        primitive, target = removal
+        if removal is not None:
+            self._check_removal_of(node, *removal)
+
+    def _check_removal_of(self, node: ast.AST, primitive: str, target: ast.expr | None) -> None:
         facts = _expr_facts(target, self.scopes)
         if _WEAK in facts:
             self._report_weak_alias(node, f"the target of {primitive}")
