@@ -174,40 +174,54 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
     i = 0
     n = len(sql)
     while i < n:
-        ch = sql[i]
-        if ch in ("'", '"'):
-            j = i + 1
-            while j < n:
-                if sql[j] == ch:
-                    if j + 1 < n and sql[j + 1] == ch:
-                        j += 2
-                        continue
-                    break
-                j += 1
-            for k in range(i + 1, min(j, n)):
-                if out[k] != "\n":
-                    out[k] = " "
+        if sql[i] in ("'", '"'):
+            j = _quote_end(sql, i)
+            _blank(out, i + 1, j)
             i = j + 1
-        elif sql.startswith("--", i):
-            j = sql.find("\n", i)
-            j = n if j < 0 else j
-            if comments is not None:
-                comments.append((i, sql[i:j]))
-            for k in range(i, j):
-                out[k] = " "
-            i = j
-        elif sql.startswith("/*", i):
-            j = sql.find("*/", i + 2)
-            j = n if j < 0 else j + 2
-            if comments is not None:
-                comments.append((i, sql[i:j]))
-            for k in range(i, j):
-                if out[k] != "\n":
-                    out[k] = " "
-            i = j
-        else:
+            continue
+        j = _comment_end(sql, i)
+        if j < 0:
             i += 1
+            continue
+        if comments is not None:
+            comments.append((i, sql[i:j]))
+        _blank(out, i, j)
+        i = j
     return "".join(out)
+
+
+def _quote_end(sql: str, i: int) -> int:
+    """Offset of the quote closing the literal opened at ``i`` (``''`` escapes)."""
+    quote = sql[i]
+    j = i + 1
+    n = len(sql)
+    while j < n:
+        if sql[j] == quote:
+            if j + 1 < n and sql[j + 1] == quote:
+                j += 2
+                continue
+            return j
+        j += 1
+    return n
+
+
+def _comment_end(sql: str, i: int) -> int:
+    """End offset of a ``--`` / ``/* */`` comment starting at ``i``, else -1."""
+    n = len(sql)
+    if sql.startswith("--", i):
+        j = sql.find("\n", i)
+        return n if j < 0 else j
+    if sql.startswith("/*", i):
+        j = sql.find("*/", i + 2)
+        return n if j < 0 else j + 2
+    return -1
+
+
+def _blank(chars: list[str], start: int, end: int) -> None:
+    """Replace ``chars[start:end]`` with spaces, keeping newlines (offsets)."""
+    for k in range(start, min(end, len(chars))):
+        if chars[k] != "\n":
+            chars[k] = " "
 
 
 def _match_paren(masked: str, open_idx: int) -> int:
@@ -361,6 +375,37 @@ def _unresolved_refs(body_masked: str) -> set[str]:
     return unresolved
 
 
+def _outer_correlation(
+    masked: str, open_idx: int, close: int, unresolved: set[str]
+) -> tuple[list[str], str] | None:
+    """``(correlated qualifiers, outer label)`` for the subquery, or None.
+
+    None means the enclosing statement is out of scope (``UPDATE ... SET``
+    and similar); an empty qualifier list means it is not correlated.
+    """
+    enc_start, enc_end = _enclosing_span(masked, open_idx, close)
+    # Enclosing statement text with every nested (...) blanked, so sibling
+    # subqueries do not contribute their own aliases to the outer scope.
+    outer_text = _top_level(masked[enc_start:enc_end])
+    if re.match(r"\s*(?:with\b.*?)?select\b", outer_text, re.IGNORECASE | re.DOTALL):
+        outer = _declared(outer_text)
+        correlated = sorted(r for r in unresolved if r in outer)
+        return correlated, ", ".join(sorted({outer[r] for r in correlated}))
+    if enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
+        # A bare projection fragment for a caller to splice into its own
+        # SELECT; any outward reference is the per-row correlation.
+        correlated = sorted(unresolved)
+        return correlated, "fragment:" + ", ".join(correlated)
+    return None
+
+
+def _output_alias(masked: str, close: int) -> str:
+    after = _AS_ALIAS_RE.match(masked, close + 1)
+    if after and after.group(1).lower() not in _KEYWORDS:
+        return after.group(1).lower()
+    return ""
+
+
 def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
     """Return ``(offset, facts)`` for each correlated aggregate subquery."""
     comments: list[tuple[int, str]] = []
@@ -369,9 +414,7 @@ def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
     # but keep quoted values (which can change semantics).
     uncommented = list(sql)
     for offset, text in comments:
-        for k in range(offset, offset + len(text)):
-            if uncommented[k] != "\n":
-                uncommented[k] = " "
+        _blank(uncommented, offset, offset + len(text))
     sql_uncommented = "".join(uncommented)
     results: list[tuple[int, dict[str, str]]] = []
     for m in _SUBQUERY_START_RE.finditer(masked):
@@ -390,37 +433,19 @@ def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
         ]
         if _has_marker(comments, open_idx, close, nested):
             continue
+        resolved = _outer_correlation(
+            masked, open_idx, close, _unresolved_refs(body_masked)
+        )
+        if not resolved or not resolved[0]:
+            continue
         inner = _declared(_top_level(body_masked[1:-1]))
-        unresolved = _unresolved_refs(body_masked)
-        enc_start, enc_end = _enclosing_span(masked, open_idx, close)
-        # Enclosing statement text with every nested (...) blanked, so sibling
-        # subqueries do not contribute their own aliases to the outer scope.
-        outer_text = _top_level(masked[enc_start:enc_end])
-        if re.match(r"\s*(?:with\b.*?)?select\b", outer_text, re.IGNORECASE | re.DOTALL):
-            outer = _declared(outer_text)
-            correlated = sorted(r for r in unresolved if r in outer)
-            outer_label = ", ".join(sorted({outer[r] for r in correlated}))
-        elif enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
-            # A bare projection fragment for a caller to splice into its own
-            # SELECT; any outward reference is the per-row correlation.
-            correlated = sorted(unresolved)
-            outer_label = "fragment:" + ", ".join(correlated)
-        else:
-            # UPDATE ... SET n = (SELECT COUNT ...) and other statements.
-            continue
-        if not correlated:
-            continue
-        after = _AS_ALIAS_RE.match(masked, close + 1)
-        output_alias = ""
-        if after and after.group(1).lower() not in _KEYWORDS:
-            output_alias = after.group(1).lower()
         inner_tables = sorted(
             {label.split(" ")[0] for label in inner.values()}
         )
         facts = {
-            "outer": outer_label,
+            "outer": resolved[1],
             "inner": ", ".join(inner_tables),
-            "output_alias": output_alias,
+            "output_alias": _output_alias(masked, close),
             "aggregate": aggregate,
             "fingerprint": hashlib.sha256(
                 _normalize(body_raw).encode("utf-8")
