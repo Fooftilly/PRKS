@@ -1628,6 +1628,11 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    os.remove(os.path.join(pdfs_dir, name))\n"
             ),
+            "os_remove_fsencoded_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(os.fsencode(os.path.join(pdfs_dir, name)))\n"
+            ),
             "os_unlink_contained_helper": (
                 "import os\n"
                 "from backend.db_manager import safe_pdf_path_under_dir\n"
@@ -2242,6 +2247,77 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        list(body.update(x) for x in items)\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "guarded_dict_dirtied_before_break": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            if x:\n"
+                "                body.update(x)\n"
+                "                break\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dirtied_before_continue": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            db.update_work_metadata(w_id, body)\n"
+                "            if x:\n"
+                "                body.update(x)\n"
+                "                continue\n"
+            ),
+            "guarded_dict_dirtied_for_next_iteration": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            db.update_work_metadata(w_id, body)\n"
+                "            body.update(x)\n"
+            ),
+            "guarded_dict_dirtied_before_while_break": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        while items:\n"
+                "            if items.pop():\n"
+                "                apply_defaults(body)\n"
+                "                break\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dirtied_before_raise": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        try:\n"
+                "            body.update(other)\n"
+                "            validate(other)\n"
+                "            body['file_path'] = body.get('file_path')\n"
+                "        except ValueError:\n"
+                "            db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_tuple_unpack_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path'], _ = other, 1\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_starred_unpack_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path'], *_ = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_loop_target_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for body['file_path'] in items:\n"
+                "            pass\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -2422,6 +2498,22 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
                 "        _ = [apply_defaults(body) for body in rows]\n"
                 "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_tuple_unpack_owned": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')) as n:\n"
+                "        body['file_path'], body['title'] = f'/api/pdfs/{n}', 't'\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_loop_without_mutation": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            if not x:\n"
+                "                break\n"
+                "            db.update_work_metadata(w_id, body)\n"
             ),
             "dict_mutated_only_on_returning_branch": (
                 "from backend.services import work_pdf_replace\n"
@@ -2644,6 +2736,10 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "def f(conn, fp, suffix):\n"
                 "    name = referenced_managed_pdf_filename(fp)\n"
                 "    conn.execute('INSERT INTO pending_pdf_cleanup (filename) VALUES (?) ' + suffix, (name,))\n"
+            ),
+            "weak_str_replace": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).replace('x', 'x'))\n"
             ),
             "claim_sql_interpolated_weak": (
                 "def f(conn, fp):\n"

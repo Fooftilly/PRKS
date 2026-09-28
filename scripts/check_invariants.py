@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -121,6 +121,7 @@ _PATH_ITERATOR_METHODS = frozenset({"glob", "iterdir", "rglob", "walk"})
 _PATH_STRING_FUNCS = frozenset(
     {
         "os.fsdecode",
+        "os.fsencode",
         "os.fspath",
         "os.path.abspath",
         "os.path.basename",
@@ -142,6 +143,7 @@ _STR_TRANSFORM_METHODS = frozenset(
         "lstrip",
         "removeprefix",
         "removesuffix",
+        "replace",
         "rstrip",
         "strip",
         "swapcase",
@@ -1060,12 +1062,14 @@ def _method_call_facts(
         facts = _path_method_facts(node, func.attr, receiver, scopes)
         if facts is not None:
             return facts
-    if func.attr not in _STR_TRANSFORM_METHODS:
+    if func.attr not in _STR_TRANSFORM_METHODS or (func.attr == "replace" and _PATH in receiver):
+        # ``Path.replace(target)`` renames; it is not a string transform.
         return None
-    # SQL text survives ``.strip()`` / ``.format()`` and the like;
-    # ``.format()`` also builds its result from its arguments.
+    # SQL text and managed / weak provenance survive ``.strip()`` /
+    # ``.replace()`` / ``.format()`` and the like; ``.format()`` and
+    # ``.replace()`` also build their result from their arguments.
     facts = _without_path(receiver)
-    if func.attr == "format":
+    if func.attr in ("format", "replace"):
         facts |= _element_facts(_call_argument_facts(node, scopes))
     return facts
 
@@ -1504,6 +1508,10 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.findings: list[Finding] = []
         # Enclosing def/class names, for function-level capability exemptions.
         self._qualname: list[str] = []
+        # Every ``(scope, name)`` a guarded dict was marked dirty in. The tag
+        # is added outside ``_bind``, so ``summary``-based widening (loop tops,
+        # exception handlers) cannot see it; this log can.
+        self._dirty_log: list[tuple[_Scope, str]] = []
 
     @property
     def _function(self) -> tuple[str, str]:
@@ -1629,6 +1637,27 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _loop_entry_state(self, nodes: Sequence[ast.AST]) -> _State:
         """State at the top of a loop, including later-iteration bindings."""
         return self._with_body_bindings(self.scopes[-1].current, nodes)
+
+    def _run_loop(self, entry: _State, run: Callable[[_State], _State]) -> tuple[_State, _State]:
+        """Run a loop body from ``entry`` until no new dict is dirtied.
+
+        A guarded dict dirtied anywhere in the body (including just before a
+        ``break``/``continue``) reaches later iterations and the loop exit, so
+        the entry is widened and the body re-walked; findings from the
+        discarded walk are dropped. Only bodies that dirty a dict re-run.
+        """
+        while True:
+            findings, mark = len(self.findings), len(self._dirty_log)
+            body_end = run(entry)
+            dirtied = {
+                name
+                for name in self._dirtied_since(mark)
+                if name in entry and _DICT_DIRTY not in entry[name]
+            }
+            if not dirtied:
+                return entry, body_end
+            del self.findings[findings:]
+            entry = self._with_dirty(entry, dirtied)
 
     def _finish_loop(self, entry: _State, body_end: _State, orelse: list[ast.stmt]) -> None:
         after = _merge_states(entry, body_end)
@@ -1813,10 +1842,14 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
         self.visit(node.iter)
-        entry = self._loop_entry_state(node.body)
-        self.scopes[-1].current = _copy_state(entry)
-        self._bind_node(node)
-        body_end = self._run_branch(self.scopes[-1].current, node.body)
+
+        def run(entry: _State) -> _State:
+            self.scopes[-1].current = _copy_state(entry)
+            self._check_guarded_dict_store(node.target, None)
+            self._bind_node(node)
+            return self._run_branch(self.scopes[-1].current, node.body)
+
+        entry, body_end = self._run_loop(self._loop_entry_state(node.body), run)
         self._finish_loop(entry, body_end, node.orelse)
 
     def visit_For(self, node: ast.For) -> None:
@@ -1828,11 +1861,16 @@ class _InvariantVisitor(ast.NodeVisitor):
     def visit_While(self, node: ast.While) -> None:
         # The test runs before every iteration and before leaving the loop, so
         # its (walrus) bindings reach both the body and the code after it.
-        entry = self._loop_entry_state([node.test, *node.body])
-        self.scopes[-1].current = _copy_state(entry)
-        self.visit(node.test)
-        after_test = self.scopes[-1].current
-        body_end = self._run_branch(after_test, node.body)
+        after_test: _State = {}
+
+        def run(entry: _State) -> _State:
+            nonlocal after_test
+            self.scopes[-1].current = _copy_state(entry)
+            self.visit(node.test)
+            after_test = self.scopes[-1].current
+            return self._run_branch(after_test, node.body)
+
+        _, body_end = self._run_loop(self._loop_entry_state([node.test, *node.body]), run)
         self._finish_loop(after_test, body_end, node.orelse)
 
     def visit_If(self, node: ast.If) -> None:
@@ -1847,9 +1885,15 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_Try(self, node: ast.Try) -> None:
         before = _copy_state(self.scopes[-1].current)
+        mark = len(self._dirty_log)
         body_end = self._run_branch(before, node.body)
         # A handler can start after any statement of the body.
-        handler_start = _merge_states(body_end, self._with_body_bindings(before, node.body))
+        handler_start = _merge_states(
+            body_end,
+            self._with_dirty(
+                self._with_body_bindings(before, node.body), self._dirtied_since(mark)
+            ),
+        )
         flows = [
             (self._run_branch(handler_start, [handler]), _terminates(handler.body))
             for handler in node.handlers
@@ -1997,7 +2041,7 @@ class _InvariantVisitor(ast.NodeVisitor):
             if name in scope.current:
                 bindings = scope.current[name]
                 if any(b[0] == "guarded_dict" for b in bindings):
-                    scope.current[name] = set(bindings) | {_DICT_DIRTY}
+                    self._mark_dirty(scope, name)
                 return
             if name in scope.summary:
                 return
@@ -2009,6 +2053,22 @@ class _InvariantVisitor(ast.NodeVisitor):
         Dict identity is not tracked, so a write through *any* other
         expression (``fields = body; fields["file_path"] = x``) may alias a
         guarded dict and invalidates every one."""
+        if isinstance(target, ast.Starred):
+            self._check_guarded_dict_store(target.value, None)
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            # ``body["file_path"], x = other, 1``: pair elements when the
+            # shapes line up; otherwise each element's value is unknown.
+            values: Sequence[ast.expr | None] = [None] * len(target.elts)
+            if (
+                isinstance(value, (ast.Tuple, ast.List))
+                and len(value.elts) == len(target.elts)
+                and not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
+            ):
+                values = value.elts
+            for sub_target, sub_value in zip(target.elts, values):
+                self._check_guarded_dict_store(sub_target, sub_value)
+            return
         if not isinstance(target, ast.Subscript):
             return
         key = target.slice
@@ -2041,7 +2101,24 @@ class _InvariantVisitor(ast.NodeVisitor):
         for scope in self._dirtiable_scopes():
             for name, bindings in list(scope.current.items()):
                 if any(b[0] == "guarded_dict" for b in bindings):
-                    scope.current[name] = set(bindings) | {_DICT_DIRTY}
+                    self._mark_dirty(scope, name)
+
+    def _mark_dirty(self, scope: _Scope, name: str) -> None:
+        scope.current[name] = scope.current[name] | {_DICT_DIRTY}
+        self._dirty_log.append((scope, name))
+
+    def _dirtied_since(self, mark: int) -> set[str]:
+        """Names dirtied in the current scope since ``len(self._dirty_log) == mark``."""
+        scope = self.scopes[-1]
+        return {name for s, name in self._dirty_log[mark:] if s is scope}
+
+    @staticmethod
+    def _with_dirty(state: _State, names: set[str]) -> _State:
+        state = _copy_state(state)
+        for name in names:
+            if name in state:
+                state[name].add(_DICT_DIRTY)
+        return state
 
     def _active_adoption_guards(self) -> list[_AdoptionGuard]:
         guards: list[_AdoptionGuard] = []
