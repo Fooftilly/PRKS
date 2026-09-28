@@ -446,11 +446,16 @@ def _person_group_chip_names(page):
 
 class PersonProfileDraftOwnershipTests(_BrowserE2E):
     def test_secondary_new_person_navigates_only_that_owner(self):
-        _server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
         page.set_viewport_size({"width": 1600, "height": 900})
         page.evaluate("() => prksNavigate('#/folders')")
         page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
-        page.evaluate("() => prksNavigate('#/people', { target: 'tile' })")
+        # The People index is not a tile route. Open a Person tile, then move
+        # that Secondary pane onto the index the way New Playlist does.
+        page.evaluate(
+            "(id) => prksNavigate('#/people/' + encodeURIComponent(id), { target: 'tile' })",
+            server.ids["person_a"],
+        )
         page.wait_for_function(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();
@@ -462,6 +467,13 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             timeout=15000,
         )
         secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.evaluate(
+            """(tabId) => {
+                const ctx = prksGetTabContext(tabId);
+                return prksRenderTabRoute(ctx, '#/people', { leaveApproved: true });
+            }""",
+            secondary_id,
+        )
         page.wait_for_function(
             """(tabId) => {
                 const ctx = prksGetTabContext(tabId);
