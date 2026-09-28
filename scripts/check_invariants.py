@@ -114,6 +114,9 @@ class Finding:
 _Binding = tuple[Any, ...]
 _ARCHIVE: _Binding = ("archive",)
 _OTHER: _Binding = ("other",)
+# An ``obj.attr`` key that some joined path never bound locally: the class-level
+# archive-attribute record still applies on that path.
+_UNSET: _Binding = ("unset",)
 
 
 class _ClassInfo:
@@ -279,8 +282,13 @@ def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
         return False
     innermost = scopes[-1]
     if key in innermost.current:
-        # A binding on the current path is authoritative over the class record.
-        return _ARCHIVE in innermost.current[key]
+        # A binding on every path reaching here is authoritative over the
+        # class record; a path that never rebound the key still defers to it.
+        local = innermost.current[key]
+        if _ARCHIVE in local:
+            return True
+        if _UNSET not in local:
+            return False
     if _ARCHIVE in _resolve(scopes, key):
         return True
     return any(
@@ -290,7 +298,9 @@ def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
 
 
 def _branch_values(node: ast.expr) -> list[ast.expr] | None:
-    """Values a conditional / boolean expression may evaluate to."""
+    """Values a conditional / boolean / assignment expression may evaluate to."""
+    if isinstance(node, ast.NamedExpr):
+        return [node.value]
     if isinstance(node, ast.IfExp):
         return [node.body, node.orelse]
     if isinstance(node, ast.BoolOp):
@@ -415,11 +425,13 @@ def _ann_assign_pairs(node: ast.AnnAssign, scopes: list[_Scope]) -> _Pairs:
     key = node.target.id if isinstance(node.target, ast.Name) else _attr_key(node.target)
     if key is None:
         return []
-    if _annotation_mentions_zip(node.annotation, scopes):
-        return [(key, {_ARCHIVE})]
-    if node.value is not None:
-        return _target_pairs(node.target, node.value, scopes)
-    return []
+    bindings = _value_bindings(node.value, scopes) if node.value is not None else set()
+    # ``x: ZipFile`` declares an archive; ``Z: type[ZipFile] = ZipFile`` keeps
+    # the class binding of its value.
+    is_class_value = any(b[0] in {"name", "class", "module"} for b in bindings)
+    if _annotation_mentions_zip(node.annotation, scopes) and not is_class_value:
+        bindings.add(_ARCHIVE)
+    return [(key, bindings)] if bindings else []
 
 
 def _aug_assign_pairs(node: ast.AugAssign, scopes: list[_Scope]) -> _Pairs:
@@ -564,7 +576,32 @@ def _merge_states(*states: _State) -> _State:
     for state in states:
         for name, bindings in state.items():
             merged.setdefault(name, set()).update(bindings)
+    for name, bindings in merged.items():
+        if "." in name and any(name not in state for state in states):
+            bindings.add(_UNSET)
     return merged
+
+
+def _terminates(stmts: Sequence[ast.AST]) -> bool:
+    """The block never falls through to the statement after it."""
+    if not stmts:
+        return False
+    last = stmts[-1]
+    if isinstance(last, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
+        return True
+    if isinstance(last, ast.If):
+        return bool(last.orelse) and _terminates(last.body) and _terminates(last.orelse)
+    return False
+
+
+def _join(flows: list[tuple[_State, bool]]) -> _State:
+    """Merge the states of the paths that reach the join point.
+
+    ``return``/``raise`` paths never reach it; ``break``/``continue`` paths are
+    already covered by the loop's later-iteration widening.
+    """
+    reaching = [state for state, terminated in flows if not terminated]
+    return _merge_states(*(reaching or [state for state, _ in flows]))
 
 
 class _InvariantVisitor(ast.NodeVisitor):
@@ -681,6 +718,8 @@ class _InvariantVisitor(ast.NodeVisitor):
         for node in _iter_scope_nodes(nodes):
             for name, _ in _binding_pairs(node, self.scopes):
                 if name in scope.summary:
+                    if "." in name and name not in state:
+                        state[name] = {_UNSET}
                     state.setdefault(name, set()).update(scope.summary[name])
         return state
 
@@ -857,18 +896,25 @@ class _InvariantVisitor(ast.NodeVisitor):
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
         before = _copy_state(self.scopes[-1].current)
-        body_end = self._run_branch(before, node.body)
-        orelse_end = self._run_branch(before, node.orelse)
-        self.scopes[-1].current = _merge_states(body_end, orelse_end)
+        self.scopes[-1].current = _join(
+            [
+                (self._run_branch(before, branch), _terminates(branch))
+                for branch in (node.body, node.orelse)
+            ]
+        )
 
     def visit_Try(self, node: ast.Try) -> None:
         before = _copy_state(self.scopes[-1].current)
         body_end = self._run_branch(before, node.body)
         # A handler can start after any statement of the body.
         handler_start = _merge_states(body_end, self._with_body_bindings(before, node.body))
-        handler_ends = [self._run_branch(handler_start, [h]) for h in node.handlers]
+        flows = [
+            (self._run_branch(handler_start, [handler]), _terminates(handler.body))
+            for handler in node.handlers
+        ]
         orelse_end = self._run_branch(body_end, node.orelse)
-        self.scopes[-1].current = _merge_states(orelse_end, *handler_ends)
+        flows.append((orelse_end, _terminates(node.body) or _terminates(node.orelse)))
+        self.scopes[-1].current = _join(flows)
         for stmt in node.finalbody:
             self.visit(stmt)
 
@@ -885,7 +931,8 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.visit(node.subject)
         subject = _value_bindings(node.subject, self.scopes)
         before = _copy_state(self.scopes[-1].current)
-        case_ends = []
+        # No case may match, so the state before the match also flows on.
+        flows: list[tuple[_State, bool]] = [(before, False)]
         for case in node.cases:
             self.scopes[-1].current = _copy_state(before)
             self._bind(_pattern_pairs(case.pattern, subject))
@@ -893,9 +940,8 @@ class _InvariantVisitor(ast.NodeVisitor):
                 self.visit(case.guard)
             for stmt in case.body:
                 self.visit(stmt)
-            case_ends.append(self.scopes[-1].current)
-        # No case may match, so the state before the match also flows on.
-        self.scopes[-1].current = _merge_states(before, *case_ends)
+            flows.append((self.scopes[-1].current, _terminates(case.body)))
+        self.scopes[-1].current = _join(flows)
 
     def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
         for item in node.items:

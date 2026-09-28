@@ -587,6 +587,72 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    open_archive()\n"
                 "    archive.extractall(dest)\n"
             ),
+            "annotated_class_alias": (
+                "import zipfile\n"
+                "Z: type[zipfile.ZipFile] = zipfile.ZipFile\n"
+                "Z(path).extractall(dest)\n"
+            ),
+            "walrus_receiver": (
+                "import zipfile\n"
+                "(archive := zipfile.ZipFile(path)).extractall(dest)\n"
+            ),
+            # A partial attribute rebinding keeps the class record in play on
+            # the paths that did not rebind it.
+            "self_attribute_rebound_on_one_branch": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest, use_bundle):\n"
+                "        if use_bundle:\n"
+                "            self.archive = load_bundle()\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "self_attribute_rebound_in_else_only": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest, keep):\n"
+                "        if keep:\n"
+                "            pass\n"
+                "        else:\n"
+                "            self.archive = load_bundle()\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "self_attribute_rebound_in_try": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest):\n"
+                "        try:\n"
+                "            self.archive = load_bundle()\n"
+                "        except OSError:\n"
+                "            pass\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "self_attribute_rebound_later_in_loop": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest, items):\n"
+                "        for _ in items:\n"
+                "            self.archive.extractall(dest)\n"
+                "            self.archive = load_bundle()\n"
+            ),
+            # A branch that falls through still reaches the join.
+            "non_terminating_else_reaches_join": (
+                "import zipfile\n"
+                "def restore(path, dest, custom):\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    if custom:\n"
+                "        archive = load_bundle()\n"
+                "    else:\n"
+                "        log()\n"
+                "    archive.extractall(dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -711,6 +777,39 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "match load_bundle():\n"
                 "    case archive:\n"
                 "        archive.extractall(dest)\n"
+            ),
+            # return/raise paths never reach the code after the branch.
+            "archive_path_returns_before_use": (
+                "import zipfile\n"
+                "def restore(path, dest, custom):\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    if custom:\n"
+                "        archive = load_bundle()\n"
+                "    else:\n"
+                "        return\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "archive_path_raises_before_use": (
+                "import zipfile\n"
+                "def restore(path, dest, ok):\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    if not ok:\n"
+                "        raise ValueError(path)\n"
+                "    else:\n"
+                "        archive = load_bundle()\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "self_attribute_rebound_on_every_branch": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest, use_bundle):\n"
+                "        if use_bundle:\n"
+                "            self.archive = load_bundle()\n"
+                "        else:\n"
+                "            self.archive = load_other()\n"
+                "        self.archive.extractall(dest)\n"
             ),
             # Only zipfile subclasses make ``self`` an archive.
             "unrelated_class_self_call": (
