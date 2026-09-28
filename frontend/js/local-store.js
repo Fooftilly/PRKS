@@ -3488,7 +3488,7 @@
          * change, and leaving the row would send a write the server does not
          * need and a revision it would advance.
          */
-        function savePersonGroupFields(groupId, changes, base) {
+        function savePersonGroupFields(groupId, changes, base, stillOwns) {
             if (!isNonBlankString(groupId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid group save.'));
             }
@@ -3512,10 +3512,14 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* The read above is the gap a check before this call cannot
+                     * see. Leave every operation row as it was. */
+                    if (!callerStillOwns(stillOwns)) { setResult([]); return; }
                     assertGroupIsNotBeingDeleted(rows, groupId, 'edited');
                     const createOp = personGroupCreationDependency(rows, groupId,
                         'it cannot be edited');
                     const written = [];
+                    let mutated = false;
                     for (const field of Object.keys(changes)) {
                         const desired = changes[field];
                         const observed = base[field];
@@ -3531,9 +3535,13 @@
                                 written.push(existing);
                                 continue;
                             }
+                            if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                             await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                            mutated = true;
+                            abandonUnownedWrite(stillOwns, true);
                         }
                         if (desired === observed.value) continue;
+                        if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                         /* Moving a group INTO one this device also created
                          * offline waits for that group too: the server
                          * validates the hierarchy, and a parent it has never
@@ -3548,7 +3556,9 @@
                             base_revision: observed.revision,
                             depends_on: [createOp, parentOp].filter(Boolean)
                                 .map(op => op.op_id),
-                        }, null));
+                        }, null, stillOwns));
+                        mutated = true;
+                        abandonUnownedWrite(stillOwns, true);
                     }
                     setResult(written);
                 });

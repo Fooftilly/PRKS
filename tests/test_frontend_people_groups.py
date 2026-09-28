@@ -10,6 +10,9 @@ _GROUPS = os.path.join(_ROOT, "frontend", "js", "components", "people-groups.js"
 _APP = os.path.join(_ROOT, "frontend", "js", "app.js")
 _TAB_CONTEXT = os.path.join(_ROOT, "frontend", "js", "tab-context.js")
 _UI = os.path.join(_ROOT, "frontend", "js", "ui.js")
+_VUE_INDEX = os.path.join(_ROOT, "frontend-app", "src", "features", "person-groups", "PersonGroupsIndexRoute.vue")
+_VUE_DETAIL = os.path.join(_ROOT, "frontend-app", "src", "features", "person-groups", "PersonGroupDetailRoute.vue")
+_VUE_STATE = os.path.join(_ROOT, "frontend-app", "src", "features", "person-groups", "ui-state.ts")
 
 
 def _read(path):
@@ -69,37 +72,39 @@ vm.runInContext(mountSource + '; this.mount = mountPersonGroupAddMemberControls;
 
 
 class FrontendPeopleGroupsTests(unittest.TestCase):
-    def test_library_runtime_is_root_local_and_filtered_tree_is_noncollapsible(self):
+    def test_library_runtime_is_owner_scoped_and_filtered_tree_is_noncollapsible(self):
         src = _read(_GROUPS)
+        state = _read(_VUE_STATE)
+        index = _read(_VUE_INDEX)
+        tree = _read(os.path.join(os.path.dirname(_VUE_INDEX), "PersonGroupTreeNode.vue"))
+        self.assertNotIn("window.__prksGroupTreeCollapsed", src)
         self.assertNotIn("window.__prksGroupLibraryState", src)
-        self.assertIn("root.__prksGroupLibraryState", src)
-        self.assertIn("function prksRerenderGroupTreeOnly(root)", src)
-        self.assertIn("input.closest('.prks-group-library')", src)
-        self.assertIn("prksRerenderGroupTreeOnly(root)", src)
-        self.assertIn("prksToggleGroupNode('${gidEnc}', this)", src)
-        self.assertIn("prks-group-tree__toggle-spacer", src)
-        self.assertIn("btn.hidden = filtering", src)
+        self.assertNotIn("sessionStorage", state)
+        self.assertIn("searchByOwner", state)
+        self.assertIn("expandedByOwner", state)
+        self.assertIn("prks-group-tree__toggle-spacer", tree)
+        self.assertIn(':hidden="filtering"', index)
+        self.assertIn(':disabled="filtering"', index)
 
     def test_empty_and_search_empty_copy_are_distinct(self):
-        src = _read(_GROUPS)
-        self.assertIn("No Person Groups yet.", src)
-        self.assertIn("openModal(\\'group-modal\\')", src)
-        self.assertIn("No groups match your search.", src)
-        self.assertNotIn("Use <strong>New group</strong> in the ribbon", src)
+        index = _read(_VUE_INDEX)
+        groups = _read(_GROUPS)
+        self.assertIn("No Person Groups yet.", index)
+        self.assertIn("New Group", index)
+        self.assertIn("No groups match your search.", index)
+        self.assertIn("openModal('group-modal')", groups)
+        self.assertNotIn("Use <strong>New group</strong> in the ribbon", index)
 
     def test_detail_prioritizes_description_hierarchy_and_members(self):
-        src = _read(_GROUPS)
-        detail = src.split("function renderPersonGroupDetail", 1)[1].split(
-            "function prksPersonEditFindGroupByNameInsensitive", 1
-        )[0]
+        detail = _read(_VUE_DETAIL)
         self.assertIn("Description", detail)
         self.assertIn("No description yet.", detail)
         self.assertIn("Hierarchy", detail)
         self.assertIn("Top-level group", detail)
         self.assertIn("Manage members", detail)
-        self.assertIn("renderPersonGroupAddMemberPanelHtml()", detail)
-        self.assertIn("removeButton: membersEditing", detail)
-        self.assertIn('href="#/people/groups/${encodeURIComponent', detail)
+        self.assertIn("group-add-member-search", detail)
+        self.assertIn("data-remove-member", detail)
+        self.assertIn("#/people/groups/", detail)
 
     def test_metadata_and_member_management_are_separate(self):
         src = _read(_GROUPS)
@@ -110,9 +115,10 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertIn("ctx.ui.personGroupMembersEditing = false", src)
         self.assertIn("ctx.ui.personGroupEditing = false", src)
         self.assertIn("function prksTogglePersonGroupMembersEdit", src)
-        self.assertIn("is-group-members-editing", src)
+        self.assertIn("is-group-members-editing", _read(_VUE_DETAIL))
         self.assertNotIn("renderPersonGroupAddMemberPanelHtml()", ui)
         self.assertNotIn("mountPersonGroupAddMemberControls(g)", ui)
+        self.assertNotIn("renderPersonGroupEditSidebarHtml", ui)
 
     def test_same_group_refresh_keeps_members_mode_but_other_groups_reset(self):
         app = _read(_APP)
@@ -120,9 +126,15 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertIn("const previousPersonGroupId", app)
         self.assertIn("const previousPersonGroupMembersEditing", app)
         self.assertIn("const preserveMembersEditing =", app)
-        self.assertIn("previousPersonGroupId === String(group.id)", app)
+        self.assertIn("const preserveGroupEditing =", app)
+        self.assertIn("previousPersonGroupEditing &&", app)
+        self.assertIn("ctx.ui.personGroupEditing", app)
+        self.assertIn("previousPersonGroupId", app)
         self.assertIn("ctx.ui.personGroupMembersEditing = preserveMembersEditing;", app)
-        self.assertIn("ctx.ui.personGroupEditing = false;", app)
+        self.assertIn("ctx.ui.personGroupEditing = preserveGroupEditing;", app)
+        self.assertIn("prksRetainPersonGroupEditAcrossRefresh", app)
+        self.assertIn("!samePersonGroupsWorkspace", app)
+        self.assertIn("prksVueDismissPersonGroups", app)
 
     def test_member_picker_async_mount_checks_original_owner_state(self):
         src = _read(_GROUPS)
@@ -147,16 +159,14 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         _member_picker_harness("stale")
 
     def test_metadata_form_keeps_typed_parent_and_separate_delete(self):
-        src = _read(_GROUPS)
-        form = src.split("function renderPersonGroupEditSidebarHtml", 1)[1].split(
-            "function prksSyncPersonGroupMemberEditUi", 1
-        )[0]
+        form = _read(_VUE_DETAIL)
         for heading in ("Identity", "Hierarchy", "Description"):
-            self.assertIn(f">{heading}</h4>", form)
+            self.assertIn(f"{heading}</h4>", form)
         self.assertIn("type a new name to create a parent when saving", form)
         self.assertIn("group-sidebar__sticky-actions", form)
         self.assertIn("<summary>Advanced</summary>", form)
         self.assertIn("Delete group", form)
+        self.assertIn("savePersonGroupEditor", _read(_GROUPS))
 
     def test_profile_group_picker_keeps_async_work_on_original_editor(self):
         src = _read(_GROUPS)

@@ -741,8 +741,15 @@ function openModal(id) {
         window.prksRefreshFolderModalValidation();
     } else if (id === 'settings-modal' && typeof window.prksOpenSettingsToLastCategory === 'function') {
         window.prksOpenSettingsToLastCategory();
-    } else if (id === 'group-modal' && typeof window.prksInitNewGroupModal === 'function') {
-        void window.prksInitNewGroupModal();
+    } else if (id === 'group-modal') {
+        if (window.__prksPersonGroupIndexCreateArmed) {
+            window.__prksPersonGroupIndexCreateArmed = false;
+        } else if (typeof window.prksClearPersonGroupIndexCreateOrigin === 'function') {
+            window.prksClearPersonGroupIndexCreateOrigin();
+        } else {
+            window.__prksPersonGroupIndexCreateOrigin = null;
+        }
+        if (typeof window.prksInitNewGroupModal === 'function') void window.prksInitNewGroupModal();
     }
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
     if (!deferBaseline) prksScheduleModalBaselineCapture(id);
@@ -3156,27 +3163,12 @@ function updatePanelContent(tabId) {
         if (tabId === 'details') {
             const g = _cpg;
             let topHtml;
-            if (
-                focusedCtx &&
-                focusedCtx.ui &&
-                focusedCtx.ui.personGroupEditing &&
-                typeof renderPersonGroupEditSidebarHtml === 'function'
-            ) {
-                topHtml = renderPersonGroupEditSidebarHtml(g);
-            } else if (typeof renderPersonGroupSummarySidebarHtml === 'function') {
+            if (typeof renderPersonGroupSummarySidebarHtml === 'function') {
                 topHtml = renderPersonGroupSummarySidebarHtml(g);
             } else {
                 topHtml = '<p class="meta-row">Group panel unavailable.</p>';
             }
             panel.innerHTML = '<div class="right-panel-stack">' + topHtml + '</div>';
-            if (
-                focusedCtx &&
-                focusedCtx.ui &&
-                focusedCtx.ui.personGroupEditing &&
-                typeof mountPersonGroupEditPanel === 'function'
-            ) {
-                void mountPersonGroupEditPanel(g, focusedCtx);
-            }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }

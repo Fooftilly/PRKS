@@ -626,6 +626,77 @@ async function aCommittedMembershipWriteStillNotifiesAfterTheEditorMovesOn() {
     assert.ok(runtime.notifications() >= 1, "a committed membership still notifies sync");
 }
 
+async function anOlderSessionCannotCommitAGroupFieldDuringTheRead() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    runtimeForStore(store);
+    const base = baseAt({ name: 1 }, { name: "Analysts", description: "Engine" });
+    const seeded = await store.savePersonGroupFields("PG-1", { name: "Engineers" }, base);
+    assert.equal(seeded[0].operation, "SET_PERSON_GROUP_FIELD");
+    const before = operationFingerprint(await store.listOperations());
+    const session = { owned: true };
+    loseOwnershipOnNextOperationsRead(idb, session);
+    const written = await globalThis.prksSavePersonGroupFieldsDurably(
+        "PG-1", { name: "Mathematicians" }, base, () => session.owned);
+    assert.deepEqual(written, []);
+    assert.equal(session.owned, false, "ownership changed during the awaited field read");
+    assert.equal(operationFingerprint(await store.listOperations()), before,
+        "the older session did not replace the field operation");
+
+    const omitted = await store.savePersonGroupFields("PG-1", { description: "Still" }, base);
+    assert.equal(omitted[0].payload.field, "description",
+        "omitting the predicate still records a field edit");
+}
+
+async function anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    runtimeForStore(store);
+    const base = baseAt({ name: 1 }, { name: "Analysts" });
+    await store.savePersonGroupFields("PG-1", { name: "Engineers" }, base);
+    const before = operationFingerprint(await store.listOperations());
+    const duringDelete = { owned: true };
+    loseOwnershipOnNextOperationsDelete(idb, duringDelete);
+    const removed = await globalThis.prksSavePersonGroupFieldsDurably(
+        "PG-1", { name: "Mathematicians" }, base, () => duringDelete.owned);
+    assert.deepEqual(removed, []);
+    assert.equal(duringDelete.owned, false, "ownership changed during the field delete");
+    let after = await store.listOperations();
+    assert.equal(operationFingerprint(after), before,
+        "aborting during the delete leaves the queued field edit");
+    assert.equal(after.find(r => r.payload && r.payload.field === "name").payload.value, "Engineers");
+
+    const duringInsert = { owned: true };
+    loseOwnershipOnNextOperationsPut(idb, duringInsert);
+    const replaced = await globalThis.prksSavePersonGroupFieldsDurably(
+        "PG-1", { name: "Mathematicians" }, base, () => duringInsert.owned);
+    assert.deepEqual(replaced, []);
+    assert.equal(duringInsert.owned, false, "ownership changed during the field insert");
+    after = await store.listOperations();
+    assert.equal(operationFingerprint(after), before,
+        "aborting during the insert leaves the queued field edit");
+    assert.equal(after.find(r => r.payload && r.payload.field === "name").payload.value, "Engineers");
+    assert.equal(after.some(r => r.payload && r.payload.value === "Mathematicians"), false);
+}
+
+async function aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const runtime = runtimeForStore(store);
+    await store.listOperations();
+    const session = { owned: true };
+    loseOwnershipWhenWriteCommits(idb, session);
+    const base = baseAt({ name: 1 }, { name: "Analysts" });
+    const written = await globalThis.prksSavePersonGroupFieldsDurably(
+        "PG-1", { name: "Engineers" }, base, () => session.owned);
+    assert.equal(session.owned, false, "ownership ended as the field commit was delivered");
+    assert.equal(written[0] && written[0].operation, "SET_PERSON_GROUP_FIELD");
+    assert.equal(
+        (await store.listOperations()).some(r => r.operation === "SET_PERSON_GROUP_FIELD"),
+        true);
+    assert.ok(runtime.notifications() >= 1, "a committed field edit still notifies sync");
+}
+
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
@@ -650,6 +721,9 @@ async function main() {
     await anOlderSessionCannotCommitAMembershipDuringTheRead();
     await anOlderSessionCannotCommitAHalfAppliedMembershipReplacement();
     await aCommittedMembershipWriteStillNotifiesAfterTheEditorMovesOn();
+    await anOlderSessionCannotCommitAGroupFieldDuringTheRead();
+    await anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement();
+    await aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn();
     console.log("All " + checks + " person group checks passed");
 }
 

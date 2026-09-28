@@ -502,9 +502,18 @@
         return op;
     }
 
-    async function saveGroupFieldsDurably(groupId, changes, base) {
+    async function saveGroupFieldsDurably(groupId, changes, base, stillOwns) {
         const runtime = sync();
-        const written = await runtime.store.savePersonGroupFields(groupId, changes, base);
+        let written;
+        try {
+            written = await runtime.store.savePersonGroupFields(
+                groupId, changes, base, stillOwns);
+        } catch (error) {
+            if (ownershipDropped(stillOwns)) return [];
+            throw error;
+        }
+        /* Resolved means the field transaction committed. Notify even when
+         * the editor that started it has moved on. */
         if (typeof runtime.changed === 'function') runtime.changed();
         return written;
     }

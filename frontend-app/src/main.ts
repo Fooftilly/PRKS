@@ -3,6 +3,7 @@ import { registerConceptsBridge } from './features/concepts/session'
 import { registerFolderLibraryBridge } from './features/folder-library/session'
 import { registerArgumentsBridge } from './features/arguments/session'
 import { registerPeopleBridge } from './features/people/session'
+import { registerPersonGroupsBridge } from './features/person-groups/session'
 import { registerPlaylistsBridge } from './features/playlists/session'
 import { registerPositionsBridge } from './features/positions/session'
 import { registerPerformanceDiagnosticsBridge } from './features/performance-diagnostics/activation'
@@ -21,3 +22,4 @@ registerPositionsBridge(window)
 registerArgumentsBridge(window)
 registerPlaylistsBridge(window)
 registerPeopleBridge(window)
+registerPersonGroupsBridge(window)
