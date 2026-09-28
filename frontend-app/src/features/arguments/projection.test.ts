@@ -4,6 +4,7 @@ import {
   buildArgumentDetailProjection,
   buildArgumentIndexProjection,
   argumentEditorDraftFromForm,
+  createEditorRowKeys,
   draftFromArgument,
 } from './projection'
 
@@ -85,10 +86,14 @@ describe('Argument projections', () => {
       targets: [{ type: 'position', id: 'P1', name: 'P', verdict_id: 'supports' }],
       sources: [{ work_id: 'W1', work_title: 'Work', pages: '2' }],
     })
-    const draft = draftFromArgument(detail!)
+    const nextRowKey = createEditorRowKeys()
+    const draft = draftFromArgument(detail!, nextRowKey)
     expect(draft.targets[0]?.rowKey).toBeTruthy()
     expect(draft.sources[0]?.rowKey).toBeTruthy()
     expect(draft.targets[0]?.rowKey).not.toBe(draft.sources[0]?.rowKey)
+    expect(nextRowKey()).not.toBe(draft.sources[0]?.rowKey)
+    const otherEditor = createEditorRowKeys()
+    expect(otherEditor()).not.toBe(draft.targets[0]?.rowKey)
     draft.targets.push({
       rowKey: 'extra',
       type: 'argument',

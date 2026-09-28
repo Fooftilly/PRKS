@@ -224,17 +224,32 @@ export function acceptArgumentDetail(value: unknown): ArgumentDetail | null {
   }
 }
 
-export function editorRowKey(): string {
-  return `arg-row-${crypto.randomUUID()}`
+let argumentEditorMounts = 0
+
+/**
+ * Ids for one mounted editor draft.
+ * A counter, not a UUID: plain HTTP is a supported LAN origin and has no
+ * `crypto.randomUUID`. The ids stay inside this draft.
+ */
+export function createEditorRowKeys(): () => string {
+  const editor = ++argumentEditorMounts
+  let next = 0
+  return () => {
+    next += 1
+    return `arg-${editor}-${next}`
+  }
 }
 
-export function draftFromArgument(argument: ArgumentDetail): ArgumentEditorForm {
+export function draftFromArgument(
+  argument: ArgumentDetail,
+  nextRowKey: () => string,
+): ArgumentEditorForm {
   return {
     name: argument.name,
     kind: argument.kind,
     main_text: argument.main_text,
     targets: argument.targets.map((target) => ({
-      rowKey: editorRowKey(),
+      rowKey: nextRowKey(),
       type: target.type,
       id: target.id,
       name: target.name,
@@ -242,7 +257,7 @@ export function draftFromArgument(argument: ArgumentDetail): ArgumentEditorForm 
       verdict_id: target.verdict_id,
     })),
     sources: argument.sources.map((source) => ({
-      rowKey: editorRowKey(),
+      rowKey: nextRowKey(),
       work_id: source.work_id,
       work_title: source.work_title,
       pages: source.pages,

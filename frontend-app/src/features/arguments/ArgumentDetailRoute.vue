@@ -7,8 +7,8 @@ import { defaultArgumentVerdict } from './match'
 import { researchMarkdownHtml } from './markdown'
 import {
   argumentEditorDraftFromForm,
+  createEditorRowKeys,
   draftFromArgument,
-  editorRowKey,
   type ArgumentDetailProjection,
 } from './projection'
 import type {
@@ -42,6 +42,7 @@ const mentionsHost = ref<HTMLElement | null>(null)
 
 const editing = ref(false)
 const draft = ref<ArgumentEditorForm | null>(null)
+const nextRowKey = createEditorRowKeys()
 const { actionBusy, actionBlocked, withBusy } = useArgumentPendingAction()
 
 const availability = computed(() => props.projection.availability)
@@ -204,7 +205,7 @@ async function onEdit(): Promise<void> {
   await withBusy('edit', async () => {
     const ok = await intents.enterEdit(current.id)
     if (!ok || props.projection.generation !== generation || argument.value?.id !== current.id) return
-    draft.value = draftFromArgument(current)
+    draft.value = draftFromArgument(current, nextRowKey)
     editing.value = true
   })
 }
@@ -249,7 +250,7 @@ function addTarget(): void {
   void withBusy('add-target', async () => {
     const verdict = defaultArgumentVerdict(body.kind)
     const row: ArgumentEditorTargetRow = {
-      rowKey: editorRowKey(),
+      rowKey: nextRowKey(),
       type: 'position',
       id: '',
       name: 'Choose…',
@@ -272,7 +273,7 @@ function addSource(): void {
   if (!body || !current) return
   void withBusy('add-source', async () => {
     const row: ArgumentEditorSourceRow = {
-      rowKey: editorRowKey(),
+      rowKey: nextRowKey(),
       work_id: '',
       work_title: 'Choose a work…',
       pages: '',

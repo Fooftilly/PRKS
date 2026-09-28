@@ -518,6 +518,79 @@ describe('Arguments route bridge', () => {
     expect(window.prksOpenResearchPicker).toHaveBeenCalledTimes(1)
   })
 
+  it('enters edit and adds a row when randomUUID throws', async () => {
+    paintHelpers()
+    window.prksPrepareArgumentEdit = async () => {}
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOpenResearchPicker = vi.fn()
+    window.fetchArguments = async () => []
+    window.fetchPositions = async () => []
+    const uuid = crypto.randomUUID.bind(crypto)
+    Object.defineProperty(crypto, 'randomUUID', {
+      configurable: true,
+      writable: true,
+      value: () => {
+        throw new TypeError('unavailable')
+      },
+    })
+    try {
+      const pane = owner()
+      const el = host()
+      presentArgumentDetail({
+        owner: pane,
+        host: el,
+        argument: {
+          id: 'A1',
+          name: 'Base',
+          kind: 'argument',
+          main_text: 'Body',
+          targets: [
+            {
+              type: 'position',
+              id: 'P0',
+              name: 'First',
+              kind: '',
+              verdict_id: 'supports',
+              verdict_label: 'Supports',
+            },
+          ],
+          sources: [{ work_id: 'W1', work_title: 'Cited', pages: '2', authors: [] }],
+          responses: [],
+          mentions: [],
+          verdicts: [{ id: 'supports', label: 'Supports' }],
+        },
+        argumentId: 'A1',
+        generation: 1,
+      })
+      el.querySelector<HTMLButtonElement>('#prks-arg-edit')?.click()
+      for (let i = 0; i < 6; i += 1) {
+        await Promise.resolve()
+        await nextTick()
+      }
+      expect(el.querySelector('#prks-arg-form')).not.toBeNull()
+      expect(el.textContent).toContain('First')
+      expect(el.textContent).toContain('Cited')
+      el.querySelector<HTMLButtonElement>('#prks-arg-add-target')?.click()
+      for (let i = 0; i < 6; i += 1) {
+        await Promise.resolve()
+        await nextTick()
+      }
+      expect(el.querySelectorAll('[data-pick="target"]')).toHaveLength(2)
+      el.querySelector<HTMLButtonElement>('#prks-arg-add-source')?.click()
+      for (let i = 0; i < 6; i += 1) {
+        await Promise.resolve()
+        await nextTick()
+      }
+      expect(el.querySelectorAll('[data-pick="source"]')).toHaveLength(2)
+    } finally {
+      Object.defineProperty(crypto, 'randomUUID', {
+        configurable: true,
+        writable: true,
+        value: uuid,
+      })
+    }
+  })
+
   it('registers bridges and unmounts one owner without affecting the other', () => {
     paintHelpers()
     const el = host()
