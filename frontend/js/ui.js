@@ -1004,6 +1004,9 @@ function prksCloseOverlays() {
     document.body.classList.remove('prks-sidebar-open', 'prks-right-panel-open', 'prks-overlay-open');
     prksSetOverlayBackdropVisible(false);
     prksSyncMobileToggleButtons();
+    if (typeof window.prksInsetOpenPersonEditorsForDetailsOverlay === 'function') {
+        window.prksInsetOpenPersonEditorsForDetailsOverlay();
+    }
 }
 
 function prksOpenSidebarDrawer() {
@@ -1026,6 +1029,9 @@ function prksOpenRightPanelOverlay() {
         prksSetOverlayBackdropVisible(false);
     }
     prksSyncMobileToggleButtons();
+    if (typeof window.prksInsetOpenPersonEditorsForDetailsOverlay === 'function') {
+        window.setTimeout(window.prksInsetOpenPersonEditorsForDetailsOverlay, 240);
+    }
 }
 
 function prksToggleSidebarDrawer(forceOpen) {

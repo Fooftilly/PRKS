@@ -1774,6 +1774,28 @@ window.prksRefreshPersonDetailMain = prksRefreshPersonDetailMain;
 window.prksRefreshMountedPersonSurfaces = prksRefreshMountedPersonSurfaces;
 window.prksBindPersonProfileDraft = prksBindPersonProfileDraft;
 
+function prksInsetPersonEditorForDetailsOverlay(root) {
+    const editor = root && root.querySelector ? root.querySelector('.person-panel-edit') : null;
+    if (!editor) return;
+    editor.style.marginRight = '';
+    if (!document.body.classList.contains('prks-right-panel-open')) return;
+    const panel = document.getElementById('right-panel');
+    if (!panel) return;
+    const editorBox = editor.getBoundingClientRect();
+    const panelBox = panel.getBoundingClientRect();
+    const overlap = Math.min(editorBox.right, panelBox.right) - Math.max(editorBox.left, panelBox.left);
+    if (overlap > 1) editor.style.marginRight = Math.ceil(overlap) + 'px';
+}
+
+function prksInsetOpenPersonEditorsForDetailsOverlay() {
+    if (typeof prksForEachMountedTabContext !== 'function') return;
+    prksForEachMountedTabContext((ctx) => {
+        if (!ctx || !ctx.root || !ctx.ui || !ctx.ui.personDetailEditing) return;
+        prksInsetPersonEditorForDetailsOverlay(ctx.root);
+    });
+}
+window.prksInsetOpenPersonEditorsForDetailsOverlay = prksInsetOpenPersonEditorsForDetailsOverlay;
+
 function renderPersonDetails(ctx, person, container) {
     if (!container) return;
     if (person && ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
@@ -1800,4 +1822,5 @@ function renderPersonDetails(ctx, person, container) {
     }
     prksBindPersonOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+    prksInsetPersonEditorForDetailsOverlay(container);
 }
