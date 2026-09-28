@@ -2388,6 +2388,12 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def adopt(db, fp):\n"
                 "    functools.partial(functools.partial(db.add_work, 't'), file_path=fp)()\n"
             ),
+            "inline_nested_partial_outer_keyword_wins": (
+                "import functools\n"
+                "def adopt(db, fp):\n"
+                "    functools.partial(\n"
+                "        functools.partial(db.add_work, 't', file_path=''), file_path=fp)()\n"
+            ),
             "raw_sql_subquery_where_before_file_path": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET title = (SELECT title FROM works WHERE id = ?), '\n"
@@ -2678,6 +2684,12 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
 
     def test_clearing_and_non_managed_values_pass(self):
         cases = {
+            "inline_nested_partial_outer_clear_wins": (
+                "import functools\n"
+                "def f(db, fp):\n"
+                "    functools.partial(\n"
+                "        functools.partial(db.add_work, 't', file_path=fp), file_path='')()\n"
+            ),
             "no_file_path": "def f(db):\n    db.add_work(title='t')\n",
             "empty_file_path": "def f(db):\n    db.add_work(title='t', file_path='')\n",
             "none_file_path": "def f(db):\n    db.add_work(title='t', file_path=None)\n",

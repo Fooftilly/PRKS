@@ -1541,6 +1541,9 @@ class _InvariantVisitor(ast.NodeVisitor):
         # is added outside ``_bind``, so ``summary``-based widening (loop tops,
         # exception handlers) cannot see it; this log can.
         self._dirty_log: list[tuple[_Scope, str]] = []
+        # Inner ``partial(...)`` calls already checked as part of the outer
+        # partial they were flattened into (whose keywords may override theirs).
+        self._flattened_partials: set[int] = set()
 
     @property
     def _function(self) -> tuple[str, str]:
@@ -2454,17 +2457,25 @@ class _InvariantVisitor(ast.NodeVisitor):
         )
 
     def _check_managed_pdf_boundary(self, node: ast.Call) -> None:
+        if id(node) in self._flattened_partials:
+            return
         if _is_partial_call(node, self.scopes) and node.args:
             # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
             # prepares; arguments supplied at invocation are checked there.
             func, args, keywords = node.args[0], node.args[1:], list(node.keywords)
             # Flatten inline ``partial(partial(helper, a), b)`` to ``helper(a, b)``.
             while isinstance(func, ast.Call) and _is_partial_call(func, self.scopes) and func.args:
+                self._flattened_partials.add(id(func))
                 func, args, keywords = (
                     func.args[0],
                     [*func.args[1:], *args],
                     [*func.keywords, *keywords],
                 )
+            # As in ``functools.partial``, the outermost binding of a keyword wins.
+            named = {kw.arg: kw for kw in keywords if kw.arg is not None}
+            keywords = [
+                kw for kw in keywords if kw.arg is None or named[kw.arg] is kw
+            ]
             prepared = ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), node)
             self._check_managed_pdf_boundary(prepared)
             self._check_partial_bound_file_path(prepared)
