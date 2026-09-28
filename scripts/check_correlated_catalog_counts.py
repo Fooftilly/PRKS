@@ -311,12 +311,24 @@ def _declared(masked: str) -> dict[str, str]:
 
 
 def _aggregate_in_select_list(body_masked: str) -> str | None:
-    """Aggregate called in the subquery's own top-level select list."""
-    top = _top_level(body_masked[1:-1])
-    m = re.match(r"\s*select\b(.*?)(?:\bfrom\b|$)", top, re.IGNORECASE | re.DOTALL)
-    if not m:
+    """Aggregate called in the subquery's own select list.
+
+    The select list runs from ``SELECT`` to the subquery's first top-level
+    ``FROM``. Aggregates wrapped in other expressions (``COALESCE(COUNT(*),
+    0)``) count; ones inside a nested ``(SELECT ...)`` belong to that query.
+    """
+    inner = body_masked[1:-1]
+    top = _top_level(inner)
+    start = re.match(r"\s*select\b", top, re.IGNORECASE)
+    if not start:
         return None
-    for fm in re.finditer(rf"\b({_IDENT})\s*\(", m.group(1)):
+    end = re.search(r"\bfrom\b", top[start.end() :], re.IGNORECASE)
+    stop = start.end() + end.start() if end else len(inner)
+    chars = list(inner)
+    for s, e in _nested_select_spans(inner):
+        _blank(chars, s, e + 1)
+    select_list = "".join(chars)[start.end() : stop]
+    for fm in re.finditer(rf"\b({_IDENT})\s*\(", select_list):
         name = fm.group(1).lower()
         if name in AGGREGATES:
             return name.upper()
@@ -350,11 +362,31 @@ def _enclosing_span(masked: str, start: int, end: int) -> tuple[int, int]:
     return 0, len(masked)
 
 
-def _normalize(text: str) -> str:
+def _normalize_sql_segment(text: str) -> str:
     # Whitespace is collapsed to single spaces first, so an optional single
     # space around punctuation is enough (and cannot backtrack).
-    text = re.sub(r"\s+", " ", text.strip().lower())
+    text = re.sub(r"\s+", " ", text.lower())
     return re.sub(r" ?([(),.=<>!*+/-]) ?", r"\1", text)
+
+
+def _normalize(text: str) -> str:
+    """Case/whitespace-insensitive SQL text; quoted values stay verbatim.
+
+    ``kind = 'VISIBLE'`` vs ``'visible'`` can select different rows, so a
+    change inside a quoted value must change the fingerprint.
+    """
+    parts: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        q = min((p for p in (text.find("'", i), text.find('"', i)) if p >= 0), default=n)
+        parts.append(_normalize_sql_segment(text[i:q]))
+        if q >= n:
+            break
+        end = _quote_end(text, q)
+        parts.append(text[q : end + 1])
+        i = end + 1
+    return "".join(parts).strip()
 
 
 def _nested_select_spans(text: str) -> list[tuple[int, int]]:

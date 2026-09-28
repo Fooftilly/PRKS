@@ -197,6 +197,41 @@ class DetectionTests(unittest.TestCase):
         """
         self.assertEqual(_hits(sql), [])
 
+    def test_aggregate_wrapped_in_select_expression_detected(self):
+        for select in ("COALESCE(COUNT(*), 0)", "IFNULL(SUM(c.n), 0)", "COUNT(*) + 1"):
+            sql = f"""
+            SELECT p.id,
+                (SELECT {select} FROM child c WHERE c.parent_id = p.id) AS n
+            FROM parent p
+            """
+            with self.subTest(select=select):
+                self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
+    def test_aggregate_only_in_nested_select_list_belongs_to_nested_query(self):
+        sql = """
+        SELECT p.id,
+            (SELECT (SELECT COUNT(*) FROM audit) FROM child c WHERE c.parent_id = p.id) AS n
+        FROM parent p
+        """
+        self.assertEqual(_hits(sql), [])
+
+    def test_quoted_value_changes_change_fingerprint(self):
+        def fp(value: str) -> str:
+            sql = PLAYLIST_SQL.replace(
+                "WHERE i.playlist_id = p.id",
+                f"WHERE i.playlist_id = p.id AND i.kind = {value}",
+            )
+            return _hits(sql)[0].fingerprint
+
+        self.assertNotEqual(fp("'VISIBLE'"), fp("'visible'"))
+        self.assertNotEqual(fp("'a  b'"), fp("'a b'"))
+        # Case and whitespace outside the quoted value still do not matter.
+        spaced = PLAYLIST_SQL.replace(
+            "WHERE i.playlist_id = p.id",
+            "WHERE   i.playlist_id = p.id AND I.KIND   =   'VISIBLE'",
+        )
+        self.assertEqual(_hits(spaced)[0].fingerprint, fp("'VISIBLE'"))
+
     def test_space_around_qualifier_dot_keeps_fingerprint(self):
         base = _hits(PLAYLIST_SQL)[0]
         spaced = PLAYLIST_SQL.replace("i.playlist_id = p.id", "i . playlist_id = p . id")
