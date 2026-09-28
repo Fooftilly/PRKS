@@ -662,30 +662,40 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     if _is_zip_archive_expr(value, scopes):
         return {_ARCHIVE}
     if _is_partial_call(value, scopes) and value.args:
-        # ``save = partial(db.add_work, *bound)`` keeps the wrapped helper
-        # identity and how many positionals it pre-binds.
-        inner = _value_bindings(value.args[0], scopes)
-        prior = [b[1] for b in inner if b[0] == "partial"]
-        # ``partial(partial(f, a), b)`` pre-binds both: offsets accumulate.
-        bound = len(value.args) - 1 + (min(prior) if prior else 0)
-        return {b for b in inner if b[0] != "partial"} | {("partial", bound)}
+        return _partial_bindings(value, scopes)
     if isinstance(value, ast.Attribute):
-        # ``mod.attr`` / ``pkg.mod.attr`` keep their import identity, so a
-        # local alias of an imported callable or class still resolves.
-        qualified = [name.rsplit(".", 1) for name in _qualified_names(value, scopes)]
-        if qualified:
-            return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(
-                value, scopes
-            )
-        if value.attr in _TRACKED_HELPER_NAMES:
-            # ``save = db.add_work``: keep the helper identity for later calls;
-            # ``upd = Cls.method`` stays unbound (receiver passed explicitly).
-            owner = "<unbound>" if _is_class_receiver(value.value, scopes) else "<bound>"
-            return {("name", owner, value.attr)} | _expr_facts(value, scopes)
+        aliased = _attribute_alias_bindings(value, scopes)
+        if aliased is not None:
+            return aliased
     owned = _proven_owned(value, scopes)
     if owned is not None:
         return owned
     return {_OTHER} | _expr_facts(value, scopes)
+
+
+def _partial_bindings(value: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
+    """``save = partial(db.add_work, *bound)`` keeps the wrapped helper
+    identity and how many positionals it pre-binds; nested partials
+    (``partial(partial(f, a), b)``) accumulate their offsets."""
+    inner = _value_bindings(value.args[0], scopes)
+    prior = [b[1] for b in inner if b[0] == "partial"]
+    bound = len(value.args) - 1 + (min(prior) if prior else 0)
+    return {b for b in inner if b[0] != "partial"} | {("partial", bound)}
+
+
+def _attribute_alias_bindings(
+    value: ast.Attribute, scopes: list[_Scope]
+) -> set[_Binding] | None:
+    """``mod.attr`` / ``pkg.mod.attr`` keep their import identity, and a bound
+    method of a tracked helper keeps its name (``save = db.add_work``);
+    ``upd = Cls.method`` stays unbound (receiver passed explicitly)."""
+    qualified = [name.rsplit(".", 1) for name in _qualified_names(value, scopes)]
+    if qualified:
+        return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(value, scopes)
+    if value.attr in _TRACKED_HELPER_NAMES:
+        owner = "<unbound>" if _is_class_receiver(value.value, scopes) else "<bound>"
+        return {("name", owner, value.attr)} | _expr_facts(value, scopes)
+    return None
 
 
 # --- qualified names and value provenance (Path / managed PDF / weak alias) ---
