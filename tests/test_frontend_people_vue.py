@@ -186,11 +186,9 @@ globalThis.prksNavigate = (hash, opts) => { navigated = { hash, tabId: opts && o
 
     def test_older_profile_save_does_not_close_a_later_session(self):
         people = (FRONTEND / "components" / "people.js").read_text()
-        script = "\n".join(
+        script = _profile_save_script(
+            people,
             (
-                "const PRKS_PERSON_PROFILE_FIELDS = ['first_name','last_name','aliases','about','image_url','link_wikipedia','link_stanford_encyclopedia','link_iep','links_other','birth_date','death_date'];",
-                "const PERSON_DATE_HELP = 'date';",
-                "const parsePersonBirthDeathField = (value) => String(value || '');",
                 "const prksReadPersonProfileBase = async () => ({ base: { first_name: { value: 'Ada' }, last_name: { value: 'Lovelace' } }, operations: [] });",
                 "const prksDirtyPersonFields = (id, desired) => desired;",
                 "let writes = 0;",
@@ -199,18 +197,7 @@ globalThis.prksNavigate = (hash, opts) => { navigated = { hash, tabId: opts && o
                 "const prksUniquePersonWorks = () => [];",
                 "let rendered = 0;",
                 "const renderPersonDetails = () => { rendered += 1; };",
-                _extract(people, "prksCompareText"),
-                _extract(people, "prksSortedUniqueIds"),
-                _extract(people, "prksPersonProfileRouteStill"),
-                _extract(people, "prksPersonEditSessionToken"),
-                _extract(people, "prksPersonEditSessionStill"),
-                _extract(people, "prksPersonProfileSaveMessage"),
-                _extract(people, "prksPersonProfileDesiredChanges"),
-                _extract(people, "prksPersonProfileWriteStillOwned"),
-                _extract(people, "prksWriteDirtyPersonFields"),
-                _extract(people, "prksSavePersonGroupIds"),
-                _extract(people, "prksFinishPersonProfileSave"),
-                _extract(people, "savePersonProfileDraft"),
+            ),
                 r"""
 const prksTabContextOwnsEntityRoute = (ctx, generation, type, id) => {
   if (!ctx.isCurrent(generation)) return false;
@@ -243,7 +230,6 @@ const ctx = {
   process.stdout.write(JSON.stringify({ writes, rendered }));
 })().catch((error) => { console.error(error); process.exit(1); });
 """,
-            )
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -257,11 +243,9 @@ const ctx = {
             "link_iep: '', links_other: '' }"
         )
         changed = fields.replace("first_name: 'Ada'", "first_name: 'Augusta'")
-        script = "\n".join(
+        script = _profile_save_script(
+            people,
             (
-                "const PRKS_PERSON_PROFILE_FIELDS = ['first_name','last_name','aliases','about','image_url','link_wikipedia','link_stanford_encyclopedia','link_iep','links_other','birth_date','death_date'];",
-                "const PERSON_DATE_HELP = 'date';",
-                "const parsePersonBirthDeathField = (value) => String(value || '');",
                 "let writes = 0;",
                 "let memberships = 0;",
                 "const prksReadPersonProfileBase = async () => { moved(); return { base: { first_name: { value: 'Ada' }, last_name: { value: 'Lovelace' } }, operations: [] }; };",
@@ -270,18 +254,7 @@ const ctx = {
                 "const prksSetPersonGroupMembership = async () => { memberships += 1; return true; };",
                 "const prksPersonRecordFor = async () => null;",
                 "const renderPersonDetails = () => {};",
-                _extract(people, "prksCompareText"),
-                _extract(people, "prksSortedUniqueIds"),
-                _extract(people, "prksPersonProfileRouteStill"),
-                _extract(people, "prksPersonEditSessionToken"),
-                _extract(people, "prksPersonEditSessionStill"),
-                _extract(people, "prksPersonProfileSaveMessage"),
-                _extract(people, "prksPersonProfileDesiredChanges"),
-                _extract(people, "prksPersonProfileWriteStillOwned"),
-                _extract(people, "prksWriteDirtyPersonFields"),
-                _extract(people, "prksSavePersonGroupIds"),
-                _extract(people, "prksFinishPersonProfileSave"),
-                _extract(people, "savePersonProfileDraft"),
+            ),
                 r"""
 const prksTabContextOwnsEntityRoute = (ctx, generation, type, id) => {
   if (!ctx.isCurrent(generation)) return false;
@@ -323,7 +296,6 @@ function moved() {
   process.stdout.write(JSON.stringify({ writes, memberships }));
 })().catch((error) => { console.error(error); process.exit(1); });
 """,
-            )
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -340,11 +312,9 @@ function moved() {
         ]
         self.assertIn("prksPersonEditSessionStill", guard)
         self.assertNotIn("prksTabContextOwnsEntityRoute", guard)
-        script = "\n".join(
+        script = _profile_save_script(
+            people,
             (
-                "const PRKS_PERSON_PROFILE_FIELDS = ['first_name','last_name','aliases','about','image_url','link_wikipedia','link_stanford_encyclopedia','link_iep','links_other','birth_date','death_date'];",
-                "const PERSON_DATE_HELP = 'date';",
-                "const parsePersonBirthDeathField = (value) => String(value || '');",
                 "let releaseRead;",
                 "const prksReadPersonProfileBase = () => new Promise((resolve) => { releaseRead = resolve; });",
                 "const prksDirtyPersonFields = (id, desired) => desired;",
@@ -353,18 +323,7 @@ function moved() {
                 "const prksPersonRecordFor = async () => ({ id: 'P1', first_name: 'Augusta', last_name: 'Lovelace', works: [] });",
                 "const prksUniquePersonWorks = () => [];",
                 "const renderPersonDetails = () => {};",
-                _extract(people, "prksCompareText"),
-                _extract(people, "prksSortedUniqueIds"),
-                _extract(people, "prksPersonProfileRouteStill"),
-                _extract(people, "prksPersonEditSessionToken"),
-                _extract(people, "prksPersonEditSessionStill"),
-                _extract(people, "prksPersonProfileSaveMessage"),
-                _extract(people, "prksPersonProfileDesiredChanges"),
-                _extract(people, "prksPersonProfileWriteStillOwned"),
-                _extract(people, "prksWriteDirtyPersonFields"),
-                _extract(people, "prksSavePersonGroupIds"),
-                _extract(people, "prksFinishPersonProfileSave"),
-                _extract(people, "savePersonProfileDraft"),
+            ),
                 r"""
 const ctx = {
   mounted: true,
@@ -391,7 +350,6 @@ const ctx = {
   process.stdout.write(JSON.stringify({ writes }));
 })().catch((error) => { console.error(error); process.exit(1); });
 """,
-            )
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -527,6 +485,39 @@ process.stdout.write(JSON.stringify({ ok: true }));
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(json.loads(proc.stdout)["ok"])
+
+
+_PROFILE_SAVE_SETUP = (
+    "const PRKS_PERSON_PROFILE_FIELDS = ['first_name','last_name','aliases','about','image_url','link_wikipedia','link_stanford_encyclopedia','link_iep','links_other','birth_date','death_date'];",
+    "const PERSON_DATE_HELP = 'date';",
+    "const parsePersonBirthDeathField = (value) => String(value || '');",
+)
+
+_PROFILE_SAVE_FUNCTIONS = (
+    "prksCompareText",
+    "prksSortedUniqueIds",
+    "prksPersonProfileRouteStill",
+    "prksPersonEditSessionToken",
+    "prksPersonEditSessionStill",
+    "prksPersonProfileSaveMessage",
+    "prksPersonProfileDesiredChanges",
+    "prksPersonProfileWriteStillOwned",
+    "prksWriteDirtyPersonFields",
+    "prksSavePersonGroupIds",
+    "prksFinishPersonProfileSave",
+    "savePersonProfileDraft",
+)
+
+
+def _profile_save_script(people: str, stubs: tuple[str, ...], body: str) -> str:
+    return "\n".join(
+        (
+            *_PROFILE_SAVE_SETUP,
+            *stubs,
+            *(_extract(people, name) for name in _PROFILE_SAVE_FUNCTIONS),
+            body,
+        )
+    )
 
 
 def _extract(src: str, name: str) -> str:

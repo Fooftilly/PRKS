@@ -12,6 +12,14 @@ let checks = 0;
 const assert = new Proxy(function (...args) { checks += 1; return strict(...args); },
     { get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); } });
 const { createFakeIndexedDBFactory } = require('./lib/fake_indexeddb.js');
+const {
+    operationFingerprint,
+    loseOwnershipOnNextOperationsRead,
+    loseOwnershipOnNextOperationsDelete,
+    loseOwnershipOnNextOperationsPut,
+    loseOwnershipWhenWriteCommits,
+    runtimeForStore,
+} = require('./lib/ownership_flip.js');
 const { createPrksLocalStore } = require('../../frontend/js/local-store.js');
 require('../../frontend/js/sync-runtime.js');
 require('../../frontend/js/person-state.js');
@@ -435,96 +443,6 @@ async function onlyProfileFieldsAreWritable() {
             () => store.savePersonMetadataFields('P-1', { [field]: 'x' }, baseAt()),
             e => e.prksLocalStoreCode === 'unknown_field', field);
     }
-}
-
-function operationFingerprint(rows) {
-    return rows.map(r => [r.op_id, r.operation, r.entity_id, JSON.stringify(r.payload)].join(':')).join('\n');
-}
-
-/* The ownership check has to run AFTER getAll resolves. Flipping the session
- * inside that request is the gap a guard before the call cannot see. */
-function openOperationsDatabase(idb) {
-    const db = idb.__databases.values().next().value;
-    if (!db) throw new Error('the store has not opened its database');
-    return db;
-}
-
-function wrapNextOperationsRequest(idb, session, method) {
-    const db = openOperationsDatabase(idb);
-    const original = db.transaction.bind(db);
-    let armed = true;
-    db.transaction = function (storeNames, mode, options) {
-        const tx = original(storeNames, mode, options);
-        const names = Array.isArray(storeNames) ? storeNames : [storeNames];
-        if (!armed || names.indexOf('operations') === -1) return tx;
-        const objectStore = tx.objectStore.bind(tx);
-        tx.objectStore = function (name) {
-            const handle = objectStore(name);
-            if (name !== 'operations' || !armed) return handle;
-            const run = handle[method].bind(handle);
-            handle[method] = function () {
-                armed = false;
-                session.owned = false;
-                return run.apply(handle, arguments);
-            };
-            return handle;
-        };
-        return tx;
-    };
-}
-
-function loseOwnershipOnNextOperationsRead(idb, session) {
-    wrapNextOperationsRequest(idb, session, 'getAll');
-}
-
-function loseOwnershipOnNextOperationsDelete(idb, session) {
-    wrapNextOperationsRequest(idb, session, 'delete');
-}
-
-function loseOwnershipOnNextOperationsPut(idb, session) {
-    wrapNextOperationsRequest(idb, session, 'put');
-}
-
-/* The commit callback runs after the rows are durable and before the store
- * promise resolves. That is the gap where the editor can move on. */
-function loseOwnershipWhenWriteCommits(idb, session) {
-    const db = openOperationsDatabase(idb);
-    const original = db.transaction.bind(db);
-    let armed = true;
-    db.transaction = function (storeNames, mode, options) {
-        const tx = original(storeNames, mode, options);
-        if (!armed || mode !== 'readwrite') return tx;
-        let handler = null;
-        Object.defineProperty(tx, 'oncomplete', {
-            configurable: true,
-            enumerable: true,
-            get: function () { return handler; },
-            set: function (fn) {
-                handler = function (event) {
-                    armed = false;
-                    session.owned = false;
-                    if (typeof fn === 'function') fn.call(tx, event);
-                };
-            },
-        });
-        return tx;
-    };
-}
-
-function runtimeForStore(store) {
-    const runtime = globalThis.createPrksSyncRuntime({
-        store, online: () => false, handlers: {},
-        request: async () => { throw new Error('offline'); },
-    });
-    let notified = 0;
-    const changed = runtime.changed.bind(runtime);
-    runtime.changed = function () {
-        notified += 1;
-        return changed();
-    };
-    runtime.notifications = () => notified;
-    globalThis.prksSync = runtime;
-    return runtime;
 }
 
 async function anOlderSessionCannotCommitAFieldDuringTheRead() {
