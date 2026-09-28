@@ -111,6 +111,7 @@ _PATH_RETURNING_METHODS = frozenset(
 _PATH_RETURNING_ATTRS = frozenset({"parent"})
 # Path attributes naming (part of) the same file as a string.
 _PATH_STRING_ATTRS = frozenset({"name", "stem"})
+_PATH_UNBOUND_UNLINK = frozenset(f"{cls}.unlink" for cls in PATHLIB_PATH_CLASSES)
 # Path methods returning the same location as a string.
 _PATH_STRING_METHODS = frozenset({"__fspath__", "__str__", "as_posix", "as_uri"})
 # Path methods yielding Paths under the receiver (``for p in d.glob("*")``).
@@ -227,7 +228,8 @@ _SQL_WORKS_INSERT_RE = re.compile(
     re.IGNORECASE,
 )
 _SQL_WORKS_UPDATE_RE = re.compile(
-    r"\bUPDATE\s+(?:OR\s+\w+\s+)?works(?:\s+(?:AS\s+)?\w+)?\s+SET\b(.*?)(?:\bWHERE\b|$)",
+    r"\bUPDATE\s+(?:OR\s+\w+\s+)?works(?:\s+(?:AS\s+)?\w+)?"
+    r"(?:\s+(?:INDEXED\s+BY\s+\w+|NOT\s+INDEXED))?\s+SET\b(.*?)(?:\bWHERE\b|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _SQL_UPSERT_SET_RE = re.compile(
@@ -632,8 +634,10 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
                 value, scopes
             )
         if value.attr in _TRACKED_HELPER_NAMES:
-            # ``save = db.add_work``: keep the helper identity for later calls.
-            return {("name", "<bound>", value.attr)} | _expr_facts(value, scopes)
+            # ``save = db.add_work``: keep the helper identity for later calls;
+            # ``upd = Cls.method`` stays unbound (receiver passed explicitly).
+            owner = "<unbound>" if _is_class_receiver(value.value, scopes) else "<bound>"
+            return {("name", owner, value.attr)} | _expr_facts(value, scopes)
     owned = _proven_owned(value, scopes)
     if owned is not None:
         return owned
@@ -675,6 +679,31 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
     if isinstance(node, ast.Attribute):
         return {f"{base}.{node.attr}" for base in _qualified_names(node.value, scopes)}
     return set()
+
+
+def _is_class_receiver(node: ast.expr, scopes: list[_Scope]) -> bool:
+    """``Cls`` in ``Cls.method``: a same-module class or an imported class-like
+    (CapWords) name, so the method is called unbound."""
+    if not isinstance(node, ast.Name):
+        return False
+    bindings = _resolve(scopes, node.id)
+    if any(b[0] == "class" for b in bindings):
+        return True
+    return any(name.rsplit(".", 1)[-1][:1].isupper() for name in _qualified_names(node, scopes))
+
+
+def _is_unbound_method_call(func: ast.expr, scopes: list[_Scope]) -> bool:
+    """``Cls.method(receiver, ...)`` or an alias of such an unbound method."""
+    if isinstance(func, ast.Attribute):
+        return _is_class_receiver(func.value, scopes)
+    if isinstance(func, ast.Name):
+        for binding in _resolve(scopes, func.id):
+            if binding[0] != "name":
+                continue
+            owner = str(binding[1])
+            if owner == "<unbound>" or owner.rsplit(".", 1)[-1][:1].isupper():
+                return True
+    return False
 
 
 def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
@@ -1876,12 +1905,20 @@ class _InvariantVisitor(ast.NodeVisitor):
             return
         self._forget_all_guarded_dicts()
 
-    def _check_guarded_dict_mutation(self, node: ast.Call) -> None:
+    def _check_guarded_dict_mutation(self, node: ast.Call, leaves: set[str]) -> None:
         """``d.update(...)`` / ``setdefault`` / ``__setitem__`` on any (possibly
-        aliasing) receiver may replace a guarded dict's file_path."""
+        aliasing) receiver may replace a guarded dict's file_path; so may any
+        callee the dict escapes to, other than the persistence sink itself."""
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in _DICT_MUTATORS:
             self._forget_all_guarded_dicts()
+            return
+        if leaves & set(WORK_FILE_PATH_SINKS):
+            return
+        for arg in [*node.args, *(kw.value for kw in node.keywords)]:
+            value = arg.value if isinstance(arg, ast.Starred) else arg
+            if isinstance(value, ast.Name):
+                self._forget_guarded_dict(value.id)
 
     def _forget_all_guarded_dicts(self) -> None:
         for guard in self._active_adoption_guards():
@@ -1983,11 +2020,8 @@ class _InvariantVisitor(ast.NodeVisitor):
                 (kw.value for kw in node.keywords if kw.arg == "path"), None
             )
             return f"{sorted(primitives)[0]}()", target
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr == "unlink"
-            and _is_path_class_expr(func.value, self.scopes)
-        ):
+        if _qualified_names(func, self.scopes) & _PATH_UNBOUND_UNLINK:
+            # ``Path.unlink(p)`` or an alias of it: the path is the first argument.
             return "pathlib.Path.unlink()", node.args[0] if node.args else None
         # ``path.unlink`` on a Path value is checked at the attribute itself
         # (visit_Attribute), so a saved bound method is covered too.
@@ -2043,8 +2077,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         ``*args`` sequence) when ``file_path`` cannot be singled out. A dict
         literal without that key and without ``**spread`` writes nothing.
         """
+        unbound = _is_unbound_method_call(node.func, self.scopes)
         for sink in sorted(leaves & set(WORK_FILE_PATH_SINKS)):
             index, keyword, is_fields = WORK_FILE_PATH_SINKS[sink]
+            if unbound and sink != "retarget_work_managed_file_path":
+                # ``PRKSDatabase.add_work(db, ...)``: the receiver comes first.
+                index += 1
             value = self._call_argument(node, index, keyword)
             if value is None:
                 continue
@@ -2080,7 +2118,11 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _is_owned_value(self, value: ast.expr) -> bool:
         """A clear / non-managed literal, minted bytes, or a value an active
         adoption guard validated (its input, its yielded basename, or the
-        fields dict whose ``file_path`` it read)."""
+        fields dict whose ``file_path`` it read). Every branch of a
+        conditional / short-circuit value must qualify on its own."""
+        branches = _branch_values(value)
+        if branches is not None and not isinstance(value, (ast.NamedExpr, ast.Await)):
+            return all(self._is_owned_value(branch) for branch in branches)
         if isinstance(value, ast.Constant):
             return not (
                 isinstance(value.value, str) and value.value.strip().startswith("/api/pdfs")
@@ -2164,7 +2206,7 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _check_managed_pdf_boundary(self, node: ast.Call) -> None:
         leaves = _callee_leaf_names(node.func, self.scopes)
-        self._check_guarded_dict_mutation(node)
+        self._check_guarded_dict_mutation(node, leaves)
         self._check_managed_pdf_removal(node)
         self._check_raw_unlink_helper(node, leaves)
         self._check_file_path_write(node, leaves)

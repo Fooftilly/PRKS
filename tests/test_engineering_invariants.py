@@ -1709,6 +1709,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    for root, _, files in Path(pdfs_dir).walk():\n"
                 "        (root / files[0]).unlink()\n"
             ),
+            "path_unlink_unbound_alias": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    delete = Path.unlink\n"
+                "    delete(Path(pdfs_dir) / name)\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2154,6 +2160,37 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        body['file_path']: str = other\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "raw_sql_update_indexed_by": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works INDEXED BY idx SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_update_not_indexed": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works NOT INDEXED SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "unbound_update_metadata": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def patch(db, body):\n"
+                "    PRKSDatabase.update_work_metadata(db, 'id', body)\n"
+            ),
+            "unbound_update_metadata_alias": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def patch(db, body):\n"
+                "    upd = PRKSDatabase.update_work_metadata\n"
+                "    upd(db, 'id', body)\n"
+            ),
+            "unbound_add_work_positional": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def create(db, fp):\n"
+                "    PRKSDatabase.add_work(db, 't', 'Not Started', '', '', '', fp)\n"
+            ),
+            "guarded_dict_passed_to_helper": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        apply_defaults(body)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2259,6 +2296,13 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def create(db, pdfs_dir, fp, items):\n"
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
                 "        return [db.add_work(title=i, file_path=fp) for i in items]\n"
+            ),
+            "guarded_name_or_none": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{name}' if name else None)\n"
+                "        db.add_work(title='t', file_path=name and f'/api/pdfs/{name}')\n"
             ),
             "guard_import_alias": (
                 "from backend.services.work_pdf_replace import managed_pdf_adoption_guard as adopt\n"
