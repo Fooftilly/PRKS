@@ -308,10 +308,11 @@ FEATURES = {
         ),
     },
     "playlists": {
-        "description": "Playlists offline + durable",
+        "description": "Playlists index/detail Vue surface + offline + durable",
         "selectors": (
             "tests.e2e.test_playlists_offline",
             "tests.e2e.test_playlists_durable",
+            "tests.e2e.test_playlists_route_surface",
         ),
     },
     "browse": {
@@ -657,6 +658,18 @@ AFFECTED_RULES = (
         ),
         "features": ("arguments",),
         "note": "Vue Arguments index/detail (#269) → arguments. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "playlists-vue",
+        "paths": ("frontend-app/src/features/playlists/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("playlists",),
+        "note": "Vue Playlists index/detail (#276) → playlists. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "settings",

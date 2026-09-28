@@ -7,21 +7,6 @@ function prksPlEsc(s) {
         .replace(/"/g, '&quot;');
 }
 
-function prksPlFormatPublishedDate(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!iso) return s;
-    return `${iso[3]}/${iso[2]}/${iso[1]}`;
-}
-
-function prksPlWorkSubtitle(w) {
-    const channel = String((w && w.author_text) || '').trim();
-    const published = prksPlFormatPublishedDate(w && w.published_date);
-    if (channel && published) return `${channel} · ${published}`;
-    return channel || published || '';
-}
-
 /**
  * The Playlist catalogue a user should see: what this device holds, with every
  * unsynchronized intent applied. A playlist created here is real, so it is in
@@ -475,39 +460,49 @@ function prksBindPlaylistsIndexCreateBtn() {
 }
 
 function renderPlaylistsIndex(playlists, container, ctx) {
-    const list = Array.isArray(playlists) ? playlists : [];
-    const rowsHtml = list.length
-        ? list
-              .map((p) => {
-                  const id = String(p && p.id ? p.id : '').trim();
-                  const path = '#/playlists/' + encodeURIComponent(id);
-                  const title = prksPlEsc(p.title || 'Playlist');
-                  const itemCount = Number(p.item_count || 0);
-                  const icon = typeof prksIcon === 'function' ? prksIcon('clapperboard', { size: 'sm' }) : '';
-                  return `
-                        <div class="project-card playlists-page__list-item" data-prks-route="${path}" data-prks-middleclick-nav="1">
-                            <div class="playlists-page__list-main">
-                                <span class="playlists-page__badge">${icon}<span>${title}</span></span>
-                                <p class="meta-row playlists-page__list-stats">${itemCount} item${itemCount === 1 ? '' : 's'}</p>
-                            </div>
-                            <span class="playlists-page__list-arrow" aria-hidden="true">${typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 'sm' }) : '→'}</span>
-                        </div>`;
-              })
-              .join('')
-        : `<p class="meta-row playlists-page__empty">No playlists yet.</p>`;
-    container.innerHTML = `
-        <div class="playlists-page">
-            <div class="prks-page-header page-header tags-page__header">
-                <h2 class="prks-page-title">Playlists</h2>
-                <p class="tags-page__sub playlists-page__sub">Open playlist row to view or edit ordered items.</p>
-            </div>
-            <div class="list-view playlists-page__list">
-                ${rowsHtml}
-            </div>
-        </div>
-    `;
+    if (!container) return;
+    if (typeof prksPresentVuePlaylists === 'function') {
+        prksPresentVuePlaylists(ctx, container, {
+            feature: 'playlists',
+            availability: 'ready',
+            items: Array.isArray(playlists) ? playlists : [],
+            generation: ctx && ctx.generation,
+        });
+    }
     prksBindPlaylistOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
+}
+
+/**
+ * Re-read one Playlist through the public detail wrapper and repaint this
+ * owner only when it still owns the route. Vue calls this after a write so
+ * it never enumerates the durable queue itself.
+ */
+async function prksReloadPlaylistDetail(ctx, playlistId) {
+    const id = playlistId ? String(playlistId) : '';
+    if (!ctx || !id) return null;
+    const generation = ctx.generation;
+    const owns = function () {
+        return typeof prksTabContextOwnsEntityRoute === 'function'
+            ? prksTabContextOwnsEntityRoute(ctx, generation, 'playlist', id, 'playlist-detail')
+            : !!(ctx.isCurrent && ctx.isCurrent(generation));
+    };
+    if (!owns()) return null;
+    const fresh = await fetchPlaylistDetails(id, {
+        signal: ctx.abortController && ctx.abortController.signal,
+    });
+    if (!owns() || !fresh || String(fresh.id) !== id) return null;
+    if (typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
+    ctx.routeSidebar = {
+        playlistTitle: fresh.title || 'Playlist',
+        itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
+    };
+    if (ctx.root) renderPlaylistDetail(ctx, fresh, ctx.root);
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    if (focused && focused.tabId === ctx.tabId && typeof updatePanelContent === 'function') {
+        updatePanelContent('details');
+    }
+    return fresh;
 }
 
 function prksClearPlaylistRenameState(ctx) {
@@ -525,276 +520,28 @@ function prksRefreshPlaylistDetailMain(ctx) {
     renderPlaylistDetail(owner, pl, page);
 }
 
-function prksPlPlaylistItemActionsHtml(w, idx, ren) {
-    const wid = prksPlEsc(w.id);
-    const icon = (name) => (typeof prksIcon === 'function' ? prksIcon(name, { size: 'sm' }) : '');
-    return `
-        <div class="prks-playlist-item__actions">
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-up="${idx}" title="Move up" aria-label="Move up">${icon('arrowUp')}</button>
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-down="${idx}" title="Move down" aria-label="Move down">${icon('arrowDown')}</button>
-            ${
-                ren[String(w.id)] === true
-                    ? `
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-rename-save="${wid}" title="Save title" aria-label="Save title">${icon('check')}</button>
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-rename-cancel="${wid}" title="Cancel rename" aria-label="Cancel rename">${icon('x')}</button>
-            `
-                    : `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-rename="${wid}" title="Rename title" aria-label="Rename title">${icon('pencil')}</button>`
-            }
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-pl-remove="${wid}" title="Remove from playlist" aria-label="Remove from playlist">${icon('x')}</button>
-        </div>`;
-}
-
-function prksPlPlaylistItemBodyHtml(w, ren, editing) {
-    const wid = prksPlEsc(w.id);
-    const subtitle = prksPlEsc(prksPlWorkSubtitle(w));
-    if (editing && ren[String(w.id)] === true) {
-        return `
-            <div class="prks-playlist-item__body prks-playlist-item__body--rename">
-                <input type="text" id="prks-pl-rename-input-${wid}" class="prks-playlist-item__rename-input" value="${prksPlEsc(w.title || '')}" autocomplete="off" aria-label="Video title">
-                <div class="meta-row">${subtitle}</div>
-            </div>`;
-    }
-    const titleHtml = `<div class="card-title prks-playlist-item__title">${prksPlEsc(w.title || 'Untitled')}</div>`;
-    if (editing) {
-        return `
-            <div class="prks-playlist-item__body">
-                ${titleHtml}
-                <div class="meta-row">${subtitle}</div>
-            </div>`;
-    }
-    return `
-        <div class="prks-playlist-item__body prks-playlist-item__body--link" role="link" tabindex="0" data-pl-nav="${wid}" data-prks-route="#/works/${encodeURIComponent(wid)}">
-            ${titleHtml}
-            <div class="meta-row">${subtitle}</div>
-        </div>`;
-}
-
 function renderPlaylistDetail(ctx, pl, container) {
     if (!container) return;
-    if (!pl) {
-        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Playlist not found</h2></div>';
-        return;
+    if (pl && ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', pl);
+    let view = pl;
+    if (pl && Array.isArray(pl.items) && typeof prksEffectiveWorkSummaryRows === 'function') {
+        view = Object.assign({}, pl, { items: prksEffectiveWorkSummaryRows(pl.items) });
     }
-    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', pl);
-    const generation = ctx && ctx.generation;
-    const ownsPlaylist = function () {
-        return typeof prksTabContextOwnsEntityRoute === 'function'
-            ? prksTabContextOwnsEntityRoute(ctx, generation, 'playlist', pl.id, 'playlist-detail')
-            : !!(ctx && ctx.isCurrent && ctx.isCurrent(generation));
-    };
-    // Acknowledged items + pending Work-field edits (Published Date drives the
-    // item subtitle). The cached playlist itself is never rewritten.
-    const acknowledged = Array.isArray(pl.items) ? pl.items : [];
-    const items = typeof prksEffectiveWorkSummaryRows === 'function'
-        ? prksEffectiveWorkSummaryRows(acknowledged) : acknowledged;
-    const editing = !!(ctx && ctx.ui && ctx.ui.playlistEditing);
-    const ren =
-        ctx && ctx.ui && ctx.ui.playlistRename && typeof ctx.ui.playlistRename === 'object'
-            ? ctx.ui.playlistRename
-            : {};
-    const editingClass = editing ? ' prks-playlist-detail--editing' : '';
-    container.innerHTML = `
-        <div class="prks-playlist-detail${editingClass}">
-            <div class="prks-page-header page-header page-header--split prks-playlist-detail__header">
-                <div class="page-header__title-row">
-                    <h2 class="prks-page-title">${prksPlEsc(pl.title || 'Playlist')}</h2>
-                    <a class="route-sidebar__link" href="#/playlists">All playlists</a>
-                </div>
-                <div class="page-header__actions">
-                    <button type="button" class="prks-btn prks-btn--danger" id="prks-playlist-delete-btn" data-playlist-id="${prksPlEsc(pl.id || '')}">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete playlist</button>
-                </div>
-            </div>
-            ${pl.description ? `<p class="meta-row prks-playlist-detail__desc">${prksPlEsc(pl.description)}</p>` : ''}
-            ${
-                editing
-                    ? '<p class="meta-row meta-row--compact prks-playlist-detail__hint">Reorder, rename, or remove items. Open Details → Done when finished.</p>'
-                    : ''
-            }
-            <div class="list-view prks-playlist-detail__list">
-            ${
-                items.length
-                    ? items
-                          .map(
-                              (w, idx) => `
-                    <div class="prks-playlist-item project-card${editing ? ' prks-playlist-item--editing' : ''}">
-                        <div class="prks-playlist-item__row">
-                            ${prksPlPlaylistItemBodyHtml(w, ren, editing)}
-                            ${editing ? prksPlPlaylistItemActionsHtml(w, idx, ren) : ''}
-                        </div>
-                    </div>`
-                          )
-                          .join('')
-                    : `<p class="meta-row prks-playlist-detail__empty">No items yet. Use Details → Edit to add videos.</p>`
-            }
-            </div>
-        </div>
-    `;
-
-    function playlistRenameMap() {
-        if (!ctx || !ctx.ui) return {};
-        if (!ctx.ui.playlistRename || typeof ctx.ui.playlistRename !== 'object') ctx.ui.playlistRename = {};
-        return ctx.ui.playlistRename;
-    }
-
-    function applyFreshPlaylist(fresh) {
-        if (!fresh || !ownsPlaylist() || String(fresh.id) !== String(pl.id)) return;
-        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('playlist', fresh);
-        if (ctx) {
-            ctx.routeSidebar = {
-                playlistTitle: fresh.title || 'Playlist',
-                itemCount: Array.isArray(fresh.items) ? fresh.items.length : 0,
-            };
-        }
-        renderPlaylistDetail(ctx, fresh, container);
-        const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-        if (
-            ctx &&
-            ctx.ui &&
-            ctx.ui.playlistEditing &&
-            focused &&
-            focused.tabId === ctx.tabId &&
-            typeof updatePanelContent === 'function'
-        ) {
-            updatePanelContent('details');
-        }
-    }
-
-    const deleteBtn = container.querySelector('#prks-playlist-delete-btn');
-    if (deleteBtn && deleteBtn.dataset.bound !== '1') {
-        deleteBtn.dataset.bound = '1';
-        deleteBtn.addEventListener('click', () => {
-            void deletePlaylistFromDetail(ctx, pl);
+    const route = ctx && (ctx.route || ctx.lastResolvedRoute);
+    const playlistId = (pl && pl.id) || (route && route.params && route.params.playlistId) || '';
+    if (typeof prksPresentVuePlaylists === 'function') {
+        prksPresentVuePlaylists(ctx, container, {
+            feature: 'playlist-detail',
+            availability: pl ? 'ready' : 'not-found',
+            playlist: view,
+            playlistId: playlistId ? String(playlistId) : '',
+            editing: !!(ctx && ctx.ui && ctx.ui.playlistEditing),
+            renaming: ctx && ctx.ui ? ctx.ui.playlistRename : null,
+            generation: ctx && ctx.generation,
         });
     }
-
-    container.onclick = async (ev) => {
-        const nav = ev.target.closest && ev.target.closest('[data-pl-nav]');
-        if (nav && !editing) {
-            const wid = String(nav.getAttribute('data-pl-nav') || '').trim();
-            if (wid && typeof prksNavigate === 'function') {
-                prksNavigate('#/works/' + encodeURIComponent(wid), { tabId: ctx && ctx.tabId });
-            }
-            return;
-        }
-        if (!editing) return;
-
-        const up = ev.target.closest && ev.target.closest('[data-pl-up]');
-        const down = ev.target.closest && ev.target.closest('[data-pl-down]');
-        const rm = ev.target.closest && ev.target.closest('[data-pl-remove]');
-        const renBtn = ev.target.closest && ev.target.closest('[data-pl-rename]');
-        const renSave = ev.target.closest && ev.target.closest('[data-pl-rename-save]');
-        const renCancel = ev.target.closest && ev.target.closest('[data-pl-rename-cancel]');
-        if (!up && !down && !rm && !renBtn && !renSave && !renCancel) return;
-        ev.preventDefault();
-        const ids = items.map((x) => x.id);
-        if (renBtn) {
-            const wid = String(renBtn.getAttribute('data-pl-rename') || '').trim();
-            if (!wid) return;
-            playlistRenameMap()[wid] = true;
-            renderPlaylistDetail(ctx, pl, container);
-            const inp = container.querySelector('#prks-pl-rename-input-' + wid);
-            if (inp) {
-                inp.focus();
-                try {
-                    const v = String(inp.value || '');
-                    inp.setSelectionRange(v.length, v.length);
-                } catch (_e) {}
-            }
-            return;
-        }
-        if (renCancel) {
-            const wid = String(renCancel.getAttribute('data-pl-rename-cancel') || '').trim();
-            delete playlistRenameMap()[wid];
-            renderPlaylistDetail(ctx, pl, container);
-            return;
-        }
-        if (renSave) {
-            const wid = String(renSave.getAttribute('data-pl-rename-save') || '').trim();
-            const inp = container.querySelector('#prks-pl-rename-input-' + wid);
-            const nextTitle = inp ? String(inp.value || '').trim() : '';
-            if (!wid || !nextTitle) return;
-            /* A Work Title, not Playlist state -- so it takes the same durable
-             * Title operation the metadata editor uses, rather than a PATCH.
-             * A second mutation path for one field is the contract every
-             * milestone since 2D has removed: the non-revision-aware one
-             * silently overwrites the other's conflicts.
-             *
-             * This is deliberately NOT a Playlist mutation: it belongs to
-             * the Work metadata family and shares that family's revision. */
-            try {
-                const result = await prksSaveWorkFieldDurably(wid, 'title', nextTitle,
-                    { label: 'Title' });
-                if (result.code === 'unavailable') {
-                    await prksAlertMessage(
-                        'This video\u2019s title cannot be renamed right now. Open it once while '
-                        + 'connected to PRKS so its details are prepared.', 'Rename unavailable');
-                    return;
-                }
-                if (result.code === 'too-long') {
-                    await prksAlertMessage(result.error, 'Title too long');
-                    return;
-                }
-                if (result.code === 'failed') throw new Error('save failed');
-                delete playlistRenameMap()[wid];
-                if (!ownsPlaylist()) return;
-                /* The overlay is what makes the new title visible here; the
-                 * cached Playlist keeps exactly what the server said until the
-                 * operation is acknowledged. */
-                await prksRefreshPendingWorkMetadata();
-                if (ownsPlaylist()) renderPlaylistDetail(ctx, pl, container);
-            } catch (_e) {
-                if (ownsPlaylist()) await prksAlertMessage('Could not rename video.', 'Error');
-            }
-            return;
-        }
-        if (up) {
-            const i = Number(up.getAttribute('data-pl-up'));
-            if (i > 0) {
-                const tmp = ids[i - 1];
-                ids[i - 1] = ids[i];
-                ids[i] = tmp;
-            }
-        } else if (down) {
-            const i = Number(down.getAttribute('data-pl-down'));
-            if (i >= 0 && i < ids.length - 1) {
-                const tmp = ids[i + 1];
-                ids[i + 1] = ids[i];
-                ids[i] = tmp;
-            }
-        } else if (rm) {
-            const wid = rm.getAttribute('data-pl-remove');
-            try {
-                await removeWorkFromPlaylist(pl.id, wid);
-                if (!ownsPlaylist()) return;
-                const fresh = await fetchPlaylistDetails(pl.id, {
-                    signal: ctx && ctx.abortController && ctx.abortController.signal,
-                });
-                applyFreshPlaylist(fresh);
-            } catch (_e) {
-                if (ownsPlaylist()) {
-                    await prksAlertMessage(
-                        String((_e && _e.message) || 'Could not remove item.'), 'Error');
-                }
-            }
-            return;
-        }
-        try {
-            await reorderPlaylist(pl.id, ids);
-            if (!ownsPlaylist()) return;
-            const fresh = await fetchPlaylistDetails(pl.id, {
-                signal: ctx && ctx.abortController && ctx.abortController.signal,
-            });
-            applyFreshPlaylist(fresh);
-        } catch (_e) {
-            if (ownsPlaylist()) {
-                await prksAlertMessage(
-                    String((_e && _e.message) || 'Could not reorder playlist.'), 'Error');
-            }
-        }
-    };
-
-    // Editing is done in the right panel (Details → Edit).
     prksBindPlaylistOfflineState(ctx, container);
+    if (typeof prksBindAutosizeTextareas === 'function') prksBindAutosizeTextareas(container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
 }
 
@@ -1098,6 +845,9 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
 window.fetchPlaylists = fetchPlaylists;
 window.fetchPlaylistDetails = fetchPlaylistDetails;
 window.prksBindPlaylistsIndexCreateBtn = prksBindPlaylistsIndexCreateBtn;
+window.prksOpenNewPlaylistModalFromPlaylistsPage = prksOpenNewPlaylistModalFromPlaylistsPage;
+window.prksReloadPlaylistDetail = prksReloadPlaylistDetail;
+window.deletePlaylistFromDetail = deletePlaylistFromDetail;
 window.renderPlaylistsIndex = renderPlaylistsIndex;
 window.prksApplyPlaylistPanelOfflineState = prksApplyPlaylistPanelOfflineState;
 window.updatePlaylist = updatePlaylist;
