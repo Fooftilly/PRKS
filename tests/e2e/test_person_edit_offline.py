@@ -573,11 +573,11 @@ class OfflinePersonEditTests(unittest.TestCase):
         self.open_editor(page)
         self.edit_field(page, '#pd-about', 'Another attempt')
         self.save_editor(page, closes=False)
-        page.wait_for_function(
-            "() => { const el = document.getElementById('prks-modal-confirm');"
-            "        return !!el && !el.classList.contains('hidden'); }",
-            timeout=15000)
-        page.locator('#prks-modal-confirm-ok').click()
+        status = page.locator('[data-prks-role="person-save-status"]')
+        status.wait_for(timeout=15000)
+        self.assertIn("cannot be edited offline yet", status.inner_text())
+        self.assertEqual(page.locator("#pd-about").input_value(), "Another attempt")
+        self.assertGreaterEqual(page.locator(".person-panel-edit").count(), 1)
         self.assertEqual(len(self.profile_operations(page)), 1,
                          'no second doomed operation is written')
 

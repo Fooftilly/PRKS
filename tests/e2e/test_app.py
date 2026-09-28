@@ -819,15 +819,15 @@ class PersonProfileDraftOwnershipTests(_BrowserE2E):
             _add_person_group_through_editor(page, "Group Gamma")
             armed = True
             page.locator("#pd-save-btn").click()
-            page.locator("#prks-modal-confirm:not(.hidden)",
-                         has_text="group change could not be recorded").wait_for()
+            status = page.locator('[data-prks-role="person-save-status"]')
+            status.wait_for()
+            self.assertIn("group change could not be recorded", status.inner_text())
             self.assertTrue(page.evaluate("id => window.prksGetTabContext(id).ui.personDetailEditing", arg=tab_a))
             self.assertEqual(
                 page.evaluate("id => window.prksGetTabContext(id).ui.personProfileDraft.about", arg=tab_a),
                 "Draft survives failed save",
             )
             armed = False
-            page.locator("#prks-modal-confirm-ok").click()
             page.wait_for_function("() => !document.querySelector('#pd-save-btn').disabled")
             self.assertEqual(page.locator("#pd-about").input_value(), "Draft survives failed save")
             self.assertEqual(_person_group_chip_names(page), {"Group Alpha", "Group Gamma"})
