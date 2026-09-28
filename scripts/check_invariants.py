@@ -211,6 +211,8 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
     # cannot correlate with the minting branch, hence the function exemption.
     ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"): "COW retarget",
 }
+# Dict methods that may (re)write a guarded fields dict's file_path entry.
+_DICT_MUTATORS = frozenset({"__setitem__", "setdefault", "update"})
 _SQL_EXECUTE_METHODS = frozenset({"execute", "execute_query", "executemany"})
 _SQL_WORKS_INSERT_RE = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+works\s*\(([^)]*)\)\s*(?:VALUES\s*\(([^)]*)\))?",
@@ -1322,6 +1324,8 @@ class _InvariantVisitor(ast.NodeVisitor):
         scope = self.scopes[-1]
         for name, bindings in pairs:
             self._record_archive_attr(name, bindings)
+            # A rebound fields dict is no longer the one the guard read.
+            self._forget_guarded_dict(name)
             owner = scope.declared.get(name, scope)
             if owner is not scope:
                 # ``global``/``nonlocal``: the binding belongs to the owner.
@@ -1423,7 +1427,10 @@ class _InvariantVisitor(ast.NodeVisitor):
         for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
             self.visit(default)
         self._push([], params=_arguments_pairs(args, self.scopes))
+        # Runs later, so it never inherits the enclosing capability exemption.
+        self._qualname.append("<lambda>")
         self.visit(node.body)
+        self._qualname.pop()
         self._pop()
 
     def _describe_class(self, node: ast.ClassDef) -> _ClassInfo:
@@ -1466,8 +1473,12 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _visit_comprehension(
         self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
     ) -> None:
+        lazy = isinstance(node, ast.GeneratorExp)
         self._push([], is_comprehension=True)
-        self.scopes[-1].is_lazy = isinstance(node, ast.GeneratorExp)
+        self.scopes[-1].is_lazy = lazy
+        if lazy:
+            # A generator body runs later: no capability exemption carries over.
+            self._qualname.append("<genexpr>")
         for generator in node.generators:
             self.visit(generator.iter)
             self._bind(_loop_target_pairs(generator.target, generator.iter, self.scopes))
@@ -1478,6 +1489,8 @@ class _InvariantVisitor(ast.NodeVisitor):
             self.visit(node.value)
         else:
             self.visit(node.elt)
+        if lazy:
+            self._qualname.pop()
         self._pop()
 
     visit_ListComp = _visit_comprehension
@@ -1503,6 +1516,8 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.generic_visit(node)
+        for target in node.targets:
+            self._check_guarded_dict_store(target, node.value)
         self._bind_node(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
@@ -1511,6 +1526,7 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self.generic_visit(node)
+        self._check_guarded_dict_store(node.target, None)
         self._bind_node(node)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
@@ -1698,6 +1714,36 @@ class _InvariantVisitor(ast.NodeVisitor):
         ):
             return node.value.id
         return None
+
+    def _forget_guarded_dict(self, name: str) -> None:
+        for guard in self._active_adoption_guards():
+            guard.fields_dicts.discard(name)
+
+    def _check_guarded_dict_store(self, target: ast.expr, value: ast.expr | None) -> None:
+        """``body["file_path"] = <owned>`` keeps a guarded dict protected; any
+        other write to (possibly) that entry invalidates it."""
+        if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+            return
+        key = target.slice
+        if isinstance(key, ast.Constant) and key.value != "file_path":
+            return
+        if (
+            isinstance(key, ast.Constant)
+            and value is not None
+            and self._is_owned_value(value)
+        ):
+            return
+        self._forget_guarded_dict(target.value.id)
+
+    def _check_guarded_dict_mutation(self, node: ast.Call) -> None:
+        """``body.update(...)`` / ``setdefault`` / ``__setitem__`` may replace file_path."""
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.attr in _DICT_MUTATORS
+        ):
+            self._forget_guarded_dict(func.value.id)
 
     def _active_adoption_guards(self) -> list[_AdoptionGuard]:
         guards: list[_AdoptionGuard] = []
@@ -1952,6 +1998,7 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _check_managed_pdf_boundary(self, node: ast.Call) -> None:
         leaves = _callee_leaf_names(node.func, self.scopes)
+        self._check_guarded_dict_mutation(node)
         self._check_managed_pdf_removal(node)
         self._check_raw_unlink_helper(node, leaves)
         self._check_file_path_write(node, leaves)

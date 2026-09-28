@@ -1808,6 +1808,22 @@ class ManagedPdfRemovalTests(unittest.TestCase):
         )
         self.assertEqual(_codes(moved, "backend/server.py"), ["INV-STORAGE-002"])
         self.assertEqual(_codes(moved, deletion), [])
+        # Deferred bodies run outside the capability's lock and re-check.
+        deferred = {
+            "lambda": (
+                "import os\n"
+                "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
+                "    return lambda: os.remove(os.path.join(pdfs_dir, filename))\n"
+            ),
+            "generator": (
+                "import os\n"
+                "def _remove_managed_pdf(db, names, pdfs_dir):\n"
+                "    return (os.remove(os.path.join(pdfs_dir, n)) for n in names)\n"
+            ),
+        }
+        for label, source in deferred.items():
+            with self.subTest(deferred=label):
+                self.assertEqual(_codes(source, deletion), ["INV-STORAGE-002"])
 
     def test_raw_unlink_helper_is_reserved_for_minted_rollback(self):
         call_sites = {
@@ -2001,6 +2017,34 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
                 "        conn.execute('UPDATE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
             ),
+            "guarded_dict_rebound": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_entry_replaced": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other_fp, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path'] = other_fp\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, extra, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body.update(extra)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dynamic_key": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, key, val, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body[key] = val\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "shadowed_guard_name": (
                 "def create(db, pdfs_dir, fp, managed_pdf_adoption_guard):\n"
                 "    with managed_pdf_adoption_guard(pdfs_dir, fp):\n"
@@ -2052,6 +2096,14 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        if adopted_name:\n"
                 "            body['file_path'] = f'/api/pdfs/{adopted_name}'\n"
                 "        return db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_other_key_written": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')) as n:\n"
+                "        body['title'] = 'x'\n"
+                "        body['file_path'] = f'/api/pdfs/{n}'\n"
+                "        db.update_work_metadata(w_id, body)\n"
             ),
             "guard_input_subscript_dict": (
                 "from backend.services import work_pdf_replace\n"
