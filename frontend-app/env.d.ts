@@ -297,6 +297,7 @@ interface Window {
   ) => Promise<{ id?: string } | null>
   prksDeleteArgumentDurably?: (argumentId: string) => Promise<unknown>
   prksArgumentSaveMessage?: (err: unknown, fallback: string) => string
+  deleteArgument?: (id: string) => Promise<{ status?: string } | unknown>
   createArgument?: (body: {
     name: string
     kind?: string

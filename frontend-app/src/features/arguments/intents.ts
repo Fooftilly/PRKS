@@ -103,11 +103,11 @@ async function alertArgument(title: string, err: unknown, fallback: string): Pro
 }
 
 /**
- * `createArgument` already turns a durable failure into a user-facing Error.
- * Mapping that Error again sees no code and replaces the message with the
- * generic default. Show the message the create API already produced.
+ * `createArgument` and `deleteArgument` already turn a durable failure into a
+ * user-facing Error. Mapping that Error again sees no code and replaces the
+ * message with the generic default. Show the message the API already produced.
  */
-async function alertCreateFailure(title: string, err: unknown, fallback: string): Promise<void> {
+async function alertApiMessage(title: string, err: unknown, fallback: string): Promise<void> {
   const alertFn = window.prksAlertDialog
   if (typeof alertFn !== 'function') return
   await alertFn({ title, message: messageOf(err).trim() || fallback })
@@ -190,7 +190,7 @@ export function browserArgumentIntents(
         created = await create({ name: String(name).trim(), kind })
       } catch (err) {
         if (!ownsIndex(owner, generation)) return
-        await alertCreateFailure(`Could not create ${label}`, err, `create this ${label}`)
+        await alertApiMessage(`Could not create ${label}`, err, `create this ${label}`)
         return
       }
       if (created?.id && ownsIndex(owner, generation) && typeof window.prksNavigate === 'function') {
@@ -265,7 +265,7 @@ export function browserArgumentIntents(
         })
       } catch (err) {
         if (!ownsGeneration(owner, generation)) return
-        await alertCreateFailure('Could not create response', err, 'create this Argument')
+        await alertApiMessage('Could not create response', err, 'create this Argument')
         return
       }
       if (
@@ -290,7 +290,7 @@ export function browserArgumentIntents(
       if (!ok) return
       if (!ownsGeneration(owner, generation)) return
       try {
-        const remove = window.prksDeleteArgumentDurably
+        const remove = window.deleteArgument
         if (typeof remove !== 'function') throw new Error('Could not delete Argument.')
         await remove(argument.id)
         if (
@@ -301,13 +301,7 @@ export function browserArgumentIntents(
         }
       } catch (err) {
         if (!ownsGeneration(owner, generation)) return
-        const alertFn = window.prksAlertDialog
-        if (typeof alertFn === 'function') {
-          await alertFn({
-            title: 'Cannot delete',
-            message: messageOf(err) || 'Could not delete Argument.',
-          })
-        }
+        await alertApiMessage('Cannot delete', err, 'Could not delete Argument.')
       }
     },
 

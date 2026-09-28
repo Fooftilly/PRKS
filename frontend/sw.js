@@ -19,7 +19,7 @@
     // --repo fails if it drifts. Changing manifest bytes (vendor files, the
     // committed Vue bundle, or frontend/js/workspace-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '10868c1e7ac3';
+    const DEPENDENCY_REVISION = 'fa27caf2f4b5';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';

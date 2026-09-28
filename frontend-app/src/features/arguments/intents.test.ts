@@ -16,6 +16,7 @@ afterEach(() => {
   delete window.prksPrepareArgumentEdit
   delete window.prksCommitArgumentEditorDraft
   delete window.prksDeleteArgumentDurably
+  delete window.deleteArgument
   delete window.prksArgumentSaveMessage
   delete window.prksTabContextOwnsEntityRoute
   delete window.prksOpenResearchPicker
@@ -181,11 +182,13 @@ describe('Argument intents', () => {
 
     window.prksTabContextOwnsEntityRoute = () => true
     window.prksConfirmDestructive = vi.fn(async () => false)
+    window.deleteArgument = vi.fn()
     window.prksDeleteArgumentDurably = vi.fn()
     await browserArgumentIntents(detailOwner(), 1).remove(argument())
     expect(window.prksConfirmDestructive).toHaveBeenCalledWith(
       expect.objectContaining({ confirmLabel: 'Delete Argument', title: 'Delete Argument?' }),
     )
+    expect(window.deleteArgument).not.toHaveBeenCalled()
     expect(window.prksDeleteArgumentDurably).not.toHaveBeenCalled()
 
     await browserArgumentIntents(detailOwner(), 1).remove(argument({ kind: 'stance' }))
@@ -194,14 +197,18 @@ describe('Argument intents', () => {
     )
 
     window.prksConfirmDestructive = vi.fn(async () => true)
-    window.prksDeleteArgumentDurably = vi.fn(async () => {
-      throw new Error('in use')
+    const useful = 'This Argument is being deleted, so it cannot be changed.'
+    window.deleteArgument = vi.fn(async () => {
+      throw new Error(useful)
     })
+    window.prksArgumentSaveMessage = () => 'Could not delete this Argument locally. Please retry.'
     await browserArgumentIntents(detailOwner(), 1).remove(argument())
-    expect(alertFn).toHaveBeenCalledWith({ title: 'Cannot delete', message: 'in use' })
+    expect(window.deleteArgument).toHaveBeenCalledWith('A1')
+    expect(window.prksDeleteArgumentDurably).not.toHaveBeenCalled()
+    expect(alertFn).toHaveBeenCalledWith({ title: 'Cannot delete', message: useful })
 
     window.prksNavigate = vi.fn()
-    window.prksDeleteArgumentDurably = vi.fn(async () => ({}))
+    window.deleteArgument = vi.fn(async () => ({ status: 'deleted' }))
     await browserArgumentIntents(detailOwner(), 1).remove(argument())
     expect(window.prksNavigate).toHaveBeenCalledWith('#/arguments', {
       replace: true,
