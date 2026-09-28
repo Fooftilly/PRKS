@@ -36,7 +36,8 @@ Rules (all evaluated against the working tree; ``--base`` supplies history):
 - SQL-CATALOG-002: an allowlist entry that matches no current hit is stale
   and fails until the entry is removed, so the list only shrinks.
 - SQL-CATALOG-003: an allowlist entry whose fingerprint does not exist in the
-  production sources at ``--base`` fails. Grandfathering therefore covers only
+  production sources at ``--base`` fails. Occurrences are counted: each entry
+  consumes one historical occurrence, so N entries need N base occurrences. Grandfathering therefore covers only
   debt that already existed; adding a new query together with a new entry, or
   rewriting a grandfathered query into another correlated aggregate and
   re-blessing it, is rejected. Moving an unchanged query to another file keeps
@@ -558,12 +559,17 @@ def evaluate(hits: list[Hit], entries: list[dict], base_hits: list[Hit]) -> list
         else:
             valid.append(entry)
 
-    base_fingerprints = {h.fingerprint for h in base_hits}
+    # Multiset: each valid entry consumes one historical occurrence, so
+    # copying grandfathered SQL and adding a second entry cannot raise the
+    # count of exempted occurrences above what existed at the base.
+    base_fingerprints: Counter[str] = Counter(h.fingerprint for h in base_hits)
     allowed: Counter[tuple[str, ...]] = Counter()
-    for idx, entry in enumerate(valid):
+    for entry in valid:
         key = tuple(entry[k] for k in _ENTRY_KEYS)
         allowed[key] += 1
-        if entry["fingerprint"] not in base_fingerprints:
+        if base_fingerprints[entry["fingerprint"]] > 0:
+            base_fingerprints[entry["fingerprint"]] -= 1
+        else:
             findings.append(
                 Finding(
                     "SQL-CATALOG-003",

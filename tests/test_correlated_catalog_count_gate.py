@@ -292,6 +292,27 @@ class RepoGateTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(out.count("SQL-CATALOG-003"), 1)
 
+    def test_copying_grandfathered_debt_with_second_entry_fails_provenance(self):
+        base = self.seed_debt()
+        self.write("backend/other.py", _py(PLAYLIST_SQL, "PLAYLISTS"))
+        self.allowlist_current()
+        entries = json.loads((self.repo / checker.ALLOWLIST_RELPATH).read_text())["entries"]
+        self.assertEqual(len(entries), 2)
+        rc, out = self.run_gate(base)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.count("SQL-CATALOG-003"), 1)
+        self.assertNotIn("SQL-CATALOG-001", out)
+
+    def test_duplicated_historical_debt_keeps_both_entries(self):
+        self.write(
+            "backend/db.py",
+            _py(PLAYLIST_SQL, "PLAYLISTS") + _py(PLAYLIST_SQL, "AGAIN"),
+        )
+        self.allowlist_current()
+        base = self.commit("seed with two identical historical copies")
+        rc, out = self.run_gate(base)
+        self.assertEqual(rc, 0, out)
+
     def test_moving_unchanged_debt_to_another_file_passes_with_updated_entry(self):
         base = self.seed_debt()
         self.remove("backend/db.py")
