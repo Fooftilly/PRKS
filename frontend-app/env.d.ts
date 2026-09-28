@@ -67,6 +67,31 @@ interface PlaylistsIndexPresentRequest {
   shell?: boolean
 }
 
+interface PeopleIndexPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable' | 'unknown-role'
+  items?: unknown
+  roleFilter?: string
+  unknownRole?: boolean
+  generation?: number
+  shell?: boolean
+}
+
+interface PersonDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable' | 'not-found'
+  person?: unknown
+  personId?: string
+  editing?: boolean
+  editorActive?: boolean
+  worksEditing?: boolean
+  offlineCached?: boolean
+  generation?: number
+  shell?: boolean
+}
+
 interface PlaylistDetailPresentRequest {
   owner: object
   host: HTMLElement
@@ -167,6 +192,74 @@ interface Window {
   prksVuePresentPlaylistsIndex?: (input: PlaylistsIndexPresentRequest) => void
   prksVuePresentPlaylistDetail?: (input: PlaylistDetailPresentRequest) => void
   prksVueDismissPlaylists?: (owner: object) => void
+  prksVuePresentPeopleIndex?: (input: PeopleIndexPresentRequest) => void
+  prksVuePresentPersonDetail?: (input: PersonDetailPresentRequest) => void
+  prksVueDismissPeople?: (owner: object) => void
+  prksTabContextIsFocused?: (ctx: unknown) => boolean
+  prksApplyPersonOfflineState?: (container: ParentNode | null) => void
+  personDateToDisplayFormat?: (stored: string) => string
+  personLifespanDisplay?: (person: { birth_date?: string; death_date?: string }) => string
+  safeHttpUrl?: (url: string) => string | null
+  openPersonProfileEdit?: () => void
+  closePersonProfileEdit?: () => void
+  prksRefreshPersonDetailMain?: (ctx: unknown) => void
+  prksBindPersonProfileDraft?: (
+    ctx: unknown,
+    personId: string,
+    fields: {
+      first_name: string
+      last_name: string
+      aliases: string
+      about: string
+      birth_date: string
+      death_date: string
+      image_url: string
+      link_wikipedia: string
+      link_stanford_encyclopedia: string
+      link_iep: string
+      links_other: string
+    },
+    groups: readonly { id?: string; name?: string }[],
+    replaceGroups: boolean,
+  ) => void
+  prksMountPersonProfileGroupPicker?: (ctx: unknown, person: unknown, editor: HTMLElement) => Promise<void> | void
+  savePersonProfileDraft?: (
+    ctx: unknown,
+    personId: string,
+    draft: {
+      first_name: string
+      last_name: string
+      aliases: string
+      about: string
+      birth_date: string
+      death_date: string
+      image_url: string
+      link_wikipedia: string
+      link_stanford_encyclopedia: string
+      link_iep: string
+      links_other: string
+    },
+    baseline: {
+      first_name: string
+      last_name: string
+      aliases: string
+      about: string
+      birth_date: string
+      death_date: string
+      image_url: string
+      link_wikipedia: string
+      link_stanford_encyclopedia: string
+      link_iep: string
+      links_other: string
+    },
+    groupIds: readonly string[],
+    baselineGroupIds: readonly string[],
+    session: number,
+  ) => Promise<{ ok: boolean; message: string }>
+  deletePerson?: (ctx?: unknown, generation?: number) => Promise<void>
+  prksTogglePersonWorksEdit?: (ctx?: unknown) => void
+  prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>
+  prksPersonViewInGraph?: () => void
   prksVuePresentFolderLibrary?: (input: FolderLibraryPresentRequest) => void
   prksVueDismissFolderLibrary?: (owner: object) => void
   prksFolderLibraryTreeInnerHtml?: (

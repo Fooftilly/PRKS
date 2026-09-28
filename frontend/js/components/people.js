@@ -115,6 +115,8 @@ function personLifespanDisplay(person) {
     if (b) return `Born ${b}`;
     return `Died ${d}`;
 }
+window.personDateToDisplayFormat = personDateToDisplayFormat;
+window.personLifespanDisplay = personLifespanDisplay;
 
 function safeHttpUrl(url) {
     const u = (url || '').trim();
@@ -123,6 +125,7 @@ function safeHttpUrl(url) {
     if (lower.startsWith('https://') || lower.startsWith('http://')) return u;
     return null;
 }
+window.safeHttpUrl = safeHttpUrl;
 
 /** Cached profile image via API (remote fetch + disk cache server-side). */
 /* --- Offline policy for People routes (AGENTS.md "Offline / PWA") ------------
@@ -271,8 +274,18 @@ function prksBindPersonOfflineState(ctx, container) {
 }
 
 /** No cached People index on this device -- distinct from a cached empty one. */
-function renderPeopleListUnavailable(container) {
+function renderPeopleListUnavailable(container, ctx) {
     if (!container) return;
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (owner && typeof prksPresentVuePeople === 'function') {
+        prksPresentVuePeople(owner, container, {
+            feature: 'people',
+            availability: 'unavailable',
+            items: [],
+            generation: owner.generation,
+        });
+        return;
+    }
     container.innerHTML =
         '<div class="prks-page-header page-header"><h2 class="prks-page-title">People not available offline</h2></div>' +
         '<p class="prks-inline-message" data-prks-role="offline-unavailable">This list has not been cached on this device.</p>';
@@ -494,7 +507,9 @@ function applyPersonTemplateValuesToEditForm(values) {
         targets[field.key] = el;
     }
     PERSON_STANDARD_TEMPLATE_FIELDS.forEach((field) => {
-        targets[field.key].value = values[field.key];
+        const input = targets[field.key];
+        input.value = values[field.key];
+        input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     if (typeof prksAutosizeTextarea === 'function') {
         ['pd-about', 'pd-links-other'].forEach((id) => {
@@ -825,61 +840,17 @@ function prksBindPeopleLibrarySearch(root) {
  * registered with the route's context rather than leaked globally.
  */
 function renderPeopleList(ctx, persons, container, options = {}) {
-    const roleFilter = options.roleFilter || null;
-    const list = Array.isArray(persons) ? persons : [];
-    const filterQuery = prksPeopleLibraryFilterFromStorage();
-    const filterEsc = escapeHtmlPerson(filterQuery);
-    const titleExtra = roleFilter ? ` — ${PEOPLE_LIST_ROLE_LABELS[roleFilter] || roleFilter}` : '';
-    const roleFiltered = filterPersonsByAssignedRole(list, roleFilter);
-    const hasPeople = roleFiltered.length > 0;
-    const filterQ = String(filterQuery || '').trim();
-    let shownCount = roleFiltered.length;
-    if (filterQ) {
-        shownCount = roleFiltered.filter((p) => prksPeopleListMatchesQuery(p, filterQ)).length;
-    }
-    const peopleScopeHtml =
-        typeof prksScopeLineHtml === 'function' && hasPeople
-            ? `<div data-prks-role="index-scope-host">${prksScopeLineHtml({
-                  shown: shownCount,
-                  total: roleFiltered.length,
-                  filter: filterQ,
-                  label: roleFilter ? String(roleFilter) : 'People',
-              })}</div>`
-            : hasPeople
-              ? '<div data-prks-role="index-scope-host"></div>'
-              : '';
-    const searchToolbar = hasPeople
-        ? `<div class="prks-people-library__toolbar">
-            <div class="tag-add-shell tag-add-shell--flush prks-people-library__search">
-                <div class="tag-add-shell__field">
-                    ${typeof prksTagSearchIconHtml === 'function' ? prksTagSearchIconHtml() : ''}
-                    <input type="text" id="prks-people-library-search" class="tag-add-shell__input" placeholder="Search people…" value="${filterEsc}" maxlength="300" autocomplete="off" aria-label="Filter people">
-                    <button type="button" class="tag-add-shell__clear" id="prks-people-library-search-clear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
-                </div>
-            </div>
-        </div>`
-        : '';
-    const listHost = hasPeople
-        ? `<div class="prks-people-library__scroll" data-prks-people-list-host>${prksPeopleListInnerHtml(list, filterQuery, roleFilter)}</div>`
-        : `<div class="prks-people-library__empty">${prksPeopleListEmptyHtml(list, filterQuery, roleFilter)}</div>`;
-
-    container.innerHTML = `
-        <div class="prks-people-library">
-        <div class="prks-page-header page-header prks-people-library__header">
-            <h2 class="prks-page-title">People${escapeHtmlPerson(titleExtra)}</h2>
-            <button type="button" class="prks-btn prks-btn--primary" data-prks-role="${PERSON_CREATE_ROLE}" onclick="openModal('person-modal')">New Person</button>
-            ${peopleScopeHtml}
-        </div>
-        ${searchToolbar}
-        ${listHost}
-        </div>`;
-
-    const root = container.querySelector('.prks-people-library');
-    if (root) {
-        // Offline search stays entirely client-side over the already-loaded
-        // (possibly cached) array -- it issues no API requests.
-        root.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter };
-        prksBindPeopleLibrarySearch(root);
+    if (!container) return;
+    const roleFilter = options.roleFilter || '';
+    if (typeof prksPresentVuePeople === 'function') {
+        prksPresentVuePeople(ctx, container, {
+            feature: 'people',
+            availability: 'ready',
+            items: Array.isArray(persons) ? persons : [],
+            roleFilter: roleFilter,
+            unknownRole: options.unknownRole === true,
+            generation: ctx && ctx.generation,
+        });
     }
     prksBindPersonOfflineState(ctx, container);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
@@ -907,11 +878,20 @@ function prksPersonDraftFromEntity(person) {
     };
 }
 
+function prksPersonGroupIdSet(groups) {
+    return Array.from(
+        new Set(
+            (Array.isArray(groups) ? groups : [])
+                .filter((group) => group && group.id != null)
+                .map((group) => String(group.id))
+        )
+    ).sort();
+}
+
 function prksPersonProfileDraftIsDirty(ctx, person) {
     if (!ctx || !ctx.ui || !person || person.id == null) return false;
     const draft = ctx.ui.personProfileDraft;
     if (!draft || String(draft.personId) !== String(person.id)) return false;
-    const original = prksPersonDraftFromEntity(person);
     const scalarFields = [
         'first_name',
         'last_name',
@@ -925,19 +905,19 @@ function prksPersonProfileDraftIsDirty(ctx, person) {
         'link_iep',
         'links_other',
     ];
-    if (scalarFields.some((key) => String(draft[key] == null ? '' : draft[key]) !== original[key])) {
+    /* Edit-session baseline, not the live projection. A retained refresh can
+     * change an untouched field; that must not make the draft look dirty. */
+    const baseline = draft.fieldBaseline && typeof draft.fieldBaseline === 'object'
+        ? draft.fieldBaseline
+        : null;
+    const original = baseline || prksPersonDraftFromEntity(person);
+    if (scalarFields.some((key) => String(draft[key] == null ? '' : draft[key]) !== String(original[key] == null ? '' : original[key]))) {
         return true;
     }
-    const groupIdSet = (groups) =>
-        Array.from(
-            new Set(
-                (Array.isArray(groups) ? groups : [])
-                    .filter((group) => group && group.id != null)
-                    .map((group) => String(group.id))
-            )
-        ).sort();
-    const draftGroupIds = groupIdSet(draft.groups);
-    const originalGroupIds = groupIdSet(original.groups);
+    const draftGroupIds = prksPersonGroupIdSet(draft.groups);
+    const originalGroupIds = Array.isArray(draft.baselineGroupIds)
+        ? Array.from(new Set(draft.baselineGroupIds.map((id) => String(id)))).sort()
+        : prksPersonGroupIdSet(original.groups);
     return (
         draftGroupIds.length !== originalGroupIds.length ||
         draftGroupIds.some((id, index) => id !== originalGroupIds[index])
@@ -954,19 +934,60 @@ function prksEnsurePersonProfileDraft(ctx, person) {
     return ctx.ui.personProfileDraft;
 }
 
+/**
+ * Mutate the one profile draft object. Replacing it would make the group
+ * picker and the leave guard disagree with the Vue form.
+ */
+function prksBindPersonProfileDraft(ctx, personId, fields, groups, replaceGroups) {
+    if (!ctx || !ctx.ui || personId == null) return null;
+    const id = String(personId);
+    let draft = ctx.ui.personProfileDraft;
+    if (!draft || String(draft.personId) !== id) {
+        draft = { personId: id, groups: [] };
+        ctx.ui.personProfileDraft = draft;
+    }
+    const source = fields && typeof fields === 'object' ? fields : {};
+    PRKS_PERSON_PROFILE_FIELDS.forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(source, key)) {
+            draft[key] = String(source[key] == null ? '' : source[key]);
+        }
+    });
+    if (replaceGroups) {
+        draft.groups = (Array.isArray(groups) ? groups : []).map((group) => ({
+            id: group && group.id,
+            name: String(group && group.name != null ? group.name : ''),
+        }));
+        draft.fieldBaseline = {};
+        PRKS_PERSON_PROFILE_FIELDS.forEach((key) => {
+            draft.fieldBaseline[key] = String(draft[key] == null ? '' : draft[key]);
+        });
+        draft.baselineGroupIds = (draft.groups || []).map((group) => String(group && group.id));
+    }
+    return draft;
+}
+
+function prksPersonProfileRouteStill(ctx, personId) {
+    if (!ctx || ctx.destroyed) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'person') return false;
+    const routeId = route.params && route.params.personId;
+    if (String(routeId || '') !== String(personId)) return false;
+    const person = ctx.getEntity && ctx.getEntity('person');
+    return !!(person && String(person.id) === String(personId));
+}
+
 function prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft) {
     if (!ctx || !ctx.ui || !ctx.ui.personDetailEditing) return false;
     if (!draft || ctx.ui.personProfileDraft !== draft || String(draft.personId) !== String(personId)) return false;
-    if (typeof prksTabContextOwnsEntityRoute === 'function') {
-        return prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person');
+    if (
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+    ) {
+        return true;
     }
-    const person = ctx.getEntity && ctx.getEntity('person');
-    return !!(
-        person &&
-        String(person.id) === String(personId) &&
-        ctx.isCurrent &&
-        ctx.isCurrent(generation)
-    );
+    /* A retained same-person refresh bumps generation. The editor is still
+     * this person when the live route says so. */
+    return prksPersonProfileRouteStill(ctx, personId);
 }
 
 function prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor) {
@@ -975,8 +996,16 @@ function prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor
         return false;
     }
     const panel = document.getElementById('panel-content');
-    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, editor)) return false;
-    return panel.querySelector('.person-panel-edit') === editor;
+    if (
+        panel &&
+        panel.querySelector('.person-panel-edit') === editor &&
+        typeof prksRightPanelOwnedBy === 'function' &&
+        prksRightPanelOwnedBy(ctx, editor)
+    ) {
+        return true;
+    }
+    const root = ctx && ctx.root;
+    return !!(root && typeof root.contains === 'function' && root.contains(editor));
 }
 
 const PRKS_PERSON_DRAFT_FIELDS = {
@@ -1055,6 +1084,7 @@ function openPersonProfileEdit() {
         void Promise.resolve(prksReadPersonGroupsStateForPerson(person.id)).catch(() => {});
     }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
+    prksRefreshPersonDetailMain(ctx);
     /* Settle the freshly rendered editor against the CURRENT connectivity.
      * The binding only reacts to changes, so an editor opened while already
      * offline would otherwise show its group controls live until connectivity
@@ -1065,10 +1095,13 @@ function openPersonProfileEdit() {
 function closePersonProfileEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     if (ctx && ctx.ui) {
+        const current = Number(ctx.ui.personEditSession);
+        ctx.ui.personEditSession = (Number.isFinite(current) ? current : 0) + 1;
         ctx.ui.personDetailEditing = false;
         ctx.ui.personProfileDraft = null;
     }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
+    prksRefreshPersonDetailMain(ctx);
 }
 
 window.prksEnsurePersonProfileDraft = prksEnsurePersonProfileDraft;
@@ -1078,9 +1111,10 @@ window.prksPersonProfileEditorCurrent = prksPersonProfileEditorCurrent;
 window.prksSyncPersonProfileDraftFromEditor = prksSyncPersonProfileDraftFromEditor;
 window.prksMountPersonProfileEditor = prksMountPersonProfileEditor;
 
-async function deletePerson() {
-    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
-    const generation = ctx && ctx.generation;
+async function deletePerson(explicitCtx, explicitGeneration) {
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const ctx = explicitCtx && typeof explicitCtx.getEntity === 'function' ? explicitCtx : focused;
+    const generation = arguments.length > 1 && explicitGeneration != null ? explicitGeneration : (ctx && ctx.generation);
     const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     const personId = p && p.id ? String(p.id) : '';
     if (!personId) return;
@@ -1129,8 +1163,9 @@ async function deletePerson() {
     if (typeof prksNavigate === 'function') prksNavigate('#/people', { replace: true, tabId: ctx.tabId });
 }
 
-function prksTogglePersonWorksEdit() {
-    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+function prksTogglePersonWorksEdit(explicitCtx) {
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const ctx = explicitCtx && typeof explicitCtx.getEntity === 'function' ? explicitCtx : focused;
     const p = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
     if (!p || !ctx) return;
     const nowEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
@@ -1194,6 +1229,11 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const nWorks = prksUniquePersonWorks(person).length;
     const nGroups = Array.isArray(person.groups) ? person.groups.length : 0;
     const nRefs = personReferenceCount(person);
+    const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const editing = !!(focused && focused.ui && focused.ui.personDetailEditing);
+    const editBtn = editing
+        ? `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" onclick="closePersonProfileEdit()">Done</button>`
+        : `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>`;
     const deleteBtn = nWorks === 0
         ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" data-prks-role="${PERSON_DELETE_ROLE}" onclick="deletePerson()">Delete person</button>`
         : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" disabled title="Unlink all files first">Delete person</button>`;
@@ -1205,7 +1245,7 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 <li>${nGroups} group${nGroups === 1 ? '' : 's'}</li>
                 <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
             </ul>
-            <button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>
+            ${editBtn}
             <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
             <details class="person-sidebar__advanced" onkeydown="prksPersonAdvancedKeydown(event)">
                 <summary>More</summary>
@@ -1362,6 +1402,151 @@ function prksPersonEditGroupIds(ctx) {
     return (person && Array.isArray(person.groups) ? person.groups : [])
         .map(g => String(g && g.id));
 }
+
+function prksPersonEditSessionToken(ctx) {
+    const value = ctx && ctx.ui && ctx.ui.personEditSession;
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function prksPersonEditSessionStill(ctx, personId, session) {
+    if (!ctx || !ctx.ui || ctx.destroyed) return false;
+    if (prksPersonEditSessionToken(ctx) !== session) return false;
+    if (!ctx.ui.personDetailEditing) return false;
+    return prksPersonProfileRouteStill(ctx, personId);
+}
+
+function prksPersonProfileSaveMessage(error) {
+    const code = error && error.prksLocalStoreCode;
+    if (code === 'scope_busy') return 'One of these fields is syncing or needs a decision. Try again shortly.';
+    if (code === 'dependency_failed') {
+        return 'This person could not be created on PRKS, so their profile cannot be edited. Discard that creation in Sync Diagnostics.';
+    }
+    return 'Could not save this profile locally. Please retry.';
+}
+
+async function prksSavePersonGroupIds(personId, afterIds, beforeIds) {
+    const norm = (ids) => Array.from(new Set((ids || []).map((id) => String(id)))).sort();
+    const before = norm(beforeIds);
+    const after = norm(afterIds);
+    const added = after.filter((id) => before.indexOf(id) === -1);
+    const removed = before.filter((id) => after.indexOf(id) === -1);
+    if (!added.length && !removed.length) return { ok: true, message: '' };
+    const failures = [];
+    for (const groupId of added.concat(removed)) {
+        const present = added.indexOf(groupId) !== -1;
+        try {
+            if (typeof prksSetPersonGroupMembership !== 'function' ||
+                !await prksSetPersonGroupMembership(groupId, personId, present, true)) {
+                failures.push(groupId);
+            }
+        } catch (_e) {
+            failures.push(groupId);
+        }
+    }
+    if (!failures.length) return { ok: true, message: '' };
+    const message = failures.length === 1
+        ? 'The profile was saved, but one group change could not be recorded. Open that group once while connected to PRKS and try again.'
+        : 'The profile was saved, but ' + failures.length + ' group changes could not be recorded. Open those groups once while connected to PRKS and try again.';
+    return { ok: false, message: message };
+}
+
+function prksFinishPersonProfileSave(ctx, person) {
+    if (person && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
+    if (person) {
+        ctx.routeSidebar = {
+            personDisplayName: typeof personDisplayName === 'function' ? personDisplayName(person) || 'Person' : 'Person',
+            linkedWorks: prksUniquePersonWorks(person).length,
+        };
+    }
+    if (ctx.ui) {
+        ctx.ui.personDetailEditing = false;
+        ctx.ui.personProfileDraft = null;
+        ctx.ui.personEditSession = prksPersonEditSessionToken(ctx) + 1;
+    }
+    if (person && ctx.root && ctx.mounted) renderPersonDetails(ctx, person, ctx.root);
+    if (
+        typeof updatePanelContent === 'function' &&
+        typeof prksRightPanelOwnedBy === 'function' &&
+        prksRightPanelOwnedBy(ctx)
+    ) {
+        updatePanelContent('details');
+    }
+}
+
+/**
+ * Persist one edit session. Only fields that differ from the session baseline
+ * are sent. An older session must not close a later one.
+ */
+async function savePersonProfileDraft(ctx, personId, draftFields, baselineFields, groupIds, baselineGroupIds, session) {
+    const fail = (message) => ({ ok: false, message: message || 'Could not save this profile.' });
+    if (!ctx || !personId || !draftFields || !baselineFields) return fail('Could not save this profile.');
+    if (!String(draftFields.last_name || '').trim()) return fail('Last name is required.');
+    const desired = {};
+    for (const key of PRKS_PERSON_PROFILE_FIELDS) {
+        const next = String(draftFields[key] == null ? '' : draftFields[key]);
+        const previous = String(baselineFields[key] == null ? '' : baselineFields[key]);
+        if (next === previous) continue;
+        if (key === 'birth_date' || key === 'death_date') {
+            const iso = parsePersonBirthDeathField(next);
+            if (iso === null) {
+                const label = key === 'birth_date' ? 'Birth' : 'Date of death';
+                return fail(label + ':\n' + PERSON_DATE_HELP);
+            }
+            desired[key] = iso;
+        } else {
+            desired[key] = next;
+        }
+    }
+    const normIds = (ids) => Array.from(new Set((ids || []).map((id) => String(id)))).sort().join('\0');
+    const membershipChanged = normIds(groupIds) !== normIds(baselineGroupIds);
+    const fieldNames = Object.keys(desired);
+    if (!fieldNames.length && !membershipChanged) {
+        if (!prksPersonEditSessionStill(ctx, personId, session)) return { ok: true, message: '' };
+        prksFinishPersonProfileSave(ctx, ctx.getEntity ? ctx.getEntity('person') : null);
+        return { ok: true, message: '' };
+    }
+    if (fieldNames.length) {
+        const read = await prksReadPersonProfileBase(personId);
+        const base = read && read.base;
+        const operations = read && read.operations;
+        if (!base) {
+            const message = 'This profile cannot be edited offline yet. Open it once while connected to PRKS so its synchronization state is prepared.';
+            if (prksPersonEditSessionStill(ctx, personId, session) && typeof prksAlertMessage === 'function') {
+                await prksAlertMessage(message, 'Unavailable');
+            }
+            return fail(message);
+        }
+        const changes = typeof prksDirtyPersonFields === 'function'
+            ? prksDirtyPersonFields(personId, desired, base, operations)
+            : desired;
+        try {
+            if (Object.keys(changes).length && typeof prksSavePersonFieldsDurably === 'function') {
+                await prksSavePersonFieldsDurably(personId, changes, base);
+            }
+        } catch (error) {
+            const message = prksPersonProfileSaveMessage(error);
+            if (prksPersonEditSessionStill(ctx, personId, session) && typeof prksAlertMessage === 'function') {
+                await prksAlertMessage(message, 'Could not save');
+            }
+            return fail(message);
+        }
+    }
+    if (membershipChanged) {
+        const changedGroups = await prksSavePersonGroupIds(personId, groupIds, baselineGroupIds);
+        if (!changedGroups.ok) {
+            if (prksPersonEditSessionStill(ctx, personId, session) && typeof prksAlertMessage === 'function') {
+                await prksAlertMessage(changedGroups.message, 'Groups not updated');
+            }
+            return fail(changedGroups.message);
+        }
+    }
+    if (!prksPersonEditSessionStill(ctx, personId, session)) return { ok: true, message: '' };
+    const person = typeof prksPersonRecordFor === 'function' ? await prksPersonRecordFor(personId) : null;
+    if (!prksPersonEditSessionStill(ctx, personId, session)) return { ok: true, message: '' };
+    prksFinishPersonProfileSave(ctx, person);
+    return { ok: true, message: '' };
+}
+window.savePersonProfileDraft = savePersonProfileDraft;
 
 async function savePersonProfile(personId) {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
@@ -1534,165 +1719,82 @@ function personRoleBlockHtml(heading, count, cardsHtml) {
     );
 }
 
-function renderPersonDetails(ctx, person, container) {
-    if (!container) return;
-    if (!person) {
-        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
-        if (ctx && ctx.ui) ctx.ui.personWorksEditing = false;
-        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
+function prksPersonViewRecord(ctx, person) {
+    const worksEditing = !!(ctx && ctx.ui && ctx.ui.personWorksEditing);
+    const rolesByWork = prksPersonWorkRolesById(person);
+    const baseWorks = worksEditing ? (person.works || []) : prksUniquePersonWorks(person);
+    const membership = typeof prksEffectivePersonWorks === 'function'
+        ? prksEffectivePersonWorks(person, baseWorks)
+        : baseWorks;
+    const rows = typeof prksEffectiveWorkSummaryRows === 'function'
+        ? prksEffectiveWorkSummaryRows(membership)
+        : membership;
+    const works = (rows || []).map((w) => {
+        const workId = w && w.id != null ? String(w.id).trim() : '';
+        if (!workId) return null;
+        const roles = rolesByWork.get(workId) || [];
+        const role = (w && w.role_type) || roles[0] || 'Linked';
+        let subtitle = '';
+        if (!worksEditing) {
+            const credit = (person.works || [])
+                .filter((x) => x && String(x.id) === workId)
+                .map((x) => (x.credit_name != null ? String(x.credit_name).trim() : ''))
+                .find(Boolean) || '';
+            const roleContext = (roles.length ? roles : [role]).join(' · ');
+            subtitle = credit ? (roleContext ? roleContext + ' · ' + credit : credit) : roleContext;
+        }
+        return {
+            id: workId,
+            title: w && w.title,
+            role_type: role,
+            order_index: w && w.order_index != null && w.order_index !== '' ? String(w.order_index) : '0',
+            subtitle: subtitle,
+        };
+    }).filter(Boolean);
+    return Object.assign({}, person, { works: works });
+}
+
+function prksRefreshPersonDetailMain(ctx) {
+    const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (!owner || !owner.root || owner.destroyed) return;
+    const route = owner.lastResolvedRoute || owner.route;
+    if (!route || route.name !== 'person') return;
+    const person = owner.getEntity ? owner.getEntity('person') : null;
+    renderPersonDetails(owner, person, owner.root);
+}
+
+function prksRefreshMountedPersonSurfaces() {
+    if (typeof prksForEachMountedTabContext !== 'function') {
+        prksRefreshPersonDetailMain();
         return;
     }
-    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
+    prksForEachMountedTabContext((ctx) => prksRefreshPersonDetailMain(ctx));
+}
+window.prksRefreshPersonDetailMain = prksRefreshPersonDetailMain;
+window.prksRefreshMountedPersonSurfaces = prksRefreshMountedPersonSurfaces;
+window.prksBindPersonProfileDraft = prksBindPersonProfileDraft;
 
-    const worksEditing = !!(ctx && ctx.ui && ctx.ui.personWorksEditing);
-    // A page mounted from cached data while PRKS is unreachable must not ask
-    // the server for portrait or thumbnail bytes it cannot get -- a broken
-    // image is worse than the ordinary no-photo presentation. Media already
-    // loaded online is never rerendered away just because connectivity changed.
-    const offlineCached = !!(ctx && ctx.ui && ctx.ui.personOfflineCached);
-    const rolesByWork = prksPersonWorkRolesById(person);
-    let worksHtml = '';
-    /* Acknowledged summaries + pending Work-field edits + pending RELATIONSHIP
-     * intents; the cached Person is left exactly as the server sent it.
-     * Membership first: a Work this Person was just linked to has to appear
-     * before its own fields are overlaid onto it. */
-    const membership = typeof prksEffectivePersonWorks === 'function'
-        ? prksEffectivePersonWorks(person, person.works || []) : (person.works || []);
-    const personWorks = typeof prksEffectiveWorkSummaryRows === 'function'
-        ? prksEffectiveWorkSummaryRows(membership) : membership;
-    if (personWorks.length > 0) {
-        if (worksEditing) {
-            const groupedWorks = personWorks.reduce((acc, w) => {
-                const role = (w && w.role_type) || 'Linked';
-                if (!acc[role]) acc[role] = [];
-                acc[role].push(w);
-                return acc;
-            }, {});
-            for (const [role, worksList] of Object.entries(groupedWorks)) {
-                let cards = '';
-                worksList.forEach((w) => {
-                    const card =
-                        typeof prksWorkCardHtml === 'function'
-                            ? prksWorkCardHtml(w, offlineCached ? { suppressThumbnail: true } : {})
-                            : '';
-                    const oi =
-                        w.order_index != null && w.order_index !== '' ? String(w.order_index) : '0';
-                    const rt = escapeHtmlPerson(w.role_type || 'Linked');
-                    const pid = escapeHtmlPerson(person.id);
-                    const wid = escapeHtmlPerson(w.id);
-                    cards += `<div class="person-profile__work-card-wrap">${card}<button type="button" class="person-profile__card-unlink" data-prks-role="${PERSON_MUTATION_ROLE}" aria-label="Remove link to this file" data-work-id="${wid}" data-person-id="${pid}" data-role-type="${rt}" data-order-index="${escapeHtmlPerson(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button></div>`;
-                });
-                worksHtml += personRoleBlockHtml(role || 'Linked', worksList.length, cards);
-            }
-        } else {
-            // Same overlay on the read-only path.
-            const uniqueWorks = typeof prksEffectiveWorkSummaryRows === 'function'
-                ? prksEffectiveWorkSummaryRows(typeof prksEffectivePersonWorks === 'function'
-                    ? prksEffectivePersonWorks(person, prksUniquePersonWorks(person))
-                    : prksUniquePersonWorks(person))
-                : prksUniquePersonWorks(person);
-            const groupedUnique = {};
-            uniqueWorks.forEach((w) => {
-                const workId = w && w.id != null ? String(w.id).trim() : '';
-                const roles = rolesByWork.get(workId) || [];
-                const primary = roles[0] || 'Linked';
-                if (!groupedUnique[primary]) groupedUnique[primary] = [];
-                groupedUnique[primary].push({ work: w, roles: roles });
-            });
-            for (const [role, rows] of Object.entries(groupedUnique)) {
-                let cards = '';
-                rows.forEach((row) => {
-                    const w = row.work;
-                    const workId = w && w.id != null ? String(w.id).trim() : '';
-                    const roleList = row.roles || [];
-                    const credit = (person.works || [])
-                        .filter((x) => x && String(x.id) === workId)
-                        .map((x) => (x.credit_name != null ? String(x.credit_name).trim() : ''))
-                        .find(Boolean) || '';
-                    const roleContext = roleList.join(' · ');
-                    const subtitle = credit
-                        ? `${roleContext}${roleContext ? ' · ' : ''}${credit}`
-                        : roleContext;
-                    const card =
-                        typeof prksWorkCardHtml === 'function'
-                            ? prksWorkCardHtml(
-                                  w,
-                                  Object.assign(
-                                      {},
-                                      subtitle ? { subtitle: subtitle } : {},
-                                      offlineCached ? { suppressThumbnail: true } : {}
-                                  )
-                              )
-                            : '';
-                    cards += `<div class="person-profile__work-card-wrap">${card}</div>`;
-                });
-                worksHtml += personRoleBlockHtml(role || 'Linked', rows.length, cards);
-            }
-        }
-    } else {
-        worksHtml = '<p class="prks-inline-message">This person is not linked to any files.</p>';
+function renderPersonDetails(ctx, person, container) {
+    if (!container) return;
+    if (person && ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', person);
+    if (!person && ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
+    const route = ctx && (ctx.lastResolvedRoute || ctx.route);
+    const personId = (person && person.id) || (route && route.params && route.params.personId) || '';
+    const view = person ? prksPersonViewRecord(ctx, person) : null;
+    if (typeof prksPresentVuePeople === 'function') {
+        prksPresentVuePeople(ctx, container, {
+            feature: 'person',
+            availability: person ? 'ready' : 'not-found',
+            person: view,
+            personId: personId ? String(personId) : '',
+            editing: !!(person && ctx && ctx.ui && ctx.ui.personDetailEditing),
+            worksEditing: !!(person && ctx && ctx.ui && ctx.ui.personWorksEditing),
+            offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached),
+            generation: ctx && ctx.generation,
+        });
+    } else if (!person) {
+        container.innerHTML = '<div class="prks-page-header page-header"><h2 class="prks-page-title">Person not found</h2></div>';
     }
-
-    const portraitApi = offlineCached ? null : personProfileImageSrc(person);
-    const heroNoPhotoClass = portraitApi ? '' : ' person-profile__hero--no-photo';
-    const portraitCol = portraitApi
-        ? `<div class="person-profile__portrait"><div class="person-portrait-wrap"><img class="person-portrait" src="${escapeHtmlPerson(portraitApi)}" alt=""></div></div>`
-        : '';
-
-    const linksBlock = renderPersonExternalLinksList(person);
-    const lifespan = personLifespanDisplay(person);
-    const lifespanHtml = lifespan
-        ? `<p class="person-profile__lifespan">${escapeHtmlPerson(lifespan)}</p>`
-        : '';
-    const aliasesRaw = (person.aliases || '').trim();
-    const aliasesHtml = aliasesRaw
-        ? `<div class="person-profile__aliases"><span class="person-card-label">Also known as</span><span class="person-profile__alias-list">${aliasesRaw.split(',').map((alias) => alias.trim()).filter(Boolean).map((alias) => `<span class="person-profile__alias-tag">${escapeHtmlPerson(alias)}</span>`).join('')}</span></div>`
-        : '';
-    let groupsHtml = '';
-    if (Array.isArray(person.groups) && person.groups.length > 0) {
-        const tags = person.groups
-            .map(
-                (g) =>
-                    `<a class="tag" data-prks-role="${PERSON_GROUP_LINK_ROLE}" href="#/people/groups/${encodeURIComponent(String(g.id || ''))}">${escapeHtmlPerson(g.name)}</a>`
-            )
-            .join(' ');
-        groupsHtml = `<p class="meta-row person-profile__groups">${tags}</p>`;
-    }
-    const aboutText = (person.about || '').trim();
-    const aboutHtml = aboutText
-        ? `<section class="person-profile__about" aria-labelledby="person-profile-about-heading"><h3 id="person-profile-about-heading">About</h3><p class="person-profile__about-text">${escapeHtmlPerson(aboutText)}</p></section>`
-        : '';
-    const nWorks = prksUniquePersonWorks(person).length;
-
-    container.innerHTML = `
-        <div class="prks-page-header page-header page-header--split">
-            <h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('user') : ''} ${escapeHtmlPerson(person.first_name || '')} ${escapeHtmlPerson(person.last_name)}</h2>
-        </div>
-        <div class="document-view document-view--person">
-            <div class="doc-content person-profile">
-                <div class="person-profile__hero${heroNoPhotoClass}">
-                    ${portraitCol}
-                    <div class="person-profile__info">
-                        <div class="person-profile__summary">
-                            ${lifespanHtml}
-                            ${aliasesHtml}
-                            ${groupsHtml}
-                        </div>
-                        ${aboutHtml}
-                        ${linksBlock}
-                    </div>
-                </div>
-                <section class="person-profile__works${worksEditing ? ' person-profile__works--editing' : ''}" aria-labelledby="person-profile-works-heading">
-                    <div class="person-profile__works-head">
-                    <h2 id="person-profile-works-heading" class="person-profile__works-title">Linked files</h2>
-                    <span class="person-profile__works-count">${nWorks}</span>
-                    ${nWorks > 0 || worksEditing ? `<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm person-profile__works-action"${worksEditing ? '' : ` data-prks-role="${PERSON_MUTATION_ROLE}"`} onclick="prksTogglePersonWorksEdit()">${worksEditing ? 'Done' : 'Edit relationships'}</button>` : ''}
-                    </div>
-                    ${worksHtml}
-                </section>
-            </div>
-        </div>
-    `;
     if (typeof window.prksInitLazyWorkThumbs === 'function') {
         window.prksInitLazyWorkThumbs(container);
     }

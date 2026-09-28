@@ -45,18 +45,24 @@ def _extract_function(src: str, name: str) -> str:
 class FrontendPeopleTests(unittest.TestCase):
     def test_people_creation_uses_canonical_modal_from_header_and_true_empty(self):
         src = _read(_PEOPLE)
-        library = src.split("function renderPeopleList", 1)[1].split(
-            "function prksPersonDraftFromEntity", 1
-        )[0]
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
+        ))
+        intents = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "intents.ts"
+        ))
         empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
             "function prksPeopleListInnerHtml", 1
         )[0]
-        self.assertIn("New Person", library)
-        self.assertIn("openModal('person-modal')", library)
+        self.assertIn("New Person", vue)
+        self.assertIn("open('person-modal')", intents)
+        self.assertIn('id="prks-people-empty-new"', vue)
+        self.assertIn("No people yet.", vue)
+        self.assertIn("No people match your search.", vue)
+        self.assertIn("No people with the", vue)
+        self.assertLess(vue.index("roleEmpty"), vue.index("searchMiss"))
         self.assertIn("No people yet.", empty)
         self.assertIn("openModal(\\'person-modal\\')", empty)
-        self.assertIn("No people match your search.", empty)
-        self.assertIn("if (roleFilter && roleFiltered.length === 0)", empty)
         search_empty = next(line for line in empty.splitlines() if "No people match your search." in line)
         self.assertNotIn("person-modal", search_empty)
 
@@ -81,18 +87,19 @@ class FrontendPeopleTests(unittest.TestCase):
         apply_filter = src.split("function prksApplyPeopleLibrarySearchFilter", 1)[1].split(
             "function prksBindPeopleLibrarySearch", 1
         )[0]
-        render = src.split("function renderPeopleList", 1)[1].split(
-            "function prksPersonDraftFromEntity", 1
-        )[0]
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PeopleIndexRoute.vue"
+        ))
         empty = src.split("function prksPeopleListEmptyHtml", 1)[1].split(
             "function prksPeopleListInnerHtml", 1
         )[0]
         self.assertNotIn("window.__prksPeopleLibraryState", src)
+        self.assertNotIn("window.__prksPeopleLibraryState", vue)
+        self.assertIn("prks-people-library-filter", vue)
         self.assertIn("root.__prksPeopleLibraryState", rerender)
         self.assertIn("function prksRerenderPeopleListOnly(root)", src)
         self.assertIn("input.closest('.prks-people-library')", apply_filter)
         self.assertIn("prksRerenderPeopleListOnly(root)", apply_filter)
-        self.assertIn("root.__prksPeopleLibraryState = { persons: list, container, filterQuery, roleFilter }", render)
         self.assertLess(
             empty.index("if (roleFilter && roleFiltered.length === 0)"),
             empty.index("if (q)"),
@@ -111,14 +118,19 @@ class FrontendPeopleTests(unittest.TestCase):
 
     def test_profile_uses_anchor_groups_and_local_relationship_action(self):
         src = _read(_PEOPLE)
-        detail = src.split("function renderPersonDetails", 1)[1]
-        self.assertIn('href="#/people/groups/${encodeURIComponent', detail)
-        self.assertIn("Edit relationships", detail)
-        self.assertIn("person-profile__works-action", detail)
-        self.assertIn("worksEditing ? 'Done'", detail)
-        self.assertNotIn("toUpperCase()", detail)
-        self.assertIn("const roleContext = roleList.join(' · ')", detail)
-        self.assertNotIn("${credit} (${roleList.join(', ')})", detail)
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
+        ))
+        view = src.split("function prksPersonViewRecord", 1)[1].split(
+            "function prksRefreshPersonDetailMain", 1
+        )[0]
+        self.assertIn(':href="`#/people/groups/${encodeURIComponent(group.id)}`"', vue)
+        self.assertIn("Edit relationships", vue)
+        self.assertIn("person-profile__works-action", vue)
+        self.assertIn("projection.worksEditing ? 'Done'", vue)
+        self.assertNotIn("toUpperCase()", vue)
+        self.assertIn("join(' · ')", view)
+        self.assertNotIn("${credit} (${roleList.join(', ')})", view)
 
     def test_sidebar_demotes_advanced_actions_and_edit_form_is_grouped(self):
         src = _read(_PEOPLE)
@@ -171,6 +183,7 @@ class FrontendPeopleTests(unittest.TestCase):
         js = "\n".join(
             (
                 "const personDateToDisplayFormat = value => String(value == null ? '' : value);",
+                _extract_function(src, "prksPersonGroupIdSet"),
                 _extract_function(src, "prksPersonDraftFromEntity"),
                 _extract_function(src, "prksPersonProfileDraftIsDirty"),
                 r"""

@@ -1101,12 +1101,18 @@ async function prksMountPersonProfileGroupPicker(ctx, person, editor) {
     };
     const renderOwnedDraftGroups = () => {
         if (!logicalSessionCurrent()) return;
+        const hosts = [];
         const panel = document.getElementById('panel-content');
-        if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
-        const currentEditor = panel.querySelector('.person-panel-edit');
-        if (!currentEditor || String(currentEditor.getAttribute('data-person-edit-id') || '') !== personId) return;
-        const currentChips = currentEditor.querySelector('#pd-group-chips');
-        if (currentChips) prksRenderPersonGroupChips(currentChips, draft.groups);
+        if (panel && (typeof prksRightPanelOwnedBy !== 'function' || prksRightPanelOwnedBy(ctx, panel))) {
+            hosts.push(panel);
+        }
+        if (ctx && ctx.root) hosts.push(ctx.root);
+        hosts.forEach((host) => {
+            const currentEditor = host.querySelector('.person-panel-edit');
+            if (!currentEditor || String(currentEditor.getAttribute('data-person-edit-id') || '') !== personId) return;
+            const currentChips = currentEditor.querySelector('#pd-group-chips');
+            if (currentChips) prksRenderPersonGroupChips(currentChips, draft.groups);
+        });
     };
 
     prksRenderPersonGroupChips(chips, draft.groups);

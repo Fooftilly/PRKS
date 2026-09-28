@@ -3125,20 +3125,14 @@ function updatePanelContent(tabId) {
     } else if (_cp && (routeName === 'person' || isPersonDetailHash(focusedHash))) {
         if (tabId === 'details') {
             let topHtml;
-            const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.personDetailEditing);
-            if (editing && typeof renderPersonProfileEditFormHtml === 'function') {
-                const draft = typeof prksEnsurePersonProfileDraft === 'function'
-                    ? prksEnsurePersonProfileDraft(focusedCtx, _cp)
-                    : null;
-                topHtml = renderPersonProfileEditFormHtml(_cp, draft);
-            } else if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
+            if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
                 topHtml = renderPersonProfileDetailsSidebarHtml(_cp);
             } else {
                 topHtml = '<p class="meta-row">Person panel unavailable.</p>';
             }
             panel.innerHTML = '<div class="right-panel-stack">' + topHtml + '</div>';
-            if (editing && typeof prksMountPersonProfileEditor === 'function') {
-                void prksMountPersonProfileEditor(focusedCtx, _cp);
+            if (typeof prksRefreshMountedPersonSurfaces === 'function') {
+                prksRefreshMountedPersonSurfaces();
             }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
@@ -3791,12 +3785,23 @@ async function prksRemoveWorkRoleLink(btn) {
         await prksAlertMessage('Missing link data.', 'Error');
         return;
     }
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ownerCtx && ownerCtx.generation;
+    const route = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
+    const routeName = route && route.name;
+    const entityType = routeName === 'person' ? 'person' : (routeName === 'work' ? 'work' : '');
+    const entityId = entityType === 'person' ? personId : workId;
     const confirmed = await prksConfirmDestructive({
         title: 'Remove link?',
         message: 'Remove this person from the file for this role?',
         confirmLabel: 'Remove',
     });
     if (!confirmed) return;
+    if (
+        entityType &&
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        !prksTabContextOwnsEntityRoute(ownerCtx, generation, entityType, entityId, routeName)
+    ) return;
     const result = await prksSaveWorkPersonRoleDurably(workId, personId, roleType, null, null);
     if (result.code === 'unavailable') {
         await prksAlertMessage(
