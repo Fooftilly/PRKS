@@ -268,11 +268,12 @@ function addTarget(): void {
 
 function addSource(): void {
   const body = draft.value
-  if (!body) return
+  const current = argument.value
+  if (!body || !current) return
   void withBusy('add-source', async () => {
     const row: ArgumentEditorSource = { work_id: '', work_title: 'Choose a work…', pages: '' }
     body.sources.push(row)
-    await intents?.pickSource((picked) => {
+    await intents?.pickSource(current.id, (picked) => {
       row.work_id = picked.work_id
       row.work_title = picked.work_title || picked.work_id
     })
@@ -300,7 +301,7 @@ function repaintTarget(row: ArgumentEditorTarget, index: number): void {
 
 function repaintSource(row: ArgumentEditorSource, index: number): void {
   void withBusy(`source:${index}`, async () => {
-    await intents?.pickSource((picked) => {
+    await intents?.pickSource(argument.value?.id || '', (picked) => {
       row.work_id = picked.work_id
       row.work_title = picked.work_title || picked.work_id
     })

@@ -40,7 +40,7 @@ export interface ArgumentIntents {
     selfId: string,
     onPick: (target: ArgumentEditorTarget) => void,
   ): Promise<void>
-  pickSource(onPick: (source: ArgumentEditorSource) => void): Promise<void>
+  pickSource(argumentId: string, onPick: (source: ArgumentEditorSource) => void): Promise<void>
 }
 
 export const argumentIntentsKey: InjectionKey<ArgumentIntents> = Symbol('prks-argument-intents')
@@ -82,6 +82,15 @@ function ownsDetail(
 
 function setEditingFlag(owner: ArgumentIntentOwner | null | undefined, editing: boolean): void {
   if (owner?.ui) owner.ui.argumentEditing = editing
+}
+
+/** Catalogue reads and an open picker can outlive Cancel or a route change. */
+function editorStillCurrent(
+  owner: ArgumentIntentOwner | null | undefined,
+  generation: number,
+  argumentId: string,
+): boolean {
+  return ownsDetail(owner, generation, argumentId) && owner?.ui?.argumentEditing === true
 }
 
 async function alertArgument(title: string, err: unknown, fallback: string): Promise<void> {
@@ -293,14 +302,17 @@ export function browserArgumentIntents(
     async pickTarget(selfId, onPick) {
       const open = window.prksOpenResearchPicker
       if (typeof open !== 'function') return
+      if (!editorStillCurrent(owner, generation, selfId)) return
       const args = typeof window.fetchArguments === 'function' ? await window.fetchArguments() : []
       const positions =
         typeof window.fetchPositions === 'function' ? await window.fetchPositions() : []
+      if (!editorStillCurrent(owner, generation, selfId)) return
       const items = argumentTargetPickerItems(args || [], positions || [], selfId)
       open({
         title: 'Responds to',
         items: () => items,
         onPick: (id, pickType) => {
+          if (!editorStillCurrent(owner, generation, selfId)) return
           const chosen = items.find((item) => item.id === id)
           onPick({
             type: pickType === 'argument' ? 'argument' : 'position',
@@ -313,15 +325,18 @@ export function browserArgumentIntents(
       })
     },
 
-    async pickSource(onPick) {
+    async pickSource(argumentId, onPick) {
       const open = window.prksOpenResearchPicker
       if (typeof open !== 'function') return
+      if (!editorStillCurrent(owner, generation, argumentId)) return
       const works = typeof window.fetchWorks === 'function' ? await window.fetchWorks() : []
+      if (!editorStillCurrent(owner, generation, argumentId)) return
       const items = argumentSourcePickerItems(works || [])
       open({
         title: 'Source work',
         items: () => items,
         onPick: (id) => {
+          if (!editorStillCurrent(owner, generation, argumentId)) return
           const chosen = items.find((item) => item.id === id)
           onPick({
             work_id: id,

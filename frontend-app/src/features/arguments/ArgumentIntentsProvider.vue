@@ -19,7 +19,7 @@ provide(argumentIntentsKey, {
   createResponse: (argument) => current.value.createResponse(argument),
   remove: (argument) => current.value.remove(argument),
   pickTarget: (selfId, onPick) => current.value.pickTarget(selfId, onPick),
-  pickSource: (onPick) => current.value.pickSource(onPick),
+  pickSource: (argumentId, onPick) => current.value.pickSource(argumentId, onPick),
 })
 </script>
 

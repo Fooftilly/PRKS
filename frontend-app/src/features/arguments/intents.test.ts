@@ -183,10 +183,79 @@ describe('Argument intents', () => {
     window.fetchPositions = vi.fn(async () => [])
     window.fetchWorks = vi.fn(async () => [{ id: 'W9', title: 'Cited' }])
     window.prksOpenResearchPicker = vi.fn()
-    await browserArgumentIntents(detailOwner(), 1).pickTarget('A1', () => {})
-    await browserArgumentIntents(detailOwner(), 1).pickSource(() => {})
+    const editing = detailOwner({ ui: { argumentEditing: true } })
+    await browserArgumentIntents(editing, 1).pickTarget('A1', () => {})
+    await browserArgumentIntents(editing, 1).pickSource('A1', () => {})
     expect(window.prksOpenResearchPicker).toHaveBeenCalledTimes(2)
     expect(window.fetchWorks).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not open a picker when edit ends before the catalogue resolves', async () => {
+    const open = vi.fn()
+    window.prksOpenResearchPicker = open
+    let releaseArgs = () => {}
+    let releaseWorks = () => {}
+    window.fetchArguments = () =>
+      new Promise((resolve) => {
+        releaseArgs = () => resolve([])
+      })
+    window.fetchPositions = async () => []
+    window.fetchWorks = () =>
+      new Promise((resolve) => {
+        releaseWorks = () => resolve([])
+      })
+
+    const cancelled = detailOwner({ ui: { argumentEditing: true } })
+    const targetPending = browserArgumentIntents(cancelled, 1).pickTarget('A1', () => {})
+    cancelled.ui!.argumentEditing = false
+    releaseArgs()
+    await targetPending
+
+    const sourceOwner = detailOwner({ ui: { argumentEditing: true } })
+    const sourcePending = browserArgumentIntents(sourceOwner, 1).pickSource('A1', () => {})
+    sourceOwner.ui!.argumentEditing = false
+    releaseWorks()
+    await sourcePending
+
+    let current = true
+    const left = detailOwner({
+      ui: { argumentEditing: true },
+      isCurrent: () => current,
+    })
+    let releaseLeft = () => {}
+    window.fetchArguments = () =>
+      new Promise((resolve) => {
+        releaseLeft = () => resolve([])
+      })
+    const leftPending = browserArgumentIntents(left, 4).pickTarget('A1', () => {})
+    current = false
+    releaseLeft()
+    await leftPending
+
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a picker choice after the editor closes', async () => {
+    const open = vi.fn()
+    window.prksOpenResearchPicker = open
+    window.fetchArguments = async () => []
+    window.fetchPositions = async () => [{ id: 'P1', name: 'Position' }]
+    window.fetchWorks = async () => [{ id: 'W1', title: 'Work' }]
+    const owner = detailOwner({ ui: { argumentEditing: true } })
+    const onTarget = vi.fn()
+    await browserArgumentIntents(owner, 1).pickTarget('A1', onTarget)
+    owner.ui!.argumentEditing = false
+    const targetOpen = open.mock.calls[0]?.[0] as { onPick: (id: string, pickType: string) => void }
+    targetOpen.onPick('P1', 'position')
+    expect(onTarget).not.toHaveBeenCalled()
+
+    owner.ui!.argumentEditing = true
+    const onSource = vi.fn()
+    await browserArgumentIntents(owner, 1).pickSource('A1', onSource)
+    owner.ui!.argumentEditing = false
+    const sourceOpen = open.mock.calls[1]?.[0] as { onPick: (id: string) => void }
+    sourceOpen.onPick('W1')
+    expect(onSource).not.toHaveBeenCalled()
   })
 
   it('does not read the server when entering edit of a caller-owned draft flag', async () => {
