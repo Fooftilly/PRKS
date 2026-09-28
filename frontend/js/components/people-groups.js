@@ -493,8 +493,9 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
     const parentShownName = String(baseFields.parent_name == null ? '' : baseFields.parent_name);
     let parentId = parentDraftId;
     if (parentDraftId !== parentShownId || parentDraftName.trim() !== parentShownName.trim()) {
-        parentId = await prksResolvePersonGroupParent(parentDraftId, parentDraftName, groupId);
-        if (parentId === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
+        const resolvedParent = await prksResolvePersonGroupParent(parentDraftId, parentDraftName, groupId);
+        if (resolvedParent === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
+        parentId = resolvedParent;
     }
     const next = {
         name: name,

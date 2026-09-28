@@ -361,6 +361,41 @@ savePersonGroupEditor(ctx, 'g1', {
         ))
         _run_node(script)
 
+    def test_failed_parent_create_does_not_write_group_fields(self):
+        src = _read(_GROUPS)
+        script = "\n".join((
+            _extract_function(src, "prksResolvePersonGroupParent"),
+            _extract_function(src, "savePersonGroupEditor"),
+            r"""
+let wrote = 0;
+function prksPersonGroupEditSessionStill() { return true; }
+function prksDurableOperationsOrNone() { return Promise.resolve([]); }
+function prksAcknowledgedPersonGroupBase() { return Promise.resolve({ name: 'Child' }); }
+function prksCreatePersonGroupDurably() { return Promise.reject(new Error('create failed')); }
+function prksEffectivePersonGroupCatalogue() { return Promise.resolve([]); }
+function prksPersonGroupSaveMessage() { return 'failed'; }
+function prksAlertMessage() { return Promise.resolve(); }
+function prksSavePersonGroupFieldsDurably() { wrote += 1; return Promise.resolve(); }
+const ctx = {
+  tabId: 'origin',
+  ui: { personGroupEditing: true, personGroupEditSession: 2 },
+  lastResolvedRoute: { name: 'person-group-detail', params: { groupId: 'g1' } },
+  getEntity: () => ({ id: 'g1' }),
+};
+savePersonGroupEditor(ctx, 'g1', {
+  name: 'Child',
+  description: '',
+  parent_id: '',
+  parent_name: 'Brand new parent',
+}, { name: 'Child', description: '', parent_id: '', parent_name: '' }, 2).then((result) => {
+  if (wrote !== 0) throw new Error('failed parent create still wrote group fields');
+  if (!result || result.ok || result.quiet) throw new Error('failed parent create was treated as saved');
+  process.stdout.write('ok');
+}).catch((error) => { console.error(error.stack || error); process.exit(1); });
+""",
+        ))
+        _run_node(script)
+
     def test_unavailable_group_routes_clear_the_cached_banner(self):
         app = _read(_APP)
         index = app.split("case 'people-groups':", 1)[1].split("case 'person-group-detail':", 1)[0]
