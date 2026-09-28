@@ -763,8 +763,17 @@ def _expr_facts(node: ast.expr | None, scopes: list[_Scope]) -> set[_Binding]:
         return facts
     if isinstance(node, ast.Attribute):
         return _attribute_facts(node, scopes)
-    if isinstance(node, ast.Constant):
-        return _sql_facts(node)
+    if isinstance(node, ast.Call):
+        return _call_facts(node, scopes)
+    if isinstance(node, (ast.Constant, ast.JoinedStr, ast.BinOp)):
+        return _string_facts(node, scopes)
+    return _container_facts(node, scopes)
+
+
+def _string_facts(
+    node: ast.Constant | ast.JoinedStr | ast.BinOp, scopes: list[_Scope]
+) -> set[_Binding]:
+    """Literal SQL text, f-strings, and ``+`` / ``%`` / Path ``/`` joins."""
     if isinstance(node, ast.JoinedStr):
         return _sql_facts(node) | set().union(
             *(
@@ -779,21 +788,24 @@ def _expr_facts(node: ast.expr | None, scopes: list[_Scope]) -> set[_Binding]:
         if isinstance(node.op, ast.Div) and (_PATH in left or _PATH in right):
             return {_PATH} | _element_facts(left) | _element_facts(right)
         return _sql_facts(node) | _without_path(left) | _without_path(right)
+    return _sql_facts(node)
+
+
+def _container_facts(node: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
+    """Collections, comprehensions and element access carry their elements' facts."""
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return set().union(*(_expr_facts(elt, scopes) for elt in node.elts))
     if isinstance(node, ast.Dict):
-        return set().union(
-            *(_element_facts(_expr_facts(part, scopes)) for part in (*node.keys, *node.values))
-        )
-    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
-        return _element_facts(_expr_facts(node.elt, scopes))
-    if isinstance(node, ast.DictComp):
-        return _element_facts(_expr_facts(node.key, scopes) | _expr_facts(node.value, scopes))
-    if isinstance(node, (ast.Starred, ast.Subscript)):
+        parts: list[ast.expr | None] = [*node.keys, *node.values]
+    elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        parts = [node.elt]
+    elif isinstance(node, ast.DictComp):
+        parts = [node.key, node.value]
+    elif isinstance(node, (ast.Starred, ast.Subscript)):
         return _expr_facts(node.value, scopes)
-    if isinstance(node, ast.Call):
-        return _call_facts(node, scopes)
-    return set()
+    else:
+        return set()
+    return set().union(*(_element_facts(_expr_facts(part, scopes)) for part in parts))
 
 
 def _attribute_facts(node: ast.Attribute, scopes: list[_Scope]) -> set[_Binding]:
