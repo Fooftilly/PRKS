@@ -5,11 +5,16 @@ import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
 import { defaultArgumentVerdict } from './match'
 import { researchMarkdownHtml } from './markdown'
-import { draftFromArgument, type ArgumentDetailProjection } from './projection'
+import {
+  argumentEditorDraftFromForm,
+  draftFromArgument,
+  editorRowKey,
+  type ArgumentDetailProjection,
+} from './projection'
 import type {
-  ArgumentEditorDraft,
-  ArgumentEditorSource,
-  ArgumentEditorTarget,
+  ArgumentEditorForm,
+  ArgumentEditorSourceRow,
+  ArgumentEditorTargetRow,
   ArgumentMentionRef,
   ArgumentResponseRef,
   ArgumentSourceRef,
@@ -36,7 +41,7 @@ const mentionsHeadHost = ref<HTMLElement | null>(null)
 const mentionsHost = ref<HTMLElement | null>(null)
 
 const editing = ref(false)
-const draft = ref<ArgumentEditorDraft | null>(null)
+const draft = ref<ArgumentEditorForm | null>(null)
 const { actionBusy, actionBlocked, withBusy } = useArgumentPendingAction()
 
 const availability = computed(() => props.projection.availability)
@@ -186,7 +191,7 @@ function verdictChoices(selected: string): { id: string; label: string }[] {
   return choices
 }
 
-function targetKindLabel(row: ArgumentEditorTarget): string {
+function targetKindLabel(row: ArgumentEditorTargetRow): string {
   if (row.type === 'position') return 'Position'
   if (row.kind === 'stance') return 'Stance'
   return 'Argument'
@@ -213,13 +218,7 @@ async function onSave(): Promise<void> {
   const body = draft.value
   if (!current || !body || !intents) return
   await withBusy('save', async () => {
-    const ok = await intents.save(current.id, {
-      name: body.name,
-      kind: body.kind,
-      main_text: body.main_text,
-      targets: body.targets.map((row) => ({ ...row })),
-      sources: body.sources.map((row) => ({ ...row })),
-    })
+    const ok = await intents.save(current.id, argumentEditorDraftFromForm(body))
     if (ok && argument.value?.id === current.id) {
       editing.value = false
       draft.value = null
@@ -249,7 +248,8 @@ function addTarget(): void {
   if (!body || !current) return
   void withBusy('add-target', async () => {
     const verdict = defaultArgumentVerdict(body.kind)
-    const row: ArgumentEditorTarget = {
+    const row: ArgumentEditorTargetRow = {
+      rowKey: editorRowKey(),
       type: 'position',
       id: '',
       name: 'Choose…',
@@ -271,7 +271,12 @@ function addSource(): void {
   const current = argument.value
   if (!body || !current) return
   void withBusy('add-source', async () => {
-    const row: ArgumentEditorSource = { work_id: '', work_title: 'Choose a work…', pages: '' }
+    const row: ArgumentEditorSourceRow = {
+      rowKey: editorRowKey(),
+      work_id: '',
+      work_title: 'Choose a work…',
+      pages: '',
+    }
     body.sources.push(row)
     await intents?.pickSource(current.id, (picked) => {
       row.work_id = picked.work_id
@@ -280,16 +285,20 @@ function addSource(): void {
   })
 }
 
-function removeTarget(index: number): void {
-  draft.value?.targets.splice(index, 1)
+function removeTarget(rowKey: string): void {
+  const body = draft.value
+  if (!body) return
+  body.targets = body.targets.filter((row) => row.rowKey !== rowKey)
 }
 
-function removeSource(index: number): void {
-  draft.value?.sources.splice(index, 1)
+function removeSource(rowKey: string): void {
+  const body = draft.value
+  if (!body) return
+  body.sources = body.sources.filter((row) => row.rowKey !== rowKey)
 }
 
-function repaintTarget(row: ArgumentEditorTarget, index: number): void {
-  void withBusy(`target:${index}`, async () => {
+function repaintTarget(row: ArgumentEditorTargetRow): void {
+  void withBusy(`target:${row.rowKey}`, async () => {
     await intents?.pickTarget(argument.value?.id || '', (picked) => {
       row.type = picked.type
       row.id = picked.id
@@ -299,8 +308,8 @@ function repaintTarget(row: ArgumentEditorTarget, index: number): void {
   })
 }
 
-function repaintSource(row: ArgumentEditorSource, index: number): void {
-  void withBusy(`source:${index}`, async () => {
+function repaintSource(row: ArgumentEditorSourceRow): void {
+  void withBusy(`source:${row.rowKey}`, async () => {
     await intents?.pickSource(argument.value?.id || '', (picked) => {
       row.work_id = picked.work_id
       row.work_title = picked.work_title || picked.work_id
@@ -455,21 +464,21 @@ watch(
         <h3>Responds to</h3>
         <div id="prks-arg-targets">
           <p v-if="!draft.targets.length" class="meta-row">None yet.</p>
-          <div v-for="(row, index) in draft.targets" :key="index" class="prks-arg-row">
+          <div v-for="row in draft.targets" :key="row.rowKey" class="prks-arg-row">
             <span class="prks-research-row__kicker">{{ targetKindLabel(row) }}</span>
             <PrksButton
               class="prks-arg-rel__pick"
               data-pick="target"
-              :busy="actionBusy(`target:${index}`)"
-              :disabled="actionBlocked(`target:${index}`)"
+              :busy="actionBusy(`target:${row.rowKey}`)"
+              :disabled="actionBlocked(`target:${row.rowKey}`)"
               busy-label="Choosing…"
-              @click="repaintTarget(row, index)"
+              @click="repaintTarget(row)"
             >
               {{ row.name || row.id || 'Choose…' }}
             </PrksButton>
-            <label class="form-field-label" :for="`prks-arg-verdict-${index}`">Verdict</label>
+            <label class="form-field-label" :for="`prks-arg-verdict-${row.rowKey}`">Verdict</label>
             <select
-              :id="`prks-arg-verdict-${index}`"
+              :id="`prks-arg-verdict-${row.rowKey}`"
               v-model="row.verdict_id"
               data-field="verdict"
               aria-label="Verdict"
@@ -482,7 +491,7 @@ watch(
               type="button"
               class="prks-btn prks-btn--ghost prks-btn--sm"
               data-remove="target"
-              @click="removeTarget(index)"
+              @click="removeTarget(row.rowKey)"
             >
               Remove
             </button>
@@ -502,14 +511,14 @@ watch(
         <p class="meta-row">Works where this was made or taken.</p>
         <div id="prks-arg-sources">
           <p v-if="!draft.sources.length" class="meta-row">None yet.</p>
-          <div v-for="(row, index) in draft.sources" :key="index" class="prks-arg-row">
+          <div v-for="row in draft.sources" :key="row.rowKey" class="prks-arg-row">
             <PrksButton
               class="prks-arg-rel__pick"
               data-pick="source"
-              :busy="actionBusy(`source:${index}`)"
-              :disabled="actionBlocked(`source:${index}`)"
+              :busy="actionBusy(`source:${row.rowKey}`)"
+              :disabled="actionBlocked(`source:${row.rowKey}`)"
               busy-label="Choosing…"
-              @click="repaintSource(row, index)"
+              @click="repaintSource(row)"
             >
               {{ row.work_title || row.work_id || 'Choose a work…' }}
             </PrksButton>
@@ -525,7 +534,7 @@ watch(
               type="button"
               class="prks-btn prks-btn--ghost prks-btn--sm"
               data-remove="source"
-              @click="removeSource(index)"
+              @click="removeSource(row.rowKey)"
             >
               Remove
             </button>

@@ -3,6 +3,7 @@ import {
   acceptArgumentDetail,
   buildArgumentDetailProjection,
   buildArgumentIndexProjection,
+  argumentEditorDraftFromForm,
   draftFromArgument,
 } from './projection'
 
@@ -85,8 +86,29 @@ describe('Argument projections', () => {
       sources: [{ work_id: 'W1', work_title: 'Work', pages: '2' }],
     })
     const draft = draftFromArgument(detail!)
-    draft.targets.push({ type: 'argument', id: 'A9', name: 'Other', kind: 'argument', verdict_id: 'opposes' })
+    expect(draft.targets[0]?.rowKey).toBeTruthy()
+    expect(draft.sources[0]?.rowKey).toBeTruthy()
+    expect(draft.targets[0]?.rowKey).not.toBe(draft.sources[0]?.rowKey)
+    draft.targets.push({
+      rowKey: 'extra',
+      type: 'argument',
+      id: 'A9',
+      name: 'Other',
+      kind: 'argument',
+      verdict_id: 'opposes',
+    })
     expect(detail?.targets).toHaveLength(1)
     expect(draft.sources[0]?.pages).toBe('2')
+    const durable = argumentEditorDraftFromForm(draft)
+    expect(durable.targets[0]).toEqual({
+      type: 'position',
+      id: 'P1',
+      name: 'P',
+      kind: '',
+      verdict_id: 'supports',
+    })
+    expect(durable.sources[0]).toEqual({ work_id: 'W1', work_title: 'Work', pages: '2' })
+    expect(durable.targets.some((row) => 'rowKey' in row)).toBe(false)
+    expect(durable.sources.some((row) => 'rowKey' in row)).toBe(false)
   })
 })

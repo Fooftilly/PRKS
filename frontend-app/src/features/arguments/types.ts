@@ -99,7 +99,26 @@ export interface ArgumentEditorSource {
   pages: string
 }
 
-/** Vue-local edit draft. Not durable state. */
+/** Local row identity. Stripped before the durable draft is saved. */
+export interface ArgumentEditorTargetRow extends ArgumentEditorTarget {
+  rowKey: string
+}
+
+/** Local row identity. Stripped before the durable draft is saved. */
+export interface ArgumentEditorSourceRow extends ArgumentEditorSource {
+  rowKey: string
+}
+
+/** Vue-local edit form. `rowKey` never leaves the editor. */
+export interface ArgumentEditorForm {
+  name: string
+  kind: ArgumentKind
+  main_text: string
+  targets: ArgumentEditorTargetRow[]
+  sources: ArgumentEditorSourceRow[]
+}
+
+/** Durable edit draft. Not the Vue form, and not a second store. */
 export interface ArgumentEditorDraft {
   name: string
   kind: ArgumentKind

@@ -32,6 +32,9 @@ afterEach(() => {
   delete window.prksTabContextOwnsEntityRoute
   delete window.prksNavigate
   delete window.prksAlertDialog
+  delete window.prksOpenResearchPicker
+  delete window.fetchArguments
+  delete window.fetchPositions
 })
 
 function host(): HTMLElement {
@@ -448,6 +451,71 @@ describe('Arguments route bridge', () => {
     expect(saveBtn?.disabled).toBe(false)
     expect(saveBtn?.textContent).toContain('Save')
     expect(el.querySelector('#prks-arg-form')).not.toBeNull()
+  })
+
+  it('keeps a pending target picker on its row after an earlier row is removed', async () => {
+    paintHelpers()
+    window.prksPrepareArgumentEdit = async () => {}
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOpenResearchPicker = vi.fn()
+    let releaseArgs = () => {}
+    window.fetchArguments = () =>
+      new Promise((resolve) => {
+        releaseArgs = () => resolve([])
+      })
+    window.fetchPositions = async () => []
+    const pane = owner()
+    const el = host()
+    presentArgumentDetail({
+      owner: pane,
+      host: el,
+      argument: {
+        id: 'A1',
+        name: 'Base',
+        kind: 'argument',
+        main_text: 'Body',
+        targets: [
+          { type: 'position', id: 'P0', name: 'First', kind: '', verdict_id: 'supports', verdict_label: 'Supports' },
+          { type: 'argument', id: 'A2', name: 'Second', kind: 'argument', verdict_id: 'opposes', verdict_label: 'Opposes' },
+        ],
+        sources: [],
+        responses: [],
+        mentions: [],
+        verdicts: [
+          { id: 'supports', label: 'Supports' },
+          { id: 'opposes', label: 'Opposes' },
+        ],
+      },
+      argumentId: 'A1',
+      generation: 1,
+    })
+    el.querySelector<HTMLButtonElement>('#prks-arg-edit')?.click()
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve()
+      await nextTick()
+    }
+    const picks = () => [...el.querySelectorAll<HTMLButtonElement>('[data-pick="target"]')]
+    expect(el.querySelector('#prks-arg-form')).not.toBeNull()
+    expect(picks()).toHaveLength(2)
+    picks()[1]?.click()
+    await nextTick()
+    expect(picks()[1]?.getAttribute('aria-busy')).toBe('true')
+    expect(picks()[1]?.textContent).toContain('Choosing…')
+    expect(picks()[0]?.getAttribute('aria-busy')).toBeNull()
+    el.querySelectorAll<HTMLButtonElement>('[data-remove="target"]')[0]?.click()
+    await nextTick()
+    const remaining = picks()
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]?.getAttribute('aria-busy')).toBe('true')
+    expect(remaining[0]?.textContent).toContain('Choosing…')
+    releaseArgs()
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve()
+      await nextTick()
+    }
+    expect(remaining[0]?.getAttribute('aria-busy')).toBeNull()
+    expect(remaining[0]?.textContent).toContain('Second')
+    expect(window.prksOpenResearchPicker).toHaveBeenCalledTimes(1)
   })
 
   it('registers bridges and unmounts one owner without affecting the other', () => {

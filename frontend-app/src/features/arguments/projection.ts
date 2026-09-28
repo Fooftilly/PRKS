@@ -2,6 +2,7 @@ import type {
   ArgumentDetail,
   ArgumentDetailAvailability,
   ArgumentEditorDraft,
+  ArgumentEditorForm,
   ArgumentIndexAvailability,
   ArgumentIndexItem,
   ArgumentIndexSource,
@@ -223,12 +224,17 @@ export function acceptArgumentDetail(value: unknown): ArgumentDetail | null {
   }
 }
 
-export function draftFromArgument(argument: ArgumentDetail): ArgumentEditorDraft {
+export function editorRowKey(): string {
+  return `arg-row-${crypto.randomUUID()}`
+}
+
+export function draftFromArgument(argument: ArgumentDetail): ArgumentEditorForm {
   return {
     name: argument.name,
     kind: argument.kind,
     main_text: argument.main_text,
     targets: argument.targets.map((target) => ({
+      rowKey: editorRowKey(),
       type: target.type,
       id: target.id,
       name: target.name,
@@ -236,9 +242,31 @@ export function draftFromArgument(argument: ArgumentDetail): ArgumentEditorDraft
       verdict_id: target.verdict_id,
     })),
     sources: argument.sources.map((source) => ({
+      rowKey: editorRowKey(),
       work_id: source.work_id,
       work_title: source.work_title,
       pages: source.pages,
+    })),
+  }
+}
+
+/** Copy the fields the durable writer keeps. `rowKey` stays in the form. */
+export function argumentEditorDraftFromForm(form: ArgumentEditorForm): ArgumentEditorDraft {
+  return {
+    name: form.name,
+    kind: form.kind,
+    main_text: form.main_text,
+    targets: form.targets.map((row) => ({
+      type: row.type,
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      verdict_id: row.verdict_id,
+    })),
+    sources: form.sources.map((row) => ({
+      work_id: row.work_id,
+      work_title: row.work_title,
+      pages: row.pages,
     })),
   }
 }
