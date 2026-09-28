@@ -214,8 +214,10 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
 # Dict methods that may (re)write a guarded fields dict's file_path entry.
 _DICT_MUTATORS = frozenset({"__setitem__", "setdefault", "update"})
 _SQL_EXECUTE_METHODS = frozenset({"execute", "execute_query", "executemany"})
+_SQL_TEXT_KEYWORDS = frozenset({"query", "sql"})
 _SQL_WORKS_INSERT_RE = re.compile(
-    r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+works\s*\(([^)]*)\)\s*(?:VALUES\s*\(([^)]*)\))?",
+    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO\s+works\s*\(([^)]*)\)"
+    r"\s*(?:VALUES\s*\(([^)]*)\))?",
     re.IGNORECASE,
 )
 _SQL_WORKS_UPDATE_RE = re.compile(
@@ -223,7 +225,8 @@ _SQL_WORKS_UPDATE_RE = re.compile(
 )
 _SQL_FILE_PATH_ASSIGN_RE = re.compile(r"\bfile_path\s*=\s*([^,\s]+)", re.IGNORECASE)
 _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
-    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+pending_pdf_cleanup\b",
+    r"\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO|UPDATE|DELETE\s+FROM)"
+    r"\s+pending_pdf_cleanup\b",
     re.IGNORECASE,
 )
 _SQL_CLEARING_VALUES = frozenset({"NULL", "''"})
@@ -243,6 +246,16 @@ WEAK_ALIAS_AUTHORITY_SINKS = frozenset(
         "unlink_managed_pdf_best_effort",
         "_remove_managed_pdf",
     }
+)
+# Helper names whose identity survives ``alias = obj.helper`` bound methods.
+_TRACKED_HELPER_NAMES = (
+    frozenset(WORK_FILE_PATH_SINKS)
+    | frozenset(RAW_MANAGED_PDF_UNLINK_HELPERS)
+    | WEAK_ALIAS_AUTHORITY_SINKS
+    | MANAGED_PDF_PATH_HELPERS
+    | MANAGED_PDF_MINTING_HELPERS
+    | WEAK_MANAGED_PDF_ALIAS_HELPERS
+    | _SQL_EXECUTE_METHODS
 )
 
 
@@ -608,6 +621,9 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
             return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(
                 value, scopes
             )
+        if value.attr in _TRACKED_HELPER_NAMES:
+            # ``save = db.add_work``: keep the helper identity for later calls.
+            return {("name", "<bound>", value.attr)} | _expr_facts(value, scopes)
     owned = _proven_owned(value, scopes)
     if owned is not None:
         return owned
@@ -852,8 +868,12 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
         if _PATH in receiver and func.attr in _PATH_RETURNING_METHODS:
             return receiver | _element_facts(_call_argument_facts(node, scopes))
         if func.attr in _STR_TRANSFORM_METHODS:
-            # SQL text survives ``.strip()`` / ``.format()`` and the like.
-            return _without_path(receiver)
+            # SQL text survives ``.strip()`` / ``.format()`` and the like;
+            # ``.format()`` also builds its result from its arguments.
+            facts = _without_path(receiver)
+            if func.attr == "format":
+                facts |= _element_facts(_call_argument_facts(node, scopes))
+            return facts
     if _qualified_names(func, scopes) & _PATH_STRING_FUNCS or _is_builtin(func, scopes, "str"):
         return _element_facts(_call_argument_facts(node, scopes))
     leaves = _callee_leaf_names(func, scopes)
@@ -1988,11 +2008,12 @@ class _InvariantVisitor(ast.NodeVisitor):
                 self._is_owned_value(value) or self._function in WORK_FILE_PATH_CAPABILITIES
             ):
                 self._report_adoption(node, f"{sink}()")
-        if leaves & _SQL_EXECUTE_METHODS and node.args:
-            sql = _expr_facts(node.args[0], self.scopes)
+        query = self._sql_argument(node) if leaves & _SQL_EXECUTE_METHODS else None
+        if query is not None:
+            sql = _expr_facts(query, self.scopes)
             params = set().union(
-                *(_expr_facts(arg, self.scopes) for arg in node.args[1:]),
-                *(_expr_facts(kw.value, self.scopes) for kw in node.keywords),
+                *(_expr_facts(arg, self.scopes) for arg in node.args if arg is not query),
+                *(_expr_facts(kw.value, self.scopes) for kw in node.keywords if kw.value is not query),
             )
             targets = {f[1] for f in sql if f[0] == "sql_write"}
             if targets and _WEAK in params:
@@ -2001,6 +2022,13 @@ class _InvariantVisitor(ast.NodeVisitor):
             # confined to the persistence primitives even under the guard.
             if "works.file_path" in targets and self._function not in WORK_FILE_PATH_CAPABILITIES:
                 self._report_adoption(node, "raw SQL writing works.file_path")
+
+    @staticmethod
+    def _sql_argument(node: ast.Call) -> ast.expr | None:
+        """The SQL text: first positional, or ``query=`` / ``sql=``."""
+        if node.args:
+            return node.args[0]
+        return next((kw.value for kw in node.keywords if kw.arg in _SQL_TEXT_KEYWORDS), None)
 
     def _report_adoption(self, node: ast.AST, what: str) -> None:
         self._report(

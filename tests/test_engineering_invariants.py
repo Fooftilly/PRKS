@@ -1695,6 +1695,11 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    pdf_path = _safe_pdf_path_for_route(path)\n"
                 "    os.remove(pdf_path)\n"
             ),
+            "str_format_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove('{}/{}'.format(pdfs_dir, name))\n"
+            ),
             "server_style_realpath": (
                 "import os\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2055,6 +2060,24 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
                 "        db.add_work(title='t', file_path=f'/api/pdfs/{fp}')\n"
             ),
+            "raw_sql_keyword_query": (
+                "def adopt(db, w_id, fp):\n"
+                "    db.execute_query(query='UPDATE works SET file_path = ? WHERE id = ?', params=(fp, w_id))\n"
+            ),
+            "raw_sql_replace_into": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('REPLACE INTO works (id, file_path) VALUES (?, ?)', (w_id, fp))\n"
+            ),
+            "bound_method_alias": (
+                "def create(db, fp):\n"
+                "    save = db.add_work\n"
+                "    save(title='t', file_path=fp)\n"
+            ),
+            "bound_sql_alias": (
+                "def adopt(conn, w_id, fp):\n"
+                "    run = conn.execute\n"
+                "    run('UPDATE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2306,6 +2329,17 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "    weak = [referenced_managed_pdf_filename(fp)]\n"
                 "    for name in weak:\n"
                 "        record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "claim_sql_replace_into_keyword": (
+                "def f(db, fp):\n"
+                "    db.execute_query(sql='REPLACE INTO pending_pdf_cleanup (filename) VALUES (?)',\n"
+                "                     params=(referenced_managed_pdf_filename(fp),))\n"
+            ),
+            "bound_claim_helper": (
+                "from backend import work_deletion\n"
+                "def f(conn, fp):\n"
+                "    claim = work_deletion.record_pending_pdf_cleanup_on_conn\n"
+                "    claim(conn, referenced_managed_pdf_filename(fp))\n"
             ),
             "claim_sql_concatenated": (
                 "def f(conn, fp, suffix):\n"
