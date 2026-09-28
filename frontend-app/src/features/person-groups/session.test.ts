@@ -1,6 +1,5 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { browserPersonGroupIntents } from './intents'
 import {
   PERSON_GROUPS_RETAIN_SURFACE_KEY,
   dismissPersonGroups,
@@ -144,7 +143,7 @@ describe('Person Groups session', () => {
     const save = paneHost.querySelector('#gd-save-btn')
     expect(save).toBeInstanceOf(HTMLButtonElement)
     expect((save as HTMLButtonElement).onclick).toEqual(expect.any(Function))
-    expect(paneHost.querySelector('[data-prks-group-edit-cancel]')?.getAttribute('onclick')).toBe('closePersonGroupEdit()')
+    expect(paneHost.querySelector('[data-prks-group-edit-cancel]')?.getAttribute('onclick')).toBeNull()
     expect(paneHost.querySelector('#group-add-member-search')).toBeNull()
     const remove = paneHost.querySelector('#gd-delete-btn')
     expect(remove).toBeInstanceOf(HTMLButtonElement)
@@ -198,12 +197,41 @@ describe('Person Groups session', () => {
     expect((paneHost.querySelector('#gd-description') as HTMLTextAreaElement).value).toBe('Kept description')
   })
 
-  it('closes the originating editor when another pane is focused', () => {
+  it('closes the originating editor when another pane is focused', async () => {
     const closed: Array<string | undefined> = []
+    const toggled: Array<string | undefined> = []
     vi.stubGlobal('closePersonGroupEdit', (target?: { tabId?: string }) => {
       closed.push(target?.tabId)
     })
-    browserPersonGroupIntents(owner('origin')).cancelEdit()
+    vi.stubGlobal('prksTogglePersonGroupMembersEdit', (target?: { tabId?: string }) => {
+      toggled.push(target?.tabId)
+    })
+    const pane = owner('origin')
+    pane.ui.personGroupEditing = true
+    pane.getEntity = () => ({ id: 'G1', name: 'Parent Branch' })
+    const paneHost = host()
+    presentPersonGroupDetail({
+      owner: pane,
+      host: paneHost,
+      group: {
+        id: 'G1',
+        name: 'Parent Branch',
+        description: '',
+        parent: null,
+        children: [],
+        members: [],
+      },
+      editing: true,
+      generation: 4,
+    })
+    await flushView()
+    const cancel = paneHost.querySelector('[data-prks-group-edit-cancel]')
+    const members = paneHost.querySelector('[data-prks-group-members-toggle]')
+    expect(cancel?.getAttribute('onclick')).toBeNull()
+    expect(members?.getAttribute('onclick')).toBeNull()
+    cancel?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    members?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(closed).toEqual(['origin'])
+    expect(toggled).toEqual(['origin'])
   })
 })

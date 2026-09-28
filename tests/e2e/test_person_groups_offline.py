@@ -371,7 +371,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.assertEqual(page.locator('#gd-name').input_value(), 'Unsaved name')
         self.assertEqual(page.locator('#gd-description').input_value(),
                          'Unsaved description')
-        page.locator('button[onclick="closePersonGroupEdit()"]').click()
+        page.locator('[data-prks-group-edit-cancel]').click()
         self.assertEqual(page.locator('.group-sidebar-pane--edit').count(), 0)
 
     def test_the_member_manager_stays_usable_after_a_disconnect(self):
@@ -388,7 +388,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._wait_content_contains(page, o.PERSON_DISPLAY)
         self.assertEqual(page.locator('#group-add-member-search').input_value(),
                          'Unsaved search')
-        page.locator('button[onclick="prksTogglePersonGroupMembersEdit()"]').click()
+        page.locator('[data-prks-group-members-toggle]').click()
         self.assertEqual(page.locator('#group-add-member-btn').count(), 0)
 
     def test_a_save_after_a_disconnect_records_an_intent_and_sends_no_patch(self):

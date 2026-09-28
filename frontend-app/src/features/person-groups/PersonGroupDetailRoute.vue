@@ -95,12 +95,18 @@ async function onDelete(): Promise<void> {
   })
 }
 
+function onCancel(): void {
+  intents?.cancelEdit()
+}
+
+function onToggleMembers(): void {
+  intents?.toggleMembers()
+}
+
 function stampEditor(): void {
   const root = rootEl.value
   const current = group.value
   if (!root || !current) return
-  const membersBtn = root.querySelector('[data-prks-group-members-toggle]')
-  if (membersBtn) membersBtn.setAttribute('onclick', 'prksTogglePersonGroupMembersEdit()')
   const editor = root.querySelector('.group-sidebar-pane--edit')
   if (editor instanceof HTMLElement && editing.value) {
     const name = editor.querySelector('#gd-name')
@@ -130,8 +136,6 @@ function stampEditor(): void {
     if (save instanceof HTMLButtonElement) save.onclick = () => { void onSave() }
     const remove = editor.querySelector('#gd-delete-btn')
     if (remove instanceof HTMLButtonElement) remove.onclick = () => { void onDelete() }
-    const cancel = editor.querySelector('[data-prks-group-edit-cancel]')
-    if (cancel) cancel.setAttribute('onclick', 'closePersonGroupEdit()')
   }
   intents?.bindChrome()
 }
@@ -212,7 +216,7 @@ onUpdated(stampEditor)
               </section>
             </div>
             <div class="form-actions prks-form-actions--split group-sidebar__sticky-actions">
-              <button type="button" class="prks-btn prks-btn--secondary" data-prks-group-edit-cancel>Cancel</button>
+              <button type="button" class="prks-btn prks-btn--secondary" data-prks-group-edit-cancel @click="onCancel">Cancel</button>
               <button id="gd-save-btn" type="button" class="prks-btn prks-btn--primary">Save changes</button>
             </div>
             <details class="group-sidebar__advanced">
@@ -260,6 +264,7 @@ onUpdated(stampEditor)
                 class="prks-btn prks-btn--secondary prks-btn--sm"
                 data-prks-group-members-toggle
                 :data-prks-role="membersEditing ? undefined : 'group-mutation-control'"
+                @click="onToggleMembers"
               >
                 {{ membersEditing ? 'Done' : 'Manage members' }}
               </button>
