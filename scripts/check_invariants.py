@@ -185,7 +185,9 @@ MANAGED_PDF_ADOPTION_GUARD = "managed_pdf_adoption_guard"
 # INV-STORAGE-002: a raw removal of a managed-PDF path is survivor-aware
 # cleanup authority. Only these (file, function) capabilities hold it; every
 # other function -- including new functions in these same files -- fails.
-RAW_REMOVE_CALLS = frozenset({"os.remove", "os.unlink"})
+# ``shutil.rmtree`` of the managed directory drops every PDF at once, live
+# references included.
+RAW_REMOVE_CALLS = frozenset({"os.remove", "os.unlink", "shutil.rmtree"})
 MANAGED_PDF_REMOVE_CAPABILITIES: dict[tuple[str, str], str] = {
     # The canonical survivor-aware cleanup: under managed_pdf_path_lock it
     # settles the claim iff a live Work strongly references the name, keeps
@@ -2324,20 +2326,20 @@ class _InvariantVisitor(ast.NodeVisitor):
                 return kw.value
         return None
 
-    def _is_owned_value(self, value: ast.expr) -> bool:
+    def _is_owned_value(self, value: ast.expr, *, under_guard: bool = True) -> bool:
         """A clear / non-managed literal, minted bytes, or a value an active
         adoption guard validated (its input, its yielded basename, or the
         fields dict whose ``file_path`` it read). Every branch of a
-        conditional / short-circuit value must qualify on its own."""
+        conditional / short-circuit value must qualify on its own.
+        ``under_guard=False`` asks whether it is owned without any guard."""
         branches = _branch_values(value)
         if branches is not None and not isinstance(value, (ast.NamedExpr, ast.Await)):
-            return all(self._is_owned_value(branch) for branch in branches)
+            return all(self._is_owned_value(branch, under_guard=under_guard) for branch in branches)
         if isinstance(value, ast.Constant):
             return not (
                 isinstance(value.value, str) and value.value.strip().startswith("/api/pdfs")
             )
-        guards = self._active_adoption_guards()
-        active = {g.key for g in guards}
+        active = {g.key for g in self._active_adoption_guards()} if under_guard else set()
         if isinstance(value, ast.Name):
             bindings = _resolve(self.scopes, value.id)
             if _DICT_DIRTY not in bindings and any(
@@ -2425,7 +2427,9 @@ class _InvariantVisitor(ast.NodeVisitor):
             # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
             # prepares; arguments supplied at invocation are checked there.
             prepared = ast.Call(func=node.args[0], args=node.args[1:], keywords=node.keywords)
-            self._check_managed_pdf_boundary(ast.copy_location(prepared, node))
+            prepared = ast.copy_location(prepared, node)
+            self._check_managed_pdf_boundary(prepared)
+            self._check_partial_bound_file_path(prepared)
             return
         leaves = _callee_leaf_names(node.func, self.scopes)
         self._check_guarded_dict_mutation(node, leaves)
@@ -2435,6 +2439,22 @@ class _InvariantVisitor(ast.NodeVisitor):
         for sink in sorted(leaves & WEAK_ALIAS_AUTHORITY_SINKS):
             if _WEAK in _call_argument_facts(node, self.scopes):
                 self._report_weak_alias(node, f"{sink}()")
+
+    def _check_partial_bound_file_path(self, prepared: ast.Call) -> None:
+        """A partial may be invoked after the guard exits, so a pre-bound
+        ``file_path`` owned only through that guard is not proven locked
+        where the row is actually written."""
+        leaves = _callee_leaf_names(prepared.func, self.scopes)
+        sink_value = self._file_path_sink_value(prepared, leaves)
+        if sink_value is None or self._function in WORK_FILE_PATH_CAPABILITIES:
+            return
+        sink, value = sink_value
+        if self._is_owned_value(value) and not self._is_owned_value(value, under_guard=False):
+            self._report_adoption(
+                prepared,
+                f"functools.partial({sink}, ...) pre-binding a guard-validated file_path "
+                "(it may run after the guard exits; call the sink inside the guard)",
+            )
 
     def visit_Call(self, node: ast.Call) -> None:
         if (

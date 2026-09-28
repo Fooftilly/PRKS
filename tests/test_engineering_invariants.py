@@ -1623,6 +1623,16 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "shutil_rmtree_managed_dir": (
+                "import shutil\n"
+                "def wipe(pdfs_dir):\n"
+                "    shutil.rmtree(pdfs_dir)\n"
+            ),
+            "shutil_rmtree_alias_keyword": (
+                "from shutil import rmtree as nuke\n"
+                "def wipe(db):\n"
+                "    nuke(path=db.storage.pdfs_dir, ignore_errors=True)\n"
+            ),
             "os_remove_join": (
                 "import os\n"
                 "def drop(pdfs_dir, name):\n"
@@ -1784,6 +1794,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_unrelated_file_cleanup_passes(self):
         cases = {
+            "rmtree_scratch_dir": (
+                "import shutil, tempfile\n"
+                "def cleanup():\n"
+                "    scratch = tempfile.mkdtemp()\n"
+                "    shutil.rmtree(scratch)\n"
+            ),
             "temp_file_in_managed_dir": (
                 "import os, tempfile\n"
                 "def publish(pdfs_dir):\n"
@@ -2318,6 +2334,22 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "            pass\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "partial_bound_under_guard_invoked_after": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        save = functools.partial(db.add_work, file_path=fp)\n"
+                "    save(title='t')\n"
+            ),
+            "partial_bound_guarded_basename_positional": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        save = functools.partial(db.add_work, 't', 's', '', '', '', f'/api/pdfs/{name}')\n"
+                "    save()\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -2556,6 +2588,14 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
 
     def test_newly_minted_exclusive_pdf_passes(self):
         cases = {
+            "partial_bound_minted_name": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace as wpr\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = wpr.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    save = functools.partial(db.add_work, file_path=f'/api/pdfs/{stored}')\n"
+                "    save(title='t')\n"
+            ),
             "upload_bytes": (
                 "from backend.services import work_pdf_replace as wpr\n"
                 "def create(db, pdfs_dir, body):\n"
