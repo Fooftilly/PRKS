@@ -2282,7 +2282,7 @@ function renderRouteContextSidebar(mode) {
         return `
             <div class="route-sidebar">
                 <h2 class="route-sidebar__title">${name}</h2>
-                <p class="route-sidebar__lede">Edit title/description and add videos from the Details panel.</p>
+                <p class="route-sidebar__lede">Edit the title, description, and videos in the playlist. Details stays a summary.</p>
                 ${extra}
                 ${link('#/playlists', 'All playlists')}
             </div>`;

@@ -410,13 +410,7 @@ async function deletePlaylistFromDetail(ctx, pl) {
               })
             : true;
     if (!confirmed) return;
-    const btn =
-        (ctx && ctx.root && ctx.root.querySelector && ctx.root.querySelector('#prks-playlist-delete-btn')) ||
-        document.getElementById('prks-playlist-delete-btn');
     try {
-        if (btn && typeof prksSetButtonBusy === 'function') {
-            prksSetButtonBusy(btn, true, { busyLabel: 'Deleting…' });
-        }
         await deletePlaylistCanonical(playlistId);
         if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
         if (typeof prksNavigate === 'function') {
@@ -429,14 +423,55 @@ async function deletePlaylistFromDetail(ctx, pl) {
                 'Error'
             );
         }
-    } finally {
-        if (btn && typeof prksSetButtonBusy === 'function') {
-            prksSetButtonBusy(btn, false);
-        }
     }
 }
 
-function prksOpenNewPlaylistModalFromPlaylistsPage() {
+function prksPlaylistIndexCreateOwner(explicit) {
+    if (explicit && explicit.tabId) return explicit;
+    const panel = document.getElementById('panel-content');
+    const panelId = panel && panel.dataset ? panel.dataset.prksOwnerTabId : '';
+    if (panelId && typeof prksGetTabContext === 'function') {
+        const fromPanel = prksGetTabContext(panelId);
+        if (fromPanel) return fromPanel;
+    }
+    return typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+}
+
+function prksRememberPlaylistIndexCreate(owner) {
+    const ctx = prksPlaylistIndexCreateOwner(owner);
+    window.__prksPlaylistIndexCreateOrigin = ctx && ctx.tabId
+        ? {
+            tabId: String(ctx.tabId),
+            generation: typeof ctx.generation === 'number' ? ctx.generation : null,
+        }
+        : { suppressed: true };
+}
+
+function prksSuppressPlaylistIndexCreateOrigin() {
+    window.__prksPlaylistIndexCreateOrigin = { suppressed: true };
+}
+
+/**
+ * Consume the origin recorded when the playlist modal opened.
+ * A still-valid Playlists-index owner is navigated by tab id. The URL hash
+ * is Main-only and is not consulted. A suppressed origin (Work attach) does
+ * not fall back to whichever tab is focused.
+ */
+function prksTakePlaylistIndexCreateTabId() {
+    const origin = window.__prksPlaylistIndexCreateOrigin || null;
+    window.__prksPlaylistIndexCreateOrigin = null;
+    if (origin && origin.suppressed) return '';
+    const ctx = origin && origin.tabId && typeof prksGetTabContext === 'function'
+        ? prksGetTabContext(origin.tabId)
+        : (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (!ctx || ctx.destroyed || !ctx.tabId) return '';
+    if (origin && origin.generation != null && ctx.generation !== origin.generation) return '';
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'playlists') return '';
+    return String(ctx.tabId);
+}
+
+function prksOpenNewPlaylistModalFromPlaylistsPage(owner) {
     const titleEl = document.getElementById('playlist-title');
     const descEl = document.getElementById('playlist-description');
     const errEl = document.getElementById('playlist-error');
@@ -447,6 +482,7 @@ function prksOpenNewPlaylistModalFromPlaylistsPage() {
         errEl.classList.add('hidden');
     }
     window.__prksPendingPlaylistAttach = null;
+    prksRememberPlaylistIndexCreate(owner);
     if (typeof openModal === 'function') openModal('playlist-modal');
 }
 
@@ -838,6 +874,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
             errEl.classList.add('hidden');
         }
         window.__prksPendingPlaylistAttach = { workId: wid };
+        prksSuppressPlaylistIndexCreateOrigin();
         if (typeof openModal === 'function') openModal('playlist-modal');
     };
 }
@@ -846,6 +883,7 @@ window.fetchPlaylists = fetchPlaylists;
 window.fetchPlaylistDetails = fetchPlaylistDetails;
 window.prksBindPlaylistsIndexCreateBtn = prksBindPlaylistsIndexCreateBtn;
 window.prksOpenNewPlaylistModalFromPlaylistsPage = prksOpenNewPlaylistModalFromPlaylistsPage;
+window.prksTakePlaylistIndexCreateTabId = prksTakePlaylistIndexCreateTabId;
 window.prksReloadPlaylistDetail = prksReloadPlaylistDetail;
 window.deletePlaylistFromDetail = deletePlaylistFromDetail;
 window.renderPlaylistsIndex = renderPlaylistsIndex;

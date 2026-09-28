@@ -11,6 +11,7 @@ afterEach(() => {
   delete window.addWorkToPlaylist
   delete window.fetchWorks
   delete window.prksInferWorkSourceKind
+  delete window.prksConsumeApiError
   delete window.prksOfflineRuntimeState
   delete window.prksSaveWorkFieldDurably
   delete window.prksRefreshPendingWorkMetadata
@@ -41,10 +42,12 @@ function owner(overrides: Partial<PlaylistIntentOwner> = {}): PlaylistIntentOwne
 }
 
 describe('Playlist intents', () => {
-  it('opens the existing create modal', () => {
+  it('opens the existing create modal for this owner', () => {
     window.prksOpenNewPlaylistModalFromPlaylistsPage = vi.fn()
-    browserPlaylistIntents(owner(), 2).create()
+    const pane = owner()
+    browserPlaylistIntents(pane, 2).create()
     expect(window.prksOpenNewPlaylistModalFromPlaylistsPage).toHaveBeenCalledOnce()
+    expect(window.prksOpenNewPlaylistModalFromPlaylistsPage).toHaveBeenCalledWith(pane)
   })
 
   it('sends only dirty fields and leaves Cancel unsaved', async () => {
@@ -60,6 +63,8 @@ describe('Playlist intents', () => {
     expect(pane.ui?.playlistEditing).toBe(false)
 
     pane.ui!.playlistEditing = true
+    vi.mocked(window.renderPlaylistDetail).mockClear()
+    vi.mocked(window.updatePanelContent).mockClear()
     const saved = await intents.saveFields(
       'PL-1',
       { title: 'Course', description: 'New', original_url: 'https://example.test/old' },
@@ -68,6 +73,24 @@ describe('Playlist intents', () => {
     expect(saved.ok).toBe(true)
     expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, {})
     expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
+    expect(window.renderPlaylistDetail).toHaveBeenCalled()
+    expect(window.updatePanelContent).toHaveBeenCalledWith('details')
+  })
+
+  it('refreshes the details panel when a save changes nothing', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn()
+    window.prksReloadPlaylistDetail = vi.fn()
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    const pane = owner()
+    const result = await browserPlaylistIntents(pane, 2).saveFields('PL-1', { ...shown }, shown)
+    expect(result.ok).toBe(true)
+    expect(window.updatePlaylist).not.toHaveBeenCalled()
+    expect(window.prksReloadPlaylistDetail).not.toHaveBeenCalled()
+    expect(pane.ui?.playlistEditing).toBe(false)
+    expect(window.renderPlaylistDetail).toHaveBeenCalled()
+    expect(window.updatePanelContent).toHaveBeenCalledWith('details')
   })
 
   it('keeps a useful save error and does not reload', async () => {
@@ -164,15 +187,44 @@ describe('Playlist intents', () => {
       ] as unknown as Array<{ id: string; title: string }>
     })
     const missed = await browserPlaylistIntents(owner(), 2).loadAddableVideos('PL-1', ['W1'])
-    expect(missed).toEqual([])
+    expect(missed).toEqual({ status: 'stale' })
 
     live = true
+    window.prksConsumeApiError = () => null
     window.fetchWorks = vi.fn(async () => [
       { id: 'W1', title: 'Already in', kind: 'video' },
       { id: 'W2', title: 'Add me', kind: 'video' },
       { id: 'D1', title: 'Paper', kind: 'pdf' },
     ] as unknown as Array<{ id: string; title: string }>)
     const choices = await browserPlaylistIntents(owner(), 2).loadAddableVideos('PL-1', ['W1'])
-    expect(choices).toEqual([{ id: 'W2', title: 'Add me' }])
+    expect(choices).toEqual({ status: 'ready', choices: [{ id: 'W2', title: 'Add me' }] })
+  })
+
+  it('treats a failed catalogue as unavailable and an empty one as ready', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOfflineRuntimeState = () => 'offline'
+    window.fetchWorks = vi.fn(async () => [])
+    const offline = await browserPlaylistIntents(owner(), 2).loadAddableVideos('PL-1', [])
+    expect(offline).toEqual({ status: 'unavailable' })
+    expect(window.fetchWorks).not.toHaveBeenCalled()
+
+    window.prksOfflineRuntimeState = () => 'online'
+    window.prksConsumeApiError = () => ({ message: 'Could not load files.' })
+    window.fetchWorks = vi.fn(async () => [])
+    const failed = await browserPlaylistIntents(owner(), 2).loadAddableVideos('PL-1', [])
+    expect(failed).toEqual({ status: 'unavailable' })
+
+    window.prksConsumeApiError = () => null
+    const empty = await browserPlaylistIntents(owner(), 2).loadAddableVideos('PL-1', [])
+    expect(empty).toEqual({ status: 'ready', choices: [] })
+
+    const controller = new AbortController()
+    controller.abort()
+    window.fetchWorks = vi.fn(async () => [{ id: 'W2', title: 'Add me' }])
+    const aborted = await browserPlaylistIntents(owner({ abortController: controller }), 2).loadAddableVideos(
+      'PL-1',
+      [],
+    )
+    expect(aborted).toEqual({ status: 'stale' })
   })
 })

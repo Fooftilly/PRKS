@@ -3502,6 +3502,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             items: [],
                             generation: generation,
                         });
+                        prksOfflinePrependBanner(contentDiv, null);
+                        titleOpts = {
+                            notFound: true,
+                            notFoundTitle: 'Playlists not available offline',
+                            skipPageEnter: samePlaylistsWorkspace,
+                        };
                         break;
                     }
                     renderPlaylistsIndex(pls, contentDiv, ctx);
@@ -3566,7 +3572,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             playlistId: plId,
                             generation: generation,
                         });
-                        titleOpts = { notFound: true, notFoundTitle: 'Playlist not available offline' };
+                        prksOfflinePrependBanner(contentDiv, null);
+                        titleOpts = {
+                            notFound: true,
+                            notFoundTitle: 'Playlist not available offline',
+                            skipPageEnter: samePlaylistsWorkspace,
+                        };
                         break;
                     }
                     const pl = typeof prksEffectivePlaylistDetail === 'function'
@@ -5661,12 +5672,14 @@ function initForms() {
                     await window.__prksRefreshAllPlaylistSelects(newId);
                 }
                 // Navigate only when playlist creation came from the playlists index (not from New File flow).
+                const attachedWork = !!(pending && pending.workId);
+                const createTabId = typeof window.prksTakePlaylistIndexCreateTabId === 'function'
+                    ? window.prksTakePlaylistIndexCreateTabId()
+                    : '';
                 if (window.__prksReturnToWorkModalAfterPlaylist === true) {
                     // closeModals() will restore the New File modal.
-                } else if ((window.location.hash || '') === '#/playlists') {
-                    if (typeof prksNavigate === 'function') {
-                        prksNavigate('#/playlists/' + encodeURIComponent(newId));
-                    }
+                } else if (!attachedWork && createTabId && typeof prksNavigate === 'function') {
+                    prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId });
                 }
             } catch (e) {
                 console.error(e);

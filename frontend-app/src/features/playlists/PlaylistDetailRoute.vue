@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onUpdated, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import { playlistIntentsKey, type PlaylistSaveResult, type PlaylistVideoChoice } from './intents'
 import { usePlaylistPendingAction } from './pending-action'
 import type { PlaylistDetailProjection } from './projection'
@@ -10,7 +10,7 @@ const props = defineProps<{
 }>()
 
 const intents = inject(playlistIntentsKey)
-const { actionBusy, actionBlocked, withBusy } = usePlaylistPendingAction()
+const { actionBusy, actionBlocked, resetPending, withBusy } = usePlaylistPendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const draft = ref<PlaylistFieldDraft>({ title: '', description: '', original_url: '' })
 const status = ref('')
@@ -18,6 +18,7 @@ const addQuery = ref('')
 const addStatus = ref('')
 const addOpen = ref(false)
 const choices = ref<PlaylistVideoChoice[]>([])
+const catalogueUnavailable = ref(false)
 const renaming = ref<Record<string, string>>({})
 
 const playlist = computed(() => props.projection.playlist)
@@ -69,40 +70,76 @@ onUpdated(settleOffline)
 watch(
   () => `${playlist.value?.id || ''}:${props.projection.editing ? '1' : '0'}`,
   (key, previous) => {
-    if (!props.projection.editing || !playlist.value) return
+    if (!props.projection.editing || !playlist.value) {
+      renaming.value = {}
+      return
+    }
     if (key === previous) return
     draft.value = { ...shown.value }
     status.value = ''
     addStatus.value = ''
     addQuery.value = ''
     addOpen.value = false
+    renaming.value = {}
   },
   { immediate: true },
 )
 
+watch(
+  () => playlist.value?.id || '',
+  (id, previous) => {
+    if (!previous || id === previous) return
+    resetPending()
+  },
+)
+
 let choiceToken = 0
+async function refreshChoices(): Promise<void> {
+  const token = ++choiceToken
+  const current = playlist.value
+  if (!props.projection.editing || !current || !intents) {
+    choices.value = []
+    catalogueUnavailable.value = false
+    return
+  }
+  const loaded = await intents.loadAddableVideos(
+    current.id,
+    current.items.map((item) => item.id),
+  )
+  if (token !== choiceToken) return
+  if (loaded.status === 'stale') return
+  if (loaded.status === 'unavailable') {
+    choices.value = []
+    catalogueUnavailable.value = true
+    return
+  }
+  catalogueUnavailable.value = false
+  choices.value = loaded.choices
+}
+
 watch(
   () => {
     const current = playlist.value
     if (!props.projection.editing || !current) return ''
     return `${current.id}|${current.items.map((item) => item.id).join(',')}`
   },
-  async (key) => {
-    const token = ++choiceToken
-    if (!key || !playlist.value || !intents) {
-      choices.value = []
-      return
-    }
-    const current = playlist.value
-    const loaded = await intents.loadAddableVideos(
-      current.id,
-      current.items.map((item) => item.id),
-    )
-    if (token !== choiceToken) return
-    choices.value = loaded
+  () => {
+    void refreshChoices()
   },
   { immediate: true },
 )
+
+function onCatalogueOnline(): void {
+  if (!props.projection.editing) return
+  void refreshChoices()
+}
+
+onMounted(() => {
+  window.addEventListener('online', onCatalogueOnline)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('online', onCatalogueOnline)
+})
 
 function onCancel(): void {
   const id = playlist.value?.id
@@ -213,11 +250,23 @@ async function onSaveRename(workId: string): Promise<void> {
 function onDelete(): void {
   const current = playlist.value
   if (!current) return
-  void intents?.remove(current.id, current)
+  void withBusy('delete', async () => {
+    await intents?.remove(current.id, current)
+  })
 }
 
 function onAddFocus(): void {
   addOpen.value = true
+  void refreshChoices()
+}
+
+function onAddInput(): void {
+  addOpen.value = true
+}
+
+function activateRouteLink(event: KeyboardEvent): void {
+  const target = event.currentTarget
+  if (target instanceof HTMLElement) target.click()
 }
 
 function onAddBlur(): void {
@@ -258,10 +307,11 @@ function onAddBlur(): void {
             type="button"
             class="prks-btn prks-btn--danger"
             :data-playlist-id="playlist.id"
+            :disabled="actionBusy('delete') || actionBlocked('delete')"
             @click="onDelete"
           >
             <span v-if="icon('trash')" v-html="icon('trash')"></span>
-            Delete playlist
+            {{ actionBusy('delete') ? 'Deleting…' : 'Delete playlist' }}
           </button>
         </div>
       </div>
@@ -335,7 +385,7 @@ function onAddBlur(): void {
               autocomplete="off"
               aria-label="Search videos to add"
               @focus="onAddFocus"
-              @input="onAddFocus"
+              @input="onAddInput"
               @blur="onAddBlur"
             >
           </div>
@@ -344,7 +394,10 @@ function onAddBlur(): void {
             class="combobox-results combobox-results--tag-panel"
             :class="{ hidden: !addOpen }"
           >
-            <div v-if="!filteredChoices.length" class="result-item no-results">No videos found</div>
+            <div v-if="catalogueUnavailable" class="result-item no-results">
+              Videos are not available right now.
+            </div>
+            <div v-else-if="!filteredChoices.length" class="result-item no-results">No videos found</div>
             <div
               v-for="choice in filteredChoices"
               :key="choice.id"
@@ -398,6 +451,7 @@ function onAddBlur(): void {
                 tabindex="0"
                 :data-pl-nav="item.id"
                 :data-prks-route="`#/works/${encodeURIComponent(item.id)}`"
+                @keydown.enter.prevent="activateRouteLink"
               >
                 <div class="card-title prks-playlist-item__title">{{ item.title }}</div>
                 <div class="meta-row">{{ item.subtitle }}</div>

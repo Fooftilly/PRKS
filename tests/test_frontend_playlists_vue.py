@@ -17,12 +17,16 @@ class PlaylistsVueContracts(unittest.TestCase):
         self.assertIn("prksEffectivePlaylistRows(", index)
         self.assertIn("prksPresentVuePlaylists(", index)
         self.assertIn("availability: 'unavailable'", index)
+        self.assertIn("prksOfflinePrependBanner(contentDiv, null)", index)
+        self.assertIn("notFoundTitle: 'Playlists not available offline'", index)
         self.assertIn("renderPlaylistsIndex(pls, contentDiv, ctx)", index)
         self.assertIn("prksEffectivePlaylistDetail(", detail)
         self.assertIn("prksPendingCreatedPlaylist", detail)
         self.assertIn("prksHydratePendingWorkMetadata()", detail)
         self.assertIn("renderPlaylistDetail(ctx, pl, contentDiv", detail)
         self.assertIn("availability: 'unavailable'", detail)
+        self.assertIn("prksOfflinePrependBanner(contentDiv, null)", detail)
+        self.assertIn("notFoundTitle: 'Playlist not available offline'", detail)
         self.assertIn("ctx.ui.playlistEditing = false;", detail)
         self.assertLess(
             detail.index("prksHydratePendingWorkMetadata()"),
@@ -103,3 +107,46 @@ class PlaylistsVueContracts(unittest.TestCase):
         sidebar = (FRONTEND / "ui.js").read_text()
         self.assertIn('id="prks-playlist-edit-btn"', sidebar)
         self.assertIn('id="prks-create-playlist-btn"', sidebar)
+        self.assertIn(
+            "Edit the title, description, and videos in the playlist. Details stays a summary.",
+            sidebar,
+        )
+        self.assertNotIn(
+            "Edit title/description and add videos from the Details panel.",
+            sidebar,
+        )
+
+    def test_new_playlist_navigates_the_originating_owner(self):
+        app = (FRONTEND / "app.js").read_text()
+        save = app[app.index("const attachedWork") : app.index("} catch (e)", app.index("const attachedWork"))]
+        self.assertIn("prksTakePlaylistIndexCreateTabId", save)
+        self.assertIn("prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId })", save)
+        self.assertNotIn("location.hash", save)
+        stub = (FRONTEND / "components" / "playlists.js").read_text()
+        take = stub[
+            stub.index("function prksTakePlaylistIndexCreateTabId()") : stub.index(
+                "function prksOpenNewPlaylistModalFromPlaylistsPage"
+            )
+        ]
+        self.assertIn("origin.suppressed", take)
+        self.assertIn("ctx.generation !== origin.generation", take)
+        self.assertIn("route.name !== 'playlists'", take)
+        self.assertIn("window.prksTakePlaylistIndexCreateTabId", stub)
+        self.assertIn("prksSuppressPlaylistIndexCreateOrigin()", stub)
+        delete_fn = stub[
+            stub.index("async function deletePlaylistFromDetail(") : stub.index(
+                "function prksPlaylistIndexCreateOwner"
+            )
+        ]
+        self.assertNotIn("prksSetButtonBusy", delete_fn)
+        self.assertIn("will stay in your library", delete_fn)
+        detail = (FEATURE / "PlaylistDetailRoute.vue").read_text()
+        self.assertIn("Deleting…", detail)
+        self.assertIn('role="link"', detail)
+        self.assertIn('@keydown.enter.prevent="activateRouteLink"', detail)
+        index = (FEATURE / "PlaylistsIndexRoute.vue").read_text()
+        self.assertIn('role="link"', index)
+        self.assertIn('tabindex="0"', index)
+        self.assertIn('@keydown.enter.prevent="activateRouteLink"', index)
+        agents = (ROOT / "frontend" / "AGENTS.md").read_text()
+        self.assertIn("does not read `location.hash`", agents)

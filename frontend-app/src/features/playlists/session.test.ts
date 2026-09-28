@@ -23,6 +23,8 @@ afterEach(() => {
   delete window.renderPlaylistDetail
   delete window.updatePanelContent
   delete window.prksTabContextOwnsEntityRoute
+  delete window.prksOfflineRuntimeState
+  delete window.deletePlaylistFromDetail
   delete window.prksIcon
 })
 
@@ -83,6 +85,9 @@ describe('Playlists route surface', () => {
     expect(sideHost.querySelector('#prks-playlists-header-new')).not.toBeNull()
     sideHost.querySelector<HTMLButtonElement>('#prks-playlists-empty-new')?.click()
     expect(window.prksOpenNewPlaylistModalFromPlaylistsPage).toHaveBeenCalledOnce()
+    expect(window.prksOpenNewPlaylistModalFromPlaylistsPage).toHaveBeenCalledWith(
+      expect.objectContaining({ tabId: 'side' }),
+    )
     expect(readRouteSurface(main)?.ownsMainShell).toBe(true)
     expect(readRouteSurface(main)?.canonicalHash).toBe('#/playlists')
     expect(readRouteSurface(secondary)?.ownsMainShell).toBe(false)
@@ -220,6 +225,91 @@ describe('Playlists route surface', () => {
     el.querySelector<HTMLButtonElement>('#prks-playlist-edit-cancel')?.click()
     expect(pane.ui.playlistEditing).toBe(false)
     expect(window.updatePlaylist).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a canceled rename when edit ends and when the next edit starts', async () => {
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    el.querySelector<HTMLButtonElement>('[data-pl-rename="W1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#prks-pl-rename-input-W1')
+    expect(input).not.toBeNull()
+    input!.value = 'Draft that should not return'
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: false, generation: 2 })
+    await nextTick()
+    expect(el.querySelector('#prks-pl-rename-input-W1')).toBeNull()
+
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 3 })
+    await nextTick()
+    expect(el.querySelector('#prks-pl-rename-input-W1')).toBeNull()
+    expect(el.querySelector('[data-pl-rename="W1"]')).not.toBeNull()
+  })
+
+  it('shows unavailable catalogue copy when videos cannot load', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOfflineRuntimeState = () => 'offline'
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await vi.waitFor(() => expect(el.textContent).toContain('Videos are not available right now.'))
+    expect(el.textContent).not.toContain('No videos found')
+  })
+
+  it('owns the delete busy label and clears it when the playlist changes', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    let release: (() => void) | undefined
+    window.deletePlaylistFromDetail = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    const pane = owner()
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: false, generation: 1 })
+    el.querySelector<HTMLButtonElement>('#prks-playlist-delete-btn')?.click()
+    await vi.waitFor(() =>
+      expect(el.querySelector('#prks-playlist-delete-btn')?.textContent).toContain('Deleting…'),
+    )
+    expect(el.querySelector<HTMLButtonElement>('#prks-playlist-delete-btn')?.disabled).toBe(true)
+
+    presentPlaylistDetail({
+      owner: pane,
+      host: el,
+      playlist: { ...playlist, id: 'PL-2', title: 'Other' },
+      editing: false,
+      generation: 2,
+    })
+    await nextTick()
+    const next = el.querySelector<HTMLButtonElement>('#prks-playlist-delete-btn')
+    expect(next?.textContent).toContain('Delete playlist')
+    expect(next?.textContent).not.toContain('Deleting…')
+    expect(next?.disabled).toBe(false)
+    release?.()
+  })
+
+  it('activates an index row on Enter', () => {
+    const pane = owner('main')
+    const el = host()
+    presentPlaylistsIndex({
+      owner: pane,
+      host: el,
+      items: [{ id: 'PL-1', title: 'Main list', description: '', item_count: 2 }],
+      generation: 1,
+    })
+    const row = el.querySelector<HTMLElement>('[data-prks-route="#/playlists/PL-1"]')
+    expect(row?.getAttribute('role')).toBe('link')
+    expect(row?.getAttribute('tabindex')).toBe('0')
+    const clicks = vi.fn()
+    row?.addEventListener('click', clicks)
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(clicks).toHaveBeenCalledOnce()
   })
 
   it('keeps the index host across a retained refresh and unmounts a failed one', async () => {

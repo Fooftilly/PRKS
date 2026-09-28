@@ -331,12 +331,16 @@ interface Window {
   }) => Promise<{ id?: string } | null>
   fetchArguments?: () => Promise<Array<{ id?: string; name?: string; kind?: string }>>
   fetchPositions?: () => Promise<Array<{ id?: string; name?: string }>>
-  fetchWorks?: (options?: { signal?: AbortSignal }) => Promise<Array<{ id?: string; title?: string }>>
+  fetchWorks?: (options?: {
+    signal?: AbortSignal
+    errorOwner?: object
+  }) => Promise<Array<{ id?: string; title?: string }>>
+  prksConsumeApiError?: (owner: object) => { message?: string } | null
   prksInferWorkSourceKind?: (work: unknown) => string
   prksOfflineRuntimeState?: () => string
   prksAlertMessage?: (message: string, title?: string) => Promise<void> | void
   prksApplyPlaylistOfflineState?: (container: ParentNode | null) => void
-  prksOpenNewPlaylistModalFromPlaylistsPage?: () => void
+  prksOpenNewPlaylistModalFromPlaylistsPage?: (owner?: object) => void
   prksReloadPlaylistDetail?: (ctx: unknown, playlistId: string) => Promise<unknown>
   updatePlaylist?: (
     playlistId: string,

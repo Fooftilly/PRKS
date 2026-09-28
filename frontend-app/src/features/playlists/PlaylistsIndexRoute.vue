@@ -23,6 +23,11 @@ function rowHref(id: string): string {
 function onCreate(): void {
   intents?.create()
 }
+
+function activateRouteLink(event: KeyboardEvent): void {
+  const target = event.currentTarget
+  if (target instanceof HTMLElement) target.click()
+}
 </script>
 
 <template>
@@ -58,8 +63,11 @@ function onCreate(): void {
             v-for="item in items"
             :key="item.id"
             class="project-card playlists-page__list-item"
+            role="link"
+            tabindex="0"
             :data-prks-route="rowHref(item.id)"
             data-prks-middleclick-nav="1"
+            @keydown.enter.prevent="activateRouteLink"
           >
             <div class="playlists-page__list-main">
               <span class="playlists-page__badge">

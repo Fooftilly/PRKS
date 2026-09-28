@@ -30,6 +30,12 @@ export interface PlaylistVideoChoice {
   title: string
 }
 
+/** Ready may be empty. Unavailable is not an empty catalogue. Stale must not paint. */
+export type PlaylistVideoCatalogue =
+  | { status: 'ready'; choices: PlaylistVideoChoice[] }
+  | { status: 'unavailable' }
+  | { status: 'stale' }
+
 export interface PlaylistIntents {
   create(): void
   cancelEdit(playlistId: string): void
@@ -41,7 +47,7 @@ export interface PlaylistIntents {
   reorder(playlistId: string, workIds: readonly string[]): Promise<PlaylistSaveResult>
   removeWork(playlistId: string, workId: string): Promise<PlaylistSaveResult>
   addWork(playlistId: string, workId: string): Promise<PlaylistSaveResult>
-  loadAddableVideos(playlistId: string, presentIds: readonly string[]): Promise<PlaylistVideoChoice[]>
+  loadAddableVideos(playlistId: string, presentIds: readonly string[]): Promise<PlaylistVideoCatalogue>
   beginRename(playlistId: string, workId: string): void
   cancelRename(playlistId: string, workId: string): void
   saveWorkTitle(playlistId: string, workId: string, title: string): Promise<PlaylistSaveResult>
@@ -84,20 +90,25 @@ function dirtyFields(draft: PlaylistFieldDraft, shown: PlaylistFieldDraft): Reco
   return changes
 }
 
+function refreshDetailsPanel(): void {
+  if (typeof window.updatePanelContent === 'function') window.updatePanelContent('details')
+}
+
 async function reloadIfOwned(
   owner: PlaylistIntentOwner | null | undefined,
   generation: number,
   playlistId: string,
 ): Promise<boolean> {
-  if (!ownsDetail(owner, generation, playlistId)) return false
+  if (!ownsDetail(owner, generation, playlistId) || !owner) return false
   const reload = window.prksReloadPlaylistDetail
-  if (typeof reload !== 'function' || !owner) return false
+  if (typeof reload !== 'function') return false
   try {
-    await reload(owner, playlistId)
+    const fresh = await reload(owner, playlistId)
+    return fresh != null && ownsDetail(owner, generation, playlistId)
   } catch {
     /* The write already landed. A failed repaint is not a rejected save. */
+    return false
   }
-  return ownsDetail(owner, generation, playlistId)
 }
 
 function renameMap(owner: PlaylistIntentOwner): Record<string, boolean> {
@@ -126,7 +137,7 @@ export function browserPlaylistIntents(
   return {
     create() {
       const open = window.prksOpenNewPlaylistModalFromPlaylistsPage
-      if (typeof open === 'function') open()
+      if (typeof open === 'function') open(owner || undefined)
     },
 
     cancelEdit(playlistId) {
@@ -147,6 +158,7 @@ export function browserPlaylistIntents(
       if (!Object.keys(changes).length) {
         if (owner?.ui) owner.ui.playlistEditing = false
         if (owner) repaint(owner, playlistId)
+        refreshDetailsPanel()
         return { ok: true, message: '' }
       }
       const update = window.updatePlaylist
@@ -165,7 +177,11 @@ export function browserPlaylistIntents(
         owner.ui.playlistEditing = false
         owner.ui.playlistRename = {}
       }
-      await reloadIfOwned(owner, generation, playlistId)
+      const painted = await reloadIfOwned(owner, generation, playlistId)
+      if (!painted && ownsDetail(owner, generation, playlistId)) {
+        repaint(owner, playlistId)
+        refreshDetailsPanel()
+      }
       return { ok: true, message: '' }
     },
 
@@ -212,24 +228,31 @@ export function browserPlaylistIntents(
     },
 
     async loadAddableVideos(playlistId, presentIds) {
-      if (!ownsDetail(owner, generation, playlistId)) return []
+      if (!ownsDetail(owner, generation, playlistId)) return { status: 'stale' }
       const online =
         typeof window.prksOfflineRuntimeState !== 'function' ||
         window.prksOfflineRuntimeState() === 'online'
-      if (!online) return []
+      if (!online) return { status: 'unavailable' }
       const fetchWorks = window.fetchWorks
-      if (typeof fetchWorks !== 'function') return []
+      if (typeof fetchWorks !== 'function') return { status: 'unavailable' }
       const signal = owner?.abortController?.signal
+      const errorOwner = {}
       let works: Array<{ id?: string; title?: string }> = []
       try {
-        works = (await fetchWorks(signal ? { signal } : undefined)) || []
+        works =
+          (await fetchWorks({
+            ...(signal ? { signal } : {}),
+            errorOwner,
+          })) || []
       } catch {
-        return []
+        return { status: 'unavailable' }
       }
-      if (!ownsDetail(owner, generation, playlistId)) return []
+      if (signal?.aborted || !ownsDetail(owner, generation, playlistId)) return { status: 'stale' }
+      const consume = window.prksConsumeApiError
+      if (typeof consume === 'function' && consume(errorOwner)) return { status: 'unavailable' }
       const present = new Set(presentIds)
       const infer = window.prksInferWorkSourceKind
-      return works
+      const choices = works
         .filter((work) => {
           if (!work || !work.id || present.has(String(work.id))) return false
           if (typeof infer !== 'function') return true
@@ -237,6 +260,7 @@ export function browserPlaylistIntents(
         })
         .map((work) => ({ id: String(work.id), title: String(work.title || 'Untitled') }))
         .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }))
+      return { status: 'ready', choices }
     },
 
     beginRename(playlistId, workId) {
