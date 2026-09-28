@@ -130,7 +130,20 @@ _PATH_STRING_FUNCS = frozenset(
     }
 )
 _STR_TRANSFORM_METHODS = frozenset(
-    {"casefold", "format", "lower", "lstrip", "removeprefix", "removesuffix", "rstrip", "strip"}
+    {
+        "capitalize",
+        "casefold",
+        "format",
+        "lower",
+        "lstrip",
+        "removeprefix",
+        "removesuffix",
+        "rstrip",
+        "strip",
+        "swapcase",
+        "title",
+        "upper",
+    }
 )
 
 # --- Managed-PDF ownership boundary (INV-STORAGE-002/003/004) --------------
@@ -219,7 +232,7 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
     ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"): "COW retarget",
 }
 # Dict methods that may (re)write a guarded fields dict's file_path entry.
-_DICT_MUTATORS = frozenset({"__setitem__", "setdefault", "update"})
+_DICT_MUTATORS = frozenset({"__ior__", "__setitem__", "setdefault", "update"})
 _SQL_EXECUTE_METHODS = frozenset({"execute", "execute_query", "executemany"})
 _SQL_TEXT_KEYWORDS = frozenset({"query", "sql"})
 _SQL_WORKS_INSERT_RE = re.compile(
@@ -235,6 +248,7 @@ _SQL_WORKS_UPDATE_RE = re.compile(
 _SQL_UPSERT_SET_RE = re.compile(
     r"\bDO\s+UPDATE\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
 )
+_SQL_ROW_VALUE_SET_RE = re.compile(r"\(([^()]*)\)\s*=\s*\(([^()]*)")
 _SQL_FILE_PATH_ASSIGN_RE = re.compile(r"\bfile_path\s*=\s*([^,\s]+)", re.IGNORECASE)
 _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
     r"\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)"
@@ -625,6 +639,9 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
         return (set(_resolve(scopes, value.id)) or {_OTHER}) | _expr_facts(value, scopes)
     if _is_zip_archive_expr(value, scopes):
         return {_ARCHIVE}
+    if _is_partial_call(value, scopes) and value.args:
+        # ``save = partial(db.add_work, ...)`` keeps the wrapped helper identity.
+        return _value_bindings(value.args[0], scopes)
     if isinstance(value, ast.Attribute):
         # ``mod.attr`` / ``pkg.mod.attr`` keep their import identity, so a
         # local alias of an imported callable or class still resolves.
@@ -679,6 +696,12 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
     if isinstance(node, ast.Attribute):
         return {f"{base}.{node.attr}" for base in _qualified_names(node.value, scopes)}
     return set()
+
+
+def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> bool:
+    return isinstance(node, ast.Call) and "functools.partial" in _qualified_names(
+        node.func, scopes
+    )
 
 
 def _is_class_receiver(node: ast.expr, scopes: list[_Scope]) -> bool:
@@ -782,10 +805,22 @@ def _upsert_writes_file_path(tail: str) -> bool:
 
 
 def _set_clause_writes_file_path(clause: str) -> bool:
-    return any(
+    if any(
         assigned.group(1).upper() not in _SQL_CLEARING_VALUES
         for assigned in _SQL_FILE_PATH_ASSIGN_RE.finditer(clause)
-    )
+    ):
+        return True
+    # Row-value form: ``SET (file_path, status) = (?, ?)`` or ``= (SELECT ...)``.
+    for match in _SQL_ROW_VALUE_SET_RE.finditer(clause):
+        columns = [c.strip().lower() for c in match.group(1).split(",")]
+        if "file_path" not in columns:
+            continue
+        values = [v.strip() for v in match.group(2).split(",")]
+        if len(values) != len(columns) or (
+            values[columns.index("file_path")].upper() not in _SQL_CLEARING_VALUES
+        ):
+            return True
+    return False
 
 
 def _facts_of(bindings: Iterable[_Binding]) -> set[_Binding]:
@@ -2205,6 +2240,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         )
 
     def _check_managed_pdf_boundary(self, node: ast.Call) -> None:
+        if _is_partial_call(node, self.scopes) and node.args:
+            # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
+            # prepares; arguments supplied at invocation are checked there.
+            prepared = ast.Call(func=node.args[0], args=node.args[1:], keywords=node.keywords)
+            self._check_managed_pdf_boundary(ast.copy_location(prepared, node))
+            return
         leaves = _callee_leaf_names(node.func, self.scopes)
         self._check_guarded_dict_mutation(node, leaves)
         self._check_managed_pdf_removal(node)

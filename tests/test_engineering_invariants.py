@@ -2191,6 +2191,34 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        apply_defaults(body)\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "raw_sql_row_value_set": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
+            ),
+            "raw_sql_upsert_row_value": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO works (id) VALUES (?) ON CONFLICT(id) '\n"
+                "                 'DO UPDATE SET (file_path, title) = (?, ?)', (w_id, fp, 't'))\n"
+            ),
+            "functools_partial_sink": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    save = functools.partial(db.add_work, title='t', file_path=fp)\n"
+                "    save()\n"
+            ),
+            "partial_alias_invoked_with_file_path": (
+                "from functools import partial\n"
+                "def create(db, fp):\n"
+                "    save = partial(db.add_work, title='t')\n"
+                "    save(file_path=fp)\n"
+            ),
+            "guarded_dict_explicit_ior": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body.__ior__({'file_path': other})\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2386,6 +2414,10 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        'INSERT INTO works (id, title) VALUES (?, ?) '\n"
                 "        'ON CONFLICT(id) DO UPDATE SET title = excluded.title', (w, t))\n"
             ),
+            "sql_row_value_clear": (
+                "def f(conn, w):\n"
+                "    conn.execute('UPDATE works SET (file_path, status) = (NULL, ?) WHERE id = ?', ('s', w))\n"
+            ),
             "sql_read": (
                 "def f(conn, w):\n"
                 "    conn.execute('SELECT file_path FROM works WHERE id = ?', (w,))\n"
@@ -2449,6 +2481,10 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "def f(db, rows):\n"
                 "    names = {referenced_managed_pdf_filename(r['file_path']) for r in rows}\n"
                 "    cleanup_released_managed_pdfs(db, names)\n"
+            ),
+            "weak_upper": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).upper())\n"
             ),
             "path_name_of_weak": (
                 "from pathlib import Path\n"
