@@ -2617,6 +2617,11 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "    name = referenced_managed_pdf_filename(fp)\n"
                 "    conn.execute('INSERT INTO pending_pdf_cleanup (filename) VALUES (?) ' + suffix, (name,))\n"
             ),
+            "claim_sql_interpolated_weak": (
+                "def f(conn, fp):\n"
+                "    weak = referenced_managed_pdf_filename(fp)\n"
+                "    conn.execute(f\"INSERT INTO pending_pdf_cleanup (filename) VALUES ('{weak}')\")\n"
+            ),
             "adoption_guard_input": (
                 "from backend.services import work_pdf_replace\n"
                 "def f(pdfs_dir, fp):\n"

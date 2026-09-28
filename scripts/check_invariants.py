@@ -2280,7 +2280,9 @@ class _InvariantVisitor(ast.NodeVisitor):
                 *(_expr_facts(kw.value, self.scopes) for kw in node.keywords if kw.value is not query),
             )
             targets = {f[1] for f in sql if f[0] == "sql_write"}
-            if targets and _WEAK in params:
+            # A weak alias interpolated into the SQL text is as much an
+            # authority as one passed as a bound parameter.
+            if targets and _WEAK in (params | sql):
                 self._report_weak_alias(node, f"a SQL write to {', '.join(sorted(targets))}")
             # Raw SQL cannot say which parameter is file_path, so it is
             # confined to the persistence primitives even under the guard.
