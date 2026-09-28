@@ -216,6 +216,33 @@ class DetectionTests(unittest.TestCase):
         hits = _hits(sql)
         self.assertEqual([(h.outer, h.inner) for h in hits], [("parent p", "child")])
 
+    def test_schema_qualified_relations_detected(self):
+        for relation in ('"main"."parent" AS "p"', "main . parent p", "temp.parent AS p"):
+            sql = f"""
+            SELECT p.id,
+                (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n
+            FROM {relation}
+            """
+            with self.subTest(relation=relation):
+                hits = _hits(sql)
+                self.assertEqual([h.outer for h in hits], ["parent p"])
+
+    def test_double_quoted_keyword_table_names_detected(self):
+        for sql in (
+            """
+            SELECT p.id,
+                (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n
+            FROM "group" AS p
+            """,
+            """
+            SELECT "order".id,
+                (SELECT COUNT(*) FROM child c WHERE c.order_id = "order".id) AS n
+            FROM "order"
+            """,
+        ):
+            with self.subTest(sql=sql):
+                self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
     def test_indexed_by_is_not_an_alias(self):
         sql = """
         SELECT parent.id,
@@ -628,7 +655,21 @@ class RepoGateTests(unittest.TestCase):
         self.assertIn("SQL-CATALOG-003", out)
 
 
+def _in_git_work_tree(path: Path) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
 class LiveCorpusTests(unittest.TestCase):
+    @unittest.skipUnless(
+        _in_git_work_tree(_ROOT),
+        "live-corpus check needs a git checkout (reads HEAD as the base)",
+    )
     def test_current_tree_passes_against_head(self):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

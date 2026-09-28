@@ -101,7 +101,7 @@ _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 _IDENT_RE = re.compile(_IDENT)
 # FROM/JOIN <table> [AS] <alias>; the optional alias must not be a keyword.
 _RELATION_RE = re.compile(
-    rf"\b(?:from|join)\s+(?:(?:main|temp)\.)?({_IDENT})"
+    rf"\b(?:from|join)\s+(?:(?:main|temp)\s*\.\s*)?({_IDENT})"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
@@ -117,7 +117,7 @@ _COMMA_DERIVED_RE = re.compile(
 )
 # Later items of a comma-separated FROM list: ", <table> [AS] <alias>".
 _COMMA_RELATION_RE = re.compile(
-    rf",\s*(?:(?:main|temp)\.)?({_IDENT})(?:\s+(?:as\s+)?({_IDENT}))?",
+    rf",\s*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
 # Where a FROM list ends (the next clause or join).
@@ -196,10 +196,7 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
         if sql[i] in ("'", '"'):
             j = _quote_end(sql, i)
             if sql[i] == '"' and _IDENT_RE.fullmatch(sql[i + 1 : j]):
-                # A double-quoted identifier ("p", "p".id): keep the name and
-                # drop the quotes, so aliases and qualifiers stay visible.
-                _blank(out, i, i + 1)
-                _blank(out, j, j + 1)
+                _unquote_identifier(out, sql, i, j)
             else:
                 _blank(out, i + 1, j)
             i = j + 1
@@ -213,6 +210,18 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
         _blank(out, i, j)
         i = j
     return "".join(out)
+
+
+def _unquote_identifier(out: list[str], sql: str, i: int, j: int) -> None:
+    """Make the double-quoted identifier at ``sql[i:j + 1]`` structural.
+
+    ``"p"`` becomes `` p `` so it matches unquoted ``p.id`` references too. A
+    quoted keyword (``"group"``) can only ever be referenced quoted, so it
+    becomes ``_group_``: same length, and no longer mistaken for a keyword.
+    """
+    fill = "_" if sql[i + 1 : j].lower() in _KEYWORDS else " "
+    out[i] = fill
+    out[j] = fill
 
 
 def _quote_end(sql: str, i: int) -> int:
