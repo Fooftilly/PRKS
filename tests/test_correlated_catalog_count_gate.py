@@ -257,6 +257,21 @@ class DetectionTests(unittest.TestCase):
         """
         self.assertEqual([h.inner for h in _hits(correlated)], ["json_each"])
 
+    def test_nested_table_valued_function_arguments_keep_alias(self):
+        independent = """
+        SELECT j.id,
+            (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.ids')) AS j
+             WHERE j.value > 0) AS n
+        FROM parent j
+        """
+        self.assertEqual(_hits(independent), [])
+        correlated = """
+        SELECT j.value,
+            (SELECT COUNT(*) FROM child c WHERE c.parent_id = j.value) AS n
+        FROM json_each(json_extract(payload, '$.ids')) AS j
+        """
+        self.assertEqual([h.outer for h in _hits(correlated)], ["json_each j"])
+
     def test_bracket_and_backtick_identifiers_detected(self):
         for rel, ref in (("[parent] [p]", "[p].id"), ("`parent` AS `p`", "`p`.id")):
             sql = f"""
@@ -268,7 +283,11 @@ class DetectionTests(unittest.TestCase):
                 self.assertEqual([h.outer for h in _hits(sql)], ["parent p"])
 
     def test_grouped_outer_relation_detected(self):
-        for rel in ("(parent AS p)", "(parent p JOIN extra x ON x.parent_id = p.id)"):
+        for rel in (
+            "(parent AS p)",
+            "(parent p JOIN extra x ON x.parent_id = p.id)",
+            "extra x, (parent AS p)",
+        ):
             sql = f"""
             SELECT p.id,
                 (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n

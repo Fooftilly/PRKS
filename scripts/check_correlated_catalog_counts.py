@@ -120,7 +120,7 @@ _COMMA_DERIVED_RE = re.compile(
 )
 # Later items of a comma-separated FROM list: ", <table> [AS] <alias>".
 _COMMA_RELATION_RE = re.compile(
-    rf",\s*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s*\([^()]*\))?"
+    rf",\s*(?:\(\s*)*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s*\([^()]*\))?"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
@@ -394,7 +394,19 @@ def _scope_text(masked: str) -> str:
     chars = list(masked)
     for s, e in _nested_select_spans(masked):
         _blank(chars, s + 1, e)
+    # Function-call arguments (json_each(json_extract(...)), COUNT(*)) never
+    # declare relations; blank them so ``json_each(...) AS j`` reads as a
+    # single relation followed by its alias.
+    for m in _CALL_OPEN_RE.finditer(masked):
+        if m.group(1).lower() in _KEYWORDS:
+            continue
+        close = _match_paren(masked, m.end() - 1)
+        if close > 0:
+            _blank(chars, m.end(), close)
     return "".join(chars)
+
+
+_CALL_OPEN_RE = re.compile(rf"\b({_IDENT})\s*\(")
 
 
 _STATEMENT_START_RE = re.compile(r"\s*(?:with|select)\b", re.IGNORECASE)
