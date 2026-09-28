@@ -84,6 +84,26 @@ describe('Argument intents', () => {
     expect(window.createArgument).toHaveBeenLastCalledWith({ name: 'Local stance', kind: 'stance' })
   })
 
+  it('does not create a response after the pane leaves while the prompt is open', async () => {
+    let release = (_name: string | null) => {}
+    window.prksPromptTextDialog = () =>
+      new Promise((resolve) => {
+        release = resolve
+      })
+    window.createArgument = vi.fn(async () => ({ id: 'A9' }))
+    window.prksNavigate = vi.fn()
+    let current = true
+    window.prksTabContextOwnsEntityRoute = () => current
+    const pending = browserArgumentIntents(detailOwner({ isCurrent: () => current }), 4).createResponse(
+      argument(),
+    )
+    current = false
+    release('Reply')
+    await pending
+    expect(window.createArgument).not.toHaveBeenCalled()
+    expect(window.prksNavigate).not.toHaveBeenCalled()
+  })
+
   it('saves through the commit API and ignores a stale completion', async () => {
     const commit = vi.fn(async () => ({ id: 'A1' }))
     window.prksCommitArgumentEditorDraft = commit

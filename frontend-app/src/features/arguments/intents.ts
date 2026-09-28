@@ -242,6 +242,7 @@ export function browserArgumentIntents(
       if (typeof prompt !== 'function') return
       const name = await prompt({ title: 'New response argument', okLabel: 'Create' })
       if (name == null || !String(name).trim()) return
+      if (!ownsDetail(owner, generation, argument.id)) return
       let created: { id?: string } | null = null
       try {
         const create = window.createArgument
