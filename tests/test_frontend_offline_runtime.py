@@ -956,10 +956,17 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         """Phase 1 caches structured data only: no portrait or thumbnail bytes
         in IndexedDB, in the service worker, or requested by a cached mount."""
         people = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
-        # A cached mount suppresses both media sources.
-        self.assertIn("const offlineCached = !!(ctx && ctx.ui && ctx.ui.personOfflineCached);", people)
-        self.assertIn("offlineCached ? null : personProfileImageSrc(person)", people)
-        self.assertIn("suppressThumbnail: true", people)
+        detail = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
+        ))
+        # A cached mount suppresses both media sources. The flag is passed into
+        # the Vue detail, which skips the portrait URL and the thumbnail request.
+        self.assertIn("offlineCached: !!(ctx && ctx.ui && ctx.ui.personOfflineCached)", people)
+        self.assertIn("props.projection.offlineCached", detail)
+        self.assertIn("suppressThumbnail: props.projection.offlineCached", detail)
+        self.assertIn("/profile-image", detail)
+        portrait = detail[detail.index("const portraitSrc"): detail.index("function emptyFields")]
+        self.assertLess(portrait.index("offlineCached"), portrait.index("profile-image"))
         app = _read(os.path.join(_FRONTEND, "js", "app.js"))
         self.assertIn("ctx.ui.personOfflineCached = offlinePerson.source === 'cache';", app)
         # The card option exists and only removes the source, never the layout.

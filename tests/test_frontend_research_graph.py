@@ -139,17 +139,19 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertNotIn("Edit works", sidebar)
         self.assertIn("openPersonProfileEdit()", sidebar)
         self.assertIn("prks-person-view-graph", sidebar)
-        detail = people.split("function renderPersonDetails", 1)[1]
-        self.assertIn("person-profile__summary", detail)
-        self.assertIn("person-profile__about", detail)
-        self.assertIn("person-profile__works-head", detail)
-        self.assertIn("personRoleBlockHtml", detail)
-        self.assertIn("person-profile__role-block", people)
+        detail = people.split("function prksPersonViewRecord", 1)[1].split(
+            "function prksRefreshPersonDetailMain", 1
+        )[0]
+        vue = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "people", "PersonDetailRoute.vue"
+        ))
+        self.assertIn("person-profile__summary", vue)
+        self.assertIn("person-profile__about", vue)
+        self.assertIn("person-profile__works-head", vue)
         self.assertIn("prksUniquePersonWorks", detail)
         self.assertIn("prksPersonWorkRolesById", detail)
-        read_branch = detail.split("} else {", 1)[1].split("} else {", 1)[0]
-        self.assertIn("uniqueWorks", read_branch)
-        self.assertNotIn("acc[role].push(w)", read_branch)
+        self.assertIn("worksEditing ? (person.works || []) : prksUniquePersonWorks(person)", detail)
+        self.assertNotIn("acc[role].push(w)", detail)
         self.assertIn("prks-people-list__lifespan", people)
         self.assertNotIn("/api/persons/", people.split("function buildPersonListRowHtml", 1)[1].split("window.buildPersonListRowHtml", 1)[0])
         self.assertIn("LATEST_SCHEMA_VERSION = 17", _read(_SCHEMA))

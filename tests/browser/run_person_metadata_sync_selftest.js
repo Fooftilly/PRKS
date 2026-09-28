@@ -12,6 +12,14 @@ let checks = 0;
 const assert = new Proxy(function (...args) { checks += 1; return strict(...args); },
     { get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); } });
 const { createFakeIndexedDBFactory } = require('./lib/fake_indexeddb.js');
+const {
+    operationFingerprint,
+    loseOwnershipOnNextOperationsRead,
+    loseOwnershipOnNextOperationsDelete,
+    loseOwnershipOnNextOperationsPut,
+    loseOwnershipWhenWriteCommits,
+    runtimeForStore,
+} = require('./lib/ownership_flip.js');
 const { createPrksLocalStore } = require('../../frontend/js/local-store.js');
 require('../../frontend/js/sync-runtime.js');
 require('../../frontend/js/person-state.js');
@@ -437,6 +445,93 @@ async function onlyProfileFieldsAreWritable() {
     }
 }
 
+async function anOlderSessionCannotCommitAFieldDuringTheRead() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    runtimeForStore(store);
+    const base = baseAt();
+    const seeded = await store.savePersonMetadataFields('P-1', { about: 'Kept' }, base);
+    assert.equal(seeded.length, 1);
+    const before = operationFingerprint(await store.listOperations());
+    const session = { owned: true };
+    loseOwnershipOnNextOperationsRead(idb, session);
+    const written = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'Stolen' }, base, () => session.owned);
+    assert.deepEqual(written, []);
+    assert.equal(session.owned, false, 'ownership changed during the awaited read');
+    assert.equal(operationFingerprint(await store.listOperations()), before,
+        'the older session did not delete or replace the field operation');
+
+    const live = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'Stolen' }, base, () => true);
+    assert.equal(live.length, 1);
+    assert.equal(live[0].payload.value, 'Stolen', 'a session that still owns the edit still writes');
+    await settle();
+    const omitted = await store.savePersonMetadataFields(
+        'P-1', { birth_date: '1815-12-10' }, base);
+    assert.equal(omitted.length, 1, 'no predicate keeps the existing write');
+
+    const freshIdb = createFakeIndexedDBFactory();
+    const fresh = createPrksLocalStore({ indexedDB: freshIdb, uuid });
+    runtimeForStore(fresh);
+    await fresh.listOperations();
+    const insertSession = { owned: true };
+    loseOwnershipOnNextOperationsRead(freshIdb, insertSession);
+    const inserted = await globalThis.prksSavePersonFieldsDurably(
+        'P-2', { about: 'New' }, base, () => insertSession.owned);
+    assert.deepEqual(inserted, []);
+    assert.equal((await fresh.listOperations()).length, 0,
+        'the older session did not insert a field operation');
+}
+
+async function anOlderSessionCannotCommitAHalfAppliedFieldReplacement() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    runtimeForStore(store);
+    const base = baseAt();
+    const seeded = await store.savePersonMetadataFields('P-1', { about: 'Old' }, base);
+    assert.equal(seeded[0].payload.value, 'Old');
+    const before = operationFingerprint(await store.listOperations());
+    const duringDelete = { owned: true };
+    loseOwnershipOnNextOperationsDelete(idb, duringDelete);
+    const deleted = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'New' }, base, () => duringDelete.owned);
+    assert.deepEqual(deleted, []);
+    assert.equal(duringDelete.owned, false, 'ownership changed during the delete');
+    const afterDelete = await store.listOperations();
+    assert.equal(operationFingerprint(afterDelete), before,
+        'aborting during the delete leaves the queued field');
+    assert.equal(afterDelete.some(r => r.payload && r.payload.value === 'New'), false);
+    assert.equal(afterDelete.some(r => r.payload && r.payload.value === 'Old'), true);
+
+    const duringInsert = { owned: true };
+    loseOwnershipOnNextOperationsPut(idb, duringInsert);
+    const inserted = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'New' }, base, () => duringInsert.owned);
+    assert.deepEqual(inserted, []);
+    assert.equal(duringInsert.owned, false, 'ownership changed during the insert');
+    const afterInsert = await store.listOperations();
+    assert.equal(operationFingerprint(afterInsert), before,
+        'aborting during the insert leaves the queued field');
+    assert.equal(afterInsert.some(r => r.payload && r.payload.value === 'New'), false);
+}
+
+async function aCommittedFieldWriteStillNotifiesAfterTheEditorMovesOn() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const runtime = runtimeForStore(store);
+    await store.listOperations();
+    const session = { owned: true };
+    loseOwnershipWhenWriteCommits(idb, session);
+    const written = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'New' }, baseAt(), () => session.owned);
+    assert.equal(session.owned, false, 'ownership ended as the commit was delivered');
+    assert.equal(written.length, 1);
+    assert.equal(written[0].payload.value, 'New');
+    assert.equal((await store.listOperations()).some(r => r.payload && r.payload.value === 'New'), true);
+    assert.ok(runtime.notifications() >= 1, 'a committed field still notifies sync');
+}
+
 async function main() {
     await fieldsAreIndependent();
     await repeatedEditsCoalesce();
@@ -451,6 +546,9 @@ async function main() {
     await revertingAFieldRemovesTheIntent();
     await oneBusyFieldNeverRefusesTheForm();
     await aPendingCreationIsTheBaseForItsOwnEdits();
+    await anOlderSessionCannotCommitAFieldDuringTheRead();
+    await anOlderSessionCannotCommitAHalfAppliedFieldReplacement();
+    await aCommittedFieldWriteStillNotifiesAfterTheEditorMovesOn();
     console.log('All ' + checks + ' person profile checks passed');
 }
 

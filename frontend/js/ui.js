@@ -723,6 +723,15 @@ function openModal(id) {
         // modal and re-capturing its baseline. `after` runs exactly once here.
         populateUploadComboboxes().then(after, after);
     } else if (id === 'person-modal') {
+        if (window.__prksPersonIndexCreateArmed) {
+            window.__prksPersonIndexCreateArmed = false;
+        } else {
+            if (typeof window.prksClearPersonIndexCreateOrigin === 'function') {
+                window.prksClearPersonIndexCreateOrigin();
+            } else {
+                window.__prksPersonIndexCreateOrigin = null;
+            }
+        }
         resetPersonCreateForm();
     } else if (id === 'folder-modal' && typeof window.prksRefreshFolderModalValidation === 'function') {
         const parentSearch = document.getElementById('folder-parent-search');
@@ -1004,6 +1013,9 @@ function prksCloseOverlays() {
     document.body.classList.remove('prks-sidebar-open', 'prks-right-panel-open', 'prks-overlay-open');
     prksSetOverlayBackdropVisible(false);
     prksSyncMobileToggleButtons();
+    if (typeof window.prksInsetOpenPersonEditorsForDetailsOverlay === 'function') {
+        window.prksInsetOpenPersonEditorsForDetailsOverlay();
+    }
 }
 
 function prksOpenSidebarDrawer() {
@@ -1026,6 +1038,9 @@ function prksOpenRightPanelOverlay() {
         prksSetOverlayBackdropVisible(false);
     }
     prksSyncMobileToggleButtons();
+    if (typeof window.prksInsetOpenPersonEditorsForDetailsOverlay === 'function') {
+        window.setTimeout(window.prksInsetOpenPersonEditorsForDetailsOverlay, 240);
+    }
 }
 
 function prksToggleSidebarDrawer(forceOpen) {
@@ -3125,21 +3140,12 @@ function updatePanelContent(tabId) {
     } else if (_cp && (routeName === 'person' || isPersonDetailHash(focusedHash))) {
         if (tabId === 'details') {
             let topHtml;
-            const editing = !!(focusedCtx && focusedCtx.ui && focusedCtx.ui.personDetailEditing);
-            if (editing && typeof renderPersonProfileEditFormHtml === 'function') {
-                const draft = typeof prksEnsurePersonProfileDraft === 'function'
-                    ? prksEnsurePersonProfileDraft(focusedCtx, _cp)
-                    : null;
-                topHtml = renderPersonProfileEditFormHtml(_cp, draft);
-            } else if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
+            if (typeof renderPersonProfileDetailsSidebarHtml === 'function') {
                 topHtml = renderPersonProfileDetailsSidebarHtml(_cp);
             } else {
                 topHtml = '<p class="meta-row">Person panel unavailable.</p>';
             }
             panel.innerHTML = '<div class="right-panel-stack">' + topHtml + '</div>';
-            if (editing && typeof prksMountPersonProfileEditor === 'function') {
-                void prksMountPersonProfileEditor(focusedCtx, _cp);
-            }
         } else {
             panel.innerHTML = '<p class="panel-empty-message">Use the Details tab.</p>';
         }
@@ -3186,6 +3192,9 @@ function updatePanelContent(tabId) {
             if (typeof prksApplyPlaylistPanelOfflineState === 'function') {
                 prksApplyPlaylistPanelOfflineState(focusedCtx);
             }
+            if (typeof prksRefreshMountedPersonSurfaces === 'function') {
+                prksRefreshMountedPersonSurfaces();
+            }
             return;
         }
         const mode = inferRightPanelListMode(focusedHash);
@@ -3204,6 +3213,9 @@ function updatePanelContent(tabId) {
     prksBindAutosizeTextareas(panel);
     prksSyncRightPanelTabStrip(tabId || 'details');
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
+    if (typeof prksRefreshMountedPersonSurfaces === 'function') {
+        prksRefreshMountedPersonSurfaces();
+    }
 }
 
 function prksBindPlaylistSummaryEditBtn() {
@@ -3782,6 +3794,26 @@ function buildWorkLinkedPersonsHtml(work, options = {}) {
  * two mutation boundaries for one decision, and only one of them advances the
  * relationship revision other devices measure staleness against.
  */
+function prksWorkRoleUnlinkFileLabel(btn, workId, ownerCtx) {
+    const fromBtn = btn && (btn.getAttribute('data-work-title') || '').trim();
+    if (fromBtn) return fromBtn;
+    const work = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    if (work && String(work.id) === String(workId) && work.title) return String(work.title).trim();
+    const person = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('person') : null;
+    const rows = person && Array.isArray(person.works) ? person.works : [];
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row && String(row.id) === String(workId) && row.title) return String(row.title).trim();
+    }
+    return '';
+}
+
+function prksWorkRoleUnlinkMessage(fileLabel, roleType) {
+    const fileName = fileLabel || 'this file';
+    const role = roleType || 'this role';
+    return 'Remove the link to ' + fileName + ' (' + role + ')?';
+}
+
 async function prksRemoveWorkRoleLink(btn) {
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
@@ -3791,12 +3823,24 @@ async function prksRemoveWorkRoleLink(btn) {
         await prksAlertMessage('Missing link data.', 'Error');
         return;
     }
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ownerCtx && ownerCtx.generation;
+    const route = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
+    const routeName = route && route.name;
+    const entityType = routeName === 'person' ? 'person' : (routeName === 'work' ? 'work' : '');
+    const entityId = entityType === 'person' ? personId : workId;
+    const fileLabel = prksWorkRoleUnlinkFileLabel(btn, workId, ownerCtx);
     const confirmed = await prksConfirmDestructive({
         title: 'Remove link?',
-        message: 'Remove this person from the file for this role?',
+        message: prksWorkRoleUnlinkMessage(fileLabel, roleType),
         confirmLabel: 'Remove',
     });
     if (!confirmed) return;
+    if (
+        entityType &&
+        typeof prksTabContextOwnsEntityRoute === 'function' &&
+        !prksTabContextOwnsEntityRoute(ownerCtx, generation, entityType, entityId, routeName)
+    ) return;
     const result = await prksSaveWorkPersonRoleDurably(workId, personId, roleType, null, null);
     if (result.code === 'unavailable') {
         await prksAlertMessage(

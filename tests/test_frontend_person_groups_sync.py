@@ -142,10 +142,12 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
         membership = people[at: people.index('\n}', at)]
         self.assertNotIn('prksPersonMutationBlocked', membership)
         self.assertNotIn("prksPersonRuntimeState() !== 'online'", membership)
-        # Deleting a Person is the one Person mutation still server-bound, and
-        # keeps its guard deliberately.
-        at = people.index('async function deletePerson(')
-        self.assertIn('prksPersonMutationBlocked(', people[at: at + 3000])
+        # Profile delete is durable. Relationship editing still refuses offline.
+        delete_at = people.index('async function deletePerson(')
+        delete_body = people[delete_at: people.index('function prksTogglePersonWorksEdit(')]
+        self.assertNotIn('prksPersonMutationBlocked(', delete_body)
+        toggle_at = people.index('function prksTogglePersonWorksEdit(')
+        self.assertIn('prksPersonMutationBlocked(', people[toggle_at: toggle_at + 800])
         # Save re-renders from the intent just written; a refetch as the
         # completion condition would make Save fail offline for a reason the
         # user cannot act on.

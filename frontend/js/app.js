@@ -3030,6 +3030,49 @@ function prksPresentVuePlaylists(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue People index or Person detail surface in this pane.
+ * `detail` must already be the authoritative effective Person projection.
+ * Same-owner People refresh reuses the existing host.
+ */
+function prksPresentVuePeople(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const feature = detail.feature === 'person' ? 'person' : 'people';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        roleFilter: detail.roleFilter || '',
+        unknownRole: detail.unknownRole === true,
+        person: detail.person,
+        personId: detail.personId,
+        editing: detail.editing === true,
+        worksEditing: detail.worksEditing === true,
+        offlineCached: detail.offlineCached === true,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'person' && typeof window.prksVuePresentPersonDetail === 'function') {
+        window.prksVuePresentPersonDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'people' && typeof window.prksVuePresentPeopleIndex === 'function') {
+        window.prksVuePresentPeopleIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3279,6 +3322,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonGroup = ctx.getEntity && ctx.getEntity('personGroup');
     const previousPersonGroupId = previousPersonGroup ? String(previousPersonGroup.id) : '';
     const previousPersonGroupMembersEditing = !!(ctx.ui && ctx.ui.personGroupMembersEditing);
+    const previousPerson = ctx.getEntity && ctx.getEntity('person');
+    const previousPersonId = previousPerson ? String(previousPerson.id) : '';
+    const previousPersonEditing = !!(ctx.ui && ctx.ui.personDetailEditing);
+    const previousPersonWorksEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
+    const previousPersonDraft = ctx.ui && ctx.ui.personProfileDraft ? ctx.ui.personProfileDraft : null;
     /* Concepts→Concepts (index or detail) in the same mounted TabContext keeps
      * the Vue host mounted so local search/filter state survives an accepted
      * in-place refresh. Flag the owner before beginRoute: TabContext cleanups
@@ -3335,6 +3383,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (samePlaylistsWorkspace) {
         ctx.__prksRetainPlaylistsSurface = true;
     }
+    /* People→People in the same mounted TabContext keeps the Vue host so an
+     * in-place refresh does not drop search or an open profile draft. */
+    const samePeopleWorkspace = !!(
+        (route.name === 'people' || route.name === 'people-role' || route.name === 'person') &&
+        contentDiv.querySelector(
+            '[data-prks-people-index-view], [data-prks-person-detail-view]'
+        )
+    );
+    if (samePeopleWorkspace) {
+        ctx.__prksRetainPeopleSurface = true;
+    }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
@@ -3350,6 +3409,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
     if (samePlaylistsWorkspace) {
         ctx.__prksRetainPlaylistsSurface = false;
+    }
+    if (samePeopleWorkspace) {
+        ctx.__prksRetainPeopleSurface = false;
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3389,6 +3451,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         !samePositionsWorkspace &&
         !sameArgumentsWorkspace &&
         !samePlaylistsWorkspace &&
+        !samePeopleWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3402,7 +3465,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace && !samePeopleWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
@@ -3421,6 +3484,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissPlaylists === 'function') {
             window.prksVueDismissPlaylists(ctx);
         }
+        if (typeof window.prksVueDismissPeople === 'function') {
+            window.prksVueDismissPeople(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -3431,7 +3497,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
-    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace || samePlaylistsWorkspace) {
+    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace || samePlaylistsWorkspace || samePeopleWorkspace) {
         // Folder Library / Concepts / Positions / Arguments / Playlists in-place refresh: keep the Vue host; mark busy until paint.
         contentDiv.setAttribute('aria-busy', 'true');
     }
@@ -3680,13 +3746,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 const persons = prksResolveOfflinePeopleIndex(offlinePeople);
                 if (!persons) {
-                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv);
+                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv, ctx);
                     else prksOfflineRenderUnavailable(contentDiv, 'People not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'People not available offline' };
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'People not available offline',
+                        skipPageEnter: samePeopleWorkspace,
+                    };
                     break;
                 }
                 renderPeopleList(ctx, persons, contentDiv);
                 prksOfflinePrependBanner(contentDiv, offlinePeople);
+                titleOpts = { skipPageEnter: samePeopleWorkspace };
                 break;
             }
             case 'people-role': {
@@ -3698,18 +3770,35 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const rolePersons = prksResolveOfflinePeopleIndex(offlineRolePeople);
                 publishSidebar({ role: roleFilter || route.params.role || 'Unknown role' });
                 if (!roleFilter) {
-                    contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
+                    if (typeof prksPresentVuePeople === 'function') {
+                        prksPresentVuePeople(ctx, contentDiv, {
+                            feature: 'people',
+                            unknownRole: true,
+                            items: Array.isArray(rolePersons) ? rolePersons : [],
+                            roleFilter: route.params.role || '',
+                            generation: generation,
+                        });
+                    } else {
+                        contentDiv.innerHTML =
+                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">People</h2></div><p class="prks-inline-message">Unknown role filter.</p>';
+                    }
+                    titleOpts = { skipPageEnter: samePeopleWorkspace };
                     break;
                 }
                 if (!rolePersons) {
-                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv);
+                    if (typeof renderPeopleListUnavailable === 'function') renderPeopleListUnavailable(contentDiv, ctx);
                     else prksOfflineRenderUnavailable(contentDiv, 'People not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'People not available offline' };
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'People not available offline',
+                        skipPageEnter: samePeopleWorkspace,
+                    };
                     break;
                 }
                 renderPeopleList(ctx, rolePersons, contentDiv, { roleFilter });
                 prksOfflinePrependBanner(contentDiv, offlineRolePeople);
+                titleOpts = { skipPageEnter: samePeopleWorkspace };
                 break;
             }
             case 'people-groups': {
@@ -4734,9 +4823,27 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     resolvedPerson.unavailable = !pendingPerson;
                 }
                 if (resolvedPerson.unavailable) {
-                    prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Person not available offline' };
                     ctx.setEntity('person', null);
+                    ctx.ui.personDetailEditing = false;
+                    ctx.ui.personProfileDraft = null;
+                    ctx.ui.personWorksEditing = false;
+                    if (typeof prksPresentVuePeople === 'function') {
+                        prksPresentVuePeople(ctx, contentDiv, {
+                            feature: 'person',
+                            availability: 'unavailable',
+                            person: null,
+                            personId: personId,
+                            generation: generation,
+                        });
+                    } else {
+                        prksOfflineRenderUnavailable(contentDiv, 'Person not available offline');
+                    }
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Person not available offline',
+                        skipPageEnter: samePeopleWorkspace,
+                    };
                     break;
                 }
                 /* The profile the user is looking at is the acknowledged one
@@ -4762,11 +4869,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         : { personDisplayName: 'Person not found', linkedWorks: 0 }
                 );
                 ctx.setEntity('person', person);
-                // A freshly mounted route always starts read-only, even if a
-                // previous mount left an edit session behind.
-                ctx.ui.personDetailEditing = false;
-                ctx.ui.personProfileDraft = null;
-                ctx.ui.personWorksEditing = false;
+                const samePersonRefresh = !!(
+                    samePeopleWorkspace &&
+                    previousPersonId &&
+                    String(personId) === previousPersonId
+                );
+                if (typeof prksRetainPersonEditAcrossRefresh === 'function') {
+                    prksRetainPersonEditAcrossRefresh(
+                        ctx,
+                        samePersonRefresh && previousPersonEditing,
+                        previousPersonDraft,
+                        samePersonRefresh && previousPersonWorksEditing
+                    );
+                }
                 // A page served from cache must not ask PRKS for portrait or
                 // Work-thumbnail bytes it cannot get; render the no-media form.
                 ctx.ui.personOfflineCached = offlinePerson.source === 'cache';
@@ -4779,9 +4894,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         typeof personDisplayName === 'function'
                             ? personDisplayName(person)
                             : `${person.first_name || ''} ${person.last_name || ''}`.trim();
-                    titleOpts = { entityTitle: String(nm || '').trim() || 'Person' };
+                    titleOpts = {
+                        entityTitle: String(nm || '').trim() || 'Person',
+                        skipPageEnter: samePeopleWorkspace,
+                    };
                 } else {
-                    titleOpts = { notFound: true, notFoundTitle: 'Person not found' };
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Person not found',
+                        skipPageEnter: samePeopleWorkspace,
+                    };
                 }
                 break;
             }
@@ -4816,6 +4938,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         }
         if (samePlaylistsWorkspace && typeof window.prksVueDismissPlaylists === 'function') {
             window.prksVueDismissPlaylists(ctx);
+        }
+        if (samePeopleWorkspace && typeof window.prksVueDismissPeople === 'function') {
+            window.prksVueDismissPeople(ctx);
         }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);
@@ -5761,9 +5886,16 @@ function initForms() {
             closeModals();
             /* Navigate to the Person that now exists. No reload: a reload
              * would throw away every other pending change on the page and, at
-             * this point, there is nothing to fetch -- the record is local. */
+             * this point, there is nothing to fetch -- the record is local.
+             * A People-index origin navigates that pane. Ribbon and command
+             * palette opens do not record one, so they keep the unscoped path. */
+            const createTabId = typeof window.prksTakePersonIndexCreateTabId === 'function'
+                ? window.prksTakePersonIndexCreateTabId()
+                : '';
             if (created && created.entity_id && typeof prksNavigate === 'function') {
-                void prksNavigate('#/people/' + encodeURIComponent(created.entity_id));
+                const hash = '#/people/' + encodeURIComponent(created.entity_id);
+                if (createTabId) void prksNavigate(hash, { tabId: createTabId });
+                else void prksNavigate(hash);
             }
         };
     }
