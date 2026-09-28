@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -167,6 +167,7 @@ class _Scope:
         "summary",
         "current",
         "declared",
+        "rebound_elsewhere",
         "class_registry",
     )
 
@@ -180,6 +181,9 @@ class _Scope:
         self.current: dict[str, set[_Binding]] = {}
         # ``global``/``nonlocal`` name -> the scope that owns its bindings.
         self.declared: dict[str, _Scope] = {}
+        # Names a nested scope rebinds via ``global``/``nonlocal``; the value
+        # may change whenever that scope runs, so uses also see ``summary``.
+        self.rebound_elsewhere: set[str] = set()
         # Only used on the module scope: ClassDef node id -> its _ClassInfo.
         self.class_registry: dict[int, _ClassInfo] = {}
 
@@ -191,6 +195,8 @@ class _Scope:
 def _resolve(scopes: list[_Scope], name: str) -> set[_Binding]:
     innermost = scopes[-1]
     if name in innermost.current:
+        if name in innermost.rebound_elsewhere:
+            return innermost.current[name] | innermost.summary.get(name, set())
         return innermost.current[name]
     if name in innermost.summary:
         return innermost.summary[name]
@@ -485,13 +491,44 @@ def _is_staticmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     )
 
 
+def _pattern_pairs(
+    pattern: ast.pattern, subject: set[_Binding], *, whole: bool = True
+) -> _Pairs:
+    """Match-pattern captures. A capture of the whole subject (``case a``,
+    ``case X() as a``, alternatives of those) takes the subject's bindings;
+    captures of sub-parts are ordinary locals."""
+    if isinstance(pattern, (ast.MatchAs, ast.MatchOr)):
+        return _alias_pattern_pairs(pattern, subject, whole=whole)
+    rest = pattern.name if isinstance(pattern, ast.MatchStar) else getattr(pattern, "rest", None)
+    pairs: _Pairs = [(rest, {_OTHER})] if rest else []
+    for child in ast.iter_child_nodes(pattern):
+        if isinstance(child, ast.pattern):
+            pairs.extend(_pattern_pairs(child, subject, whole=False))
+    return pairs
+
+
+def _alias_pattern_pairs(
+    pattern: ast.MatchAs | ast.MatchOr, subject: set[_Binding], *, whole: bool
+) -> _Pairs:
+    """``case a`` / ``case P as a`` / ``case P | Q``: these match the same value."""
+    if isinstance(pattern, ast.MatchOr):
+        alternatives = pattern.patterns
+        pairs: _Pairs = []
+    else:
+        alternatives = [pattern.pattern] if pattern.pattern is not None else []
+        pairs = [(pattern.name, set(subject) if whole else {_OTHER})] if pattern.name else []
+    for alternative in alternatives:
+        pairs.extend(_pattern_pairs(alternative, subject, whole=whole))
+    return pairs
+
+
 def _function_params(args: ast.arguments) -> list[ast.arg]:
     params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
     params.extend(a for a in (args.vararg, args.kwarg) if a is not None)
     return params
 
 
-def _iter_scope_nodes(body: list[ast.stmt]) -> Iterable[ast.AST]:
+def _iter_scope_nodes(body: Sequence[ast.AST]) -> Iterable[ast.AST]:
     """Nodes evaluated in this scope, in source order, excluding nested scope bodies."""
     stack: list[ast.AST] = list(reversed(body))
     while stack:
@@ -582,6 +619,8 @@ class _InvariantVisitor(ast.NodeVisitor):
                 for name, bindings in _binding_pairs(node, self.scopes):
                     owner = scope.declared.get(name, scope)
                     owner.summary.setdefault(name, set()).update(bindings)
+                    if owner is not scope:
+                        owner.rebound_elsewhere.add(name)
         for name, bindings in scope.summary.items():
             self._record_archive_attr(name, bindings)
 
@@ -610,6 +649,7 @@ class _InvariantVisitor(ast.NodeVisitor):
             if owner is not scope:
                 # ``global``/``nonlocal``: the binding belongs to the owner.
                 owner.summary.setdefault(name, set()).update(bindings)
+                owner.rebound_elsewhere.add(name)
             elif may:
                 scope.current.setdefault(name, set()).update(bindings)
             else:
@@ -628,15 +668,25 @@ class _InvariantVisitor(ast.NodeVisitor):
             self.visit(stmt)
         return scope.current
 
-    def _loop_entry_state(self, body: list[ast.stmt]) -> _State:
-        """State at the top of a loop body, including later-iteration bindings."""
+    def _with_body_bindings(self, state: _State, nodes: Sequence[ast.AST]) -> _State:
+        """``state`` plus every binding ``nodes`` can make anywhere.
+
+        Used where control can arrive from an arbitrary point in ``nodes``: the
+        top of a loop (later iterations) and an exception handler (any
+        statement of the ``try`` body may raise). ``summary`` is a safe
+        over-approximation of what each such name may hold.
+        """
         scope = self.scopes[-1]
-        state = _copy_state(scope.current)
-        for node in _iter_scope_nodes(body):
+        state = _copy_state(state)
+        for node in _iter_scope_nodes(nodes):
             for name, _ in _binding_pairs(node, self.scopes):
                 if name in scope.summary:
                     state.setdefault(name, set()).update(scope.summary[name])
         return state
+
+    def _loop_entry_state(self, nodes: Sequence[ast.AST]) -> _State:
+        """State at the top of a loop, including later-iteration bindings."""
+        return self._with_body_bindings(self.scopes[-1].current, nodes)
 
     def _finish_loop(self, entry: _State, body_end: _State, orelse: list[ast.stmt]) -> None:
         after = _merge_states(entry, body_end)
@@ -795,11 +845,14 @@ class _InvariantVisitor(ast.NodeVisitor):
         self._visit_loop(node)
 
     def visit_While(self, node: ast.While) -> None:
-        entry = self._loop_entry_state(node.body)
+        # The test runs before every iteration and before leaving the loop, so
+        # its (walrus) bindings reach both the body and the code after it.
+        entry = self._loop_entry_state([node.test, *node.body])
         self.scopes[-1].current = _copy_state(entry)
         self.visit(node.test)
-        body_end = self._run_branch(entry, node.body)
-        self._finish_loop(entry, body_end, node.orelse)
+        after_test = self.scopes[-1].current
+        body_end = self._run_branch(after_test, node.body)
+        self._finish_loop(after_test, body_end, node.orelse)
 
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
@@ -811,8 +864,8 @@ class _InvariantVisitor(ast.NodeVisitor):
     def visit_Try(self, node: ast.Try) -> None:
         before = _copy_state(self.scopes[-1].current)
         body_end = self._run_branch(before, node.body)
-        # A handler can start anywhere in the body.
-        handler_start = _merge_states(before, body_end)
+        # A handler can start after any statement of the body.
+        handler_start = _merge_states(body_end, self._with_body_bindings(before, node.body))
         handler_ends = [self._run_branch(handler_start, [h]) for h in node.handlers]
         orelse_end = self._run_branch(body_end, node.orelse)
         self.scopes[-1].current = _merge_states(orelse_end, *handler_ends)
@@ -830,8 +883,17 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_Match(self, node: ast.Match) -> None:
         self.visit(node.subject)
+        subject = _value_bindings(node.subject, self.scopes)
         before = _copy_state(self.scopes[-1].current)
-        case_ends = [self._run_branch(before, [case]) for case in node.cases]
+        case_ends = []
+        for case in node.cases:
+            self.scopes[-1].current = _copy_state(before)
+            self._bind(_pattern_pairs(case.pattern, subject))
+            if case.guard is not None:
+                self.visit(case.guard)
+            for stmt in case.body:
+                self.visit(stmt)
+            case_ends.append(self.scopes[-1].current)
         # No case may match, so the state before the match also flows on.
         self.scopes[-1].current = _merge_states(before, *case_ends)
 

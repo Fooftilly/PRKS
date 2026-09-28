@@ -529,6 +529,64 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    pass\n"
                 "SafeZip.extractall(archive, dest)\n"
             ),
+            # A handler can start after any statement of the try body.
+            "try_handler_sees_mid_body_binding": (
+                "import zipfile\n"
+                "archive = None\n"
+                "try:\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    validate(archive)\n"
+                "    archive = None\n"
+                "except ValueError:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            # Match captures of the whole subject.
+            "match_capture_pattern": (
+                "import zipfile\n"
+                "match zipfile.ZipFile(path):\n"
+                "    case archive:\n"
+                "        archive.extractall(dest)\n"
+            ),
+            "match_as_pattern": (
+                "import zipfile\n"
+                "match zipfile.ZipFile(path):\n"
+                "    case zipfile.ZipFile() as archive:\n"
+                "        archive.extractall(dest)\n"
+            ),
+            # The while test runs before the body and before leaving the loop.
+            "while_test_walrus_in_body": (
+                "import zipfile\n"
+                "archive = None\n"
+                "while (archive := zipfile.ZipFile(next_path())):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "while_test_walrus_after_loop": (
+                "import zipfile\n"
+                "archive = load_bundle()\n"
+                "while (archive := zipfile.ZipFile(next_path())):\n"
+                "    pass\n"
+                "archive.extractall(dest)\n"
+            ),
+            # A nested global/nonlocal rebinding reaches the owner's own uses.
+            "global_rebinding_seen_by_owner_scope": (
+                "import zipfile\n"
+                "archive = load_bundle()\n"
+                "def open_archive(path):\n"
+                "    global archive\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "open_archive(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "nonlocal_rebinding_seen_by_owner_scope": (
+                "import zipfile\n"
+                "def restore(path, dest):\n"
+                "    archive = load_bundle()\n"
+                "    def open_archive():\n"
+                "        nonlocal archive\n"
+                "        archive = zipfile.ZipFile(path)\n"
+                "    open_archive()\n"
+                "    archive.extractall(dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -638,6 +696,21 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    def run(self, dest):\n"
                 "        self.archive = load_bundle()\n"
                 "        self.archive.extractall(dest)\n"
+            ),
+            # A capture of part of the subject, or of an unrelated subject,
+            # is an ordinary local.
+            "match_subpart_capture": (
+                "import zipfile\n"
+                "match zipfile.ZipFile(path):\n"
+                "    case Wrapper(inner=part):\n"
+                "        part.extractall(dest)\n"
+            ),
+            "match_capture_shadows_archive": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "match load_bundle():\n"
+                "    case archive:\n"
+                "        archive.extractall(dest)\n"
             ),
             # Only zipfile subclasses make ``self`` an archive.
             "unrelated_class_self_call": (
