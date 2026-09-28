@@ -119,15 +119,25 @@ _OTHER: _Binding = ("other",)
 _UNSET: _Binding = ("unset",)
 
 
-class _ClassInfo:
-    """One same-module class: is it a zipfile archive subclass, and which of
-    its attributes are proven zipfile archives."""
+class _FuncInfo:
+    """One same-module function or method: does it return a zipfile archive?"""
 
-    __slots__ = ("archive_attrs", "bases", "zip_base")
+    __slots__ = ("returns_archive",)
+
+    def __init__(self) -> None:
+        self.returns_archive = False
+
+
+class _ClassInfo:
+    """One same-module class: is it a zipfile archive subclass, which of its
+    attributes are proven zipfile archives, and what are its methods."""
+
+    __slots__ = ("archive_attrs", "bases", "zip_base", "methods")
 
     def __init__(self) -> None:
         self.archive_attrs: set[str] = set()
         self.bases: list[_ClassInfo] = []
+        self.methods: dict[str, _FuncInfo] = {}
         # A base expression resolves to zipfile.ZipFile / PyZipFile directly.
         self.zip_base = False
 
@@ -144,6 +154,12 @@ class _ClassInfo:
 
     def has_archive_attr(self, attr: str) -> bool:
         return any(attr in info.archive_attrs for info in self._lineage())
+
+    def method_returns_archive(self, name: str) -> bool:
+        for info in self._lineage():
+            if name in info.methods:
+                return info.methods[name].returns_archive
+        return False
 
     def is_archive_class(self) -> bool:
         return any(info.zip_base for info in self._lineage())
@@ -172,6 +188,8 @@ class _Scope:
         "declared",
         "rebound_elsewhere",
         "class_registry",
+        "function_registry",
+        "function_info",
     )
 
     def __init__(
@@ -187,8 +205,12 @@ class _Scope:
         # Names a nested scope rebinds via ``global``/``nonlocal``; the value
         # may change whenever that scope runs, so uses also see ``summary``.
         self.rebound_elsewhere: set[str] = set()
-        # Only used on the module scope: ClassDef node id -> its _ClassInfo.
+        # Only used on the module scope: def/class node id -> its info. They
+        # are shared across the analysis passes of one module.
         self.class_registry: dict[int, _ClassInfo] = {}
+        self.function_registry: dict[int, _FuncInfo] = {}
+        # Set for function bodies: the function whose ``return``s are seen.
+        self.function_info: _FuncInfo | None = None
 
     @property
     def is_class(self) -> bool:
@@ -299,13 +321,28 @@ def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
 
 def _branch_values(node: ast.expr) -> list[ast.expr] | None:
     """Values a conditional / boolean / assignment expression may evaluate to."""
-    if isinstance(node, ast.NamedExpr):
+    if isinstance(node, (ast.NamedExpr, ast.Await)):
         return [node.value]
     if isinstance(node, ast.IfExp):
         return [node.body, node.orelse]
     if isinstance(node, ast.BoolOp):
         return list(node.values)
     return None
+
+
+def _call_returns_archive(node: ast.Call, scopes: list[_Scope]) -> bool:
+    """A call to a same-module function or method proven to return an archive."""
+    fn = node.func
+    if isinstance(fn, ast.Name):
+        return any(
+            b[0] == "function" and b[1].returns_archive for b in _resolve(scopes, fn.id)
+        )
+    if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+        return any(
+            info.method_returns_archive(fn.attr)
+            for info in _class_infos(_resolve(scopes, fn.value.id))
+        )
+    return False
 
 
 def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
@@ -319,7 +356,9 @@ def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
         )
     if isinstance(node, ast.Attribute):
         return _is_archive_attribute(node, scopes)
-    return _is_zip_constructor(node, scopes)
+    if isinstance(node, ast.Call):
+        return _is_zip_constructor(node, scopes) or _call_returns_archive(node, scopes)
+    return False
 
 
 def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
@@ -461,7 +500,10 @@ def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
 
 
 def _def_pairs(node: ast.FunctionDef | ast.AsyncFunctionDef, scopes: list[_Scope]) -> _Pairs:
-    return [(node.name, {_OTHER})]
+    info = scopes[0].function_registry.setdefault(id(node), _FuncInfo())
+    if _annotation_mentions_zip(node.returns, scopes):
+        info.returns_archive = True
+    return [(node.name, {("function", info)})]
 
 
 def _class_def_pairs(node: ast.ClassDef, scopes: list[_Scope]) -> _Pairs:
@@ -616,8 +658,15 @@ def _join(flows: list[tuple[_State, bool]]) -> _State:
 class _InvariantVisitor(ast.NodeVisitor):
     """Walk the tree, resolving os/shutil/zipfile bindings in the current lexical scope."""
 
-    def __init__(self, relpath: str) -> None:
+    def __init__(
+        self,
+        relpath: str,
+        class_registry: dict[int, _ClassInfo] | None = None,
+        function_registry: dict[int, _FuncInfo] | None = None,
+    ) -> None:
         self.relpath = relpath
+        self._class_registry = {} if class_registry is None else class_registry
+        self._function_registry = {} if function_registry is None else function_registry
         self.scopes: list[_Scope] = []
         self.findings: list[Finding] = []
 
@@ -649,8 +698,13 @@ class _InvariantVisitor(ast.NodeVisitor):
         class_info: _ClassInfo | None = None,
         params: _Pairs | None = None,
         is_comprehension: bool = False,
+        function_info: _FuncInfo | None = None,
     ) -> None:
         scope = _Scope(class_info=class_info, is_comprehension=is_comprehension)
+        scope.function_info = function_info
+        if not self.scopes:
+            scope.class_registry = self._class_registry
+            scope.function_registry = self._function_registry
         self.scopes.append(scope)
         for name, bindings in params or ():
             scope.summary[name] = set(bindings)
@@ -763,7 +817,8 @@ class _InvariantVisitor(ast.NodeVisitor):
             self.visit(type_param)
         param_pairs = self._param_pairs(node)
         self._bind_node(node)
-        self._push(node.body, params=param_pairs)
+        info = self.scopes[0].function_registry.setdefault(id(node), _FuncInfo())
+        self._push(node.body, params=param_pairs, function_info=info)
         for stmt in node.body:
             self.visit(stmt)
         self._pop()
@@ -799,16 +854,29 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.visit(node.body)
         self._pop()
 
+    def _describe_class(self, node: ast.ClassDef) -> _ClassInfo:
+        """Refresh the class's zipfile base, same-module bases and methods."""
+        info = self.scopes[0].class_registry.setdefault(id(node), _ClassInfo())
+        info.zip_base = any(_is_zip_class_expr(base, self.scopes) for base in node.bases)
+        info.bases = [
+            base_info
+            for base in node.bases
+            if isinstance(base, ast.Name)
+            for base_info in _class_infos(_resolve(self.scopes, base.id))
+        ]
+        info.methods = {
+            stmt.name: self.scopes[0].function_registry.setdefault(id(stmt), _FuncInfo())
+            for stmt in node.body
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        return info
+
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for child in [*node.decorator_list, *node.bases, *node.keywords]:
             self.visit(child)
         for type_param in getattr(node, "type_params", ()):
             self.visit(type_param)
-        info = self.scopes[0].class_registry.setdefault(id(node), _ClassInfo())
-        info.zip_base = any(_is_zip_class_expr(base, self.scopes) for base in node.bases)
-        for base in node.bases:
-            if isinstance(base, ast.Name):
-                info.bases.extend(_class_infos(_resolve(self.scopes, base.id)))
+        info = self._describe_class(node)
         self._push(node.body, class_info=info)
         # Pre-collect every method body first so ``self.x = ZipFile(...)`` in
         # ``__init__`` classifies ``self.x`` in methods defined before it.
@@ -841,6 +909,16 @@ class _InvariantVisitor(ast.NodeVisitor):
     visit_SetComp = _visit_comprehension
     visit_GeneratorExp = _visit_comprehension
     visit_DictComp = _visit_comprehension
+
+    def visit_Return(self, node: ast.Return) -> None:
+        self.generic_visit(node)
+        function_info = self.scopes[-1].function_info
+        if (
+            function_info is not None
+            and node.value is not None
+            and _is_zip_archive_expr(node.value, self.scopes)
+        ):
+            function_info.returns_archive = True
 
     def visit_Import(self, node: ast.Import) -> None:
         self._bind_node(node)
@@ -1071,9 +1149,35 @@ def check_source(source: str, relpath: str) -> list[Finding]:
             )
         ]
 
-    visitor = _InvariantVisitor(relpath)
-    visitor.visit(tree)
+    # Facts about same-module defs (helpers returning archives, archive
+    # attributes, archive subclasses) can be used before the def is reached,
+    # so re-run the walk until they stop changing; they only ever grow.
+    class_registry: dict[int, _ClassInfo] = {}
+    function_registry: dict[int, _FuncInfo] = {}
+    previous: object = None
+    for _ in range(_MAX_ANALYSIS_PASSES):
+        visitor = _InvariantVisitor(relpath, class_registry, function_registry)
+        visitor.visit(tree)
+        snapshot = _registry_snapshot(class_registry, function_registry)
+        if snapshot == previous:
+            break
+        previous = snapshot
     return visitor.findings
+
+
+_MAX_ANALYSIS_PASSES = 10
+
+
+def _registry_snapshot(
+    class_registry: dict[int, _ClassInfo], function_registry: dict[int, _FuncInfo]
+) -> object:
+    return (
+        frozenset((key, info.returns_archive) for key, info in function_registry.items()),
+        frozenset(
+            (key, frozenset(info.archive_attrs), info.zip_base)
+            for key, info in class_registry.items()
+        ),
+    )
 
 
 def iter_production_python(root: Path) -> Iterable[Path]:

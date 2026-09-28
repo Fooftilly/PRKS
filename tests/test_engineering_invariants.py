@@ -604,6 +604,79 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "        case archive:\n"
                 "            pass\n"
             ),
+            # Same-module helpers that return a zipfile archive.
+            "helper_returned_archive": (
+                "import zipfile\n"
+                "def open_backup(path):\n"
+                "    return zipfile.ZipFile(path)\n"
+                "archive = open_backup(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "helper_defined_after_use": (
+                "import zipfile\n"
+                "def restore(path, dest):\n"
+                "    open_backup(path).extractall(dest)\n"
+                "def open_backup(path):\n"
+                "    return zipfile.ZipFile(path)\n"
+            ),
+            "helper_returns_validated_local": (
+                "import zipfile\n"
+                "def open_backup(path):\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    validate(archive)\n"
+                "    return archive\n"
+                "open_backup(path).extractall(dest)\n"
+            ),
+            "helper_return_annotation": (
+                "import zipfile\n"
+                "def open_backup(path) -> zipfile.ZipFile:\n"
+                "    return make_archive(path)\n"
+                "open_backup(path).extractall(dest)\n"
+            ),
+            "helper_chain": (
+                "import zipfile\n"
+                "def outer(path):\n"
+                "    return middle(path)\n"
+                "def middle(path):\n"
+                "    return inner(path)\n"
+                "def inner(path):\n"
+                "    return zipfile.ZipFile(path)\n"
+                "outer(path).extractall(dest)\n"
+            ),
+            "helper_on_some_path": (
+                "import zipfile\n"
+                "def open_backup(path, is_zip):\n"
+                "    if is_zip:\n"
+                "        return zipfile.ZipFile(path)\n"
+                "    return load_bundle(path)\n"
+                "open_backup(path, is_zip).extractall(dest)\n"
+            ),
+            "method_helper": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def run(self, dest):\n"
+                "        self._open().extractall(dest)\n"
+                "    def _open(self):\n"
+                "        return zipfile.ZipFile(self.path)\n"
+            ),
+            "base_class_method_helper": (
+                "import zipfile\n"
+                "class Base:\n"
+                "    def _open(self):\n"
+                "        return zipfile.ZipFile(self.path)\n"
+                "class Restore(Base):\n"
+                "    def run(self, dest):\n"
+                "        with self._open() as archive:\n"
+                "            archive.extractall(dest)\n"
+            ),
+            "async_helper": (
+                "import zipfile\n"
+                "async def open_backup(path):\n"
+                "    return zipfile.ZipFile(path)\n"
+                "async def restore(path, dest):\n"
+                "    archive = await open_backup(path)\n"
+                "    archive.extractall(dest)\n"
+            ),
             "annotated_class_alias": (
                 "import zipfile\n"
                 "Z: type[zipfile.ZipFile] = zipfile.ZipFile\n"
@@ -827,6 +900,27 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "        else:\n"
                 "            self.archive = load_other()\n"
                 "        self.archive.extractall(dest)\n"
+            ),
+            # Helpers are classified by what they return.
+            "helper_returns_unrelated_value": (
+                "import zipfile\n"
+                "def open_bundle(path):\n"
+                "    return load_bundle(path)\n"
+                "open_bundle(path).extractall(dest)\n"
+            ),
+            "helper_reads_archive_returns_other": (
+                "import zipfile\n"
+                "def load(path):\n"
+                "    with zipfile.ZipFile(path) as archive:\n"
+                "        return Bundle(archive.read('manifest.json'))\n"
+                "load(path).extractall(dest)\n"
+            ),
+            "helper_name_shadowed_by_parameter": (
+                "import zipfile\n"
+                "def open_backup(path):\n"
+                "    return zipfile.ZipFile(path)\n"
+                "def restore(open_backup, path, dest):\n"
+                "    open_backup(path).extractall(dest)\n"
             ),
             # Only zipfile subclasses make ``self`` an archive.
             "unrelated_class_self_call": (
