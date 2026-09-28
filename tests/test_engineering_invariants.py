@@ -677,6 +677,21 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    archive = await open_backup(path)\n"
                 "    archive.extractall(dest)\n"
             ),
+            # A parameter default runs whenever the caller omits it.
+            "function_parameter_default": (
+                "import zipfile\n"
+                "def restore(dest, archive=zipfile.ZipFile('backup.zip')):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "keyword_only_parameter_default": (
+                "import zipfile\n"
+                "def restore(dest, *, archive=zipfile.ZipFile('backup.zip')):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "lambda_parameter_default": (
+                "import zipfile\n"
+                "restore = lambda archive=zipfile.ZipFile(path): archive.extractall(dest)\n"
+            ),
             "annotated_class_alias": (
                 "import zipfile\n"
                 "Z: type[zipfile.ZipFile] = zipfile.ZipFile\n"
@@ -900,6 +915,11 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "        else:\n"
                 "            self.archive = load_other()\n"
                 "        self.archive.extractall(dest)\n"
+            ),
+            "parameter_default_none": (
+                "import zipfile\n"
+                "def restore(dest, bundle=None):\n"
+                "    bundle.extractall(dest)\n"
             ),
             # Helpers are classified by what they return.
             "helper_returns_unrelated_value": (

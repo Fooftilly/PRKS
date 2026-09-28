@@ -591,6 +591,36 @@ def _function_params(args: ast.arguments) -> list[ast.arg]:
     return params
 
 
+def _param_defaults(args: ast.arguments) -> dict[str, ast.expr]:
+    """Parameter name -> its default expression, where it has one."""
+    defaults: dict[str, ast.expr] = {}
+    if args.defaults:
+        # Positional defaults belong to the last positional parameters.
+        tail = [*args.posonlyargs, *args.args][-len(args.defaults) :]
+        defaults.update(zip((param.arg for param in tail), args.defaults))
+    for param, default in zip(args.kwonlyargs, args.kw_defaults):
+        if default is not None:
+            defaults[param.arg] = default
+    return defaults
+
+
+def _arguments_pairs(args: ast.arguments, scopes: list[_Scope]) -> _Pairs:
+    """Parameters are locals: they shadow enclosing imports and archive
+    bindings. A parameter is an archive when annotated as one, and may be one
+    when its default (evaluated in the enclosing scope) is; callers can still
+    pass something else, so the default is merged, not substituted."""
+    defaults = _param_defaults(args)
+    pairs: _Pairs = []
+    for param in _function_params(args):
+        bindings: set[_Binding] = {_OTHER}
+        if _annotation_mentions_zip(param.annotation, scopes):
+            bindings.add(_ARCHIVE)
+        if param.arg in defaults:
+            bindings |= _value_bindings(defaults[param.arg], scopes)
+        pairs.append((param.arg, bindings))
+    return pairs
+
+
 def _iter_scope_nodes(body: Sequence[ast.AST]) -> Iterable[ast.AST]:
     """Nodes evaluated in this scope, in source order, excluding nested scope bodies."""
     stack: list[ast.AST] = list(reversed(body))
@@ -824,16 +854,9 @@ class _InvariantVisitor(ast.NodeVisitor):
         self._pop()
 
     def _param_pairs(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> _Pairs:
-        """Parameters are locals: they shadow enclosing imports and archive
-        bindings unless annotated as a zipfile archive. A method's first
-        parameter (``self``/``cls``) is bound to its class."""
-        pairs: _Pairs = [
-            (
-                param.arg,
-                {_ARCHIVE} if _annotation_mentions_zip(param.annotation, self.scopes) else {_OTHER},
-            )
-            for param in _function_params(node.args)
-        ]
+        """See ``_arguments_pairs``; a method's first parameter (``self`` /
+        ``cls``) is additionally bound to its class."""
+        pairs = _arguments_pairs(node.args, self.scopes)
         class_info = self.scopes[-1].class_info
         positional = [*node.args.posonlyargs, *node.args.args]
         if class_info is not None and positional and not _is_staticmethod(node):
@@ -850,7 +873,7 @@ class _InvariantVisitor(ast.NodeVisitor):
         args = node.args
         for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
             self.visit(default)
-        self._push([], params=[(p.arg, {_OTHER}) for p in _function_params(args)])
+        self._push([], params=_arguments_pairs(args, self.scopes))
         self.visit(node.body)
         self._pop()
 
