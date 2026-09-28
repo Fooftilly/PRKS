@@ -2256,6 +2256,14 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')), mutate(body):\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "raw_sql_where_inside_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute(\"UPDATE works SET title='WHERE', file_path=? WHERE id=?\", (fp, w_id))\n"
+            ),
+            "raw_sql_executescript": (
+                "def adopt(conn):\n"
+                "    conn.executescript(\"UPDATE works SET file_path='/api/pdfs/shared.pdf' WHERE id='1'\")\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2458,6 +2466,10 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
             "sql_comment_mentions_file_path": (
                 "def f(conn, w, t):\n"
                 "    conn.execute('UPDATE works SET title = ? /* not file_path = ? */ WHERE id = ?', (t, w))\n"
+            ),
+            "sql_literal_clear": (
+                "def f(conn):\n"
+                "    conn.executescript(\"UPDATE works SET file_path='' WHERE id='1'\")\n"
             ),
             "sql_read": (
                 "def f(conn, w):\n"

@@ -237,7 +237,7 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
 }
 # Dict methods that may (re)write a guarded fields dict's file_path entry.
 _DICT_MUTATORS = frozenset({"__ior__", "__setitem__", "setdefault", "update"})
-_SQL_EXECUTE_METHODS = frozenset({"execute", "execute_query", "executemany"})
+_SQL_EXECUTE_METHODS = frozenset({"execute", "execute_query", "executemany", "executescript"})
 _SQL_TEXT_KEYWORDS = frozenset({"query", "sql"})
 _SQL_WORKS_INSERT_RE = re.compile(
     r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO\s+works\s*\(([^)]*)\)"
@@ -262,6 +262,7 @@ _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
 _SQL_CLEARING_VALUES = frozenset({"NULL", "''"})
 # A string literal (kept) or a /* block */ / -- line comment (dropped).
 _SQL_COMMENT_RE = re.compile(r"('(?:[^']|'')*')|/\*.*?\*/|--[^\n]*", re.DOTALL)
+_SQL_STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
 _SQL_IDENTIFIER_QUOTES_RE = re.compile(r'["`\[\]]')
 _SQL_SCHEMA_PREFIX_RE = re.compile(r"\b(?:main|temp)\.(?=\w)", re.IGNORECASE)
 
@@ -782,6 +783,9 @@ def _sql_write_targets(text: str) -> set[str]:
     # SQLite identifier quoting ("x", `x`, [x]) and a schema prefix name the
     # same table/column; '' stays (it is a string literal, not an identifier).
     text = _SQL_COMMENT_RE.sub(lambda m: m.group(1) or " ", text)
+    # Mask literal contents so keywords inside strings (``'WHERE'``) cannot
+    # end a clause early; an empty literal stays ``''`` (a clearing value).
+    text = _SQL_STRING_LITERAL_RE.sub(lambda m: "''" if m.group(0) == "''" else "'s'", text)
     text = _SQL_SCHEMA_PREFIX_RE.sub("", _SQL_IDENTIFIER_QUOTES_RE.sub("", text))
     targets: set[str] = set()
     if _SQL_PENDING_CLEANUP_WRITE_RE.search(text):
