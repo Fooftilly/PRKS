@@ -26,6 +26,22 @@ export interface PersonWorkItem {
   readonly roleType: string
   readonly orderIndex: string
   readonly subtitle: string
+  readonly filePath: string
+  readonly thumbUrl: string
+  readonly thumbPage: number | null
+  readonly status: string
+  readonly docType: string
+  readonly year: string
+  readonly publishedDate: string
+  readonly sizeBytes: number | null
+  readonly linkedAuthors: string
+  readonly authorText: string
+  readonly primaryAuthor: string
+  readonly primaryEditor: string
+  readonly sourceKind: string
+  readonly sourceUrl: string
+  readonly provider: string
+  readonly providerId: string
 }
 
 /** Fields the profile editor may send. Dates stay in the form's display format. */

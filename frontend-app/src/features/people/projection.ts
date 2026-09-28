@@ -131,6 +131,12 @@ function fieldsFrom(record: Record<string, unknown>): PersonFieldDraft {
   }
 }
 
+function optionalNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value)
+  return null
+}
+
 function worksFrom(record: Record<string, unknown>): PersonWorkItem[] {
   const rows = Array.isArray(record.works) ? record.works : []
   const out: PersonWorkItem[] = []
@@ -145,6 +151,22 @@ function worksFrom(record: Record<string, unknown>): PersonWorkItem[] {
       roleType: text(work.role_type).trim() || 'Linked',
       orderIndex: text(work.order_index) || '0',
       subtitle: text(work.subtitle || work.credit_name),
+      filePath: text(work.file_path),
+      thumbUrl: text(work.thumb_url),
+      thumbPage: optionalNumber(work.thumb_page),
+      status: text(work.status),
+      docType: text(work.doc_type),
+      year: text(work.year),
+      publishedDate: text(work.published_date),
+      sizeBytes: optionalNumber(work.file_size_bytes),
+      linkedAuthors: text(work.linked_authors),
+      authorText: text(work.author_text),
+      primaryAuthor: text(work.primary_author),
+      primaryEditor: text(work.primary_editor),
+      sourceKind: text(work.source_kind),
+      sourceUrl: text(work.source_url),
+      provider: text(work.provider),
+      providerId: text(work.provider_id),
     })
   }
   return out

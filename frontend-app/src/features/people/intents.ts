@@ -44,9 +44,16 @@ export interface PeopleIntents {
     groupIds: readonly string[],
     baselineGroupIds: readonly string[],
     session: number,
+    generation: number,
   ): Promise<PersonSaveResult>
   toggleWorks(personId: string): void
-  removeWorkRole(personId: string, workId: string, roleType: string, orderIndex: string): Promise<void>
+  removeWorkRole(
+    personId: string,
+    workId: string,
+    roleType: string,
+    orderIndex: string,
+    workTitle: string,
+  ): Promise<void>
   remove(personId: string, generation: number): Promise<void>
   viewGraph(): void
   bindDraft(
@@ -82,6 +89,11 @@ export function browserPeopleIntents(
 ): PeopleIntents {
   return {
     create() {
+      const openFromPage = window.prksOpenNewPersonModalFromPeoplePage
+      if (typeof openFromPage === 'function') {
+        openFromPage(owner ?? undefined)
+        return
+      }
       const open = window.openModal
       if (typeof open === 'function') open('person-modal')
     },
@@ -134,10 +146,10 @@ export function browserPeopleIntents(
       return draft.groups.map((group) => String(group?.id || '')).filter(Boolean)
     },
 
-    async saveProfile(personId, draft, baseline, groupIds, baselineGroupIds, session) {
+    async saveProfile(personId, draft, baseline, groupIds, baselineGroupIds, session, generation) {
       const save = window.savePersonProfileDraft
       if (typeof save !== 'function') return { ok: false, message: 'Could not save this profile.' }
-      return save(owner, personId, draft, baseline, groupIds, baselineGroupIds, session)
+      return save(owner, personId, draft, baseline, groupIds, baselineGroupIds, session, generation)
     },
 
     toggleWorks() {
@@ -145,7 +157,7 @@ export function browserPeopleIntents(
       if (typeof toggle === 'function') toggle(owner)
     },
 
-    async removeWorkRole(personId, workId, roleType, orderIndex) {
+    async removeWorkRole(personId, workId, roleType, orderIndex, workTitle) {
       const remove = window.prksRemoveWorkRoleLink
       if (typeof remove !== 'function') return
       const button = document.createElement('button')
@@ -153,6 +165,7 @@ export function browserPeopleIntents(
       button.setAttribute('data-work-id', workId)
       button.setAttribute('data-role-type', roleType)
       button.setAttribute('data-order-index', orderIndex)
+      button.setAttribute('data-work-title', workTitle || '')
       await remove(button)
     },
 

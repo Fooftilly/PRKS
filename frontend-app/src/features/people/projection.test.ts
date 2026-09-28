@@ -16,7 +16,21 @@ const ada = {
   link_stanford_encyclopedia: '',
   link_iep: '',
   links_other: '[Notes](https://example.test/notes)',
-  works: [{ id: 'W1', title: 'Notes on the engine', role_type: 'Author', order_index: 0, credit_name: 'Ada' }],
+  works: [
+    {
+      id: 'W1',
+      title: 'Notes on the engine',
+      role_type: 'Author',
+      order_index: 0,
+      credit_name: 'Ada',
+      file_path: '/api/pdfs/notes.pdf',
+      status: 'read',
+      doc_type: 'article',
+      year: '1843',
+      file_size_bytes: 1200,
+      thumb_page: 2,
+    },
+  ],
 }
 
 describe('People projections', () => {
@@ -46,6 +60,12 @@ describe('People projections', () => {
     expect(person?.fields.death_date).toBe('1852')
     expect(person?.works[0]?.title).toBe('Notes on the engine')
     expect(person?.works[0]?.roleType).toBe('Author')
+    expect(person?.works[0]?.filePath).toBe('/api/pdfs/notes.pdf')
+    expect(person?.works[0]?.status).toBe('read')
+    expect(person?.works[0]?.docType).toBe('article')
+    expect(person?.works[0]?.year).toBe('1843')
+    expect(person?.works[0]?.sizeBytes).toBe(1200)
+    expect(person?.works[0]?.thumbPage).toBe(2)
     expect(person?.groups[0]?.name).toBe('Analysts')
     expect(person?.links.map((link) => link.label)).toEqual(['Wikipedia', 'Notes'])
     expect(person?.referenceCount).toBe(2)

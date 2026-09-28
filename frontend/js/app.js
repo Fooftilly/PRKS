@@ -3326,6 +3326,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonId = previousPerson ? String(previousPerson.id) : '';
     const previousPersonEditing = !!(ctx.ui && ctx.ui.personDetailEditing);
     const previousPersonWorksEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
+    const previousPersonDraft = ctx.ui && ctx.ui.personProfileDraft ? ctx.ui.personProfileDraft : null;
     /* Concepts→Concepts (index or detail) in the same mounted TabContext keeps
      * the Vue host mounted so local search/filter state survives an accepted
      * in-place refresh. Flag the owner before beginRoute: TabContext cleanups
@@ -4873,12 +4874,13 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     previousPersonId &&
                     String(personId) === previousPersonId
                 );
-                if (!(samePersonRefresh && previousPersonEditing)) {
-                    ctx.ui.personDetailEditing = false;
-                    ctx.ui.personProfileDraft = null;
-                }
-                if (!(samePersonRefresh && previousPersonWorksEditing)) {
-                    ctx.ui.personWorksEditing = false;
+                if (typeof prksRetainPersonEditAcrossRefresh === 'function') {
+                    prksRetainPersonEditAcrossRefresh(
+                        ctx,
+                        samePersonRefresh && previousPersonEditing,
+                        previousPersonDraft,
+                        samePersonRefresh && previousPersonWorksEditing
+                    );
                 }
                 // A page served from cache must not ask PRKS for portrait or
                 // Work-thumbnail bytes it cannot get; render the no-media form.
@@ -5884,9 +5886,16 @@ function initForms() {
             closeModals();
             /* Navigate to the Person that now exists. No reload: a reload
              * would throw away every other pending change on the page and, at
-             * this point, there is nothing to fetch -- the record is local. */
+             * this point, there is nothing to fetch -- the record is local.
+             * A People-index origin navigates that pane. Ribbon and command
+             * palette opens do not record one, so they keep the unscoped path. */
+            const createTabId = typeof window.prksTakePersonIndexCreateTabId === 'function'
+                ? window.prksTakePersonIndexCreateTabId()
+                : '';
             if (created && created.entity_id && typeof prksNavigate === 'function') {
-                void prksNavigate('#/people/' + encodeURIComponent(created.entity_id));
+                const hash = '#/people/' + encodeURIComponent(created.entity_id);
+                if (createTabId) void prksNavigate(hash, { tabId: createTabId });
+                else void prksNavigate(hash);
             }
         };
     }

@@ -17,11 +17,11 @@ provide(peopleIntentsKey, {
   editSession: () => current.value.editSession(),
   invalidateEditSession: () => current.value.invalidateEditSession(),
   liveGroupIds: (personId) => current.value.liveGroupIds(personId),
-  saveProfile: (personId, draft, baseline, groupIds, baselineGroupIds, session) =>
-    current.value.saveProfile(personId, draft, baseline, groupIds, baselineGroupIds, session),
+  saveProfile: (personId, draft, baseline, groupIds, baselineGroupIds, session, generation) =>
+    current.value.saveProfile(personId, draft, baseline, groupIds, baselineGroupIds, session, generation),
   toggleWorks: (personId) => current.value.toggleWorks(personId),
-  removeWorkRole: (personId, workId, roleType, orderIndex) =>
-    current.value.removeWorkRole(personId, workId, roleType, orderIndex),
+  removeWorkRole: (personId, workId, roleType, orderIndex, workTitle) =>
+    current.value.removeWorkRole(personId, workId, roleType, orderIndex, workTitle),
   remove: (personId, routeGeneration) => current.value.remove(personId, routeGeneration),
   viewGraph: () => current.value.viewGraph(),
   bindDraft: (personId, fields, groups, replaceGroups) =>

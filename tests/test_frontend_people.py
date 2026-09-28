@@ -155,7 +155,7 @@ class FrontendPeopleTests(unittest.TestCase):
         src = _read(_PEOPLE)
         groups = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "components", "people-groups.js"))
         self.assertIn("function prksEnsurePersonProfileDraft(ctx, person)", src)
-        self.assertIn("function prksMountPersonProfileEditor(ctx, person)", src)
+        self.assertNotIn("function prksMountPersonProfileEditor(ctx, person)", src)
         self.assertIn('data-person-edit-id="${id}"', src)
         self.assertIn("renderPersonProfileEditFormHtml(person, draft)", src)
         self.assertIn("prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation)", src)
@@ -183,6 +183,8 @@ class FrontendPeopleTests(unittest.TestCase):
         js = "\n".join(
             (
                 "const personDateToDisplayFormat = value => String(value == null ? '' : value);",
+                _extract_function(src, "prksCompareText"),
+                _extract_function(src, "prksSortedUniqueIds"),
                 _extract_function(src, "prksPersonGroupIdSet"),
                 _extract_function(src, "prksPersonDraftFromEntity"),
                 _extract_function(src, "prksPersonProfileDraftIsDirty"),

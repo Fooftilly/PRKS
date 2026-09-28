@@ -878,14 +878,24 @@ function prksPersonDraftFromEntity(person) {
     };
 }
 
+function prksCompareText(left, right) {
+    const a = String(left);
+    const b = String(right);
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
+function prksSortedUniqueIds(ids) {
+    return Array.from(new Set((ids || []).map((id) => String(id)))).sort(prksCompareText);
+}
+
 function prksPersonGroupIdSet(groups) {
-    return Array.from(
-        new Set(
-            (Array.isArray(groups) ? groups : [])
-                .filter((group) => group && group.id != null)
-                .map((group) => String(group.id))
-        )
-    ).sort();
+    return prksSortedUniqueIds(
+        (Array.isArray(groups) ? groups : [])
+            .filter((group) => group && group.id != null)
+            .map((group) => group.id)
+    );
 }
 
 function prksPersonProfileDraftIsDirty(ctx, person) {
@@ -916,7 +926,7 @@ function prksPersonProfileDraftIsDirty(ctx, person) {
     }
     const draftGroupIds = prksPersonGroupIdSet(draft.groups);
     const originalGroupIds = Array.isArray(draft.baselineGroupIds)
-        ? Array.from(new Set(draft.baselineGroupIds.map((id) => String(id)))).sort()
+        ? prksSortedUniqueIds(draft.baselineGroupIds)
         : prksPersonGroupIdSet(original.groups);
     return (
         draftGroupIds.length !== originalGroupIds.length ||
@@ -1032,24 +1042,6 @@ function prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation)
     return true;
 }
 
-async function prksMountPersonProfileEditor(ctx, person) {
-    if (!ctx || !person || person.id == null) return;
-    const generation = ctx.generation;
-    const personId = String(person.id);
-    const draft = prksEnsurePersonProfileDraft(ctx, person);
-    if (!prksPersonProfileEditSessionCurrent(ctx, generation, personId, draft)) return;
-    const panel = document.getElementById('panel-content');
-    if (!panel || typeof prksRightPanelOwnedBy !== 'function' || !prksRightPanelOwnedBy(ctx, panel)) return;
-    const editor = panel.querySelector('.person-panel-edit');
-    if (!prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor)) return;
-    const sync = () => prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation);
-    editor.addEventListener('input', sync);
-    editor.addEventListener('change', sync);
-    if (typeof prksMountPersonProfileGroupPicker === 'function') {
-        await prksMountPersonProfileGroupPicker(ctx, person, editor);
-    }
-}
-
 function openPersonProfileEdit() {
     const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const person = ctx && ctx.getEntity ? ctx.getEntity('person') : null;
@@ -1109,7 +1101,6 @@ window.prksPersonProfileDraftIsDirty = prksPersonProfileDraftIsDirty;
 window.prksPersonProfileEditSessionCurrent = prksPersonProfileEditSessionCurrent;
 window.prksPersonProfileEditorCurrent = prksPersonProfileEditorCurrent;
 window.prksSyncPersonProfileDraftFromEditor = prksSyncPersonProfileDraftFromEditor;
-window.prksMountPersonProfileEditor = prksMountPersonProfileEditor;
 
 async function deletePerson(explicitCtx, explicitGeneration) {
     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
@@ -1137,11 +1128,27 @@ async function deletePerson(explicitCtx, explicitGeneration) {
         typeof prksTabContextOwnsEntityRoute === 'function' &&
         !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
     ) return;
+    const deleteBtn = typeof document !== 'undefined' && document.querySelector
+        ? document.querySelector('[data-prks-role="' + PERSON_DELETE_ROLE + '"]')
+        : null;
+    if (deleteBtn && typeof prksSetButtonBusy === 'function') {
+        prksSetButtonBusy(deleteBtn, true, { busyLabel: 'Deleting…' });
+    }
     try {
         /* A tombstone, not a destruction: the acknowledged cache is untouched,
          * so a server that refuses the deletion restores them by doing nothing.
          * A Person created here and never sent folds away entirely. */
         await prksDeletePersonDurably(personId);
+        if (
+            typeof prksTabContextOwnsEntityRoute === 'function' &&
+            !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
+        ) return;
+        if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
+        if (ctx && ctx.ui) {
+            ctx.ui.personDetailEditing = false;
+            ctx.ui.personWorksEditing = false;
+        }
+        if (typeof prksNavigate === 'function') prksNavigate('#/people', { replace: true, tabId: ctx.tabId });
     } catch (error) {
         if (ctx && ctx.isCurrent && ctx.isCurrent(generation)) {
             await prksAlertMessage(
@@ -1149,18 +1156,9 @@ async function deletePerson(explicitCtx, explicitGeneration) {
                     ? 'This person is already being deleted.'
                     : 'Could not delete this person locally. Please retry.', 'Could not delete');
         }
-        return;
+    } finally {
+        if (deleteBtn && typeof prksSetButtonBusy === 'function') prksSetButtonBusy(deleteBtn, false);
     }
-    if (
-        typeof prksTabContextOwnsEntityRoute === 'function' &&
-        !prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person')
-    ) return;
-    if (ctx && typeof ctx.setEntity === 'function') ctx.setEntity('person', null);
-    if (ctx && ctx.ui) {
-        ctx.ui.personDetailEditing = false;
-        ctx.ui.personWorksEditing = false;
-    }
-    if (typeof prksNavigate === 'function') prksNavigate('#/people', { replace: true, tabId: ctx.tabId });
 }
 
 function prksTogglePersonWorksEdit(explicitCtx) {
@@ -1424,15 +1422,15 @@ function prksPersonProfileSaveMessage(error) {
     return 'Could not save this profile locally. Please retry.';
 }
 
-async function prksSavePersonGroupIds(personId, afterIds, beforeIds) {
-    const norm = (ids) => Array.from(new Set((ids || []).map((id) => String(id)))).sort();
-    const before = norm(beforeIds);
-    const after = norm(afterIds);
+async function prksSavePersonGroupIds(personId, afterIds, beforeIds, stillOwns) {
+    const before = prksSortedUniqueIds(beforeIds);
+    const after = prksSortedUniqueIds(afterIds);
     const added = after.filter((id) => before.indexOf(id) === -1);
     const removed = before.filter((id) => after.indexOf(id) === -1);
     if (!added.length && !removed.length) return { ok: true, message: '' };
     const failures = [];
     for (const groupId of added.concat(removed)) {
+        if (typeof stillOwns === 'function' && !stillOwns()) return { ok: true, message: '' };
         const present = added.indexOf(groupId) !== -1;
         try {
             if (typeof prksSetPersonGroupMembership !== 'function' ||
@@ -1473,14 +1471,7 @@ function prksFinishPersonProfileSave(ctx, person) {
     }
 }
 
-/**
- * Persist one edit session. Only fields that differ from the session baseline
- * are sent. An older session must not close a later one.
- */
-async function savePersonProfileDraft(ctx, personId, draftFields, baselineFields, groupIds, baselineGroupIds, session) {
-    const fail = (message) => ({ ok: false, message: message || 'Could not save this profile.' });
-    if (!ctx || !personId || !draftFields || !baselineFields) return fail('Could not save this profile.');
-    if (!String(draftFields.last_name || '').trim()) return fail('Last name is required.');
+function prksPersonProfileDesiredChanges(draftFields, baselineFields) {
     const desired = {};
     for (const key of PRKS_PERSON_PROFILE_FIELDS) {
         const next = String(draftFields[key] == null ? '' : draftFields[key]);
@@ -1490,59 +1481,79 @@ async function savePersonProfileDraft(ctx, personId, draftFields, baselineFields
             const iso = parsePersonBirthDeathField(next);
             if (iso === null) {
                 const label = key === 'birth_date' ? 'Birth' : 'Date of death';
-                return fail(label + ':\n' + PERSON_DATE_HELP);
+                return { error: label + ':\n' + PERSON_DATE_HELP };
             }
             desired[key] = iso;
         } else {
             desired[key] = next;
         }
     }
-    const normIds = (ids) => Array.from(new Set((ids || []).map((id) => String(id)))).sort().join('\0');
-    const membershipChanged = normIds(groupIds) !== normIds(baselineGroupIds);
-    const fieldNames = Object.keys(desired);
+    return { desired: desired };
+}
+
+function prksPersonProfileWriteStillOwned(ctx, personId, generation) {
+    return typeof prksTabContextOwnsEntityRoute === 'function' &&
+        prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person');
+}
+
+async function prksWriteDirtyPersonFields(ctx, personId, desired, generation) {
+    const read = await prksReadPersonProfileBase(personId);
+    if (!prksPersonProfileWriteStillOwned(ctx, personId, generation)) return { ok: true, skipped: true, message: '' };
+    const base = read && read.base;
+    const operations = read && read.operations;
+    if (!base) {
+        return {
+            ok: false,
+            message: 'This profile cannot be edited offline yet. Open it once while connected to PRKS so its synchronization state is prepared.',
+        };
+    }
+    const changes = typeof prksDirtyPersonFields === 'function'
+        ? prksDirtyPersonFields(personId, desired, base, operations)
+        : desired;
+    if (!Object.keys(changes).length || typeof prksSavePersonFieldsDurably !== 'function') {
+        return { ok: true, message: '' };
+    }
+    if (!prksPersonProfileWriteStillOwned(ctx, personId, generation)) return { ok: true, skipped: true, message: '' };
+    await prksSavePersonFieldsDurably(personId, changes, base);
+    return { ok: true, message: '' };
+}
+
+/**
+ * Persist one edit session. Only fields that differ from the session baseline
+ * are sent. Ownership is checked immediately before each durable write. An
+ * older session must not close a later one.
+ */
+async function savePersonProfileDraft(ctx, personId, draftFields, baselineFields, groupIds, baselineGroupIds, session, generation) {
+    const fail = (message) => ({ ok: false, message: message || 'Could not save this profile.' });
+    const stillOwned = () => prksPersonProfileWriteStillOwned(ctx, personId, generation);
+    if (!ctx || !personId || !draftFields || !baselineFields) return fail('Could not save this profile.');
+    if (!String(draftFields.last_name || '').trim()) return fail('Last name is required.');
+    const built = prksPersonProfileDesiredChanges(draftFields, baselineFields);
+    if (built.error) return fail(built.error);
+    const membershipChanged = prksSortedUniqueIds(groupIds).join('\0') !== prksSortedUniqueIds(baselineGroupIds).join('\0');
+    const fieldNames = Object.keys(built.desired);
     if (!fieldNames.length && !membershipChanged) {
         if (!prksPersonEditSessionStill(ctx, personId, session)) return { ok: true, message: '' };
         prksFinishPersonProfileSave(ctx, ctx.getEntity ? ctx.getEntity('person') : null);
         return { ok: true, message: '' };
     }
     if (fieldNames.length) {
-        const read = await prksReadPersonProfileBase(personId);
-        const base = read && read.base;
-        const operations = read && read.operations;
-        if (!base) {
-            const message = 'This profile cannot be edited offline yet. Open it once while connected to PRKS so its synchronization state is prepared.';
-            if (prksPersonEditSessionStill(ctx, personId, session) && typeof prksAlertMessage === 'function') {
-                await prksAlertMessage(message, 'Unavailable');
-            }
-            return fail(message);
-        }
-        const changes = typeof prksDirtyPersonFields === 'function'
-            ? prksDirtyPersonFields(personId, desired, base, operations)
-            : desired;
         try {
-            if (Object.keys(changes).length && typeof prksSavePersonFieldsDurably === 'function') {
-                await prksSavePersonFieldsDurably(personId, changes, base);
-            }
+            const written = await prksWriteDirtyPersonFields(ctx, personId, built.desired, generation);
+            if (written.skipped) return { ok: true, message: '' };
+            if (!written.ok) return fail(written.message);
         } catch (error) {
-            const message = prksPersonProfileSaveMessage(error);
-            if (prksPersonEditSessionStill(ctx, personId, session) && typeof prksAlertMessage === 'function') {
-                await prksAlertMessage(message, 'Could not save');
-            }
-            return fail(message);
+            return fail(prksPersonProfileSaveMessage(error));
         }
     }
     if (membershipChanged) {
-        const changedGroups = await prksSavePersonGroupIds(personId, groupIds, baselineGroupIds);
-        if (!changedGroups.ok) {
-            if (prksPersonEditSessionStill(ctx, personId, session) && typeof prksAlertMessage === 'function') {
-                await prksAlertMessage(changedGroups.message, 'Groups not updated');
-            }
-            return fail(changedGroups.message);
-        }
+        if (!stillOwned()) return { ok: true, message: '' };
+        const changedGroups = await prksSavePersonGroupIds(personId, groupIds, baselineGroupIds, stillOwned);
+        if (!changedGroups.ok) return fail(changedGroups.message);
     }
-    if (!prksPersonEditSessionStill(ctx, personId, session)) return { ok: true, message: '' };
+    if (!prksPersonEditSessionStill(ctx, personId, session) || !stillOwned()) return { ok: true, message: '' };
     const person = typeof prksPersonRecordFor === 'function' ? await prksPersonRecordFor(personId) : null;
-    if (!prksPersonEditSessionStill(ctx, personId, session)) return { ok: true, message: '' };
+    if (!prksPersonEditSessionStill(ctx, personId, session) || !stillOwned()) return { ok: true, message: '' };
     prksFinishPersonProfileSave(ctx, person);
     return { ok: true, message: '' };
 }
@@ -1719,6 +1730,33 @@ function personRoleBlockHtml(heading, count, cardsHtml) {
     );
 }
 
+const PRKS_PERSON_WORK_CARD_KEYS = [
+    'file_path',
+    'thumb_url',
+    'thumb_page',
+    'status',
+    'doc_type',
+    'year',
+    'published_date',
+    'file_size_bytes',
+    'linked_authors',
+    'author_text',
+    'primary_author',
+    'primary_editor',
+    'source_kind',
+    'source_url',
+    'provider',
+    'provider_id',
+];
+
+function prksPersonWorkCardFields(row) {
+    const card = {};
+    PRKS_PERSON_WORK_CARD_KEYS.forEach((key) => {
+        if (row && Object.prototype.hasOwnProperty.call(row, key)) card[key] = row[key];
+    });
+    return card;
+}
+
 function prksPersonViewRecord(ctx, person) {
     const worksEditing = !!(ctx && ctx.ui && ctx.ui.personWorksEditing);
     const rolesByWork = prksPersonWorkRolesById(person);
@@ -1734,7 +1772,7 @@ function prksPersonViewRecord(ctx, person) {
         if (!workId) return null;
         const roles = rolesByWork.get(workId) || [];
         const role = (w && w.role_type) || roles[0] || 'Linked';
-        let subtitle = '';
+        let subtitle = role;
         if (!worksEditing) {
             const credit = (person.works || [])
                 .filter((x) => x && String(x.id) === workId)
@@ -1743,13 +1781,13 @@ function prksPersonViewRecord(ctx, person) {
             const roleContext = (roles.length ? roles : [role]).join(' · ');
             subtitle = credit ? (roleContext ? roleContext + ' · ' + credit : credit) : roleContext;
         }
-        return {
+        return Object.assign(prksPersonWorkCardFields(w), {
             id: workId,
             title: w && w.title,
             role_type: role,
             order_index: w && w.order_index != null && w.order_index !== '' ? String(w.order_index) : '0',
             subtitle: subtitle,
-        };
+        });
     }).filter(Boolean);
     return Object.assign({}, person, { works: works });
 }
@@ -1757,11 +1795,68 @@ function prksPersonViewRecord(ctx, person) {
 function prksRefreshPersonDetailMain(ctx) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!owner || !owner.root || owner.destroyed) return;
-    const route = owner.lastResolvedRoute || owner.route;
+    const route = owner.lastResolvedRoute;
     if (!route || route.name !== 'person') return;
+    const personId = route.params && route.params.personId ? String(route.params.personId) : '';
+    if (!personId) return;
     const person = owner.getEntity ? owner.getEntity('person') : null;
+    if (!person || person.id == null || String(person.id) !== personId) return;
     renderPersonDetails(owner, person, owner.root);
 }
+
+function prksRetainPersonEditAcrossRefresh(ctx, keepEditing, draft, keepWorksEditing) {
+    if (!ctx || !ctx.ui) return;
+    if (keepEditing) {
+        ctx.ui.personDetailEditing = true;
+        ctx.ui.personProfileDraft = draft || null;
+    } else {
+        ctx.ui.personDetailEditing = false;
+        ctx.ui.personProfileDraft = null;
+    }
+    ctx.ui.personWorksEditing = !!keepWorksEditing;
+}
+window.prksRetainPersonEditAcrossRefresh = prksRetainPersonEditAcrossRefresh;
+
+function prksRememberPersonIndexCreate(owner) {
+    const ctx = owner && owner.tabId
+        ? owner
+        : (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const route = ctx && (ctx.lastResolvedRoute || ctx.route);
+    const onIndex = !!(route && (route.name === 'people' || route.name === 'people-role'));
+    window.__prksPersonIndexCreateOrigin = ctx && ctx.tabId && onIndex
+        ? {
+            tabId: String(ctx.tabId),
+            generation: typeof ctx.generation === 'number' ? ctx.generation : null,
+        }
+        : null;
+}
+
+function prksClearPersonIndexCreateOrigin() {
+    window.__prksPersonIndexCreateOrigin = null;
+    window.__prksPersonIndexCreateArmed = false;
+}
+
+function prksOpenNewPersonModalFromPeoplePage(owner) {
+    prksRememberPersonIndexCreate(owner);
+    window.__prksPersonIndexCreateArmed = true;
+    if (typeof openModal === 'function') openModal('person-modal');
+}
+
+function prksTakePersonIndexCreateTabId() {
+    const origin = window.__prksPersonIndexCreateOrigin || null;
+    window.__prksPersonIndexCreateOrigin = null;
+    window.__prksPersonIndexCreateArmed = false;
+    if (!origin || !origin.tabId) return '';
+    const ctx = typeof prksGetTabContext === 'function' ? prksGetTabContext(origin.tabId) : null;
+    if (!ctx || ctx.destroyed || !ctx.tabId) return '';
+    if (origin.generation != null && ctx.generation !== origin.generation) return '';
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || (route.name !== 'people' && route.name !== 'people-role')) return '';
+    return String(ctx.tabId);
+}
+window.prksOpenNewPersonModalFromPeoplePage = prksOpenNewPersonModalFromPeoplePage;
+window.prksTakePersonIndexCreateTabId = prksTakePersonIndexCreateTabId;
+window.prksClearPersonIndexCreateOrigin = prksClearPersonIndexCreateOrigin;
 
 function prksRefreshMountedPersonSurfaces() {
     if (typeof prksForEachMountedTabContext !== 'function') {

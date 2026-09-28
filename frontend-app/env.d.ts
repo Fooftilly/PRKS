@@ -167,6 +167,21 @@ interface Window {
       id?: unknown
       title?: unknown
       status?: unknown
+      file_path?: unknown
+      thumb_url?: unknown
+      thumb_page?: unknown
+      doc_type?: unknown
+      year?: unknown
+      published_date?: unknown
+      file_size_bytes?: unknown
+      linked_authors?: unknown
+      author_text?: unknown
+      primary_author?: unknown
+      primary_editor?: unknown
+      source_kind?: unknown
+      source_url?: unknown
+      provider?: unknown
+      provider_id?: unknown
       abstract_excerpt?: unknown
       abstract?: unknown
     },
@@ -255,7 +270,9 @@ interface Window {
     groupIds: readonly string[],
     baselineGroupIds: readonly string[],
     session: number,
+    generation: number,
   ) => Promise<{ ok: boolean; message: string }>
+  prksOpenNewPersonModalFromPeoplePage?: (owner?: object) => void
   deletePerson?: (ctx?: unknown, generation?: number) => Promise<void>
   prksTogglePersonWorksEdit?: (ctx?: unknown) => void
   prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>

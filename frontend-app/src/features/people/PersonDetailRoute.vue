@@ -113,15 +113,23 @@ watch(
   },
 )
 
-function viewIdentity(): { id: string; editSession: number } | null {
+function viewIdentity(): { id: string; generation: number; editSession: number } | null {
   const id = person.value?.id
   if (!id) return null
-  return { id, editSession: intents?.editSession() ?? 0 }
+  return {
+    id,
+    generation: props.projection.generation,
+    editSession: intents?.editSession() ?? 0,
+  }
 }
 
-function viewStill(identity: { id: string; editSession: number } | null): boolean {
+function viewStill(identity: { id: string; generation: number; editSession: number } | null): boolean {
   if (!identity) return false
-  return person.value?.id === identity.id && (intents?.editSession() ?? 0) === identity.editSession
+  return (
+    person.value?.id === identity.id &&
+    props.projection.generation === identity.generation &&
+    (intents?.editSession() ?? 0) === identity.editSession
+  )
 }
 
 function settleOffline(): void {
@@ -158,6 +166,7 @@ async function onSave(): Promise<void> {
   const groups = intents.liveGroupIds(current.id)
   const baselineGroups = groupBaseline.value.slice()
   const session = identity.editSession
+  const generation = identity.generation
   await withBusy('save', async () => {
     const result = await intents.saveProfile(
       current.id,
@@ -166,6 +175,7 @@ async function onSave(): Promise<void> {
       groups,
       baselineGroups,
       session,
+      generation,
     )
     if (!viewStill(identity) || !result) return
     if (!result.ok) status.value = result.message
@@ -173,33 +183,64 @@ async function onSave(): Promise<void> {
   })
 }
 
-async function onDelete(): Promise<void> {
-  const current = person.value
-  if (!current) return
-  await withBusy('delete', async () => {
-    await intents?.remove(current.id, props.projection.generation)
-  })
-}
-
 function onToggleWorks(): void {
   intents?.toggleWorks(person.value?.id || '')
 }
 
-async function onUnlink(workId: string, roleType: string, orderIndex: string): Promise<void> {
+async function onUnlink(workId: string, roleType: string, orderIndex: string, title: string): Promise<void> {
   const current = person.value
   const identity = viewIdentity()
   if (!current || !identity) return
   await withBusy(`unlink:${workId}:${roleType}`, async () => {
-    await intents?.removeWorkRole(current.id, workId, roleType, orderIndex)
+    await intents?.removeWorkRole(current.id, workId, roleType, orderIndex, title)
     if (!viewStill(identity)) return
   })
 }
 
-function workCard(work: { id: string; title: string; subtitle: string }): string {
+function workCard(work: {
+  id: string
+  title: string
+  subtitle: string
+  filePath: string
+  thumbUrl: string
+  thumbPage: number | null
+  status: string
+  docType: string
+  year: string
+  publishedDate: string
+  sizeBytes: number | null
+  linkedAuthors: string
+  authorText: string
+  primaryAuthor: string
+  primaryEditor: string
+  sourceKind: string
+  sourceUrl: string
+  provider: string
+  providerId: string
+}): string {
   const html = window.prksWorkCardHtml
   if (typeof html !== 'function') return ''
   return html(
-    { id: work.id, title: work.title },
+    {
+      id: work.id,
+      title: work.title,
+      file_path: work.filePath,
+      thumb_url: work.thumbUrl,
+      thumb_page: work.thumbPage,
+      status: work.status,
+      doc_type: work.docType,
+      year: work.year,
+      published_date: work.publishedDate,
+      file_size_bytes: work.sizeBytes,
+      linked_authors: work.linkedAuthors,
+      author_text: work.authorText,
+      primary_author: work.primaryAuthor,
+      primary_editor: work.primaryEditor,
+      source_kind: work.sourceKind,
+      source_url: work.sourceUrl,
+      provider: work.provider,
+      provider_id: work.providerId,
+    },
     {
       subtitle: work.subtitle || undefined,
       suppressThumbnail: props.projection.offlineCached,
@@ -311,9 +352,9 @@ function workCard(work: { id: string; title: string; subtitle: string }): string
           </PrksButton>
         </div>
       </div>
-      <div v-else class="document-view document-view--person">
+      <div class="document-view document-view--person">
         <div class="doc-content person-profile">
-          <div class="person-profile__hero" :class="{ 'person-profile__hero--no-photo': !portraitSrc }">
+          <div v-if="!showForm" class="person-profile__hero" :class="{ 'person-profile__hero--no-photo': !portraitSrc }">
             <div v-if="portraitSrc" class="person-profile__portrait">
               <div class="person-portrait-wrap">
                 <img class="person-portrait" :src="portraitSrc" alt="" />
@@ -383,29 +424,16 @@ function workCard(work: { id: string; title: string; subtitle: string }): string
                 size="sm"
                 class="person-profile__card-unlink"
                 data-prks-role="person-mutation-control"
-                :aria-label="`Remove link to this file`"
+                :aria-label="`Remove link to ${work.title} (${work.roleType})`"
                 :busy="actionBusy(`unlink:${work.id}:${work.roleType}`)"
                 :disabled="actionBlocked(`unlink:${work.id}:${work.roleType}`)"
                 busy-label="Removing…"
-                @click="onUnlink(work.id, work.roleType, work.orderIndex)"
+                @click="onUnlink(work.id, work.roleType, work.orderIndex, work.title)"
               >
                 ×
               </PrksButton>
             </div>
           </section>
-          <div class="person-profile__actions">
-            <PrksButton
-              id="prks-person-delete-btn"
-              variant="danger"
-              data-prks-role="person-delete-control"
-              :disabled="person.works.length > 0 || actionBlocked('delete')"
-              :busy="actionBusy('delete')"
-              busy-label="Deleting…"
-              @click="onDelete"
-            >
-              Delete person
-            </PrksButton>
-          </div>
         </div>
       </div>
     </template>

@@ -28,6 +28,8 @@ afterEach(() => {
   delete window.prksTabContextIsFocused
   delete window.prksIcon
   delete window.prksPaintScopeHost
+  delete window.prksOpenNewPersonModalFromPeoplePage
+  delete window.prksWorkCardHtml
   sessionStorage.removeItem('prks-people-library-filter')
 })
 
@@ -87,6 +89,7 @@ const grace = {
 describe('People route surface', () => {
   it('renders ready, empty, and unavailable indexes independently', () => {
     window.openModal = vi.fn()
+    window.prksOpenNewPersonModalFromPeoplePage = vi.fn()
     const main = owner('main')
     const secondary = owner('side')
     const mainHost = host()
@@ -116,7 +119,8 @@ describe('People route surface', () => {
     expect(sideHost.querySelector('#prks-people-header-new')?.className).toContain('prks-btn--secondary')
     expect(sideHost.querySelector('#prks-people-header-new')?.getAttribute('data-prks-role')).toBeNull()
     sideHost.querySelector<HTMLButtonElement>('#prks-people-empty-new')?.click()
-    expect(window.openModal).toHaveBeenCalledWith('person-modal')
+    expect(window.prksOpenNewPersonModalFromPeoplePage).toHaveBeenCalledWith(secondary)
+    expect(window.openModal).not.toHaveBeenCalled()
     expect(readRouteSurface(main)?.ownsMainShell).toBe(true)
     expect(readRouteSurface(secondary)?.ownsMainShell).toBe(false)
     expect(readRouteSurface(secondary)?.canonicalHash).toBe('#/people')
@@ -291,6 +295,7 @@ describe('People route surface', () => {
     const draft = saved[0] as unknown[]
     expect(draft[2]).toMatchObject({ first_name: 'Augusta', about: 'Mathematician and writer' })
     expect(draft[3]).toMatchObject({ first_name: 'Ada', about: 'Mathematician and writer' })
+    expect(draft[7]).toBe(2)
   })
 
   it('keeps a failed save and ignores an older save after cancel and reopen', async () => {
@@ -376,28 +381,82 @@ describe('People route surface', () => {
     expect(el.querySelector('[data-person-edit-id]')?.getAttribute('data-person-edit-id')).toBe('P2')
   })
 
-  it('shows a delete as busy and drops it when the person changes', async () => {
-    let release: (() => void) | undefined
-    window.deletePerson = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve
-        }),
-    )
+  it('keeps linked work navigation open beside the profile editor', async () => {
+    const cards: { work: Record<string, unknown>; subtitle?: string }[] = []
+    window.prksWorkCardHtml = vi.fn((work, options) => {
+      cards.push({ work: work as Record<string, unknown>, subtitle: options?.subtitle })
+      const id = String((work as { id?: unknown }).id || '')
+      return `<a data-prks-route="#/works/${id}">${String((work as { title?: unknown }).title || '')}</a>`
+    })
+    window.prksBindPersonProfileDraft = vi.fn()
     const pane = owner()
+    pane.ui.personDetailEditing = true
     const el = host()
-    presentPersonDetail({ owner: pane, host: el, person: ada, editing: false, generation: 4 })
-    el.querySelector<HTMLButtonElement>('#prks-person-delete-btn')?.click()
+    presentPersonDetail({
+      owner: pane,
+      host: el,
+      person: {
+        ...ada,
+        works: [
+          {
+            id: 'W1',
+            title: 'Notes',
+            role_type: 'Author',
+            order_index: '0',
+            file_path: '/api/pdfs/notes.pdf',
+            status: 'read',
+            year: '1843',
+            file_size_bytes: 1200,
+          },
+        ],
+      },
+      editing: true,
+      generation: 1,
+    })
     await flushView()
-    expect(el.querySelector('#prks-person-delete-btn')?.textContent).toContain('Deleting…')
-    expect(el.querySelector<HTMLButtonElement>('#prks-person-delete-btn')?.getAttribute('aria-busy')).toBe('true')
-    presentPersonDetail({ owner: pane, host: el, person: grace, personId: 'P2', generation: 5 })
-    await nextTick()
-    expect(el.querySelector('#prks-person-delete-btn')?.textContent).toContain('Delete person')
-    expect(el.querySelector('#prks-person-delete-btn')?.textContent).not.toContain('Deleting…')
-    release?.()
+    expect(el.querySelector('.person-panel-edit')).not.toBeNull()
+    expect(el.querySelectorAll('[data-prks-route^="#/works/"]').length).toBeGreaterThan(0)
+    expect(el.querySelector('#prks-person-delete-btn')).toBeNull()
+    expect(el.querySelector('.person-profile__card-unlink')).toBeNull()
+    expect(cards[0]?.work).toMatchObject({
+      id: 'W1',
+      file_path: '/api/pdfs/notes.pdf',
+      status: 'read',
+      year: '1843',
+      file_size_bytes: 1200,
+    })
+  })
+
+  it('names the file and role on each unlinkable relationship', async () => {
+    window.prksWorkCardHtml = vi.fn((work, options) => {
+      const id = String((work as { id?: unknown }).id || '')
+      const subtitle = options?.subtitle || ''
+      return `<a data-prks-route="#/works/${id}"><span class="work-card-subtitle">${subtitle}</span></a>`
+    })
+    window.prksBindPersonProfileDraft = vi.fn()
+    const pane = owner()
+    pane.ui.personDetailEditing = true
+    const el = host()
+    presentPersonDetail({
+      owner: pane,
+      host: el,
+      person: {
+        ...ada,
+        works: [
+          { id: 'W1', title: 'Notes', role_type: 'Author', order_index: '0', subtitle: 'Author' },
+          { id: 'W1', title: 'Notes', role_type: 'Editor', order_index: '1', subtitle: 'Editor' },
+        ],
+      },
+      editing: true,
+      worksEditing: true,
+      generation: 1,
+    })
     await flushView()
-    expect(window.deletePerson).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab' }), 4)
+    expect(el.querySelector('[aria-label="Remove link to Notes (Author)"]')).not.toBeNull()
+    expect(el.querySelector('[aria-label="Remove link to Notes (Editor)"]')).not.toBeNull()
+    const subtitles = Array.from(el.querySelectorAll('.work-card-subtitle')).map((node) => node.textContent)
+    expect(subtitles).toEqual(['Author', 'Editor'])
+    expect(el.querySelectorAll('[data-prks-route^="#/works/"]').length).toBe(2)
   })
 
   it('keeps the index host across a retained refresh and unmounts a failed one', async () => {

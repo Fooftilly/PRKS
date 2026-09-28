@@ -445,6 +445,61 @@ def _person_group_chip_names(page):
 
 
 class PersonProfileDraftOwnershipTests(_BrowserE2E):
+    def test_secondary_new_person_navigates_only_that_owner(self):
+        _server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
+        page.set_viewport_size({"width": 1600, "height": 900})
+        page.evaluate("() => prksNavigate('#/folders')")
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=15000)
+        page.evaluate("() => prksNavigate('#/people', { target: 'tile' })")
+        page.wait_for_function(
+            """() => {
+                const snap = window.prksWorkspaceSnapshot();
+                return !!(
+                    snap && snap.mode === 'tiled' &&
+                    snap.secondaryTree && snap.secondaryTree.tabId
+                );
+            }""",
+            timeout=15000,
+        )
+        secondary_id = page.evaluate("() => window.prksWorkspaceSnapshot().secondaryTree.tabId")
+        page.wait_for_function(
+            """(tabId) => {
+                const ctx = prksGetTabContext(tabId);
+                const route = ctx && ctx.lastResolvedRoute;
+                const tile = document.querySelector('.prks-tile--secondary');
+                return !!(
+                    route && route.name === 'people' &&
+                    tile && tile.querySelector('#prks-people-header-new')
+                );
+            }""",
+            arg=secondary_id,
+            timeout=15000,
+        )
+        page.locator(".prks-tile--secondary #prks-people-header-new").click()
+        page.wait_for_selector("#person-modal:not(.hidden)", timeout=10000)
+        page.fill("#person-lname", "Secondary Created")
+        page.click("#save-person-btn")
+        page.wait_for_function(
+            """(tabId) => {
+                const ctx = prksGetTabContext(tabId);
+                const route = ctx && ctx.lastResolvedRoute;
+                return !!(route && route.name === 'person');
+            }""",
+            arg=secondary_id,
+            timeout=15000,
+        )
+        self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
+        main_after = page.evaluate(
+            """() => {
+                const main = prksGetMainTabContext();
+                const route = main && (main.lastResolvedRoute || main.route);
+                return route ? route.name : '';
+            }"""
+        )
+        self.assertEqual(main_after, "folders")
+        self.assertEqual(page.locator(".prks-tile--main .person-profile").count(), 0)
+        self.assertGreater(page.locator(".prks-tile--secondary .person-profile").count(), 0)
+
     def test_focus_round_trip_and_cross_person_groups_use_independent_drafts(self):
         server, page, _collector = self._start_app(seed_fn=seed_person_profile_draft_library)
         person_a = server.ids["person_a"]
