@@ -228,7 +228,7 @@ const ctx = {
   if (!result.ok) throw new Error('landed write should still report ok');
   if (ctx.ui.personDetailEditing !== true) throw new Error('older save closed the later editor');
   if (ctx.ui.personProfileDraft.first_name !== 'Later') throw new Error('older save replaced the later draft');
-  if (writes !== 1) throw new Error('expected the field write');
+  if (writes !== 0) throw new Error('a reopened session accepted the older write');
   if (rendered !== 0) throw new Error('older save repainted the later session');
   process.stdout.write(JSON.stringify({ writes, rendered }));
 })().catch((error) => { console.error(error); process.exit(1); });
@@ -237,7 +237,7 @@ const ctx = {
         )
         proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(json.loads(proc.stdout)["writes"], 1)
+        self.assertEqual(json.loads(proc.stdout)["writes"], 0)
 
     def test_save_started_on_person_a_does_not_write_after_navigation_to_b(self):
         people = (FRONTEND / "components" / "people.js").read_text()
@@ -320,6 +320,72 @@ function moved() {
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["writes"], 0)
         self.assertEqual(payload["memberships"], 0)
+
+    def test_retained_same_person_refresh_still_writes_once(self):
+        people = (FRONTEND / "components" / "people.js").read_text()
+        guard = people[
+            people.index("function prksPersonProfileWriteStillOwned(") : people.index(
+                "async function prksWriteDirtyPersonFields("
+            )
+        ]
+        self.assertIn("prksPersonEditSessionStill", guard)
+        self.assertNotIn("prksTabContextOwnsEntityRoute", guard)
+        script = "\n".join(
+            (
+                "const PRKS_PERSON_PROFILE_FIELDS = ['first_name','last_name','aliases','about','image_url','link_wikipedia','link_stanford_encyclopedia','link_iep','links_other','birth_date','death_date'];",
+                "const PERSON_DATE_HELP = 'date';",
+                "const parsePersonBirthDeathField = (value) => String(value || '');",
+                "let releaseRead;",
+                "const prksReadPersonProfileBase = () => new Promise((resolve) => { releaseRead = resolve; });",
+                "const prksDirtyPersonFields = (id, desired) => desired;",
+                "let writes = 0;",
+                "const prksSavePersonFieldsDurably = async () => { writes += 1; };",
+                "const prksPersonRecordFor = async () => ({ id: 'P1', first_name: 'Augusta', last_name: 'Lovelace', works: [] });",
+                "const prksUniquePersonWorks = () => [];",
+                "const renderPersonDetails = () => {};",
+                _extract(people, "prksCompareText"),
+                _extract(people, "prksSortedUniqueIds"),
+                _extract(people, "prksPersonProfileRouteStill"),
+                _extract(people, "prksPersonEditSessionToken"),
+                _extract(people, "prksPersonEditSessionStill"),
+                _extract(people, "prksPersonProfileSaveMessage"),
+                _extract(people, "prksPersonProfileDesiredChanges"),
+                _extract(people, "prksPersonProfileWriteStillOwned"),
+                _extract(people, "prksWriteDirtyPersonFields"),
+                _extract(people, "prksSavePersonGroupIds"),
+                _extract(people, "prksFinishPersonProfileSave"),
+                _extract(people, "savePersonProfileDraft"),
+                r"""
+const ctx = {
+  mounted: true,
+  root: {},
+  generation: 4,
+  ui: { personDetailEditing: true, personEditSession: 2, personProfileDraft: { personId: 'P1', first_name: 'Augusta' } },
+  lastResolvedRoute: { name: 'person', params: { personId: 'P1' } },
+  getEntity: () => ({ id: 'P1' }),
+  setEntity() {},
+  isCurrent(generation) { return generation === ctx.generation; },
+};
+(async () => {
+  const pending = savePersonProfileDraft(ctx, 'P1',
+    { first_name: 'Augusta', last_name: 'Lovelace', aliases: '', about: '', birth_date: '', death_date: '', image_url: '', link_wikipedia: '', link_stanford_encyclopedia: '', link_iep: '', links_other: '' },
+    { first_name: 'Ada', last_name: 'Lovelace', aliases: '', about: '', birth_date: '', death_date: '', image_url: '', link_wikipedia: '', link_stanford_encyclopedia: '', link_iep: '', links_other: '' },
+    [], [], 2, 4);
+  ctx.generation = 9;
+  if (ctx.isCurrent(4)) throw new Error('retained refresh left the captured generation current');
+  if (ctx.ui.personEditSession !== 2 || !ctx.ui.personDetailEditing) throw new Error('retained refresh dropped the edit session');
+  releaseRead({ base: { first_name: { value: 'Ada' }, last_name: { value: 'Lovelace' } }, operations: [] });
+  const result = await pending;
+  if (!result.ok || result.message) throw new Error('same-person save should complete quietly');
+  if (writes !== 1) throw new Error('expected one durable write, got ' + writes);
+  process.stdout.write(JSON.stringify({ writes }));
+})().catch((error) => { console.error(error); process.exit(1); });
+""",
+            )
+        )
+        proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False, timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["writes"], 1)
 
     def test_editing_relationships_keep_role_subtitles_and_card_fields(self):
         people = (FRONTEND / "components" / "people.js").read_text()

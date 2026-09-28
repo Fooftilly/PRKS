@@ -1491,14 +1491,16 @@ function prksPersonProfileDesiredChanges(draftFields, baselineFields) {
     return { desired: desired };
 }
 
-function prksPersonProfileWriteStillOwned(ctx, personId, generation) {
-    return typeof prksTabContextOwnsEntityRoute === 'function' &&
-        prksTabContextOwnsEntityRoute(ctx, generation, 'person', personId, 'person');
+function prksPersonProfileWriteStillOwned(ctx, personId, session) {
+    /* A retained refresh of this Person bumps route generation and restores
+     * the same edit session. That save is still this Person. A different
+     * Person, or a cancel that opened a new session, is not. */
+    return prksPersonEditSessionStill(ctx, personId, session);
 }
 
-async function prksWriteDirtyPersonFields(ctx, personId, desired, generation) {
+async function prksWriteDirtyPersonFields(ctx, personId, desired, session) {
     const read = await prksReadPersonProfileBase(personId);
-    if (!prksPersonProfileWriteStillOwned(ctx, personId, generation)) return { ok: true, skipped: true, message: '' };
+    if (!prksPersonProfileWriteStillOwned(ctx, personId, session)) return { ok: true, skipped: true, message: '' };
     const base = read && read.base;
     const operations = read && read.operations;
     if (!base) {
@@ -1513,19 +1515,22 @@ async function prksWriteDirtyPersonFields(ctx, personId, desired, generation) {
     if (!Object.keys(changes).length || typeof prksSavePersonFieldsDurably !== 'function') {
         return { ok: true, message: '' };
     }
-    if (!prksPersonProfileWriteStillOwned(ctx, personId, generation)) return { ok: true, skipped: true, message: '' };
+    if (!prksPersonProfileWriteStillOwned(ctx, personId, session)) return { ok: true, skipped: true, message: '' };
     await prksSavePersonFieldsDurably(personId, changes, base);
     return { ok: true, message: '' };
 }
 
 /**
  * Persist one edit session. Only fields that differ from the session baseline
- * are sent. Ownership is checked immediately before each durable write. An
- * older session must not close a later one.
+ * are sent. The live person route and this edit-session token are checked
+ * immediately before each durable write. Route generation is not that key:
+ * a retained refresh of the same Person bumps it. An older session must not
+ * write into, or close, a later one.
  */
 async function savePersonProfileDraft(ctx, personId, draftFields, baselineFields, groupIds, baselineGroupIds, session, generation) {
     const fail = (message) => ({ ok: false, message: message || 'Could not save this profile.' });
-    const stillOwned = () => prksPersonProfileWriteStillOwned(ctx, personId, generation);
+    const stillOwned = () => prksPersonProfileWriteStillOwned(ctx, personId, session);
+    void generation;
     if (!ctx || !personId || !draftFields || !baselineFields) return fail('Could not save this profile.');
     if (!String(draftFields.last_name || '').trim()) return fail('Last name is required.');
     const built = prksPersonProfileDesiredChanges(draftFields, baselineFields);
@@ -1539,7 +1544,7 @@ async function savePersonProfileDraft(ctx, personId, draftFields, baselineFields
     }
     if (fieldNames.length) {
         try {
-            const written = await prksWriteDirtyPersonFields(ctx, personId, built.desired, generation);
+            const written = await prksWriteDirtyPersonFields(ctx, personId, built.desired, session);
             if (written.skipped) return { ok: true, message: '' };
             if (!written.ok) return fail(written.message);
         } catch (error) {
