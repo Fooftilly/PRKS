@@ -725,10 +725,12 @@ function openModal(id) {
     } else if (id === 'person-modal') {
         if (window.__prksPersonIndexCreateArmed) {
             window.__prksPersonIndexCreateArmed = false;
-        } else if (typeof window.prksClearPersonIndexCreateOrigin === 'function') {
-            window.prksClearPersonIndexCreateOrigin();
         } else {
-            window.__prksPersonIndexCreateOrigin = null;
+            if (typeof window.prksClearPersonIndexCreateOrigin === 'function') {
+                window.prksClearPersonIndexCreateOrigin();
+            } else {
+                window.__prksPersonIndexCreateOrigin = null;
+            }
         }
         resetPersonCreateForm();
     } else if (id === 'folder-modal' && typeof window.prksRefreshFolderModalValidation === 'function') {
