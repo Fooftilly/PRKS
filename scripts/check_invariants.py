@@ -103,81 +103,79 @@ class Finding:
         return f"{self.code} {self.path}:{self.line}: {self.message}"
 
 
+# A lexical binding, as far as these invariants care:
+#   ("module", "os")                  import os / import zipfile as z
+#   ("name", "zipfile", "ZipFile")    from zipfile import ZipFile as Z
+#   ("archive",)                      a value known to be a zipfile archive
+#   ("other",)                        any other local binding (shadows imports)
+_Binding = tuple[str, ...]
+_ARCHIVE: _Binding = ("archive",)
+_OTHER: _Binding = ("other",)
+
+
 class _Scope:
-    """One lexical import scope (module, class body, or function)."""
+    """One lexical scope (module, class body, function, lambda, comprehension).
 
-    __slots__ = ("modules", "names", "zip_archives")
+    ``summary`` holds every binding made anywhere in the scope body, collected
+    before the body is walked. Nested scopes resolve enclosing names through it
+    because a function body runs after its enclosing scope has bound them, so
+    imports placed after a ``def`` still resolve. ``current`` holds bindings
+    reached so far in source order and serves the scope being walked: a
+    definite rebinding replaces a name's bindings, while a rebinding inside a
+    conditional block (if/loop/try/match) only adds to them. A name the scope
+    binds but has not reached yet (e.g. a loop-carried use) falls back to
+    ``summary``. Every set is a may-alias set: any archive entry classifies.
+    """
 
-    def __init__(self) -> None:
-        self.modules: dict[str, str] = {}
-        self.names: dict[str, tuple[str, str]] = {}
-        # Local name -> whether this scope binds it to a zipfile archive.
-        # ``False`` records a non-archive local binding that shadows an
-        # enclosing one. Bindings are sticky within one scope (no flow
-        # analysis): any archive binding taints the name for the scope.
-        self.zip_archives: dict[str, bool] = {}
+    __slots__ = ("is_class", "summary", "current")
 
-
-def _bind_import(scope: _Scope, node: ast.Import) -> None:
-    for item in node.names:
-        if item.name in _TRACKED_MODULES:
-            scope.modules[item.asname or item.name] = item.name
-            continue
-        # ``import os.path`` (no ``as``) still binds the top-level name ``os``
-        # to the ``os`` package. ``import os.path as p`` binds only ``p``.
-        if item.asname is None:
-            top = item.name.split(".", 1)[0]
-            if top in _TRACKED_MODULES:
-                scope.modules[top] = top
+    def __init__(self, *, is_class: bool = False) -> None:
+        self.is_class = is_class
+        self.summary: dict[str, set[_Binding]] = {}
+        self.current: dict[str, set[_Binding]] = {}
 
 
-def _bind_import_from(scope: _Scope, node: ast.ImportFrom) -> None:
-    if node.module not in _TRACKED_MODULES:
-        return
-    for item in node.names:
-        if item.name == "*":
-            continue
-        scope.names[item.asname or item.name] = (node.module, item.name)
+def _resolve(scopes: list[_Scope], name: str) -> set[_Binding]:
+    innermost = scopes[-1]
+    if name in innermost.current:
+        return innermost.current[name]
+    if name in innermost.summary:
+        return innermost.summary[name]
+    # Class bodies are not enclosing scopes for the functions nested in them.
+    for scope in reversed(scopes[:-1]):
+        if not scope.is_class and name in scope.summary:
+            return scope.summary[name]
+    return set()
 
 
-def _lookup_module(scopes: list[_Scope], name: str) -> str | None:
-    for scope in reversed(scopes):
-        if name in scope.modules:
-            return scope.modules[name]
-    return None
+def _lookup_modules(scopes: list[_Scope], name: str) -> set[str]:
+    return {b[1] for b in _resolve(scopes, name) if b[0] == "module"}
 
 
-def _lookup_name(scopes: list[_Scope], name: str) -> tuple[str, str] | None:
-    for scope in reversed(scopes):
-        if name in scope.names:
-            return scope.names[name]
-    return None
+def _lookup_names(scopes: list[_Scope], name: str) -> set[tuple[str, str]]:
+    return {(b[1], b[2]) for b in _resolve(scopes, name) if b[0] == "name"}
 
 
-def _call_identity(node: ast.Call, scopes: list[_Scope]) -> tuple[str, str] | None:
+def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, str]]:
     fn = node.func
     if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-        module = _lookup_module(scopes, fn.value.id)
-        if module:
-            return module, fn.attr
+        return sorted((module, fn.attr) for module in _lookup_modules(scopes, fn.value.id))
     if isinstance(fn, ast.Name):
-        return _lookup_name(scopes, fn.id)
-    return None
+        return sorted(_lookup_names(scopes, fn.id))
+    return []
 
 
 def _is_zip_class_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
     """``zipfile.ZipFile`` / ``z.ZipFile`` / ``ZipFile`` / ``Z`` (import alias)."""
     if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
         return (
-            _lookup_module(scopes, node.value.id) == "zipfile"
-            and node.attr in ZIPFILE_ARCHIVE_CLASSES
+            node.attr in ZIPFILE_ARCHIVE_CLASSES
+            and "zipfile" in _lookup_modules(scopes, node.value.id)
         )
     if isinstance(node, ast.Name):
-        identity = _lookup_name(scopes, node.id)
-        return (
-            identity is not None
-            and identity[0] == "zipfile"
-            and identity[1] in ZIPFILE_ARCHIVE_CLASSES
+        return any(
+            module == "zipfile" and name in ZIPFILE_ARCHIVE_CLASSES
+            for module, name in _lookup_names(scopes, node.id)
         )
     return False
 
@@ -201,40 +199,228 @@ def _annotation_mentions_zip(node: ast.expr | None, scopes: list[_Scope]) -> boo
     )
 
 
-def _lookup_zip_archive(scopes: list[_Scope], name: str) -> bool:
-    for scope in reversed(scopes):
-        if name in scope.zip_archives:
-            return scope.zip_archives[name]
-    return False
-
-
 def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
     if isinstance(node, ast.Name):
-        return _lookup_zip_archive(scopes, node.id)
+        return _ARCHIVE in _resolve(scopes, node.id)
     return _is_zip_constructor(node, scopes)
 
 
+def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
+    """What a name bound to ``value`` refers to (aliases carry through)."""
+    if isinstance(value, ast.Name):
+        return set(_resolve(scopes, value.id)) or {_OTHER}
+    if _is_zip_constructor(value, scopes):
+        return {_ARCHIVE}
+    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+        modules = _lookup_modules(scopes, value.value.id)
+        if modules:
+            return {("name", module, value.attr) for module in modules}
+    return {_OTHER}
+
+
+def _iterable_yields_archive(iterable: ast.expr, scopes: list[_Scope]) -> bool:
+    return isinstance(iterable, (ast.Tuple, ast.List, ast.Set)) and any(
+        _is_zip_archive_expr(elt, scopes) for elt in iterable.elts
+    )
+
+
+def _stored_names(target: ast.expr) -> list[str]:
+    return [
+        sub.id
+        for sub in ast.walk(target)
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
+    ]
+
+
+def _target_pairs(
+    target: ast.expr, value: ast.expr, scopes: list[_Scope]
+) -> list[tuple[str, set[_Binding]]]:
+    if isinstance(target, ast.Name):
+        return [(target.id, _value_bindings(value, scopes))]
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+        and not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
+    ):
+        pairs: list[tuple[str, set[_Binding]]] = []
+        for sub_target, sub_value in zip(target.elts, value.elts):
+            pairs.extend(_target_pairs(sub_target, sub_value, scopes))
+        return pairs
+    return [(name, {_OTHER}) for name in _stored_names(target)]
+
+
+def _loop_target_pairs(
+    target: ast.expr, iterable: ast.expr, scopes: list[_Scope]
+) -> list[tuple[str, set[_Binding]]]:
+    if isinstance(target, ast.Name) and _iterable_yields_archive(iterable, scopes):
+        return [(target.id, {_ARCHIVE})]
+    return [(name, {_OTHER}) for name in _stored_names(target)]
+
+
+def _import_pairs(node: ast.Import | ast.ImportFrom) -> list[tuple[str, set[_Binding]]]:
+    pairs: list[tuple[str, set[_Binding]]] = []
+    if isinstance(node, ast.Import):
+        for item in node.names:
+            top = item.name.split(".", 1)[0]
+            if item.asname is None:
+                # ``import os.path`` still binds the top-level name ``os``.
+                binding = ("module", top) if top in _TRACKED_MODULES else _OTHER
+                pairs.append((top, {binding}))
+            elif item.name in _TRACKED_MODULES:
+                pairs.append((item.asname, {("module", item.name)}))
+            else:
+                # ``import os.path as p`` binds only ``p`` (to os.path).
+                pairs.append((item.asname, {_OTHER}))
+        return pairs
+    tracked = node.level == 0 and node.module in _TRACKED_MODULES
+    for item in node.names:
+        if item.name == "*":
+            if tracked and node.module == "zipfile":
+                pairs.extend(
+                    (cls, {("name", "zipfile", cls)}) for cls in sorted(ZIPFILE_ARCHIVE_CLASSES)
+                )
+            continue
+        binding = ("name", node.module, item.name) if tracked else _OTHER
+        pairs.append((item.asname or item.name, {binding}))
+    return pairs
+
+
+def _binding_pairs(node: ast.AST, scopes: list[_Scope]) -> list[tuple[str, set[_Binding]]]:
+    """Names ``node`` binds in its own scope, with what each refers to."""
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return _import_pairs(node)
+    if isinstance(node, ast.Assign):
+        pairs: list[tuple[str, set[_Binding]]] = []
+        for target in node.targets:
+            pairs.extend(_target_pairs(target, node.value, scopes))
+        return pairs
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        if _annotation_mentions_zip(node.annotation, scopes):
+            return [(node.target.id, {_ARCHIVE})]
+        if node.value is not None:
+            return _target_pairs(node.target, node.value, scopes)
+        return []
+    if isinstance(node, ast.AugAssign):
+        return [(name, {_OTHER}) for name in _stored_names(node.target)]
+    if isinstance(node, ast.NamedExpr):
+        return _target_pairs(node.target, node.value, scopes)
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return _loop_target_pairs(node.target, node.iter, scopes)
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        pairs = []
+        for item in node.items:
+            if item.optional_vars is None:
+                continue
+            if isinstance(item.optional_vars, ast.Name) and _is_zip_archive_expr(
+                item.context_expr, scopes
+            ):
+                pairs.append((item.optional_vars.id, {_ARCHIVE}))
+            else:
+                pairs.extend((name, {_OTHER}) for name in _stored_names(item.optional_vars))
+        return pairs
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [(node.name, {_OTHER})]
+    if isinstance(node, ast.ExceptHandler) and node.name:
+        return [(node.name, {_OTHER})]
+    return []
+
+
+def _function_params(args: ast.arguments) -> list[ast.arg]:
+    params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    params.extend(a for a in (args.vararg, args.kwarg) if a is not None)
+    return params
+
+
+def _iter_scope_nodes(body: list[ast.stmt]) -> Iterable[ast.AST]:
+    """Nodes evaluated in this scope, in source order, excluding nested scope bodies."""
+    stack: list[ast.AST] = list(reversed(body))
+    while stack:
+        node = stack.pop()
+        yield node
+        children: list[ast.AST]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            children = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+            if not isinstance(node, ast.Lambda):
+                children = [*node.decorator_list, *children]
+        elif isinstance(node, ast.ClassDef):
+            children = [*node.decorator_list, *node.bases, *node.keywords]
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            # Only walrus targets escape a comprehension into this scope.
+            children = [sub for sub in ast.walk(node) if isinstance(sub, ast.NamedExpr)]
+            stack.extend(reversed(children))
+            continue
+        else:
+            children = list(ast.iter_child_nodes(node))
+        stack.extend(reversed(children))
+
+
 class _InvariantVisitor(ast.NodeVisitor):
-    """Walk the tree, resolving os/shutil/zipfile aliases in the current lexical scope."""
+    """Walk the tree, resolving os/shutil/zipfile bindings in the current lexical scope."""
 
     def __init__(self, relpath: str) -> None:
         self.relpath = relpath
-        self.scopes: list[_Scope] = [_Scope()]
+        self.scopes: list[_Scope] = []
+        # Conditional-block nesting depth, one counter per open scope.
+        self._depth: list[int] = []
         self.findings: list[Finding] = []
 
-    def _push(self) -> None:
-        self.scopes.append(_Scope())
+    def _push(
+        self,
+        body: list[ast.stmt],
+        *,
+        is_class: bool = False,
+        params: list[tuple[str, set[_Binding]]] | None = None,
+    ) -> None:
+        scope = _Scope(is_class=is_class)
+        self.scopes.append(scope)
+        self._depth.append(0)
+        for name, bindings in params or ():
+            scope.summary[name] = set(bindings)
+            scope.current[name] = set(bindings)
+        nodes = list(_iter_scope_nodes(body))
+        # Imports first so later assignments in the scope can resolve them.
+        for pass_imports in (True, False):
+            for node in nodes:
+                if isinstance(node, (ast.Import, ast.ImportFrom)) != pass_imports:
+                    continue
+                for name, bindings in _binding_pairs(node, self.scopes):
+                    scope.summary.setdefault(name, set()).update(bindings)
 
     def _pop(self) -> None:
         self.scopes.pop()
+        self._depth.pop()
+
+    def _bind(self, pairs: list[tuple[str, set[_Binding]]]) -> None:
+        current = self.scopes[-1].current
+        for name, bindings in pairs:
+            if self._depth[-1] == 0:
+                current[name] = set(bindings)
+            else:
+                current.setdefault(name, set()).update(bindings)
+
+    def _bind_node(self, node: ast.AST) -> None:
+        self._bind(_binding_pairs(node, self.scopes))
+
+    def _visit_block(self, stmts: list[ast.stmt] | list[ast.AST]) -> None:
+        self._depth[-1] += 1
+        for stmt in stmts:
+            self.visit(stmt)
+        self._depth[-1] -= 1
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._push(node.body)
+        for stmt in node.body:
+            self.visit(stmt)
+        self._pop()
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         # Decorators, defaults and annotations evaluate in the enclosing scope.
         for decorator in node.decorator_list:
             self.visit(decorator)
         args = node.args
-        params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
-        params.extend(a for a in (args.vararg, args.kwarg) if a is not None)
+        params = _function_params(args)
         for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
             self.visit(default)
         for param in params:
@@ -244,14 +430,17 @@ class _InvariantVisitor(ast.NodeVisitor):
             self.visit(node.returns)
         for type_param in getattr(node, "type_params", ()):
             self.visit(type_param)
-        zip_params = {
-            param.arg: _annotation_mentions_zip(param.annotation, self.scopes)
+        # Parameters are locals: they shadow enclosing imports and archive
+        # bindings unless annotated as a zipfile archive themselves.
+        param_pairs = [
+            (
+                param.arg,
+                {_ARCHIVE} if _annotation_mentions_zip(param.annotation, self.scopes) else {_OTHER},
+            )
             for param in params
-        }
-        self._push()
-        # Parameters are locals: they shadow enclosing archive bindings unless
-        # annotated as a zipfile archive themselves.
-        self.scopes[-1].zip_archives.update(zip_params)
+        ]
+        self._bind_node(node)
+        self._push(node.body, params=param_pairs)
         for stmt in node.body:
             self.visit(stmt)
         self._pop()
@@ -262,47 +451,120 @@ class _InvariantVisitor(ast.NodeVisitor):
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 
-    def _bind_target(self, target: ast.expr, is_archive: bool) -> None:
-        if not isinstance(target, ast.Name):
-            return
-        bindings = self.scopes[-1].zip_archives
-        if is_archive:
-            bindings[target.id] = True
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        args = node.args
+        for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
+            self.visit(default)
+        self._push([], params=[(p.arg, {_OTHER}) for p in _function_params(args)])
+        self.visit(node.body)
+        self._pop()
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for child in [*node.decorator_list, *node.bases, *node.keywords]:
+            self.visit(child)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+        self._push(node.body, is_class=True)
+        for stmt in node.body:
+            self.visit(stmt)
+        self._pop()
+        self._bind_node(node)
+
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
+    ) -> None:
+        self._push([])
+        for generator in node.generators:
+            self.visit(generator.iter)
+            self._bind(_loop_target_pairs(generator.target, generator.iter, self.scopes))
+            for condition in generator.ifs:
+                self.visit(condition)
+        if isinstance(node, ast.DictComp):
+            self.visit(node.key)
+            self.visit(node.value)
         else:
-            bindings.setdefault(target.id, False)
+            self.visit(node.elt)
+        self._pop()
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self._bind_node(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self._bind_node(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        is_archive = _is_zip_archive_expr(node.value, self.scopes)
-        for target in node.targets:
-            self._bind_target(target, is_archive)
         self.generic_visit(node)
+        self._bind_node(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        is_archive = _annotation_mentions_zip(node.annotation, self.scopes) or (
-            node.value is not None and _is_zip_archive_expr(node.value, self.scopes)
-        )
-        self._bind_target(node.target, is_archive)
         self.generic_visit(node)
+        self._bind_node(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.generic_visit(node)
+        self._bind_node(node)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
-        self._bind_target(node.target, _is_zip_archive_expr(node.value, self.scopes))
         self.generic_visit(node)
+        self._bind_node(node)
 
-    def _bind_with_items(self, items: list[ast.withitem]) -> None:
-        for item in items:
-            if item.optional_vars is not None:
-                self._bind_target(
-                    item.optional_vars,
-                    _is_zip_archive_expr(item.context_expr, self.scopes),
-                )
+    def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self._depth[-1] += 1
+        self._bind_node(node)
+        self._depth[-1] -= 1
+        self._visit_block(node.body)
+        self._visit_block(node.orelse)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_loop(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self._visit_loop(node)
+
+    def visit_While(self, node: ast.While) -> None:
+        self.visit(node.test)
+        self._visit_block(node.body)
+        self._visit_block(node.orelse)
+
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        self._visit_block(node.body)
+        self._visit_block(node.orelse)
+
+    def visit_Try(self, node: ast.Try) -> None:
+        self._visit_block([*node.body, *node.handlers, *node.orelse, *node.finalbody])
+
+    visit_TryStar = visit_Try
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.type is not None:
+            self.visit(node.type)
+        self._bind_node(node)
+        for stmt in node.body:
+            self.visit(stmt)
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self.visit(node.subject)
+        self._visit_block(node.cases)
+
+    def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+        self._bind_node(node)
+        for stmt in node.body:
+            self.visit(stmt)
 
     def visit_With(self, node: ast.With) -> None:
-        self._bind_with_items(node.items)
-        self.generic_visit(node)
+        self._visit_with(node)
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
-        self._bind_with_items(node.items)
-        self.generic_visit(node)
+        self._visit_with(node)
 
     def _report_zip_extractall(self, node: ast.AST) -> None:
         self.findings.append(
@@ -318,26 +580,15 @@ class _InvariantVisitor(ast.NodeVisitor):
             )
         )
 
+    def _is_zip_receiver(self, node: ast.expr) -> bool:
+        return _is_zip_archive_expr(node, self.scopes) or _is_zip_class_expr(node, self.scopes)
+
     def visit_Attribute(self, node: ast.Attribute) -> None:
         # Match the attribute itself so method references (``f = zf.extractall``)
         # and unbound calls (``ZipFile.extractall(zf, dest)``) are covered too.
-        if node.attr == BANNED_ZIPFILE_METHOD and (
-            _is_zip_archive_expr(node.value, self.scopes)
-            or _is_zip_class_expr(node.value, self.scopes)
-        ):
+        if node.attr == BANNED_ZIPFILE_METHOD and self._is_zip_receiver(node.value):
             self._report_zip_extractall(node)
         self.generic_visit(node)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._push()
-        self.generic_visit(node)
-        self._pop()
-
-    def visit_Import(self, node: ast.Import) -> None:
-        _bind_import(self.scopes[-1], node)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        _bind_import_from(self.scopes[-1], node)
 
     def visit_Call(self, node: ast.Call) -> None:
         if (
@@ -346,12 +597,10 @@ class _InvariantVisitor(ast.NodeVisitor):
             and len(node.args) >= 2
             and isinstance(node.args[1], ast.Constant)
             and node.args[1].value == BANNED_ZIPFILE_METHOD
-            and _is_zip_archive_expr(node.args[0], self.scopes)
+            and self._is_zip_receiver(node.args[0])
         ):
             self._report_zip_extractall(node)
-        identity = _call_identity(node, self.scopes)
-        if identity is not None:
-            module, name = identity
+        for module, name in _call_identities(node, self.scopes):
             if module == "shutil" and name in BANNED_SHUTIL_COPY_CALLS:
                 self.findings.append(
                     Finding(

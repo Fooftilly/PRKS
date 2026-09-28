@@ -85,6 +85,19 @@ class EngineeringInvariantTests(unittest.TestCase):
         # ``os`` was never bound; ``os.replace`` is an unresolved Name path.
         self.assertEqual(aliased, [])
 
+    def test_import_resolution_honors_deferred_imports_and_shadowing(self):
+        """The shared lexical model also serves the os/shutil invariants."""
+        deferred = checker.check_source(
+            "def commit():\n    os.replace('a', 'b')\n\nimport os\n",
+            "backend/new_feature.py",
+        )
+        self.assertEqual([f.code for f in deferred], ["INV-DURABILITY-001"])
+        shadowed = checker.check_source(
+            "import shutil\ndef publish(shutil):\n    shutil.copy2('a', 'b')\n",
+            "backend/new_feature.py",
+        )
+        self.assertEqual(shadowed, [])
+
     def test_replace_is_allowed_only_at_approved_boundary(self):
         allowed = checker.check_source(
             "import os\nos.replace('a', 'b')\n",
@@ -243,6 +256,66 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "        archive.extractall(dest)\n"
                 "    run()\n"
             ),
+            # Function bodies run after the module finished importing.
+            "deferred_module_import": (
+                "def restore(path, dest):\n"
+                "    zipfile.ZipFile(path).extractall(dest)\n"
+                "\n"
+                "import zipfile\n"
+            ),
+            # Class attributes are not visible to method bodies by bare name.
+            "class_attribute_does_not_hide_module_archive": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "class Restore:\n"
+                "    archive = None\n"
+                "    def run(self, dest):\n"
+                "        archive.extractall(dest)\n"
+            ),
+            "wildcard_import": (
+                "from zipfile import *\n"
+                "archive = ZipFile(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "tuple_unpacking": (
+                "import zipfile\n"
+                "archive, label = zipfile.ZipFile(path), 'backup'\n"
+                "archive.extractall(dest)\n"
+            ),
+            "loop_over_constructors": (
+                "import zipfile\n"
+                "for archive in (zipfile.ZipFile(a), zipfile.ZipFile(b)):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "comprehension_over_constructors": (
+                "import zipfile\n"
+                "[a.extractall(dest) for a in (zipfile.ZipFile(path),)]\n"
+            ),
+            # Only a definite rebinding clears the archive classification.
+            "conditional_rebinding_keeps_archive": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "if staged:\n"
+                "    archive = load_bundle()\n"
+                "archive.extractall(dest)\n"
+            ),
+            "loop_carried_binding": (
+                "import zipfile\n"
+                "def restore(paths, dest):\n"
+                "    for path in paths:\n"
+                "        if ready:\n"
+                "            archive.extractall(dest)\n"
+                "        archive = zipfile.ZipFile(path)\n"
+            ),
+            "class_alias_by_assignment": (
+                "import zipfile\n"
+                "Z = zipfile.ZipFile\n"
+                "Z(path).extractall(dest)\n"
+            ),
+            "getattr_on_class": (
+                "from zipfile import ZipFile\n"
+                "getattr(ZipFile, 'extractall')(archive, dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -310,6 +383,20 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "import zipfile\n"
                 "getattr(bundle, 'extractall')(dest)\n"
             ),
+            # A definite rebinding replaces the archive classification.
+            "definite_rebinding": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "archive.close()\n"
+                "archive = load_bundle()\n"
+                "archive.extractall(dest)\n"
+            ),
+            "reassigned_class_alias": (
+                "from zipfile import ZipFile as Z\n"
+                "Z = Bundle\n"
+                "archive = Z(path)\n"
+                "archive.extractall(dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -360,6 +447,26 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "def unpack(dest):\n"
                 "    archive = load_bundle()\n"
                 "    archive.extractall(dest)\n"
+            ),
+            "class_import_shadowed_by_parameter": (
+                "from zipfile import ZipFile\n"
+                "def unpack(ZipFile, path, dest):\n"
+                "    ZipFile(path).extractall(dest)\n"
+            ),
+            "module_import_shadowed_by_parameter": (
+                "import zipfile\n"
+                "def unpack(zipfile, path, dest):\n"
+                "    zipfile.ZipFile(path).extractall(dest)\n"
+            ),
+            "module_binding_shadowed_by_comprehension": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "[archive.extractall(dest) for archive in bundles]\n"
+            ),
+            "module_binding_shadowed_by_lambda": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "unpack = lambda archive: archive.extractall(dest)\n"
             ),
         }
         for label, source in cases.items():
