@@ -127,7 +127,8 @@ _FROM_LIST_END_RE = re.compile(
 )
 _QUALIFIED_RE = re.compile(rf"\b({_IDENT})\s*\.\s*(?:{_IDENT}|\*)")
 _AS_ALIAS_RE = re.compile(rf"\s*(?:as\s+)?({_IDENT})", re.IGNORECASE)
-_SUBQUERY_START_RE = re.compile(r"\(\s*select\b", re.IGNORECASE)
+# A parenthesized query expression: (SELECT ...) or (WITH ... SELECT ...).
+_SUBQUERY_START_RE = re.compile(r"\(\s*(?:select|with)\b", re.IGNORECASE)
 _KEYWORDS = frozenset(
     """
     select from where join left right inner outer cross full natural on using
@@ -319,7 +320,10 @@ def _aggregate_in_select_list(body_masked: str) -> str | None:
     """
     inner = body_masked[1:-1]
     top = _top_level(inner)
-    start = re.match(r"\s*select\b", top, re.IGNORECASE)
+    if not _is_select_scope(top):
+        return None
+    # The main SELECT: the first top-level one (CTE bodies are blanked).
+    start = re.search(r"\bselect\b", top, re.IGNORECASE)
     if not start:
         return None
     end = re.search(r"\bfrom\b", top[start.end() :], re.IGNORECASE)
@@ -449,23 +453,52 @@ def _outer_correlation(
 ) -> tuple[list[str], str] | None:
     """``(correlated qualifiers, outer label)`` for the subquery, or None.
 
-    None means the enclosing statement is out of scope (``UPDATE ... SET``
-    and similar); an empty qualifier list means it is not correlated.
+    Walks outward through every enclosing ``(SELECT ...)`` scope (parent,
+    grandparent, ...) until each unresolved qualifier finds its declaration.
+    None means the immediately enclosing statement is out of scope
+    (``UPDATE ... SET`` and similar); an empty qualifier list means the
+    subquery is not correlated.
     """
-    enc_start, enc_end = _enclosing_span(masked, open_idx, close)
-    # Enclosing statement text with every nested (...) blanked, so sibling
-    # subqueries do not contribute their own aliases to the outer scope.
-    outer_text = _top_level(masked[enc_start:enc_end])
-    if re.match(r"\s*(?:with\b.*?)?select\b", outer_text, re.IGNORECASE | re.DOTALL):
-        outer = _declared(outer_text)
-        correlated = sorted(r for r in unresolved if r in outer)
-        return correlated, ", ".join(sorted({outer[r] for r in correlated}))
-    if enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
-        # A bare projection fragment for a caller to splice into its own
-        # SELECT; any outward reference is the per-row correlation.
-        correlated = sorted(unresolved)
-        return correlated, "fragment:" + ", ".join(correlated)
-    return None
+    remaining = set(unresolved)
+    correlated: list[str] = []
+    labels: set[str] = set()
+    saw_select = False
+    start, end = open_idx, close
+    while remaining:
+        enc_start, enc_end = _enclosing_span(masked, start, end)
+        # Enclosing scope text with every nested (...) blanked, so sibling
+        # subqueries do not contribute their own aliases to this scope.
+        outer_text = _top_level(masked[enc_start:enc_end])
+        if _is_select_scope(outer_text):
+            saw_select = True
+            outer = _declared(outer_text)
+            found = sorted(r for r in remaining if r in outer)
+            labels.update(outer[r] for r in found)
+        elif enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
+            # A bare projection fragment for a caller to splice into its own
+            # SELECT; any outward reference is the per-row correlation.
+            found = sorted(remaining)
+            labels.add("fragment:" + ", ".join(found))
+        elif not saw_select:
+            return None
+        else:
+            found = []
+        correlated.extend(found)
+        remaining.difference_update(found)
+        if enc_start == 0:
+            break
+        start, end = enc_start - 1, enc_end
+    return sorted(correlated), ", ".join(sorted(labels))
+
+
+def _is_select_scope(top_text: str) -> bool:
+    """A SELECT, or ``WITH ... SELECT`` (CTE bodies are already blanked)."""
+    if re.match(r"\s*select\b", top_text, re.IGNORECASE):
+        return True
+    return bool(
+        re.match(r"\s*with\b", top_text, re.IGNORECASE)
+        and re.search(r"\bselect\b", top_text, re.IGNORECASE)
+    )
 
 
 def _output_alias(masked: str, close: int) -> str:

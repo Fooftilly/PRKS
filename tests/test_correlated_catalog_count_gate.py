@@ -207,6 +207,34 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(select=select):
                 self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
 
+    def test_correlation_to_grandparent_scope_detected(self):
+        sql = """
+        SELECT p.id,
+            (SELECT (SELECT COUNT(*) FROM audit a WHERE a.parent_id = p.id)
+             FROM child c WHERE c.parent_id = p.id LIMIT 1) AS first_audits
+        FROM parent p
+        """
+        hits = _hits(sql)
+        self.assertEqual([(h.outer, h.inner) for h in hits], [("parent p", "audit")])
+
+    def test_cte_prefixed_scalar_subquery_detected(self):
+        sql = """
+        SELECT p.id,
+            (WITH chosen AS (SELECT * FROM child WHERE visible = 1)
+             SELECT COUNT(*) FROM chosen c WHERE c.parent_id = p.id) AS n
+        FROM parent p
+        """
+        hits = _hits(sql)
+        self.assertEqual([(h.output_alias, h.inner) for h in hits], [("n", "chosen")])
+
+    def test_independent_cte_scalar_subquery_passes(self):
+        sql = """
+        SELECT p.id,
+            (WITH chosen AS (SELECT * FROM child) SELECT COUNT(*) FROM chosen) AS total
+        FROM parent p
+        """
+        self.assertEqual(_hits(sql), [])
+
     def test_aggregate_only_in_nested_select_list_belongs_to_nested_query(self):
         sql = """
         SELECT p.id,
