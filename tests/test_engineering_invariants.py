@@ -1727,6 +1727,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    for root, _, files in os.walk(pdfs_dir):\n"
                 "        os.remove(os.path.join(root, files[0]))\n"
             ),
+            "relative_import_helper": (
+                "import os\n"
+                "from .db_manager import safe_pdf_path_under_dir as contain\n"
+                "def drop(root, name):\n"
+                "    os.remove(contain(root, name))\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2264,6 +2270,20 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def adopt(conn):\n"
                 "    conn.executescript(\"UPDATE works SET file_path='/api/pdfs/shared.pdf' WHERE id='1'\")\n"
             ),
+            "raw_sql_columnless_insert": (
+                "def create(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO works VALUES (?, ?, ?)', (w_id, 't', fp))\n"
+            ),
+            "raw_sql_insert_select": (
+                "def copy(conn):\n"
+                "    conn.execute('INSERT INTO works SELECT * FROM staged_works')\n"
+            ),
+            "partial_prebound_positional": (
+                "from functools import partial\n"
+                "def create(db, fp):\n"
+                "    save = partial(db.add_work, 't')\n"
+                "    save('Not Started', '', '', '', fp)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2543,6 +2563,11 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "def f(db, fp):\n"
                 "    forget_pending_pdf_cleanup(db, Path(referenced_managed_pdf_filename(fp)).name)\n"
+            ),
+            "relative_import_weak": (
+                "from ..db_manager import referenced_managed_pdf_filename as loose\n"
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, loose(fp))\n"
             ),
             "loop_over_named_list": (
                 "def f(conn, fp):\n"

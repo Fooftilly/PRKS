@@ -244,6 +244,11 @@ _SQL_WORKS_INSERT_RE = re.compile(
     r"\s*(?:VALUES\s*\(([^)]*)\))?",
     re.IGNORECASE,
 )
+_SQL_WORKS_COLUMNLESS_INSERT_RE = re.compile(
+    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO\s+works(?:\s+(?:AS\s+)?\w+)?"
+    r"\s+(?:VALUES|SELECT|WITH)\b",
+    re.IGNORECASE,
+)
 _SQL_WORKS_UPDATE_RE = re.compile(
     r"\bUPDATE\s+(?:OR\s+\w+\s+)?works(?:\s+(?:AS\s+)?\w+)?"
     r"(?:\s+(?:INDEXED\s+BY\s+\w+|NOT\s+INDEXED))?\s+SET\b(.*?)(?:\bWHERE\b|$)",
@@ -647,8 +652,10 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     if _is_zip_archive_expr(value, scopes):
         return {_ARCHIVE}
     if _is_partial_call(value, scopes) and value.args:
-        # ``save = partial(db.add_work, ...)`` keeps the wrapped helper identity.
-        return _value_bindings(value.args[0], scopes)
+        # ``save = partial(db.add_work, *bound)`` keeps the wrapped helper
+        # identity and how many positionals it pre-binds.
+        bound = len(value.args) - 1
+        return _value_bindings(value.args[0], scopes) | {("partial", bound)}
     if isinstance(value, ast.Attribute):
         # ``mod.attr`` / ``pkg.mod.attr`` keep their import identity, so a
         # local alias of an imported callable or class still resolves.
@@ -793,6 +800,10 @@ def _sql_write_targets(text: str) -> set[str]:
     for match in _SQL_WORKS_INSERT_RE.finditer(text):
         if _insert_writes_file_path(match) or _upsert_writes_file_path(text[match.end() :]):
             targets.add("works.file_path")
+    if _SQL_WORKS_COLUMNLESS_INSERT_RE.search(text):
+        # ``INSERT INTO works VALUES (...)`` / ``SELECT``: every column, in
+        # schema order, including file_path.
+        targets.add("works.file_path")
     for match in _SQL_WORKS_UPDATE_RE.finditer(text):
         if _set_clause_writes_file_path(match.group(1)):
             targets.add("works.file_path")
@@ -1183,8 +1194,10 @@ def _import_pairs(node: ast.Import, scopes: list[_Scope]) -> _Pairs:
 
 def _import_from_pairs(node: ast.ImportFrom, scopes: list[_Scope]) -> _Pairs:
     pairs: _Pairs = []
-    # Relative imports are not resolved to a module; they only shadow.
+    # Relative imports keep a ``.``-prefixed pseudo-module so imported helper
+    # names still resolve (stdlib identities never come from them).
     absolute = node.level == 0 and bool(node.module)
+    module = node.module if absolute else "." * node.level + (node.module or "")
     for item in node.names:
         if item.name == "*":
             if absolute and node.module == "zipfile":
@@ -1192,8 +1205,7 @@ def _import_from_pairs(node: ast.ImportFrom, scopes: list[_Scope]) -> _Pairs:
                     (cls, {("name", "zipfile", cls)}) for cls in sorted(ZIPFILE_ARCHIVE_CLASSES)
                 )
             continue
-        binding = ("name", node.module, item.name) if absolute else _OTHER
-        pairs.append((item.asname or item.name, {binding}))
+        pairs.append((item.asname or item.name, {("name", module, item.name)}))
     return pairs
 
 
@@ -2135,11 +2147,15 @@ class _InvariantVisitor(ast.NodeVisitor):
         literal without that key and without ``**spread`` writes nothing.
         """
         unbound = _is_unbound_method_call(node.func, self.scopes)
+        prebound = self._partial_prebound(node.func)
         for sink in sorted(leaves & set(WORK_FILE_PATH_SINKS)):
             index, keyword, is_fields = WORK_FILE_PATH_SINKS[sink]
             if unbound and sink != "retarget_work_managed_file_path":
                 # ``PRKSDatabase.add_work(db, ...)``: the receiver comes first.
                 index += 1
+            # ``save = partial(db.add_work, "t")``: positionals shift left; one
+            # bound at construction was checked there.
+            index -= prebound
             value = self._call_argument(node, index, keyword)
             if value is None:
                 continue
@@ -2150,12 +2166,21 @@ class _InvariantVisitor(ast.NodeVisitor):
             return sink, value
         return None
 
+    def _partial_prebound(self, func: ast.expr) -> int:
+        """Positionals a ``functools.partial`` bound to ``func`` pre-supplies."""
+        if not isinstance(func, ast.Name):
+            return 0
+        counts = [b[1] for b in _resolve(self.scopes, func.id) if b[0] == "partial"]
+        return min(counts) if counts else 0
+
     @staticmethod
     def _call_argument(node: ast.Call, index: int, keyword: str) -> ast.expr | None:
         """The expression a call binds to parameter ``keyword`` (at ``index``)."""
         explicit = next((kw.value for kw in node.keywords if kw.arg == keyword), None)
         if explicit is not None:
             return explicit
+        if index < 0:
+            return None
         for position, arg in enumerate(node.args):
             if isinstance(arg, ast.Starred):
                 # ``*args`` may reach the parameter's position.
