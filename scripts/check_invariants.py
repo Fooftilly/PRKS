@@ -904,23 +904,8 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
     if _is_path_class_expr(func, scopes):
         return {_PATH} | _element_facts(_call_argument_facts(node, scopes))
     if isinstance(func, ast.Attribute):
-        if func.attr in _PATH_CLASS_FACTORIES and _is_path_class_expr(func.value, scopes):
-            return {_PATH}
-        receiver = _expr_facts(func.value, scopes)
-        if _PATH in receiver and func.attr in _PATH_STRING_METHODS:
-            # ``p.as_posix()`` is the same file as a string.
-            return _without_path(receiver)
-        if _PATH in receiver and func.attr in _PATH_ITERATOR_METHODS:
-            # An iterator of Paths under the receiver; loops carry the facts.
-            return receiver
-        if _PATH in receiver and func.attr in _PATH_RETURNING_METHODS:
-            return receiver | _element_facts(_call_argument_facts(node, scopes))
-        if func.attr in _STR_TRANSFORM_METHODS:
-            # SQL text survives ``.strip()`` / ``.format()`` and the like;
-            # ``.format()`` also builds its result from its arguments.
-            facts = _without_path(receiver)
-            if func.attr == "format":
-                facts |= _element_facts(_call_argument_facts(node, scopes))
+        facts = _method_call_facts(node, func, scopes)
+        if facts is not None:
             return facts
     if _qualified_names(func, scopes) & _PATH_STRING_FUNCS or _is_builtin(func, scopes, "str"):
         return _element_facts(_call_argument_facts(node, scopes))
@@ -930,6 +915,41 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
     if leaves & WEAK_MANAGED_PDF_ALIAS_HELPERS:
         return {_WEAK}
     return set()
+
+
+def _method_call_facts(
+    node: ast.Call, func: ast.Attribute, scopes: list[_Scope]
+) -> set[_Binding] | None:
+    """Facts of ``receiver.method(...)``, or ``None`` when the method is not modelled."""
+    if func.attr in _PATH_CLASS_FACTORIES and _is_path_class_expr(func.value, scopes):
+        return {_PATH}
+    receiver = _expr_facts(func.value, scopes)
+    if _PATH in receiver:
+        facts = _path_method_facts(node, func.attr, receiver, scopes)
+        if facts is not None:
+            return facts
+    if func.attr not in _STR_TRANSFORM_METHODS:
+        return None
+    # SQL text survives ``.strip()`` / ``.format()`` and the like;
+    # ``.format()`` also builds its result from its arguments.
+    facts = _without_path(receiver)
+    if func.attr == "format":
+        facts |= _element_facts(_call_argument_facts(node, scopes))
+    return facts
+
+
+def _path_method_facts(
+    node: ast.Call, method: str, receiver: set[_Binding], scopes: list[_Scope]
+) -> set[_Binding] | None:
+    """A method on a Path value: same file as a string, an iterator of
+    Paths under it, or another Path derived from it."""
+    if method in _PATH_STRING_METHODS:
+        return _without_path(receiver)
+    if method in _PATH_ITERATOR_METHODS:
+        return receiver
+    if method in _PATH_RETURNING_METHODS:
+        return receiver | _element_facts(_call_argument_facts(node, scopes))
+    return None
 
 
 def _proven_owned(node: ast.expr, scopes: list[_Scope]) -> set[_Binding] | None:
@@ -2064,7 +2084,12 @@ class _InvariantVisitor(ast.NodeVisitor):
                 self._is_owned_value(value) or self._function in WORK_FILE_PATH_CAPABILITIES
             ):
                 self._report_adoption(node, f"{sink}()")
-        query = self._sql_argument(node) if leaves & _SQL_EXECUTE_METHODS else None
+        if leaves & _SQL_EXECUTE_METHODS:
+            self._check_sql_write(node)
+
+    def _check_sql_write(self, node: ast.Call) -> None:
+        """Raw SQL writing works.file_path / pending_pdf_cleanup."""
+        query = self._sql_argument(node)
         if query is not None:
             sql = _expr_facts(query, self.scopes)
             params = set().union(
