@@ -2025,6 +2025,36 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('INSERT INTO main.[works] ([id], `file_path`) VALUES (?, ?)', (w_id, fp))\n"
             ),
+            "guarded_input_with_suffix": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp + '.other')\n"
+            ),
+            "guarded_input_fstring_suffix": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=f'{fp}.other')\n"
+            ),
+            "guarded_name_with_suffix": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as n:\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{n}.bak')\n"
+            ),
+            "minted_name_with_prefix": (
+                "from backend.services.work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/old_{stored}')\n"
+            ),
+            "guarded_path_rewrapped": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{fp}')\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"

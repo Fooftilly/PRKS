@@ -266,8 +266,10 @@ class Finding:
 #   ("path",)                         a value known to be a pathlib Path
 #   ("managed_pdf",)                  may be a managed-PDF filesystem path
 #   ("weak_alias",)                   may derive from referenced_managed_pdf_filename
-#   ("minted",)                       a managed name this request minted
-#   ("guarded", id)                   the input/yield of an entered adoption guard
+#   ("minted", kind)                  a managed basename this request minted, or
+#                                     its exact ``/api/pdfs/<name>`` path
+#   ("guarded", id, kind)             an entered adoption guard's exact input path
+#                                     or yielded basename (kind "path" / "name")
 #   ("sql_write", target)             SQL text writing works.file_path / pending_pdf_cleanup
 # ``obj.attr`` targets are bound under the dotted key ``"obj.attr"``. Every
 # absolute import is recorded (``("module", ...)`` / ``("name", ...)``) so
@@ -279,10 +281,11 @@ _OTHER: _Binding = ("other",)
 _PATH: _Binding = ("path",)
 _MANAGED: _Binding = ("managed_pdf",)
 _WEAK: _Binding = ("weak_alias",)
-_MINTED: _Binding = ("minted",)
+_MINTED: _Binding = ("minted", "name")
 _FACT_TAGS = frozenset({"path", "managed_pdf", "weak_alias", "minted", "sql_write"})
 # Tags a works.file_path value may be built from without claiming existing bytes.
 _OWNED_TAGS = frozenset({"minted", "guarded"})
+_MANAGED_ROUTE_PREFIX = "/api/pdfs/"
 # An ``obj.attr`` key that some joined path never bound locally: the class-level
 # archive-attribute record still applies on that path.
 _UNSET: _Binding = ("unset",)
@@ -343,11 +346,15 @@ class _AdoptionGuard:
     whose ``file_path`` entry was that input (``body.get("file_path")``).
     """
 
-    __slots__ = ("tag", "fields_dicts")
+    __slots__ = ("key", "fields_dicts")
 
     def __init__(self) -> None:
-        self.tag: _Binding = ("guarded", id(self))
+        self.key = id(self)
         self.fields_dicts: set[str] = set()
+
+    def tag(self, kind: str) -> _Binding:
+        """``kind`` is ``"path"`` (the exact input) or ``"name"`` (the yield)."""
+        return ("guarded", self.key, kind)
 
 
 class _Scope:
@@ -859,11 +866,13 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
 
 def _proven_owned(node: ast.expr, scopes: list[_Scope]) -> set[_Binding] | None:
     """The owned tags (``minted`` / ``guarded``) ``node`` is built from, when every
-    value it may hold is built only from them; otherwise ``None``.
+    value it may hold is exactly an owned value; otherwise ``None``.
 
-    Owned values: the minting helpers' results, an entered adoption guard's
-    input and yielded basename, names bound only to those, and
-    ``/api/pdfs/{owned}``-style strings interpolating nothing else.
+    Ownership survives only identity-preserving shapes: the minting helpers'
+    results, an entered guard's exact input path and yielded basename, names
+    bound only to those, ``str()``, and the canonical ``/api/pdfs/{name}``
+    wrapper around an owned *basename*. Any other prefix or suffix names
+    different bytes than the ones minted or locked, so ownership is dropped.
     """
     branches = _branch_values(node)
     if branches is not None:
@@ -876,25 +885,37 @@ def _proven_owned(node: ast.expr, scopes: list[_Scope]) -> set[_Binding] | None:
     if isinstance(node, ast.Call):
         if _callee_leaf_names(node.func, scopes) & MANAGED_PDF_MINTING_HELPERS:
             return {_MINTED}
-        if (
-            _is_builtin(node.func, scopes, "str")
-            or "os.path.basename" in _qualified_names(node.func, scopes)
-        ) and len(node.args) == 1:
+        if _is_builtin(node.func, scopes, "str") and len(node.args) == 1:
             return _proven_owned(node.args[0], scopes)
         return None
-    if isinstance(node, ast.JoinedStr):
-        return _all_owned(
-            [part.value for part in node.values if isinstance(part, ast.FormattedValue)], scopes
-        )
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return _all_owned(
-            [
-                operand
-                for operand in (node.left, node.right)
-                if not (isinstance(operand, ast.Constant) and isinstance(operand.value, str))
-            ],
-            scopes,
-        )
+    name = _managed_route_basename_expr(node)
+    if name is None:
+        return None
+    owned = _proven_owned(name, scopes)
+    if owned is None or any(tag[-1] != "name" for tag in owned):
+        return None
+    return {(*tag[:-1], "path") for tag in owned}
+
+
+def _managed_route_basename_expr(node: ast.expr) -> ast.expr | None:
+    """``x`` for exactly ``f"/api/pdfs/{x}"`` or ``"/api/pdfs/" + x``."""
+    if isinstance(node, ast.JoinedStr) and len(node.values) == 2:
+        prefix, value = node.values
+        if (
+            isinstance(prefix, ast.Constant)
+            and prefix.value == _MANAGED_ROUTE_PREFIX
+            and isinstance(value, ast.FormattedValue)
+            and value.conversion == -1
+            and value.format_spec is None
+        ):
+            return value.value
+    if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Add)
+        and isinstance(node.left, ast.Constant)
+        and node.left.value == _MANAGED_ROUTE_PREFIX
+    ):
+        return node.right
     return None
 
 
@@ -1689,12 +1710,12 @@ class _InvariantVisitor(ast.NodeVisitor):
             # The exact value the guard validated and locked; any weak
             # provenance it had is kept so INV-STORAGE-004 still sees it.
             weak = {f for f in _expr_facts(value, self.scopes) if f == _WEAK}
-            pairs.append((value.id, {guard.tag} | weak))
+            pairs.append((value.id, {guard.tag("path")} | weak))
         fields = self._file_path_entry_owner(value)
         if fields is not None:
             guard.fields_dicts.add(fields)
         if isinstance(target, ast.Name):
-            pairs.append((target.id, {guard.tag}))
+            pairs.append((target.id, {guard.tag("name")}))
         self._bind(pairs)
         return guard
 
@@ -1954,8 +1975,8 @@ class _InvariantVisitor(ast.NodeVisitor):
         owned = _proven_owned(value, self.scopes)
         if owned is None:
             return False
-        active = {g.tag for g in guards}
-        return all(tag == _MINTED or tag in active for tag in owned)
+        active = {g.key for g in guards}
+        return all(tag[0] == "minted" or tag[1] in active for tag in owned)
 
     def _check_file_path_write(self, node: ast.Call, leaves: set[str]) -> None:
         sink_value = self._file_path_sink_value(node, leaves)
