@@ -1623,6 +1623,26 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "os_rename_out_of_managed_dir": (
+                "import os\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    os.rename(os.path.join(pdfs_dir, name), dest)\n"
+            ),
+            "shutil_move_keyword_src": (
+                "import os, shutil\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    shutil.move(src=os.path.join(pdfs_dir, name), dst=dest)\n"
+            ),
+            "path_rename_managed": (
+                "from pathlib import Path\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    (Path(pdfs_dir) / name).rename(dest)\n"
+            ),
+            "unbound_path_rename": (
+                "from pathlib import Path\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    Path.rename(Path(pdfs_dir) / name, dest)\n"
+            ),
             "shutil_rmtree_managed_dir": (
                 "import shutil\n"
                 "def wipe(pdfs_dir):\n"
@@ -1794,6 +1814,11 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_unrelated_file_cleanup_passes(self):
         cases = {
+            "rename_scratch_file": (
+                "import os, tempfile\n"
+                "def rotate(log_dir):\n"
+                "    os.rename(os.path.join(log_dir, 'a.log'), os.path.join(log_dir, 'a.1'))\n"
+            ),
             "rmtree_scratch_dir": (
                 "import shutil, tempfile\n"
                 "def cleanup():\n"
@@ -2350,6 +2375,29 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        save = functools.partial(db.add_work, 't', 's', '', '', '', f'/api/pdfs/{name}')\n"
                 "    save()\n"
             ),
+            "inline_nested_partial_bound_under_guard": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        save = functools.partial(functools.partial(db.add_work, 't'), file_path=fp)\n"
+                "    save()\n"
+            ),
+            "inline_nested_partial_unguarded": (
+                "import functools\n"
+                "def adopt(db, fp):\n"
+                "    functools.partial(functools.partial(db.add_work, 't'), file_path=fp)()\n"
+            ),
+            "raw_sql_subquery_where_before_file_path": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title = (SELECT title FROM works WHERE id = ?), '\n"
+                "                 'file_path = ? WHERE id = ?', (w_id, fp, w_id))\n"
+            ),
+            "raw_sql_upsert_subquery_where": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO works (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET '\n"
+                "                 'title = (SELECT t FROM x WHERE y), file_path = excluded.file_path', (w_id,))\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -2650,6 +2698,14 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def f(conn, w):\n"
                 "    conn.execute('UPDATE works SET file_path = NULL WHERE id = ?', (w,))\n"
             ),
+            "sql_file_path_only_in_where": (
+                "def f(conn, t, fp):\n"
+                "    conn.execute('UPDATE works SET title = (SELECT ?) WHERE file_path = ?', (t, fp))\n"
+            ),
+            "sql_file_path_only_in_update_from": (
+                "def f(conn):\n"
+                "    conn.execute('UPDATE works SET title = s.title FROM src AS s WHERE s.file_path = works.file_path')\n"
+            ),
             "sql_insert_null_file_path": (
                 "def f(conn, w, t):\n"
                 "    conn.execute(\n"
@@ -2780,6 +2836,15 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
             "weak_str_replace": (
                 "def f(db, fp):\n"
                 "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).replace('x', 'x'))\n"
+            ),
+            "weak_encode_fsdecode": (
+                "import os\n"
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, os.fsdecode(referenced_managed_pdf_filename(fp).encode()))\n"
+            ),
+            "weak_encode_decode": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).encode().decode())\n"
             ),
             "claim_sql_interpolated_weak": (
                 "def f(conn, fp):\n"

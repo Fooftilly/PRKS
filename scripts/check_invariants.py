@@ -111,7 +111,11 @@ _PATH_RETURNING_METHODS = frozenset(
 _PATH_RETURNING_ATTRS = frozenset({"parent"})
 # Path attributes naming (part of) the same file as a string.
 _PATH_STRING_ATTRS = frozenset({"name", "stem"})
-_PATH_UNBOUND_UNLINK = frozenset(f"{cls}.unlink" for cls in PATHLIB_PATH_CLASSES)
+# Path methods that take the file away from its managed name.
+_PATH_REMOVAL_METHODS = ("rename", "unlink")
+_PATH_UNBOUND_UNLINK = frozenset(
+    f"{cls}.{method}" for cls in PATHLIB_PATH_CLASSES for method in _PATH_REMOVAL_METHODS
+)
 # Path methods returning the same location as a string.
 _PATH_STRING_METHODS = frozenset({"__fspath__", "__str__", "as_posix", "as_uri"})
 # Path methods yielding Paths under the receiver (``for p in d.glob("*")``).
@@ -138,6 +142,8 @@ _STR_TRANSFORM_METHODS = frozenset(
     {
         "capitalize",
         "casefold",
+        "decode",
+        "encode",
         "format",
         "lower",
         "lstrip",
@@ -187,7 +193,11 @@ MANAGED_PDF_ADOPTION_GUARD = "managed_pdf_adoption_guard"
 # other function -- including new functions in these same files -- fails.
 # ``shutil.rmtree`` of the managed directory drops every PDF at once, live
 # references included.
-RAW_REMOVE_CALLS = frozenset({"os.remove", "os.unlink", "shutil.rmtree"})
+# ``os.rename`` / ``shutil.move`` of a managed source takes its bytes away
+# from every live Work just as an unlink does.
+RAW_REMOVE_CALLS = frozenset(
+    {"os.remove", "os.rename", "os.renames", "os.unlink", "shutil.move", "shutil.rmtree"}
+)
 MANAGED_PDF_REMOVE_CAPABILITIES: dict[tuple[str, str], str] = {
     # The canonical survivor-aware cleanup: under managed_pdf_path_lock it
     # settles the claim iff a live Work strongly references the name, keeps
@@ -255,12 +265,14 @@ _SQL_WORKS_COLUMNLESS_INSERT_RE = re.compile(
 )
 _SQL_WORKS_UPDATE_RE = re.compile(
     r"\bUPDATE\s+(?:OR\s+\w+\s+)?works(?:\s+(?:AS\s+)?\w+)?"
-    r"(?:\s+(?:INDEXED\s+BY\s+\w+|NOT\s+INDEXED))?\s+SET\b(.*?)(?:\bWHERE\b|$)",
-    re.IGNORECASE | re.DOTALL,
+    r"(?:\s+(?:INDEXED\s+BY\s+\w+|NOT\s+INDEXED))?\s+SET\b([^;]*)",
+    re.IGNORECASE,
 )
-_SQL_UPSERT_SET_RE = re.compile(
-    r"\bDO\s+UPDATE\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
-)
+_SQL_UPSERT_SET_RE = re.compile(r"\bDO\s+UPDATE\s+SET\b([^;]*)", re.IGNORECASE)
+# Clauses that end a SET list -- only outside parentheses, so a scalar
+# subquery's own ``WHERE`` (``SET t = (SELECT ... WHERE ...), file_path = ?``)
+# does not truncate it.
+_SQL_SET_END_RE = re.compile(r"[()]|\b(?:WHERE|FROM|RETURNING|ORDER|LIMIT)\b", re.IGNORECASE)
 _SQL_ROW_VALUE_SET_RE = re.compile(r"\(([^()]*)\)\s*=\s*\(([^()]*)")
 _SQL_FILE_PATH_ASSIGN_RE = re.compile(r"\bfile_path\s*=\s*([^,\s]+)", re.IGNORECASE)
 _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
@@ -864,7 +876,22 @@ def _upsert_writes_file_path(tail: str) -> bool:
     return upsert is not None and _set_clause_writes_file_path(upsert.group(1))
 
 
-def _set_clause_writes_file_path(clause: str) -> bool:
+def _top_level_set_list(tail: str) -> str:
+    """The SET assignments: ``tail`` up to the first clause keyword at depth 0."""
+    depth = 0
+    for token in _SQL_SET_END_RE.finditer(tail):
+        text = token.group(0)
+        if text == "(":
+            depth += 1
+        elif text == ")":
+            depth = max(depth - 1, 0)
+        elif depth == 0:
+            return tail[: token.start()]
+    return tail
+
+
+def _set_clause_writes_file_path(tail: str) -> bool:
+    clause = _top_level_set_list(tail)
     if any(
         assigned.group(1).upper() not in _SQL_CLEARING_VALUES
         for assigned in _SQL_FILE_PATH_ASSIGN_RE.finditer(clause)
@@ -2177,12 +2204,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         ):
             self._report_replace(node, "pathlib.Path.replace()")
         if (
-            node.attr == "unlink"
+            node.attr in _PATH_REMOVAL_METHODS
             and not _is_path_class_expr(node.value, self.scopes)
             and _PATH in _expr_facts(node.value, self.scopes)
         ):
-            # Covers ``p.unlink()`` and a bound method saved for later.
-            self._check_removal_of(node, "pathlib.Path.unlink()", node.value)
+            # Covers ``p.unlink()`` / ``p.rename(dst)`` and a saved bound method.
+            self._check_removal_of(node, f"pathlib.Path.{node.attr}()", node.value)
         self.generic_visit(node)
 
     def _is_path_receiver(self, node: ast.expr) -> bool:
@@ -2210,17 +2237,21 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.findings.append(Finding(code, self.relpath, getattr(node, "lineno", 1), message))
 
     def _removal_target(self, node: ast.Call) -> tuple[str, ast.expr | None] | None:
-        """``(primitive, target)`` for os.remove/os.unlink/Path.unlink calls."""
+        """``(primitive, target)`` for os.remove/os.unlink/os.rename/shutil.move/
+        shutil.rmtree and unbound Path.unlink/Path.rename calls (the target is
+        the removed or moved-away source)."""
         func = node.func
         primitives = _qualified_names(func, self.scopes) & RAW_REMOVE_CALLS
         if primitives:
             target = node.args[0] if node.args else next(
-                (kw.value for kw in node.keywords if kw.arg == "path"), None
+                (kw.value for kw in node.keywords if kw.arg in ("path", "src")), None
             )
             return f"{sorted(primitives)[0]}()", target
-        if _qualified_names(func, self.scopes) & _PATH_UNBOUND_UNLINK:
+        unbound = _qualified_names(func, self.scopes) & _PATH_UNBOUND_UNLINK
+        if unbound:
             # ``Path.unlink(p)`` or an alias of it: the path is the first argument.
-            return "pathlib.Path.unlink()", node.args[0] if node.args else None
+            method = sorted(unbound)[0].rsplit(".", 1)[1]
+            return f"pathlib.Path.{method}()", node.args[0] if node.args else None
         # ``path.unlink`` on a Path value is checked at the attribute itself
         # (visit_Attribute), so a saved bound method is covered too.
         return None
@@ -2426,8 +2457,15 @@ class _InvariantVisitor(ast.NodeVisitor):
         if _is_partial_call(node, self.scopes) and node.args:
             # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
             # prepares; arguments supplied at invocation are checked there.
-            prepared = ast.Call(func=node.args[0], args=node.args[1:], keywords=node.keywords)
-            prepared = ast.copy_location(prepared, node)
+            func, args, keywords = node.args[0], node.args[1:], list(node.keywords)
+            # Flatten inline ``partial(partial(helper, a), b)`` to ``helper(a, b)``.
+            while isinstance(func, ast.Call) and _is_partial_call(func, self.scopes) and func.args:
+                func, args, keywords = (
+                    func.args[0],
+                    [*func.args[1:], *args],
+                    [*func.keywords, *keywords],
+                )
+            prepared = ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), node)
             self._check_managed_pdf_boundary(prepared)
             self._check_partial_bound_file_path(prepared)
             return
