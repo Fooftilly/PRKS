@@ -217,7 +217,13 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual([(h.outer, h.inner) for h in hits], [("parent p", "child")])
 
     def test_schema_qualified_relations_detected(self):
-        for relation in ('"main"."parent" AS "p"', "main . parent p", "temp.parent AS p"):
+        for relation in (
+            '"main"."parent" AS "p"',
+            "main . parent p",
+            "temp.parent AS p",
+            "aux.parent p",
+            "extra x, aux.parent AS p",
+        ):
             sql = f"""
             SELECT p.id,
                 (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n
@@ -300,6 +306,14 @@ class DetectionTests(unittest.TestCase):
             """
             with self.subTest(rel=rel):
                 self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
+    def test_distinct_quoted_names_do_not_collide(self):
+        sql = """
+        SELECT 1,
+            (SELECT COUNT(*) FROM child AS "a b" WHERE "a b".parent_id = "a-b".id) AS n
+        FROM parent AS "a-b"
+        """
+        self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
 
     def test_bracket_and_backtick_identifiers_detected(self):
         for rel, ref in (("[parent] [p]", "[p].id"), ("`parent` AS `p`", "`p`.id")):

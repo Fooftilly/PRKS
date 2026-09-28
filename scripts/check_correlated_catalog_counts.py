@@ -102,7 +102,7 @@ _IDENT_RE = re.compile(_IDENT)
 # FROM/JOIN <table> [AS] <alias>; the optional alias must not be a keyword.
 _RELATION_RE = re.compile(
     # Grouping parentheses are allowed: FROM (parent AS p JOIN ...).
-    rf"\b(?:from|join)\b\s*(?:\(\s*)*(?:(?:main|temp)\s*\.\s*)?({_IDENT})"
+    rf"\b(?:from|join)\b\s*(?:\(\s*)*(?:{_IDENT}\s*\.\s*)?({_IDENT})"
     # Table-valued function arguments: json_each('...') AS j.
     rf"(?:\s*\([^()]*\))?"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
@@ -120,7 +120,7 @@ _COMMA_DERIVED_RE = re.compile(
 )
 # Later items of a comma-separated FROM list: ", <table> [AS] <alias>".
 _COMMA_RELATION_RE = re.compile(
-    rf",\s*(?:\(\s*)*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s*\([^()]*\))?"
+    rf",\s*(?:\(\s*)*(?:{_IDENT}\s*\.\s*)?({_IDENT})(?:\s*\([^()]*\))?"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
@@ -223,18 +223,19 @@ def _unquote_identifier(out: list[str], sql: str, i: int, j: int) -> None:
     ``"p"`` / ``[p]`` / `` `p` `` become `` p `` so they also match unquoted
     ``p.id`` references. Anything else (a keyword such as ``"group"``, or a
     name such as ``"outer alias"``) can only ever be referenced quoted, so it
-    becomes a same-length synthetic identifier (``_group_``,
-    ``_outer_alias_``): offsets are kept and every quoted reference maps to
-    the same token.
+    becomes a same-length synthetic identifier ``_<hex>_`` derived from a
+    hash of the exact name: offsets are kept, every quoted reference to that
+    name maps to the same token, and different names (``"a-b"`` vs ``"a b"``)
+    get different tokens (short names can still collide by chance).
     """
     name = sql[i + 1 : j]
     if _IDENT_RE.fullmatch(name) and name.lower() not in _KEYWORDS:
         out[i] = out[j] = " "
         return
-    out[i] = out[j] = "_"
-    for k in range(i + 1, j):
-        if not (sql[k].isascii() and (sql[k].isalnum() or sql[k] == "_")):
-            out[k] = "_"
+    # "_<hex>_" derived from the exact name, so "a-b" and "a b" differ.
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()
+    body = (digest * (len(name) // len(digest) + 1))[: len(name)]
+    out[i : j + 1] = ["_", *body, "_"]
 
 
 _QUOTE_OPENERS = frozenset("'\"`[")
