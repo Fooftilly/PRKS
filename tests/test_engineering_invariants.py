@@ -1733,6 +1733,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(root, name):\n"
                 "    os.remove(contain(root, name))\n"
             ),
+            "os_fwalk_root": (
+                "import os\n"
+                "def purge(pdfs_dir):\n"
+                "    for root, _, files, _ in os.fwalk(pdfs_dir):\n"
+                "        os.remove(os.path.join(root, files[0]))\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2284,6 +2290,17 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    save = partial(db.add_work, 't')\n"
                 "    save('Not Started', '', '', '', fp)\n"
             ),
+            "raw_sql_double_quoted_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"WHERE\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "nested_partial_offsets": (
+                "from functools import partial\n"
+                "def create(db, fp, status, abstract):\n"
+                "    p = partial(db.add_work, 't')\n"
+                "    q = partial(p, status, abstract)\n"
+                "    q('text', 'date', fp)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2376,6 +2393,15 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')) as n:\n"
                 "        body['title'] = 'x'\n"
                 "        body['file_path'] = f'/api/pdfs/{n}'\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "dict_mutated_only_on_returning_branch": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir, fail):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        if fail:\n"
+                "            body['file_path'] = other\n"
+                "            return None\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
             "guard_input_subscript_dict": (

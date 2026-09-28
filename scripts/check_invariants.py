@@ -268,6 +268,13 @@ _SQL_CLEARING_VALUES = frozenset({"NULL", "''"})
 # A string literal (kept) or a /* block */ / -- line comment (dropped).
 _SQL_COMMENT_RE = re.compile(r"('(?:[^']|'')*')|/\*.*?\*/|--[^\n]*", re.DOTALL)
 _SQL_STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+_SQL_DOUBLE_QUOTED_RE = re.compile(r'"((?:[^"]|"")*)"')
+_SQL_KEYWORDS = frozenset(
+    {
+        "AND", "AS", "DO", "FROM", "INDEXED", "INSERT", "INTO", "NOT", "ON",
+        "OR", "REPLACE", "SELECT", "SET", "UPDATE", "VALUES", "WHERE", "WITH",
+    }
+)
 _SQL_IDENTIFIER_QUOTES_RE = re.compile(r'["`\[\]]')
 _SQL_SCHEMA_PREFIX_RE = re.compile(r"\b(?:main|temp)\.(?=\w)", re.IGNORECASE)
 
@@ -333,6 +340,8 @@ _PATH: _Binding = ("path",)
 _MANAGED: _Binding = ("managed_pdf",)
 _WEAK: _Binding = ("weak_alias",)
 _MINTED: _Binding = ("minted", "name")
+# A guarded fields dict mutated (possibly) on this control-flow path.
+_DICT_DIRTY: _Binding = ("dict_dirty",)
 _FACT_TAGS = frozenset({"path", "managed_pdf", "weak_alias", "minted", "sql_write"})
 # Tags a works.file_path value may be built from without claiming existing bytes.
 _OWNED_TAGS = frozenset({"minted", "guarded"})
@@ -393,15 +402,16 @@ class _AdoptionGuard:
     """One entered ``managed_pdf_adoption_guard``: what it locked and re-checked.
 
     Only values derived from the guard's own input (the path it validated) or
-    its yielded basename are protected by it; ``fields_dicts`` are the dicts
-    whose ``file_path`` entry was that input (``body.get("file_path")``).
+    its yielded basename are protected by it. A fields dict whose
+    ``file_path`` entry was that input (``body.get("file_path")``) carries a
+    ``("guarded_dict", key)`` tag in the flow state, so invalidating it is
+    path-local: a mutation on a branch that returns does not reach the join.
     """
 
-    __slots__ = ("key", "fields_dicts")
+    __slots__ = ("key",)
 
     def __init__(self) -> None:
         self.key = id(self)
-        self.fields_dicts: set[str] = set()
 
     def tag(self, kind: str) -> _Binding:
         """``kind`` is ``"path"`` (the exact input) or ``"name"`` (the yield)."""
@@ -654,8 +664,11 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     if _is_partial_call(value, scopes) and value.args:
         # ``save = partial(db.add_work, *bound)`` keeps the wrapped helper
         # identity and how many positionals it pre-binds.
-        bound = len(value.args) - 1
-        return _value_bindings(value.args[0], scopes) | {("partial", bound)}
+        inner = _value_bindings(value.args[0], scopes)
+        prior = [b[1] for b in inner if b[0] == "partial"]
+        # ``partial(partial(f, a), b)`` pre-binds both: offsets accumulate.
+        bound = len(value.args) - 1 + (min(prior) if prior else 0)
+        return {b for b in inner if b[0] != "partial"} | {("partial", bound)}
     if isinstance(value, ast.Attribute):
         # ``mod.attr`` / ``pkg.mod.attr`` keep their import identity, so a
         # local alias of an imported callable or class still resolves.
@@ -793,6 +806,9 @@ def _sql_write_targets(text: str) -> set[str]:
     # Mask literal contents so keywords inside strings (``'WHERE'``) cannot
     # end a clause early; an empty literal stays ``''`` (a clearing value).
     text = _SQL_STRING_LITERAL_RE.sub(lambda m: "''" if m.group(0) == "''" else "'s'", text)
+    # A double-quoted plain name is an identifier; anything else (including a
+    # quoted keyword such as "WHERE") may be SQLite's legacy string literal.
+    text = _SQL_DOUBLE_QUOTED_RE.sub(_double_quoted_token, text)
     text = _SQL_SCHEMA_PREFIX_RE.sub("", _SQL_IDENTIFIER_QUOTES_RE.sub("", text))
     targets: set[str] = set()
     if _SQL_PENDING_CLEANUP_WRITE_RE.search(text):
@@ -808,6 +824,13 @@ def _sql_write_targets(text: str) -> set[str]:
         if _set_clause_writes_file_path(match.group(1)):
             targets.add("works.file_path")
     return targets
+
+
+def _double_quoted_token(match: re.Match[str]) -> str:
+    content = match.group(1)
+    if re.fullmatch(r"\w+", content) and content.upper() not in _SQL_KEYWORDS:
+        return content
+    return "'s'"
 
 
 def _insert_writes_file_path(match: re.Match[str]) -> bool:
@@ -1172,7 +1195,7 @@ def _is_path_walk(node: ast.expr) -> bool:
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "walk"
+        and node.func.attr in {"fwalk", "walk"}
     )
 
 
@@ -1552,8 +1575,6 @@ class _InvariantVisitor(ast.NodeVisitor):
         scope = self.scopes[-1]
         for name, bindings in pairs:
             self._record_archive_attr(name, bindings)
-            # A rebound fields dict is no longer the one the guard read.
-            self._forget_guarded_dict(name)
             owner = scope.declared.get(name, scope)
             if owner is not scope:
                 # ``global``/``nonlocal``: the binding belongs to the owner.
@@ -1922,7 +1943,8 @@ class _InvariantVisitor(ast.NodeVisitor):
             pairs.append((value.id, {guard.tag("path")} | weak))
         fields = self._file_path_entry_owner(value)
         if fields is not None:
-            guard.fields_dicts.add(fields)
+            current = set(_resolve(self.scopes, fields)) - {_DICT_DIRTY}
+            pairs.append((fields, current | {("guarded_dict", guard.key)}))
         if isinstance(target, ast.Name):
             pairs.append((target.id, {guard.tag("name")}))
         self._bind(pairs)
@@ -1951,8 +1973,10 @@ class _InvariantVisitor(ast.NodeVisitor):
         return None
 
     def _forget_guarded_dict(self, name: str) -> None:
-        for guard in self._active_adoption_guards():
-            guard.fields_dicts.discard(name)
+        """Mark ``name`` dirty on this control-flow path if it is a guarded dict."""
+        bindings = _resolve(self.scopes, name)
+        if any(b[0] == "guarded_dict" for b in bindings):
+            self.scopes[-1].current[name] = set(bindings) | {_DICT_DIRTY}
 
     def _check_guarded_dict_store(self, target: ast.expr, value: ast.expr | None) -> None:
         """``body["file_path"] = <owned>`` keeps a guarded dict protected; any
@@ -1990,8 +2014,9 @@ class _InvariantVisitor(ast.NodeVisitor):
                 self._forget_guarded_dict(value.id)
 
     def _forget_all_guarded_dicts(self) -> None:
-        for guard in self._active_adoption_guards():
-            guard.fields_dicts.clear()
+        for name, bindings in list(self.scopes[-1].current.items()):
+            if any(b[0] == "guarded_dict" for b in bindings):
+                self.scopes[-1].current[name] = set(bindings) | {_DICT_DIRTY}
 
     def _active_adoption_guards(self) -> list[_AdoptionGuard]:
         guards: list[_AdoptionGuard] = []
@@ -2210,12 +2235,16 @@ class _InvariantVisitor(ast.NodeVisitor):
                 isinstance(value.value, str) and value.value.strip().startswith("/api/pdfs")
             )
         guards = self._active_adoption_guards()
-        if isinstance(value, ast.Name) and any(value.id in g.fields_dicts for g in guards):
-            return True
+        active = {g.key for g in guards}
+        if isinstance(value, ast.Name):
+            bindings = _resolve(self.scopes, value.id)
+            if _DICT_DIRTY not in bindings and any(
+                b[0] == "guarded_dict" and b[1] in active for b in bindings
+            ):
+                return True
         owned = _proven_owned(value, self.scopes)
         if owned is None:
             return False
-        active = {g.key for g in guards}
         return all(tag[0] == "minted" or tag[1] in active for tag in owned)
 
     def _check_file_path_write(self, node: ast.Call, leaves: set[str]) -> None:
