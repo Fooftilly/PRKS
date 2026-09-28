@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -79,6 +79,19 @@ OS_FSYNC_ALLOWLIST = {
     "backend/fs_durability.py",
 }
 
+# INV-BACKUP-001: ZipFile.extractall() trusts member names/types and is never
+# acceptable on backup input. There is intentionally no production allowlist.
+# A receiver is classified only when it provably originates from one of these
+# zipfile classes (constructor call, a name or ``obj.attr`` bound to one, a
+# parameter/variable/class attribute annotated with one, or an instance
+# attribute such as ``self.archive`` assigned one in any method of the class
+# or a same-module base class); unrelated ``.extractall()`` methods are not
+# matched. Containers and values returned from helper functions are not tracked.
+ZIPFILE_ARCHIVE_CLASSES = frozenset({"ZipFile", "PyZipFile"})
+BANNED_ZIPFILE_METHOD = "extractall"
+
+_TRACKED_MODULES = frozenset({"os", "shutil", "zipfile"})
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -91,102 +104,1036 @@ class Finding:
         return f"{self.code} {self.path}:{self.line}: {self.message}"
 
 
-class _Scope:
-    """One lexical import scope (module, class body, or function)."""
+# A lexical binding, as far as these invariants care:
+#   ("module", "os")                  import os / import zipfile as z
+#   ("name", "zipfile", "ZipFile")    from zipfile import ZipFile as Z
+#   ("archive",)                      a value known to be a zipfile archive
+#   ("class", info) / ("instance", info)   a same-module class / its self or cls
+#   ("other",)                        any other local binding (shadows imports)
+# ``obj.attr`` targets are bound under the dotted key ``"obj.attr"``.
+_Binding = tuple[Any, ...]
+_ARCHIVE: _Binding = ("archive",)
+_OTHER: _Binding = ("other",)
+# An ``obj.attr`` key that some joined path never bound locally: the class-level
+# archive-attribute record still applies on that path.
+_UNSET: _Binding = ("unset",)
 
-    __slots__ = ("modules", "names")
+
+class _FuncInfo:
+    """One same-module function or method: does it return a zipfile archive?"""
+
+    __slots__ = ("returns_archive",)
 
     def __init__(self) -> None:
-        self.modules: dict[str, str] = {}
-        self.names: dict[str, tuple[str, str]] = {}
+        self.returns_archive = False
 
 
-def _bind_import(scope: _Scope, node: ast.Import) -> None:
-    for item in node.names:
-        if item.name in {"os", "shutil"}:
-            scope.modules[item.asname or item.name] = item.name
-            continue
-        # ``import os.path`` (no ``as``) still binds the top-level name ``os``
-        # to the ``os`` package. ``import os.path as p`` binds only ``p``.
-        if item.asname is None:
-            top = item.name.split(".", 1)[0]
-            if top in {"os", "shutil"}:
-                scope.modules[top] = top
+class _ClassInfo:
+    """One same-module class: is it a zipfile archive subclass, which of its
+    attributes are proven zipfile archives, and what are its methods."""
+
+    __slots__ = ("archive_attrs", "bases", "zip_base", "methods")
+
+    def __init__(self) -> None:
+        self.archive_attrs: set[str] = set()
+        self.bases: list[_ClassInfo] = []
+        self.methods: dict[str, _FuncInfo] = {}
+        # A base expression resolves to zipfile.ZipFile / PyZipFile directly.
+        self.zip_base = False
+
+    def _lineage(self) -> Iterable[_ClassInfo]:
+        seen: set[int] = set()
+        stack: list[_ClassInfo] = [self]
+        while stack:
+            info = stack.pop()
+            if id(info) in seen:
+                continue
+            seen.add(id(info))
+            yield info
+            stack.extend(info.bases)
+
+    def has_archive_attr(self, attr: str) -> bool:
+        return any(attr in info.archive_attrs for info in self._lineage())
+
+    def method_returns_archive(self, name: str) -> bool:
+        for info in self._lineage():
+            if name in info.methods:
+                return info.methods[name].returns_archive
+        return False
+
+    def is_archive_class(self) -> bool:
+        return any(info.zip_base for info in self._lineage())
 
 
-def _bind_import_from(scope: _Scope, node: ast.ImportFrom) -> None:
-    if node.module not in {"os", "shutil"}:
-        return
-    for item in node.names:
-        if item.name == "*":
-            continue
-        scope.names[item.asname or item.name] = (node.module, item.name)
+class _Scope:
+    """One lexical scope (module, class body, function, lambda, comprehension).
+
+    ``summary`` holds every binding made anywhere in the scope body, collected
+    before the body is walked. Nested scopes resolve enclosing names through it
+    because a function body runs after its enclosing scope has bound them, so
+    imports placed after a ``def`` still resolve. ``current`` holds the
+    bindings that may reach the statement being walked: a rebinding replaces a
+    name's bindings on its own control-flow path, and branch states are
+    unioned where if/loop/try/match paths join; loop bodies also see bindings
+    from later iterations. A name the scope binds but has not reached yet
+    falls back to ``summary``. Every set is a may-alias set: any archive entry
+    classifies. ``global``/``nonlocal`` names are bound in their owner scope.
+    """
+
+    __slots__ = (
+        "class_info",
+        "is_comprehension",
+        "summary",
+        "current",
+        "declared",
+        "rebound_elsewhere",
+        "class_registry",
+        "function_registry",
+        "function_info",
+    )
+
+    def __init__(
+        self, *, class_info: _ClassInfo | None = None, is_comprehension: bool = False
+    ) -> None:
+        # Set for class bodies; ``None`` for every other scope kind.
+        self.class_info = class_info
+        self.is_comprehension = is_comprehension
+        self.summary: dict[str, set[_Binding]] = {}
+        self.current: dict[str, set[_Binding]] = {}
+        # ``global``/``nonlocal`` name -> the scope that owns its bindings.
+        self.declared: dict[str, _Scope] = {}
+        # Names a nested scope rebinds via ``global``/``nonlocal``; the value
+        # may change whenever that scope runs, so uses also see ``summary``.
+        self.rebound_elsewhere: set[str] = set()
+        # Only used on the module scope: def/class node id -> its info. They
+        # are shared across the analysis passes of one module.
+        self.class_registry: dict[int, _ClassInfo] = {}
+        self.function_registry: dict[int, _FuncInfo] = {}
+        # Set for function bodies: the function whose ``return``s are seen.
+        self.function_info: _FuncInfo | None = None
+
+    @property
+    def is_class(self) -> bool:
+        return self.class_info is not None
 
 
-def _lookup_module(scopes: list[_Scope], name: str) -> str | None:
-    for scope in reversed(scopes):
-        if name in scope.modules:
-            return scope.modules[name]
-    return None
+def _resolve(scopes: list[_Scope], name: str) -> set[_Binding]:
+    innermost = scopes[-1]
+    if name in innermost.current:
+        if name in innermost.rebound_elsewhere:
+            return innermost.current[name] | innermost.summary.get(name, set())
+        return innermost.current[name]
+    if name in innermost.summary:
+        return innermost.summary[name]
+    # Class bodies are not enclosing scopes for the functions nested in them.
+    for scope in reversed(scopes[:-1]):
+        if not scope.is_class and name in scope.summary:
+            return scope.summary[name]
+    return set()
 
 
-def _lookup_name(scopes: list[_Scope], name: str) -> tuple[str, str] | None:
-    for scope in reversed(scopes):
-        if name in scope.names:
-            return scope.names[name]
-    return None
+def _lookup_modules(scopes: list[_Scope], name: str) -> set[str]:
+    return {b[1] for b in _resolve(scopes, name) if b[0] == "module"}
 
 
-def _call_identity(node: ast.Call, scopes: list[_Scope]) -> tuple[str, str] | None:
+def _lookup_names(scopes: list[_Scope], name: str) -> set[tuple[str, str]]:
+    return {(b[1], b[2]) for b in _resolve(scopes, name) if b[0] == "name"}
+
+
+def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, str]]:
     fn = node.func
     if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-        module = _lookup_module(scopes, fn.value.id)
-        if module:
-            return module, fn.attr
+        return sorted((module, fn.attr) for module in _lookup_modules(scopes, fn.value.id))
     if isinstance(fn, ast.Name):
-        return _lookup_name(scopes, fn.id)
+        return sorted(_lookup_names(scopes, fn.id))
+    return []
+
+
+def _is_zip_class_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
+    """``zipfile.ZipFile`` / ``z.ZipFile`` / ``ZipFile`` / ``Z`` (import alias) / a same-module subclass."""
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return (
+            node.attr in ZIPFILE_ARCHIVE_CLASSES
+            and "zipfile" in _lookup_modules(scopes, node.value.id)
+        )
+    if isinstance(node, ast.Name):
+        return any(_is_zip_class_binding(b) for b in _resolve(scopes, node.id))
+    return False
+
+
+def _is_zip_class_binding(binding: _Binding) -> bool:
+    """An imported zipfile archive class, or a same-module subclass of one."""
+    if binding[0] == "name":
+        return binding[1] == "zipfile" and binding[2] in ZIPFILE_ARCHIVE_CLASSES
+    return binding[0] == "class" and binding[1].is_archive_class()
+
+
+def _is_zip_constructor(node: ast.expr, scopes: list[_Scope]) -> bool:
+    return isinstance(node, ast.Call) and _is_zip_class_expr(node.func, scopes)
+
+
+def _annotation_mentions_zip(node: ast.expr | None, scopes: list[_Scope]) -> bool:
+    """True for ``ZipFile``, ``ZipFile | None``, ``Optional[ZipFile]``, or a string form."""
+    if node is None:
+        return False
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            node = ast.parse(node.value, mode="eval").body
+        except SyntaxError:
+            return False
+    return any(
+        isinstance(sub, ast.expr) and _is_zip_class_expr(sub, scopes)
+        for sub in ast.walk(node)
+    )
+
+
+def _attr_key(node: ast.expr) -> str | None:
+    """``"obj.attr"`` for a one-level attribute on a bare name."""
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return f"{node.value.id}.{node.attr}"
     return None
+
+
+def _class_infos(bindings: set[_Binding]) -> list[_ClassInfo]:
+    return [b[1] for b in bindings if b[0] in {"class", "instance"}]
+
+
+def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
+    key = _attr_key(node)
+    if key is None or not isinstance(node.value, ast.Name):
+        return False
+    innermost = scopes[-1]
+    if key in innermost.current:
+        # A binding on every path reaching here is authoritative over the
+        # class record; a path that never rebound the key still defers to it.
+        local = innermost.current[key]
+        if _ARCHIVE in local:
+            return True
+        if _UNSET not in local:
+            return False
+    if _ARCHIVE in _resolve(scopes, key):
+        return True
+    return any(
+        info.has_archive_attr(node.attr)
+        for info in _class_infos(_resolve(scopes, node.value.id))
+    )
+
+
+def _branch_values(node: ast.expr) -> list[ast.expr] | None:
+    """Values a conditional / boolean / assignment expression may evaluate to."""
+    if isinstance(node, (ast.NamedExpr, ast.Await)):
+        return [node.value]
+    if isinstance(node, ast.IfExp):
+        return [node.body, node.orelse]
+    if isinstance(node, ast.BoolOp):
+        return list(node.values)
+    return None
+
+
+def _call_returns_archive(node: ast.Call, scopes: list[_Scope]) -> bool:
+    """A call to a same-module function or method proven to return an archive."""
+    fn = node.func
+    if isinstance(fn, ast.Name):
+        return any(
+            b[0] == "function" and b[1].returns_archive for b in _resolve(scopes, fn.id)
+        )
+    if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+        return any(
+            info.method_returns_archive(fn.attr)
+            for info in _class_infos(_resolve(scopes, fn.value.id))
+        )
+    if isinstance(fn, ast.Attribute) and _is_super_call(fn.value):
+        return _super_method_returns_archive(fn.attr, scopes)
+    return False
+
+
+def _super_method_returns_archive(method: str, scopes: list[_Scope]) -> bool:
+    """``super().method()`` resolves through the enclosing class's bases."""
+    class_info = _enclosing_class(scopes)
+    return class_info is not None and any(
+        base.method_returns_archive(method) for base in class_info.bases
+    )
+
+
+def _is_super_call(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "super"
+    )
+
+
+def _enclosing_class(scopes: list[_Scope]) -> _ClassInfo | None:
+    return next((scope.class_info for scope in reversed(scopes) if scope.class_info), None)
+
+
+def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
+    branches = _branch_values(node)
+    if branches is not None:
+        return any(_is_zip_archive_expr(branch, scopes) for branch in branches)
+    if isinstance(node, ast.Name):
+        bindings = _resolve(scopes, node.id)
+        return _ARCHIVE in bindings or any(
+            b[0] == "instance" and b[1].is_archive_class() for b in bindings
+        )
+    if isinstance(node, ast.Attribute):
+        return _is_archive_attribute(node, scopes)
+    if isinstance(node, ast.Call):
+        return _is_zip_constructor(node, scopes) or _call_returns_archive(node, scopes)
+    return False
+
+
+def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
+    """What a name bound to ``value`` refers to (aliases carry through)."""
+    branches = _branch_values(value)
+    if branches is not None:
+        return set().union(*(_value_bindings(branch, scopes) for branch in branches))
+    if isinstance(value, ast.Name):
+        return set(_resolve(scopes, value.id)) or {_OTHER}
+    if _is_zip_archive_expr(value, scopes):
+        return {_ARCHIVE}
+    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+        modules = _lookup_modules(scopes, value.value.id)
+        if modules:
+            return {("name", module, value.attr) for module in modules}
+    return {_OTHER}
+
+
+def _iterable_yields_archive(iterable: ast.expr, scopes: list[_Scope]) -> bool:
+    return isinstance(iterable, (ast.Tuple, ast.List, ast.Set)) and any(
+        _is_zip_archive_expr(elt, scopes) for elt in iterable.elts
+    )
+
+
+def _stored_names(target: ast.expr) -> list[str]:
+    return [
+        sub.id
+        for sub in ast.walk(target)
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
+    ]
+
+
+def _target_pairs(
+    target: ast.expr, value: ast.expr, scopes: list[_Scope]
+) -> list[tuple[str, set[_Binding]]]:
+    key = target.id if isinstance(target, ast.Name) else _attr_key(target)
+    if key is not None:
+        return [(key, _value_bindings(value, scopes))]
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+        and not any(isinstance(e, ast.Starred) for e in (*target.elts, *value.elts))
+    ):
+        pairs: list[tuple[str, set[_Binding]]] = []
+        for sub_target, sub_value in zip(target.elts, value.elts):
+            pairs.extend(_target_pairs(sub_target, sub_value, scopes))
+        return pairs
+    return [(name, {_OTHER}) for name in _stored_names(target)]
+
+
+def _loop_target_pairs(
+    target: ast.expr, iterable: ast.expr, scopes: list[_Scope]
+) -> list[tuple[str, set[_Binding]]]:
+    key = target.id if isinstance(target, ast.Name) else _attr_key(target)
+    if key is not None and _iterable_yields_archive(iterable, scopes):
+        return [(key, {_ARCHIVE})]
+    return [(name, {_OTHER}) for name in _stored_names(target)]
+
+
+_Pairs = list[tuple[str, set[_Binding]]]
+
+
+def _import_pairs(node: ast.Import, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    for item in node.names:
+        top = item.name.split(".", 1)[0]
+        if item.asname is None:
+            # ``import os.path`` still binds the top-level name ``os``.
+            binding = ("module", top) if top in _TRACKED_MODULES else _OTHER
+            pairs.append((top, {binding}))
+        elif item.name in _TRACKED_MODULES:
+            pairs.append((item.asname, {("module", item.name)}))
+        else:
+            # ``import os.path as p`` binds only ``p`` (to os.path).
+            pairs.append((item.asname, {_OTHER}))
+    return pairs
+
+
+def _import_from_pairs(node: ast.ImportFrom, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    tracked = node.level == 0 and node.module in _TRACKED_MODULES
+    for item in node.names:
+        if item.name == "*":
+            if tracked and node.module == "zipfile":
+                pairs.extend(
+                    (cls, {("name", "zipfile", cls)}) for cls in sorted(ZIPFILE_ARCHIVE_CLASSES)
+                )
+            continue
+        binding = ("name", node.module, item.name) if tracked else _OTHER
+        pairs.append((item.asname or item.name, {binding}))
+    return pairs
+
+
+def _assign_pairs(node: ast.Assign, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    for target in node.targets:
+        pairs.extend(_target_pairs(target, node.value, scopes))
+    return pairs
+
+
+def _ann_assign_pairs(node: ast.AnnAssign, scopes: list[_Scope]) -> _Pairs:
+    key = node.target.id if isinstance(node.target, ast.Name) else _attr_key(node.target)
+    if key is None:
+        return []
+    bindings = _value_bindings(node.value, scopes) if node.value is not None else set()
+    # ``x: ZipFile`` declares an archive; ``Z: type[ZipFile] = ZipFile`` keeps
+    # the class binding of its value.
+    is_class_value = any(b[0] in {"name", "class", "module"} for b in bindings)
+    if _annotation_mentions_zip(node.annotation, scopes) and not is_class_value:
+        bindings.add(_ARCHIVE)
+    return [(key, bindings)] if bindings else []
+
+
+def _aug_assign_pairs(node: ast.AugAssign, scopes: list[_Scope]) -> _Pairs:
+    return [(name, {_OTHER}) for name in _stored_names(node.target)]
+
+
+def _named_expr_pairs(node: ast.NamedExpr, scopes: list[_Scope]) -> _Pairs:
+    return _target_pairs(node.target, node.value, scopes)
+
+
+def _for_pairs(node: ast.For | ast.AsyncFor, scopes: list[_Scope]) -> _Pairs:
+    return _loop_target_pairs(node.target, node.iter, scopes)
+
+
+def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    for item in node.items:
+        target = item.optional_vars
+        if target is None:
+            continue
+        key = target.id if isinstance(target, ast.Name) else _attr_key(target)
+        if key is not None and _is_zip_archive_expr(item.context_expr, scopes):
+            pairs.append((key, {_ARCHIVE}))
+        else:
+            pairs.extend((name, {_OTHER}) for name in _stored_names(target))
+    return pairs
+
+
+def _def_pairs(node: ast.FunctionDef | ast.AsyncFunctionDef, scopes: list[_Scope]) -> _Pairs:
+    info = scopes[0].function_registry.setdefault(id(node), _FuncInfo())
+    if _annotation_mentions_zip(node.returns, scopes):
+        info.returns_archive = True
+    return [(node.name, {("function", info)})]
+
+
+def _class_def_pairs(node: ast.ClassDef, scopes: list[_Scope]) -> _Pairs:
+    info = scopes[0].class_registry.setdefault(id(node), _ClassInfo())
+    return [(node.name, {("class", info)})]
+
+
+def _match_pairs(node: ast.Match, scopes: list[_Scope]) -> _Pairs:
+    subject = _value_bindings(node.subject, scopes)
+    pairs: _Pairs = []
+    for case in node.cases:
+        pairs.extend(_pattern_pairs(case.pattern, subject))
+    return pairs
+
+
+def _except_pairs(node: ast.ExceptHandler, scopes: list[_Scope]) -> _Pairs:
+    return [(node.name, {_OTHER})] if node.name else []
+
+
+_BINDING_HANDLERS: dict[type, Any] = {
+    ast.Import: _import_pairs,
+    ast.ImportFrom: _import_from_pairs,
+    ast.Assign: _assign_pairs,
+    ast.AnnAssign: _ann_assign_pairs,
+    ast.AugAssign: _aug_assign_pairs,
+    ast.NamedExpr: _named_expr_pairs,
+    ast.For: _for_pairs,
+    ast.AsyncFor: _for_pairs,
+    ast.With: _with_pairs,
+    ast.AsyncWith: _with_pairs,
+    ast.FunctionDef: _def_pairs,
+    ast.AsyncFunctionDef: _def_pairs,
+    ast.ClassDef: _class_def_pairs,
+    ast.ExceptHandler: _except_pairs,
+    ast.Match: _match_pairs,
+}
+
+
+def _binding_pairs(node: ast.AST, scopes: list[_Scope]) -> _Pairs:
+    """Names (or ``obj.attr`` keys) ``node`` binds in its own scope, with what each refers to."""
+    handler = _BINDING_HANDLERS.get(type(node))
+    return handler(node, scopes) if handler is not None else []
+
+
+def _is_staticmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    return any(
+        isinstance(d, ast.Name) and d.id == "staticmethod" for d in node.decorator_list
+    )
+
+
+def _pattern_pairs(
+    pattern: ast.pattern, subject: set[_Binding], *, whole: bool = True
+) -> _Pairs:
+    """Match-pattern captures. A capture of the whole subject (``case a``,
+    ``case X() as a``, alternatives of those) takes the subject's bindings;
+    captures of sub-parts are ordinary locals."""
+    if isinstance(pattern, (ast.MatchAs, ast.MatchOr)):
+        return _alias_pattern_pairs(pattern, subject, whole=whole)
+    rest = pattern.name if isinstance(pattern, ast.MatchStar) else getattr(pattern, "rest", None)
+    pairs: _Pairs = [(rest, {_OTHER})] if rest else []
+    for child in ast.iter_child_nodes(pattern):
+        if isinstance(child, ast.pattern):
+            pairs.extend(_pattern_pairs(child, subject, whole=False))
+    return pairs
+
+
+def _alias_pattern_pairs(
+    pattern: ast.MatchAs | ast.MatchOr, subject: set[_Binding], *, whole: bool
+) -> _Pairs:
+    """``case a`` / ``case P as a`` / ``case P | Q``: these match the same value."""
+    if isinstance(pattern, ast.MatchOr):
+        alternatives = pattern.patterns
+        pairs: _Pairs = []
+    else:
+        alternatives = [pattern.pattern] if pattern.pattern is not None else []
+        pairs = [(pattern.name, set(subject) if whole else {_OTHER})] if pattern.name else []
+    for alternative in alternatives:
+        pairs.extend(_pattern_pairs(alternative, subject, whole=whole))
+    return pairs
+
+
+def _function_params(args: ast.arguments) -> list[ast.arg]:
+    params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    params.extend(a for a in (args.vararg, args.kwarg) if a is not None)
+    return params
+
+
+def _param_defaults(args: ast.arguments) -> dict[str, ast.expr]:
+    """Parameter name -> its default expression, where it has one."""
+    defaults: dict[str, ast.expr] = {}
+    if args.defaults:
+        # Positional defaults belong to the last positional parameters.
+        tail = [*args.posonlyargs, *args.args][-len(args.defaults) :]
+        defaults.update(zip((param.arg for param in tail), args.defaults))
+    for param, default in zip(args.kwonlyargs, args.kw_defaults):
+        if default is not None:
+            defaults[param.arg] = default
+    return defaults
+
+
+def _arguments_pairs(args: ast.arguments, scopes: list[_Scope]) -> _Pairs:
+    """Parameters are locals: they shadow enclosing imports and archive
+    bindings. A parameter is an archive when annotated as one, and may be one
+    when its default (evaluated in the enclosing scope) is; callers can still
+    pass something else, so the default is merged, not substituted."""
+    defaults = _param_defaults(args)
+    pairs: _Pairs = []
+    for param in _function_params(args):
+        bindings: set[_Binding] = {_OTHER}
+        if _annotation_mentions_zip(param.annotation, scopes):
+            bindings.add(_ARCHIVE)
+        if param.arg in defaults:
+            bindings |= _value_bindings(defaults[param.arg], scopes)
+        pairs.append((param.arg, bindings))
+    return pairs
+
+
+def _iter_scope_nodes(body: Sequence[ast.AST]) -> Iterable[ast.AST]:
+    """Nodes evaluated in this scope, in source order, excluding nested scope bodies."""
+    stack: list[ast.AST] = list(reversed(body))
+    while stack:
+        node = stack.pop()
+        yield node
+        children: list[ast.AST]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            children = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+            if not isinstance(node, ast.Lambda):
+                children = [*node.decorator_list, *children]
+        elif isinstance(node, ast.ClassDef):
+            children = [*node.decorator_list, *node.bases, *node.keywords]
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            # Only walrus targets escape a comprehension into this scope.
+            children = [sub for sub in ast.walk(node) if isinstance(sub, ast.NamedExpr)]
+            stack.extend(reversed(children))
+            continue
+        else:
+            children = list(ast.iter_child_nodes(node))
+        stack.extend(reversed(children))
+
+
+_State = dict[str, set[_Binding]]
+
+
+def _copy_state(state: _State) -> _State:
+    return {name: set(bindings) for name, bindings in state.items()}
+
+
+def _merge_states(*states: _State) -> _State:
+    merged: _State = {}
+    for state in states:
+        for name, bindings in state.items():
+            merged.setdefault(name, set()).update(bindings)
+    for name, bindings in merged.items():
+        if "." in name and any(name not in state for state in states):
+            bindings.add(_UNSET)
+    return merged
+
+
+def _terminates(stmts: Sequence[ast.AST]) -> bool:
+    """The block never falls through to the statement after it."""
+    if not stmts:
+        return False
+    last = stmts[-1]
+    if isinstance(last, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
+        return True
+    if isinstance(last, ast.If):
+        return bool(last.orelse) and _terminates(last.body) and _terminates(last.orelse)
+    return False
+
+
+def _join(flows: list[tuple[_State, bool]]) -> _State:
+    """Merge the states of the paths that reach the join point.
+
+    ``return``/``raise`` paths never reach it; ``break``/``continue`` paths are
+    already covered by the loop's later-iteration widening.
+    """
+    reaching = [state for state, terminated in flows if not terminated]
+    return _merge_states(*(reaching or [state for state, _ in flows]))
 
 
 class _InvariantVisitor(ast.NodeVisitor):
-    """Walk the tree, resolving os/shutil aliases in the current lexical scope."""
+    """Walk the tree, resolving os/shutil/zipfile bindings in the current lexical scope."""
 
-    def __init__(self, relpath: str) -> None:
+    def __init__(
+        self,
+        relpath: str,
+        class_registry: dict[int, _ClassInfo] | None = None,
+        function_registry: dict[int, _FuncInfo] | None = None,
+    ) -> None:
         self.relpath = relpath
-        self.scopes: list[_Scope] = [_Scope()]
+        self._class_registry = {} if class_registry is None else class_registry
+        self._function_registry = {} if function_registry is None else function_registry
+        self.scopes: list[_Scope] = []
         self.findings: list[Finding] = []
 
-    def _push(self) -> None:
-        self.scopes.append(_Scope())
+    def _declared_targets(self, nodes: list[ast.AST]) -> dict[str, _Scope]:
+        """``global`` / ``nonlocal`` names of the innermost scope -> owning scope."""
+        declared: dict[str, _Scope] = {}
+        for node in nodes:
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    declared[name] = self.scopes[0]
+            elif isinstance(node, ast.Nonlocal):
+                for name in node.names:
+                    owner = next(
+                        (
+                            scope
+                            for scope in reversed(self.scopes[1:-1])
+                            if not scope.is_class and name in scope.summary
+                        ),
+                        None,
+                    )
+                    if owner is not None:
+                        declared[name] = owner
+        return declared
+
+    def _push(
+        self,
+        body: list[ast.stmt],
+        *,
+        class_info: _ClassInfo | None = None,
+        params: _Pairs | None = None,
+        is_comprehension: bool = False,
+        function_info: _FuncInfo | None = None,
+    ) -> None:
+        scope = _Scope(class_info=class_info, is_comprehension=is_comprehension)
+        scope.function_info = function_info
+        if not self.scopes:
+            scope.class_registry = self._class_registry
+            scope.function_registry = self._function_registry
+        self.scopes.append(scope)
+        for name, bindings in params or ():
+            scope.summary[name] = set(bindings)
+            scope.current[name] = set(bindings)
+        nodes = list(_iter_scope_nodes(body))
+        scope.declared = self._declared_targets(nodes)
+        # Imports first so later assignments in the scope can resolve them.
+        for pass_imports in (True, False):
+            for node in nodes:
+                if isinstance(node, (ast.Import, ast.ImportFrom)) != pass_imports:
+                    continue
+                for name, bindings in _binding_pairs(node, self.scopes):
+                    owner = scope.declared.get(name, scope)
+                    owner.summary.setdefault(name, set()).update(bindings)
+                    if owner is not scope:
+                        owner.rebound_elsewhere.add(name)
+        for name, bindings in scope.summary.items():
+            self._record_archive_attr(name, bindings)
 
     def _pop(self) -> None:
         self.scopes.pop()
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._push()
-        self.generic_visit(node)
+    def _record_archive_attr(self, name: str, bindings: set[_Binding]) -> None:
+        """Remember ``self.x = <archive>`` / class-body ``x = <archive>`` on the class."""
+        if _ARCHIVE not in bindings:
+            return
+        root, dot, attr = name.partition(".")
+        if not dot:
+            class_info = self.scopes[-1].class_info
+            if class_info is not None:
+                class_info.archive_attrs.add(name)
+            return
+        for info in _class_infos(_resolve(self.scopes, root)):
+            info.archive_attrs.add(attr)
+
+    def _bind(self, pairs: _Pairs, *, may: bool = False) -> None:
+        """Bind in the innermost scope; ``may`` merges instead of replacing."""
+        scope = self.scopes[-1]
+        for name, bindings in pairs:
+            self._record_archive_attr(name, bindings)
+            owner = scope.declared.get(name, scope)
+            if owner is not scope:
+                # ``global``/``nonlocal``: the binding belongs to the owner.
+                owner.summary.setdefault(name, set()).update(bindings)
+                owner.rebound_elsewhere.add(name)
+            elif may:
+                scope.current.setdefault(name, set()).update(bindings)
+            else:
+                scope.current[name] = set(bindings)
+
+    def _bind_node(self, node: ast.AST) -> None:
+        self._bind(_binding_pairs(node, self.scopes))
+
+    # --- control flow: each branch starts from the state before it, and the
+    # --- branch states are unioned where control flow joins again.
+
+    def _run_branch(self, start: _State, stmts: list[ast.stmt] | list[ast.AST]) -> _State:
+        scope = self.scopes[-1]
+        scope.current = _copy_state(start)
+        for stmt in stmts:
+            self.visit(stmt)
+        return scope.current
+
+    def _with_body_bindings(self, state: _State, nodes: Sequence[ast.AST]) -> _State:
+        """``state`` plus every binding ``nodes`` can make anywhere.
+
+        Used where control can arrive from an arbitrary point in ``nodes``: the
+        top of a loop (later iterations) and an exception handler (any
+        statement of the ``try`` body may raise). ``summary`` is a safe
+        over-approximation of what each such name may hold.
+        """
+        scope = self.scopes[-1]
+        state = _copy_state(state)
+        for node in _iter_scope_nodes(nodes):
+            for name, _ in _binding_pairs(node, self.scopes):
+                if name in scope.summary:
+                    if "." in name and name not in state:
+                        state[name] = {_UNSET}
+                    state.setdefault(name, set()).update(scope.summary[name])
+        return state
+
+    def _loop_entry_state(self, nodes: Sequence[ast.AST]) -> _State:
+        """State at the top of a loop, including later-iteration bindings."""
+        return self._with_body_bindings(self.scopes[-1].current, nodes)
+
+    def _finish_loop(self, entry: _State, body_end: _State, orelse: list[ast.stmt]) -> None:
+        after = _merge_states(entry, body_end)
+        self.scopes[-1].current = _merge_states(after, self._run_branch(after, orelse))
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._push(node.body)
+        for stmt in node.body:
+            self.visit(stmt)
         self._pop()
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        # Decorators, defaults and annotations evaluate in the enclosing scope.
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        args = node.args
+        params = _function_params(args)
+        for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
+            self.visit(default)
+        for param in params:
+            if param.annotation is not None:
+                self.visit(param.annotation)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+        param_pairs = self._param_pairs(node)
+        self._bind_node(node)
+        info = self.scopes[0].function_registry.setdefault(id(node), _FuncInfo())
+        self._push(node.body, params=param_pairs, function_info=info)
+        for stmt in node.body:
+            self.visit(stmt)
+        self._pop()
+
+    def _param_pairs(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> _Pairs:
+        """See ``_arguments_pairs``; a method's first parameter (``self`` /
+        ``cls``) is additionally bound to its class."""
+        pairs = _arguments_pairs(node.args, self.scopes)
+        class_info = self.scopes[-1].class_info
+        positional = [*node.args.posonlyargs, *node.args.args]
+        if class_info is not None and positional and not _is_staticmethod(node):
+            pairs[0] = (positional[0].arg, {("instance", class_info)})
+        return pairs
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._push()
-        self.generic_visit(node)
+        self._visit_function(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        args = node.args
+        for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
+            self.visit(default)
+        self._push([], params=_arguments_pairs(args, self.scopes))
+        self.visit(node.body)
         self._pop()
+
+    def _describe_class(self, node: ast.ClassDef) -> _ClassInfo:
+        """Refresh the class's zipfile base, same-module bases and methods."""
+        info = self.scopes[0].class_registry.setdefault(id(node), _ClassInfo())
+        info.zip_base = any(_is_zip_class_expr(base, self.scopes) for base in node.bases)
+        info.bases = [
+            base_info
+            for base in node.bases
+            if isinstance(base, ast.Name)
+            for base_info in _class_infos(_resolve(self.scopes, base.id))
+        ]
+        info.methods = {
+            stmt.name: self.scopes[0].function_registry.setdefault(id(stmt), _FuncInfo())
+            for stmt in node.body
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        return info
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._push()
-        self.generic_visit(node)
+        for child in [*node.decorator_list, *node.bases, *node.keywords]:
+            self.visit(child)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+        info = self._describe_class(node)
+        self._push(node.body, class_info=info)
+        # Pre-collect every method body first so ``self.x = ZipFile(...)`` in
+        # ``__init__`` classifies ``self.x`` in methods defined before it.
+        for stmt in node.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._push(stmt.body, params=self._param_pairs(stmt))
+                self._pop()
+        for stmt in node.body:
+            self.visit(stmt)
+        self._pop()
+        self._bind_node(node)
+
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
+    ) -> None:
+        self._push([], is_comprehension=True)
+        for generator in node.generators:
+            self.visit(generator.iter)
+            self._bind(_loop_target_pairs(generator.target, generator.iter, self.scopes))
+            for condition in generator.ifs:
+                self.visit(condition)
+        if isinstance(node, ast.DictComp):
+            self.visit(node.key)
+            self.visit(node.value)
+        else:
+            self.visit(node.elt)
         self._pop()
 
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+
+    def visit_Return(self, node: ast.Return) -> None:
+        self.generic_visit(node)
+        function_info = self.scopes[-1].function_info
+        if (
+            function_info is not None
+            and node.value is not None
+            and _is_zip_archive_expr(node.value, self.scopes)
+        ):
+            function_info.returns_archive = True
+
     def visit_Import(self, node: ast.Import) -> None:
-        _bind_import(self.scopes[-1], node)
+        self._bind_node(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        _bind_import_from(self.scopes[-1], node)
+        self._bind_node(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.generic_visit(node)
+        self._bind_node(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.generic_visit(node)
+        self._bind_node(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.generic_visit(node)
+        self._bind_node(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.generic_visit(node)
+        pairs = _binding_pairs(node, self.scopes)
+        depth = len(self.scopes)
+        while depth > 1 and self.scopes[depth - 1].is_comprehension:
+            depth -= 1
+        if depth == len(self.scopes):
+            self._bind(pairs)
+            return
+        # A walrus inside a comprehension binds in the containing scope, and
+        # may run any number of times, so it merges into that scope's state.
+        inner = self.scopes[depth:]
+        del self.scopes[depth:]
+        try:
+            self._bind(pairs, may=True)
+        finally:
+            self.scopes.extend(inner)
+
+    def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        entry = self._loop_entry_state(node.body)
+        self.scopes[-1].current = _copy_state(entry)
+        self._bind_node(node)
+        body_end = self._run_branch(self.scopes[-1].current, node.body)
+        self._finish_loop(entry, body_end, node.orelse)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_loop(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self._visit_loop(node)
+
+    def visit_While(self, node: ast.While) -> None:
+        # The test runs before every iteration and before leaving the loop, so
+        # its (walrus) bindings reach both the body and the code after it.
+        entry = self._loop_entry_state([node.test, *node.body])
+        self.scopes[-1].current = _copy_state(entry)
+        self.visit(node.test)
+        after_test = self.scopes[-1].current
+        body_end = self._run_branch(after_test, node.body)
+        self._finish_loop(after_test, body_end, node.orelse)
+
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        before = _copy_state(self.scopes[-1].current)
+        self.scopes[-1].current = _join(
+            [
+                (self._run_branch(before, branch), _terminates(branch))
+                for branch in (node.body, node.orelse)
+            ]
+        )
+
+    def visit_Try(self, node: ast.Try) -> None:
+        before = _copy_state(self.scopes[-1].current)
+        body_end = self._run_branch(before, node.body)
+        # A handler can start after any statement of the body.
+        handler_start = _merge_states(body_end, self._with_body_bindings(before, node.body))
+        flows = [
+            (self._run_branch(handler_start, [handler]), _terminates(handler.body))
+            for handler in node.handlers
+        ]
+        orelse_end = self._run_branch(body_end, node.orelse)
+        flows.append((orelse_end, _terminates(node.body) or _terminates(node.orelse)))
+        self.scopes[-1].current = _join(flows)
+        for stmt in node.finalbody:
+            self.visit(stmt)
+
+    visit_TryStar = visit_Try
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.type is not None:
+            self.visit(node.type)
+        self._bind_node(node)
+        for stmt in node.body:
+            self.visit(stmt)
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self.visit(node.subject)
+        subject = _value_bindings(node.subject, self.scopes)
+        before = _copy_state(self.scopes[-1].current)
+        # No case may match, so the state before the match also flows on.
+        flows: list[tuple[_State, bool]] = [(before, False)]
+        for case in node.cases:
+            self.scopes[-1].current = _copy_state(before)
+            self._bind(_pattern_pairs(case.pattern, subject))
+            if case.guard is not None:
+                self.visit(case.guard)
+            for stmt in case.body:
+                self.visit(stmt)
+            flows.append((self.scopes[-1].current, _terminates(case.body)))
+        self.scopes[-1].current = _join(flows)
+
+    def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+        self._bind_node(node)
+        for stmt in node.body:
+            self.visit(stmt)
+
+    def visit_With(self, node: ast.With) -> None:
+        self._visit_with(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self._visit_with(node)
+
+    def _report_zip_extractall(self, node: ast.AST) -> None:
+        self.findings.append(
+            Finding(
+                "INV-BACKUP-001",
+                self.relpath,
+                getattr(node, "lineno", 1),
+                (
+                    "direct ZipFile.extractall() is forbidden in production PRKS code; "
+                    "it trusts archive member names and types. Restore must use the "
+                    "validated, staged per-member extraction in backend.backup_restore"
+                ),
+            )
+        )
+
+    def _is_zip_receiver(self, node: ast.expr) -> bool:
+        return (
+            _is_zip_archive_expr(node, self.scopes)
+            or _is_zip_class_expr(node, self.scopes)
+            or self._is_archive_super(node)
+        )
+
+    def _is_archive_super(self, node: ast.expr) -> bool:
+        """``super()`` inside a method of a zipfile archive subclass."""
+        if not _is_super_call(node):
+            return False
+        class_info = _enclosing_class(self.scopes)
+        return class_info is not None and class_info.is_archive_class()
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        # Match the attribute itself so method references (``f = zf.extractall``)
+        # and unbound calls (``ZipFile.extractall(zf, dest)``) are covered too.
+        if node.attr == BANNED_ZIPFILE_METHOD and self._is_zip_receiver(node.value):
+            self._report_zip_extractall(node)
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        identity = _call_identity(node, self.scopes)
-        if identity is not None:
-            module, name = identity
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == BANNED_ZIPFILE_METHOD
+            and self._is_zip_receiver(node.args[0])
+        ):
+            self._report_zip_extractall(node)
+        for module, name in _call_identities(node, self.scopes):
             if module == "shutil" and name in BANNED_SHUTIL_COPY_CALLS:
                 self.findings.append(
                     Finding(
@@ -241,9 +1188,35 @@ def check_source(source: str, relpath: str) -> list[Finding]:
             )
         ]
 
-    visitor = _InvariantVisitor(relpath)
-    visitor.visit(tree)
+    # Facts about same-module defs (helpers returning archives, archive
+    # attributes, archive subclasses) can be used before the def is reached,
+    # so re-run the walk until they stop changing; they only ever grow.
+    class_registry: dict[int, _ClassInfo] = {}
+    function_registry: dict[int, _FuncInfo] = {}
+    previous: object = None
+    for _ in range(_MAX_ANALYSIS_PASSES):
+        visitor = _InvariantVisitor(relpath, class_registry, function_registry)
+        visitor.visit(tree)
+        snapshot = _registry_snapshot(class_registry, function_registry)
+        if snapshot == previous:
+            break
+        previous = snapshot
     return visitor.findings
+
+
+_MAX_ANALYSIS_PASSES = 10
+
+
+def _registry_snapshot(
+    class_registry: dict[int, _ClassInfo], function_registry: dict[int, _FuncInfo]
+) -> object:
+    return (
+        frozenset((key, info.returns_archive) for key, info in function_registry.items()),
+        frozenset(
+            (key, frozenset(info.archive_attrs), info.zip_base)
+            for key, info in class_registry.items()
+        ),
+    )
 
 
 def iter_production_python(root: Path) -> Iterable[Path]:
