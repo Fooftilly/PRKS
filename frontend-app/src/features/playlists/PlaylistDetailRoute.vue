@@ -14,6 +14,7 @@ const intents = inject(playlistIntentsKey)
 const { actionBusy, actionBlocked, resetPending, withBusy } = usePlaylistPendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const draft = ref<PlaylistFieldDraft>({ title: '', description: '', original_url: '' })
+const fieldBaseline = ref<PlaylistFieldDraft>({ title: '', description: '', original_url: '' })
 const status = ref('')
 const addQuery = ref('')
 const addStatus = ref('')
@@ -71,12 +72,16 @@ onUpdated(settleOffline)
 watch(
   () => `${playlist.value?.id || ''}:${props.projection.editing ? '1' : '0'}`,
   (key, previous) => {
+    if (key === previous) return
+    intents?.invalidateEditSession()
+    resetPending()
     if (!props.projection.editing || !playlist.value) {
       renaming.value = {}
       return
     }
-    if (key === previous) return
-    draft.value = { ...shown.value }
+    const session = { ...shown.value }
+    draft.value = { ...session }
+    fieldBaseline.value = { ...session }
     status.value = ''
     addStatus.value = ''
     addQuery.value = ''
@@ -158,15 +163,23 @@ onBeforeUnmount(() => {
   stopConnectivity = null
 })
 
-function viewIdentity(): { id: string; generation: number } | null {
+function viewIdentity(): { id: string; generation: number; editSession: number } | null {
   const id = playlist.value?.id
   if (!id) return null
-  return { id, generation: props.projection.generation }
+  return {
+    id,
+    generation: props.projection.generation,
+    editSession: intents?.editSession() ?? 0,
+  }
 }
 
-function viewStill(identity: { id: string; generation: number } | null): boolean {
+function viewStill(identity: { id: string; generation: number; editSession: number } | null): boolean {
   if (!identity) return false
-  return playlist.value?.id === identity.id && props.projection.generation === identity.generation
+  return (
+    playlist.value?.id === identity.id &&
+    props.projection.generation === identity.generation &&
+    (intents?.editSession() ?? 0) === identity.editSession
+  )
 }
 
 function onCancel(): void {
@@ -185,9 +198,9 @@ async function onSave(): Promise<void> {
     return
   }
   const draftSnapshot = { ...draft.value }
-  const shownSnapshot = { ...shown.value }
+  const baselineSnapshot = { ...fieldBaseline.value }
   await withBusy('save', async () => {
-    const result = await intents?.saveFields(current.id, draftSnapshot, shownSnapshot)
+    const result = await intents?.saveFields(current.id, draftSnapshot, baselineSnapshot)
     if (!viewStill(identity) || !result) return
     if (!result.ok) status.value = result.message
     else status.value = ''

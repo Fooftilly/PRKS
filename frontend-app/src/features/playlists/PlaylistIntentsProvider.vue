@@ -12,7 +12,9 @@ const current = computed(() => browserPlaylistIntents(props.owner, props.generat
 provide(playlistIntentsKey, {
   create: () => current.value.create(),
   cancelEdit: (playlistId) => current.value.cancelEdit(playlistId),
-  saveFields: (playlistId, draft, shown) => current.value.saveFields(playlistId, draft, shown),
+  editSession: () => current.value.editSession(),
+  invalidateEditSession: () => current.value.invalidateEditSession(),
+  saveFields: (playlistId, draft, baseline) => current.value.saveFields(playlistId, draft, baseline),
   reorder: (playlistId, workIds) => current.value.reorder(playlistId, workIds),
   removeWork: (playlistId, workId) => current.value.removeWork(playlistId, workId),
   addWork: (playlistId, workId) => current.value.addWork(playlistId, workId),

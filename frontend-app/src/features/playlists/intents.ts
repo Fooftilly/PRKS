@@ -12,6 +12,8 @@ export interface PlaylistIntentOwner {
   abortController?: { signal?: AbortSignal } | null
   ui?: {
     playlistEditing?: boolean
+    /** Increments when an edit session ends or a new one begins. */
+    playlistEditSession?: number
     playlistRename?: Record<string, boolean>
     workPlaylistEditing?: boolean
   }
@@ -39,10 +41,13 @@ export type PlaylistVideoCatalogue =
 export interface PlaylistIntents {
   create(): void
   cancelEdit(playlistId: string): void
+  /** Current edit session. A later session means an older save must not settle it. */
+  editSession(): number
+  invalidateEditSession(): void
   saveFields(
     playlistId: string,
     draft: PlaylistFieldDraft,
-    shown: PlaylistFieldDraft,
+    baseline: PlaylistFieldDraft,
   ): Promise<PlaylistSaveResult>
   reorder(playlistId: string, workIds: readonly string[]): Promise<PlaylistSaveResult>
   removeWork(playlistId: string, workId: string): Promise<PlaylistSaveResult>
@@ -80,12 +85,23 @@ function messageOf(err: unknown, fallback: string): string {
   return fallback
 }
 
-function dirtyFields(draft: PlaylistFieldDraft, shown: PlaylistFieldDraft): Record<string, string> {
+function editSessionOf(owner: PlaylistIntentOwner | null | undefined): number {
+  const value = owner?.ui?.playlistEditSession
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function bumpEditSession(owner: PlaylistIntentOwner | null | undefined): void {
+  if (!owner) return
+  if (!owner.ui) owner.ui = {}
+  owner.ui.playlistEditSession = editSessionOf(owner) + 1
+}
+
+function dirtyFields(draft: PlaylistFieldDraft, baseline: PlaylistFieldDraft): Record<string, string> {
   const changes: Record<string, string> = {}
   for (const field of FIELDS) {
     const desired = String(draft[field] ?? '')
-    const baseline = String(shown[field] ?? '')
-    if (desired !== baseline) changes[field] = desired
+    const acknowledged = String(baseline[field] ?? '')
+    if (desired !== acknowledged) changes[field] = desired
   }
   return changes
 }
@@ -142,6 +158,7 @@ export function browserPlaylistIntents(
 
     cancelEdit(playlistId) {
       if (!ownsDetail(owner, generation, playlistId) || !owner) return
+      bumpEditSession(owner)
       if (owner.ui) {
         owner.ui.playlistEditing = false
         owner.ui.playlistRename = {}
@@ -150,14 +167,27 @@ export function browserPlaylistIntents(
       if (typeof window.updatePanelContent === 'function') window.updatePanelContent('details')
     },
 
-    async saveFields(playlistId, draft, shown) {
-      if (!ownsDetail(owner, generation, playlistId)) {
+    editSession() {
+      return editSessionOf(owner)
+    },
+
+    invalidateEditSession() {
+      bumpEditSession(owner)
+    },
+
+    async saveFields(playlistId, draft, baseline) {
+      if (!ownsDetail(owner, generation, playlistId) || !owner) {
         return { ok: false, message: '' }
       }
-      const changes = dirtyFields(draft, shown)
+      const session = editSessionOf(owner)
+      const sessionCurrent = () =>
+        ownsDetail(owner, generation, playlistId) && editSessionOf(owner) === session
+      const changes = dirtyFields(draft, baseline)
       if (!Object.keys(changes).length) {
-        if (owner?.ui) owner.ui.playlistEditing = false
-        if (owner) repaint(owner, playlistId)
+        if (!sessionCurrent()) return { ok: true, message: '' }
+        if (owner.ui) owner.ui.playlistEditing = false
+        bumpEditSession(owner)
+        repaint(owner, playlistId)
         refreshDetailsPanel()
         return { ok: true, message: '' }
       }
@@ -170,13 +200,12 @@ export function browserPlaylistIntents(
       } catch (err) {
         return { ok: false, message: messageOf(err, 'Could not save this playlist.') }
       }
-      if (!ownsDetail(owner, generation, playlistId) || !owner) {
-        return { ok: true, message: '' }
-      }
+      if (!sessionCurrent()) return { ok: true, message: '' }
       if (owner.ui) {
         owner.ui.playlistEditing = false
         owner.ui.playlistRename = {}
       }
+      bumpEditSession(owner)
       const painted = await reloadIfOwned(owner, generation, playlistId)
       if (!painted && ownsDetail(owner, generation, playlistId)) {
         repaint(owner, playlistId)

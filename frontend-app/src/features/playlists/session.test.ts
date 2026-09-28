@@ -243,6 +243,94 @@ describe('Playlists route surface', () => {
     expect(window.updatePlaylist).toHaveBeenCalledTimes(1)
   })
 
+  it('saves a title edit against the session baseline after a refresh changes the description', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await nextTick()
+    const title = el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')
+    title!.value = 'Retitled'
+    title!.dispatchEvent(new Event('input'))
+    await nextTick()
+    presentPlaylistDetail({
+      owner: pane,
+      host: el,
+      playlist: { ...playlist, description: 'Remote description' },
+      editing: true,
+      generation: 2,
+    })
+    await nextTick()
+    expect(el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')?.value).toBe('Retitled')
+    expect(el.querySelector<HTMLTextAreaElement>('#prks-playlist-edit-desc')?.value).toBe('A description')
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
+    await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { title: 'Retitled' }, {})
+  })
+
+  it('does not let a finished save close a later edit of the same playlist', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    let releaseSave: (value: unknown) => void = () => {}
+    window.updatePlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseSave = resolve
+        }),
+    )
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await nextTick()
+    const description = el.querySelector<HTMLTextAreaElement>('#prks-playlist-edit-desc')
+    description!.value = 'Changed on the first session'
+    description!.dispatchEvent(new Event('input'))
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
+    await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
+
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-cancel')?.click()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: false, generation: 1 })
+    await nextTick()
+    expect(el.querySelector('#prks-playlist-edit-title')).toBeNull()
+
+    pane.ui.playlistEditing = true
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await nextTick()
+    const title = el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')
+    expect(title?.value).toBe('Course')
+    title!.value = ''
+    title!.dispatchEvent(new Event('input'))
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
+    await nextTick()
+    expect(el.querySelector('#prks-playlist-edit-status')?.textContent).toContain('Title is required.')
+    title!.value = 'Second session title'
+    title!.dispatchEvent(new Event('input'))
+    await nextTick()
+    vi.mocked(window.renderPlaylistDetail).mockClear()
+    vi.mocked(window.prksReloadPlaylistDetail).mockClear()
+    vi.mocked(window.updatePanelContent).mockClear()
+
+    releaseSave({})
+    await flushView()
+    expect(pane.ui.playlistEditing).toBe(true)
+    expect(el.querySelector('#prks-playlist-edit-title')).not.toBeNull()
+    expect(el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')?.value).toBe('Second session title')
+    expect(el.querySelector('#prks-playlist-edit-status')?.textContent).toContain('Title is required.')
+    expect(window.prksReloadPlaylistDetail).not.toHaveBeenCalled()
+    expect(window.renderPlaylistDetail).not.toHaveBeenCalled()
+    expect(window.updatePanelContent).not.toHaveBeenCalled()
+  })
+
   it('drops a canceled rename when edit ends and when the next edit starts', async () => {
     const pane = owner()
     pane.ui.playlistEditing = true
