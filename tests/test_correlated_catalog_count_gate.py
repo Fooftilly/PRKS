@@ -243,6 +243,30 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(sql=sql):
                 self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
 
+    def test_table_valued_function_alias_is_inner_scope(self):
+        sql = """
+        SELECT j.id,
+            (SELECT COUNT(*) FROM json_each('[1,2]') AS j WHERE j.value > 0) AS n
+        FROM parent j
+        """
+        self.assertEqual(_hits(sql), [])
+        correlated = """
+        SELECT p.id,
+            (SELECT COUNT(*) FROM json_each(p.tags) AS j WHERE j.value = p.kind) AS n
+        FROM parent p, json_each('[]') e
+        """
+        self.assertEqual([h.inner for h in _hits(correlated)], ["json_each"])
+
+    def test_bracket_and_backtick_identifiers_detected(self):
+        for rel, ref in (("[parent] [p]", "[p].id"), ("`parent` AS `p`", "`p`.id")):
+            sql = f"""
+            SELECT p.id,
+                (SELECT COUNT(*) FROM child c WHERE c.parent_id = {ref}) AS n
+            FROM {rel}
+            """
+            with self.subTest(rel=rel):
+                self.assertEqual([h.outer for h in _hits(sql)], ["parent p"])
+
     def test_indexed_by_is_not_an_alias(self):
         sql = """
         SELECT parent.id,

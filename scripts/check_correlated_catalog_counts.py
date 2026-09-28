@@ -102,6 +102,8 @@ _IDENT_RE = re.compile(_IDENT)
 # FROM/JOIN <table> [AS] <alias>; the optional alias must not be a keyword.
 _RELATION_RE = re.compile(
     rf"\b(?:from|join)\s+(?:(?:main|temp)\s*\.\s*)?({_IDENT})"
+    # Table-valued function arguments, already blanked: json_each(   ) AS j.
+    rf"(?:\s*\(\s*\))?"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
@@ -117,7 +119,8 @@ _COMMA_DERIVED_RE = re.compile(
 )
 # Later items of a comma-separated FROM list: ", <table> [AS] <alias>".
 _COMMA_RELATION_RE = re.compile(
-    rf",\s*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s+(?:as\s+)?({_IDENT}))?",
+    rf",\s*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s*\(\s*\))?"
+    rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
 # Where a FROM list ends (the next clause or join).
@@ -193,9 +196,10 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
     i = 0
     n = len(sql)
     while i < n:
-        if sql[i] in ("'", '"'):
+        if sql[i] in _QUOTE_OPENERS:
             j = _quote_end(sql, i)
-            if sql[i] == '"' and _IDENT_RE.fullmatch(sql[i + 1 : j]):
+            # "p", [p] and `p` are identifiers; 'x' is always a value.
+            if sql[i] != "'" and _IDENT_RE.fullmatch(sql[i + 1 : j]):
                 _unquote_identifier(out, sql, i, j)
             else:
                 _blank(out, i + 1, j)
@@ -224,11 +228,20 @@ def _unquote_identifier(out: list[str], sql: str, i: int, j: int) -> None:
     out[j] = fill
 
 
+_QUOTE_OPENERS = frozenset("'\"`[")
+
+
 def _quote_end(sql: str, i: int) -> int:
-    """Offset of the quote closing the literal opened at ``i`` (``''`` escapes)."""
+    """Offset of the character closing the quote opened at ``i``.
+
+    ``'``, ``"`` and backticks escape by doubling; ``[...]`` has no escape.
+    """
     quote = sql[i]
-    j = i + 1
     n = len(sql)
+    if quote == "[":
+        j = sql.find("]", i + 1)
+        return n if j < 0 else j
+    j = i + 1
     while j < n:
         if sql[j] == quote:
             if j + 1 < n and sql[j + 1] == quote:
