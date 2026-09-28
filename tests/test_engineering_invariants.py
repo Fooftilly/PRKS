@@ -1715,6 +1715,18 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    delete = Path.unlink\n"
                 "    delete(Path(pdfs_dir) / name)\n"
             ),
+            "os_scandir_entry_path": (
+                "import os\n"
+                "def purge(pdfs_dir):\n"
+                "    for entry in os.scandir(pdfs_dir):\n"
+                "        os.remove(entry.path)\n"
+            ),
+            "os_walk_root": (
+                "import os\n"
+                "def purge(pdfs_dir):\n"
+                "    for root, _, files in os.walk(pdfs_dir):\n"
+                "        os.remove(os.path.join(root, files[0]))\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -1808,6 +1820,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def purge(thumbs_dir):\n"
                 "    for path in Path(thumbs_dir).glob('*.webp'):\n"
                 "        path.unlink()\n"
+            ),
+            "cache_scandir": (
+                "import os\n"
+                "def purge(thumbs_dir):\n"
+                "    for entry in os.scandir(thumbs_dir):\n"
+                "        os.remove(entry.path)\n"
             ),
             "unrelated_unlink_method": (
                 "def f(pdfs_dir, link):\n"
@@ -2219,6 +2237,25 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        body.__ior__({'file_path': other})\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "raw_sql_block_comment": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE /* reason */ works SET file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "raw_sql_line_comment": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works -- note\\n SET file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "unbound_connection_execute": (
+                "import sqlite3\n"
+                "def adopt(conn, w_id, fp):\n"
+                "    sqlite3.Connection.execute(conn, 'UPDATE works SET file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "later_manager_mutates_guarded_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')), mutate(body):\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2417,6 +2454,10 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
             "sql_row_value_clear": (
                 "def f(conn, w):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (NULL, ?) WHERE id = ?', ('s', w))\n"
+            ),
+            "sql_comment_mentions_file_path": (
+                "def f(conn, w, t):\n"
+                "    conn.execute('UPDATE works SET title = ? /* not file_path = ? */ WHERE id = ?', (t, w))\n"
             ),
             "sql_read": (
                 "def f(conn, w):\n"

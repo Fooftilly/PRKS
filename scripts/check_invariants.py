@@ -129,6 +129,10 @@ _PATH_STRING_FUNCS = frozenset(
         "os.path.realpath",
     }
 )
+# os functions yielding entries under their directory argument.
+_DIR_ITERATOR_FUNCS = frozenset({"os.fwalk", "os.scandir", "os.walk"})
+# DirEntry attributes naming the entry.
+_DIR_ENTRY_ATTRS = frozenset({"name", "path"})
 _STR_TRANSFORM_METHODS = frozenset(
     {
         "capitalize",
@@ -256,6 +260,8 @@ _SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
     re.IGNORECASE,
 )
 _SQL_CLEARING_VALUES = frozenset({"NULL", "''"})
+# A string literal (kept) or a /* block */ / -- line comment (dropped).
+_SQL_COMMENT_RE = re.compile(r"('(?:[^']|'')*')|/\*.*?\*/|--[^\n]*", re.DOTALL)
 _SQL_IDENTIFIER_QUOTES_RE = re.compile(r'["`\[\]]')
 _SQL_SCHEMA_PREFIX_RE = re.compile(r"\b(?:main|temp)\.(?=\w)", re.IGNORECASE)
 
@@ -707,11 +713,12 @@ def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> bool:
 def _is_class_receiver(node: ast.expr, scopes: list[_Scope]) -> bool:
     """``Cls`` in ``Cls.method``: a same-module class or an imported class-like
     (CapWords) name, so the method is called unbound."""
-    if not isinstance(node, ast.Name):
-        return False
-    bindings = _resolve(scopes, node.id)
-    if any(b[0] == "class" for b in bindings):
+    if isinstance(node, ast.Name) and any(
+        b[0] == "class" for b in _resolve(scopes, node.id)
+    ):
         return True
+    if not isinstance(node, (ast.Name, ast.Attribute)):
+        return False
     return any(name.rsplit(".", 1)[-1][:1].isupper() for name in _qualified_names(node, scopes))
 
 
@@ -774,6 +781,7 @@ def _sql_write_targets(text: str) -> set[str]:
     ``pending_pdf_cleanup``."""
     # SQLite identifier quoting ("x", `x`, [x]) and a schema prefix name the
     # same table/column; '' stays (it is a string literal, not an identifier).
+    text = _SQL_COMMENT_RE.sub(lambda m: m.group(1) or " ", text)
     text = _SQL_SCHEMA_PREFIX_RE.sub("", _SQL_IDENTIFIER_QUOTES_RE.sub("", text))
     targets: set[str] = set()
     if _SQL_PENDING_CLEANUP_WRITE_RE.search(text):
@@ -953,6 +961,11 @@ def _attribute_facts(node: ast.Attribute, scopes: list[_Scope]) -> set[_Binding]
     key = _attr_key(node)
     if key is not None:
         facts |= _facts_of(_resolve(scopes, key))
+    if node.attr in _DIR_ENTRY_ATTRS:
+        # ``entry.path`` of an ``os.scandir`` entry under a managed directory.
+        receiver = _expr_facts(node.value, scopes)
+        if _MANAGED in receiver and _PATH not in receiver:
+            facts |= _element_facts(receiver)
     if node.attr in _PATH_RETURNING_ATTRS or node.attr in _PATH_STRING_ATTRS:
         receiver = _expr_facts(node.value, scopes)
         if _PATH in receiver:
@@ -975,6 +988,9 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
         facts = _method_call_facts(node, func, scopes)
         if facts is not None:
             return facts
+    if _qualified_names(func, scopes) & _DIR_ITERATOR_FUNCS:
+        # Entries under the directory argument carry its provenance.
+        return _element_facts(_call_argument_facts(node, scopes))
     if _qualified_names(func, scopes) & _PATH_STRING_FUNCS or _is_builtin(func, scopes, "str"):
         return _element_facts(_call_argument_facts(node, scopes))
     leaves = _callee_leaf_names(func, scopes)
@@ -1823,16 +1839,18 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.scopes[-1].current = _join(flows)
 
     def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
-        for item in node.items:
-            self.visit(item.context_expr)
-        self._bind_node(node)
+        # Items are entered left to right: a later manager's expression runs
+        # while an earlier guard is already held.
         scope = self.scopes[-1]
         entered: list[_AdoptionGuard] = []
         for item in node.items:
+            self.visit(item.context_expr)
+            self._bind(_with_pairs(ast.With(items=[item], body=[]), self.scopes))
             call = self._entered_adoption_guard(item.context_expr)
             if call is not None:
-                entered.append(self._enter_adoption_guard(call, item.optional_vars))
-        scope.adoption_guards.extend(entered)
+                guard = self._enter_adoption_guard(call, item.optional_vars)
+                entered.append(guard)
+                scope.adoption_guards.append(guard)
         for stmt in node.body:
             self.visit(stmt)
         del scope.adoption_guards[len(scope.adoption_guards) - len(entered) :]
@@ -2201,11 +2219,12 @@ class _InvariantVisitor(ast.NodeVisitor):
             if "works.file_path" in targets and self._function not in WORK_FILE_PATH_CAPABILITIES:
                 self._report_adoption(node, "raw SQL writing works.file_path")
 
-    @staticmethod
-    def _sql_argument(node: ast.Call) -> ast.expr | None:
-        """The SQL text: first positional, or ``query=`` / ``sql=``."""
-        if node.args:
-            return node.args[0]
+    def _sql_argument(self, node: ast.Call) -> ast.expr | None:
+        """The SQL text: first positional (after the receiver of an unbound
+        ``Connection.execute(conn, sql)``), or ``query=`` / ``sql=``."""
+        index = 1 if _is_unbound_method_call(node.func, self.scopes) else 0
+        if len(node.args) > index:
+            return node.args[index]
         return next((kw.value for kw in node.keywords if kw.arg in _SQL_TEXT_KEYWORDS), None)
 
     def _report_adoption(self, node: ast.AST, what: str) -> None:
