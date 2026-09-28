@@ -123,7 +123,7 @@ _PATH_STRING_FUNCS = frozenset(
     }
 )
 _STR_TRANSFORM_METHODS = frozenset(
-    {"casefold", "lower", "lstrip", "removeprefix", "removesuffix", "rstrip", "strip"}
+    {"casefold", "format", "lower", "lstrip", "removeprefix", "removesuffix", "rstrip", "strip"}
 )
 
 # --- Managed-PDF ownership boundary (INV-STORAGE-002/003/004) --------------
@@ -263,6 +263,7 @@ class Finding:
 #   ("managed_pdf",)                  may be a managed-PDF filesystem path
 #   ("weak_alias",)                   may derive from referenced_managed_pdf_filename
 #   ("minted",)                       a managed name this request minted
+#   ("guarded", id)                   the input/yield of an entered adoption guard
 #   ("sql_write", target)             SQL text writing works.file_path / pending_pdf_cleanup
 # ``obj.attr`` targets are bound under the dotted key ``"obj.attr"``. Every
 # absolute import is recorded (``("module", ...)`` / ``("name", ...)``) so
@@ -276,6 +277,8 @@ _MANAGED: _Binding = ("managed_pdf",)
 _WEAK: _Binding = ("weak_alias",)
 _MINTED: _Binding = ("minted",)
 _FACT_TAGS = frozenset({"path", "managed_pdf", "weak_alias", "minted", "sql_write"})
+# Tags a works.file_path value may be built from without claiming existing bytes.
+_OWNED_TAGS = frozenset({"minted", "guarded"})
 # An ``obj.attr`` key that some joined path never bound locally: the class-level
 # archive-attribute record still applies on that path.
 _UNSET: _Binding = ("unset",)
@@ -328,6 +331,21 @@ class _ClassInfo:
         return any(info.zip_base for info in self._lineage())
 
 
+class _AdoptionGuard:
+    """One entered ``managed_pdf_adoption_guard``: what it locked and re-checked.
+
+    Only values derived from the guard's own input (the path it validated) or
+    its yielded basename are protected by it; ``fields_dicts`` are the dicts
+    whose ``file_path`` entry was that input (``body.get("file_path")``).
+    """
+
+    __slots__ = ("tag", "fields_dicts")
+
+    def __init__(self) -> None:
+        self.tag: _Binding = ("guarded", id(self))
+        self.fields_dicts: set[str] = set()
+
+
 class _Scope:
     """One lexical scope (module, class body, function, lambda, comprehension).
 
@@ -353,7 +371,8 @@ class _Scope:
         "class_registry",
         "function_registry",
         "function_info",
-        "adoption_guard_depth",
+        "adoption_guards",
+        "is_lazy",
     )
 
     def __init__(
@@ -376,7 +395,9 @@ class _Scope:
         # Set for function bodies: the function whose ``return``s are seen.
         self.function_info: _FuncInfo | None = None
         # Enclosing ``with managed_pdf_adoption_guard(...)`` blocks.
-        self.adoption_guard_depth = 0
+        self.adoption_guards: list[_AdoptionGuard] = []
+        # A generator expression body runs lazily, after its creator returns.
+        self.is_lazy = False
 
     @property
     def is_class(self) -> bool:
@@ -391,6 +412,16 @@ def _resolve(scopes: list[_Scope], name: str) -> set[_Binding]:
         return innermost.current[name]
     if name in innermost.summary:
         return innermost.summary[name]
+    # A list/set/dict comprehension runs immediately, so the enclosing
+    # scope's flow state at that point applies (a generator runs later).
+    enclosing = scopes[:-1]
+    if (
+        innermost.is_comprehension
+        and not innermost.is_lazy
+        and enclosing
+        and not enclosing[-1].is_class
+    ):
+        return _resolve(enclosing, name)
     # Class bodies are not enclosing scopes for the functions nested in them.
     for scope in reversed(scopes[:-1]):
         if not scope.is_class and name in scope.summary:
@@ -566,12 +597,28 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
             return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(
                 value, scopes
             )
-    if _is_proven_minted(value, scopes):
-        return {_MINTED}
+    owned = _proven_owned(value, scopes)
+    if owned is not None:
+        return owned
     return {_OTHER} | _expr_facts(value, scopes)
 
 
 # --- qualified names and value provenance (Path / managed PDF / weak alias) ---
+
+
+def _dict_file_path_value(node: ast.Dict, key: str = "file_path") -> ast.expr | None:
+    """The value a dict literal gives ``key``; the dict itself when a
+    ``**spread`` may supply or override it; ``None`` when it cannot."""
+    if None in node.keys:
+        return node
+    return next(
+        (
+            v
+            for k, v in zip(node.keys, node.values)
+            if isinstance(k, ast.Constant) and k.value == key
+        ),
+        None,
+    )
 
 
 def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
@@ -662,7 +709,44 @@ def _facts_of(bindings: Iterable[_Binding]) -> set[_Binding]:
 
 def _without_path(facts: set[_Binding]) -> set[_Binding]:
     """Provenance that survives conversion to a string / path component."""
+    return {f for f in facts if f != _PATH}
+
+
+def _element_facts(facts: set[_Binding]) -> set[_Binding]:
+    """What an element / entry of a container carries: managed / weak provenance."""
     return {f for f in facts if f != _PATH and f[0] != "sql_write"}
+
+
+def _static_sql_text(node: ast.expr) -> str | None:
+    """Literal text of a SQL string built from constants, f-strings, ``+`` and
+    ``%``; each dynamic part becomes ``?``. ``None`` when nothing is literal.
+
+    A dynamic *column name* (``SET %s = ?``) is deliberately not treated as a
+    ``file_path`` write: those builders are persistence primitives
+    (``update_work_metadata``, the per-field sync writer) whose callers are
+    what INV-STORAGE-003 checks.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value if isinstance(part, ast.Constant) else "?" for part in node.values
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _static_sql_text(node.left), _static_sql_text(node.right)
+        if left is None and right is None:
+            return None
+        return (left if left is not None else "?") + (right if right is not None else "?")
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _static_sql_text(node.left)
+    return None
+
+
+def _sql_facts(node: ast.expr) -> set[_Binding]:
+    text = _static_sql_text(node)
+    if text is None:
+        return set()
+    return {("sql_write", target) for target in _sql_write_targets(text)}
 
 
 def _expr_facts(node: ast.expr | None, scopes: list[_Scope]) -> set[_Binding]:
@@ -680,11 +764,9 @@ def _expr_facts(node: ast.expr | None, scopes: list[_Scope]) -> set[_Binding]:
     if isinstance(node, ast.Attribute):
         return _attribute_facts(node, scopes)
     if isinstance(node, ast.Constant):
-        if isinstance(node.value, str):
-            return {("sql_write", target) for target in _sql_write_targets(node.value)}
-        return set()
+        return _sql_facts(node)
     if isinstance(node, ast.JoinedStr):
-        return set().union(
+        return _sql_facts(node) | set().union(
             *(
                 _without_path(_expr_facts(part.value, scopes))
                 for part in node.values
@@ -695,10 +777,18 @@ def _expr_facts(node: ast.expr | None, scopes: list[_Scope]) -> set[_Binding]:
         left = _expr_facts(node.left, scopes)
         right = _expr_facts(node.right, scopes)
         if isinstance(node.op, ast.Div) and (_PATH in left or _PATH in right):
-            return {_PATH} | _without_path(left) | _without_path(right)
-        return _without_path(left) | _without_path(right)
+            return {_PATH} | _element_facts(left) | _element_facts(right)
+        return _sql_facts(node) | _without_path(left) | _without_path(right)
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return set().union(*(_expr_facts(elt, scopes) for elt in node.elts))
+    if isinstance(node, ast.Dict):
+        return set().union(
+            *(_element_facts(_expr_facts(part, scopes)) for part in (*node.keys, *node.values))
+        )
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return _element_facts(_expr_facts(node.elt, scopes))
+    if isinstance(node, ast.DictComp):
+        return _element_facts(_expr_facts(node.key, scopes) | _expr_facts(node.value, scopes))
     if isinstance(node, (ast.Starred, ast.Subscript)):
         return _expr_facts(node.value, scopes)
     if isinstance(node, ast.Call):
@@ -728,55 +818,75 @@ def _call_argument_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
 def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
     func = node.func
     if _is_path_class_expr(func, scopes):
-        return {_PATH} | _without_path(_call_argument_facts(node, scopes))
+        return {_PATH} | _element_facts(_call_argument_facts(node, scopes))
     if isinstance(func, ast.Attribute):
         if func.attr in _PATH_CLASS_FACTORIES and _is_path_class_expr(func.value, scopes):
             return {_PATH}
         receiver = _expr_facts(func.value, scopes)
         if _PATH in receiver and func.attr in _PATH_RETURNING_METHODS:
-            return receiver | _without_path(_call_argument_facts(node, scopes))
+            return receiver | _element_facts(_call_argument_facts(node, scopes))
         if func.attr in _STR_TRANSFORM_METHODS:
+            # SQL text survives ``.strip()`` / ``.format()`` and the like.
             return _without_path(receiver)
     if _qualified_names(func, scopes) & _PATH_STRING_FUNCS or _is_builtin(func, scopes, "str"):
-        return _without_path(_call_argument_facts(node, scopes))
+        return _element_facts(_call_argument_facts(node, scopes))
     leaves = _callee_leaf_names(func, scopes)
     if leaves & MANAGED_PDF_PATH_HELPERS:
-        return {_MANAGED} | _without_path(_call_argument_facts(node, scopes))
+        return {_MANAGED} | _element_facts(_call_argument_facts(node, scopes))
     if leaves & WEAK_MANAGED_PDF_ALIAS_HELPERS:
         return {_WEAK}
     return set()
 
 
-def _is_proven_minted(node: ast.expr, scopes: list[_Scope]) -> bool:
-    """Every value ``node`` may hold is (built only from) a freshly minted
-    managed name: the minting helpers, names bound only to their results, and
-    ``/api/pdfs/{minted}``-style strings interpolating nothing else."""
+def _proven_owned(node: ast.expr, scopes: list[_Scope]) -> set[_Binding] | None:
+    """The owned tags (``minted`` / ``guarded``) ``node`` is built from, when every
+    value it may hold is built only from them; otherwise ``None``.
+
+    Owned values: the minting helpers' results, an entered adoption guard's
+    input and yielded basename, names bound only to those, and
+    ``/api/pdfs/{owned}``-style strings interpolating nothing else.
+    """
     branches = _branch_values(node)
     if branches is not None:
-        return all(_is_proven_minted(branch, scopes) for branch in branches)
+        return _all_owned(branches, scopes)
     if isinstance(node, ast.Name):
         bindings = _resolve(scopes, node.id)
-        return bool(bindings) and all(b == _MINTED for b in bindings)
+        if bindings and all(b[0] in _OWNED_TAGS for b in bindings):
+            return set(bindings)
+        return None
     if isinstance(node, ast.Call):
         if _callee_leaf_names(node.func, scopes) & MANAGED_PDF_MINTING_HELPERS:
-            return True
+            return {_MINTED}
         if (
             _is_builtin(node.func, scopes, "str")
             or "os.path.basename" in _qualified_names(node.func, scopes)
         ) and len(node.args) == 1:
-            return _is_proven_minted(node.args[0], scopes)
-        return False
+            return _proven_owned(node.args[0], scopes)
+        return None
     if isinstance(node, ast.JoinedStr):
-        parts = [part.value for part in node.values if isinstance(part, ast.FormattedValue)]
-        return bool(parts) and all(_is_proven_minted(part, scopes) for part in parts)
+        return _all_owned(
+            [part.value for part in node.values if isinstance(part, ast.FormattedValue)], scopes
+        )
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        operands = [
-            operand
-            for operand in (node.left, node.right)
-            if not (isinstance(operand, ast.Constant) and isinstance(operand.value, str))
-        ]
-        return bool(operands) and all(_is_proven_minted(op, scopes) for op in operands)
-    return False
+        return _all_owned(
+            [
+                operand
+                for operand in (node.left, node.right)
+                if not (isinstance(operand, ast.Constant) and isinstance(operand.value, str))
+            ],
+            scopes,
+        )
+    return None
+
+
+def _all_owned(nodes: Sequence[ast.expr], scopes: list[_Scope]) -> set[_Binding] | None:
+    tags: set[_Binding] = set()
+    for node in nodes:
+        owned = _proven_owned(node, scopes)
+        if owned is None:
+            return None
+        tags |= owned
+    return tags or None
 
 
 def _iterable_yields_archive(iterable: ast.expr, scopes: list[_Scope]) -> bool:
@@ -818,10 +928,10 @@ def _loop_target_pairs(
     key = target.id if isinstance(target, ast.Name) else _attr_key(target)
     if key is not None and _iterable_yields_archive(iterable, scopes):
         return [(key, {_ARCHIVE})]
-    # Elements of a literal list/tuple/set carry their managed/weak provenance.
+    # Elements of a collection carry its managed / weak provenance.
     carried = {_OTHER}
-    if key is not None and isinstance(iterable, (ast.Tuple, ast.List, ast.Set)):
-        carried |= _expr_facts(iterable, scopes)
+    if key is not None:
+        carried |= _element_facts(_expr_facts(iterable, scopes))
     return [(name, set(carried)) for name in _stored_names(target)]
 
 
@@ -864,6 +974,15 @@ def _assign_pairs(node: ast.Assign, scopes: list[_Scope]) -> _Pairs:
     return pairs
 
 
+def _is_class_binding(binding: _Binding) -> bool:
+    """A binding naming a class (or module), not an instance of it."""
+    if binding[0] == "name":
+        return _is_zip_class_binding(binding) or (
+            f"{binding[1]}.{binding[2]}" in PATHLIB_PATH_CLASSES
+        )
+    return binding[0] in {"class", "module"}
+
+
 def _ann_assign_pairs(node: ast.AnnAssign, scopes: list[_Scope]) -> _Pairs:
     key = node.target.id if isinstance(node.target, ast.Name) else _attr_key(node.target)
     if key is None:
@@ -871,7 +990,7 @@ def _ann_assign_pairs(node: ast.AnnAssign, scopes: list[_Scope]) -> _Pairs:
     bindings = _value_bindings(node.value, scopes) if node.value is not None else set()
     # ``x: ZipFile`` declares an archive; ``Z: type[ZipFile] = ZipFile`` keeps
     # the class binding of its value.
-    is_class_value = any(b[0] in {"name", "class", "module"} for b in bindings)
+    is_class_value = any(_is_class_binding(b) for b in bindings)
     if _annotation_mentions_zip(node.annotation, scopes) and not is_class_value:
         bindings.add(_ARCHIVE)
     if _annotation_mentions_path(node.annotation, scopes) and not is_class_value:
@@ -1336,6 +1455,7 @@ class _InvariantVisitor(ast.NodeVisitor):
         self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
     ) -> None:
         self._push([], is_comprehension=True)
+        self.scopes[-1].is_lazy = isinstance(node, ast.GeneratorExp)
         for generator in node.generators:
             self.visit(generator.iter)
             self._bind(_loop_target_pairs(generator.target, generator.iter, self.scopes))
@@ -1476,33 +1596,105 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
         for item in node.items:
             self.visit(item.context_expr)
-        guarded = any(self._mentions_adoption_guard(item.context_expr) for item in node.items)
         self._bind_node(node)
         scope = self.scopes[-1]
-        scope.adoption_guard_depth += guarded
+        entered: list[_AdoptionGuard] = []
+        for item in node.items:
+            call = self._entered_adoption_guard(item.context_expr)
+            if call is not None:
+                entered.append(self._enter_adoption_guard(call, item.optional_vars))
+        scope.adoption_guards.extend(entered)
         for stmt in node.body:
             self.visit(stmt)
-        scope.adoption_guard_depth -= guarded
+        del scope.adoption_guards[len(scope.adoption_guards) - len(entered) :]
 
-    def _mentions_adoption_guard(self, node: ast.expr) -> bool:
-        """``with managed_pdf_adoption_guard(...)`` -- also as one arm of a
-        conditional context manager (``guard(...) if changing else nullcontext()``)."""
-        return any(
-            isinstance(sub, ast.Call)
-            and MANAGED_PDF_ADOPTION_GUARD in _callee_leaf_names(sub.func, self.scopes)
-            for sub in ast.walk(node)
+    def _is_adoption_guard_call(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Call) and MANAGED_PDF_ADOPTION_GUARD in _callee_leaf_names(
+            node.func, self.scopes
         )
 
-    def _under_adoption_guard(self) -> bool:
+    def _entered_adoption_guard(self, node: ast.expr) -> ast.Call | None:
+        """The guard call this context expression actually enters.
+
+        ``guard(...)`` itself, or the canonical conditional form
+        ``guard(...) if cond else nullcontext()`` (either order). A guard merely
+        constructed inside another context manager -- ``nullcontext(guard(...))``
+        -- is never entered and does not count.
+
+        The conditional form is trusted on the assumption, visible at both
+        current call sites, that the no-op arm is taken only when nothing
+        existing is adopted (a just-minted upload; an unchanged ``file_path``
+        echo removed from the body). That correlation between the condition
+        and the persisted value is runtime state an intraprocedural checker
+        cannot prove; reviewers own it.
+        """
+        if isinstance(node, ast.Call) and self._is_adoption_guard_call(node):
+            return node
+        if isinstance(node, ast.IfExp):
+            for arm, other in ((node.body, node.orelse), (node.orelse, node.body)):
+                if (
+                    isinstance(arm, ast.Call)
+                    and self._is_adoption_guard_call(arm)
+                    and self._is_nullcontext_call(other)
+                ):
+                    return arm
+        return None
+
+    def _is_nullcontext_call(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Call) and (
+            "contextlib.nullcontext" in _qualified_names(node.func, self.scopes)
+        )
+
+    def _enter_adoption_guard(self, call: ast.Call, target: ast.expr | None) -> _AdoptionGuard:
+        """Tag the guard's input and yielded name as protected by this guard."""
+        guard = _AdoptionGuard()
+        value = call.args[1] if len(call.args) > 1 else next(
+            (kw.value for kw in call.keywords if kw.arg == "file_path_value"), None
+        )
+        pairs: _Pairs = []
+        if isinstance(value, ast.Name):
+            # The exact value the guard validated and locked; any weak
+            # provenance it had is kept so INV-STORAGE-004 still sees it.
+            weak = {f for f in _expr_facts(value, self.scopes) if f == _WEAK}
+            pairs.append((value.id, {guard.tag} | weak))
+        fields = self._file_path_entry_owner(value)
+        if fields is not None:
+            guard.fields_dicts.add(fields)
+        if isinstance(target, ast.Name):
+            pairs.append((target.id, {guard.tag}))
+        self._bind(pairs)
+        return guard
+
+    @staticmethod
+    def _file_path_entry_owner(node: ast.expr | None) -> str | None:
+        """``body`` for ``body.get("file_path", ...)`` / ``body["file_path"]``."""
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "file_path"
+        ):
+            return node.func.value.id
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "file_path"
+        ):
+            return node.value.id
+        return None
+
+    def _active_adoption_guards(self) -> list[_AdoptionGuard]:
+        guards: list[_AdoptionGuard] = []
         for scope in reversed(self.scopes):
-            if scope.adoption_guard_depth:
-                return True
-            # A nested def/lambda body runs later, outside the guard.
-            if scope.function_info is not None or scope.is_class or scope is self.scopes[0]:
-                return False
-            if not scope.is_comprehension:
-                return False
-        return False
+            guards.extend(scope.adoption_guards)
+            # A nested def/lambda/generator body runs later, outside the guard.
+            if scope.is_lazy or not scope.is_comprehension:
+                break
+        return guards
 
     def visit_With(self, node: ast.With) -> None:
         self._visit_with(node)
@@ -1634,43 +1826,62 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _file_path_sink_value(
         self, node: ast.Call, leaves: set[str]
     ) -> tuple[str, ast.expr] | None:
-        """``(sink, value)`` when the call persists ``works.file_path``.
+        """``(sink, value)`` when the call may persist ``works.file_path``.
 
-        ``value`` is the ``fields`` dict itself when it is not a literal (it
-        may carry ``file_path``). A dict literal without that key is no write.
+        ``value`` is opaque (the ``fields`` dict, a ``**kwargs`` mapping or a
+        ``*args`` sequence) when ``file_path`` cannot be singled out. A dict
+        literal without that key and without ``**spread`` writes nothing.
         """
         for sink in sorted(leaves & set(WORK_FILE_PATH_SINKS)):
             index, keyword, is_fields = WORK_FILE_PATH_SINKS[sink]
-            value = next((kw.value for kw in node.keywords if kw.arg == keyword), None)
-            if value is None and len(node.args) > index:
-                value = node.args[index]
+            value = self._call_argument(node, index, keyword)
             if value is None:
                 continue
             if is_fields and isinstance(value, ast.Dict):
-                keys = dict(zip(value.keys, value.values))
-                explicit = next(
-                    (
-                        v
-                        for k, v in keys.items()
-                        if isinstance(k, ast.Constant) and k.value == "file_path"
-                    ),
-                    None,
-                )
-                if explicit is not None:
-                    value = explicit
-                elif None not in keys:
-                    # A literal without the key (and no ``**spread``) writes no file_path.
+                value = _dict_file_path_value(value)
+                if value is None:
                     continue
             return sink, value
         return None
 
-    def _is_non_adopting_value(self, value: ast.expr) -> bool:
-        """``None`` / ``""`` / a non-``/api/pdfs/`` literal, or minted bytes."""
+    @staticmethod
+    def _call_argument(node: ast.Call, index: int, keyword: str) -> ast.expr | None:
+        """The expression a call binds to parameter ``keyword`` (at ``index``)."""
+        explicit = next((kw.value for kw in node.keywords if kw.arg == keyword), None)
+        if explicit is not None:
+            return explicit
+        for position, arg in enumerate(node.args):
+            if isinstance(arg, ast.Starred):
+                # ``*args`` may reach the parameter's position.
+                return arg.value
+            if position == index:
+                return arg
+        for kw in node.keywords:
+            if kw.arg is None:
+                if isinstance(kw.value, ast.Dict):
+                    found = _dict_file_path_value(kw.value, key=keyword)
+                    if found is not None:
+                        return found
+                    continue
+                return kw.value
+        return None
+
+    def _is_owned_value(self, value: ast.expr) -> bool:
+        """A clear / non-managed literal, minted bytes, or a value an active
+        adoption guard validated (its input, its yielded basename, or the
+        fields dict whose ``file_path`` it read)."""
         if isinstance(value, ast.Constant):
             return not (
                 isinstance(value.value, str) and value.value.strip().startswith("/api/pdfs")
             )
-        return _is_proven_minted(value, self.scopes)
+        guards = self._active_adoption_guards()
+        if isinstance(value, ast.Name) and any(value.id in g.fields_dicts for g in guards):
+            return True
+        owned = _proven_owned(value, self.scopes)
+        if owned is None:
+            return False
+        active = {g.tag for g in guards}
+        return all(tag == _MINTED or tag in active for tag in owned)
 
     def _check_file_path_write(self, node: ast.Call, leaves: set[str]) -> None:
         sink_value = self._file_path_sink_value(node, leaves)
@@ -1679,9 +1890,7 @@ class _InvariantVisitor(ast.NodeVisitor):
             if _WEAK in _expr_facts(value, self.scopes):
                 self._report_weak_alias(node, f"the works.file_path written by {sink}()")
             if not (
-                self._is_non_adopting_value(value)
-                or self._under_adoption_guard()
-                or self._function in WORK_FILE_PATH_CAPABILITIES
+                self._is_owned_value(value) or self._function in WORK_FILE_PATH_CAPABILITIES
             ):
                 self._report_adoption(node, f"{sink}()")
         if leaves & _SQL_EXECUTE_METHODS and node.args:
@@ -1693,11 +1902,9 @@ class _InvariantVisitor(ast.NodeVisitor):
             targets = {f[1] for f in sql if f[0] == "sql_write"}
             if targets and _WEAK in params:
                 self._report_weak_alias(node, f"a SQL write to {', '.join(sorted(targets))}")
-            if (
-                "works.file_path" in targets
-                and not self._under_adoption_guard()
-                and self._function not in WORK_FILE_PATH_CAPABILITIES
-            ):
+            # Raw SQL cannot say which parameter is file_path, so it is
+            # confined to the persistence primitives even under the guard.
+            if "works.file_path" in targets and self._function not in WORK_FILE_PATH_CAPABILITIES:
                 self._report_adoption(node, "raw SQL writing works.file_path")
 
     def _report_adoption(self, node: ast.AST, what: str) -> None:
@@ -1705,8 +1912,8 @@ class _InvariantVisitor(ast.NodeVisitor):
             "INV-STORAGE-003",
             node,
             (
-                f"{what} persists a works.file_path that is not proven to be a "
-                "freshly minted managed PDF, outside managed_pdf_adoption_guard. "
+                f"{what} persists a works.file_path that is neither proven freshly "
+                "minted nor the value an entered managed_pdf_adoption_guard validated. "
                 "Claiming an EXISTING /api/pdfs/<name> must hold that guard "
                 "(backend.services.work_pdf_replace.managed_pdf_adoption_guard: it "
                 "takes managed_pdf_path_lock, re-checks the bytes still exist and "
