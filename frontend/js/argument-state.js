@@ -499,6 +499,80 @@
         return after(await sync().store.deleteArgument(argumentId), true);
     }
 
+    /**
+     * Warm the acknowledged revision before an edit session.
+     *
+     * A locally created Argument already has a known revision-0 base and must
+     * not ask the server for an entity it cannot know. Failure is swallowed:
+     * save reports an unknown base if the warm-up did not land.
+     */
+    async function prepareArgumentEdit(argumentId) {
+        let operations = [];
+        try {
+            if (root.prksSync && root.prksSync.store) {
+                operations = await root.prksSync.store.listOperations();
+            }
+        } catch (_e) { operations = []; }
+        const locallyCreated = pendingCreates(operations).some(function (op) {
+            return op.entity_id === argumentId;
+        });
+        if (!locallyCreated && argumentId) {
+            try { await readArgumentState(argumentId); }
+            catch (_e) { /* save reports unknown base if warm-up failed */ }
+        }
+    }
+
+    /**
+     * Persist one editor draft through the existing durable writers.
+     *
+     * Compares against the acknowledged base and pending intent. Only dirty
+     * scalar fields and dirty source/target aggregates are written. A partial
+     * failure still attempts every dirty unit, then throws the first error.
+     */
+    async function commitArgumentEditorDraft(argumentId, draft) {
+        const src = draft && typeof draft === 'object' ? draft : {};
+        const fields = {
+            name: src.name == null ? '' : String(src.name),
+            kind: src.kind === 'stance' ? 'stance' : 'argument',
+            main_text: src.main_text == null ? '' : String(src.main_text),
+        };
+        const targets = canonicalTargetRows(src.targets).filter(function (row) {
+            return row.id;
+        });
+        const sources = canonicalSourceRows(src.sources).filter(function (row) {
+            return row.work_id;
+        });
+        const operations = root.prksSync && root.prksSync.store
+            ? await root.prksSync.store.listOperations() : [];
+        const base = await acknowledgedArgumentBase(argumentId, operations);
+        if (!base) {
+            const unavailable = new Error(
+                'This Argument cannot be safely saved because this device does not know its revision. Open it once while connected to PRKS and try again.');
+            unavailable.prksArgumentUnavailable = true;
+            throw unavailable;
+        }
+        const changes = dirtyArgumentFields(argumentId, fields, base.fields, operations);
+        const dirtyTargets = dirtyArgumentTargets(argumentId, targets, base.targets, operations);
+        const dirtySources = dirtyArgumentSources(argumentId, sources, base.sources, operations);
+        const failures = [];
+        for (const field of Object.keys(changes)) {
+            try {
+                await saveArgumentFieldsDurably(argumentId,
+                    { [field]: changes[field] }, { [field]: base.fields[field] });
+            } catch (error) { failures.push(error); }
+        }
+        if (dirtyTargets) {
+            try { await setArgumentTargetsDurably(argumentId, targets, base.targets); }
+            catch (error) { failures.push(error); }
+        }
+        if (dirtySources) {
+            try { await setArgumentSourcesDurably(argumentId, sources, base.sources); }
+            catch (error) { failures.push(error); }
+        }
+        if (failures.length) throw failures[0];
+        return { id: argumentId };
+    }
+
     /* ---- sync handlers ---- */
 
     /* Named refusals only. Anything outside this vocabulary is not an answer
@@ -631,6 +705,8 @@
         prksSetArgumentSourcesDurably: setArgumentSourcesDurably,
         prksSetArgumentTargetsDurably: setArgumentTargetsDurably,
         prksDeleteArgumentDurably: deleteArgumentDurably,
+        prksPrepareArgumentEdit: prepareArgumentEdit,
+        prksCommitArgumentEditorDraft: commitArgumentEditorDraft,
         prksArgumentCreateSyncHandler: createHandler,
         prksArgumentFieldSyncHandler: fieldHandler,
         prksArgumentSourcesSyncHandler: sourcesHandler,

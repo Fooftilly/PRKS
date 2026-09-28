@@ -179,6 +179,119 @@ async function failedRootBlocksDescendants() {
     assert.equal(byId.get(b.op_id).status, "conflict");
 }
 
+async function commitWritesOnlyDirtyUnits() {
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    const created = await store.createArgument({
+        name: "Base", kind: "argument", main_text: "Text",
+        sources: [{ work_id: "W-1", pages: "1" }],
+        targets: [{ type: "position", id: "P-1", verdict_id: "supports" }],
+    });
+    const id = created.entity_id;
+    const calls = [];
+    const origSave = store.saveArgumentFields.bind(store);
+    const origSources = store.setArgumentSources.bind(store);
+    const origTargets = store.setArgumentTargets.bind(store);
+    store.saveArgumentFields = async function (argumentId, changes, base) {
+        calls.push(["field", changes]);
+        return origSave(argumentId, changes, base);
+    };
+    store.setArgumentSources = async function (argumentId, sources, observed) {
+        calls.push(["sources", sources]);
+        return origSources(argumentId, sources, observed);
+    };
+    store.setArgumentTargets = async function (argumentId, targets, observed) {
+        calls.push(["targets", targets]);
+        return origTargets(argumentId, targets, observed);
+    };
+    const shown = {
+        name: "Base", kind: "argument", main_text: "Text",
+        sources: [{ work_id: "W-1", work_title: "Work", pages: "1" }],
+        targets: [{ type: "position", id: "P-1", name: "Position", verdict_id: "supports" }],
+    };
+    await globalThis.prksCommitArgumentEditorDraft(id, shown);
+    assert.deepEqual(calls, [], "an unchanged draft writes nothing");
+
+    await globalThis.prksCommitArgumentEditorDraft(id, Object.assign({}, shown, { name: "Renamed" }));
+    assert.deepEqual(calls.map(row => row[0]), ["field"]);
+    assert.deepEqual(calls[0][1], { name: "Renamed" });
+
+    calls.length = 0;
+    await globalThis.prksCommitArgumentEditorDraft(id, Object.assign({}, shown, {
+        name: "Renamed", kind: "stance",
+    }));
+    assert.deepEqual(calls.map(row => row[0]), ["field"]);
+    assert.deepEqual(calls[0][1], { kind: "stance" });
+
+    calls.length = 0;
+    await globalThis.prksCommitArgumentEditorDraft(id, Object.assign({}, shown, {
+        name: "Renamed", kind: "stance", main_text: "Later",
+    }));
+    assert.deepEqual(calls[0][1], { main_text: "Later" });
+
+    calls.length = 0;
+    await globalThis.prksCommitArgumentEditorDraft(id, Object.assign({}, shown, {
+        name: "Renamed", kind: "stance", main_text: "Later",
+        targets: [
+            { type: "position", id: "", verdict_id: "supports" },
+            { type: "position", id: "P-2", verdict_id: "opposes", name: "Other" },
+        ],
+    }));
+    assert.deepEqual(calls.map(row => row[0]), ["targets"]);
+    assert.equal(calls[0][1].length, 1);
+    assert.equal(calls[0][1][0].id, "P-2");
+
+    calls.length = 0;
+    await globalThis.prksCommitArgumentEditorDraft(id, Object.assign({}, shown, {
+        name: "Renamed", kind: "stance", main_text: "Later",
+        targets: [{ type: "position", id: "P-2", verdict_id: "opposes" }],
+        sources: [{ work_id: "W-2", pages: "9", work_title: "Next" }],
+    }));
+    assert.deepEqual(calls.map(row => row[0]), ["sources"]);
+
+    calls.length = 0;
+    await globalThis.prksCommitArgumentEditorDraft(id, {
+        name: "Both", kind: "argument", main_text: "Both text",
+        sources: [{ work_id: "W-3", pages: "" }],
+        targets: [{ type: "argument", id: "A-OTHER", verdict_id: "supports" }],
+    });
+    const kinds = calls.map(row => row[0]);
+    assert.ok(kinds.indexOf("field") !== -1);
+    assert.ok(kinds.indexOf("sources") !== -1);
+    assert.ok(kinds.indexOf("targets") !== -1);
+
+    store.saveArgumentFields = async function () { calls.push(["field-fail"]); throw new Error("field failed"); };
+    calls.length = 0;
+    let partial = null;
+    try {
+        await globalThis.prksCommitArgumentEditorDraft(id, {
+            name: "Again", kind: "argument", main_text: "Both text",
+            sources: [{ work_id: "W-4", pages: "1" }],
+            targets: [{ type: "argument", id: "A-OTHER", verdict_id: "supports" }],
+        });
+    } catch (error) { partial = error; }
+    assert.equal(partial && partial.message, "field failed");
+    assert.ok(calls.some(row => row[0] === "sources"), "source aggregate still attempted");
+
+    const reads = [];
+    globalThis.prksOfflineReadEntity = async function (kind, entityId) {
+        reads.push(kind + ":" + entityId);
+        return { value: null, source: "unavailable", cachedAt: null };
+    };
+    reads.length = 0;
+    await globalThis.prksPrepareArgumentEdit(id);
+    assert.deepEqual(reads, [], "a locally created Argument does not read the server to enter edit");
+    await globalThis.prksPrepareArgumentEdit("A-NOBASE");
+    assert.ok(reads.some(row => row.indexOf("argument-state:A-NOBASE") === 0));
+
+    let unavailable = null;
+    try {
+        await globalThis.prksCommitArgumentEditorDraft("A-NOBASE", shown);
+    } catch (error) { unavailable = error; }
+    assert.equal(unavailable && unavailable.prksArgumentUnavailable, true);
+    assert.match(String(unavailable && unavailable.message), /does not know its revision/);
+}
+
 async function main() {
     await constructionAndDependencies();
     await scalarCoalescingAndIndependence();
@@ -186,6 +299,7 @@ async function main() {
     await deletionAndImmutability();
     await validation();
     await failedRootBlocksDescendants();
+    await commitWritesOnlyDirtyUnits();
     console.log("All " + checks + " argument checks passed");
 }
 

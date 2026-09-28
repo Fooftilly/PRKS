@@ -4073,35 +4073,53 @@ class OfflinePositionTests(unittest.TestCase):
         _wait_content_contains(page, "Domain coherence check.")
 
     def test_failed_position_mutation_retains_the_position_cache(self):
+        """A refused sync post must not drop a cached Position.
+
+        Durable writes travel through ``/api/sync/operations``. A pending
+        deletion hides the detail until the server answers, so this case
+        refuses the sync post and does not enqueue a deletion. The in-use
+        refusal that brings a Position back is covered by the durable
+        Positions suite.
+        """
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
 
         _wait_sw_active(page)
         _open_position(page, position_a)
         _wait_entity_cached(page, "position", position_a)
+        page.evaluate(
+            "id => { void Promise.resolve(prksReadPositionState(id)).catch(() => {}); }",
+            position_a,
+        )
+        _wait_entity_cached(page, "position-state", position_a)
         generation_before = _domain_generation(page, "positions")
 
-        def reject_patch(route):
-            if route.request.method in ("PATCH", "POST", "DELETE"):
+        def reject_sync(route):
+            if route.request.method == "POST":
                 route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
                 return
             route.fallback()
 
-        page.route("**/api/positions**", reject_patch)
+        page.route("**/api/sync/operations**", reject_sync)
         try:
             page.evaluate(
                 """async (id) => {
                     try { await window.updatePosition(id, { description: 'never applied' }); } catch (_e) {}
                     try { await window.createPosition({ name: 'never created' }); } catch (_e) {}
-                    try { await window.deletePosition(id); } catch (_e) {}
                 }""",
                 position_a,
             )
-            page.wait_for_timeout(400)
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "op => op.status === 'pending' && op.last_error))",
+            )
             self.assertEqual(_domain_generation(page, "positions"), generation_before)
             self.assertIsNotNone(_cached_entity(page, "position", position_a))
+            cached = _cached_entity(page, "position", position_a)
+            self.assertEqual(cached["value"]["name"], POSITION_A_NAME)
         finally:
-            _safe_unroute(page, "**/api/positions**", reject_patch)
+            _safe_unroute(page, "**/api/sync/operations**", reject_sync)
 
         context.set_offline(True)
         page.reload(wait_until="domcontentloaded")

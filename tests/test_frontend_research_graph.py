@@ -25,7 +25,9 @@ _POSITIONS_VUE_DETAIL = os.path.join(
 _POSITIONS_VUE_INTENTS = os.path.join(
     _PROJECT_DIR, "frontend-app", "src", "features", "positions", "intents.ts"
 )
-_ARGS = os.path.join(_FRONTEND, "js", "components", "arguments.js")
+_ARGS = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "arguments", "ArgumentDetailRoute.vue"
+)
 _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
 _VENDOR = os.path.join(_FRONTEND, "vendor", "cytoscape")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")

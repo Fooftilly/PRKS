@@ -11,6 +11,18 @@ _APP = os.path.join(_FRONTEND, "js", "app.js")
 _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _LINKS = os.path.join(_FRONTEND, "js", "research-links.js")
 _ARGS = os.path.join(_FRONTEND, "js", "components", "arguments.js")
+_ARGS_VUE_INDEX = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "arguments", "ArgumentsIndexRoute.vue"
+)
+_ARGS_VUE_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "arguments", "ArgumentDetailRoute.vue"
+)
+_ARGS_MATCH = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "arguments", "match.ts"
+)
+_ARGS_ROW = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "arguments", "ArgumentRow.vue"
+)
 _CONCEPTS = os.path.join(_FRONTEND, "js", "components", "concepts.js")
 _CONCEPTS_VUE_INDEX = os.path.join(
     _PROJECT_DIR, "frontend-app", "src", "features", "concepts", "ConceptsIndexRoute.vue"
@@ -141,14 +153,15 @@ class FrontendResearchLinksTests(unittest.TestCase):
                 _PROJECT_DIR, "frontend-app", "src", "features", "positions", "PositionRow.vue"
             )
         )
-        args = _read(_ARGS)
+        args = _read(_ARGS_VUE_INDEX)
+        args_row = _read(_ARGS_ROW)
         self.assertIn("prks-research-row", concepts)
         self.assertIn("prksResearchIndexRowHtml", concepts)
         self.assertIn("Top-level concept", concepts_row)
         self.assertNotIn("No parent", concepts_row)
         self.assertNotIn("Parents:", concepts_row)
         self.assertIn("prks-research-row", positions)
-        self.assertIn("prks-research-row", args)
+        self.assertIn("prks-research-row", args_row)
         self.assertIn("prks-tab", args)
         self.assertIn("prks-tabs", args)
 
@@ -158,14 +171,14 @@ class FrontendResearchLinksTests(unittest.TestCase):
             os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "concepts", "match.ts")
         )
         positions_match = _read(_POSITIONS_MATCH)
-        args = _read(_ARGS)
-        # Shared helper remains for Arguments. Concepts and Positions Vue own
-        # local filters with the same match semantics.
+        args_match = _read(_ARGS_MATCH)
+        # Shared helper remains for any remaining legacy binder. Concepts,
+        # Positions, and Arguments Vue own local filters with the same match
+        # semantics.
         self.assertIn("function bindResearchIndexSearch", concepts)
         self.assertIn("function normalizeSearchQuery", concepts)
         self.assertIn("prksBindResearchIndexSearch: bindResearchIndexSearch", concepts)
-        self.assertIn("root.prksBindResearchIndexSearch", args)
-        self.assertNotIn("function bindResearchIndexSearch", args)
+        self.assertNotIn("function bindResearchIndexSearch", args_match)
         # Purely local filtering: no network call is part of the search path.
         search_block = concepts.split("function bindResearchIndexSearch", 1)[1].split(
             "function researchIndexToolbarHtml", 1
@@ -174,8 +187,10 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertNotIn("prksRequest", search_block)
         self.assertIn("input.addEventListener('input'", search_block)
         # Argument kind filter stays a real route/query param; search only narrows within it.
-        self.assertIn("k === 'all' ? '#/arguments' : '#/arguments?kind=", args)
-        self.assertIn("matchArgument", args)
+        self.assertIn("return `#/arguments?kind=${encodeURIComponent(filter)}`", args_match)
+        self.assertIn("export function matchArgumentIndexItem", args_match)
+        self.assertNotIn("fetch", args_match)
+        self.assertNotIn("prksRequest", args_match)
         self.assertIn("export function matchConceptIndexItem", concepts_match)
         self.assertNotIn("fetch", concepts_match)
         self.assertIn("export function matchPositionIndexItem", positions_match)
@@ -186,7 +201,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         concepts = _read(_CONCEPTS)
         concepts_vue = _read(_CONCEPTS_VUE_INDEX)
         positions_vue = _read(_POSITIONS_VUE_INDEX)
-        args = _read(_ARGS)
+        args = _read(_ARGS_VUE_INDEX)
         self.assertIn("function researchIndexSearchEmptyHtml", concepts)
         self.assertIn("data-research-search-clear", concepts)
         self.assertIn("prks-concept-new-empty", concepts_vue)
@@ -196,18 +211,18 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("prks-argument-new-empty", args)
         self.assertIn("prks-stance-new-empty", args)
         self.assertIn("No Positions yet.", positions_vue)
-        self.assertIn("No Arguments or Stances yet.", args)
+        self.assertIn("No Arguments or Stances yet.", _read(_ARGS_MATCH))
 
     def test_research_entity_sections_use_shared_head_pattern(self):
         concepts = _read(_CONCEPTS)
         concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
         positions_detail = _read(_POSITIONS_VUE_DETAIL)
-        args = _read(_ARGS)
+        args = _read(_ARGS_VUE_DETAIL)
         self.assertIn("function researchSectionHeadHtml", concepts)
         self.assertIn("research-entity__section-head", concepts)
         self.assertIn("prksResearchSectionHeadHtml: researchSectionHeadHtml", concepts)
         self.assertIn("prksResearchSectionHeadHtml", positions_detail)
-        self.assertIn("root.prksResearchSectionHeadHtml", args)
+        self.assertIn("prksResearchSectionHeadHtml", args)
         # Concept detail (Vue): canonical section set, each a real .research-entity__section.
         for heading in (
             "Definition",
@@ -235,10 +250,10 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("No sources.", args)
         self.assertIn("No responses.", args)
         self.assertIn("Not mentioned in research notes.", args)
-        self.assertIn("count: targetList.length", args)
-        self.assertIn("count: sourceList.length", args)
-        self.assertIn("count: responseList.length", args)
-        self.assertIn("count: mentionList.length", args)
+        self.assertIn("count: current.targets.length", args)
+        self.assertIn("count: current.sources.length", args)
+        self.assertIn("count: current.responses.length", args)
+        self.assertIn("count: current.mentions.length", args)
 
 
     def test_concept_create_flow_owner_scoping_selftest(self):
@@ -254,7 +269,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_destructive_actions_are_visually_subordinate(self):
         concepts_detail = _read(_CONCEPTS_VUE_DETAIL)
-        args = _read(_ARGS)
+        args = _read(_ARGS_VUE_DETAIL)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
         self.assertIn(".prks-btn--quiet-danger", css)
         self.assertIn("prks-concept-delete", concepts_detail)
@@ -265,7 +280,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
         # aside. Asserted on the button and its label rather than on exact
         # attribute order, which offline control roles legitimately extend.
         self.assertIn('id="prks-arg-response"', args)
-        self.assertIn(">New response</button>", args)
+        self.assertIn("New response", args)
 
     def test_research_index_clear_search_uses_a_current_controller_slot(self):
         concepts = _read(_CONCEPTS)
@@ -290,28 +305,35 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertNotIn("argumentController", concepts)
 
     def test_argument_index_empty_states_are_kind_aware(self):
-        args = _read(_ARGS)
-        self.assertIn("function argumentKindUi", args)
-        kind_ui = args.split("function argumentKindUi", 1)[1].split("function argumentsEmptyDataHtml", 1)[0]
+        match = _read(_ARGS_MATCH)
+        index = _read(_ARGS_VUE_INDEX)
+        self.assertIn("export function argumentKindUi", match)
+        kind_ui = match.split("export function argumentKindUi", 1)[1].split(
+            "export function argumentIndexHash", 1
+        )[0]
         self.assertIn("No Arguments yet.", kind_ui)
         self.assertIn("No Stances yet.", kind_ui)
         self.assertIn("No Arguments or Stances yet.", kind_ui)
         # True-empty and search-empty copy both key off the active canonical kind, not a
         # hardcoded "Arguments or Stances" -- an empty Stances route must not claim the
         # whole research-network subsystem is empty.
-        self.assertIn("argumentsEmptyDataHtml(kindUi)", args)
-        self.assertIn("root.prksResearchIndexSearchEmptyHtml(kindUi.plural, query)", args)
-        self.assertNotIn("argumentsEmptyDataHtml()", args)
-        self.assertNotIn("prksResearchIndexSearchEmptyHtml('Arguments or Stances', query)", args)
+        self.assertIn("{{ kindUi.empty }}", index)
+        self.assertIn("No {{ scopeLabel }} match", index)
+        self.assertNotIn("No Arguments or Stances match", index)
 
     def test_argument_editor_uses_form_pane_controls(self):
-        args = _read(_ARGS)
+        args = _read(_ARGS_VUE_DETAIL)
+        intents = _read(
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "arguments", "intents.ts")
+        )
+        app = _read(_APP)
         self.assertIn('class="prks-arg-form form-pane"', args)
         self.assertIn('class="prks-btn prks-btn--primary"', args)
         self.assertIn("research-entity", args)
         self.assertIn("prks-arg-edit", args)
-        self.assertIn("ctx.ui.argumentEditing", args)
-        self.assertIn("prksOpenResearchPicker", args)
+        self.assertIn("ctx.ui.argumentEditing = false", app)
+        self.assertIn("argumentEditing", intents)
+        self.assertIn("prksOpenResearchPicker", intents)
         self.assertNotIn('placeholder="Work id"', args)
         self.assertNotIn("P-… or A-…", args)
         css = _read(os.path.join(_FRONTEND, "css", "style.css"))
