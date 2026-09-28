@@ -73,9 +73,9 @@ MARKER = "prks-allow-correlated-count:"
 AGGREGATES = frozenset({"count", "sum", "total"})
 
 EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d6927f8d2765b5"
-_SAFE_GIT_REV_RE = re.compile(
-    r"\A(?:HEAD|[0-9a-fA-F]{7,40}|[A-Za-z0-9][A-Za-z0-9._/-]*)\Z"
-)
+# HEAD, hex SHAs and simple ref names all fit this single charset rule; ranges
+# and leading '-' are rejected separately in sanitize_git_revision().
+_SAFE_GIT_REV_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 _FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{40}\Z")
 
 GUIDANCE = (
@@ -265,8 +265,10 @@ def _enclosing_span(masked: str, start: int, end: int) -> tuple[int, int]:
 
 
 def _normalize(text: str) -> str:
+    # Whitespace is collapsed to single spaces first, so an optional single
+    # space around punctuation is enough (and cannot backtrack).
     text = re.sub(r"\s+", " ", text.strip().lower())
-    return re.sub(r"\s*([(),=<>!*+/-])\s*", r"\1", text)
+    return re.sub(r" ?([(),=<>!*+/-]) ?", r"\1", text)
 
 
 def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
