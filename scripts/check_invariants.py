@@ -58,11 +58,12 @@ BANNED_SHUTIL_COPY_CALLS = {"copy", "copy2", "copyfile"}
 # Durable filesystem primitives are deliberately concentrated. Expanding these
 # sets requires an explicit review of the durability/recovery contract.
 #
-# Intentional gap: pathlib.Path.replace is the same atomic rename as os.replace
-# but is not matched here (fn.value is typically a Call/Name that is not an
-# ``os`` module alias). Cover Path.replace only with an explicit follow-up that
-# tracks Path constructors / Path-typed names — do not treat every ``.replace``
-# attribute call as os.replace.
+# INV-DURABILITY-001 covers ``os.replace`` and ``pathlib.Path.replace``: they
+# are the same atomic rename, so one invariant with one boundary. A
+# ``.replace`` receiver is classified only when it is provably a pathlib Path
+# (a Path constructor, a Path-returning Path method or ``/`` join, a name bound
+# to one, or a parameter / variable annotated as one). ``str.replace`` and
+# every other unrelated ``.replace`` method are never matched.
 OS_REPLACE_ALLOWLIST = {
     "backend/backup_restore.py",
     # Disposable thumb / Person-image cache publication only — not canonical
@@ -90,7 +91,155 @@ OS_FSYNC_ALLOWLIST = {
 ZIPFILE_ARCHIVE_CLASSES = frozenset({"ZipFile", "PyZipFile"})
 BANNED_ZIPFILE_METHOD = "extractall"
 
-_TRACKED_MODULES = frozenset({"os", "shutil", "zipfile"})
+# pathlib classes whose instances expose the filesystem ``replace``/``unlink``.
+# (PurePath has neither.)
+PATHLIB_PATH_CLASSES = frozenset({"pathlib.Path", "pathlib.PosixPath", "pathlib.WindowsPath"})
+_PATH_CLASS_FACTORIES = frozenset({"cwd", "home"})
+_PATH_RETURNING_METHODS = frozenset(
+    {
+        "absolute",
+        "expanduser",
+        "joinpath",
+        "readlink",
+        "relative_to",
+        "resolve",
+        "with_name",
+        "with_stem",
+        "with_suffix",
+    }
+)
+_PATH_RETURNING_ATTRS = frozenset({"parent"})
+# Stdlib calls whose string result is built from their arguments; a managed
+# PDF / weak-alias provenance survives them (a Path value does not).
+_PATH_STRING_FUNCS = frozenset(
+    {
+        "os.fsdecode",
+        "os.fspath",
+        "os.path.abspath",
+        "os.path.basename",
+        "os.path.join",
+        "os.path.normpath",
+        "os.path.realpath",
+    }
+)
+_STR_TRANSFORM_METHODS = frozenset(
+    {"casefold", "lower", "lstrip", "removeprefix", "removesuffix", "rstrip", "strip"}
+)
+
+# --- Managed-PDF ownership boundary (INV-STORAGE-002/003/004) --------------
+#
+# Provenance is tracked per lexical binding with the same flow-sensitive,
+# alias-aware machinery as INV-BACKUP-001. Helper names are matched on the
+# name they were *imported/defined* as, so ``from m import helper as h`` and
+# ``mod.helper`` both resolve; a parameter or local that shadows the name does
+# not. Everything is intraprocedural: values returned from arbitrary helpers
+# and container contents (other than literal lists/tuples/sets) are not
+# tracked, and neither are paths passed across function boundaries.
+#
+# A value is a *managed-PDF filesystem path* when it is built from the managed
+# PDF directory (a name or attribute spelled ``pdfs_dir`` -- the StorageConfig
+# field every PRKS call site uses) or from the canonical containment helpers.
+MANAGED_PDF_DIR_NAMES = frozenset({"pdfs_dir"})
+MANAGED_PDF_PATH_HELPERS = frozenset(
+    {"safe_pdf_path_under_dir", "_safe_pdf_path_in_pdfs_dir", "_safe_pdf_path_for_route"}
+)
+# Helpers that return a managed basename this request minted exclusively.
+MANAGED_PDF_MINTING_HELPERS = frozenset(
+    {
+        "allocate_exclusive_managed_filename",
+        "mint_managed_pdf_filename",
+        "store_new_managed_pdf_bytes",
+        "store_new_managed_pdf_from_path",
+    }
+)
+# Fail-closed over-approximation; may only ever *block* a delete.
+WEAK_MANAGED_PDF_ALIAS_HELPERS = frozenset({"referenced_managed_pdf_filename"})
+MANAGED_PDF_ADOPTION_GUARD = "managed_pdf_adoption_guard"
+
+# INV-STORAGE-002: a raw removal of a managed-PDF path is survivor-aware
+# cleanup authority. Only these (file, function) capabilities hold it; every
+# other function -- including new functions in these same files -- fails.
+RAW_REMOVE_CALLS = frozenset({"os.remove", "os.unlink"})
+MANAGED_PDF_REMOVE_CAPABILITIES: dict[tuple[str, str], str] = {
+    # The canonical survivor-aware cleanup: under managed_pdf_path_lock it
+    # settles the claim iff a live Work strongly references the name, keeps
+    # a weak-alias-blocked claim pending, contains the path through
+    # safe_pdf_path_under_dir, unlinks, then settles the claim.
+    ("backend/work_deletion.py", "_remove_managed_pdf"): "survivor-aware cleanup",
+    # The bounded retry pass performs the same locked sequence per claim.
+    ("backend/work_deletion.py", "retry_pending_pdf_cleanup"): "survivor-aware retry",
+    # Rollback of exclusive bytes the current request just minted (callers
+    # restricted by RAW_MANAGED_PDF_UNLINK_HELPERS below).
+    ("backend/services/work_pdf_replace.py", "unlink_managed_pdf_best_effort"): (
+        "self-minted rollback"
+    ),
+}
+# Raw managed-PDF unlink helpers without a survivor re-check: callable only
+# where the name is bytes this request minted and nothing else can reference.
+RAW_MANAGED_PDF_UNLINK_HELPERS: dict[str, frozenset[tuple[str, str]]] = {
+    "unlink_managed_pdf_best_effort": frozenset(
+        {
+            # Partial exclusive create that never reported its name.
+            ("backend/services/work_pdf_replace.py", "_exclusive_create_write_and_fsync"),
+            # Holds managed_pdf_path_lock and re-checks live references first.
+            ("backend/services/work_pdf_replace.py", "discard_unowned_managed_pdf"),
+            # COW exclusive bytes whose retarget never committed.
+            ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"),
+        }
+    ),
+}
+
+# INV-STORAGE-003: persisting ``works.file_path``. Sink -> (positional index
+# after the receiver, keyword name, the value is a fields dict).
+WORK_FILE_PATH_SINKS: dict[str, tuple[int, str, bool]] = {
+    "add_work": (5, "file_path", False),
+    "update_work_metadata": (1, "fields", True),
+    "retarget_work_managed_file_path": (2, "file_path", False),
+}
+# Functions that own a file_path persistence primitive (raw SQL) or a
+# documented non-adoption write. Their callers are what the rule checks.
+WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
+    # The persistence primitive behind every create; callers are checked.
+    ("backend/db_manager.py", "PRKSDatabase.add_work"): "create primitive",
+    # The COW retarget primitive; its one caller is the exemption below.
+    ("backend/services/work_pdf_replace.py", "retarget_work_managed_file_path"): (
+        "retarget primitive"
+    ),
+    # Copy-on-write retargets the Work to an exclusive name it just minted
+    # (allocate_exclusive_managed_filename) while holding that name's lock.
+    # The retarget runs behind a ``cow_retarget`` flag the flow analysis
+    # cannot correlate with the minting branch, hence the function exemption.
+    ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"): "COW retarget",
+}
+_SQL_EXECUTE_METHODS = frozenset({"execute", "execute_query", "executemany"})
+_SQL_WORKS_INSERT_RE = re.compile(
+    r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+works\s*\(([^)]*)\)\s*(?:VALUES\s*\(([^)]*)\))?",
+    re.IGNORECASE,
+)
+_SQL_WORKS_UPDATE_RE = re.compile(
+    r"\bUPDATE\s+works\s+SET\b(.*?)(?:\bWHERE\b|$)", re.IGNORECASE | re.DOTALL
+)
+_SQL_FILE_PATH_ASSIGN_RE = re.compile(r"\bfile_path\s*=\s*([^,\s]+)", re.IGNORECASE)
+_SQL_PENDING_CLEANUP_WRITE_RE = re.compile(
+    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+pending_pdf_cleanup\b",
+    re.IGNORECASE,
+)
+_SQL_CLEARING_VALUES = frozenset({"NULL", "''"})
+
+# INV-STORAGE-004: operations that treat a basename as ownership, cleanup
+# claim, or deletion authority. A weak-alias value must never reach them.
+WEAK_ALIAS_AUTHORITY_SINKS = frozenset(
+    {
+        "cleanup_released_managed_pdfs",
+        "discard_unowned_managed_pdf",
+        "forget_pending_pdf_cleanup",
+        "managed_pdf_adoption_guard",
+        "record_pending_pdf_cleanup_on_conn",
+        "settle_claim_if_referenced",
+        "unlink_managed_pdf_best_effort",
+        "_remove_managed_pdf",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -110,21 +259,35 @@ class Finding:
 #   ("archive",)                      a value known to be a zipfile archive
 #   ("class", info) / ("instance", info)   a same-module class / its self or cls
 #   ("other",)                        any other local binding (shadows imports)
-# ``obj.attr`` targets are bound under the dotted key ``"obj.attr"``.
+#   ("path",)                         a value known to be a pathlib Path
+#   ("managed_pdf",)                  may be a managed-PDF filesystem path
+#   ("weak_alias",)                   may derive from referenced_managed_pdf_filename
+#   ("minted",)                       a managed name this request minted
+#   ("sql_write", target)             SQL text writing works.file_path / pending_pdf_cleanup
+# ``obj.attr`` targets are bound under the dotted key ``"obj.attr"``. Every
+# absolute import is recorded (``("module", ...)`` / ``("name", ...)``) so
+# helper and stdlib identities resolve through ``import m as a`` /
+# ``from m import f as g`` / ``g2 = g`` exactly like os/shutil/zipfile.
 _Binding = tuple[Any, ...]
 _ARCHIVE: _Binding = ("archive",)
 _OTHER: _Binding = ("other",)
+_PATH: _Binding = ("path",)
+_MANAGED: _Binding = ("managed_pdf",)
+_WEAK: _Binding = ("weak_alias",)
+_MINTED: _Binding = ("minted",)
+_FACT_TAGS = frozenset({"path", "managed_pdf", "weak_alias", "minted", "sql_write"})
 # An ``obj.attr`` key that some joined path never bound locally: the class-level
 # archive-attribute record still applies on that path.
 _UNSET: _Binding = ("unset",)
 
 
 class _FuncInfo:
-    """One same-module function or method: does it return a zipfile archive?"""
+    """One same-module function or method: its name, and does it return a zipfile archive?"""
 
-    __slots__ = ("returns_archive",)
+    __slots__ = ("name", "returns_archive")
 
     def __init__(self) -> None:
+        self.name = ""
         self.returns_archive = False
 
 
@@ -190,6 +353,7 @@ class _Scope:
         "class_registry",
         "function_registry",
         "function_info",
+        "adoption_guard_depth",
     )
 
     def __init__(
@@ -211,6 +375,8 @@ class _Scope:
         self.function_registry: dict[int, _FuncInfo] = {}
         # Set for function bodies: the function whose ``return``s are seen.
         self.function_info: _FuncInfo | None = None
+        # Enclosing ``with managed_pdf_adoption_guard(...)`` blocks.
+        self.adoption_guard_depth = 0
 
     @property
     def is_class(self) -> bool:
@@ -389,14 +555,228 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     if branches is not None:
         return set().union(*(_value_bindings(branch, scopes) for branch in branches))
     if isinstance(value, ast.Name):
-        return set(_resolve(scopes, value.id)) or {_OTHER}
+        return (set(_resolve(scopes, value.id)) or {_OTHER}) | _expr_facts(value, scopes)
     if _is_zip_archive_expr(value, scopes):
         return {_ARCHIVE}
-    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
-        modules = _lookup_modules(scopes, value.value.id)
-        if modules:
-            return {("name", module, value.attr) for module in modules}
-    return {_OTHER}
+    if isinstance(value, ast.Attribute):
+        # ``mod.attr`` / ``pkg.mod.attr`` keep their import identity, so a
+        # local alias of an imported callable or class still resolves.
+        qualified = [name.rsplit(".", 1) for name in _qualified_names(value, scopes)]
+        if qualified:
+            return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(
+                value, scopes
+            )
+    if _is_proven_minted(value, scopes):
+        return {_MINTED}
+    return {_OTHER} | _expr_facts(value, scopes)
+
+
+# --- qualified names and value provenance (Path / managed PDF / weak alias) ---
+
+
+def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
+    """Import-resolved dotted names ``node`` may denote (``os.path.join``,
+    ``pathlib.Path``, ``backend.db_manager.helper``); same-module defs resolve
+    to their bare name. Empty for locals, parameters and unknown names."""
+    if isinstance(node, ast.Name):
+        names: set[str] = set()
+        for binding in _resolve(scopes, node.id):
+            if binding[0] == "module":
+                names.add(binding[1])
+            elif binding[0] == "name":
+                names.add(f"{binding[1]}.{binding[2]}")
+            elif binding[0] == "function" and binding[1].name:
+                names.add(binding[1].name)
+        return names
+    if isinstance(node, ast.Attribute):
+        return {f"{base}.{node.attr}" for base in _qualified_names(node.value, scopes)}
+    return set()
+
+
+def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
+    """The name(s) a PRKS helper was defined/imported as.
+
+    ``obj.helper`` -> ``helper``. A bare name resolves through its imports and
+    aliases; a name bound only to a parameter/local matches nothing, and an
+    unbound (global from elsewhere) name matches its own spelling.
+    """
+    if isinstance(func, ast.Attribute):
+        return {func.attr}
+    if isinstance(func, ast.Name):
+        bindings = _resolve(scopes, func.id)
+        if not bindings:
+            return {func.id}
+        return {name.rsplit(".", 1)[-1] for name in _qualified_names(func, scopes)}
+    return set()
+
+
+def _is_builtin(func: ast.expr, scopes: list[_Scope], name: str) -> bool:
+    return isinstance(func, ast.Name) and func.id == name and not _resolve(scopes, func.id)
+
+
+def _is_path_class_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
+    return bool(_qualified_names(node, scopes) & PATHLIB_PATH_CLASSES)
+
+
+def _annotation_mentions_path(node: ast.expr | None, scopes: list[_Scope]) -> bool:
+    """True for ``Path``, ``Path | None``, ``Optional[pathlib.Path]``, or a string form."""
+    if node is None:
+        return False
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            node = ast.parse(node.value, mode="eval").body
+        except SyntaxError:
+            return False
+    return any(
+        isinstance(sub, ast.expr) and _is_path_class_expr(sub, scopes) for sub in ast.walk(node)
+    )
+
+
+def _sql_write_targets(text: str) -> set[str]:
+    """Which ownership tables a SQL literal writes: ``works.file_path`` (to a
+    bound value -- ``NULL``/``''`` clears are not adoption) and
+    ``pending_pdf_cleanup``."""
+    targets: set[str] = set()
+    if _SQL_PENDING_CLEANUP_WRITE_RE.search(text):
+        targets.add("pending_pdf_cleanup")
+    for match in _SQL_WORKS_INSERT_RE.finditer(text):
+        columns = [c.strip().lower() for c in match.group(1).split(",")]
+        if "file_path" not in columns:
+            continue
+        values = [v.strip() for v in (match.group(2) or "").split(",")]
+        if len(values) == len(columns) and (
+            values[columns.index("file_path")].upper() in _SQL_CLEARING_VALUES
+        ):
+            continue
+        targets.add("works.file_path")
+    for match in _SQL_WORKS_UPDATE_RE.finditer(text):
+        for assigned in _SQL_FILE_PATH_ASSIGN_RE.finditer(match.group(1)):
+            if assigned.group(1).upper() not in _SQL_CLEARING_VALUES:
+                targets.add("works.file_path")
+    return targets
+
+
+def _facts_of(bindings: Iterable[_Binding]) -> set[_Binding]:
+    return {b for b in bindings if b[0] in _FACT_TAGS}
+
+
+def _without_path(facts: set[_Binding]) -> set[_Binding]:
+    """Provenance that survives conversion to a string / path component."""
+    return {f for f in facts if f != _PATH and f[0] != "sql_write"}
+
+
+def _expr_facts(node: ast.expr | None, scopes: list[_Scope]) -> set[_Binding]:
+    """May-provenance of ``node``: Path value, managed-PDF path, weak alias, SQL write."""
+    if node is None:
+        return set()
+    branches = _branch_values(node)
+    if branches is not None:
+        return set().union(*(_expr_facts(branch, scopes) for branch in branches))
+    if isinstance(node, ast.Name):
+        facts = _facts_of(_resolve(scopes, node.id))
+        if node.id in MANAGED_PDF_DIR_NAMES:
+            facts.add(_MANAGED)
+        return facts
+    if isinstance(node, ast.Attribute):
+        return _attribute_facts(node, scopes)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return {("sql_write", target) for target in _sql_write_targets(node.value)}
+        return set()
+    if isinstance(node, ast.JoinedStr):
+        return set().union(
+            *(
+                _without_path(_expr_facts(part.value, scopes))
+                for part in node.values
+                if isinstance(part, ast.FormattedValue)
+            )
+        )
+    if isinstance(node, ast.BinOp):
+        left = _expr_facts(node.left, scopes)
+        right = _expr_facts(node.right, scopes)
+        if isinstance(node.op, ast.Div) and (_PATH in left or _PATH in right):
+            return {_PATH} | _without_path(left) | _without_path(right)
+        return _without_path(left) | _without_path(right)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return set().union(*(_expr_facts(elt, scopes) for elt in node.elts))
+    if isinstance(node, (ast.Starred, ast.Subscript)):
+        return _expr_facts(node.value, scopes)
+    if isinstance(node, ast.Call):
+        return _call_facts(node, scopes)
+    return set()
+
+
+def _attribute_facts(node: ast.Attribute, scopes: list[_Scope]) -> set[_Binding]:
+    facts: set[_Binding] = set()
+    if node.attr in MANAGED_PDF_DIR_NAMES:
+        facts.add(_MANAGED)
+    key = _attr_key(node)
+    if key is not None:
+        facts |= _facts_of(_resolve(scopes, key))
+    if node.attr in _PATH_RETURNING_ATTRS:
+        receiver = _expr_facts(node.value, scopes)
+        if _PATH in receiver:
+            facts |= receiver
+    return facts
+
+
+def _call_argument_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
+    values = [*node.args, *(kw.value for kw in node.keywords)]
+    return set().union(*(_expr_facts(value, scopes) for value in values))
+
+
+def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
+    func = node.func
+    if _is_path_class_expr(func, scopes):
+        return {_PATH} | _without_path(_call_argument_facts(node, scopes))
+    if isinstance(func, ast.Attribute):
+        if func.attr in _PATH_CLASS_FACTORIES and _is_path_class_expr(func.value, scopes):
+            return {_PATH}
+        receiver = _expr_facts(func.value, scopes)
+        if _PATH in receiver and func.attr in _PATH_RETURNING_METHODS:
+            return receiver | _without_path(_call_argument_facts(node, scopes))
+        if func.attr in _STR_TRANSFORM_METHODS:
+            return _without_path(receiver)
+    if _qualified_names(func, scopes) & _PATH_STRING_FUNCS or _is_builtin(func, scopes, "str"):
+        return _without_path(_call_argument_facts(node, scopes))
+    leaves = _callee_leaf_names(func, scopes)
+    if leaves & MANAGED_PDF_PATH_HELPERS:
+        return {_MANAGED} | _without_path(_call_argument_facts(node, scopes))
+    if leaves & WEAK_MANAGED_PDF_ALIAS_HELPERS:
+        return {_WEAK}
+    return set()
+
+
+def _is_proven_minted(node: ast.expr, scopes: list[_Scope]) -> bool:
+    """Every value ``node`` may hold is (built only from) a freshly minted
+    managed name: the minting helpers, names bound only to their results, and
+    ``/api/pdfs/{minted}``-style strings interpolating nothing else."""
+    branches = _branch_values(node)
+    if branches is not None:
+        return all(_is_proven_minted(branch, scopes) for branch in branches)
+    if isinstance(node, ast.Name):
+        bindings = _resolve(scopes, node.id)
+        return bool(bindings) and all(b == _MINTED for b in bindings)
+    if isinstance(node, ast.Call):
+        if _callee_leaf_names(node.func, scopes) & MANAGED_PDF_MINTING_HELPERS:
+            return True
+        if (
+            _is_builtin(node.func, scopes, "str")
+            or "os.path.basename" in _qualified_names(node.func, scopes)
+        ) and len(node.args) == 1:
+            return _is_proven_minted(node.args[0], scopes)
+        return False
+    if isinstance(node, ast.JoinedStr):
+        parts = [part.value for part in node.values if isinstance(part, ast.FormattedValue)]
+        return bool(parts) and all(_is_proven_minted(part, scopes) for part in parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        operands = [
+            operand
+            for operand in (node.left, node.right)
+            if not (isinstance(operand, ast.Constant) and isinstance(operand.value, str))
+        ]
+        return bool(operands) and all(_is_proven_minted(op, scopes) for op in operands)
+    return False
 
 
 def _iterable_yields_archive(iterable: ast.expr, scopes: list[_Scope]) -> bool:
@@ -438,7 +818,11 @@ def _loop_target_pairs(
     key = target.id if isinstance(target, ast.Name) else _attr_key(target)
     if key is not None and _iterable_yields_archive(iterable, scopes):
         return [(key, {_ARCHIVE})]
-    return [(name, {_OTHER}) for name in _stored_names(target)]
+    # Elements of a literal list/tuple/set carry their managed/weak provenance.
+    carried = {_OTHER}
+    if key is not None and isinstance(iterable, (ast.Tuple, ast.List, ast.Set)):
+        carried |= _expr_facts(iterable, scopes)
+    return [(name, set(carried)) for name in _stored_names(target)]
 
 
 _Pairs = list[tuple[str, set[_Binding]]]
@@ -450,27 +834,25 @@ def _import_pairs(node: ast.Import, scopes: list[_Scope]) -> _Pairs:
         top = item.name.split(".", 1)[0]
         if item.asname is None:
             # ``import os.path`` still binds the top-level name ``os``.
-            binding = ("module", top) if top in _TRACKED_MODULES else _OTHER
-            pairs.append((top, {binding}))
-        elif item.name in _TRACKED_MODULES:
-            pairs.append((item.asname, {("module", item.name)}))
+            pairs.append((top, {("module", top)}))
         else:
             # ``import os.path as p`` binds only ``p`` (to os.path).
-            pairs.append((item.asname, {_OTHER}))
+            pairs.append((item.asname, {("module", item.name)}))
     return pairs
 
 
 def _import_from_pairs(node: ast.ImportFrom, scopes: list[_Scope]) -> _Pairs:
     pairs: _Pairs = []
-    tracked = node.level == 0 and node.module in _TRACKED_MODULES
+    # Relative imports are not resolved to a module; they only shadow.
+    absolute = node.level == 0 and bool(node.module)
     for item in node.names:
         if item.name == "*":
-            if tracked and node.module == "zipfile":
+            if absolute and node.module == "zipfile":
                 pairs.extend(
                     (cls, {("name", "zipfile", cls)}) for cls in sorted(ZIPFILE_ARCHIVE_CLASSES)
                 )
             continue
-        binding = ("name", node.module, item.name) if tracked else _OTHER
+        binding = ("name", node.module, item.name) if absolute else _OTHER
         pairs.append((item.asname or item.name, {binding}))
     return pairs
 
@@ -492,6 +874,8 @@ def _ann_assign_pairs(node: ast.AnnAssign, scopes: list[_Scope]) -> _Pairs:
     is_class_value = any(b[0] in {"name", "class", "module"} for b in bindings)
     if _annotation_mentions_zip(node.annotation, scopes) and not is_class_value:
         bindings.add(_ARCHIVE)
+    if _annotation_mentions_path(node.annotation, scopes) and not is_class_value:
+        bindings.add(_PATH)
     return [(key, bindings)] if bindings else []
 
 
@@ -523,6 +907,7 @@ def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
 
 def _def_pairs(node: ast.FunctionDef | ast.AsyncFunctionDef, scopes: list[_Scope]) -> _Pairs:
     info = scopes[0].function_registry.setdefault(id(node), _FuncInfo())
+    info.name = node.name
     if _annotation_mentions_zip(node.returns, scopes):
         info.returns_archive = True
     return [(node.name, {("function", info)})]
@@ -637,6 +1022,8 @@ def _arguments_pairs(args: ast.arguments, scopes: list[_Scope]) -> _Pairs:
         bindings: set[_Binding] = {_OTHER}
         if _annotation_mentions_zip(param.annotation, scopes):
             bindings.add(_ARCHIVE)
+        if _annotation_mentions_path(param.annotation, scopes):
+            bindings.add(_PATH)
         if param.arg in defaults:
             bindings |= _value_bindings(defaults[param.arg], scopes)
         pairs.append((param.arg, bindings))
@@ -721,6 +1108,13 @@ class _InvariantVisitor(ast.NodeVisitor):
         self._function_registry = {} if function_registry is None else function_registry
         self.scopes: list[_Scope] = []
         self.findings: list[Finding] = []
+        # Enclosing def/class names, for function-level capability exemptions.
+        self._qualname: list[str] = []
+
+    @property
+    def _function(self) -> tuple[str, str]:
+        """``(relpath, "Class.method")`` of the def being walked."""
+        return (self.relpath, ".".join(self._qualname))
 
     def _declared_targets(self, nodes: list[ast.AST]) -> dict[str, _Scope]:
         """``global`` / ``nonlocal`` names of the innermost scope -> owning scope."""
@@ -871,8 +1265,10 @@ class _InvariantVisitor(ast.NodeVisitor):
         self._bind_node(node)
         info = self.scopes[0].function_registry.setdefault(id(node), _FuncInfo())
         self._push(node.body, params=param_pairs, function_info=info)
+        self._qualname.append(node.name)
         for stmt in node.body:
             self.visit(stmt)
+        self._qualname.pop()
         self._pop()
 
     def _param_pairs(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> _Pairs:
@@ -929,8 +1325,10 @@ class _InvariantVisitor(ast.NodeVisitor):
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._push(stmt.body, params=self._param_pairs(stmt))
                 self._pop()
+        self._qualname.append(node.name)
         for stmt in node.body:
             self.visit(stmt)
+        self._qualname.pop()
         self._pop()
         self._bind_node(node)
 
@@ -1078,9 +1476,33 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
         for item in node.items:
             self.visit(item.context_expr)
+        guarded = any(self._mentions_adoption_guard(item.context_expr) for item in node.items)
         self._bind_node(node)
+        scope = self.scopes[-1]
+        scope.adoption_guard_depth += guarded
         for stmt in node.body:
             self.visit(stmt)
+        scope.adoption_guard_depth -= guarded
+
+    def _mentions_adoption_guard(self, node: ast.expr) -> bool:
+        """``with managed_pdf_adoption_guard(...)`` -- also as one arm of a
+        conditional context manager (``guard(...) if changing else nullcontext()``)."""
+        return any(
+            isinstance(sub, ast.Call)
+            and MANAGED_PDF_ADOPTION_GUARD in _callee_leaf_names(sub.func, self.scopes)
+            for sub in ast.walk(node)
+        )
+
+    def _under_adoption_guard(self) -> bool:
+        for scope in reversed(self.scopes):
+            if scope.adoption_guard_depth:
+                return True
+            # A nested def/lambda body runs later, outside the guard.
+            if scope.function_info is not None or scope.is_class or scope is self.scopes[0]:
+                return False
+            if not scope.is_comprehension:
+                return False
+        return False
 
     def visit_With(self, node: ast.With) -> None:
         self._visit_with(node)
@@ -1121,7 +1543,202 @@ class _InvariantVisitor(ast.NodeVisitor):
         # and unbound calls (``ZipFile.extractall(zf, dest)``) are covered too.
         if node.attr == BANNED_ZIPFILE_METHOD and self._is_zip_receiver(node.value):
             self._report_zip_extractall(node)
+        if (
+            node.attr == "replace"
+            and self.relpath not in OS_REPLACE_ALLOWLIST
+            and self._is_path_receiver(node.value)
+        ):
+            self._report_replace(node, "pathlib.Path.replace()")
         self.generic_visit(node)
+
+    def _is_path_receiver(self, node: ast.expr) -> bool:
+        return _PATH in _expr_facts(node, self.scopes) or _is_path_class_expr(node, self.scopes)
+
+    def _report_replace(self, node: ast.AST, primitive: str) -> None:
+        self.findings.append(
+            Finding(
+                "INV-DURABILITY-001",
+                self.relpath,
+                getattr(node, "lineno", 1),
+                (
+                    f"direct {primitive} is outside the approved durability boundary; "
+                    "it is the same atomic rename as os.replace and publishes bytes "
+                    "without the fsync-before/fsync-after contract. Use "
+                    "backend.fs_durability or an existing durable domain helper "
+                    "(managed PDFs: backend.services.work_pdf_replace)"
+                ),
+            )
+        )
+
+    # --- managed-PDF ownership boundary -----------------------------------
+
+    def _report(self, code: str, node: ast.AST, message: str) -> None:
+        self.findings.append(Finding(code, self.relpath, getattr(node, "lineno", 1), message))
+
+    def _removal_target(self, node: ast.Call) -> tuple[str, ast.expr | None] | None:
+        """``(primitive, target)`` for os.remove/os.unlink/Path.unlink calls."""
+        func = node.func
+        primitives = _qualified_names(func, self.scopes) & RAW_REMOVE_CALLS
+        if primitives:
+            target = node.args[0] if node.args else next(
+                (kw.value for kw in node.keywords if kw.arg == "path"), None
+            )
+            return f"{sorted(primitives)[0]}()", target
+        if isinstance(func, ast.Attribute) and func.attr == "unlink":
+            if _is_path_class_expr(func.value, self.scopes):
+                return "pathlib.Path.unlink()", node.args[0] if node.args else None
+            if _PATH in _expr_facts(func.value, self.scopes):
+                return "pathlib.Path.unlink()", func.value
+        return None
+
+    def _check_managed_pdf_removal(self, node: ast.Call) -> None:
+        removal = self._removal_target(node)
+        if removal is None:
+            return
+        primitive, target = removal
+        facts = _expr_facts(target, self.scopes)
+        if _WEAK in facts:
+            self._report_weak_alias(node, f"the target of {primitive}")
+        if _MANAGED in facts and self._function not in MANAGED_PDF_REMOVE_CAPABILITIES:
+            self._report(
+                "INV-STORAGE-002",
+                node,
+                (
+                    f"raw {primitive} of a managed-PDF path (derived from pdfs_dir / "
+                    "safe_pdf_path_under_dir) bypasses survivor-aware cleanup: another "
+                    "Work may still reference, or be adopting, those bytes. Record a "
+                    "pending_pdf_cleanup claim and remove through "
+                    "backend.work_deletion (cleanup_released_managed_pdfs / "
+                    "_remove_managed_pdf), which re-checks live references under "
+                    "managed_pdf_path_lock; roll back a just-minted upload with "
+                    "work_pdf_replace.discard_unowned_managed_pdf"
+                ),
+            )
+
+    def _check_raw_unlink_helper(self, node: ast.Call, leaves: set[str]) -> None:
+        for helper in sorted(leaves & set(RAW_MANAGED_PDF_UNLINK_HELPERS)):
+            if self._function in RAW_MANAGED_PDF_UNLINK_HELPERS[helper]:
+                continue
+            self._report(
+                "INV-STORAGE-002",
+                node,
+                (
+                    f"{helper}() unlinks a managed PDF without a live-reference "
+                    "re-check and is reserved for rolling back bytes the same request "
+                    "just minted inside backend.services.work_pdf_replace. Use "
+                    "work_pdf_replace.discard_unowned_managed_pdf (locked, "
+                    "survivor-checked) or backend.work_deletion cleanup instead"
+                ),
+            )
+
+    def _file_path_sink_value(
+        self, node: ast.Call, leaves: set[str]
+    ) -> tuple[str, ast.expr] | None:
+        """``(sink, value)`` when the call persists ``works.file_path``.
+
+        ``value`` is the ``fields`` dict itself when it is not a literal (it
+        may carry ``file_path``). A dict literal without that key is no write.
+        """
+        for sink in sorted(leaves & set(WORK_FILE_PATH_SINKS)):
+            index, keyword, is_fields = WORK_FILE_PATH_SINKS[sink]
+            value = next((kw.value for kw in node.keywords if kw.arg == keyword), None)
+            if value is None and len(node.args) > index:
+                value = node.args[index]
+            if value is None:
+                continue
+            if is_fields and isinstance(value, ast.Dict):
+                keys = dict(zip(value.keys, value.values))
+                explicit = next(
+                    (
+                        v
+                        for k, v in keys.items()
+                        if isinstance(k, ast.Constant) and k.value == "file_path"
+                    ),
+                    None,
+                )
+                if explicit is not None:
+                    value = explicit
+                elif None not in keys:
+                    # A literal without the key (and no ``**spread``) writes no file_path.
+                    continue
+            return sink, value
+        return None
+
+    def _is_non_adopting_value(self, value: ast.expr) -> bool:
+        """``None`` / ``""`` / a non-``/api/pdfs/`` literal, or minted bytes."""
+        if isinstance(value, ast.Constant):
+            return not (
+                isinstance(value.value, str) and value.value.strip().startswith("/api/pdfs")
+            )
+        return _is_proven_minted(value, self.scopes)
+
+    def _check_file_path_write(self, node: ast.Call, leaves: set[str]) -> None:
+        sink_value = self._file_path_sink_value(node, leaves)
+        if sink_value is not None:
+            sink, value = sink_value
+            if _WEAK in _expr_facts(value, self.scopes):
+                self._report_weak_alias(node, f"the works.file_path written by {sink}()")
+            if not (
+                self._is_non_adopting_value(value)
+                or self._under_adoption_guard()
+                or self._function in WORK_FILE_PATH_CAPABILITIES
+            ):
+                self._report_adoption(node, f"{sink}()")
+        if leaves & _SQL_EXECUTE_METHODS and node.args:
+            sql = _expr_facts(node.args[0], self.scopes)
+            params = set().union(
+                *(_expr_facts(arg, self.scopes) for arg in node.args[1:]),
+                *(_expr_facts(kw.value, self.scopes) for kw in node.keywords),
+            )
+            targets = {f[1] for f in sql if f[0] == "sql_write"}
+            if targets and _WEAK in params:
+                self._report_weak_alias(node, f"a SQL write to {', '.join(sorted(targets))}")
+            if (
+                "works.file_path" in targets
+                and not self._under_adoption_guard()
+                and self._function not in WORK_FILE_PATH_CAPABILITIES
+            ):
+                self._report_adoption(node, "raw SQL writing works.file_path")
+
+    def _report_adoption(self, node: ast.AST, what: str) -> None:
+        self._report(
+            "INV-STORAGE-003",
+            node,
+            (
+                f"{what} persists a works.file_path that is not proven to be a "
+                "freshly minted managed PDF, outside managed_pdf_adoption_guard. "
+                "Claiming an EXISTING /api/pdfs/<name> must hold that guard "
+                "(backend.services.work_pdf_replace.managed_pdf_adoption_guard: it "
+                "takes managed_pdf_path_lock, re-checks the bytes still exist and "
+                "yields the exact ownership basename to persist), or post-delete "
+                "cleanup can unlink the bytes the new row now points at. New uploads "
+                "persist the name returned by store_new_managed_pdf_bytes/_from_path"
+            ),
+        )
+
+    def _report_weak_alias(self, node: ast.AST, authority: str) -> None:
+        self._report(
+            "INV-STORAGE-004",
+            node,
+            (
+                f"a referenced_managed_pdf_filename() result reaches {authority}. "
+                "That helper is a weak, fail-closed over-approximation (it maps "
+                "traversal, nested and %2F spellings the PDF route cannot serve) and "
+                "may only BLOCK or defer a delete / reject a path. Ownership, "
+                "adoption, cleanup claims and deletion must use the strong "
+                "identities: managed_pdf_filename / owned_managed_pdf_basename / "
+                "managed_basenames_protected_by / row_strongly_references_managed_pdf"
+            ),
+        )
+
+    def _check_managed_pdf_boundary(self, node: ast.Call) -> None:
+        leaves = _callee_leaf_names(node.func, self.scopes)
+        self._check_managed_pdf_removal(node)
+        self._check_raw_unlink_helper(node, leaves)
+        self._check_file_path_write(node, leaves)
+        for sink in sorted(leaves & WEAK_ALIAS_AUTHORITY_SINKS):
+            if _WEAK in _call_argument_facts(node, self.scopes):
+                self._report_weak_alias(node, f"{sink}()")
 
     def visit_Call(self, node: ast.Call) -> None:
         if (
@@ -1149,17 +1766,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                     )
                 )
             elif module == "os" and name == "replace" and self.relpath not in OS_REPLACE_ALLOWLIST:
-                self.findings.append(
-                    Finding(
-                        "INV-DURABILITY-001",
-                        self.relpath,
-                        node.lineno,
-                        (
-                            "direct os.replace() is outside the approved durability boundary; "
-                            "use backend.fs_durability or an existing durable domain helper"
-                        ),
-                    )
-                )
+                self._report_replace(node, "os.replace()")
             elif module == "os" and name == "fsync" and self.relpath not in OS_FSYNC_ALLOWLIST:
                 self.findings.append(
                     Finding(
@@ -1172,6 +1779,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                         ),
                     )
                 )
+        self._check_managed_pdf_boundary(node)
         self.generic_visit(node)
 
 
