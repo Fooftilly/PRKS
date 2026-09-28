@@ -443,7 +443,10 @@ class GateRepoTests(unittest.TestCase):
                 )
             }
         )
-        self.assertEqual(self.codes(), [])
+        # Not read as ``works`` (no 003/005); the whole unknown name fails closed.
+        findings = self.findings()
+        self.assertEqual([f.code for f in findings], ["SCHEMA-GATE-008"])
+        self.assertIn("INSERT INTO works backup ...", findings[0].message)
 
     def test_temp_schema_table_is_not_the_canonical_table(self):
         self.write(
@@ -451,6 +454,145 @@ class GateRepoTests(unittest.TestCase):
                 "backend/tmp.py": (
                     "SQL = 'INSERT INTO temp.works (id) VALUES (?) ON CONFLICT(title) DO NOTHING'\n"
                 )
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
+    # unknown upsert targets fail closed (post-#265 hardening) -------------
+
+    def test_typo_upsert_table_in_backend_code_fails(self):
+        self.write(
+            {
+                "backend/works_sync.py": (
+                    "SQL = 'INSERT INTO workz (id) VALUES (?) ON CONFLICT(id) DO NOTHING'\n"
+                )
+            }
+        )
+        findings = self.findings()
+        self.assertEqual([f.code for f in findings], ["SCHEMA-GATE-008"])
+        self.assertEqual(findings[0].path, "backend/works_sync.py")
+        self.assertIn("INSERT INTO workz", findings[0].message)
+        self.assertIn("not part of the canonical schema", findings[0].message)
+        self.assertIn("not a recognized derived database target", findings[0].message)
+
+    def test_unknown_literal_upsert_table_in_canonical_code_fails(self):
+        self.write(
+            {
+                "backend/db_manager.py": (
+                    "SQL = ('INSERT INTO main.reading_sessions (work_id) VALUES (?) '\n"
+                    "       'ON CONFLICT DO NOTHING')\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-008"])
+
+    def test_derived_table_is_exempt_only_in_its_owning_module(self):
+        self.write(
+            {
+                "backend/text_index.py": (
+                    "SQL = 'INSERT INTO work_text_index (work_id) VALUES (?) "
+                    "ON CONFLICT(work_id) DO NOTHING'\n"
+                ),
+                "backend/research_index.py": (
+                    "SQL = 'INSERT INTO work_note_state (work_id) VALUES (?) "
+                    "ON CONFLICT(work_id) DO NOTHING'\n"
+                ),
+            }
+        )
+        self.assertEqual(self.codes(), [])
+        # The same table name outside its owning module is not derived.
+        self.write(
+            {
+                "backend/notes.py": (
+                    "SQL = 'INSERT INTO work_note_state (work_id) VALUES (?) "
+                    "ON CONFLICT(work_id) DO NOTHING'\n"
+                )
+            }
+        )
+        findings = self.findings()
+        self.assertEqual([(f.code, f.path) for f in findings], [("SCHEMA-GATE-008", "backend/notes.py")])
+        # An undeclared table in a derived-index module is not exempt either.
+        self.write(
+            {
+                "backend/text_index.py": (
+                    "SQL = 'INSERT INTO work_text_indx (work_id) VALUES (?) "
+                    "ON CONFLICT(work_id) DO NOTHING'\n"
+                )
+            }
+        )
+        self.assertEqual(
+            [(f.code, f.path) for f in self.findings()],
+            [("SCHEMA-GATE-008", "backend/notes.py"), ("SCHEMA-GATE-008", "backend/text_index.py")],
+        )
+
+    def test_attached_schema_upsert_is_out_of_scope(self):
+        self.write(
+            {
+                "backend/idx.py": (
+                    "SQL = ('INSERT INTO \"scratch\".workz (id) VALUES (?) '\n"
+                    "       'ON CONFLICT(id) DO NOTHING; '\n"
+                    "       'INSERT INTO temp.anything (id) VALUES (?) ON CONFLICT DO NOTHING')\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), [])
+
+    def test_quoted_dotted_main_table_is_not_treated_as_attached(self):
+        self.write(
+            {
+                "backend/q.py": (
+                    "SQL = 'INSERT INTO \"temp.works\" (id) VALUES (?) ON CONFLICT DO NOTHING'\n"
+                )
+            }
+        )
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-008"])
+
+    # upserted canonical tables need a real primary key -------------------
+
+    def _no_pk_table(self, pks: str, conflict: str) -> None:
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA + "CREATE TABLE t (key TEXT UNIQUE);\n",
+                "backend/db_migrations.py": _migrations(3, [(2, "first"), (3, "t")], pks),
+                "backend/t.py": (
+                    f"SQL = 'INSERT INTO t (key) VALUES (?) ON CONFLICT{conflict} DO NOTHING'\n"
+                ),
+            }
+        )
+
+    def test_upserted_table_without_pk_and_empty_registry_fails(self):
+        self._no_pk_table(
+            '{"sync_entity_revisions": ("scope_type", "scope_id"), "t": ()}', "(key)"
+        )
+        findings = self.findings()
+        self.assertEqual([f.code for f in findings], ["SCHEMA-GATE-009"])
+        self.assertIn("no primary key", findings[0].message)
+        self.assertIn("no primary key to protect", findings[0].message)
+
+    def test_targetless_do_nothing_does_not_bypass_missing_pk(self):
+        self._no_pk_table('{"sync_entity_revisions": ("scope_type", "scope_id"), "t": ()}', "")
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-009"])
+        # Neither leaving it unregistered nor allowlisting it waives the missing key.
+        self._no_pk_table(BASE_PKS, "")
+        self.assertEqual(self.codes(), ["SCHEMA-GATE-009"])
+        self.assertEqual(self.codes({"t": "fixture"}), ["SCHEMA-GATE-009"])
+
+    def test_upserted_tables_with_real_single_and_composite_pks_pass(self):
+        self.write(
+            {
+                "backend/db_schema.sql": BASE_SCHEMA
+                + "CREATE TABLE t (key TEXT PRIMARY KEY);\n"
+                + "CREATE TABLE m (a TEXT, b TEXT, PRIMARY KEY (a, b));\n",
+                "backend/db_migrations.py": _migrations(
+                    3,
+                    [(2, "first"), (3, "t")],
+                    '{"sync_entity_revisions": ("scope_type", "scope_id"),'
+                    ' "t": ("key",), "m": ("a", "b")}',
+                ),
+                "backend/t.py": (
+                    "A = 'INSERT INTO t (key) VALUES (?) ON CONFLICT DO NOTHING'\n"
+                    "B = 'INSERT INTO m (a, b) VALUES (?, ?) ON CONFLICT(b, a) DO NOTHING'\n"
+                ),
             }
         )
         self.assertEqual(self.codes(), [])
@@ -531,6 +673,17 @@ class CurrentRepoTests(unittest.TestCase):
         self.assertEqual(
             [f.render() for f in gate.collect_findings(_ROOT, head)], []
         )
+
+    def test_live_derived_tables_are_upserted_by_their_owning_module(self):
+        for relpath, (_reason, tables) in gate.DERIVED_UPSERT_TABLES.items():
+            source = (_ROOT / relpath).read_text(encoding="utf-8")
+            upserted = {s.table for s in gate.iter_upsert_sites(source, relpath)}
+            self.assertLessEqual(set(tables), upserted, relpath)
+
+    def test_live_allowlisted_tables_have_primary_keys(self):
+        pks = gate.schema_table_pks((_ROOT / gate.SCHEMA_RELPATH).read_text(encoding="utf-8"))
+        for table in gate.PK_REGISTRY_ALLOWLIST:
+            self.assertTrue(pks[table], table)
 
     def test_live_registry_matches_runtime_module(self):
         from backend import db_migrations

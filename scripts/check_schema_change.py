@@ -33,9 +33,15 @@ Structural (always, against the working tree):
   now registered, no longer upserted, or no longer canonical).
 - SCHEMA-GATE-007: an ``ON CONFLICT ... DO`` upsert whose ``INSERT INTO`` table
   cannot be resolved statically (the registry check would otherwise miss it).
+- SCHEMA-GATE-008: an upsert into a ``main``-schema table that ``db_schema.sql``
+  does not create and that is not a declared ``DERIVED_UPSERT_TABLES`` target
+  of its module (a typo, a removed/renamed table, or a new canonical table
+  missing from the schema).
+- SCHEMA-GATE-009: an upserted canonical table has no primary key, so neither
+  its conflict resolution nor a ``_CURRENT_TABLE_PKS`` entry protects anything.
 
-Tables that are not created by ``db_schema.sql`` (the disposable text/research
-index databases) are out of scope.
+Only the declared derived-index tables (``DERIVED_UPSERT_TABLES``) and
+``temp`` / attached-schema targets are out of scope.
 """
 from __future__ import annotations
 
@@ -69,6 +75,22 @@ PK_REGISTRY_ALLOWLIST: dict[str, str] = {
     "folder_tags": "pre-#190 membership insert; PK validation not yet registered",
     "processing_file_tags": "pre-#190 membership insert; PK validation not yet registered",
     "work_tags": "pre-#190 membership insert; PK validation not yet registered",
+}
+
+# Upsert targets that live in the disposable derived index databases, not the
+# canonical library DB. Keyed by the one backend module that owns (creates and
+# writes) that database; a table is exempt only when upserted from its owning
+# module. Anything else absent from db_schema.sql fails SCHEMA-GATE-008. List
+# tables explicitly; never add a wildcard or a whole-module exemption.
+DERIVED_UPSERT_TABLES: dict[str, tuple[str, frozenset[str]]] = {
+    "backend/text_index.py": (
+        "prks_text_index.db (derived, disposable)",
+        frozenset({"text_index_meta", "work_text_index"}),
+    ),
+    "backend/research_index.py": (
+        "prks_research_index.db (derived, disposable)",
+        frozenset({"work_note_state"}),
+    ),
 }
 
 _E2E_WAIT_CHECKER = Path(__file__).resolve().parent / "check_e2e_wait_for_timeout.py"
@@ -112,6 +134,12 @@ def _span_text(original: str, match: re.Match[str], group: int) -> str | None:
     return None if start < 0 else original[start:end]
 
 
+def _insert_schema(match: re.Match[str], original: str) -> str:
+    """Lower-cased schema qualifier of an INSERT target (``main`` when bare)."""
+    schema_raw = _span_text(original, match, 1)
+    return _unquote_ident(schema_raw).lower() if schema_raw else "main"
+
+
 def _insert_target(match: re.Match[str], original: str) -> str:
     """Lower-cased INSERT target (SQLite identifiers are case-insensitive).
 
@@ -119,8 +147,7 @@ def _insert_target(match: re.Match[str], original: str) -> str:
     tables keep their qualifier so they never match a canonical table.
     """
     table = _unquote_ident(_span_text(original, match, 2) or "").lower()
-    schema_raw = _span_text(original, match, 1)
-    schema = _unquote_ident(schema_raw).lower() if schema_raw else "main"
+    schema = _insert_schema(match, original)
     return table if schema == "main" else f"{schema}.{table}"
 
 
@@ -392,6 +419,7 @@ class UpsertSite:
     line: int
     table: str | None  # None: the INSERT target could not be resolved statically
     target: tuple[str, ...] | None
+    schema: str = "main"  # temp / attached schemas are never canonical
 
 
 def _static_sql(node: ast.AST) -> str | None:
@@ -469,6 +497,7 @@ def _statement_upserts(
                     line,
                     _insert_target(insert, original),
                     _conflict_columns(_span_text(original, upsert, 1)),
+                    _insert_schema(insert, original),
                 )
             )
     return sites
@@ -689,6 +718,48 @@ def _unresolved_upsert_finding(site: UpsertSite) -> Finding:
     )
 
 
+def _unknown_table_finding(site: UpsertSite) -> Finding:
+    return Finding(
+        "SCHEMA-GATE-008",
+        site.path,
+        site.line,
+        (
+            f"INSERT INTO {site.table} ... ON CONFLICT targets a table that is not part of "
+            f"the canonical schema ({SCHEMA_RELPATH} does not create it) and is not a "
+            f"recognized derived database target of {site.path}"
+        ),
+        (
+            f"fix the table name, or create the table in {SCHEMA_RELPATH} (with its "
+            "migration and _CURRENT_TABLE_PKS entry); a genuine derived-index table "
+            f"belongs in DERIVED_UPSERT_TABLES in {CHECKER_RELPATH} under its owning module"
+        ),
+    )
+
+
+def _no_primary_key_finding(site: UpsertSite) -> Finding:
+    return Finding(
+        "SCHEMA-GATE-009",
+        site.path,
+        site.line,
+        (
+            f"INSERT INTO {site.table} ... ON CONFLICT upserts a canonical table that has "
+            f"no primary key in {SCHEMA_RELPATH}, so there is no primary key to protect "
+            "(an empty _CURRENT_TABLE_PKS entry validates nothing)"
+        ),
+        (
+            f"give {site.table} a PRIMARY KEY in {SCHEMA_RELPATH} (with a migration) and "
+            "register it in _CURRENT_TABLE_PKS, or stop upserting it"
+        ),
+    )
+
+
+def _is_out_of_scope(site: UpsertSite, derived: dict[str, frozenset[str]]) -> bool:
+    """Non-main schema, or a declared derived-index table of the owning module."""
+    if site.schema != "main":
+        return True
+    return site.table in derived.get(site.path, frozenset())
+
+
 def _conflict_target_finding(
     site: UpsertSite, pk: tuple[str, ...], registered: bool
 ) -> Finding | None:
@@ -713,16 +784,26 @@ def _upsert_findings(
     registry: dict[str, tuple[str, ...]],
     sites: list[UpsertSite],
     allow: dict[str, str],
+    derived: dict[str, frozenset[str]],
 ) -> list[Finding]:
-    """003/005/007 per upsert site. The allowlist waives only 003 (missing registry)."""
+    """003/005/007/008/009 per upsert site. The allowlist waives only 003."""
     findings: list[Finding] = []
     reported: set[str] = set(allow)
+    no_pk_reported: set[str] = set()
     for site in sorted(sites, key=lambda s: (s.path, s.line)):
         if site.table is None:
             findings.append(_unresolved_upsert_finding(site))
             continue
         if site.table not in schema_pks:
-            continue  # derived/disposable index DBs are out of scope
+            if not _is_out_of_scope(site, derived):
+                findings.append(_unknown_table_finding(site))
+            continue
+        if not schema_pks[site.table]:
+            # No PK: 003/005 would cite an empty key; the allowlist cannot waive this.
+            if site.table not in no_pk_reported:
+                no_pk_reported.add(site.table)
+                findings.append(_no_primary_key_finding(site))
+            continue
         registered = site.table in registry
         if not registered and site.table not in reported:
             reported.add(site.table)
@@ -768,10 +849,17 @@ def check_pk_registry(
     sites: list[UpsertSite],
     *,
     allowlist: dict[str, str] | None = None,
+    derived_tables: dict[str, tuple[str, frozenset[str]]] | None = None,
 ) -> list[Finding]:
     """Structural: load-bearing upserts on canonical tables are PK-registered."""
     allow = {
         k.lower(): v for k, v in (PK_REGISTRY_ALLOWLIST if allowlist is None else allowlist).items()
+    }
+    derived = {
+        path: frozenset(t.lower() for t in tables)
+        for path, (_reason, tables) in (
+            DERIVED_UPSERT_TABLES if derived_tables is None else derived_tables
+        ).items()
     }
     registry = (
         None if head.table_pks is None else {k.lower(): v for k, v in head.table_pks.items()}
@@ -789,7 +877,7 @@ def check_pk_registry(
     upserted = {site.table for site in sites if site.table is not None and site.table in schema_pks}
     return (
         _registry_parity_findings(schema_pks, registry, head.table_pks_line)
-        + _upsert_findings(schema_pks, registry, sites, allow)
+        + _upsert_findings(schema_pks, registry, sites, allow, derived)
         + _stale_allowlist_findings(schema_pks, registry, upserted, allow)
     )
 
