@@ -115,6 +115,16 @@ class PeopleVueContracts(unittest.TestCase):
         saved = write.index("await prksSavePersonFieldsDurably")
         self.assertLess(owned, saved)
         self.assertNotIn("await ", write[owned:saved])
+        self.assertIn("prksSavePersonFieldsDurably(personId, changes, base, stillOwned)", write)
+        groups = people[
+            people.index("async function prksSavePersonGroupIds(") : people.index(
+                "function prksFinishPersonProfileSave("
+            )
+        ]
+        self.assertIn(
+            "prksSetPersonGroupMembership(groupId, personId, present, true, stillOwns)",
+            groups,
+        )
         draft_save = people[people.index("async function savePersonProfileDraft(") : people.index("window.savePersonProfileDraft")]
         self.assertLess(draft_save.index("if (!stillOwned())"), draft_save.index("prksSavePersonGroupIds"))
         self.assertNotIn("prksAlertMessage", draft_save)

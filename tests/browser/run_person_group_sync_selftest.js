@@ -499,6 +499,124 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-UNKNOWN", ops), null);
 }
 
+function operationFingerprint(rows) {
+    return rows.map(r => [r.op_id, r.operation, r.entity_id, JSON.stringify(r.payload)].join(":")).join("\n");
+}
+
+function loseOwnershipOnNextOperationsRead(idb, session) {
+    const db = idb.__databases.values().next().value;
+    if (!db) throw new Error("the store has not opened its database");
+    const original = db.transaction.bind(db);
+    let armed = true;
+    db.transaction = function (storeNames, mode, options) {
+        const tx = original(storeNames, mode, options);
+        const names = Array.isArray(storeNames) ? storeNames : [storeNames];
+        if (!armed || names.indexOf("operations") === -1) return tx;
+        const objectStore = tx.objectStore.bind(tx);
+        tx.objectStore = function (name) {
+            const handle = objectStore(name);
+            if (name !== "operations" || !armed) return handle;
+            const getAll = handle.getAll.bind(handle);
+            handle.getAll = function () {
+                armed = false;
+                session.owned = false;
+                return getAll.apply(handle, arguments);
+            };
+            return handle;
+        };
+        return tx;
+    };
+}
+
+async function anOlderSessionCannotCommitAMembershipDuringTheRead() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    globalThis.prksSync = globalThis.createPrksSyncRuntime({
+        store, online: () => false, handlers: {},
+        request: async () => { throw new Error("offline"); },
+    });
+    const absent = { present: false, revision: 0 };
+    const seeded = await store.setPersonGroupMember("PG-1", "P-A", true, absent);
+    assert.equal(seeded.operation, "ADD_PERSON_GROUP_MEMBER");
+    const before = operationFingerprint(await store.listOperations());
+    const session = { owned: true };
+    loseOwnershipOnNextOperationsRead(idb, session);
+    const removed = await globalThis.prksSetPersonGroupMemberDurably(
+        "PG-1", "P-A", false, absent, () => session.owned);
+    assert.equal(removed, null);
+    assert.equal(session.owned, false, "ownership changed during the awaited read");
+    assert.equal(operationFingerprint(await store.listOperations()), before,
+        "the older session did not delete the membership operation");
+
+    const insertSession = { owned: true };
+    loseOwnershipOnNextOperationsRead(idb, insertSession);
+    const added = await globalThis.prksSetPersonGroupMemberDurably(
+        "PG-1", "P-B", true, absent, () => insertSession.owned);
+    assert.equal(added, null);
+    assert.equal(
+        (await store.listOperations()).some(r => r.payload && r.payload.person_id === "P-B"),
+        false, "the older session did not insert a membership");
+
+    globalThis.window = globalThis;
+    if (typeof globalThis.prksSetPersonGroupMembership !== "function") {
+        const fs = require("fs");
+        const vm = require("vm");
+        const path = require("path");
+        vm.runInThisContext(
+            fs.readFileSync(path.join(__dirname, "../../frontend/js/components/people-groups.js"), "utf8"),
+            { filename: "people-groups.js" });
+    }
+    globalThis.prksDurableOperationsOrNone = async () => [];
+    globalThis.prksAlertMessage = async () => { throw new Error("stale membership alerted"); };
+    globalThis.prksOfflineInvalidateEntity = async () => {};
+    const cachedGroupState = async (kind, id) => {
+        if (kind !== "person-group-state") return { value: null, source: "unavailable" };
+        return {
+            value: {
+                group_id: id,
+                fields: {
+                    name: { revision: 0 },
+                    description: { revision: 0 },
+                    parent_id: { revision: 0 },
+                },
+                members: [],
+            },
+            source: "cache",
+        };
+    };
+    globalThis.prksOfflineReadEntity = cachedGroupState;
+    const chain = { owned: true };
+    loseOwnershipOnNextOperationsRead(idb, chain);
+    const recorded = await globalThis.prksSetPersonGroupMembership(
+        "PG-9", "P-C", true, true, () => chain.owned);
+    assert.equal(recorded, false);
+    assert.equal(chain.owned, false);
+    assert.equal(
+        (await store.listOperations()).some(r => r.payload && r.payload.person_id === "P-C"),
+        false, "a session that dies during the membership read does not insert");
+
+    let storeCalls = 0;
+    const inner = store.setPersonGroupMember.bind(store);
+    store.setPersonGroupMember = function () {
+        storeCalls += 1;
+        return inner.apply(store, arguments);
+    };
+    const early = { owned: true };
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        early.owned = false;
+        return cachedGroupState(kind, id);
+    };
+    const earlyResult = await globalThis.prksSetPersonGroupMembership(
+        "PG-9", "P-D", true, true, () => early.owned);
+    assert.equal(earlyResult, false);
+    assert.equal(storeCalls, 0, "a read that drops ownership does not start the mutation");
+    store.setPersonGroupMember = inner;
+
+    const kept = await store.setPersonGroupMember("PG-1", "P-E", true, absent);
+    assert.equal(kept.operation, "ADD_PERSON_GROUP_MEMBER",
+        "omitting the predicate still records a membership");
+}
+
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
@@ -520,6 +638,7 @@ async function main() {
     await aSentLinkIsWaitedForRatherThanRewritten();
     await aPendingDeletionHidesThePersonEverywhere();
     await theBaseIsAcknowledgedAndNeverGuessed();
+    await anOlderSessionCannotCommitAMembershipDuringTheRead();
     console.log("All " + checks + " person group checks passed");
 }
 

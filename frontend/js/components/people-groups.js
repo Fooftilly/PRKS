@@ -107,25 +107,32 @@ async function prksSavePersonGroupDraft(groupId, draft) {
  * the Person editor saves a whole selection -- reports one refusal rather than
  * one dialog per pair.
  */
-async function prksSetPersonGroupMembership(groupId, personId, present, quiet) {
+async function prksSetPersonGroupMembership(groupId, personId, present, quiet, stillOwns) {
     const say = async (message, title) => {
         if (!quiet) await prksAlertMessage(message, title);
         return false;
     };
+    const dropped = () => typeof stillOwns === 'function' && !stillOwns();
     const ops = typeof prksDurableOperationsOrNone === 'function'
         ? await prksDurableOperationsOrNone() : [];
-    const observed = await prksAcknowledgedPersonGroupMembership(groupId, personId, ops);
+    if (dropped()) return false;
+    const observed = await prksAcknowledgedPersonGroupMembership(
+        groupId, personId, ops, stillOwns);
+    if (dropped() || (observed && observed.prksOwnershipLost)) return false;
     if (!observed) {
         return await say(
             'This group\u2019s members cannot be changed offline yet. Open it once while '
             + 'connected to PRKS so its synchronization state is prepared.', 'Unavailable');
     }
+    if (dropped()) return false;
     try {
-        await prksSetPersonGroupMemberDurably(groupId, personId, present, observed);
+        await prksSetPersonGroupMemberDurably(groupId, personId, present, observed, stillOwns);
     } catch (error) {
+        if (dropped()) return false;
         return await say(
             prksPersonGroupSaveMessage(error, 'change this membership'), 'Could not save');
     }
+    if (dropped()) return false;
     return true;
 }
 

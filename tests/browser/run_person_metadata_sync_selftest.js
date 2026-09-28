@@ -437,6 +437,82 @@ async function onlyProfileFieldsAreWritable() {
     }
 }
 
+function operationFingerprint(rows) {
+    return rows.map(r => [r.op_id, r.operation, r.entity_id, JSON.stringify(r.payload)].join(':')).join('\n');
+}
+
+/* The ownership check has to run AFTER getAll resolves. Flipping the session
+ * inside that request is the gap a guard before the call cannot see. */
+function loseOwnershipOnNextOperationsRead(idb, session) {
+    const db = idb.__databases.values().next().value;
+    if (!db) throw new Error('the store has not opened its database');
+    const original = db.transaction.bind(db);
+    let armed = true;
+    db.transaction = function (storeNames, mode, options) {
+        const tx = original(storeNames, mode, options);
+        const names = Array.isArray(storeNames) ? storeNames : [storeNames];
+        if (!armed || names.indexOf('operations') === -1) return tx;
+        const objectStore = tx.objectStore.bind(tx);
+        tx.objectStore = function (name) {
+            const handle = objectStore(name);
+            if (name !== 'operations' || !armed) return handle;
+            const getAll = handle.getAll.bind(handle);
+            handle.getAll = function () {
+                armed = false;
+                session.owned = false;
+                return getAll.apply(handle, arguments);
+            };
+            return handle;
+        };
+        return tx;
+    };
+}
+
+async function anOlderSessionCannotCommitAFieldDuringTheRead() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    globalThis.prksSync = globalThis.createPrksSyncRuntime({
+        store, online: () => false, handlers: {},
+        request: async () => { throw new Error('offline'); },
+    });
+    const base = baseAt();
+    const seeded = await store.savePersonMetadataFields('P-1', { about: 'Kept' }, base);
+    assert.equal(seeded.length, 1);
+    const before = operationFingerprint(await store.listOperations());
+    const session = { owned: true };
+    loseOwnershipOnNextOperationsRead(idb, session);
+    const written = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'Stolen' }, base, () => session.owned);
+    assert.deepEqual(written, []);
+    assert.equal(session.owned, false, 'ownership changed during the awaited read');
+    assert.equal(operationFingerprint(await store.listOperations()), before,
+        'the older session did not delete or replace the field operation');
+
+    const live = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'Stolen' }, base, () => true);
+    assert.equal(live.length, 1);
+    assert.equal(live[0].payload.value, 'Stolen', 'a session that still owns the edit still writes');
+    await settle();
+    const omitted = await store.savePersonMetadataFields(
+        'P-1', { birth_date: '1815-12-10' }, base);
+    assert.equal(omitted.length, 1, 'no predicate keeps the existing write');
+
+    const freshIdb = createFakeIndexedDBFactory();
+    const fresh = createPrksLocalStore({ indexedDB: freshIdb, uuid });
+    globalThis.prksSync = globalThis.createPrksSyncRuntime({
+        store: fresh, online: () => false, handlers: {},
+        request: async () => { throw new Error('offline'); },
+    });
+    await fresh.listOperations();
+    const insertSession = { owned: true };
+    loseOwnershipOnNextOperationsRead(freshIdb, insertSession);
+    const inserted = await globalThis.prksSavePersonFieldsDurably(
+        'P-2', { about: 'New' }, base, () => insertSession.owned);
+    assert.deepEqual(inserted, []);
+    assert.equal((await fresh.listOperations()).length, 0,
+        'the older session did not insert a field operation');
+}
+
 async function main() {
     await fieldsAreIndependent();
     await repeatedEditsCoalesce();
@@ -451,6 +527,7 @@ async function main() {
     await revertingAFieldRemovesTheIntent();
     await oneBusyFieldNeverRefusesTheForm();
     await aPendingCreationIsTheBaseForItsOwnEdits();
+    await anOlderSessionCannotCommitAFieldDuringTheRead();
     console.log('All ' + checks + ' person profile checks passed');
 }
 

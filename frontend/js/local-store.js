@@ -1859,7 +1859,15 @@
          * -- it fails it visibly, through the same propagation as everything
          * else.
          */
-        function savePersonMetadataFields(personId, changes, base) {
+        /* Absent means "this caller has no edit session" -- the Group page
+         * and the legacy profile save. Present and false means the session
+         * that started this write is gone, and the transaction must not
+         * change a row. */
+        function callerStillOwns(stillOwns) {
+            return typeof stillOwns !== 'function' || stillOwns() === true;
+        }
+
+        function savePersonMetadataFields(personId, changes, base, stillOwns) {
             if (!isNonBlankString(personId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid profile save.'));
             }
@@ -1877,6 +1885,9 @@
             }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                /* The read above is the gap a check before this call cannot
+                 * see. Leave every operation row as it was. */
+                if (!callerStillOwns(stillOwns)) { setResult([]); return; }
                 assertPersonIsNotBeingDeleted(rows, personId, 'edited');
                 const createOp = personCreationDependency(rows, personId,
                     'their profile cannot be edited');
@@ -1896,9 +1907,11 @@
                             throw localStoreError('scope_busy', 'This field is syncing or needs resolution.');
                         }
                         if (existing.payload.value === desired) { written.push(existing); continue; }
+                        if (!callerStillOwns(stillOwns)) { setResult(written); return; }
                         await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                     }
                     if (desired === observed.value) continue;
+                    if (!callerStillOwns(stillOwns)) { setResult(written); return; }
                     written.push(await insertEnvelopeIn(request, {
                         operation: 'SET_PERSON_METADATA_FIELD', entity_type: 'person',
                         entity_id: personId, payload: { field, value: desired },
@@ -3519,7 +3532,7 @@
          * changes, it is none. `observed` is the acknowledged state of the
          * pair: `{present, revision}`.
          */
-        function setPersonGroupMember(groupId, personId, present, observed) {
+        function setPersonGroupMember(groupId, personId, present, observed, stillOwns) {
             if (!isNonBlankString(groupId) || !isNonBlankString(personId) ||
                 !isPlainObject(observed) || typeof observed.present !== 'boolean' ||
                 !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
@@ -3530,6 +3543,10 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* Same gap as a profile field: the read yields, and the
+                     * session that asked for this membership may be gone
+                     * before the delete or the insert. */
+                    if (!callerStillOwns(stillOwns)) { setResult(null); return; }
                     assertGroupIsNotBeingDeleted(rows, groupId, 'changed');
                     const existing = rows.find(r =>
                         PERSON_GROUP_MEMBER_OPERATIONS.indexOf(r.operation) !== -1 &&
@@ -3542,9 +3559,11 @@
                         }
                         const already = existing.operation === 'ADD_PERSON_GROUP_MEMBER';
                         if (already === desired) { setResult(existing); return; }
+                        if (!callerStillOwns(stillOwns)) { setResult(null); return; }
                         await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                     }
                     if (desired === observed.present) { setResult(null); return; }
+                    if (!callerStillOwns(stillOwns)) { setResult(null); return; }
                     assertPersonIsNotBeingDeleted(rows, personId, 'put in a group');
                     const createOp = personGroupCreationDependency(rows, groupId,
                         'nobody can be added to it');

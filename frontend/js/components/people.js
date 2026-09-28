@@ -1433,11 +1433,12 @@ async function prksSavePersonGroupIds(personId, afterIds, beforeIds, stillOwns) 
         if (typeof stillOwns === 'function' && !stillOwns()) return { ok: true, message: '' };
         const present = added.indexOf(groupId) !== -1;
         try {
-            if (typeof prksSetPersonGroupMembership !== 'function' ||
-                !await prksSetPersonGroupMembership(groupId, personId, present, true)) {
-                failures.push(groupId);
-            }
+            const recorded = typeof prksSetPersonGroupMembership === 'function' &&
+                await prksSetPersonGroupMembership(groupId, personId, present, true, stillOwns);
+            if (typeof stillOwns === 'function' && !stillOwns()) return { ok: true, message: '' };
+            if (!recorded) failures.push(groupId);
         } catch (_e) {
+            if (typeof stillOwns === 'function' && !stillOwns()) return { ok: true, message: '' };
             failures.push(groupId);
         }
     }
@@ -1515,15 +1516,17 @@ async function prksWriteDirtyPersonFields(ctx, personId, desired, session) {
     if (!Object.keys(changes).length || typeof prksSavePersonFieldsDurably !== 'function') {
         return { ok: true, message: '' };
     }
-    if (!prksPersonProfileWriteStillOwned(ctx, personId, session)) return { ok: true, skipped: true, message: '' };
-    await prksSavePersonFieldsDurably(personId, changes, base);
+    const stillOwned = () => prksPersonProfileWriteStillOwned(ctx, personId, session);
+    if (!stillOwned()) return { ok: true, skipped: true, message: '' };
+    await prksSavePersonFieldsDurably(personId, changes, base, stillOwned);
     return { ok: true, message: '' };
 }
 
 /**
  * Persist one edit session. Only fields that differ from the session baseline
  * are sent. The live person route and this edit-session token are checked
- * immediately before each durable write. Route generation is not that key:
+ * immediately before each durable write, and those writers re-check it
+ * after their own reads. Route generation is not that key:
  * a retained refresh of the same Person bumps it. An older session must not
  * write into, or close, a later one.
  */

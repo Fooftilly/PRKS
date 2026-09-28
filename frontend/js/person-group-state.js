@@ -447,7 +447,12 @@
      * group this device created: the server has never heard of it, so nobody
      * is in it and every pair is at revision 0.
      */
-    async function acknowledgedMembership(groupId, personId, operations) {
+    function ownershipDropped(stillOwns) {
+        return typeof stillOwns === 'function' && !stillOwns();
+    }
+
+    async function acknowledgedMembership(groupId, personId, operations, stillOwns) {
+        if (ownershipDropped(stillOwns)) return { prksOwnershipLost: true };
         if (pendingCreates(operations).some(op => op.entity_id === groupId)) {
             return { present: false, revision: 0 };
         }
@@ -464,6 +469,7 @@
             const result = await readPersonGroupState(groupId);
             state = result && result.value;
         } catch (_e) { state = null; }
+        if (ownershipDropped(stillOwns)) return { prksOwnershipLost: true };
         if (state) {
             const entry = (state.members || []).find(m => m.person_id === personId);
             return entry ? { present: entry.present, revision: entry.revision }
@@ -474,6 +480,7 @@
             const result = await readPersonGroupsStateForPerson(personId);
             mine = result && result.value;
         } catch (_e) { mine = null; }
+        if (ownershipDropped(stillOwns)) return { prksOwnershipLost: true };
         if (!mine) return null;
         const entry = (mine.groups || []).find(g => g.group_id === groupId);
         return entry ? { present: entry.present, revision: entry.revision }
@@ -502,9 +509,14 @@
         return written;
     }
 
-    async function setMembershipDurably(groupId, personId, present, observed) {
+    async function setMembershipDurably(groupId, personId, present, observed, stillOwns) {
+        if (ownershipDropped(stillOwns)) return null;
         const runtime = sync();
-        const op = await runtime.store.setPersonGroupMember(groupId, personId, present, observed);
+        const op = await runtime.store.setPersonGroupMember(
+            groupId, personId, present, observed, stillOwns);
+        /* A null from "already the observed state" still notifies. A null
+         * because the session ended during the store read must not. */
+        if (ownershipDropped(stillOwns)) return op;
         if (typeof runtime.changed === 'function') runtime.changed();
         return op;
     }
