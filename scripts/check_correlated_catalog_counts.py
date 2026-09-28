@@ -109,6 +109,22 @@ _RELATION_RE = re.compile(
 _DERIVED_RE = re.compile(
     rf"\b(?:from|join)\s*\(\s*\)\s*(?:as\s+)?({_IDENT})", re.IGNORECASE
 )
+# The same for a later FROM-list item; applied only inside a FROM list, since
+# a select-list ", (SELECT ...) AS n" has the same blanked shape.
+_COMMA_DERIVED_RE = re.compile(
+    rf",\s*\(\s*\)\s*(?:as\s+)?({_IDENT})", re.IGNORECASE
+)
+# Later items of a comma-separated FROM list: ", <table> [AS] <alias>".
+_COMMA_RELATION_RE = re.compile(
+    rf",\s*(?:(?:main|temp)\.)?({_IDENT})(?:\s+(?:as\s+)?({_IDENT}))?",
+    re.IGNORECASE,
+)
+# Where a FROM list ends (the next clause or join).
+_FROM_LIST_END_RE = re.compile(
+    r"\b(?:where|group|order|having|limit|window|union|except|intersect|"
+    r"join|left|right|inner|cross|natural|full|on|using)\b",
+    re.IGNORECASE,
+)
 _QUALIFIED_RE = re.compile(rf"\b({_IDENT})\s*\.\s*(?:{_IDENT}|\*)")
 _AS_ALIAS_RE = re.compile(rf"\s*(?:as\s+)?({_IDENT})", re.IGNORECASE)
 _SUBQUERY_START_RE = re.compile(r"\(\s*select\b", re.IGNORECASE)
@@ -253,21 +269,42 @@ def _top_level(masked: str) -> str:
     return "".join(out)
 
 
+def _add_relation(names: dict[str, str], table: str, alias: str | None) -> None:
+    table = table.lower()
+    if table in _KEYWORDS:
+        return
+    alias = (alias or "").lower()
+    if alias in _KEYWORDS:
+        alias = ""
+    # An aliased relation is only addressable by its alias (SQLite hides the
+    # table name), so ``FROM folders c`` does not shadow ``folders.id``.
+    names.setdefault(alias or table, f"{table} {alias}".strip())
+
+
+def _from_list_tails(masked: str) -> list[str]:
+    """Text after each top-level ``FROM`` up to its next clause keyword.
+
+    Used to pick up the second and later items of ``FROM a x, b y``.
+    """
+    tails = []
+    for m in re.finditer(r"\bfrom\b", masked, re.IGNORECASE):
+        end = _FROM_LIST_END_RE.search(masked, m.end())
+        tails.append(masked[m.end() : end.start() if end else len(masked)])
+    return tails
+
+
 def _declared(masked: str) -> dict[str, str]:
     """Map every FROM/JOIN qualifier (alias and table name) to ``table alias``."""
     names: dict[str, str] = {}
     for m in _RELATION_RE.finditer(masked):
-        table = m.group(1).lower()
-        if table in _KEYWORDS:
-            continue
-        alias = (m.group(2) or "").lower()
-        if alias in _KEYWORDS:
-            alias = ""
-        # An aliased relation is only addressable by its alias (SQLite hides
-        # the table name), so ``FROM folders c`` does not shadow ``folders.id``.
-        names.setdefault(alias or table, f"{table} {alias}".strip())
-    for m in _DERIVED_RE.finditer(masked):
-        alias = m.group(1).lower()
+        _add_relation(names, m.group(1), m.group(2))
+    derived = [m.group(1) for m in _DERIVED_RE.finditer(masked)]
+    for tail in _from_list_tails(masked):
+        for m in _COMMA_RELATION_RE.finditer(tail):
+            _add_relation(names, m.group(1), m.group(2))
+        derived.extend(m.group(1) for m in _COMMA_DERIVED_RE.finditer(tail))
+    for alias in derived:
+        alias = alias.lower()
         if alias not in _KEYWORDS:
             names.setdefault(alias, f"(subquery) {alias}")
     return names
@@ -317,7 +354,7 @@ def _normalize(text: str) -> str:
     # Whitespace is collapsed to single spaces first, so an optional single
     # space around punctuation is enough (and cannot backtrack).
     text = re.sub(r"\s+", " ", text.strip().lower())
-    return re.sub(r" ?([(),=<>!*+/-]) ?", r"\1", text)
+    return re.sub(r" ?([(),.=<>!*+/-]) ?", r"\1", text)
 
 
 def _nested_select_spans(text: str) -> list[tuple[int, int]]:

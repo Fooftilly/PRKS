@@ -171,6 +171,37 @@ class DetectionTests(unittest.TestCase):
         hits = _hits(sql)
         self.assertEqual([h.outer for h in hits], ["(subquery) p"])
 
+    def test_comma_separated_outer_relations_detected(self):
+        for sql in (
+            """
+            SELECT p.id,
+                (SELECT COUNT(*) FROM child c WHERE c.extra_id = x.id) AS n
+            FROM parent p, extra x
+            WHERE x.parent_id = p.id
+            """,
+            """
+            SELECT p.id,
+                (SELECT COUNT(*) FROM child c WHERE c.extra_id = x.id) AS n
+            FROM parent p, (SELECT id, parent_id FROM extra) AS x
+            WHERE x.parent_id = p.id
+            """,
+        ):
+            with self.subTest(sql=sql):
+                self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
+    def test_select_list_subquery_alias_is_not_an_outer_relation(self):
+        sql = """
+        SELECT p.id, (SELECT MAX(v) FROM t) AS n,
+            (SELECT COUNT(*) FROM child c WHERE c.parent_id = n.id) AS m
+        FROM parent p
+        """
+        self.assertEqual(_hits(sql), [])
+
+    def test_space_around_qualifier_dot_keeps_fingerprint(self):
+        base = _hits(PLAYLIST_SQL)[0]
+        spaced = PLAYLIST_SQL.replace("i.playlist_id = p.id", "i . playlist_id = p . id")
+        self.assertEqual(_hits(spaced)[0].fingerprint, base.fingerprint)
+
     def test_helper_projection_fragment_detected(self):
         src = (
             "def member_count_sql(alias):\n"
