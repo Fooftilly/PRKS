@@ -2221,6 +2221,27 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        apply_defaults(body)\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "guarded_dict_updated_in_comprehension": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        _ = [body.update(x) for x in items]\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_comprehension": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        _ = {apply_defaults(body) for _ in items}\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated_in_consumed_generator": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        list(body.update(x) for x in items)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -2393,6 +2414,13 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')) as n:\n"
                 "        body['title'] = 'x'\n"
                 "        body['file_path'] = f'/api/pdfs/{n}'\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "comprehension_shadows_guarded_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, rows):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        _ = [apply_defaults(body) for body in rows]\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
             "dict_mutated_only_on_returning_branch": (

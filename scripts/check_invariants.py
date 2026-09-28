@@ -1982,11 +1982,25 @@ class _InvariantVisitor(ast.NodeVisitor):
             return node.value.id
         return None
 
+    def _dirtiable_scopes(self) -> list[_Scope]:
+        """Scopes, innermost first, whose flow state a mutation here may reach.
+
+        A comprehension (or nested def/lambda) body mutating an enclosing
+        guarded dict must dirty the scope that owns the binding: the inner
+        scope's state is discarded when it is popped. Class bodies are not
+        enclosing scopes for what is nested in them."""
+        return [self.scopes[-1], *(s for s in reversed(self.scopes[:-1]) if not s.is_class)]
+
     def _forget_guarded_dict(self, name: str) -> None:
         """Mark ``name`` dirty on this control-flow path if it is a guarded dict."""
-        bindings = _resolve(self.scopes, name)
-        if any(b[0] == "guarded_dict" for b in bindings):
-            self.scopes[-1].current[name] = set(bindings) | {_DICT_DIRTY}
+        for scope in self._dirtiable_scopes():
+            if name in scope.current:
+                bindings = scope.current[name]
+                if any(b[0] == "guarded_dict" for b in bindings):
+                    scope.current[name] = set(bindings) | {_DICT_DIRTY}
+                return
+            if name in scope.summary:
+                return
 
     def _check_guarded_dict_store(self, target: ast.expr, value: ast.expr | None) -> None:
         """``body["file_path"] = <owned>`` keeps a guarded dict protected; any
@@ -2024,9 +2038,10 @@ class _InvariantVisitor(ast.NodeVisitor):
                 self._forget_guarded_dict(value.id)
 
     def _forget_all_guarded_dicts(self) -> None:
-        for name, bindings in list(self.scopes[-1].current.items()):
-            if any(b[0] == "guarded_dict" for b in bindings):
-                self.scopes[-1].current[name] = set(bindings) | {_DICT_DIRTY}
+        for scope in self._dirtiable_scopes():
+            for name, bindings in list(scope.current.items()):
+                if any(b[0] == "guarded_dict" for b in bindings):
+                    scope.current[name] = set(bindings) | {_DICT_DIRTY}
 
     def _active_adoption_guards(self) -> list[_AdoptionGuard]:
         guards: list[_AdoptionGuard] = []
