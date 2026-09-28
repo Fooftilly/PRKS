@@ -101,14 +101,15 @@ _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 _IDENT_RE = re.compile(_IDENT)
 # FROM/JOIN <table> [AS] <alias>; the optional alias must not be a keyword.
 _RELATION_RE = re.compile(
-    rf"\b(?:from|join)\s+(?:(?:main|temp)\s*\.\s*)?({_IDENT})"
-    # Table-valued function arguments, already blanked: json_each(   ) AS j.
-    rf"(?:\s*\(\s*\))?"
+    # Grouping parentheses are allowed: FROM (parent AS p JOIN ...).
+    rf"\b(?:from|join)\b\s*(?:\(\s*)*(?:(?:main|temp)\s*\.\s*)?({_IDENT})"
+    # Table-valued function arguments: json_each('...') AS j.
+    rf"(?:\s*\([^()]*\))?"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
-# FROM/JOIN (<derived table>) [AS] <alias>. Only meaningful on _top_level()
-# text, where the derived table's body is already blanked to spaces.
+# FROM/JOIN (<derived table>) [AS] <alias>. Only meaningful on _scope_text()
+# / _top_level() text, where the derived table's body is blanked to spaces.
 _DERIVED_RE = re.compile(
     rf"\b(?:from|join)\s*\(\s*\)\s*(?:as\s+)?({_IDENT})", re.IGNORECASE
 )
@@ -119,7 +120,7 @@ _COMMA_DERIVED_RE = re.compile(
 )
 # Later items of a comma-separated FROM list: ", <table> [AS] <alias>".
 _COMMA_RELATION_RE = re.compile(
-    rf",\s*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s*\(\s*\))?"
+    rf",\s*(?:(?:main|temp)\s*\.\s*)?({_IDENT})(?:\s*\([^()]*\))?"
     rf"(?:\s+(?:as\s+)?({_IDENT}))?",
     re.IGNORECASE,
 )
@@ -342,31 +343,58 @@ def _declared(masked: str) -> dict[str, str]:
 
 
 def _aggregate_in_select_list(body_masked: str) -> str | None:
-    """Aggregate called in the subquery's own select list.
+    """Aggregate called in one of the subquery's own select lists.
 
-    The select list runs from ``SELECT`` to the subquery's first top-level
-    ``FROM``. Aggregates wrapped in other expressions (``COALESCE(COUNT(*),
-    0)``) count; ones inside a nested ``(SELECT ...)`` belong to that query.
+    Each compound arm (``UNION [ALL]`` / ``INTERSECT`` / ``EXCEPT``) has its
+    select list from its ``SELECT`` to its first top-level ``FROM``.
+    Aggregates wrapped in other expressions (``COALESCE(COUNT(*), 0)``)
+    count; ones inside a nested ``(SELECT ...)`` belong to that query.
     """
     inner = body_masked[1:-1]
     top = _top_level(inner)
     if not _is_select_scope(top):
         return None
-    # The main SELECT: the first top-level one (CTE bodies are blanked).
-    start = re.search(r"\bselect\b", top, re.IGNORECASE)
-    if not start:
-        return None
-    end = re.search(r"\bfrom\b", top[start.end() :], re.IGNORECASE)
-    stop = start.end() + end.start() if end else len(inner)
     chars = list(inner)
     for s, e in _nested_select_spans(inner):
         _blank(chars, s, e + 1)
-    select_list = "".join(chars)[start.end() : stop]
-    for fm in re.finditer(rf"\b({_IDENT})\s*\(", select_list):
-        name = fm.group(1).lower()
-        if name in AGGREGATES:
-            return name.upper()
+    flat = "".join(chars)
+    for arm_start, arm_end in _compound_arms(top):
+        arm = top[arm_start:arm_end]
+        start = re.search(r"\bselect\b", arm, re.IGNORECASE)
+        if not start:
+            continue
+        end = re.search(r"\bfrom\b", arm[start.end() :], re.IGNORECASE)
+        stop = start.end() + end.start() if end else len(arm)
+        select_list = flat[arm_start + start.end() : arm_start + stop]
+        for fm in re.finditer(rf"\b({_IDENT})\s*\(", select_list):
+            if fm.group(1).lower() in AGGREGATES:
+                return fm.group(1).upper()
     return None
+
+
+def _compound_arms(top: str) -> list[tuple[int, int]]:
+    """``(start, end)`` of each top-level compound SELECT arm."""
+    arms = []
+    start = 0
+    for m in _COMPOUND_RE.finditer(top):
+        arms.append((start, m.start()))
+        start = m.end()
+    arms.append((start, len(top)))
+    return arms
+
+
+_COMPOUND_RE = re.compile(r"\b(?:union(?:\s+all)?|intersect|except)\b", re.IGNORECASE)
+
+
+def _scope_text(masked: str) -> str:
+    """One query scope's own text: nested ``(SELECT|WITH ...)`` bodies
+    blanked (their parentheses kept), but grouping parentheses such as
+    ``FROM (parent AS p)`` left readable, since they declare this scope's
+    relations."""
+    chars = list(masked)
+    for s, e in _nested_select_spans(masked):
+        _blank(chars, s + 1, e)
+    return "".join(chars)
 
 
 _STATEMENT_START_RE = re.compile(r"\s*(?:with|select)\b", re.IGNORECASE)
@@ -465,10 +493,10 @@ def _unresolved_refs(body_masked: str) -> set[str]:
     """
     inner_text = body_masked[1:-1]
     scopes: list[tuple[int, int, dict[str, str]]] = [
-        (0, len(inner_text), _declared(_top_level(inner_text)))
+        (0, len(inner_text), _declared(_scope_text(inner_text)))
     ]
     for s, e in _nested_select_spans(inner_text):
-        scopes.append((s, e, _declared(_top_level(inner_text[s + 1 : e]))))
+        scopes.append((s, e, _declared(_scope_text(inner_text[s + 1 : e]))))
     unresolved: set[str] = set()
     for q in _QUALIFIED_RE.finditer(inner_text):
         name = q.group(1).lower()
@@ -501,7 +529,7 @@ def _outer_correlation(
         outer_text = _top_level(masked[enc_start:enc_end])
         if _is_select_scope(outer_text):
             saw_select = True
-            outer = _declared(outer_text)
+            outer = _declared(_scope_text(masked[enc_start:enc_end]))
             found = sorted(r for r in remaining if r in outer)
             labels.update(outer[r] for r in found)
         elif enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
@@ -570,7 +598,7 @@ def find_correlated_aggregates(sql: str) -> list[tuple[int, dict[str, str]]]:
         )
         if not resolved or not resolved[0]:
             continue
-        inner = _declared(_top_level(body_masked[1:-1]))
+        inner = _declared(_scope_text(body_masked[1:-1]))
         inner_tables = sorted(
             {label.split(" ")[0] for label in inner.values()}
         )

@@ -267,6 +267,26 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(rel=rel):
                 self.assertEqual([h.outer for h in _hits(sql)], ["parent p"])
 
+    def test_grouped_outer_relation_detected(self):
+        for rel in ("(parent AS p)", "(parent p JOIN extra x ON x.parent_id = p.id)"):
+            sql = f"""
+            SELECT p.id,
+                (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n
+            FROM {rel}
+            """
+            with self.subTest(rel=rel):
+                self.assertEqual([h.outer for h in _hits(sql)], ["parent p"])
+
+    def test_aggregate_in_later_compound_arm_detected(self):
+        sql = """
+        SELECT p.id,
+            (SELECT e.x FROM empty e WHERE 0
+             UNION ALL
+             SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id) AS n
+        FROM parent p
+        """
+        self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
     def test_indexed_by_is_not_an_alias(self):
         sql = """
         SELECT parent.id,
