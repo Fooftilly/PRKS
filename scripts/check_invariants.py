@@ -469,6 +469,14 @@ def _class_def_pairs(node: ast.ClassDef, scopes: list[_Scope]) -> _Pairs:
     return [(node.name, {("class", info)})]
 
 
+def _match_pairs(node: ast.Match, scopes: list[_Scope]) -> _Pairs:
+    subject = _value_bindings(node.subject, scopes)
+    pairs: _Pairs = []
+    for case in node.cases:
+        pairs.extend(_pattern_pairs(case.pattern, subject))
+    return pairs
+
+
 def _except_pairs(node: ast.ExceptHandler, scopes: list[_Scope]) -> _Pairs:
     return [(node.name, {_OTHER})] if node.name else []
 
@@ -488,6 +496,7 @@ _BINDING_HANDLERS: dict[type, Any] = {
     ast.AsyncFunctionDef: _def_pairs,
     ast.ClassDef: _class_def_pairs,
     ast.ExceptHandler: _except_pairs,
+    ast.Match: _match_pairs,
 }
 
 

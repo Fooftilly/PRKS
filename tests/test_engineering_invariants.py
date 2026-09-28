@@ -587,6 +587,23 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    open_archive()\n"
                 "    archive.extractall(dest)\n"
             ),
+            "match_capture_in_closure": (
+                "import zipfile\n"
+                "match zipfile.ZipFile(path):\n"
+                "    case archive:\n"
+                "        def inner():\n"
+                "            archive.extractall(dest)\n"
+                "        inner()\n"
+            ),
+            "match_capture_loop_carried": (
+                "import zipfile\n"
+                "archive = load_bundle()\n"
+                "for path in paths:\n"
+                "    archive.extractall(dest)\n"
+                "    match zipfile.ZipFile(path):\n"
+                "        case archive:\n"
+                "            pass\n"
+            ),
             "annotated_class_alias": (
                 "import zipfile\n"
                 "Z: type[zipfile.ZipFile] = zipfile.ZipFile\n"
