@@ -249,20 +249,15 @@ function addTarget(): void {
   if (!body || !current) return
   void withBusy('add-target', async () => {
     const verdict = defaultArgumentVerdict(body.kind)
-    const row: ArgumentEditorTargetRow = {
-      rowKey: nextRowKey(),
-      type: 'position',
-      id: '',
-      name: 'Choose…',
-      kind: '',
-      verdict_id: verdict,
-    }
-    body.targets.push(row)
     await intents?.pickTarget(current.id, (picked) => {
-      row.type = picked.type
-      row.id = picked.id
-      row.name = picked.name || picked.id
-      row.kind = picked.kind
+      body.targets.push({
+        rowKey: nextRowKey(),
+        type: picked.type,
+        id: picked.id,
+        name: picked.name || picked.id,
+        kind: picked.kind,
+        verdict_id: verdict,
+      })
     })
   })
 }
@@ -272,16 +267,13 @@ function addSource(): void {
   const current = argument.value
   if (!body || !current) return
   void withBusy('add-source', async () => {
-    const row: ArgumentEditorSourceRow = {
-      rowKey: nextRowKey(),
-      work_id: '',
-      work_title: 'Choose a work…',
-      pages: '',
-    }
-    body.sources.push(row)
     await intents?.pickSource(current.id, (picked) => {
-      row.work_id = picked.work_id
-      row.work_title = picked.work_title || picked.work_id
+      body.sources.push({
+        rowKey: nextRowKey(),
+        work_id: picked.work_id,
+        work_title: picked.work_title || picked.work_id,
+        pages: '',
+      })
     })
   })
 }

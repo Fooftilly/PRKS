@@ -35,6 +35,7 @@ afterEach(() => {
   delete window.prksOpenResearchPicker
   delete window.fetchArguments
   delete window.fetchPositions
+  delete window.fetchWorks
 })
 
 function host(): HTMLElement {
@@ -518,6 +519,56 @@ describe('Arguments route bridge', () => {
     expect(window.prksOpenResearchPicker).toHaveBeenCalledTimes(1)
   })
 
+  it('does not add a target or source when the picker is cancelled', async () => {
+    paintHelpers()
+    window.prksPrepareArgumentEdit = async () => {}
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOpenResearchPicker = vi.fn()
+    window.fetchArguments = async () => []
+    window.fetchPositions = async () => [{ id: 'P9', name: 'Picked' }]
+    window.fetchWorks = async () => [{ id: 'W9', title: 'Picked work' }]
+    const pane = owner()
+    const el = host()
+    presentBaseDetail(el, pane)
+    el.querySelector<HTMLButtonElement>('#prks-arg-edit')?.click()
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve()
+      await nextTick()
+    }
+    expect(el.querySelector('#prks-arg-form')).not.toBeNull()
+
+    el.querySelector<HTMLButtonElement>('#prks-arg-add-target')?.click()
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve()
+      await nextTick()
+    }
+    expect(window.prksOpenResearchPicker).toHaveBeenCalled()
+    expect(el.querySelectorAll('[data-pick="target"]')).toHaveLength(0)
+    expect(el.textContent).not.toContain('Choose…')
+    const targetOpen = vi.mocked(window.prksOpenResearchPicker).mock.calls.at(-1)?.[0] as {
+      onPick: (id: string, pickType: string) => void
+    }
+    targetOpen.onPick('P9', 'position')
+    await nextTick()
+    expect(el.querySelectorAll('[data-pick="target"]')).toHaveLength(1)
+    expect(el.textContent).toContain('Picked')
+
+    el.querySelector<HTMLButtonElement>('#prks-arg-add-source')?.click()
+    for (let i = 0; i < 6; i += 1) {
+      await Promise.resolve()
+      await nextTick()
+    }
+    expect(el.querySelectorAll('[data-pick="source"]')).toHaveLength(0)
+    expect(el.textContent).not.toContain('Choose a work…')
+    const sourceOpen = vi.mocked(window.prksOpenResearchPicker).mock.calls.at(-1)?.[0] as {
+      onPick: (id: string) => void
+    }
+    sourceOpen.onPick('W9')
+    await nextTick()
+    expect(el.querySelectorAll('[data-pick="source"]')).toHaveLength(1)
+    expect(el.textContent).toContain('Picked work')
+  })
+
   it('enters edit and adds a row when randomUUID throws', async () => {
     paintHelpers()
     window.prksPrepareArgumentEdit = async () => {}
@@ -570,18 +621,32 @@ describe('Arguments route bridge', () => {
       expect(el.querySelector('#prks-arg-form')).not.toBeNull()
       expect(el.textContent).toContain('First')
       expect(el.textContent).toContain('Cited')
+      window.fetchWorks = async () => [{ id: 'W9', title: 'Picked work' }]
+      window.fetchPositions = async () => [{ id: 'P9', name: 'Picked' }]
       el.querySelector<HTMLButtonElement>('#prks-arg-add-target')?.click()
       for (let i = 0; i < 6; i += 1) {
         await Promise.resolve()
         await nextTick()
       }
+      const targetOpen = vi.mocked(window.prksOpenResearchPicker).mock.calls.at(-1)?.[0] as
+        | { onPick: (id: string, pickType: string) => void }
+        | undefined
+      targetOpen?.onPick('P9', 'position')
+      await nextTick()
       expect(el.querySelectorAll('[data-pick="target"]')).toHaveLength(2)
+      expect(el.textContent).toContain('Picked')
       el.querySelector<HTMLButtonElement>('#prks-arg-add-source')?.click()
       for (let i = 0; i < 6; i += 1) {
         await Promise.resolve()
         await nextTick()
       }
+      const sourceOpen = vi.mocked(window.prksOpenResearchPicker).mock.calls.at(-1)?.[0] as
+        | { onPick: (id: string) => void }
+        | undefined
+      sourceOpen?.onPick('W9')
+      await nextTick()
       expect(el.querySelectorAll('[data-pick="source"]')).toHaveLength(2)
+      expect(el.textContent).toContain('Picked work')
     } finally {
       Object.defineProperty(crypto, 'randomUUID', {
         configurable: true,
