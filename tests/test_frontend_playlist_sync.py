@@ -141,6 +141,12 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         self.assertIn('deletePlaylistCanonical', body)
         self.assertIn('will stay in your library', body)
         self.assertIn("prksNavigate('#/playlists'", body)
+        after_confirm = body[body.index("await prksConfirmDestructive"):]
+        self.assertLess(after_confirm.index("stillOwnsPlaylist()"), after_confirm.index("await deletePlaylistCanonical"))
+        after_delete = after_confirm[after_confirm.index("await deletePlaylistCanonical"):]
+        self.assertLess(after_delete.index("stillOwnsPlaylist()"), after_delete.index("prksNavigate('#/playlists'"))
+        self.assertIn("prksTabContextOwnsEntityRoute(", body)
+        self.assertIn("'playlist-detail'", body)
         sel_at = pl.index('const PRKS_PLAYLIST_MUTATION_SELECTOR')
         sel = pl[sel_at: pl.index('].join', sel_at)]
         self.assertNotIn('prks-playlist-delete-btn', sel)

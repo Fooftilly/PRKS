@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { playlistIntentsKey, type PlaylistSaveResult, type PlaylistVideoChoice } from './intents'
 import { usePlaylistPendingAction } from './pending-action'
 import type { PlaylistDetailProjection } from './projection'
@@ -93,6 +94,10 @@ watch(
   },
 )
 
+function itemKey(ids: readonly string[]): string {
+  return ids.join('\0')
+}
+
 let choiceToken = 0
 async function refreshChoices(): Promise<void> {
   const token = ++choiceToken
@@ -102,11 +107,19 @@ async function refreshChoices(): Promise<void> {
     catalogueUnavailable.value = false
     return
   }
-  const loaded = await intents.loadAddableVideos(
-    current.id,
-    current.items.map((item) => item.id),
-  )
+  const playlistId = current.id
+  const itemIds = current.items.map((item) => item.id)
+  const loaded = await intents.loadAddableVideos(playlistId, itemIds)
   if (token !== choiceToken) return
+  const live = playlist.value
+  if (
+    !props.projection.editing ||
+    !live ||
+    live.id !== playlistId ||
+    itemKey(live.items.map((item) => item.id)) !== itemKey(itemIds)
+  ) {
+    return
+  }
   if (loaded.status === 'stale') return
   if (loaded.status === 'unavailable') {
     choices.value = []
@@ -129,17 +142,32 @@ watch(
   { immediate: true },
 )
 
-function onCatalogueOnline(): void {
-  if (!props.projection.editing) return
+function onRuntimeState(state: string): void {
+  if (state !== 'online' || !props.projection.editing) return
   void refreshChoices()
 }
 
+let stopConnectivity: (() => void) | null = null
 onMounted(() => {
-  window.addEventListener('online', onCatalogueOnline)
+  const subscribe = window.prksOfflineRuntimeSubscribe
+  if (typeof subscribe !== 'function') return
+  stopConnectivity = subscribe(onRuntimeState)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('online', onCatalogueOnline)
+  stopConnectivity?.()
+  stopConnectivity = null
 })
+
+function viewIdentity(): { id: string; generation: number } | null {
+  const id = playlist.value?.id
+  if (!id) return null
+  return { id, generation: props.projection.generation }
+}
+
+function viewStill(identity: { id: string; generation: number } | null): boolean {
+  if (!identity) return false
+  return playlist.value?.id === identity.id && props.projection.generation === identity.generation
+}
 
 function onCancel(): void {
   const id = playlist.value?.id
@@ -150,14 +178,17 @@ function onCancel(): void {
 
 async function onSave(): Promise<void> {
   const current = playlist.value
-  if (!current) return
+  const identity = viewIdentity()
+  if (!current || !identity) return
   if (!draft.value.title.trim()) {
     status.value = 'Title is required.'
     return
   }
+  const draftSnapshot = { ...draft.value }
+  const shownSnapshot = { ...shown.value }
   await withBusy('save', async () => {
-    const result = await intents?.saveFields(current.id, { ...draft.value }, { ...shown.value })
-    if (!result) return
+    const result = await intents?.saveFields(current.id, draftSnapshot, shownSnapshot)
+    if (!viewStill(identity) || !result) return
     if (!result.ok) status.value = result.message
     else status.value = ''
   })
@@ -165,7 +196,8 @@ async function onSave(): Promise<void> {
 
 async function onReorder(workId: string, direction: -1 | 1): Promise<void> {
   const current = playlist.value
-  if (!current) return
+  const identity = viewIdentity()
+  if (!current || !identity) return
   const ids = current.items.map((item) => item.id)
   const index = ids.indexOf(workId)
   const target = index + direction
@@ -176,25 +208,36 @@ async function onReorder(workId: string, direction: -1 | 1): Promise<void> {
   if (!swapped || !currentId) return
   next[target] = currentId
   next[index] = swapped
-  await withBusy('reorder', async () => {
-    report(await intents?.reorder(current.id, next), 'Reorder')
+  const key = reorderKey(workId, direction)
+  await withBusy(key, async () => {
+    const result = await intents?.reorder(current.id, next)
+    if (!viewStill(identity)) return
+    report(result, 'Reorder')
   })
+}
+
+function reorderKey(workId: string, direction: -1 | 1): string {
+  return `reorder:${workId}:${direction < 0 ? 'up' : 'down'}`
 }
 
 async function onRemoveWork(workId: string): Promise<void> {
   const current = playlist.value
-  if (!current) return
+  const identity = viewIdentity()
+  if (!current || !identity) return
   await withBusy(`remove:${workId}`, async () => {
-    report(await intents?.removeWork(current.id, workId), 'Remove')
+    const result = await intents?.removeWork(current.id, workId)
+    if (!viewStill(identity)) return
+    report(result, 'Remove')
   })
 }
 
 async function onAdd(workId: string): Promise<void> {
   const current = playlist.value
-  if (!current || !workId) return
+  const identity = viewIdentity()
+  if (!current || !identity || !workId) return
   await withBusy(`add:${workId}`, async () => {
     const result = await intents?.addWork(current.id, workId)
-    if (!result) return
+    if (!viewStill(identity) || !result) return
     if (!result.ok) addStatus.value = result.message
     else {
       addStatus.value = 'Added.'
@@ -232,11 +275,12 @@ function onCancelRename(workId: string): void {
 
 async function onSaveRename(workId: string): Promise<void> {
   const current = playlist.value
-  if (!current) return
+  const identity = viewIdentity()
+  if (!current || !identity) return
   const title = renaming.value[workId] || ''
   await withBusy(`rename:${workId}`, async () => {
     const result = await intents?.saveWorkTitle(current.id, workId, title)
-    if (!result) return
+    if (!viewStill(identity) || !result) return
     if (!result.ok) {
       alertMessage(result.message, result.message.includes('cannot be renamed') ? 'Rename unavailable' : 'Error')
       return
@@ -302,17 +346,18 @@ function onAddBlur(): void {
           <a class="route-sidebar__link" href="#/playlists">All playlists</a>
         </div>
         <div class="page-header__actions">
-          <button
+          <PrksButton
             id="prks-playlist-delete-btn"
-            type="button"
-            class="prks-btn prks-btn--danger"
+            variant="danger"
             :data-playlist-id="playlist.id"
-            :disabled="actionBusy('delete') || actionBlocked('delete')"
+            :busy="actionBusy('delete')"
+            :disabled="actionBlocked('delete')"
+            busy-label="Deleting…"
             @click="onDelete"
           >
             <span v-if="icon('trash')" v-html="icon('trash')"></span>
-            {{ actionBusy('delete') ? 'Deleting…' : 'Delete playlist' }}
-          </button>
+            Delete playlist
+          </PrksButton>
         </div>
       </div>
       <p v-if="playlist.description" class="meta-row prks-playlist-detail__desc">{{ playlist.description }}</p>
@@ -358,15 +403,16 @@ function onAddBlur(): void {
           >
             Cancel
           </button>
-          <button
+          <PrksButton
             id="prks-playlist-edit-save"
-            type="button"
-            class="prks-btn prks-btn--primary"
+            variant="primary"
+            :busy="actionBusy('save')"
             :disabled="actionBlocked('save')"
+            busy-label="Saving…"
             @click="onSave"
           >
-            {{ actionBusy('save') ? 'Saving…' : 'Save' }}
-          </button>
+            Save
+          </PrksButton>
         </div>
         <p id="prks-playlist-edit-status" class="meta-row meta-row--spaced" aria-live="polite">{{ status }}</p>
       </div>
@@ -404,14 +450,16 @@ function onAddBlur(): void {
               class="result-item prks-playlist-add-result"
             >
               <div class="prks-playlist-add-result__label">{{ choice.title }}</div>
-              <button
-                type="button"
-                class="prks-btn prks-btn--secondary prks-btn--sm"
+              <PrksButton
+                size="sm"
+                :busy="actionBusy(`add:${choice.id}`)"
+                :disabled="actionBlocked(`add:${choice.id}`)"
+                busy-label="Adding…"
                 @mousedown.prevent
                 @click="onAdd(choice.id)"
               >
                 Add
-              </button>
+              </PrksButton>
             </div>
           </div>
         </div>
@@ -457,39 +505,43 @@ function onAddBlur(): void {
                 <div class="meta-row">{{ item.subtitle }}</div>
               </div>
               <div v-if="editing" class="prks-playlist-item__actions">
-                <button
-                  type="button"
-                  class="prks-btn prks-btn--secondary prks-btn--sm"
+                <PrksButton
+                  size="sm"
                   :data-pl-up="item.id"
-                  :disabled="actionBlocked('reorder')"
+                  :busy="actionBusy(reorderKey(item.id, -1))"
+                  :disabled="actionBlocked(reorderKey(item.id, -1))"
+                  busy-label="Reordering…"
                   title="Move up"
-                  aria-label="Move up"
+                  :aria-label="actionBusy(reorderKey(item.id, -1)) ? 'Reordering…' : 'Move up'"
                   @click="onReorder(item.id, -1)"
                 >
                   <span v-if="icon('arrowUp')" v-html="icon('arrowUp')"></span>
-                </button>
-                <button
-                  type="button"
-                  class="prks-btn prks-btn--secondary prks-btn--sm"
+                </PrksButton>
+                <PrksButton
+                  size="sm"
                   :data-pl-down="item.id"
-                  :disabled="actionBlocked('reorder')"
+                  :busy="actionBusy(reorderKey(item.id, 1))"
+                  :disabled="actionBlocked(reorderKey(item.id, 1))"
+                  busy-label="Reordering…"
                   title="Move down"
-                  aria-label="Move down"
+                  :aria-label="actionBusy(reorderKey(item.id, 1)) ? 'Reordering…' : 'Move down'"
                   @click="onReorder(item.id, 1)"
                 >
                   <span v-if="icon('arrowDown')" v-html="icon('arrowDown')"></span>
-                </button>
+                </PrksButton>
                 <template v-if="isRenaming(item.id)">
-                  <button
-                    type="button"
-                    class="prks-btn prks-btn--secondary prks-btn--sm"
+                  <PrksButton
+                    size="sm"
                     :data-pl-rename-save="item.id"
+                    :busy="actionBusy(`rename:${item.id}`)"
+                    :disabled="actionBlocked(`rename:${item.id}`)"
+                    busy-label="Renaming…"
                     title="Save title"
-                    aria-label="Save title"
+                    :aria-label="actionBusy(`rename:${item.id}`) ? 'Renaming…' : 'Save title'"
                     @click="onSaveRename(item.id)"
                   >
                     <span v-if="icon('check')" v-html="icon('check')"></span>
-                  </button>
+                  </PrksButton>
                   <button
                     type="button"
                     class="prks-btn prks-btn--secondary prks-btn--sm"
@@ -512,16 +564,18 @@ function onAddBlur(): void {
                 >
                   <span v-if="icon('pencil')" v-html="icon('pencil')"></span>
                 </button>
-                <button
-                  type="button"
-                  class="prks-btn prks-btn--secondary prks-btn--sm"
+                <PrksButton
+                  size="sm"
                   :data-pl-remove="item.id"
+                  :busy="actionBusy(`remove:${item.id}`)"
+                  :disabled="actionBlocked(`remove:${item.id}`)"
+                  busy-label="Removing…"
                   title="Remove from playlist"
-                  aria-label="Remove from playlist"
+                  :aria-label="actionBusy(`remove:${item.id}`) ? 'Removing…' : 'Remove from playlist'"
                   @click="onRemoveWork(item.id)"
                 >
                   <span v-if="icon('x')" v-html="icon('x')"></span>
-                </button>
+                </PrksButton>
               </div>
             </div>
           </div>

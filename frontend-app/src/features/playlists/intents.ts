@@ -314,11 +314,15 @@ export function browserPlaylistIntents(
       if (!ownsDetail(owner, generation, playlistId) || !owner) return
       const deleteFromDetail = window.deletePlaylistFromDetail
       if (typeof deleteFromDetail !== 'function') return
-      await deleteFromDetail(owner, {
-        id: playlist.id,
-        title: playlist.title,
-        items: playlist.items.map((item) => ({ id: item.id })),
-      })
+      await deleteFromDetail(
+        owner,
+        {
+          id: playlist.id,
+          title: playlist.title,
+          items: playlist.items.map((item) => ({ id: item.id })),
+        },
+        generation,
+      )
     },
   }
 }

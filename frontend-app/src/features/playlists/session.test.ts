@@ -24,7 +24,16 @@ afterEach(() => {
   delete window.updatePanelContent
   delete window.prksTabContextOwnsEntityRoute
   delete window.prksOfflineRuntimeState
+  delete window.prksOfflineRuntimeSubscribe
   delete window.deletePlaylistFromDetail
+  delete window.reorderPlaylist
+  delete window.addWorkToPlaylist
+  delete window.removeWorkFromPlaylist
+  delete window.fetchWorks
+  delete window.prksConsumeApiError
+  delete window.prksInferWorkSourceKind
+  delete window.prksSaveWorkFieldDurably
+  delete window.prksAlertMessage
   delete window.prksIcon
 })
 
@@ -32,6 +41,13 @@ function host(): HTMLElement {
   const el = document.createElement('div')
   document.body.appendChild(el)
   return el
+}
+
+async function flushView(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) {
+    await Promise.resolve()
+    await nextTick()
+  }
 }
 
 function owner(tabId = 'tab') {
@@ -259,6 +275,313 @@ describe('Playlists route surface', () => {
     presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
     await vi.waitFor(() => expect(el.textContent).toContain('Videos are not available right now.'))
     expect(el.textContent).not.toContain('No videos found')
+  })
+
+  it('reloads addable videos when the runtime comes online and keeps the draft', async () => {
+    const listeners = new Set<(state: string) => void>()
+    window.prksOfflineRuntimeSubscribe = (fn) => {
+      listeners.add(fn)
+      return () => {
+        listeners.delete(fn)
+      }
+    }
+    let runtime = 'offline'
+    window.prksOfflineRuntimeState = () => runtime
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksConsumeApiError = () => null
+    window.prksInferWorkSourceKind = () => 'video'
+    window.fetchWorks = vi.fn(async () => [])
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    const title = el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')
+    title!.value = 'Draft title'
+    title!.dispatchEvent(new Event('input'))
+    await vi.waitFor(() => expect(el.textContent).toContain('Videos are not available right now.'))
+    expect(el.textContent).not.toContain('No videos found')
+    expect(window.fetchWorks).not.toHaveBeenCalled()
+
+    window.fetchWorks = vi.fn(async () => [{ id: 'W9', title: 'Now online' }])
+    runtime = 'online'
+    listeners.forEach((fn) => fn('online'))
+    await vi.waitFor(() => expect(el.textContent).toContain('Now online'))
+    expect(el.textContent).not.toContain('Videos are not available right now.')
+    expect(el.textContent).not.toContain('No videos found')
+    expect(el.querySelector('#prks-playlist-edit-title')).not.toBeNull()
+    expect(el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')?.value).toBe('Draft title')
+  })
+
+  it('discards a catalogue that finishes after this detail no longer owns the route', async () => {
+    const listeners = new Set<(state: string) => void>()
+    window.prksOfflineRuntimeSubscribe = (fn) => {
+      listeners.add(fn)
+      return () => {
+        listeners.delete(fn)
+      }
+    }
+    let runtime = 'offline'
+    window.prksOfflineRuntimeState = () => runtime
+    let owns = true
+    window.prksTabContextOwnsEntityRoute = () => owns
+    window.prksConsumeApiError = () => null
+    window.prksInferWorkSourceKind = () => 'video'
+    window.fetchWorks = vi.fn(async () => [])
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await vi.waitFor(() => expect(el.textContent).toContain('Videos are not available right now.'))
+
+    let release: (rows: Array<{ id?: string; title?: string }>) => void = () => {}
+    window.fetchWorks = vi.fn(
+      () =>
+        new Promise<Array<{ id?: string; title?: string }>>((resolve) => {
+          release = resolve
+        }),
+    )
+    runtime = 'online'
+    listeners.forEach((fn) => fn('online'))
+    await vi.waitFor(() => expect(window.fetchWorks).toHaveBeenCalled())
+    owns = false
+    release([{ id: 'W9', title: 'Stale video' }])
+    await flushView()
+    expect(el.textContent).not.toContain('Stale video')
+    expect(el.textContent).toContain('Videos are not available right now.')
+    expect(el.textContent).not.toContain('No videos found')
+    expect(el.querySelector('#prks-playlist-edit-title')).not.toBeNull()
+  })
+
+  it('marks awaited playlist controls busy until the request settles', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOfflineRuntimeState = () => 'online'
+    window.prksConsumeApiError = () => null
+    window.prksInferWorkSourceKind = () => 'video'
+    window.fetchWorks = vi.fn(async () => [{ id: 'W9', title: 'Extra video' }])
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    let releaseSave: (value: unknown) => void = () => {}
+    let releaseReorder: (value: unknown) => void = () => {}
+    let releaseAdd: (value: unknown) => void = () => {}
+    let releaseRemove: (value: unknown) => void = () => {}
+    let releaseRename: (value: { code?: string; error?: string } | null) => void = () => {}
+    window.updatePlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseSave = resolve
+        }),
+    )
+    window.reorderPlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseReorder = resolve
+        }),
+    )
+    window.addWorkToPlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseAdd = resolve
+        }),
+    )
+    window.removeWorkFromPlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseRemove = resolve
+        }),
+    )
+    window.prksSaveWorkFieldDurably = vi.fn(
+      () =>
+        new Promise<{ code?: string; error?: string } | null>((resolve) => {
+          releaseRename = resolve
+        }),
+    )
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await nextTick()
+    const up = () => el.querySelector<HTMLButtonElement>('[data-pl-up="W1"]')
+    expect(up()?.disabled).toBe(false)
+    const description = el.querySelector<HTMLTextAreaElement>('#prks-playlist-edit-desc')
+    description!.value = 'Changed while saving'
+    description!.dispatchEvent(new Event('input'))
+    await nextTick()
+
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
+    await nextTick()
+    const saveBtn = el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')
+    expect(saveBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(saveBtn?.disabled).toBe(true)
+    expect(saveBtn?.textContent).toContain('Saving…')
+    expect(el.querySelector<HTMLButtonElement>('[data-pl-down="W1"]')?.disabled).toBe(true)
+    expect(el.querySelector('[data-pl-down="W1"]')?.getAttribute('aria-busy')).toBeNull()
+    releaseSave({})
+    await flushView()
+    expect(saveBtn?.getAttribute('aria-busy')).toBeNull()
+    expect(saveBtn?.disabled).toBe(false)
+    expect(saveBtn?.textContent).toContain('Save')
+
+    el.querySelector<HTMLButtonElement>('[data-pl-down="W1"]')?.click()
+    await nextTick()
+    const down = el.querySelector<HTMLButtonElement>('[data-pl-down="W1"]')
+    expect(down?.getAttribute('aria-busy')).toBe('true')
+    expect(down?.disabled).toBe(true)
+    expect(down?.textContent).toContain('Reordering…')
+    expect(up()?.disabled).toBe(true)
+    expect(up()?.getAttribute('aria-busy')).toBeNull()
+    releaseReorder(null)
+    await flushView()
+    expect(down?.getAttribute('aria-busy')).toBeNull()
+    expect(down?.disabled).toBe(false)
+    expect(up()?.disabled).toBe(false)
+
+    el.querySelector<HTMLInputElement>('#prks-playlist-add-search')?.dispatchEvent(new FocusEvent('focus'))
+    await vi.waitFor(() => expect(el.textContent).toContain('Extra video'))
+    const addBtn = el.querySelector<HTMLButtonElement>('#prks-playlist-add-results button')
+    addBtn?.click()
+    await nextTick()
+    expect(addBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(addBtn?.disabled).toBe(true)
+    expect(addBtn?.textContent).toContain('Adding…')
+    releaseAdd(null)
+    await flushView()
+    expect(addBtn?.getAttribute('aria-busy')).toBeNull()
+    expect(addBtn?.textContent).toContain('Add')
+
+    el.querySelector<HTMLButtonElement>('[data-pl-remove="W2"]')?.click()
+    await nextTick()
+    const removeBtn = el.querySelector<HTMLButtonElement>('[data-pl-remove="W2"]')
+    expect(removeBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(removeBtn?.disabled).toBe(true)
+    expect(removeBtn?.textContent).toContain('Removing…')
+    releaseRemove(null)
+    await flushView()
+    expect(removeBtn?.getAttribute('aria-busy')).toBeNull()
+    expect(removeBtn?.disabled).toBe(false)
+
+    el.querySelector<HTMLButtonElement>('[data-pl-rename="W1"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-pl-rename-save="W1"]')?.click()
+    await nextTick()
+    const renameBtn = el.querySelector<HTMLButtonElement>('[data-pl-rename-save="W1"]')
+    expect(renameBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(renameBtn?.disabled).toBe(true)
+    expect(renameBtn?.textContent).toContain('Renaming…')
+    releaseRename({ code: '' })
+    await flushView()
+    expect(el.querySelector('[data-pl-rename-save="W1"]')).toBeNull()
+    expect(el.querySelector('[data-pl-rename="W1"]')).not.toBeNull()
+  })
+
+  it('does not let a finished action from playlist A change playlist B', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOfflineRuntimeState = () => 'online'
+    window.prksConsumeApiError = () => null
+    window.prksInferWorkSourceKind = () => 'video'
+    window.fetchWorks = vi.fn(async () => [{ id: 'W9', title: 'Extra video' }])
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    window.prksAlertMessage = vi.fn()
+    let releaseAdd: (value: unknown) => void = () => {}
+    window.addWorkToPlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseAdd = resolve
+        }),
+    )
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    el.querySelector<HTMLInputElement>('#prks-playlist-add-search')?.dispatchEvent(new FocusEvent('focus'))
+    await vi.waitFor(() => expect(el.querySelector('#prks-playlist-add-results button')).not.toBeNull())
+    el.querySelector<HTMLButtonElement>('#prks-playlist-add-results button')?.click()
+    await vi.waitFor(() => expect(window.addWorkToPlaylist).toHaveBeenCalled())
+
+    const other = { ...playlist, id: 'PL-2', title: 'Other playlist' }
+    presentPlaylistDetail({ owner: pane, host: el, playlist: other, editing: true, generation: 2 })
+    await nextTick()
+    const search = el.querySelector<HTMLInputElement>('#prks-playlist-add-search')
+    search!.value = 'keep-b'
+    search!.dispatchEvent(new Event('input'))
+    search!.dispatchEvent(new FocusEvent('focus'))
+    await nextTick()
+    releaseAdd(null)
+    await flushView()
+    expect(el.querySelector<HTMLInputElement>('#prks-playlist-add-search')?.value).toBe('keep-b')
+    expect(el.textContent).not.toContain('Added.')
+    expect(el.querySelector('#prks-playlist-add-results')?.classList.contains('hidden')).toBe(false)
+    expect(el.textContent).toContain('Other playlist')
+  })
+
+  it('does not let a finished save or rename from playlist A change playlist B', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    window.prksAlertMessage = vi.fn()
+    let releaseSave: (value: unknown) => void = () => {}
+    window.updatePlaylist = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseSave = resolve
+        }),
+    )
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    const other = { ...playlist, id: 'PL-2', title: 'Other playlist' }
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await nextTick()
+    const saveBtn = el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')
+    expect(saveBtn?.disabled).toBe(false)
+    expect(el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')?.value).toBe('Course')
+    const description = el.querySelector<HTMLTextAreaElement>('#prks-playlist-edit-desc')
+    description!.value = 'Changed on A'
+    description!.dispatchEvent(new Event('input'))
+    await nextTick()
+    saveBtn?.click()
+    await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
+    presentPlaylistDetail({ owner: pane, host: el, playlist: other, editing: true, generation: 2 })
+    await nextTick()
+    const title = el.querySelector<HTMLInputElement>('#prks-playlist-edit-title')
+    title!.value = ''
+    title!.dispatchEvent(new Event('input'))
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
+    await nextTick()
+    expect(el.querySelector('#prks-playlist-edit-status')?.textContent).toContain('Title is required.')
+    releaseSave({})
+    await flushView()
+    expect(el.querySelector('#prks-playlist-edit-status')?.textContent).toContain('Title is required.')
+
+    let releaseRename: (value: { code?: string; error?: string } | null) => void = () => {}
+    window.prksSaveWorkFieldDurably = vi.fn(
+      () =>
+        new Promise<{ code?: string; error?: string } | null>((resolve) => {
+          releaseRename = resolve
+        }),
+    )
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 3 })
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-pl-rename="W1"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-pl-rename-save="W1"]')?.click()
+    await vi.waitFor(() => expect(window.prksSaveWorkFieldDurably).toHaveBeenCalled())
+    presentPlaylistDetail({ owner: pane, host: el, playlist: other, editing: true, generation: 4 })
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-pl-rename="W1"]')?.click()
+    await nextTick()
+    const renameInput = el.querySelector<HTMLInputElement>('#prks-pl-rename-input-W1')
+    renameInput!.value = 'B keeps this title'
+    renameInput!.dispatchEvent(new Event('input'))
+    await nextTick()
+    releaseRename({ code: '' })
+    await flushView()
+    expect(el.querySelector<HTMLInputElement>('#prks-pl-rename-input-W1')?.value).toBe('B keeps this title')
+    expect(window.prksAlertMessage).not.toHaveBeenCalled()
   })
 
   it('owns the delete busy label and clears it when the playlist changes', async () => {

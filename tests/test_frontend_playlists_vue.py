@@ -1,6 +1,7 @@
 """Static contracts for the Playlists Vue route surface (#276 / #230)."""
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -142,6 +143,11 @@ class PlaylistsVueContracts(unittest.TestCase):
         self.assertIn("will stay in your library", delete_fn)
         detail = (FEATURE / "PlaylistDetailRoute.vue").read_text()
         self.assertIn("Deleting…", detail)
+        for label in ("Saving…", "Adding…", "Removing…", "Reordering…", "Renaming…"):
+            self.assertIn(f'busy-label="{label}"', detail)
+        self.assertIn("prksOfflineRuntimeSubscribe", detail)
+        self.assertNotIn("addEventListener('online'", detail)
+        self.assertNotIn(":key=\"playlist.id\"", detail)
         self.assertIn('role="link"', detail)
         self.assertIn('@keydown.enter.prevent="activateRouteLink"', detail)
         index = (FEATURE / "PlaylistsIndexRoute.vue").read_text()
@@ -150,3 +156,83 @@ class PlaylistsVueContracts(unittest.TestCase):
         self.assertIn('@keydown.enter.prevent="activateRouteLink"', index)
         agents = (ROOT / "frontend" / "AGENTS.md").read_text()
         self.assertIn("does not read `location.hash`", agents)
+
+    def test_stale_delete_confirmation_does_not_delete_or_navigate(self):
+        script = r"""
+const fs = require('fs');
+const vm = require('vm');
+const context = { console };
+context.window = context;
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync('frontend/js/components/playlists.js', 'utf8'), context);
+const playlist = { id: 'PL-A', title: 'A', items: [{ id: 'W1' }] };
+const ctx = {
+  tabId: 'side',
+  generation: 4,
+  ui: { playlistEditing: true },
+  isCurrent(generation) { return generation === 4 && context.owns; },
+};
+let confirm;
+context.owns = true;
+context.deleted = false;
+context.navigated = null;
+context.calls = [];
+context.prksTabContextOwnsEntityRoute = (owner, generation, type, id, route) => {
+  context.calls.push({ generation, type, id, route, tabId: owner && owner.tabId });
+  return context.owns;
+};
+context.prksDeletePlaylistDurably = async () => { context.deleted = true; };
+context.prksConfirmDestructive = () => new Promise((resolve) => { confirm = resolve; });
+context.prksNavigate = (hash, opts) => { context.navigated = { hash, tabId: opts && opts.tabId }; };
+
+(async () => {
+  const stale = context.deletePlaylistFromDetail(ctx, playlist, 4);
+  await Promise.resolve();
+  context.owns = false;
+  ctx.generation = 9;
+  confirm(true);
+  await stale;
+  if (context.deleted) throw new Error('stale confirmation deleted the playlist');
+  if (context.navigated) throw new Error('stale confirmation navigated');
+  if (ctx.ui.playlistEditing !== true) throw new Error('stale confirmation cleared editing');
+  if (context.calls.length !== 1) throw new Error('expected one ownership check, got ' + context.calls.length);
+  const check = context.calls[0];
+  if (check.generation !== 4 || check.type !== 'playlist' || check.id !== 'PL-A' || check.route !== 'playlist-detail' || check.tabId !== 'side') {
+    throw new Error('ownership check args ' + JSON.stringify(check));
+  }
+
+  context.owns = true;
+  context.deleted = false;
+  context.navigated = null;
+  context.calls = [];
+  ctx.generation = 4;
+  ctx.ui.playlistEditing = true;
+  context.prksConfirmDestructive = async () => true;
+  await context.deletePlaylistFromDetail(ctx, playlist, 4);
+  if (!context.deleted) throw new Error('owned confirmation did not delete');
+  if (!context.navigated || context.navigated.tabId !== 'side' || context.navigated.hash !== '#/playlists') {
+    throw new Error('owned confirmation did not navigate the owner');
+  }
+  if (ctx.ui.playlistEditing !== false) throw new Error('owned delete left editing on');
+  if (context.calls.length < 2) throw new Error('expected a check before navigation');
+
+  context.owns = true;
+  context.deleted = false;
+  context.navigated = null;
+  ctx.ui.playlistEditing = true;
+  context.prksDeletePlaylistDurably = async () => {
+    context.owns = false;
+    context.deleted = true;
+  };
+  await context.deletePlaylistFromDetail(ctx, playlist, 4);
+  if (!context.deleted) throw new Error('delete should start while the route is still owned');
+  if (context.navigated) throw new Error('navigated after ownership was lost during delete');
+  if (ctx.ui.playlistEditing !== true) throw new Error('cleared editing after the route was replaced');
+})().catch((err) => {
+  console.error(err && err.stack || err);
+  process.exit(1);
+});
+"""
+        proc = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

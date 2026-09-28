@@ -166,9 +166,22 @@ function prksApplyPlaylistOfflineState(container) {
         // Cancel/Close and the rename Cancel are deliberately absent from the
         // selector: a user must always be able to leave an edit they can no
         // longer save, and the draft itself stays on screen either way.
-        if ('disabled' in el) el.disabled = !online;
-        if (online) el.removeAttribute('aria-disabled');
-        else el.setAttribute('aria-disabled', 'true');
+        if (!('disabled' in el)) return;
+        if (!online) {
+            el.disabled = true;
+            el.setAttribute('aria-disabled', 'true');
+            return;
+        }
+        /* Coming back online releases only this helper's lock. An in-flight
+         * Add keeps aria-busy, and a sibling Vue already disabled stays disabled. */
+        if (el.getAttribute('aria-busy') === 'true') {
+            el.removeAttribute('aria-disabled');
+            return;
+        }
+        if (el.getAttribute('aria-disabled') === 'true') {
+            el.disabled = false;
+            el.removeAttribute('aria-disabled');
+        }
     });
     const results = container.querySelector('#prks-playlist-add-results');
     if (results) {
@@ -391,9 +404,21 @@ async function deletePlaylistCanonical(playlistId) {
  * Product control for DELETE_PLAYLIST. Videos survive — only this playlist
  * identity and its ordered memberships are removed.
  */
-async function deletePlaylistFromDetail(ctx, pl) {
+async function deletePlaylistFromDetail(ctx, pl, generation) {
     const playlistId = pl && pl.id ? String(pl.id) : '';
     if (!playlistId) return;
+    const ownedGeneration = typeof generation === 'number'
+        ? generation
+        : (ctx && typeof ctx.generation === 'number' ? ctx.generation : null);
+    function stillOwnsPlaylist() {
+        if (!ctx || ownedGeneration == null) return false;
+        if (typeof prksTabContextOwnsEntityRoute === 'function') {
+            return !!prksTabContextOwnsEntityRoute(
+                ctx, ownedGeneration, 'playlist', playlistId, 'playlist-detail'
+            );
+        }
+        return typeof ctx.isCurrent === 'function' && ctx.isCurrent(ownedGeneration);
+    }
     const title = (pl && pl.title) ? String(pl.title) : 'this playlist';
     const itemCount = Array.isArray(pl && pl.items) ? pl.items.length : 0;
     const message = itemCount
@@ -409,9 +434,10 @@ async function deletePlaylistFromDetail(ctx, pl) {
                   confirmLabel: 'Delete playlist',
               })
             : true;
-    if (!confirmed) return;
+    if (!confirmed || !stillOwnsPlaylist()) return;
     try {
         await deletePlaylistCanonical(playlistId);
+        if (!stillOwnsPlaylist()) return;
         if (ctx && ctx.ui) ctx.ui.playlistEditing = false;
         if (typeof prksNavigate === 'function') {
             prksNavigate('#/playlists', { tabId: ctx && ctx.tabId });

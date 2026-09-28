@@ -338,6 +338,7 @@ interface Window {
   prksConsumeApiError?: (owner: object) => { message?: string } | null
   prksInferWorkSourceKind?: (work: unknown) => string
   prksOfflineRuntimeState?: () => string
+  prksOfflineRuntimeSubscribe?: (listener: (state: string) => void) => () => void
   prksAlertMessage?: (message: string, title?: string) => Promise<void> | void
   prksApplyPlaylistOfflineState?: (container: ParentNode | null) => void
   prksOpenNewPlaylistModalFromPlaylistsPage?: (owner?: object) => void
@@ -353,6 +354,7 @@ interface Window {
   deletePlaylistFromDetail?: (
     ctx: unknown,
     playlist: { id: string; title?: string; items?: ReadonlyArray<{ id: string }> },
+    generation?: number,
   ) => Promise<void>
   renderPlaylistDetail?: (ctx: unknown, playlist: unknown, container: HTMLElement) => void
   updatePanelContent?: (tab?: string) => void

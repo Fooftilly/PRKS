@@ -148,11 +148,15 @@ describe('Playlist intents', () => {
     expect((await intents.removeWork('PL-1', 'W9')).ok).toBe(true)
     expect(window.removeWorkFromPlaylist).toHaveBeenCalledWith('PL-1', 'W9')
     await intents.remove('PL-1', { id: 'PL-1', title: 'Course', items: [{ id: 'W1' }] })
-    expect(window.deletePlaylistFromDetail).toHaveBeenCalledWith(pane, {
-      id: 'PL-1',
-      title: 'Course',
-      items: [{ id: 'W1' }],
-    })
+    expect(window.deletePlaylistFromDetail).toHaveBeenCalledWith(
+      pane,
+      {
+        id: 'PL-1',
+        title: 'Course',
+        items: [{ id: 'W1' }],
+      },
+      2,
+    )
   })
 
   it('renames a video through the Work title family and ignores a stale completion', async () => {
