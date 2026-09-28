@@ -406,6 +406,75 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "    holder.archive = zipfile.ZipFile(path)\n"
                 "    holder.archive.extractall(dest)\n"
             ),
+            # Control flow: later loop iterations, handlers and match arms.
+            "for_loop_carried_over_prior_binding": (
+                "import zipfile\n"
+                "prev = None\n"
+                "for path in paths:\n"
+                "    if prev is not None:\n"
+                "        prev.extractall(dest)\n"
+                "    prev = zipfile.ZipFile(path)\n"
+            ),
+            "while_loop_carried_over_prior_binding": (
+                "import zipfile\n"
+                "prev = None\n"
+                "while more():\n"
+                "    if prev is not None:\n"
+                "        prev.extractall(dest)\n"
+                "    prev = zipfile.ZipFile(next_path())\n"
+            ),
+            "try_handler_sees_body_binding": (
+                "import zipfile\n"
+                "archive = load_bundle()\n"
+                "try:\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    validate()\n"
+                "except OSError:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "match_case_binding": (
+                "import zipfile\n"
+                "archive = load_bundle()\n"
+                "match kind:\n"
+                "    case 'zip':\n"
+                "        archive = zipfile.ZipFile(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            # Scope declarations and escaping walrus targets.
+            "global_declared_module_later_rebound": (
+                "import zipfile\n"
+                "def restore(path, dest):\n"
+                "    global zipfile\n"
+                "    zipfile.ZipFile(path).extractall(dest)\n"
+                "    zipfile = None\n"
+            ),
+            "global_archive_assigned_in_other_function": (
+                "import zipfile\n"
+                "archive = None\n"
+                "def open_archive(path):\n"
+                "    global archive\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "def restore(dest):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "nonlocal_archive_assigned_in_closure": (
+                "import zipfile\n"
+                "def restore(path, dest):\n"
+                "    archive = None\n"
+                "    def open_archive():\n"
+                "        nonlocal archive\n"
+                "        archive = zipfile.ZipFile(path)\n"
+                "    open_archive()\n"
+                "    def run():\n"
+                "        archive.extractall(dest)\n"
+                "    run()\n"
+            ),
+            "comprehension_walrus_escapes": (
+                "import zipfile\n"
+                "archive = load_bundle()\n"
+                "[(archive := zipfile.ZipFile(p)) for p in paths]\n"
+                "archive.extractall(dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -485,6 +554,24 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "from zipfile import ZipFile as Z\n"
                 "Z = Bundle\n"
                 "archive = Z(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            # A rebinding replaces the archive on its own branch, and a join
+            # where every path rebinds drops it.
+            "branch_local_rebinding": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "if use_bundle:\n"
+                "    archive = load_bundle()\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "every_branch_rebinds": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "if use_bundle:\n"
+                "    archive = load_bundle()\n"
+                "else:\n"
+                "    archive = load_other()\n"
                 "archive.extractall(dest)\n"
             ),
             # Archive attributes are per class, per attribute name.

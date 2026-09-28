@@ -145,21 +145,34 @@ class _Scope:
     ``summary`` holds every binding made anywhere in the scope body, collected
     before the body is walked. Nested scopes resolve enclosing names through it
     because a function body runs after its enclosing scope has bound them, so
-    imports placed after a ``def`` still resolve. ``current`` holds bindings
-    reached so far in source order and serves the scope being walked: a
-    definite rebinding replaces a name's bindings, while a rebinding inside a
-    conditional block (if/loop/try/match) only adds to them. A name the scope
-    binds but has not reached yet (e.g. a loop-carried use) falls back to
-    ``summary``. Every set is a may-alias set: any archive entry classifies.
+    imports placed after a ``def`` still resolve. ``current`` holds the
+    bindings that may reach the statement being walked: a rebinding replaces a
+    name's bindings on its own control-flow path, and branch states are
+    unioned where if/loop/try/match paths join; loop bodies also see bindings
+    from later iterations. A name the scope binds but has not reached yet
+    falls back to ``summary``. Every set is a may-alias set: any archive entry
+    classifies. ``global``/``nonlocal`` names are bound in their owner scope.
     """
 
-    __slots__ = ("class_info", "summary", "current", "class_registry")
+    __slots__ = (
+        "class_info",
+        "is_comprehension",
+        "summary",
+        "current",
+        "declared",
+        "class_registry",
+    )
 
-    def __init__(self, *, class_info: _ClassInfo | None = None) -> None:
+    def __init__(
+        self, *, class_info: _ClassInfo | None = None, is_comprehension: bool = False
+    ) -> None:
         # Set for class bodies; ``None`` for every other scope kind.
         self.class_info = class_info
+        self.is_comprehension = is_comprehension
         self.summary: dict[str, set[_Binding]] = {}
         self.current: dict[str, set[_Binding]] = {}
+        # ``global``/``nonlocal`` name -> the scope that owns its bindings.
+        self.declared: dict[str, _Scope] = {}
         # Only used on the module scope: ClassDef node id -> its _ClassInfo.
         self.class_registry: dict[int, _ClassInfo] = {}
 
@@ -469,15 +482,49 @@ def _iter_scope_nodes(body: list[ast.stmt]) -> Iterable[ast.AST]:
         stack.extend(reversed(children))
 
 
+_State = dict[str, set[_Binding]]
+
+
+def _copy_state(state: _State) -> _State:
+    return {name: set(bindings) for name, bindings in state.items()}
+
+
+def _merge_states(*states: _State) -> _State:
+    merged: _State = {}
+    for state in states:
+        for name, bindings in state.items():
+            merged.setdefault(name, set()).update(bindings)
+    return merged
+
+
 class _InvariantVisitor(ast.NodeVisitor):
     """Walk the tree, resolving os/shutil/zipfile bindings in the current lexical scope."""
 
     def __init__(self, relpath: str) -> None:
         self.relpath = relpath
         self.scopes: list[_Scope] = []
-        # Conditional-block nesting depth, one counter per open scope.
-        self._depth: list[int] = []
         self.findings: list[Finding] = []
+
+    def _declared_targets(self, nodes: list[ast.AST]) -> dict[str, _Scope]:
+        """``global`` / ``nonlocal`` names of the innermost scope -> owning scope."""
+        declared: dict[str, _Scope] = {}
+        for node in nodes:
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    declared[name] = self.scopes[0]
+            elif isinstance(node, ast.Nonlocal):
+                for name in node.names:
+                    owner = next(
+                        (
+                            scope
+                            for scope in reversed(self.scopes[1:-1])
+                            if not scope.is_class and name in scope.summary
+                        ),
+                        None,
+                    )
+                    if owner is not None:
+                        declared[name] = owner
+        return declared
 
     def _push(
         self,
@@ -485,27 +532,28 @@ class _InvariantVisitor(ast.NodeVisitor):
         *,
         class_info: _ClassInfo | None = None,
         params: _Pairs | None = None,
+        is_comprehension: bool = False,
     ) -> None:
-        scope = _Scope(class_info=class_info)
+        scope = _Scope(class_info=class_info, is_comprehension=is_comprehension)
         self.scopes.append(scope)
-        self._depth.append(0)
         for name, bindings in params or ():
             scope.summary[name] = set(bindings)
             scope.current[name] = set(bindings)
         nodes = list(_iter_scope_nodes(body))
+        scope.declared = self._declared_targets(nodes)
         # Imports first so later assignments in the scope can resolve them.
         for pass_imports in (True, False):
             for node in nodes:
                 if isinstance(node, (ast.Import, ast.ImportFrom)) != pass_imports:
                     continue
                 for name, bindings in _binding_pairs(node, self.scopes):
-                    scope.summary.setdefault(name, set()).update(bindings)
+                    owner = scope.declared.get(name, scope)
+                    owner.summary.setdefault(name, set()).update(bindings)
         for name, bindings in scope.summary.items():
             self._record_archive_attr(name, bindings)
 
     def _pop(self) -> None:
         self.scopes.pop()
-        self._depth.pop()
 
     def _record_archive_attr(self, name: str, bindings: set[_Binding]) -> None:
         """Remember ``self.x = <archive>`` / class-body ``x = <archive>`` on the class."""
@@ -520,23 +568,46 @@ class _InvariantVisitor(ast.NodeVisitor):
         for info in _class_infos(_resolve(self.scopes, root)):
             info.archive_attrs.add(attr)
 
-    def _bind(self, pairs: _Pairs) -> None:
-        current = self.scopes[-1].current
+    def _bind(self, pairs: _Pairs, *, may: bool = False) -> None:
+        """Bind in the innermost scope; ``may`` merges instead of replacing."""
+        scope = self.scopes[-1]
         for name, bindings in pairs:
             self._record_archive_attr(name, bindings)
-            if self._depth[-1] == 0:
-                current[name] = set(bindings)
+            owner = scope.declared.get(name, scope)
+            if owner is not scope:
+                # ``global``/``nonlocal``: the binding belongs to the owner.
+                owner.summary.setdefault(name, set()).update(bindings)
+            elif may:
+                scope.current.setdefault(name, set()).update(bindings)
             else:
-                current.setdefault(name, set()).update(bindings)
+                scope.current[name] = set(bindings)
 
     def _bind_node(self, node: ast.AST) -> None:
         self._bind(_binding_pairs(node, self.scopes))
 
-    def _visit_block(self, stmts: list[ast.stmt] | list[ast.AST]) -> None:
-        self._depth[-1] += 1
+    # --- control flow: each branch starts from the state before it, and the
+    # --- branch states are unioned where control flow joins again.
+
+    def _run_branch(self, start: _State, stmts: list[ast.stmt] | list[ast.AST]) -> _State:
+        scope = self.scopes[-1]
+        scope.current = _copy_state(start)
         for stmt in stmts:
             self.visit(stmt)
-        self._depth[-1] -= 1
+        return scope.current
+
+    def _loop_entry_state(self, body: list[ast.stmt]) -> _State:
+        """State at the top of a loop body, including later-iteration bindings."""
+        scope = self.scopes[-1]
+        state = _copy_state(scope.current)
+        for node in _iter_scope_nodes(body):
+            for name, _ in _binding_pairs(node, self.scopes):
+                if name in scope.summary:
+                    state.setdefault(name, set()).update(scope.summary[name])
+        return state
+
+    def _finish_loop(self, entry: _State, body_end: _State, orelse: list[ast.stmt]) -> None:
+        after = _merge_states(entry, body_end)
+        self.scopes[-1].current = _merge_states(after, self._run_branch(after, orelse))
 
     def visit_Module(self, node: ast.Module) -> None:
         self._push(node.body)
@@ -621,7 +692,7 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _visit_comprehension(
         self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
     ) -> None:
-        self._push([])
+        self._push([], is_comprehension=True)
         for generator in node.generators:
             self.visit(generator.iter)
             self._bind(_loop_target_pairs(generator.target, generator.iter, self.scopes))
@@ -659,15 +730,29 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         self.generic_visit(node)
-        self._bind_node(node)
+        pairs = _binding_pairs(node, self.scopes)
+        depth = len(self.scopes)
+        while depth > 1 and self.scopes[depth - 1].is_comprehension:
+            depth -= 1
+        if depth == len(self.scopes):
+            self._bind(pairs)
+            return
+        # A walrus inside a comprehension binds in the containing scope, and
+        # may run any number of times, so it merges into that scope's state.
+        inner = self.scopes[depth:]
+        del self.scopes[depth:]
+        try:
+            self._bind(pairs, may=True)
+        finally:
+            self.scopes.extend(inner)
 
     def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
         self.visit(node.iter)
-        self._depth[-1] += 1
+        entry = self._loop_entry_state(node.body)
+        self.scopes[-1].current = _copy_state(entry)
         self._bind_node(node)
-        self._depth[-1] -= 1
-        self._visit_block(node.body)
-        self._visit_block(node.orelse)
+        body_end = self._run_branch(self.scopes[-1].current, node.body)
+        self._finish_loop(entry, body_end, node.orelse)
 
     def visit_For(self, node: ast.For) -> None:
         self._visit_loop(node)
@@ -676,17 +761,29 @@ class _InvariantVisitor(ast.NodeVisitor):
         self._visit_loop(node)
 
     def visit_While(self, node: ast.While) -> None:
+        entry = self._loop_entry_state(node.body)
+        self.scopes[-1].current = _copy_state(entry)
         self.visit(node.test)
-        self._visit_block(node.body)
-        self._visit_block(node.orelse)
+        body_end = self._run_branch(entry, node.body)
+        self._finish_loop(entry, body_end, node.orelse)
 
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
-        self._visit_block(node.body)
-        self._visit_block(node.orelse)
+        before = _copy_state(self.scopes[-1].current)
+        body_end = self._run_branch(before, node.body)
+        orelse_end = self._run_branch(before, node.orelse)
+        self.scopes[-1].current = _merge_states(body_end, orelse_end)
 
     def visit_Try(self, node: ast.Try) -> None:
-        self._visit_block([*node.body, *node.handlers, *node.orelse, *node.finalbody])
+        before = _copy_state(self.scopes[-1].current)
+        body_end = self._run_branch(before, node.body)
+        # A handler can start anywhere in the body.
+        handler_start = _merge_states(before, body_end)
+        handler_ends = [self._run_branch(handler_start, [h]) for h in node.handlers]
+        orelse_end = self._run_branch(body_end, node.orelse)
+        self.scopes[-1].current = _merge_states(orelse_end, *handler_ends)
+        for stmt in node.finalbody:
+            self.visit(stmt)
 
     visit_TryStar = visit_Try
 
@@ -699,7 +796,10 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_Match(self, node: ast.Match) -> None:
         self.visit(node.subject)
-        self._visit_block(node.cases)
+        before = _copy_state(self.scopes[-1].current)
+        case_ends = [self._run_branch(before, [case]) for case in node.cases]
+        # No case may match, so the state before the match also flows on.
+        self.scopes[-1].current = _merge_states(before, *case_ends)
 
     def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
         for item in node.items:
