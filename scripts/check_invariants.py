@@ -79,6 +79,18 @@ OS_FSYNC_ALLOWLIST = {
     "backend/fs_durability.py",
 }
 
+# INV-BACKUP-001: ZipFile.extractall() trusts member names/types and is never
+# acceptable on backup input. There is intentionally no production allowlist.
+# A receiver is classified only when it provably originates from one of these
+# zipfile classes (constructor call, a local name bound to one, or a
+# parameter/variable annotated with one); unrelated ``.extractall()`` methods
+# are not matched. Instance attributes (``self.archive``), containers, and
+# values returned from helper functions are not tracked.
+ZIPFILE_ARCHIVE_CLASSES = frozenset({"ZipFile", "PyZipFile"})
+BANNED_ZIPFILE_METHOD = "extractall"
+
+_TRACKED_MODULES = frozenset({"os", "shutil", "zipfile"})
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -94,28 +106,33 @@ class Finding:
 class _Scope:
     """One lexical import scope (module, class body, or function)."""
 
-    __slots__ = ("modules", "names")
+    __slots__ = ("modules", "names", "zip_archives")
 
     def __init__(self) -> None:
         self.modules: dict[str, str] = {}
         self.names: dict[str, tuple[str, str]] = {}
+        # Local name -> whether this scope binds it to a zipfile archive.
+        # ``False`` records a non-archive local binding that shadows an
+        # enclosing one. Bindings are sticky within one scope (no flow
+        # analysis): any archive binding taints the name for the scope.
+        self.zip_archives: dict[str, bool] = {}
 
 
 def _bind_import(scope: _Scope, node: ast.Import) -> None:
     for item in node.names:
-        if item.name in {"os", "shutil"}:
+        if item.name in _TRACKED_MODULES:
             scope.modules[item.asname or item.name] = item.name
             continue
         # ``import os.path`` (no ``as``) still binds the top-level name ``os``
         # to the ``os`` package. ``import os.path as p`` binds only ``p``.
         if item.asname is None:
             top = item.name.split(".", 1)[0]
-            if top in {"os", "shutil"}:
+            if top in _TRACKED_MODULES:
                 scope.modules[top] = top
 
 
 def _bind_import_from(scope: _Scope, node: ast.ImportFrom) -> None:
-    if node.module not in {"os", "shutil"}:
+    if node.module not in _TRACKED_MODULES:
         return
     for item in node.names:
         if item.name == "*":
@@ -148,8 +165,57 @@ def _call_identity(node: ast.Call, scopes: list[_Scope]) -> tuple[str, str] | No
     return None
 
 
+def _is_zip_class_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
+    """``zipfile.ZipFile`` / ``z.ZipFile`` / ``ZipFile`` / ``Z`` (import alias)."""
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return (
+            _lookup_module(scopes, node.value.id) == "zipfile"
+            and node.attr in ZIPFILE_ARCHIVE_CLASSES
+        )
+    if isinstance(node, ast.Name):
+        identity = _lookup_name(scopes, node.id)
+        return (
+            identity is not None
+            and identity[0] == "zipfile"
+            and identity[1] in ZIPFILE_ARCHIVE_CLASSES
+        )
+    return False
+
+
+def _is_zip_constructor(node: ast.expr, scopes: list[_Scope]) -> bool:
+    return isinstance(node, ast.Call) and _is_zip_class_expr(node.func, scopes)
+
+
+def _annotation_mentions_zip(node: ast.expr | None, scopes: list[_Scope]) -> bool:
+    """True for ``ZipFile``, ``ZipFile | None``, ``Optional[ZipFile]``, or a string form."""
+    if node is None:
+        return False
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            node = ast.parse(node.value, mode="eval").body
+        except SyntaxError:
+            return False
+    return any(
+        isinstance(sub, ast.expr) and _is_zip_class_expr(sub, scopes)
+        for sub in ast.walk(node)
+    )
+
+
+def _lookup_zip_archive(scopes: list[_Scope], name: str) -> bool:
+    for scope in reversed(scopes):
+        if name in scope.zip_archives:
+            return scope.zip_archives[name]
+    return False
+
+
+def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
+    if isinstance(node, ast.Name):
+        return _lookup_zip_archive(scopes, node.id)
+    return _is_zip_constructor(node, scopes)
+
+
 class _InvariantVisitor(ast.NodeVisitor):
-    """Walk the tree, resolving os/shutil aliases in the current lexical scope."""
+    """Walk the tree, resolving os/shutil/zipfile aliases in the current lexical scope."""
 
     def __init__(self, relpath: str) -> None:
         self.relpath = relpath
@@ -162,15 +228,105 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _pop(self) -> None:
         self.scopes.pop()
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        # Decorators, defaults and annotations evaluate in the enclosing scope.
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        args = node.args
+        params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        params.extend(a for a in (args.vararg, args.kwarg) if a is not None)
+        for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
+            self.visit(default)
+        for param in params:
+            if param.annotation is not None:
+                self.visit(param.annotation)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+        zip_params = {
+            param.arg: _annotation_mentions_zip(param.annotation, self.scopes)
+            for param in params
+        }
         self._push()
-        self.generic_visit(node)
+        # Parameters are locals: they shadow enclosing archive bindings unless
+        # annotated as a zipfile archive themselves.
+        self.scopes[-1].zip_archives.update(zip_params)
+        for stmt in node.body:
+            self.visit(stmt)
         self._pop()
 
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._push()
+        self._visit_function(node)
+
+    def _bind_target(self, target: ast.expr, is_archive: bool) -> None:
+        if not isinstance(target, ast.Name):
+            return
+        bindings = self.scopes[-1].zip_archives
+        if is_archive:
+            bindings[target.id] = True
+        else:
+            bindings.setdefault(target.id, False)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        is_archive = _is_zip_archive_expr(node.value, self.scopes)
+        for target in node.targets:
+            self._bind_target(target, is_archive)
         self.generic_visit(node)
-        self._pop()
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        is_archive = _annotation_mentions_zip(node.annotation, self.scopes) or (
+            node.value is not None and _is_zip_archive_expr(node.value, self.scopes)
+        )
+        self._bind_target(node.target, is_archive)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self._bind_target(node.target, _is_zip_archive_expr(node.value, self.scopes))
+        self.generic_visit(node)
+
+    def _bind_with_items(self, items: list[ast.withitem]) -> None:
+        for item in items:
+            if item.optional_vars is not None:
+                self._bind_target(
+                    item.optional_vars,
+                    _is_zip_archive_expr(item.context_expr, self.scopes),
+                )
+
+    def visit_With(self, node: ast.With) -> None:
+        self._bind_with_items(node.items)
+        self.generic_visit(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self._bind_with_items(node.items)
+        self.generic_visit(node)
+
+    def _report_zip_extractall(self, node: ast.AST) -> None:
+        self.findings.append(
+            Finding(
+                "INV-BACKUP-001",
+                self.relpath,
+                getattr(node, "lineno", 1),
+                (
+                    "direct ZipFile.extractall() is forbidden in production PRKS code; "
+                    "it trusts archive member names and types. Restore must use the "
+                    "validated, staged per-member extraction in backend.backup_restore"
+                ),
+            )
+        )
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        # Match the attribute itself so method references (``f = zf.extractall``)
+        # and unbound calls (``ZipFile.extractall(zf, dest)``) are covered too.
+        if node.attr == BANNED_ZIPFILE_METHOD and (
+            _is_zip_archive_expr(node.value, self.scopes)
+            or _is_zip_class_expr(node.value, self.scopes)
+        ):
+            self._report_zip_extractall(node)
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._push()
@@ -184,6 +340,15 @@ class _InvariantVisitor(ast.NodeVisitor):
         _bind_import_from(self.scopes[-1], node)
 
     def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == BANNED_ZIPFILE_METHOD
+            and _is_zip_archive_expr(node.args[0], self.scopes)
+        ):
+            self._report_zip_extractall(node)
         identity = _call_identity(node, self.scopes)
         if identity is not None:
             module, name = identity

@@ -127,6 +127,304 @@ class EngineeringInvariantTests(unittest.TestCase):
         self.assertEqual([f.code for f in blocked_feature], ["INV-DURABILITY-002"])
         self.assertEqual([f.code for f in blocked_pdf], ["INV-DURABILITY-002"])
 
+    # --- INV-BACKUP-001: ZipFile.extractall() ------------------------------
+
+    def _backup_codes(self, source: str, relpath: str = "backend/example.py") -> list[str]:
+        return [f.code for f in checker.check_source(source, relpath)]
+
+    def test_blocks_zipfile_extractall_binding_forms(self):
+        """Every realistic ZipFile import/binding shape must fail the gate."""
+        cases = {
+            "module_with": (
+                "import zipfile\n"
+                "with zipfile.ZipFile(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "module_alias_with": (
+                "import zipfile as z\n"
+                "with z.ZipFile(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "from_import_with": (
+                "from zipfile import ZipFile\n"
+                "with ZipFile(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "class_alias_assign": (
+                "from zipfile import ZipFile as Z\n"
+                "archive = Z(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "module_assign": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "module_chained": (
+                "import zipfile\n"
+                "zipfile.ZipFile(path).extractall(dest)\n"
+            ),
+            "from_import_chained": (
+                "from zipfile import ZipFile\n"
+                "ZipFile(path).extractall(dest)\n"
+            ),
+            "annotated_assign": (
+                "import zipfile\n"
+                "archive: zipfile.ZipFile = zipfile.ZipFile(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "walrus": (
+                "import zipfile\n"
+                "if (archive := zipfile.ZipFile(path)):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "multi_item_with": (
+                "import zipfile\n"
+                "with open(log) as fh, zipfile.ZipFile(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "async_with": (
+                "import zipfile\n"
+                "async def restore():\n"
+                "    async with zipfile.ZipFile(path) as archive:\n"
+                "        archive.extractall(dest)\n"
+            ),
+            "annotated_parameter": (
+                "import zipfile\n"
+                "def restore(archive: zipfile.ZipFile, dest):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "optional_parameter": (
+                "from __future__ import annotations\n"
+                "from zipfile import ZipFile\n"
+                "def restore(archive: ZipFile | None, dest):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "string_annotation_parameter": (
+                "import zipfile\n"
+                "def restore(archive: 'zipfile.ZipFile', dest):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "unbound_method_via_module": (
+                "import zipfile\n"
+                "zipfile.ZipFile.extractall(archive, dest)\n"
+            ),
+            "unbound_method_via_class_alias": (
+                "from zipfile import ZipFile as Z\n"
+                "Z.extractall(archive, dest)\n"
+            ),
+            "method_reference_escape": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "extract = archive.extractall\n"
+                "extract(dest)\n"
+            ),
+            "getattr_literal": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "getattr(archive, 'extractall')(dest)\n"
+            ),
+            "pyzipfile_subclass": (
+                "import zipfile\n"
+                "with zipfile.PyZipFile(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "import_inside_function": (
+                "def restore(path, dest):\n"
+                "    import zipfile as zf_mod\n"
+                "    with zf_mod.ZipFile(path) as archive:\n"
+                "        archive.extractall(dest)\n"
+            ),
+            "closure_reads_enclosing_binding": (
+                "import zipfile\n"
+                "def restore(path, dest):\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    def run():\n"
+                "        archive.extractall(dest)\n"
+                "    run()\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(form=label):
+                findings = checker.check_source(source, "backend/example.py")
+                self.assertEqual([f.code for f in findings], ["INV-BACKUP-001"])
+                message = findings[0].message
+                self.assertIn("ZipFile.extractall()", message)
+                self.assertIn("forbidden", message)
+                self.assertIn("backup_restore", message)
+
+    def test_zipfile_extractall_has_no_production_allowlist(self):
+        """Even the backup/restore module itself may not call extractall()."""
+        source = (
+            "import zipfile\n"
+            "with zipfile.ZipFile(path) as archive:\n"
+            "    archive.extractall(dest)\n"
+        )
+        for relpath in (
+            "backend/backup_restore.py",
+            "backend/fs_durability.py",
+            "backend/server.py",
+            "prks_app.py",
+        ):
+            with self.subTest(path=relpath):
+                self.assertEqual(self._backup_codes(source, relpath), ["INV-BACKUP-001"])
+
+    def test_zipfile_extractall_does_not_classify_unrelated_receivers(self):
+        """High-signal rule: only receivers proven to come from zipfile."""
+        cases = {
+            # An application object that happens to expose extractall().
+            "unrelated_object": (
+                "class Bundle:\n"
+                "    def extractall(self, dest):\n"
+                "        pass\n"
+                "Bundle().extractall(dest)\n"
+            ),
+            # A ZipFile-named class that is not zipfile's.
+            "shadowing_local_class": (
+                "class ZipFile:\n"
+                "    def extractall(self, dest):\n"
+                "        pass\n"
+                "ZipFile(path).extractall(dest)\n"
+            ),
+            # tarfile is a different API and is not part of this invariant.
+            "tarfile_archive": (
+                "import tarfile\n"
+                "with tarfile.open(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            # Validated per-member reads are the approved pattern.
+            "validated_member_reads": (
+                "import zipfile\n"
+                "with zipfile.ZipFile(path) as archive:\n"
+                "    for info in archive.infolist():\n"
+                "        data = archive.read(info)\n"
+                "        archive.extract(info, dest)\n"
+            ),
+            # zipfile imported but extractall() receiver is unrelated.
+            "zipfile_imported_unrelated_receiver": (
+                "import zipfile\n"
+                "archive = load_bundle(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "unrelated_getattr": (
+                "import zipfile\n"
+                "getattr(bundle, 'extractall')(dest)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(form=label):
+                self.assertEqual(self._backup_codes(source), [])
+
+    def test_zipfile_binding_does_not_leak_across_functions(self):
+        """A ZipFile binding in one function must not taint a sibling scope."""
+        cases = {
+            "sibling_parameter": (
+                "import zipfile\n"
+                "def open_archive(path):\n"
+                "    archive = zipfile.ZipFile(path)\n"
+                "    return archive.namelist()\n"
+                "\n"
+                "def unpack(archive, dest):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "sibling_local": (
+                "import zipfile\n"
+                "def open_archive(path):\n"
+                "    with zipfile.ZipFile(path) as archive:\n"
+                "        return archive.namelist()\n"
+                "\n"
+                "def unpack(dest):\n"
+                "    archive = load_bundle()\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "function_import_does_not_leak": (
+                "def open_archive(path):\n"
+                "    from zipfile import ZipFile\n"
+                "    return ZipFile(path).namelist()\n"
+                "\n"
+                "class ZipFile:\n"
+                "    pass\n"
+                "\n"
+                "def unpack(path, dest):\n"
+                "    ZipFile(path).extractall(dest)\n"
+            ),
+            "module_binding_shadowed_by_parameter": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "def unpack(archive, dest):\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "module_binding_shadowed_by_local": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path)\n"
+                "def unpack(dest):\n"
+                "    archive = load_bundle()\n"
+                "    archive.extractall(dest)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(form=label):
+                self.assertEqual(self._backup_codes(source), [])
+
+        # The same source still fails when the extraction sits in the scope
+        # that owns the ZipFile binding.
+        in_scope = (
+            "import zipfile\n"
+            "def open_archive(path, dest):\n"
+            "    archive = zipfile.ZipFile(path)\n"
+            "    archive.extractall(dest)\n"
+            "\n"
+            "def unpack(archive, dest):\n"
+            "    archive.extractall(dest)\n"
+        )
+        findings = checker.check_source(in_scope, "backend/example.py")
+        self.assertEqual([(f.code, f.line) for f in findings], [("INV-BACKUP-001", 4)])
+
+    def test_repo_scan_reports_zipfile_extractall_in_backend_and_prks_app(self):
+        source = (
+            "from zipfile import ZipFile as Z\n"
+            "archive = Z('backup.zip')\n"
+            "archive.extractall('out')\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "backend" / "services").mkdir(parents=True)
+            (root / "backend" / "services" / "restore_helper.py").write_text(
+                source, encoding="utf-8"
+            )
+            (root / "prks_app.py").write_text(source, encoding="utf-8")
+            findings = checker.check_repo(root)
+            self.assertEqual(
+                sorted((f.code, f.path, f.line) for f in findings),
+                [
+                    ("INV-BACKUP-001", "backend/services/restore_helper.py", 3),
+                    ("INV-BACKUP-001", "prks_app.py", 3),
+                ],
+            )
+
+    def test_repo_scan_ignores_zipfile_extractall_in_tests_and_scripts(self):
+        """Test fixtures and tooling may unpack archives; they are not production."""
+        source = (
+            "import zipfile\n"
+            "with zipfile.ZipFile('fixture.zip') as archive:\n"
+            "    archive.extractall('tmp')\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "backend").mkdir()
+            (root / "tests" / "support").mkdir(parents=True)
+            (root / "scripts").mkdir()
+            (root / "tests" / "support" / "archive_fixture.py").write_text(
+                source, encoding="utf-8"
+            )
+            (root / "scripts" / "unpack_fixture.py").write_text(source, encoding="utf-8")
+            self.assertEqual(checker.check_repo(root), [])
+            scanned = [
+                p.relative_to(root).as_posix()
+                for p in checker.iter_production_python(root)
+            ]
+            self.assertEqual(scanned, [])
+
     def test_current_backend_passes(self):
         findings = checker.check_repo(_ROOT)
         self.assertEqual(findings, [], "\n".join(f.render() for f in findings))
