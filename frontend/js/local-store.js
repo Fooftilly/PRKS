@@ -1153,21 +1153,32 @@
             }
         }
 
-        async function insertEnvelopeIn(request, envelope, localContext) {
+        async function insertEnvelopeIn(request, envelope, localContext, stillOwns) {
             const deviceId = await resolveDeviceIdIn(request);
+            /* Each await below can outlive the editor. A write that already
+             * happened in this transaction must not return into setResult. */
+            abandonUnownedWrite(stillOwns, true);
             const row = await request(STORE_METADATA, s => s.get(META_SEQUENCE));
+            abandonUnownedWrite(stillOwns, true);
             const sequence = (row ? row.value : 0) + 1;
             const prepared = normalizeOperationEnvelope(envelope, {
                 opId: uuid(), deviceId, sequence, createdAt: nowIso(),
             });
             await assertDependenciesUsableIn(request, prepared);
+            abandonUnownedWrite(stillOwns, true);
             if (localContext != null) {
                 if (jsonByteLength(localContext) > 4096) throw localStoreError('invalid_context', 'Local context too large.');
                 prepared.local_context = JSON.parse(JSON.stringify(localContext));
             }
             await request(STORE_METADATA, s => s.put({ key: META_SEQUENCE, value: sequence }));
-            if (await request(STORE_OPERATIONS, s => s.get(prepared.op_id))) throw localStoreError('duplicate_op_id', 'Duplicate operation id.');
+            abandonUnownedWrite(stillOwns, true);
+            if (await request(STORE_OPERATIONS, s => s.get(prepared.op_id))) {
+                abandonUnownedWrite(stillOwns, true);
+                throw localStoreError('duplicate_op_id', 'Duplicate operation id.');
+            }
+            abandonUnownedWrite(stillOwns, true);
             await request(STORE_OPERATIONS, s => s.put(prepared));
+            abandonUnownedWrite(stillOwns, true);
             return prepared;
         }
 
@@ -1867,6 +1878,18 @@
             return typeof stillOwns !== 'function' || stillOwns() === true;
         }
 
+        /* A normal return commits. Once a delete or insert has run, losing
+         * the session has to reject so the transaction aborts and the row
+         * comes back. Before any write, returning is enough. */
+        function abandonUnownedWrite(stillOwns, mutated) {
+            if (callerStillOwns(stillOwns)) return false;
+            if (mutated) {
+                throw localStoreError('ownership_lost',
+                    'This edit session ended before the change was stored.');
+            }
+            return true;
+        }
+
         function savePersonMetadataFields(personId, changes, base, stillOwns) {
             if (!isNonBlankString(personId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid profile save.'));
@@ -1892,6 +1915,7 @@
                 const createOp = personCreationDependency(rows, personId,
                     'their profile cannot be edited');
                 const written = [];
+                let mutated = false;
                 for (const field of Object.keys(changes)) {
                     const desired = changes[field];
                     const observed = base[field];
@@ -1907,17 +1931,23 @@
                             throw localStoreError('scope_busy', 'This field is syncing or needs resolution.');
                         }
                         if (existing.payload.value === desired) { written.push(existing); continue; }
-                        if (!callerStillOwns(stillOwns)) { setResult(written); return; }
+                        if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                         await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        mutated = true;
+                        /* The delete already changed a row. Returning here
+                         * would commit that removal and skip the replacement. */
+                        abandonUnownedWrite(stillOwns, true);
                     }
                     if (desired === observed.value) continue;
-                    if (!callerStillOwns(stillOwns)) { setResult(written); return; }
+                    if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                     written.push(await insertEnvelopeIn(request, {
                         operation: 'SET_PERSON_METADATA_FIELD', entity_type: 'person',
                         entity_id: personId, payload: { field, value: desired },
                         base_revision: observed.revision,
                         depends_on: createOp ? [createOp.op_id] : [],
-                    }, null));
+                    }, null, stillOwns));
+                    mutated = true;
+                    abandonUnownedWrite(stillOwns, true);
                 }
                 setResult(written);
             });
@@ -3552,6 +3582,7 @@
                         PERSON_GROUP_MEMBER_OPERATIONS.indexOf(r.operation) !== -1 &&
                         r.entity_type === 'person-group' && r.entity_id === groupId &&
                         r.payload.person_id === personId && r.status !== STATUS_ACKNOWLEDGED);
+                    let mutated = false;
                     if (existing) {
                         if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                             throw localStoreError('scope_busy',
@@ -3559,24 +3590,30 @@
                         }
                         const already = existing.operation === 'ADD_PERSON_GROUP_MEMBER';
                         if (already === desired) { setResult(existing); return; }
-                        if (!callerStillOwns(stillOwns)) { setResult(null); return; }
+                        if (abandonUnownedWrite(stillOwns, mutated)) { setResult(null); return; }
                         await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                        mutated = true;
+                        /* Same as a field replacement: the delete must not
+                         * commit without the membership that replaces it. */
+                        abandonUnownedWrite(stillOwns, true);
                     }
                     if (desired === observed.present) { setResult(null); return; }
-                    if (!callerStillOwns(stillOwns)) { setResult(null); return; }
+                    if (abandonUnownedWrite(stillOwns, mutated)) { setResult(null); return; }
                     assertPersonIsNotBeingDeleted(rows, personId, 'put in a group');
                     const createOp = personGroupCreationDependency(rows, groupId,
                         'nobody can be added to it');
                     const personOp = personCreationDependency(rows, personId,
                         'they cannot be added to a group');
-                    setResult(await insertEnvelopeIn(request, {
+                    const inserted = await insertEnvelopeIn(request, {
                         operation: desired ? 'ADD_PERSON_GROUP_MEMBER'
                             : 'REMOVE_PERSON_GROUP_MEMBER',
                         entity_type: 'person-group', entity_id: groupId,
                         payload: { person_id: personId },
                         base_revision: observed.revision,
                         depends_on: [createOp, personOp].filter(Boolean).map(op => op.op_id),
-                    }, null));
+                    }, null, stillOwns);
+                    abandonUnownedWrite(stillOwns, true);
+                    setResult(inserted);
                 });
         }
 

@@ -512,11 +512,18 @@
     async function setMembershipDurably(groupId, personId, present, observed, stillOwns) {
         if (ownershipDropped(stillOwns)) return null;
         const runtime = sync();
-        const op = await runtime.store.setPersonGroupMember(
-            groupId, personId, present, observed, stillOwns);
-        /* A null from "already the observed state" still notifies. A null
-         * because the session ended during the store read must not. */
-        if (ownershipDropped(stillOwns)) return op;
+        let op;
+        try {
+            op = await runtime.store.setPersonGroupMember(
+                groupId, personId, present, observed, stillOwns);
+        } catch (error) {
+            /* Rejected means the transaction aborted. A session that ended
+             * during the write is not a membership error to show. */
+            if (ownershipDropped(stillOwns)) return null;
+            throw error;
+        }
+        /* Resolved means the membership transaction committed, including a
+         * no-op. Notify even when the editor that started it has moved on. */
         if (typeof runtime.changed === 'function') runtime.changed();
         return op;
     }

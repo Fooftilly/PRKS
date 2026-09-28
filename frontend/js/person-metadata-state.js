@@ -336,12 +336,20 @@
         if (!sync || !sync.store || typeof sync.store.savePersonMetadataFields !== 'function') {
             throw new Error('Profile editing is not available.');
         }
-        const written = await sync.store.savePersonMetadataFields(
-            personId, changes, base, stillOwns);
-        /* The store re-checks after its own read. When that session is gone,
-         * nothing was written, and this completion must not refresh names or
-         * wake sync for whoever is on screen now. */
-        if (typeof stillOwns === 'function' && !stillOwns()) return written;
+        let written;
+        try {
+            written = await sync.store.savePersonMetadataFields(
+                personId, changes, base, stillOwns);
+        } catch (error) {
+            /* Rejected means the transaction aborted, so there is no row to
+             * publish. A session that ended during the write is not a failure
+             * to show. */
+            if (typeof stillOwns === 'function' && !stillOwns()) return [];
+            throw error;
+        }
+        /* The promise resolved, so the transaction committed. Ownership can
+         * end in that gap. The row is already stored, and the name map and
+         * sync notification are what make it visible. */
         /* Refresh the synchronous name map HERE, not only at route hydration.
          * A rename made on the Person page has to be visible the moment the
          * user reaches a Work that credits them, and the surfaces that render

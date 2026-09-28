@@ -443,9 +443,14 @@ function operationFingerprint(rows) {
 
 /* The ownership check has to run AFTER getAll resolves. Flipping the session
  * inside that request is the gap a guard before the call cannot see. */
-function loseOwnershipOnNextOperationsRead(idb, session) {
+function openOperationsDatabase(idb) {
     const db = idb.__databases.values().next().value;
     if (!db) throw new Error('the store has not opened its database');
+    return db;
+}
+
+function wrapNextOperationsRequest(idb, session, method) {
+    const db = openOperationsDatabase(idb);
     const original = db.transaction.bind(db);
     let armed = true;
     db.transaction = function (storeNames, mode, options) {
@@ -456,11 +461,11 @@ function loseOwnershipOnNextOperationsRead(idb, session) {
         tx.objectStore = function (name) {
             const handle = objectStore(name);
             if (name !== 'operations' || !armed) return handle;
-            const getAll = handle.getAll.bind(handle);
-            handle.getAll = function () {
+            const run = handle[method].bind(handle);
+            handle[method] = function () {
                 armed = false;
                 session.owned = false;
-                return getAll.apply(handle, arguments);
+                return run.apply(handle, arguments);
             };
             return handle;
         };
@@ -468,13 +473,64 @@ function loseOwnershipOnNextOperationsRead(idb, session) {
     };
 }
 
-async function anOlderSessionCannotCommitAFieldDuringTheRead() {
-    const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
-    globalThis.prksSync = globalThis.createPrksSyncRuntime({
+function loseOwnershipOnNextOperationsRead(idb, session) {
+    wrapNextOperationsRequest(idb, session, 'getAll');
+}
+
+function loseOwnershipOnNextOperationsDelete(idb, session) {
+    wrapNextOperationsRequest(idb, session, 'delete');
+}
+
+function loseOwnershipOnNextOperationsPut(idb, session) {
+    wrapNextOperationsRequest(idb, session, 'put');
+}
+
+/* The commit callback runs after the rows are durable and before the store
+ * promise resolves. That is the gap where the editor can move on. */
+function loseOwnershipWhenWriteCommits(idb, session) {
+    const db = openOperationsDatabase(idb);
+    const original = db.transaction.bind(db);
+    let armed = true;
+    db.transaction = function (storeNames, mode, options) {
+        const tx = original(storeNames, mode, options);
+        if (!armed || mode !== 'readwrite') return tx;
+        let handler = null;
+        Object.defineProperty(tx, 'oncomplete', {
+            configurable: true,
+            enumerable: true,
+            get: function () { return handler; },
+            set: function (fn) {
+                handler = function (event) {
+                    armed = false;
+                    session.owned = false;
+                    if (typeof fn === 'function') fn.call(tx, event);
+                };
+            },
+        });
+        return tx;
+    };
+}
+
+function runtimeForStore(store) {
+    const runtime = globalThis.createPrksSyncRuntime({
         store, online: () => false, handlers: {},
         request: async () => { throw new Error('offline'); },
     });
+    let notified = 0;
+    const changed = runtime.changed.bind(runtime);
+    runtime.changed = function () {
+        notified += 1;
+        return changed();
+    };
+    runtime.notifications = () => notified;
+    globalThis.prksSync = runtime;
+    return runtime;
+}
+
+async function anOlderSessionCannotCommitAFieldDuringTheRead() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    runtimeForStore(store);
     const base = baseAt();
     const seeded = await store.savePersonMetadataFields('P-1', { about: 'Kept' }, base);
     assert.equal(seeded.length, 1);
@@ -499,10 +555,7 @@ async function anOlderSessionCannotCommitAFieldDuringTheRead() {
 
     const freshIdb = createFakeIndexedDBFactory();
     const fresh = createPrksLocalStore({ indexedDB: freshIdb, uuid });
-    globalThis.prksSync = globalThis.createPrksSyncRuntime({
-        store: fresh, online: () => false, handlers: {},
-        request: async () => { throw new Error('offline'); },
-    });
+    runtimeForStore(fresh);
     await fresh.listOperations();
     const insertSession = { owned: true };
     loseOwnershipOnNextOperationsRead(freshIdb, insertSession);
@@ -511,6 +564,54 @@ async function anOlderSessionCannotCommitAFieldDuringTheRead() {
     assert.deepEqual(inserted, []);
     assert.equal((await fresh.listOperations()).length, 0,
         'the older session did not insert a field operation');
+}
+
+async function anOlderSessionCannotCommitAHalfAppliedFieldReplacement() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    runtimeForStore(store);
+    const base = baseAt();
+    const seeded = await store.savePersonMetadataFields('P-1', { about: 'Old' }, base);
+    assert.equal(seeded[0].payload.value, 'Old');
+    const before = operationFingerprint(await store.listOperations());
+    const duringDelete = { owned: true };
+    loseOwnershipOnNextOperationsDelete(idb, duringDelete);
+    const deleted = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'New' }, base, () => duringDelete.owned);
+    assert.deepEqual(deleted, []);
+    assert.equal(duringDelete.owned, false, 'ownership changed during the delete');
+    const afterDelete = await store.listOperations();
+    assert.equal(operationFingerprint(afterDelete), before,
+        'aborting during the delete leaves the queued field');
+    assert.equal(afterDelete.some(r => r.payload && r.payload.value === 'New'), false);
+    assert.equal(afterDelete.some(r => r.payload && r.payload.value === 'Old'), true);
+
+    const duringInsert = { owned: true };
+    loseOwnershipOnNextOperationsPut(idb, duringInsert);
+    const inserted = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'New' }, base, () => duringInsert.owned);
+    assert.deepEqual(inserted, []);
+    assert.equal(duringInsert.owned, false, 'ownership changed during the insert');
+    const afterInsert = await store.listOperations();
+    assert.equal(operationFingerprint(afterInsert), before,
+        'aborting during the insert leaves the queued field');
+    assert.equal(afterInsert.some(r => r.payload && r.payload.value === 'New'), false);
+}
+
+async function aCommittedFieldWriteStillNotifiesAfterTheEditorMovesOn() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const runtime = runtimeForStore(store);
+    await store.listOperations();
+    const session = { owned: true };
+    loseOwnershipWhenWriteCommits(idb, session);
+    const written = await globalThis.prksSavePersonFieldsDurably(
+        'P-1', { about: 'New' }, baseAt(), () => session.owned);
+    assert.equal(session.owned, false, 'ownership ended as the commit was delivered');
+    assert.equal(written.length, 1);
+    assert.equal(written[0].payload.value, 'New');
+    assert.equal((await store.listOperations()).some(r => r.payload && r.payload.value === 'New'), true);
+    assert.ok(runtime.notifications() >= 1, 'a committed field still notifies sync');
 }
 
 async function main() {
@@ -528,6 +629,8 @@ async function main() {
     await oneBusyFieldNeverRefusesTheForm();
     await aPendingCreationIsTheBaseForItsOwnEdits();
     await anOlderSessionCannotCommitAFieldDuringTheRead();
+    await anOlderSessionCannotCommitAHalfAppliedFieldReplacement();
+    await aCommittedFieldWriteStillNotifiesAfterTheEditorMovesOn();
     console.log('All ' + checks + ' person profile checks passed');
 }
 
