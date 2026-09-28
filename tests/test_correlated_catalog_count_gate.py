@@ -272,6 +272,35 @@ class DetectionTests(unittest.TestCase):
         """
         self.assertEqual([h.outer for h in _hits(correlated)], ["json_each j"])
 
+    def test_compound_arm_aliases_do_not_shadow_each_other(self):
+        sql = """
+        SELECT p.id,
+            (SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id
+             UNION ALL SELECT 0 FROM other p LIMIT 1) AS n
+        FROM parent p
+        """
+        self.assertEqual([h.outer for h in _hits(sql)], ["parent p"])
+        outer_arms = """
+        SELECT q.id, (SELECT COUNT(*) FROM child c WHERE c.parent_id = q.id) AS n
+        FROM parent q
+        UNION ALL
+        SELECT x.id, 0 FROM other x
+        """
+        self.assertEqual([h.outer for h in _hits(outer_arms)], ["parent q"])
+
+    def test_non_simple_quoted_identifiers_detected(self):
+        for rel, ref in (
+            ('parent AS "outer alias"', '"outer alias".id'),
+            ("parent p", 'p."outer id"'),
+        ):
+            sql = f"""
+            SELECT 1,
+                (SELECT COUNT(*) FROM child c WHERE c.parent_id = {ref}) AS n
+            FROM {rel}
+            """
+            with self.subTest(rel=rel):
+                self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
+
     def test_bracket_and_backtick_identifiers_detected(self):
         for rel, ref in (("[parent] [p]", "[p].id"), ("`parent` AS `p`", "`p`.id")):
             sql = f"""

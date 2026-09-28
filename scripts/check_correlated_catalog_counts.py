@@ -200,7 +200,7 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
         if sql[i] in _QUOTE_OPENERS:
             j = _quote_end(sql, i)
             # "p", [p] and `p` are identifiers; 'x' is always a value.
-            if sql[i] != "'" and _IDENT_RE.fullmatch(sql[i + 1 : j]):
+            if sql[i] != "'" and j < n:
                 _unquote_identifier(out, sql, i, j)
             else:
                 _blank(out, i + 1, j)
@@ -218,15 +218,23 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
 
 
 def _unquote_identifier(out: list[str], sql: str, i: int, j: int) -> None:
-    """Make the double-quoted identifier at ``sql[i:j + 1]`` structural.
+    """Make the quoted identifier at ``sql[i:j + 1]`` structural.
 
-    ``"p"`` becomes `` p `` so it matches unquoted ``p.id`` references too. A
-    quoted keyword (``"group"``) can only ever be referenced quoted, so it
-    becomes ``_group_``: same length, and no longer mistaken for a keyword.
+    ``"p"`` / ``[p]`` / `` `p` `` become `` p `` so they also match unquoted
+    ``p.id`` references. Anything else (a keyword such as ``"group"``, or a
+    name such as ``"outer alias"``) can only ever be referenced quoted, so it
+    becomes a same-length synthetic identifier (``_group_``,
+    ``_outer_alias_``): offsets are kept and every quoted reference maps to
+    the same token.
     """
-    fill = "_" if sql[i + 1 : j].lower() in _KEYWORDS else " "
-    out[i] = fill
-    out[j] = fill
+    name = sql[i + 1 : j]
+    if _IDENT_RE.fullmatch(name) and name.lower() not in _KEYWORDS:
+        out[i] = out[j] = " "
+        return
+    out[i] = out[j] = "_"
+    for k in range(i + 1, j):
+        if not (sql[k].isascii() and (sql[k].isalnum() or sql[k] == "_")):
+            out[k] = "_"
 
 
 _QUOTE_OPENERS = frozenset("'\"`[")
@@ -504,11 +512,9 @@ def _unresolved_refs(body_masked: str) -> set[str]:
     works p ...)`` does not hide a sibling ``p.id`` that points outside.
     """
     inner_text = body_masked[1:-1]
-    scopes: list[tuple[int, int, dict[str, str]]] = [
-        (0, len(inner_text), _declared(_scope_text(inner_text)))
-    ]
+    scopes = _arm_scopes(inner_text, 0, len(inner_text))
     for s, e in _nested_select_spans(inner_text):
-        scopes.append((s, e, _declared(_scope_text(inner_text[s + 1 : e]))))
+        scopes.extend(_arm_scopes(inner_text, s + 1, e))
     unresolved: set[str] = set()
     for q in _QUALIFIED_RE.finditer(inner_text):
         name = q.group(1).lower()
@@ -516,6 +522,25 @@ def _unresolved_refs(body_masked: str) -> set[str]:
         if not any(s <= pos <= e and name in decl for s, e, decl in scopes):
             unresolved.add(name)
     return unresolved
+
+
+def _arm_scopes(text: str, start: int, end: int) -> list[tuple[int, int, dict[str, str]]]:
+    """Per compound arm of the query in ``text[start:end]``: its span and the
+    relations it declares. Arms of ``UNION``/``INTERSECT``/``EXCEPT`` have
+    separate FROM clauses, so one arm's alias never hides another's."""
+    region = text[start:end]
+    return [
+        (start + a, start + b, _declared(_scope_text(region[a:b])))
+        for a, b in _compound_arms(_top_level(region))
+    ]
+
+
+def _arm_declared(masked: str, start: int, end: int, pos: int) -> dict[str, str]:
+    """Relations of the compound arm of ``masked[start:end]`` containing ``pos``."""
+    for a, b, decl in _arm_scopes(masked, start, end):
+        if a <= pos <= b:
+            return decl
+    return {}
 
 
 def _outer_correlation(
@@ -541,7 +566,7 @@ def _outer_correlation(
         outer_text = _top_level(masked[enc_start:enc_end])
         if _is_select_scope(outer_text):
             saw_select = True
-            outer = _declared(_scope_text(masked[enc_start:enc_end]))
+            outer = _arm_declared(masked, enc_start, enc_end, start)
             found = sorted(r for r in remaining if r in outer)
             labels.update(outer[r] for r in found)
         elif enc_start == 0 and not _STATEMENT_WORD_RE.search(outer_text):
