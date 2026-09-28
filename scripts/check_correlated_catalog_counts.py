@@ -98,6 +98,7 @@ GUIDANCE = (
 )
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+_IDENT_RE = re.compile(_IDENT)
 # FROM/JOIN <table> [AS] <alias>; the optional alias must not be a keyword.
 _RELATION_RE = re.compile(
     rf"\b(?:from|join)\s+(?:(?:main|temp)\.)?({_IDENT})"
@@ -135,6 +136,7 @@ _KEYWORDS = frozenset(
     group order by having limit offset union all except intersect as and or not
     in is null exists case when then else end with recursive values set distinct
     collate asc desc nocase between like glob escape window over partition
+    indexed
     """.split()
 )
 
@@ -193,7 +195,13 @@ def _mask_sql(sql: str, comments: list[tuple[int, str]] | None = None) -> str:
     while i < n:
         if sql[i] in ("'", '"'):
             j = _quote_end(sql, i)
-            _blank(out, i + 1, j)
+            if sql[i] == '"' and _IDENT_RE.fullmatch(sql[i + 1 : j]):
+                # A double-quoted identifier ("p", "p".id): keep the name and
+                # drop the quotes, so aliases and qualifiers stay visible.
+                _blank(out, i, i + 1)
+                _blank(out, j, j + 1)
+            else:
+                _blank(out, i + 1, j)
             i = j + 1
             continue
         j = _comment_end(sql, i)

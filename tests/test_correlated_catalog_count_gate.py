@@ -207,6 +207,24 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(select=select):
                 self.assertEqual([h.output_alias for h in _hits(sql)], ["n"])
 
+    def test_double_quoted_identifiers_detected(self):
+        sql = """
+        SELECT "p".id,
+            (SELECT COUNT(*) FROM "child" AS "c" WHERE "c".parent_id = "p"."id") AS n
+        FROM "parent" AS "p"
+        """
+        hits = _hits(sql)
+        self.assertEqual([(h.outer, h.inner) for h in hits], [("parent p", "child")])
+
+    def test_indexed_by_is_not_an_alias(self):
+        sql = """
+        SELECT parent.id,
+            (SELECT COUNT(*) FROM child c WHERE c.parent_id = parent.id) AS n
+        FROM parent INDEXED BY idx_parent_name
+        """
+        hits = _hits(sql)
+        self.assertEqual([h.outer for h in hits], ["parent"])
+
     def test_correlation_to_grandparent_scope_detected(self):
         sql = """
         SELECT p.id,
