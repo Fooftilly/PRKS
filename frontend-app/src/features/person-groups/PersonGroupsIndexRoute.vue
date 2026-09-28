@@ -1,15 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { personGroupIntentsKey } from './intents'
 import { buildGroupTree, collapsibleGroupIds } from './projection'
 import type { PersonGroupsIndexProjection } from './projection'
-import {
-  isGroupExpanded,
-  readGroupSearch,
-  setGroupsExpanded,
-  toggleGroupExpanded,
-  writeGroupSearch,
-} from './ui-state'
 import PersonGroupTreeNode from './PersonGroupTreeNode.vue'
 
 const props = defineProps<{
@@ -18,33 +11,12 @@ const props = defineProps<{
 
 const intents = inject(personGroupIntentsKey)
 const query = ref('')
-const chrome = ref(0)
+const expandedIds = ref(new Set<string>())
 
-const ownerKey = computed(() => intents?.ownerTabId() || '')
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const groups = computed(() => props.projection.groups)
-const expandedIds = computed(() => {
-  void chrome.value
-  const ids = new Set<string>()
-  groups.value.forEach((group) => {
-    if (isGroupExpanded(ownerKey.value, group.id)) ids.add(group.id)
-  })
-  return ids
-})
 const tree = computed(() => buildGroupTree(groups.value, query.value, expandedIds.value))
 const filtering = computed(() => !!query.value.trim())
-
-watch(
-  ownerKey,
-  (key) => {
-    query.value = readGroupSearch(key)
-  },
-  { immediate: true },
-)
-
-watch(query, (value) => {
-  writeGroupSearch(ownerKey.value, value)
-})
 
 function icon(name: string): string {
   return typeof window.prksIcon === 'function' ? window.prksIcon(name, { size: 'sm' }) : ''
@@ -56,15 +28,17 @@ function onCreate(): void {
 
 function onToggle(groupId: string): void {
   if (filtering.value) return
-  toggleGroupExpanded(ownerKey.value, groupId)
-  chrome.value += 1
+  const next = new Set(expandedIds.value)
+  if (next.has(groupId)) next.delete(groupId)
+  else next.add(groupId)
+  expandedIds.value = next
 }
 
 function onToggleAll(): void {
   if (filtering.value) return
-  const ids = collapsibleGroupIds(groups.value)
-  setGroupsExpanded(ownerKey.value, ids, tree.value.allCollapsed)
-  chrome.value += 1
+  expandedIds.value = tree.value.allCollapsed
+    ? new Set(collapsibleGroupIds(groups.value))
+    : new Set()
 }
 </script>
 

@@ -84,17 +84,17 @@ export function browserPersonGroupIntents(owner: PersonGroupIntentOwner | null |
 
     beginEdit() {
       const open = window.openPersonGroupEdit
-      if (typeof open === 'function') open()
+      if (typeof open === 'function') open(owner ?? undefined)
     },
 
     cancelEdit() {
       const close = window.closePersonGroupEdit
-      if (typeof close === 'function') close()
+      if (typeof close === 'function') close(owner ?? undefined)
     },
 
     toggleMembers() {
       const toggle = window.prksTogglePersonGroupMembersEdit
-      if (typeof toggle === 'function') toggle()
+      if (typeof toggle === 'function') toggle(owner ?? undefined)
     },
 
     editSession() {

@@ -234,9 +234,9 @@ interface Window {
   prksOpenNewGroupModalFromGroupsPage?: (owner?: object) => void
   prksTakePersonGroupCreateNavigation?: () => { mode?: string; tabId?: string }
   prksClearPersonGroupIndexCreateOrigin?: () => void
-  openPersonGroupEdit?: () => void
-  closePersonGroupEdit?: () => void
-  prksTogglePersonGroupMembersEdit?: () => void
+  openPersonGroupEdit?: (owner?: object) => void
+  closePersonGroupEdit?: (owner?: object) => void
+  prksTogglePersonGroupMembersEdit?: (owner?: object) => void
   prksBindPersonGroupDetailChrome?: (owner?: object) => void
   prksSetButtonBusy?: (button: HTMLElement | null, busy: boolean, options?: { busyLabel?: string }) => void
   prksHintBtnHtml?: (hintType: string, ariaLabel: string, extraClass?: string) => string

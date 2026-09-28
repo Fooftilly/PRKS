@@ -14,7 +14,6 @@ _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_navigation_selftes
 _FIXTURE = os.path.join(_PROJECT_DIR, "tests", "browser", "navigation.html")
 _PEOPLE = os.path.join(_FRONTEND, "js", "components", "people.js")
 _FOLDERS = os.path.join(_FRONTEND, "js", "components", "folders.js")
-_GROUPS = os.path.join(_FRONTEND, "js", "components", "people-groups.js")
 
 
 def _read(path: str) -> str:
@@ -63,10 +62,8 @@ class FrontendNavigationTests(unittest.TestCase):
     def test_component_filter_keys_remain(self):
         people = _read(_PEOPLE)
         folders = _read(_FOLDERS)
-        groups = _read(_GROUPS)
         self.assertIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", people)
         self.assertIn("PRKS_FOLDER_LIBRARY_FILTER_KEY", folders)
-        self.assertIn("PRKS_GROUP_LIBRARY_FILTER_KEY", groups)
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_NAV))
 
     def test_sidebar_removes_duplicate_disclosure_headings(self):

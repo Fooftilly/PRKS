@@ -3902,7 +3902,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     } else {
                         prksOfflineRenderUnavailable(contentDiv, 'Person Groups not available offline');
                     }
-                    titleOpts = { skipPageEnter: samePersonGroupsWorkspace };
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Person Groups not available offline',
+                        skipPageEnter: samePersonGroupsWorkspace,
+                    };
                     break;
                 }
                 publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
@@ -3968,6 +3973,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     } else {
                         prksOfflineRenderUnavailable(contentDiv, 'Group not available offline');
                     }
+                    prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
                         notFoundTitle: 'Group not available offline',
@@ -3991,6 +3997,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         contentDiv.innerHTML =
                             '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
                     }
+                    prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = {
                         notFound: true,
                         notFoundTitle: 'Group not found',

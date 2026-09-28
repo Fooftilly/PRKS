@@ -43,7 +43,7 @@ function openGroup(event: MouseEvent, id: string): void {
     :class="{ 'prks-group-tree__row--match': node.match }"
     :data-group-id="node.id"
     role="treeitem"
-    :aria-expanded="node.hasChildren ? (node.collapsed ? 'false' : 'true') : 'false'"
+    :aria-expanded="node.hasChildren ? (node.collapsed ? 'false' : 'true') : undefined"
     :style="{ '--depth': node.depth }"
   >
     <button

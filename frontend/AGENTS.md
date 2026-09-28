@@ -196,8 +196,9 @@ People-library search runtime belongs to rendered `.prks-people-library` root
 Rerender only that root. SessionStorage preserves shared query preference; it is not
 workspace persistence or route state.
 
-Group-library runtime likewise belongs to rendered `.prks-group-library` root, never
-a route-scoped `window` singleton. `personGroupEditing` and
+Group-library search and collapse live in the Vue index instance for that pane
+and are discarded when that surface unmounts. They are not a `window` singleton,
+sessionStorage, or a module-level map. `personGroupEditing` and
 `personGroupMembersEditing` are mutually exclusive TabContext UI modes: metadata
 editing owns the right panel; membership management owns the Members section.
 

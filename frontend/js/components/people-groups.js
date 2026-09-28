@@ -296,6 +296,11 @@ function prksFocusedPersonGroupContext() {
     return typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
 }
 
+function prksPersonGroupActionContext(owner) {
+    if (owner && owner.tabId) return owner;
+    return prksFocusedPersonGroupContext();
+}
+
 function prksRefreshPersonGroupMain(ctx) {
     const owner = ctx || prksFocusedPersonGroupContext();
     if (!owner || !owner.root || owner.destroyed) return;
@@ -357,10 +362,7 @@ function prksTakePersonGroupCreateNavigation() {
     if (!origin || !origin.tabId) return { mode: 'unscoped' };
     const ctx = typeof prksGetTabContext === 'function' ? prksGetTabContext(origin.tabId) : null;
     const route = ctx && (ctx.lastResolvedRoute || ctx.route);
-    const live = !!(ctx && !ctx.destroyed && ctx.tabId &&
-        (origin.generation == null || ctx.generation === origin.generation) &&
-        route && route.name === 'people-groups');
-    if (!live) return { mode: 'stale' };
+    if (!ctx || ctx.destroyed || !route || route.name !== 'people-groups') return { mode: 'stale' };
     return { mode: 'owner', tabId: String(ctx.tabId) };
 }
 window.prksOpenNewGroupModalFromGroupsPage = prksOpenNewGroupModalFromGroupsPage;
@@ -409,8 +411,8 @@ function renderPersonGroupSummarySidebarHtml(g) {
         </div>`;
 }
 
-function openPersonGroupEdit() {
-    const ctx = prksFocusedPersonGroupContext();
+function openPersonGroupEdit(owner) {
+    const ctx = prksPersonGroupActionContext(owner);
     if (!ctx || !ctx.ui) return;
     const g = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!g) return;
@@ -434,26 +436,23 @@ function openPersonGroupEdit() {
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
 
-function closePersonGroupEdit() {
-    const ctx = prksFocusedPersonGroupContext();
+function closePersonGroupEdit(owner) {
+    const ctx = prksPersonGroupActionContext(owner);
     const group = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (ctx && ctx.ui) {
         prksBumpPersonGroupEditSession(ctx);
         ctx.ui.personGroupEditing = false;
         ctx.ui.personGroupFieldBaseline = null;
     }
-    if (group && group.id) {
-        void prksRerenderPersonGroupDetail(ctx, group.id);
-        return;
-    }
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
+    if (group && group.id) void prksRerenderPersonGroupDetail(ctx, group.id);
 }
 window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
 
-function prksTogglePersonGroupMembersEdit() {
-    const ctx = prksFocusedPersonGroupContext();
+function prksTogglePersonGroupMembersEdit(owner) {
+    const ctx = prksPersonGroupActionContext(owner);
     const g = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!ctx || !ctx.ui || !g) return;
     if (ctx.ui.personGroupEditing) {
@@ -476,21 +475,6 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
         await prksAlertMessage('Name is required.', 'Validation');
         return { ok: false, message: 'Name is required.' };
     }
-    const parentId = await prksResolvePersonGroupParent(
-        draft && draft.parent_id, draft && draft.parent_name, groupId);
-    if (parentId === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
-    const next = {
-        name: name,
-        description: String(draft && draft.description != null ? draft.description : ''),
-        parent_id: String(parentId || ''),
-    };
-    const baseFields = baseline || {};
-    const changes = {};
-    ['name', 'description', 'parent_id'].forEach((field) => {
-        const desired = String(next[field] == null ? '' : next[field]);
-        const shown = String(baseFields[field] == null ? '' : baseFields[field]);
-        if (desired !== shown) changes[field] = desired;
-    });
     const ops = typeof prksDurableOperationsOrNone === 'function'
         ? await prksDurableOperationsOrNone() : [];
     if (!stillOwns()) return { ok: true, quiet: true };
@@ -502,6 +486,27 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
             + 'so its synchronization state is prepared.', 'Unavailable');
         return { ok: false, message: 'Unavailable' };
     }
+    const baseFields = baseline || {};
+    const parentDraftId = String(draft && draft.parent_id || '').trim();
+    const parentDraftName = String(draft && draft.parent_name || '');
+    const parentShownId = String(baseFields.parent_id == null ? '' : baseFields.parent_id);
+    const parentShownName = String(baseFields.parent_name == null ? '' : baseFields.parent_name);
+    let parentId = parentDraftId;
+    if (parentDraftId !== parentShownId || parentDraftName.trim() !== parentShownName.trim()) {
+        parentId = await prksResolvePersonGroupParent(parentDraftId, parentDraftName, groupId);
+        if (parentId === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
+    }
+    const next = {
+        name: name,
+        description: String(draft && draft.description != null ? draft.description : ''),
+        parent_id: String(parentId || ''),
+    };
+    const changes = {};
+    ['name', 'description', 'parent_id'].forEach((field) => {
+        const desired = String(next[field] == null ? '' : next[field]);
+        const shown = String(baseFields[field] == null ? '' : baseFields[field]);
+        if (desired !== shown) changes[field] = desired;
+    });
     if (!Object.keys(changes).length) return { ok: true };
     try {
         await prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns);
@@ -621,10 +626,30 @@ function mountPersonGroupMemberRemoveButtons(g, ownerCtx) {
     });
 }
 
+function prksReplacePersonGroupMemberExclude(input, members) {
+    const nextIds = (members || []).map((member) => String(member && member.id || '')).filter(Boolean);
+    let set = input.__prksMemberExclude;
+    if (!(set instanceof Set)) {
+        set = new Set();
+        input.__prksMemberExclude = set;
+    }
+    Array.from(set).forEach((id) => {
+        if (nextIds.indexOf(id) === -1) set.delete(id);
+    });
+    nextIds.forEach((id) => set.add(id));
+    return set;
+}
+
 /** Members-section searchable Person combobox. */
 async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     const input = ownerCtx && ownerCtx.query ? ownerCtx.query('#group-add-member-search') : null;
-    if (!input || input.__prksMemberBound || input.__prksMemberMounting) return;
+    if (!input || input.__prksMemberMounting) return;
+    if (input.__prksMemberBound) {
+        const liveGroup = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('personGroup') : null;
+        if (!liveGroup || String(liveGroup.id) !== String(g.id)) return;
+        prksReplacePersonGroupMemberExclude(input, liveGroup.members);
+        return;
+    }
     const generation = ownerCtx && typeof ownerCtx.generation === 'number' ? ownerCtx.generation : undefined;
     input.__prksMemberMounting = true;
 
@@ -658,7 +683,7 @@ async function mountPersonGroupAddMemberControls(g, ownerCtx) {
     input.__prksMemberBound = true;
     allPersons = persons;
     window.allPersons = persons;
-    const memberIds = new Set((g.members || []).map((m) => String(m.id)));
+    const memberIds = prksReplacePersonGroupMemberExclude(input, liveGroup.members || []);
     initSearchableCombobox('group-add-member-search', 'group-add-member-results', 'group-add-member-id', 'person', {
         excludePersonIds: memberIds,
     });

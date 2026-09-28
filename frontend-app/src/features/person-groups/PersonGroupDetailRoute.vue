@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onUpdated, ref } from 'vue'
+import { computed, inject, onMounted, onUpdated, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { personGroupIntentsKey } from './intents'
+import { usePersonGroupPendingAction } from './pending-action'
 import type { PersonGroupDetailProjection } from './projection'
 import type { PersonGroupFieldDraft, PersonGroupMemberItem } from './types'
 
@@ -9,6 +11,7 @@ const props = defineProps<{
 }>()
 
 const intents = inject(personGroupIntentsKey)
+const { actionBusy, resetPending, withBusy } = usePersonGroupPendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const fieldBaseline = ref<PersonGroupFieldDraft | null>(null)
 
@@ -18,6 +21,13 @@ const membersEditing = computed(() => props.projection.membersEditing && !!group
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const notFound = computed(() => !unavailable.value && (props.projection.availability === 'not-found' || !group.value))
 const description = computed(() => group.value?.description.trim() || '')
+
+watch(
+  () => group.value?.id || '',
+  () => {
+    resetPending()
+  },
+)
 const parentHint = computed(() =>
   typeof window.prksHintBtnHtml === 'function'
     ? window.prksHintBtnHtml('group-edit-parent', 'About parent group', 'group-sidebar__hint-btn')
@@ -80,7 +90,9 @@ async function onDelete(): Promise<void> {
   const current = group.value
   if (!current || !intents) return
   const session = intents.editSession()
-  await intents.remove(current.id, session)
+  await withBusy('delete', async () => {
+    await intents.remove(current.id, session)
+  })
 }
 
 function stampEditor(): void {
@@ -92,7 +104,8 @@ function stampEditor(): void {
   const editor = root.querySelector('.group-sidebar-pane--edit')
   if (editor instanceof HTMLElement && editing.value) {
     const name = editor.querySelector('#gd-name')
-    if (name instanceof HTMLInputElement && name.dataset.prksGroupDraft !== '1') {
+    const session = String(intents?.editSession() ?? 0)
+    if (name instanceof HTMLInputElement && name.dataset.prksGroupDraft !== session) {
       const stored = intents?.capturedBaseline(current.id)
       const parent = current.parent
       const baseline: PersonGroupFieldDraft = stored || {
@@ -103,13 +116,13 @@ function stampEditor(): void {
       }
       fieldBaseline.value = baseline
       name.value = baseline.name
-      name.dataset.prksGroupDraft = '1'
+      name.dataset.prksGroupDraft = session
       const descriptionField = editor.querySelector('#gd-description')
       if (descriptionField instanceof HTMLTextAreaElement) descriptionField.value = baseline.description
       const hidden = editor.querySelector('#gd-parent-id')
       const search = editor.querySelector('#gd-parent-search')
-      if (hidden instanceof HTMLInputElement && !hidden.value) hidden.value = baseline.parent_id
-      if (search instanceof HTMLInputElement && !search.value) search.value = baseline.parent_name
+      if (hidden instanceof HTMLInputElement) hidden.value = baseline.parent_id
+      if (search instanceof HTMLInputElement) search.value = baseline.parent_name
     } else if (!fieldBaseline.value) {
       fieldBaseline.value = intents?.capturedBaseline(current.id) || null
     }
@@ -204,9 +217,15 @@ onUpdated(stampEditor)
             </div>
             <details class="group-sidebar__advanced">
               <summary>Advanced</summary>
-              <button id="gd-delete-btn" type="button" class="prks-btn prks-btn--danger group-sidebar__delete">
+              <PrksButton
+                id="gd-delete-btn"
+                variant="danger"
+                class="group-sidebar__delete"
+                :busy="actionBusy('delete')"
+                busy-label="Deleting…"
+              >
                 Delete group
-              </button>
+              </PrksButton>
             </details>
           </div>
           <section v-else class="group-detail__section" aria-labelledby="group-description-heading">
