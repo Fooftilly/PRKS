@@ -51,7 +51,7 @@ jobs:
 
       - name: Resolve diff-aware check base
         id: diff-base
-        # Shared by the diff-aware guards below (#189, #190).
+        # Shared by the diff-aware guards below (#189, #190, #192).
         # PR base is the immutable event SHA (not the live base-branch tip).
         # Zero-before pushes (new/recreated branch) use the empty tree so the
         # full tip is scanned — do not merge-base with origin/master after a
@@ -98,6 +98,16 @@ jobs:
         env:
           PRKS_DIFF_BASE: ${{ steps.diff-base.outputs.base }}
         run: python scripts/check_schema_change.py --base "$PRKS_DIFF_BASE"
+
+      - name: Fail on new correlated catalogue COUNT SQL
+        # #192: per-row correlated (SELECT COUNT(...) ... = outer.id) scalar
+        # subqueries in backend/ + prks_app.py must match a grandfathered
+        # entry in scripts/correlated_catalog_counts_allowlist.json whose
+        # query already existed at the diff base. New debt fails; fixed debt
+        # leaves a stale entry that fails until removed.
+        env:
+          PRKS_DIFF_BASE: ${{ steps.diff-base.outputs.base }}
+        run: python scripts/check_correlated_catalog_counts.py --base "$PRKS_DIFF_BASE"
 
   pyright:
     permissions:

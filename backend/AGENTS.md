@@ -45,6 +45,13 @@ endpoint appears theoretically expensive; use measured diagnostics first.
 
 Performance instrumentation must never be required for application correctness.
 
+Catalogue/list SQL must not compute per-row counts with a correlated scalar
+subquery (`(SELECT COUNT(*) FROM child c WHERE c.parent_id = p.id)`); aggregate
+once with `GROUP BY` in a CTE or joined derived table. `scripts/check_correlated_catalog_counts.py`
+(#192, Fast Static Analysis) fails new instances; existing debt is listed with
+its owning issue in `scripts/correlated_catalog_counts_allowlist.json` and may
+only shrink. See the script docstring for codes and the reviewed escape hatch.
+
 ## Backup and restore
 
 Backup/restore code must never operate on production storage during tests.

@@ -1,0 +1,139 @@
+{
+  "_comment": [
+    "Grandfathered correlated per-row COUNT debt (#192). Checked by scripts/check_correlated_catalog_counts.py.",
+    "Identity = path + outer + inner + output_alias + aggregate + fingerprint; 'issue' and 'function' are for humans.",
+    "Remove an entry when its query is fixed (stale entries fail SQL-CATALOG-002). Never add entries for new queries (SQL-CATALOG-003)."
+  ],
+  "entries": [
+    {
+      "issue": 157,
+      "function": "get_all_playlists",
+      "path": "backend/db_manager.py",
+      "outer": "playlists p",
+      "inner": "playlist_items",
+      "output_alias": "item_count",
+      "aggregate": "COUNT",
+      "fingerprint": "9341b361e677"
+    },
+    {
+      "issue": 155,
+      "function": "get_all_folders",
+      "path": "backend/db_manager.py",
+      "outer": "folders f",
+      "inner": "folder_files",
+      "output_alias": "work_count",
+      "aggregate": "COUNT",
+      "fingerprint": "6645a83ffb41"
+    },
+    {
+      "issue": 155,
+      "function": "get_all_folders",
+      "path": "backend/db_manager.py",
+      "outer": "folders f",
+      "inner": "folders",
+      "output_alias": "child_count",
+      "aggregate": "COUNT",
+      "fingerprint": "32393842fcd5"
+    },
+    {
+      "issue": 155,
+      "function": "get_all_folders",
+      "path": "backend/db_manager.py",
+      "outer": "folders f",
+      "inner": "folder_files",
+      "output_alias": "",
+      "aggregate": "COUNT",
+      "fingerprint": "6645a83ffb41"
+    },
+    {
+      "issue": 155,
+      "function": "get_all_folders",
+      "path": "backend/db_manager.py",
+      "outer": "folders f",
+      "inner": "folders",
+      "output_alias": "",
+      "aggregate": "COUNT",
+      "fingerprint": "32393842fcd5"
+    },
+    {
+      "issue": 277,
+      "function": "get_folder",
+      "path": "backend/db_manager.py",
+      "outer": "folders",
+      "inner": "folder_files",
+      "output_alias": "work_count",
+      "aggregate": "COUNT",
+      "fingerprint": "37f468443081"
+    },
+    {
+      "issue": 277,
+      "function": "get_folder",
+      "path": "backend/db_manager.py",
+      "outer": "folders",
+      "inner": "folders",
+      "output_alias": "child_count",
+      "aggregate": "COUNT",
+      "fingerprint": "f7b876760d1f"
+    },
+    {
+      "issue": 153,
+      "function": "get_all_person_groups",
+      "path": "backend/db_manager.py",
+      "outer": "person_groups g",
+      "inner": "person_group_members",
+      "output_alias": "member_count",
+      "aggregate": "COUNT",
+      "fingerprint": "ddb9d9a858ed"
+    },
+    {
+      "issue": 153,
+      "function": "get_all_person_groups",
+      "path": "backend/db_manager.py",
+      "outer": "person_groups g",
+      "inner": "person_groups",
+      "output_alias": "child_count",
+      "aggregate": "COUNT",
+      "fingerprint": "4d597b2c04e6"
+    },
+    {
+      "issue": 278,
+      "function": "get_person_group",
+      "path": "backend/db_manager.py",
+      "outer": "person_groups pg",
+      "inner": "person_group_members",
+      "output_alias": "member_count",
+      "aggregate": "COUNT",
+      "fingerprint": "14edbdb8b966"
+    },
+    {
+      "issue": 159,
+      "function": "get_tags_in_use",
+      "path": "backend/db_manager.py",
+      "outer": "tags t",
+      "inner": "work_tags",
+      "output_alias": "work_count",
+      "aggregate": "COUNT",
+      "fingerprint": "11b4b2bbcc08"
+    },
+    {
+      "issue": 159,
+      "function": "get_tags_in_use",
+      "path": "backend/db_manager.py",
+      "outer": "tags t",
+      "inner": "folder_tags",
+      "output_alias": "folder_count",
+      "aggregate": "COUNT",
+      "fingerprint": "8425f27eb26a"
+    },
+    {
+      "issue": 141,
+      "function": "list_concepts",
+      "path": "backend/research_network.py",
+      "outer": "concepts c",
+      "inner": "concept_parents",
+      "output_alias": "subconcept_count",
+      "aggregate": "COUNT",
+      "fingerprint": "5f6f1d5ff4da"
+    }
+  ]
+}
