@@ -316,6 +316,96 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "from zipfile import ZipFile\n"
                 "getattr(ZipFile, 'extractall')(archive, dest)\n"
             ),
+            # Instance / object attribute ownership shapes.
+            "self_attribute_same_method": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def run(self, path, dest):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "self_attribute_assigned_in_init": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "self_attribute_method_before_init": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+            ),
+            "self_attribute_with_target": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def open(self, path):\n"
+                "        with zipfile.ZipFile(path) as self.archive:\n"
+                "            pass\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "self_attribute_annotated": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive: zipfile.ZipFile = open_archive(path)\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "class_attribute_annotation": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    archive: zipfile.ZipFile\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "classmethod_cls_attribute": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    archive = zipfile.ZipFile('backup.zip')\n"
+                "    @classmethod\n"
+                "    def run(cls, dest):\n"
+                "        cls.archive.extractall(dest)\n"
+            ),
+            "self_attribute_via_local_alias": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest):\n"
+                "        archive = self.archive\n"
+                "        archive.extractall(dest)\n"
+            ),
+            "self_attribute_in_method_closure": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest):\n"
+                "        def go():\n"
+                "            self.archive.extractall(dest)\n"
+                "        go()\n"
+            ),
+            "self_attribute_from_same_module_base": (
+                "import zipfile\n"
+                "class Base:\n"
+                "    def __init__(self, path):\n"
+                "        self._zf = zipfile.ZipFile(path)\n"
+                "class Restore(Base):\n"
+                "    def run(self, dest):\n"
+                "        self._zf.extractall(dest)\n"
+            ),
+            "object_attribute_in_function": (
+                "import zipfile\n"
+                "def restore(holder, path, dest):\n"
+                "    holder.archive = zipfile.ZipFile(path)\n"
+                "    holder.archive.extractall(dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -396,6 +486,34 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "Z = Bundle\n"
                 "archive = Z(path)\n"
                 "archive.extractall(dest)\n"
+            ),
+            # Archive attributes are per class, per attribute name.
+            "same_attribute_on_unrelated_class": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "class Bundle:\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            "different_attribute_same_class": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "        self.bundle = load_bundle()\n"
+                "    def run(self, dest):\n"
+                "        self.bundle.extractall(dest)\n"
+            ),
+            "staticmethod_first_parameter_is_not_self": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    @staticmethod\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
             ),
         }
         for label, source in cases.items():

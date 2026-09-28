@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,10 +82,11 @@ OS_FSYNC_ALLOWLIST = {
 # INV-BACKUP-001: ZipFile.extractall() trusts member names/types and is never
 # acceptable on backup input. There is intentionally no production allowlist.
 # A receiver is classified only when it provably originates from one of these
-# zipfile classes (constructor call, a local name bound to one, or a
-# parameter/variable annotated with one); unrelated ``.extractall()`` methods
-# are not matched. Instance attributes (``self.archive``), containers, and
-# values returned from helper functions are not tracked.
+# zipfile classes (constructor call, a name or ``obj.attr`` bound to one, a
+# parameter/variable/class attribute annotated with one, or an instance
+# attribute such as ``self.archive`` assigned one in any method of the class
+# or a same-module base class); unrelated ``.extractall()`` methods are not
+# matched. Containers and values returned from helper functions are not tracked.
 ZIPFILE_ARCHIVE_CLASSES = frozenset({"ZipFile", "PyZipFile"})
 BANNED_ZIPFILE_METHOD = "extractall"
 
@@ -107,10 +108,35 @@ class Finding:
 #   ("module", "os")                  import os / import zipfile as z
 #   ("name", "zipfile", "ZipFile")    from zipfile import ZipFile as Z
 #   ("archive",)                      a value known to be a zipfile archive
+#   ("class", info) / ("instance", info)   a same-module class / its self or cls
 #   ("other",)                        any other local binding (shadows imports)
-_Binding = tuple[str, ...]
+# ``obj.attr`` targets are bound under the dotted key ``"obj.attr"``.
+_Binding = tuple[Any, ...]
 _ARCHIVE: _Binding = ("archive",)
 _OTHER: _Binding = ("other",)
+
+
+class _ClassInfo:
+    """Attributes of one same-module class that are proven zipfile archives."""
+
+    __slots__ = ("archive_attrs", "bases")
+
+    def __init__(self) -> None:
+        self.archive_attrs: set[str] = set()
+        self.bases: list[_ClassInfo] = []
+
+    def has_archive_attr(self, attr: str) -> bool:
+        seen: set[int] = set()
+        stack: list[_ClassInfo] = [self]
+        while stack:
+            info = stack.pop()
+            if id(info) in seen:
+                continue
+            seen.add(id(info))
+            if attr in info.archive_attrs:
+                return True
+            stack.extend(info.bases)
+        return False
 
 
 class _Scope:
@@ -127,12 +153,19 @@ class _Scope:
     ``summary``. Every set is a may-alias set: any archive entry classifies.
     """
 
-    __slots__ = ("is_class", "summary", "current")
+    __slots__ = ("class_info", "summary", "current", "class_registry")
 
-    def __init__(self, *, is_class: bool = False) -> None:
-        self.is_class = is_class
+    def __init__(self, *, class_info: _ClassInfo | None = None) -> None:
+        # Set for class bodies; ``None`` for every other scope kind.
+        self.class_info = class_info
         self.summary: dict[str, set[_Binding]] = {}
         self.current: dict[str, set[_Binding]] = {}
+        # Only used on the module scope: ClassDef node id -> its _ClassInfo.
+        self.class_registry: dict[int, _ClassInfo] = {}
+
+    @property
+    def is_class(self) -> bool:
+        return self.class_info is not None
 
 
 def _resolve(scopes: list[_Scope], name: str) -> set[_Binding]:
@@ -199,9 +232,34 @@ def _annotation_mentions_zip(node: ast.expr | None, scopes: list[_Scope]) -> boo
     )
 
 
+def _attr_key(node: ast.expr) -> str | None:
+    """``"obj.attr"`` for a one-level attribute on a bare name."""
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return f"{node.value.id}.{node.attr}"
+    return None
+
+
+def _class_infos(bindings: set[_Binding]) -> list[_ClassInfo]:
+    return [b[1] for b in bindings if b[0] in {"class", "instance"}]
+
+
+def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
+    key = _attr_key(node)
+    if key is None or not isinstance(node.value, ast.Name):
+        return False
+    if _ARCHIVE in _resolve(scopes, key):
+        return True
+    return any(
+        info.has_archive_attr(node.attr)
+        for info in _class_infos(_resolve(scopes, node.value.id))
+    )
+
+
 def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
     if isinstance(node, ast.Name):
         return _ARCHIVE in _resolve(scopes, node.id)
+    if isinstance(node, ast.Attribute):
+        return _is_archive_attribute(node, scopes)
     return _is_zip_constructor(node, scopes)
 
 
@@ -209,7 +267,7 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     """What a name bound to ``value`` refers to (aliases carry through)."""
     if isinstance(value, ast.Name):
         return set(_resolve(scopes, value.id)) or {_OTHER}
-    if _is_zip_constructor(value, scopes):
+    if _is_zip_archive_expr(value, scopes):
         return {_ARCHIVE}
     if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
         modules = _lookup_modules(scopes, value.value.id)
@@ -235,8 +293,9 @@ def _stored_names(target: ast.expr) -> list[str]:
 def _target_pairs(
     target: ast.expr, value: ast.expr, scopes: list[_Scope]
 ) -> list[tuple[str, set[_Binding]]]:
-    if isinstance(target, ast.Name):
-        return [(target.id, _value_bindings(value, scopes))]
+    key = target.id if isinstance(target, ast.Name) else _attr_key(target)
+    if key is not None:
+        return [(key, _value_bindings(value, scopes))]
     if (
         isinstance(target, (ast.Tuple, ast.List))
         and isinstance(value, (ast.Tuple, ast.List))
@@ -253,26 +312,33 @@ def _target_pairs(
 def _loop_target_pairs(
     target: ast.expr, iterable: ast.expr, scopes: list[_Scope]
 ) -> list[tuple[str, set[_Binding]]]:
-    if isinstance(target, ast.Name) and _iterable_yields_archive(iterable, scopes):
-        return [(target.id, {_ARCHIVE})]
+    key = target.id if isinstance(target, ast.Name) else _attr_key(target)
+    if key is not None and _iterable_yields_archive(iterable, scopes):
+        return [(key, {_ARCHIVE})]
     return [(name, {_OTHER}) for name in _stored_names(target)]
 
 
-def _import_pairs(node: ast.Import | ast.ImportFrom) -> list[tuple[str, set[_Binding]]]:
-    pairs: list[tuple[str, set[_Binding]]] = []
-    if isinstance(node, ast.Import):
-        for item in node.names:
-            top = item.name.split(".", 1)[0]
-            if item.asname is None:
-                # ``import os.path`` still binds the top-level name ``os``.
-                binding = ("module", top) if top in _TRACKED_MODULES else _OTHER
-                pairs.append((top, {binding}))
-            elif item.name in _TRACKED_MODULES:
-                pairs.append((item.asname, {("module", item.name)}))
-            else:
-                # ``import os.path as p`` binds only ``p`` (to os.path).
-                pairs.append((item.asname, {_OTHER}))
-        return pairs
+_Pairs = list[tuple[str, set[_Binding]]]
+
+
+def _import_pairs(node: ast.Import, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    for item in node.names:
+        top = item.name.split(".", 1)[0]
+        if item.asname is None:
+            # ``import os.path`` still binds the top-level name ``os``.
+            binding = ("module", top) if top in _TRACKED_MODULES else _OTHER
+            pairs.append((top, {binding}))
+        elif item.name in _TRACKED_MODULES:
+            pairs.append((item.asname, {("module", item.name)}))
+        else:
+            # ``import os.path as p`` binds only ``p`` (to os.path).
+            pairs.append((item.asname, {_OTHER}))
+    return pairs
+
+
+def _import_from_pairs(node: ast.ImportFrom, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
     tracked = node.level == 0 and node.module in _TRACKED_MODULES
     for item in node.names:
         if item.name == "*":
@@ -286,44 +352,91 @@ def _import_pairs(node: ast.Import | ast.ImportFrom) -> list[tuple[str, set[_Bin
     return pairs
 
 
-def _binding_pairs(node: ast.AST, scopes: list[_Scope]) -> list[tuple[str, set[_Binding]]]:
-    """Names ``node`` binds in its own scope, with what each refers to."""
-    if isinstance(node, (ast.Import, ast.ImportFrom)):
-        return _import_pairs(node)
-    if isinstance(node, ast.Assign):
-        pairs: list[tuple[str, set[_Binding]]] = []
-        for target in node.targets:
-            pairs.extend(_target_pairs(target, node.value, scopes))
-        return pairs
-    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        if _annotation_mentions_zip(node.annotation, scopes):
-            return [(node.target.id, {_ARCHIVE})]
-        if node.value is not None:
-            return _target_pairs(node.target, node.value, scopes)
+def _assign_pairs(node: ast.Assign, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    for target in node.targets:
+        pairs.extend(_target_pairs(target, node.value, scopes))
+    return pairs
+
+
+def _ann_assign_pairs(node: ast.AnnAssign, scopes: list[_Scope]) -> _Pairs:
+    key = node.target.id if isinstance(node.target, ast.Name) else _attr_key(node.target)
+    if key is None:
         return []
-    if isinstance(node, ast.AugAssign):
-        return [(name, {_OTHER}) for name in _stored_names(node.target)]
-    if isinstance(node, ast.NamedExpr):
+    if _annotation_mentions_zip(node.annotation, scopes):
+        return [(key, {_ARCHIVE})]
+    if node.value is not None:
         return _target_pairs(node.target, node.value, scopes)
-    if isinstance(node, (ast.For, ast.AsyncFor)):
-        return _loop_target_pairs(node.target, node.iter, scopes)
-    if isinstance(node, (ast.With, ast.AsyncWith)):
-        pairs = []
-        for item in node.items:
-            if item.optional_vars is None:
-                continue
-            if isinstance(item.optional_vars, ast.Name) and _is_zip_archive_expr(
-                item.context_expr, scopes
-            ):
-                pairs.append((item.optional_vars.id, {_ARCHIVE}))
-            else:
-                pairs.extend((name, {_OTHER}) for name in _stored_names(item.optional_vars))
-        return pairs
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return [(node.name, {_OTHER})]
-    if isinstance(node, ast.ExceptHandler) and node.name:
-        return [(node.name, {_OTHER})]
     return []
+
+
+def _aug_assign_pairs(node: ast.AugAssign, scopes: list[_Scope]) -> _Pairs:
+    return [(name, {_OTHER}) for name in _stored_names(node.target)]
+
+
+def _named_expr_pairs(node: ast.NamedExpr, scopes: list[_Scope]) -> _Pairs:
+    return _target_pairs(node.target, node.value, scopes)
+
+
+def _for_pairs(node: ast.For | ast.AsyncFor, scopes: list[_Scope]) -> _Pairs:
+    return _loop_target_pairs(node.target, node.iter, scopes)
+
+
+def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
+    pairs: _Pairs = []
+    for item in node.items:
+        target = item.optional_vars
+        if target is None:
+            continue
+        key = target.id if isinstance(target, ast.Name) else _attr_key(target)
+        if key is not None and _is_zip_archive_expr(item.context_expr, scopes):
+            pairs.append((key, {_ARCHIVE}))
+        else:
+            pairs.extend((name, {_OTHER}) for name in _stored_names(target))
+    return pairs
+
+
+def _def_pairs(node: ast.FunctionDef | ast.AsyncFunctionDef, scopes: list[_Scope]) -> _Pairs:
+    return [(node.name, {_OTHER})]
+
+
+def _class_def_pairs(node: ast.ClassDef, scopes: list[_Scope]) -> _Pairs:
+    info = scopes[0].class_registry.setdefault(id(node), _ClassInfo())
+    return [(node.name, {("class", info)})]
+
+
+def _except_pairs(node: ast.ExceptHandler, scopes: list[_Scope]) -> _Pairs:
+    return [(node.name, {_OTHER})] if node.name else []
+
+
+_BINDING_HANDLERS: dict[type, Any] = {
+    ast.Import: _import_pairs,
+    ast.ImportFrom: _import_from_pairs,
+    ast.Assign: _assign_pairs,
+    ast.AnnAssign: _ann_assign_pairs,
+    ast.AugAssign: _aug_assign_pairs,
+    ast.NamedExpr: _named_expr_pairs,
+    ast.For: _for_pairs,
+    ast.AsyncFor: _for_pairs,
+    ast.With: _with_pairs,
+    ast.AsyncWith: _with_pairs,
+    ast.FunctionDef: _def_pairs,
+    ast.AsyncFunctionDef: _def_pairs,
+    ast.ClassDef: _class_def_pairs,
+    ast.ExceptHandler: _except_pairs,
+}
+
+
+def _binding_pairs(node: ast.AST, scopes: list[_Scope]) -> _Pairs:
+    """Names (or ``obj.attr`` keys) ``node`` binds in its own scope, with what each refers to."""
+    handler = _BINDING_HANDLERS.get(type(node))
+    return handler(node, scopes) if handler is not None else []
+
+
+def _is_staticmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    return any(
+        isinstance(d, ast.Name) and d.id == "staticmethod" for d in node.decorator_list
+    )
 
 
 def _function_params(args: ast.arguments) -> list[ast.arg]:
@@ -370,10 +483,10 @@ class _InvariantVisitor(ast.NodeVisitor):
         self,
         body: list[ast.stmt],
         *,
-        is_class: bool = False,
-        params: list[tuple[str, set[_Binding]]] | None = None,
+        class_info: _ClassInfo | None = None,
+        params: _Pairs | None = None,
     ) -> None:
-        scope = _Scope(is_class=is_class)
+        scope = _Scope(class_info=class_info)
         self.scopes.append(scope)
         self._depth.append(0)
         for name, bindings in params or ():
@@ -387,14 +500,30 @@ class _InvariantVisitor(ast.NodeVisitor):
                     continue
                 for name, bindings in _binding_pairs(node, self.scopes):
                     scope.summary.setdefault(name, set()).update(bindings)
+        for name, bindings in scope.summary.items():
+            self._record_archive_attr(name, bindings)
 
     def _pop(self) -> None:
         self.scopes.pop()
         self._depth.pop()
 
-    def _bind(self, pairs: list[tuple[str, set[_Binding]]]) -> None:
+    def _record_archive_attr(self, name: str, bindings: set[_Binding]) -> None:
+        """Remember ``self.x = <archive>`` / class-body ``x = <archive>`` on the class."""
+        if _ARCHIVE not in bindings:
+            return
+        root, dot, attr = name.partition(".")
+        if not dot:
+            class_info = self.scopes[-1].class_info
+            if class_info is not None:
+                class_info.archive_attrs.add(name)
+            return
+        for info in _class_infos(_resolve(self.scopes, root)):
+            info.archive_attrs.add(attr)
+
+    def _bind(self, pairs: _Pairs) -> None:
         current = self.scopes[-1].current
         for name, bindings in pairs:
+            self._record_archive_attr(name, bindings)
             if self._depth[-1] == 0:
                 current[name] = set(bindings)
             else:
@@ -430,20 +559,29 @@ class _InvariantVisitor(ast.NodeVisitor):
             self.visit(node.returns)
         for type_param in getattr(node, "type_params", ()):
             self.visit(type_param)
-        # Parameters are locals: they shadow enclosing imports and archive
-        # bindings unless annotated as a zipfile archive themselves.
-        param_pairs = [
-            (
-                param.arg,
-                {_ARCHIVE} if _annotation_mentions_zip(param.annotation, self.scopes) else {_OTHER},
-            )
-            for param in params
-        ]
+        param_pairs = self._param_pairs(node)
         self._bind_node(node)
         self._push(node.body, params=param_pairs)
         for stmt in node.body:
             self.visit(stmt)
         self._pop()
+
+    def _param_pairs(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> _Pairs:
+        """Parameters are locals: they shadow enclosing imports and archive
+        bindings unless annotated as a zipfile archive. A method's first
+        parameter (``self``/``cls``) is bound to its class."""
+        pairs: _Pairs = [
+            (
+                param.arg,
+                {_ARCHIVE} if _annotation_mentions_zip(param.annotation, self.scopes) else {_OTHER},
+            )
+            for param in _function_params(node.args)
+        ]
+        class_info = self.scopes[-1].class_info
+        positional = [*node.args.posonlyargs, *node.args.args]
+        if class_info is not None and positional and not _is_staticmethod(node):
+            pairs[0] = (positional[0].arg, {("instance", class_info)})
+        return pairs
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
@@ -464,7 +602,17 @@ class _InvariantVisitor(ast.NodeVisitor):
             self.visit(child)
         for type_param in getattr(node, "type_params", ()):
             self.visit(type_param)
-        self._push(node.body, is_class=True)
+        info = self.scopes[0].class_registry.setdefault(id(node), _ClassInfo())
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                info.bases.extend(_class_infos(_resolve(self.scopes, base.id)))
+        self._push(node.body, class_info=info)
+        # Pre-collect every method body first so ``self.x = ZipFile(...)`` in
+        # ``__init__`` classifies ``self.x`` in methods defined before it.
+        for stmt in node.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._push(stmt.body, params=self._param_pairs(stmt))
+                self._pop()
         for stmt in node.body:
             self.visit(stmt)
         self._pop()
