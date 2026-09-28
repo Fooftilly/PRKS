@@ -117,15 +117,18 @@ _OTHER: _Binding = ("other",)
 
 
 class _ClassInfo:
-    """Attributes of one same-module class that are proven zipfile archives."""
+    """One same-module class: is it a zipfile archive subclass, and which of
+    its attributes are proven zipfile archives."""
 
-    __slots__ = ("archive_attrs", "bases")
+    __slots__ = ("archive_attrs", "bases", "zip_base")
 
     def __init__(self) -> None:
         self.archive_attrs: set[str] = set()
         self.bases: list[_ClassInfo] = []
+        # A base expression resolves to zipfile.ZipFile / PyZipFile directly.
+        self.zip_base = False
 
-    def has_archive_attr(self, attr: str) -> bool:
+    def _lineage(self) -> Iterable[_ClassInfo]:
         seen: set[int] = set()
         stack: list[_ClassInfo] = [self]
         while stack:
@@ -133,10 +136,14 @@ class _ClassInfo:
             if id(info) in seen:
                 continue
             seen.add(id(info))
-            if attr in info.archive_attrs:
-                return True
+            yield info
             stack.extend(info.bases)
-        return False
+
+    def has_archive_attr(self, attr: str) -> bool:
+        return any(attr in info.archive_attrs for info in self._lineage())
+
+    def is_archive_class(self) -> bool:
+        return any(info.zip_base for info in self._lineage())
 
 
 class _Scope:
@@ -212,18 +219,22 @@ def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, st
 
 
 def _is_zip_class_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
-    """``zipfile.ZipFile`` / ``z.ZipFile`` / ``ZipFile`` / ``Z`` (import alias)."""
+    """``zipfile.ZipFile`` / ``z.ZipFile`` / ``ZipFile`` / ``Z`` (import alias) / a same-module subclass."""
     if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
         return (
             node.attr in ZIPFILE_ARCHIVE_CLASSES
             and "zipfile" in _lookup_modules(scopes, node.value.id)
         )
     if isinstance(node, ast.Name):
-        return any(
-            module == "zipfile" and name in ZIPFILE_ARCHIVE_CLASSES
-            for module, name in _lookup_names(scopes, node.id)
-        )
+        return any(_is_zip_class_binding(b) for b in _resolve(scopes, node.id))
     return False
+
+
+def _is_zip_class_binding(binding: _Binding) -> bool:
+    """An imported zipfile archive class, or a same-module subclass of one."""
+    if binding[0] == "name":
+        return binding[1] == "zipfile" and binding[2] in ZIPFILE_ARCHIVE_CLASSES
+    return binding[0] == "class" and binding[1].is_archive_class()
 
 
 def _is_zip_constructor(node: ast.expr, scopes: list[_Scope]) -> bool:
@@ -260,6 +271,10 @@ def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
     key = _attr_key(node)
     if key is None or not isinstance(node.value, ast.Name):
         return False
+    innermost = scopes[-1]
+    if key in innermost.current:
+        # A binding on the current path is authoritative over the class record.
+        return _ARCHIVE in innermost.current[key]
     if _ARCHIVE in _resolve(scopes, key):
         return True
     return any(
@@ -268,9 +283,24 @@ def _is_archive_attribute(node: ast.Attribute, scopes: list[_Scope]) -> bool:
     )
 
 
+def _branch_values(node: ast.expr) -> list[ast.expr] | None:
+    """Values a conditional / boolean expression may evaluate to."""
+    if isinstance(node, ast.IfExp):
+        return [node.body, node.orelse]
+    if isinstance(node, ast.BoolOp):
+        return list(node.values)
+    return None
+
+
 def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
+    branches = _branch_values(node)
+    if branches is not None:
+        return any(_is_zip_archive_expr(branch, scopes) for branch in branches)
     if isinstance(node, ast.Name):
-        return _ARCHIVE in _resolve(scopes, node.id)
+        bindings = _resolve(scopes, node.id)
+        return _ARCHIVE in bindings or any(
+            b[0] == "instance" and b[1].is_archive_class() for b in bindings
+        )
     if isinstance(node, ast.Attribute):
         return _is_archive_attribute(node, scopes)
     return _is_zip_constructor(node, scopes)
@@ -278,6 +308,9 @@ def _is_zip_archive_expr(node: ast.expr, scopes: list[_Scope]) -> bool:
 
 def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
     """What a name bound to ``value`` refers to (aliases carry through)."""
+    branches = _branch_values(value)
+    if branches is not None:
+        return set().union(*(_value_bindings(branch, scopes) for branch in branches))
     if isinstance(value, ast.Name):
         return set(_resolve(scopes, value.id)) or {_OTHER}
     if _is_zip_archive_expr(value, scopes):
@@ -674,6 +707,7 @@ class _InvariantVisitor(ast.NodeVisitor):
         for type_param in getattr(node, "type_params", ()):
             self.visit(type_param)
         info = self.scopes[0].class_registry.setdefault(id(node), _ClassInfo())
+        info.zip_base = any(_is_zip_class_expr(base, self.scopes) for base in node.bases)
         for base in node.bases:
             if isinstance(base, ast.Name):
                 info.bases.extend(_class_infos(_resolve(self.scopes, base.id)))
@@ -829,7 +863,24 @@ class _InvariantVisitor(ast.NodeVisitor):
         )
 
     def _is_zip_receiver(self, node: ast.expr) -> bool:
-        return _is_zip_archive_expr(node, self.scopes) or _is_zip_class_expr(node, self.scopes)
+        return (
+            _is_zip_archive_expr(node, self.scopes)
+            or _is_zip_class_expr(node, self.scopes)
+            or self._is_archive_super(node)
+        )
+
+    def _is_archive_super(self, node: ast.expr) -> bool:
+        """``super()`` inside a method of a zipfile archive subclass."""
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "super"
+        ):
+            return False
+        class_info = next(
+            (scope.class_info for scope in reversed(self.scopes) if scope.class_info), None
+        )
+        return class_info is not None and class_info.is_archive_class()
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         # Match the attribute itself so method references (``f = zf.extractall``)

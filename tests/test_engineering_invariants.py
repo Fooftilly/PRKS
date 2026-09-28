@@ -475,6 +475,60 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "[(archive := zipfile.ZipFile(p)) for p in paths]\n"
                 "archive.extractall(dest)\n"
             ),
+            # Conditional / boolean value selection.
+            "conditional_expression_value": (
+                "import zipfile\n"
+                "archive = zipfile.ZipFile(path) if use_zip else load_bundle(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "boolean_fallback_value": (
+                "import zipfile\n"
+                "archive = cached or zipfile.ZipFile(path)\n"
+                "archive.extractall(dest)\n"
+            ),
+            "self_attribute_used_before_local_rebinding": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest):\n"
+                "        self.archive.extractall(dest)\n"
+                "        self.archive = None\n"
+            ),
+            # Same-module subclasses inherit ZipFile.extractall.
+            "subclass_constructor": (
+                "import zipfile\n"
+                "class SafeZip(zipfile.ZipFile):\n"
+                "    pass\n"
+                "SafeZip(path).extractall(dest)\n"
+            ),
+            "subclass_self_call": (
+                "import zipfile\n"
+                "class SafeZip(zipfile.ZipFile):\n"
+                "    def unpack(self, dest):\n"
+                "        self.extractall(dest)\n"
+            ),
+            "subclass_super_call": (
+                "import zipfile\n"
+                "class SafeZip(zipfile.ZipFile):\n"
+                "    def extractall(self, dest):\n"
+                "        return super().extractall(dest)\n"
+            ),
+            "indirect_subclass_with": (
+                "from zipfile import ZipFile\n"
+                "class Base(ZipFile):\n"
+                "    pass\n"
+                "class Restore(Base):\n"
+                "    pass\n"
+                "with Restore(path) as archive:\n"
+                "    archive.extractall(dest)\n"
+            ),
+            "subclass_unbound_method": (
+                "import zipfile\n"
+                "class SafeZip(zipfile.ZipFile):\n"
+                "    pass\n"
+                "SafeZip.extractall(archive, dest)\n"
+            ),
         }
         for label, source in cases.items():
             with self.subTest(form=label):
@@ -573,6 +627,24 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "else:\n"
                 "    archive = load_other()\n"
                 "archive.extractall(dest)\n"
+            ),
+            # A definite rebinding of an attribute on the current path wins
+            # over the class-level record.
+            "self_attribute_definite_rebinding": (
+                "import zipfile\n"
+                "class Restore:\n"
+                "    def __init__(self, path):\n"
+                "        self.archive = zipfile.ZipFile(path)\n"
+                "    def run(self, dest):\n"
+                "        self.archive = load_bundle()\n"
+                "        self.archive.extractall(dest)\n"
+            ),
+            # Only zipfile subclasses make ``self`` an archive.
+            "unrelated_class_self_call": (
+                "import zipfile\n"
+                "class Bundle:\n"
+                "    def unpack(self, dest):\n"
+                "        self.extractall(dest)\n"
             ),
             # Archive attributes are per class, per attribute name.
             "same_attribute_on_unrelated_class": (
