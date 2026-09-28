@@ -1703,6 +1703,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    path = (Path(pdfs_dir) / name).as_posix()\n"
                 "    os.remove(path)\n"
             ),
+            "path_walk_root": (
+                "from pathlib import Path\n"
+                "def purge(pdfs_dir):\n"
+                "    for root, _, files in Path(pdfs_dir).walk():\n"
+                "        (root / files[0]).unlink()\n"
+            ),
             "path_unlink_unbound": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2137,6 +2143,17 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        fields |= {'file_path': other}\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "raw_sql_update_table_alias": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works AS w SET file_path = ? WHERE w.id = ?', (fp, w_id))\n"
+            ),
+            "guarded_dict_annotated_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path']: str = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_under_guard": (
                 "from backend.services import work_pdf_replace\n"
                 "def adopt(conn, pdfs_dir, w_id, fp):\n"
@@ -2388,6 +2405,11 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "def f(db, rows):\n"
                 "    names = {referenced_managed_pdf_filename(r['file_path']) for r in rows}\n"
                 "    cleanup_released_managed_pdfs(db, names)\n"
+            ),
+            "path_name_of_weak": (
+                "from pathlib import Path\n"
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, Path(referenced_managed_pdf_filename(fp)).name)\n"
             ),
             "loop_over_named_list": (
                 "def f(conn, fp):\n"

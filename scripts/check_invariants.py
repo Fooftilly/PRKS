@@ -109,6 +109,8 @@ _PATH_RETURNING_METHODS = frozenset(
     }
 )
 _PATH_RETURNING_ATTRS = frozenset({"parent"})
+# Path attributes naming (part of) the same file as a string.
+_PATH_STRING_ATTRS = frozenset({"name", "stem"})
 # Path methods returning the same location as a string.
 _PATH_STRING_METHODS = frozenset({"__fspath__", "__str__", "as_posix", "as_uri"})
 # Path methods yielding Paths under the receiver (``for p in d.glob("*")``).
@@ -225,7 +227,7 @@ _SQL_WORKS_INSERT_RE = re.compile(
     re.IGNORECASE,
 )
 _SQL_WORKS_UPDATE_RE = re.compile(
-    r"\bUPDATE\s+(?:OR\s+\w+\s+)?works\s+SET\b(.*?)(?:\bWHERE\b|$)",
+    r"\bUPDATE\s+(?:OR\s+\w+\s+)?works(?:\s+(?:AS\s+)?\w+)?\s+SET\b(.*?)(?:\bWHERE\b|$)",
     re.IGNORECASE | re.DOTALL,
 )
 _SQL_UPSERT_SET_RE = re.compile(
@@ -887,10 +889,12 @@ def _attribute_facts(node: ast.Attribute, scopes: list[_Scope]) -> set[_Binding]
     key = _attr_key(node)
     if key is not None:
         facts |= _facts_of(_resolve(scopes, key))
-    if node.attr in _PATH_RETURNING_ATTRS:
+    if node.attr in _PATH_RETURNING_ATTRS or node.attr in _PATH_STRING_ATTRS:
         receiver = _expr_facts(node.value, scopes)
         if _PATH in receiver:
-            facts |= receiver
+            # ``p.parent`` is a Path; ``p.name`` is a string naming the same
+            # file, so it keeps the managed / weak provenance.
+            facts |= receiver if node.attr in _PATH_RETURNING_ATTRS else _without_path(receiver)
     return facts
 
 
@@ -1057,10 +1061,24 @@ def _loop_target_pairs(
     if key is not None and _iterable_yields_archive(iterable, scopes):
         return [(key, {_ARCHIVE})]
     # Elements of a collection (or a Path iterator) carry its provenance.
-    carried = {_OTHER}
+    carried = {_OTHER} | _iteration_facts(_expr_facts(iterable, scopes))
     if key is not None:
-        carried |= _iteration_facts(_expr_facts(iterable, scopes))
-    return [(name, set(carried)) for name in _stored_names(target)]
+        return [(key, carried)]
+    pairs = [(name, {_OTHER}) for name in _stored_names(target)]
+    if _is_path_walk(iterable) and isinstance(target, (ast.Tuple, ast.List)) and target.elts:
+        # ``for root, dirs, files in p.walk()``: ``root`` is a Path under ``p``.
+        root = target.elts[0]
+        if isinstance(root, ast.Name):
+            pairs = [(root.id, carried), *(pair for pair in pairs if pair[0] != root.id)]
+    return pairs
+
+
+def _is_path_walk(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "walk"
+    )
 
 
 _Pairs = list[tuple[str, set[_Binding]]]
@@ -1636,6 +1654,8 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self.generic_visit(node)
+        if node.value is not None:
+            self._check_guarded_dict_store(node.target, node.value)
         self._bind_node(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
