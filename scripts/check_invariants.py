@@ -138,12 +138,15 @@ _PATH_STRING_FUNCS = frozenset(
         "os.path.normcase",
         "os.path.normpath",
         "os.path.realpath",
+        "os.path.relpath",
     }
 )
 # os functions yielding entries under their directory argument.
 _DIR_ITERATOR_FUNCS = frozenset({"os.fwalk", "os.scandir", "os.walk"})
 # DirEntry attributes naming the entry.
 _DIR_ENTRY_ATTRS = frozenset({"name", "path"})
+# Mapping lookups returning one of the mapping's values (or the default).
+_MAPPING_LOOKUP_METHODS = frozenset({"get", "pop", "setdefault"})
 _STR_TRANSFORM_METHODS = frozenset(
     {
         "capitalize",
@@ -583,6 +586,15 @@ def _lookup_names(scopes: list[_Scope], name: str) -> set[tuple[str, str]]:
 
 def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, str]]:
     fn = node.func
+    constant = _constant_getattr(fn, scopes)
+    if constant is not None:
+        # ``getattr(shutil, "copy2")(...)``.
+        pairs: set[tuple[str, str]] = set()
+        for name in _qualified_names(fn, scopes):
+            owner, _, attr = name.rpartition(".")
+            if owner:
+                pairs.add((owner, attr))
+        return sorted(pairs)
     if isinstance(fn, ast.Attribute):
         # ``mod.fn(...)``, and a callable stored on a tracked one-level
         # attribute (``self.cp = shutil.copy2; self.cp(...)``).
@@ -820,6 +832,11 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
     to their bare name. Empty for locals, parameters and unknown names."""
     if isinstance(node, ast.Name):
         return _names_of_bindings(_resolve(scopes, node.id))
+    constant = _constant_getattr(node, scopes)
+    if constant is not None:
+        # ``getattr(os, "remove")`` names ``os.remove``.
+        obj, attr = constant
+        return {f"{base}.{attr}" for base in _qualified_names(obj, scopes)}
     if isinstance(node, ast.Attribute):
         # A callable stored on a tracked one-level attribute
         # (``self.rm = os.remove``) keeps its identity.
@@ -827,6 +844,19 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
         stored = _names_of_bindings(_resolve(scopes, key)) if key is not None else set()
         return stored | {f"{base}.{node.attr}" for base in _qualified_names(node.value, scopes)}
     return set()
+
+
+def _constant_getattr(node: ast.expr, scopes: list[_Scope]) -> tuple[ast.expr, str] | None:
+    """``(obj, "attr")`` for the builtin ``getattr(obj, "attr"[, default])``."""
+    if (
+        isinstance(node, ast.Call)
+        and _is_builtin(node.func, scopes, "getattr")
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    ):
+        return node.args[0], node.args[1].value
+    return None
 
 
 def _names_of_bindings(bindings: Iterable[_Binding]) -> set[str]:
@@ -882,6 +912,10 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
     aliases; a name bound only to a parameter/local matches nothing, and an
     unbound (global from elsewhere) name matches its own spelling.
     """
+    constant = _constant_getattr(func, scopes)
+    if constant is not None:
+        # ``getattr(db, "add_work")(...)`` -> ``add_work``.
+        return {constant[1]} | {name.rsplit(".", 1)[-1] for name in _qualified_names(func, scopes)}
     if isinstance(func, ast.Attribute):
         # ``self.save = db.add_work; self.save(...)`` -> ``add_work`` too.
         return {func.attr} | {
@@ -1233,6 +1267,10 @@ def _method_call_facts(
         # A pure path (``PurePath(d).joinpath(n)``) derives another pure path
         # naming a file under the same provenance, still without ``path``.
         return receiver | _element_facts(_call_argument_facts(node, scopes))
+    if func.attr in _MAPPING_LOOKUP_METHODS and _PATH not in receiver:
+        # ``names.get("pdf")``: an element of the mapping, or the default.
+        defaults = set().union(*(_expr_facts(arg, scopes) for arg in node.args[1:]))
+        return _element_facts(receiver) | _element_facts(defaults)
     if func.attr not in _STR_TRANSFORM_METHODS or (func.attr == "replace" and _PATH in receiver):
         # ``Path.replace(target)`` renames; it is not a string transform.
         return None

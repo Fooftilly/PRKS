@@ -67,6 +67,17 @@ class EngineeringInvariantTests(unittest.TestCase):
                 codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
                 self.assertEqual(codes, [code, code])
 
+    def test_blocks_constant_getattr_banned_callables(self):
+        cases = {
+            "copy2": ("shutil", "copy2", "INV-STORAGE-001"),
+            "os_replace": ("os", "replace", "INV-DURABILITY-001"),
+        }
+        for label, (module, attr, code) in cases.items():
+            with self.subTest(case=label):
+                source = f"import {module}\ndef f(a, b):\n    getattr({module}, '{attr}')(a, b)\n"
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, [code])
+
     def test_blocks_direct_import_alias(self):
         findings = checker.check_source(
             "from shutil import copyfile as cp\ncp('a', 'b')\n",
@@ -1669,6 +1680,16 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
             ),
+            "os_unlink_relpath_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.unlink(os.path.relpath(os.path.join(pdfs_dir, name)))\n"
+            ),
+            "constant_getattr_remove": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    getattr(os, 'remove')(os.path.join(pdfs_dir, name))\n"
+            ),
             "remove_stored_on_attribute": (
                 "import os\n"
                 "class Cleaner:\n"
@@ -2712,6 +2733,10 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        mutate({k: body for k in items})\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "constant_getattr_sink": (
+                "def create(db, fp):\n"
+                "    getattr(db, 'add_work')(title='t', file_path=fp)\n"
+            ),
             "sink_stored_on_attribute": (
                 "class Creator:\n"
                 "    def create(self, db, fp):\n"
@@ -3325,6 +3350,11 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
                 "def f(db, fp):\n"
                 "    name = ''.join([referenced_managed_pdf_filename(fp)])\n"
                 "    forget_pending_pdf_cleanup(db, name)\n"
+            ),
+            "weak_through_mapping_get": (
+                "def f(db, fp):\n"
+                "    names = {'pdf': referenced_managed_pdf_filename(fp)}\n"
+                "    forget_pending_pdf_cleanup(db, names.get('pdf'))\n"
             ),
             "claim_sql_interpolated_weak": (
                 "def f(conn, fp):\n"
