@@ -4329,6 +4329,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 const liveDeleted = lifecycle === 'delete';
                 const liveUnsent = lifecycle === 'create';
+                let workDeleted = false;
+                let work = null;
                 if (cachedWorkRow && cachedWorkRow.value) {
                     if (liveDeleted) {
                         offlineWork = { value: null, source: 'unavailable', cachedAt: null };
@@ -4342,19 +4344,40 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             routeSignal
                         );
                         if (stale()) return;
-                        /* Background: keep live set coherent with the queue.
-                         * The persisted marker already classified delete
-                         * before paint, so this must not be the first time
-                         * a pending DELETE becomes visible. */
+                        /* Background: this cached open did not wait on the queue.
+                         * A pending DELETE the marker missed must drop the
+                         * projection, not only the entity. */
                         void workOpsPromise.then(function (ops) {
                             if (stale()) return;
                             workOps = ops;
-                            if (typeof prksPendingWorkDeletions === 'function' &&
-                                prksPendingWorkDeletions(ops).has(workId)) {
-                                if (typeof prksOfflineRenderUnavailable === 'function') {
-                                    prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
-                                }
-                                if (ctx.setEntity) ctx.setEntity('work', null);
+                            if (typeof prksPendingWorkDeletions !== 'function' ||
+                                !prksPendingWorkDeletions(ops).has(workId)) return;
+                            /* The cached row may already be a ready projection.
+                             * Clearing the entity alone leaves that projection
+                             * for a later placement refresh to republish. */
+                            workDeleted = true;
+                            work = null;
+                            if (typeof prksProjectWorkRoute === 'function' &&
+                                typeof prksPublishWorkRouteProjection === 'function') {
+                                const deletedProjection = prksPublishWorkRouteProjection(
+                                    ctx,
+                                    generation,
+                                    prksProjectWorkRoute({
+                                        workId: workId,
+                                        owner: { tabId: ctx.tabId, generation: generation },
+                                        availability: 'unavailable',
+                                        lifecycle: 'pending-delete',
+                                        provenance: 'cache',
+                                        work: null,
+                                        recordOpen: false,
+                                    })
+                                );
+                                if (!deletedProjection) return;
+                            } else if (ctx.setEntity) {
+                                ctx.setEntity('work', null);
+                            }
+                            if (typeof prksOfflineRenderUnavailable === 'function') {
+                                prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                             }
                         });
                     }
@@ -4377,7 +4400,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         if (stale()) return;
                     }
                 }
-                const workDeleted = liveDeleted ||
+                workDeleted = liveDeleted ||
                     (typeof prksPendingWorkDeletions === 'function' &&
                         prksPendingWorkDeletions(workOps).has(workId));
                 const workUnsent = liveUnsent || (!workDeleted &&
@@ -4421,7 +4444,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     }
                     return placed;
                 };
-                let work = prksPlacePendingWork(offlineWork.value);
+                work = prksPlacePendingWork(offlineWork.value);
                 if (workDeleted) {
                     work = null;
                 }
@@ -4483,10 +4506,30 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
                 }
-                /* Sync overlays only. Metadata and roles use the in-memory
-                 * maps; they do not start a durable-queue read. Video source
-                 * refresh stays the one await the painter already performed,
-                 * and only for an acknowledged video. */
+                /* Sync overlays read maps. Fill those maps from the durable
+                 * read this route already started. The shared hydration hook
+                 * would issue further queue reads (folders, playlists, and
+                 * other names) that this route does not wait on. */
+                if (work && !workOps.length) {
+                    workOps = await workOpsPromise;
+                    if (stale()) return;
+                }
+                if (work && typeof prksPendingWorkDeletions === 'function' &&
+                    prksPendingWorkDeletions(workOps).has(workId)) {
+                    workDeleted = true;
+                    work = null;
+                }
+                if (work) {
+                    if (typeof prksSetPendingWorkMetadata === 'function') {
+                        prksSetPendingWorkMetadata(workOps);
+                    }
+                    if (typeof prksSetPendingWorkRoles === 'function') {
+                        prksSetPendingWorkRoles(workOps);
+                    }
+                    if (typeof prksSetPendingPersonNames === 'function') {
+                        prksSetPendingPersonNames(workOps);
+                    }
+                }
                 if (work && typeof prksEffectiveWorkSync === 'function') {
                     work = prksEffectiveWorkSync(work);
                 }

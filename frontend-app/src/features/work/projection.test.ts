@@ -246,6 +246,36 @@ describe('owner publication', () => {
     expect(replaceWorkRoutePlacement(main, 1, { id: 'w2', folder_id: 'nope' })).toBeNull()
   })
 
+  it('drops a ready cached projection when a later publish is pending deletion', () => {
+    const ctx = ctxFor('main', 1)
+    publishWorkRouteProjection(
+      ctx,
+      1,
+      projectWorkRoute(input({ workId: 'w1', provenance: 'cache', work: { id: 'w1', title: 'Cached' } })),
+    )
+    const deleted = publishWorkRouteProjection(
+      ctx,
+      1,
+      projectWorkRoute(
+        input({
+          workId: 'w1',
+          availability: 'unavailable',
+          lifecycle: 'pending-delete',
+          provenance: 'cache',
+          work: { id: 'w1', title: 'Cached' },
+          recordOpen: false,
+        }),
+      ),
+    )
+    expect(deleted?.availability).toBe('unavailable')
+    expect(deleted?.lifecycle).toBe('pending-delete')
+    expect(deleted?.work).toBeNull()
+    expect(ctx.getEntity('work')).toBeNull()
+    expect(replaceWorkRoutePlacement(ctx, 1, { id: 'w1', title: 'Cached', folder_id: 'later' })).toBeNull()
+    expect(ctx.getEntity('work')).toBeNull()
+    expect((ctx.getResource('workRouteProjection') as WorkRouteProjection).work).toBeNull()
+  })
+
   it('does not adopt a painted Work after the generation moves', () => {
     let currentGeneration = 1
     const ctx = ctxFor('main', 1)

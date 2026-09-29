@@ -1,4 +1,6 @@
 """Work route projection stays a typed owner boundary around the legacy painter."""
+import json
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -61,6 +63,13 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertIn("if (!workUnsentEarly && !workDeletedEarly)", body)
         self.assertIn("lifecycle: workLifecycle", body)
         self.assertIn("workDeleted ? 'pending-delete'", body)
+        self.assertIn("lifecycle: 'pending-delete'", body)
+        self.assertLess(body.index("lifecycle: 'pending-delete'"), body.index("prksOfflineRenderUnavailable(contentDiv, 'File not available offline')"))
+        self.assertLess(body.index("if (!deletedProjection) return;"), body.index("prksOfflineRenderUnavailable(contentDiv, 'File not available offline')"))
+        self.assertLess(body.index("prksSetPendingWorkMetadata(workOps)"), body.index("prksEffectiveWorkSync"))
+        self.assertLess(body.index("prksSetPendingWorkRoles(workOps)"), body.index("prksEffectiveWorkDetailRoles"))
+        self.assertLess(body.index("workOps = await workOpsPromise;"), body.index("prksSetPendingWorkMetadata(workOps)"))
+        self.assertNotIn("prksHydratePendingWorkMetadata", body)
         self.assertNotIn("currentWorkProjection", body)
         self.assertNotIn(".listOperations(", body)
 
@@ -106,6 +115,95 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         entry = next(item for item in manifest["dependencies"] if item["name"] == "prks-work-route-projection")
         self.assertEqual(entry["runtime_files"][0]["path"], "/js/work-route-projection.js")
         self.assertEqual(len(entry["runtime_files"][0]["sha256"]), 64)
+
+    def test_fresh_context_projects_pending_metadata_and_roles(self):
+        """A reload starts with empty overlay maps. Pending metadata and a
+        pending role already in the durable read show up on the projection."""
+        ops = [
+            {
+                "operation": "SET_WORK_METADATA_FIELD",
+                "entity_type": "work",
+                "entity_id": "w1",
+                "status": "pending",
+                "payload": {"field": "title", "value": "Pending title"},
+            },
+            {
+                "operation": "ADD_WORK_PERSON_ROLE",
+                "entity_type": "work",
+                "entity_id": "w1",
+                "status": "pending",
+                "payload": {"person_id": "p1", "role_type": "Author", "credit_name": ""},
+                "local_context": {
+                    "person": {
+                        "id": "p1",
+                        "first_name": "Ada",
+                        "last_name": "Lovelace",
+                        "canonical_name": "Ada Lovelace",
+                    }
+                },
+            },
+        ]
+        script = r"""
+        const root = process.argv[1];
+        require(root + '/frontend/js/date-format.js');
+        require(root + '/frontend/js/work-metadata-state.js');
+        require(root + '/frontend/js/work-role-state.js');
+        require(root + '/frontend/js/person-metadata-state.js');
+        require(root + '/frontend/js/work-route-projection.js');
+        const ops = JSON.parse(process.argv[2]);
+        const acknowledged = { id: 'w1', title: 'Acknowledged', roles: [] };
+        if (globalThis.prksEffectiveWorkSync(acknowledged).title !== 'Acknowledged') {
+            throw new Error('fresh metadata map was not empty');
+        }
+        if (globalThis.prksEffectiveWorkDetailRoles(acknowledged).roles.length !== 0) {
+            throw new Error('fresh role map was not empty');
+        }
+        globalThis.prksSetPendingWorkMetadata(ops);
+        globalThis.prksSetPendingWorkRoles(ops);
+        globalThis.prksSetPendingPersonNames(ops);
+        let work = globalThis.prksEffectiveWorkSync(acknowledged);
+        work = globalThis.prksEffectiveWorkDetailRoles(work);
+        const ctx = {
+            tabId: 'main',
+            generation: 1,
+            entity: null,
+            resource: null,
+            isCurrent(token) { return token === 1; },
+            setEntity(_type, value) { this.entity = value; },
+            getEntity() { return this.entity; },
+            setResource(_name, value) { this.resource = value; },
+            getResource() { return this.resource; },
+        };
+        const published = globalThis.prksPublishWorkRouteProjection(
+            ctx, 1, globalThis.prksProjectWorkRoute({
+                workId: 'w1',
+                owner: { tabId: 'main', generation: 1 },
+                availability: 'ready',
+                lifecycle: 'ordinary',
+                provenance: 'cache',
+                work: work,
+                recordOpen: false,
+            })
+        );
+        process.stdout.write(JSON.stringify({
+            title: published.work && published.work.title,
+            role: published.work && published.work.roles && published.work.roles[0],
+        }));
+        """
+        proc = subprocess.run(
+            ["node", "-e", script, str(_PROJECT), json.dumps(ops)],
+            cwd=_PROJECT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["title"], "Pending title")
+        self.assertEqual(payload["role"]["id"], "p1")
+        self.assertEqual(payload["role"]["role_type"], "Author")
+        self.assertEqual(payload["role"]["first_name"], "Ada")
 
 
 if __name__ == "__main__":

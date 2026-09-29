@@ -1,6 +1,6 @@
 var prksWorkRoute = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region frontend-app/src/features/work/projection.ts
+	//#region src/features/work/projection.ts
 	var RESOURCE = "workRouteProjection";
 	function cloneWork(work) {
 		if (!work) return null;
@@ -119,7 +119,7 @@ var prksWorkRoute = (function(exports) {
 		return !internalRefresh && !!workValue;
 	}
 	//#endregion
-	//#region frontend-app/src/features/work/browser-entry.ts
+	//#region src/features/work/browser-entry.ts
 	/**
 	* Classic-script entry. The maintainer build emits frontend/js/work-route-projection.js.
 	* The Vue application does not import this module. No Vue mount, Pinia, or Vue Router.
