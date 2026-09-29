@@ -3740,12 +3740,12 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
     const dateError = panel.querySelector('#meta-date-error');
     if (date && dateError) {
         const clearDateError = () => {
-            /* `#meta-date-error` is Vue-owned through chrome.fieldError. Emptying
-             * the node here leaves the next identical message unpainted. */
+            /* One chrome.fieldError slot serves every field. This listener is
+             * only for Published Date, so it must not drop a thumbnail error. */
             if (typeof prksVueWorkMetadataEditorOwns === 'function' &&
                 prksVueWorkMetadataEditorOwns(ownerCtx)) {
                 if (typeof prksVueSetWorkMetadataFieldError === 'function') {
-                    prksVueSetWorkMetadataFieldError('', '');
+                    prksVueSetWorkMetadataFieldError('published_date', '');
                 }
                 return;
             }

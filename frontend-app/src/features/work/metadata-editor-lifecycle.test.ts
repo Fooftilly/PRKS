@@ -413,7 +413,7 @@ describe('work metadata editor lifecycle', () => {
     expect(document.getElementById('meta-thumb-page-error')?.textContent).toBe(THUMB_ERROR)
   })
 
-  it('keeps a repeated published-date error when the date field is edited', async () => {
+  it('clears only a published-date error when that field is edited', async () => {
     const ctx = mount()
     const record = ctx.getEntity('work')
     const panel = document.getElementById('panel-content')
@@ -445,9 +445,9 @@ describe('work metadata editor lifecycle', () => {
     }
     if (!ctx.ui.workMetaDraft) throw new Error('draft missing')
     const originalSet = panelWindow.prksVueSetWorkMetadataFieldError
-    let vueClears = 0
+    const dateClears: Array<[string, string]> = []
     panelWindow.prksVueSetWorkMetadataFieldError = (field, message) => {
-      if (!field && !message) vueClears += 1
+      if (!message) dateClears.push([field, message])
       originalSet(field, message)
     }
     try {
@@ -458,17 +458,30 @@ describe('work metadata editor lifecycle', () => {
       expect(date).toBeInstanceOf(HTMLInputElement)
       expect(document.getElementById('meta-date-error')?.textContent).toBe(DATE_ERROR)
       const input = date as HTMLInputElement
-      vueClears = 0
-      input.value = '32/13/1999'
+      dateClears.length = 0
+      input.value = '01/01/2020'
       input.dispatchEvent(new Event('input', { bubbles: true }))
-      expect(vueClears).toBe(1)
-      expect(document.getElementById('meta-date-error')?.textContent).toBe(DATE_ERROR)
-      expect(input.getAttribute('aria-invalid')).toBe('true')
-      ctx.ui.workMetaDraft.published_date = '32/13/1999'
+      expect(dateClears).toEqual([['published_date', '']])
+      await nextTick()
+      expect(document.getElementById('meta-date-error')?.textContent).toBe('')
+      expect(input.getAttribute('aria-invalid')).not.toBe('true')
+
+      panelWindow.prksWorkFieldToCanonical = (field, value) => (field === 'thumb_page' ? null : value)
+      ctx.ui.workMetaDraft.published_date = ''
+      ctx.ui.workMetaDraft.thumb_page = '0'
       await panelWindow.prksSaveWorkMetadataFields('work-a', 'bib')
       await nextTick()
-      expect(document.getElementById('meta-date-error')?.textContent).toBe(DATE_ERROR)
-      expect(input.getAttribute('aria-invalid')).toBe('true')
+      const thumb = document.getElementById('meta-thumb-page')
+      expect(thumb).toBeInstanceOf(HTMLInputElement)
+      expect(document.getElementById('meta-thumb-page-error')?.textContent).toBe(THUMB_ERROR)
+      dateClears.length = 0
+      input.value = '02/02/2021'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(dateClears).toEqual([['published_date', '']])
+      await nextTick()
+      expect(document.getElementById('meta-thumb-page-error')?.textContent).toBe(THUMB_ERROR)
+      expect((thumb as HTMLInputElement).getAttribute('aria-invalid')).toBe('true')
+      expect(document.getElementById('meta-date-error')?.textContent).toBe('')
       expect(enqueued).toBe(0)
     } finally {
       panelWindow.prksVueSetWorkMetadataFieldError = originalSet

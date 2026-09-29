@@ -181,8 +181,14 @@ export function applyWorkMetadataChrome(
 
 export function setWorkMetadataFieldError(field: string, message: string): void {
   if (!mounted) return
-  mounted.chrome.fieldError = message ? { field, message } : null
-  if (!message) return
+  if (!message) {
+    /* An empty field name is the explicit clear-all used before validation.
+     * A named field clears only its own message. One slot holds every field. */
+    if (field && mounted.chrome.fieldError?.field !== field) return
+    mounted.chrome.fieldError = null
+    return
+  }
+  mounted.chrome.fieldError = { field, message }
   const input = mounted.anchor.querySelector(`[data-prks-work-field="${field}"]`)
   if (input instanceof HTMLElement) input.focus()
 }

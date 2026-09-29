@@ -62,6 +62,8 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         date_clear = bind[bind.index("const clearDateError"):]
         vue_owns = date_clear.index("prksVueWorkMetadataEditorOwns")
         self.assertLess(vue_owns, date_clear.index("textContent"))
+        self.assertIn("prksVueSetWorkMetadataFieldError('published_date', '')", date_clear)
+        self.assertNotIn("prksVueSetWorkMetadataFieldError('', '')", date_clear)
         self.assertLess(date_clear.index("prksVueSetWorkMetadataFieldError"), date_clear.index("textContent"))
         self.assertLess(date_clear.index("return"), date_clear.index("removeAttribute('aria-invalid')"))
 
