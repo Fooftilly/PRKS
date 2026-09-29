@@ -52,6 +52,34 @@ class AgentContextBudgetTests(unittest.TestCase):
             + ", ".join(oversized),
         )
 
+    def test_offline_agent_rule_leaves_are_bounded(self):
+        rules_dir = ROOT / "docs" / "agent-rules"
+        router = rules_dir / "offline-pwa.md"
+        leaves = (
+            rules_dir / "offline-foundations.md",
+            rules_dir / "offline-entity-coherence.md",
+            rules_dir / "offline-folder-tag-coherence.md",
+            rules_dir / "offline-browse-protocol.md",
+            rules_dir / "offline-work-sync.md",
+        )
+
+        self.assertLessEqual(
+            line_count(router),
+            120,
+            "offline-pwa.md is a router; move implementation detail into bounded leaves.",
+        )
+        oversized = [
+            f"{path.relative_to(ROOT)}: {line_count(path)} lines"
+            for path in leaves
+            if line_count(path) > 450
+        ]
+        self.assertEqual(
+            oversized,
+            [],
+            "Split oversized offline agent-rule leaves so agents can load only "
+            "the relevant synchronization domain: " + ", ".join(oversized),
+        )
+
     def test_cursor_rules_are_bounded(self):
         rules_dir = ROOT / ".cursor" / "rules"
         oversized = []
