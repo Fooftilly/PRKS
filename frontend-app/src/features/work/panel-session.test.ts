@@ -128,4 +128,29 @@ describe('work panel read session', () => {
     )
     expect(panel.querySelector('[data-prks-role="work-panel-source"] a')).toBeNull()
   })
+
+  it('hides the empty metadata line when a non-PDF source url is the only bibliographic row', () => {
+    const panel = mountPanel('main', 1)
+    expect(
+      presentWorkPanelRead({
+        ownerTabId: 'main',
+        ownerGeneration: 1,
+        workId: 'w-url',
+        work: { id: 'w-url', title: 'Clip' },
+        effectiveWork: { id: 'w-url', source_url: 'https://example.test/only' },
+        tags: [],
+        sourceKind: 'video',
+      }),
+    ).toBe(true)
+    const rows = panel.querySelector('[data-prks-role="work-bib-rows"]')?.textContent || ''
+    expect(rows).toContain('Original URL')
+    expect(rows).toContain('https://example.test/only')
+    expect(rows).not.toContain('Author')
+    expect(rows).not.toContain('Thumbnail page')
+    expect(panel.querySelector('[data-prks-role="work-meta-empty"]')).toBeNull()
+    expect(panel.querySelector('[data-prks-role="work-panel-source"]')?.textContent).not.toContain(
+      'No metadata available',
+    )
+    expect(panel.querySelector('[data-prks-role="work-panel-source"] a')).toBeNull()
+  })
 })
