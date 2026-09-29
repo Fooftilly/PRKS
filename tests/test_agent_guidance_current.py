@@ -177,12 +177,16 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertNotIn("prunes its newly-unused tags", self.offline_contract)
         self.assertIn("Folder deletion and Work/Folder tag removal preserve Tag identity",
                       self.offline_contract)
-        self.assertIn("Only explicit `delete_tag()` and", self.offline_contract)
-        self.assertIn("`merge_tags_into()` may destroy or transform Tag identity",
-                      self.offline_contract)
+        normalized_contract = re.sub(r"\\s+", " ", self.offline_contract)
+        self.assertIn(
+            "Only explicit `delete_tag()` and `merge_tags_into()` "
+            "may destroy or transform Tag identity",
+            normalized_contract,
+        )
 
     def test_router_covers_remaining_durable_family_routes(self):
         sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
+        router = self.offline_pwa
         for phrase in (
             "## Work lifecycle",
             "## Work-Person roles",
@@ -190,9 +194,16 @@ class AgentGuidanceTests(unittest.TestCase):
             "backend/work_lifecycle_sync.py",
             "backend/work_role_sync.py",
             "backend/tag_sync.py",
+            "Research Graph Work-delete invalidation",
+            "Research Graph core/People projection invalidation",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, sync_map)
+        for row in ("Work lifecycle", "Work-Person roles"):
+            with self.subTest(row=row):
+                matching = next(line for line in router.splitlines() if f"| {row}" in line)
+                self.assertIn("offline-entity-surfaces.md", matching)
+        self.assertNotIn("transactional pruning", sync_map)
 
     # ---- obsolete phrases that must never come back ------------------------
 
