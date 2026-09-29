@@ -4427,7 +4427,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
                                     recordOpen: false,
                                 })
                             );
-                            if (refreshed && refreshed.work) work = refreshed.work;
+                            if (!refreshed) return;
+                            if (refreshed.work) work = refreshed.work;
+                            /* The first paint used the maps it already had.
+                             * Refresh the selected panel so pending metadata
+                             * appears, without switching Annotations to Details. */
+                            if (stale()) return;
+                            const ownedNow = ctx.getResource('workRouteProjection');
+                            if (!ownedNow || ownedNow.ownerTabId !== ctx.tabId ||
+                                ownedNow.ownerGeneration !== generation ||
+                                ownedNow.workId !== workId ||
+                                ownedNow.availability !== 'ready') return;
+                            const focused = typeof prksTabContextIsFocused === 'function'
+                                ? prksTabContextIsFocused(ctx) : true;
+                            if (!focused || typeof updatePanelContent !== 'function') return;
+                            const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+                            updatePanelContent(panelTab);
                         });
                     }
                 } else {
@@ -4546,13 +4561,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         } else {
                             return;
                         }
-                        /* Only when this tab actually owns the shared panel. A
-                         * background tab whose bookkeeping happens to land late
-                         * must never replace what the user is looking at. */
+                        /* Re-check the owner. A late filing must not repaint
+                         * after this generation moved on, and it must not
+                         * replace Annotations with Details. */
+                        if (stale()) return;
+                        if (typeof prksReplaceWorkRoutePlacement === 'function') {
+                            const still = ctx.getResource ? ctx.getResource('workRouteProjection') : null;
+                            if (!still || still.ownerTabId !== ctx.tabId ||
+                                still.ownerGeneration !== generation ||
+                                still.workId !== workId ||
+                                still.availability !== 'ready') return;
+                        }
                         const focused = typeof prksTabContextIsFocused === 'function'
                             ? prksTabContextIsFocused(ctx) : true;
-                        if (focused && typeof updatePanelContent === 'function') {
-                            updatePanelContent('details');
+                        const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+                        if (focused && panelTab === 'details' && typeof updatePanelContent === 'function') {
+                            updatePanelContent(panelTab);
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
                 }
