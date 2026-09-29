@@ -742,17 +742,26 @@ lease and a live binding. Revert therefore runs in this fixed order, with the
 **P2 scope held throughout**:
 
 1. Unbind the destination: rebind to the old root's config, or to no storage,
-   through `bind_storage`'s existing rollback path.
-2. Release the destination's `active_process` lease.
-3. Atomically set the config back to `from`, with phase `failed`.
-4. Lift the old `fenced` marker back to `active`.
+   through `bind_storage`'s existing rollback path. **Keep holding the
+   destination's lease.**
+2. Atomically set the config back to `from`, with phase `failed`. From this
+   write on, no committed record exists that could authorize activating the
+   destination.
+3. Lift the old `fenced` marker back to `active`.
+4. Release the destination's lease.
 5. Only then release the scope.
+
+The lease is held through steps 2 and 3 because the P2 scope is process-local
+(§12). If the lease were released while the config still said `committed`,
+another process could take it, activate the `staging` destination from that
+record and bind it, leaving two active roots.
 
 A crash in the middle of revert is resolved by §8.3 recovery. While the config
 still says `committed`, recovery completes the move instead: P6 is idempotent
 on a `staging` destination. Once the config says `failed` with `local_root =
 from`, recovery lifts the fence. Either way a crash leaves exactly one
-bindable outcome, and a stale lease expires by its heartbeat rule (§12).
+bindable outcome. The dead process's lease is an OS lock, which the kernel
+releases when the process exits (§12).
 
 Reverting is safe because **no process** has admitted a mutation to either root
 since P2. The source has been fenced throughout, the destination was never
@@ -1082,10 +1091,27 @@ operation needs, without designing job queues or distributed locking:
 | Rebind | every process sees the same root | Roots change only at restart for multi-process deployments. Hot rebind (`bind_storage`) stays a single-process capability. |
 
 **Until those locks are cross-process, PRKS supports exactly one server process
-per data root.** Phase A records this in the marker (`active_process` lease, a
-PID plus heartbeat) and refuses a second process that tries to bind the same
-root. That also catches two PRKS installations accidentally configured with one
-root.
+per data root.** Phase A enforces this with the **`active_process` lease**, and
+refuses a second process that tries to bind the same root. That also catches
+two PRKS installations accidentally configured with one root.
+
+**The lease is a non-expiring OS lock, not a heartbeat.** It is an exclusive
+advisory lock on `<root>/.prks-maintenance/root.lock`: `fcntl`/`flock` on
+POSIX, `LockFileEx` on Windows. The lock is held for the whole time the root is
+bound, including across hot rebind. Only the kernel releases it, when the
+process closes it or exits. A process that is suspended, paused in a debugger
+or slow to schedule keeps its lock, so no other process can decide it is stale
+and bind the root underneath it. There is no timeout and no "stale lease" rule.
+The marker's `active_process` field (PID, host, start time) is **diagnostic
+only**: it names the holder in the error message, and it is never the
+authority.
+
+The lock depends on the filesystem honoring advisory locks, which is one of
+the local-filesystem semantics §7.4 already requires for a live SQLite-era
+root. A root whose filesystem cannot provide it, such as a network mount, is
+refused by §7.4 for the same reason. When a later multi-process deployment
+moves coordination to PostgreSQL, a fencing generation validated at each
+commit may replace the OS lock. That is a Phase F/PostgreSQL design item.
 
 ---
 
@@ -1167,9 +1193,10 @@ None of these blocks approving the design or starting Phase A.
    `pdfs/`" the right heuristic, or should the first Phase A start require an
    explicit confirmation when the root came from the default rather than
    `PRKS_STORAGE`?
-6. **The single-process lease** (§12): PID + heartbeat file in the marker as
-   proposed, or an OS advisory lock on the marker file (simpler, but its
-   behavior on network filesystems is the very thing §7.4 distrusts).
+6. *(Resolved in review.)* The single-process lease is a non-expiring OS
+   advisory lock (§12). A PID-and-heartbeat lease was rejected, because a
+   suspended holder could resume writing after another process had declared
+   it stale.
 
 ---
 
