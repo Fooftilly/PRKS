@@ -20,10 +20,12 @@ For shared protocol/coordinator changes whose behavior can affect every durable 
 | Task/domain | Load |
 | --- | --- |
 | Any offline/sync/PWA work | `offline-foundations.md` |
-| People, Person Groups, Playlists, Concepts, Positions, Arguments/Stances, PDF annotation coherence | `offline-entity-coherence.md` |
+| Research Graph, Work notes, and People/Concept/Position/Argument route + mutation surface semantics | `offline-entity-surfaces.md` |
+| People/Person Group/Playlist/Concept/Position/Argument/PDF coherence-domain invalidation | `offline-entity-coherence.md` |
 | Folders/Home, folder tags, Work-tag coherence/invalidation | `offline-folder-tag-coherence.md` |
 | Progress/Types/Recent/Recently Added projections, shared operation-family protocol/handler semantics | `offline-browse-protocol.md` |
-| Work metadata, source identity, opens, Work Tags, field conflicts/derived Work values | `offline-work-sync.md` |
+| Work metadata and Work opens | `offline-work-sync.md` + `offline-browse-protocol.md` |
+| Work source identity and Work Tags | `offline-work-sync.md` |
 
 ## Cross-domain cases
 
@@ -36,7 +38,7 @@ For shared protocol/coordinator changes whose behavior can affect every durable 
 
 Existing code comments may still name sections from the former monolithic file. Resolve them as follows:
 
-- "Offline coherence domains" → `offline-entity-coherence.md` and, for Folder/Tag-specific continuation, `offline-folder-tag-coherence.md`.
+- "Offline coherence domains" → shared framework in `offline-foundations.md`, then `offline-entity-coherence.md` or `offline-folder-tag-coherence.md` for the affected domain.
 - "Offline browse catalogs" → `offline-browse-protocol.md`.
 - "Synchronized operation families" → `offline-browse-protocol.md`.
 - Work metadata/source/open/tag milestone headings → `offline-work-sync.md`.
