@@ -153,6 +153,14 @@ function link(id: unknown, title: unknown): WorkPanelLink | null {
   return Object.freeze({ id: linkId, title: linkTitle || linkId })
 }
 
+/** A folder placement is a route. A title with no id is not a folder. */
+function folderPlacement(id: unknown, title: unknown): WorkPanelLink | null {
+  const linkId = text(id).trim()
+  if (!linkId) return null
+  const linkTitle = text(title).trim()
+  return Object.freeze({ id: linkId, title: linkTitle || linkId })
+}
+
 function personName(role: Record<string, unknown>): string {
   const credit = text(role.credit_name).trim()
   if (credit) return credit
@@ -216,7 +224,7 @@ function docTypeOf(input: WorkPanelReadInput, raw: string): WorkPanelDocType {
 export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadModel {
   const work = record(input.work)
   const effective = record(input.effectiveWork) ?? work
-  const folder = link(work?.folder_id ?? record(work?.folder)?.id, work?.folder_title ?? record(work?.folder)?.title)
+  const folder = folderPlacement(work?.folder_id ?? record(work?.folder)?.id, work?.folder_title ?? record(work?.folder)?.title)
   const playlist = link(work?.playlist_id, work?.playlist_title)
   const people = peopleFrom(effective)
   const tags = tagsFrom(input.tags)
@@ -361,13 +369,19 @@ export function refreshWorkPanelDisplay(
   },
 ): WorkPanelReadModel {
   const effective = record(patch.effectiveWork)
-  const peopleRows =
-    patch.people != null ? patch.people : effective && Array.isArray(effective.roles) ? effective.roles : null
+  const metadata = { ...(effective ?? {}) }
+  delete metadata.roles
   const effectiveWork: Record<string, unknown> = {
     ...displayRecord(current),
-    ...(effective ?? {}),
+    ...metadata,
   }
-  if (peopleRows) effectiveWork.roles = peopleRows
+  // People stay on the mounted overlay unless this refresh names them.
+  // A metadata payload still carries the acknowledged Work's roles.
+  effectiveWork.roles = patch.people != null ? patch.people : displayRecord(current).roles
+  const nextStatus = text(metadata.status).trim()
+  const statusChanged = !!nextStatus && nextStatus !== current.display.status
+  const nextDoc = text(metadata.doc_type).trim()
+  const docChanged = !!nextDoc && nextDoc !== current.display.docType.value
   return projectWorkPanelRead({
     ownerTabId: current.ownerTabId,
     ownerGeneration: current.ownerGeneration,
@@ -390,7 +404,13 @@ export function refreshWorkPanelDisplay(
         : effective && text(effective.published_date).trim()
           ? text(effective.published_date)
           : current.display.publishedDisplay,
-    docType: patch.docType === undefined ? current.display.docType : patch.docType,
-    statusIcon: patch.statusIcon == null ? current.display.statusIcon : patch.statusIcon,
+    docType:
+      patch.docType !== undefined
+        ? patch.docType
+        : docChanged
+          ? { value: nextDoc }
+          : current.display.docType,
+    statusIcon:
+      patch.statusIcon != null ? patch.statusIcon : statusChanged ? '' : current.display.statusIcon,
   })
 }

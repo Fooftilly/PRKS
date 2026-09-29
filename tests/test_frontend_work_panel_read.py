@@ -58,8 +58,15 @@ class WorkPanelReadContractTests(unittest.TestCase):
     def test_failed_metadata_read_does_not_refresh_the_panel_as_empty(self):
         self.assertIn("prksPendingWorkMetadataState", _META)
         self.assertIn("hydration !== 'unavailable'", _META)
-        refresh = _META.index("prksVueRefreshWorkPanelRead")
+        refresh = _META.index("root.prksVueRefreshWorkPanelRead({")
         self.assertLess(_META.index("hydration !== 'unavailable'"), refresh)
+        self.assertLess(_META.index("delete effectiveMetadata.roles"), refresh)
+        self.assertIn("prksDocTypeMeta", _META)
+        self.assertIn("PRKS_PROGRESS_STATUS_ICON", _META)
+        publish = _UI[_UI.index("function prksPublishWorkPanelRead"):_UI.index("function prksFolderRightPanelStackHtml")]
+        self.assertIn("installed === projection.work", publish)
+        self.assertIn("prksEffectiveWorkSync", publish)
+        self.assertIn("prksEffectiveWorkDetailRoles", publish)
         self.assertNotIn("people: []", _ROLES)
         self.assertIn("people: roles", _ROLES)
         self.assertLess(_TAGS.index("await root.prksSync.store.listOperations()"), _TAGS.index("prksVueRefreshWorkPanelRead"))

@@ -114,5 +114,96 @@ describe('projectWorkPanelRead', () => {
     expect(next.display.title).toBe('Overlay title')
     expect(next.display.publisher).toBe('Overlay Press')
     expect(next.display.publishedDisplay).toBe('02/02/2002')
+    expect(next.editor.fields.author_text).toBe('')
+    expect(next.editor.fields.thumb_page).toBe('')
+    expect(next.editor.fields.source_url).toBe('')
+  })
+
+  it('a metadata refresh keeps pending people and updates type, status, and source url', () => {
+    const current = projectWorkPanelRead({
+      ownerTabId: 'main',
+      ownerGeneration: 2,
+      workId: 'w1',
+      work: {
+        ...server,
+        author_text: 'Acknowledged author',
+        thumb_page: '2',
+        source_url: 'https://example.test/old',
+        doc_type: 'article',
+        status: 'Planned',
+      },
+      effectiveWork: {
+        id: 'w1',
+        title: 'Pending title',
+        status: 'Planned',
+        doc_type: 'article',
+        source_url: 'https://example.test/old',
+        author_text: 'Pending author',
+        roles: [{ id: 'person-pending', role_type: 'Author', credit_name: 'Pending Person', first_name: 'Pending', last_name: 'Person' }],
+      },
+      tags: [],
+      sourceKind: 'pdf',
+      docType: { value: 'article', label: 'Article', color: '#3b82f6', border: '#1d4ed8' },
+      statusIcon: 'circle',
+    })
+    const next = refreshWorkPanelDisplay(current, {
+      effectiveWork: {
+        title: 'Overlay title',
+        status: 'Completed',
+        doc_type: 'book',
+        source_url: 'https://example.test/new',
+        author_text: 'Overlay author',
+        thumb_page: '4',
+        roles: [{ id: 'person-server', role_type: 'Author', first_name: 'Ada', last_name: 'Lovelace' }],
+      },
+      docType: { value: 'book', label: 'Book', color: '#a855f7', border: '#6d28d9' },
+      statusIcon: 'check',
+    })
+    expect(next.display.people[0]?.displayName).toBe('Pending Person')
+    expect(next.display.peopleCount).toBe(1)
+    expect(next.display.docType).toEqual({ value: 'book', label: 'Book', color: '#a855f7', border: '#6d28d9' })
+    expect(next.display.status).toBe('Completed')
+    expect(next.display.statusIcon).toBe('check')
+    expect(next.display.sourceUrl).toBe('https://example.test/new')
+    expect(next.display.showOriginalUrl).toBe(true)
+    expect(next.editor.fields.author_text).toBe('Acknowledged author')
+    expect(next.editor.fields.thumb_page).toBe('2')
+    expect(next.editor.fields.source_url).toBe('https://example.test/old')
+    expect(next.editor.fields.title).toBe('Server title')
+  })
+
+  it('recomputes a changed document type and drops a stale status icon', () => {
+    const current = projectWorkPanelRead({
+      ownerTabId: 'main',
+      ownerGeneration: 2,
+      workId: 'w1',
+      work: server,
+      effectiveWork: { id: 'w1', status: 'Planned', doc_type: 'article' },
+      tags: [],
+      sourceKind: 'pdf',
+      docType: { value: 'article', label: 'Article', color: '#3b82f6', border: '#1d4ed8' },
+      statusIcon: 'circle',
+    })
+    const next = refreshWorkPanelDisplay(current, {
+      effectiveWork: { status: 'Completed', doc_type: 'book' },
+    })
+    expect(next.display.docType.value).toBe('book')
+    expect(next.display.docType.label).toBe('book')
+    expect(next.display.status).toBe('Completed')
+    expect(next.display.statusIcon).toBe('')
+  })
+
+  it('does not link a folder that has a title and no id', () => {
+    const model = projectWorkPanelRead({
+      ownerTabId: 'main',
+      ownerGeneration: 1,
+      workId: 'w1',
+      work: { id: 'w1', title: 'Loose', folder_title: 'Notes only' },
+      tags: [],
+      sourceKind: 'pdf',
+    })
+    expect(model.display.folder).toBeNull()
+    expect(model.editor.folderId).toBe('')
+    expect(model.editor.folderTitle).toBe('')
   })
 })

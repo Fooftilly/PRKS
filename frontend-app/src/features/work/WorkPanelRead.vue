@@ -182,7 +182,7 @@ function publisherHref(value: string): string {
   </Teleport>
 
   <Teleport v-if="slots.folder" to="[data-prks-role='work-folder-read']">
-    <template v-if="model.display.folder">
+    <template v-if="model.display.folder && model.display.folder.id">
       <span class="meta-row">Folder:</span>
       <a class="route-sidebar__link" :href="folderHref(model.display.folder.id)">{{ model.display.folder.title }}</a>
     </template>

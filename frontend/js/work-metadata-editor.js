@@ -96,12 +96,27 @@
                 const publishedDisplay = typeof root.prksFormatPublishedForDisplay === 'function'
                     ? root.prksFormatPublishedForDisplay(publishedRaw)
                     : (publishedRaw == null ? '' : String(publishedRaw));
+                const effectiveMetadata = Object.assign({}, effective);
+                delete effectiveMetadata.roles;
+                const docMeta = typeof root.prksDocTypeMeta === 'function'
+                    ? root.prksDocTypeMeta(effective && effective.doc_type) : null;
+                const statusLabel = String((effective && effective.status) || '').trim() || 'Not Started';
+                const statusIcon = typeof root.PRKS_PROGRESS_STATUS_ICON === 'object' && root.PRKS_PROGRESS_STATUS_ICON
+                    ? root.PRKS_PROGRESS_STATUS_ICON[statusLabel] || ''
+                    : '';
                 root.prksVueRefreshWorkPanelRead({
                     ownerTabId: String(ctx.tabId),
                     ownerGeneration: ctx.generation,
                     workId: state.workId,
-                    effectiveWork: effective,
+                    effectiveWork: effectiveMetadata,
                     publishedDisplay: publishedDisplay == null ? '' : String(publishedDisplay),
+                    docType: docMeta ? {
+                        value: docMeta.value,
+                        label: docMeta.label,
+                        color: docMeta.color,
+                        border: docMeta.border,
+                    } : null,
+                    statusIcon: statusIcon,
                 });
             }
             return;

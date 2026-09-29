@@ -3080,14 +3080,30 @@ function prksPublishWorkPanelRead(ctx, work) {
     const panel = document.getElementById('panel-content');
     if (!panel || !prksRightPanelOwnedBy(ctx, panel)) return;
     const projection = typeof ctx.getResource === 'function' ? ctx.getResource('workRouteProjection') : null;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    const installed = live && String(live.id) === String(work.id) ? live : work;
     const sameProjection = !!(
         projection &&
-        String(projection.workId) === String(work.id) &&
+        String(projection.workId) === String(installed.id) &&
         String(projection.ownerTabId) === String(ctx.tabId) &&
         String(projection.ownerGeneration) === String(ctx.generation)
     );
-    const editor = sameProjection && projection.work ? projection.work : work;
-    const effective = sameProjection && projection.effectiveWork ? projection.effectiveWork : work;
+    /* Folder, playlist, tag, and metadata acknowledgements replace the entity
+     * without republishing workRouteProjection. The projection is current only
+     * while its Work object is still the one setEntity holds. */
+    const projectionMatchesInstalled = !!(sameProjection && projection.work && installed === projection.work);
+    const editor = projectionMatchesInstalled ? projection.work : installed;
+    let effective = projectionMatchesInstalled && projection.effectiveWork ? projection.effectiveWork : installed;
+    if (!projectionMatchesInstalled) {
+        if (typeof prksEffectiveWorkSync === 'function') {
+            const overlaid = prksEffectiveWorkSync(installed);
+            if (overlaid) effective = overlaid;
+        }
+        if (typeof prksEffectiveWorkDetailRoles === 'function') {
+            const withRoles = prksEffectiveWorkDetailRoles(effective);
+            if (withRoles) effective = withRoles;
+        }
+    }
     const docType = typeof prksDocTypeMeta === 'function' ? prksDocTypeMeta(effective.doc_type) : null;
     const statusText = String((effective && effective.status) || '').trim() || 'Not Started';
     const statusIcon = typeof PRKS_PROGRESS_STATUS_ICON === 'object' && PRKS_PROGRESS_STATUS_ICON
@@ -3100,10 +3116,10 @@ function prksPublishWorkPanelRead(ctx, work) {
     const request = {
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
-        workId: String(work.id),
+        workId: String(installed.id),
         work: editor,
         effectiveWork: effective,
-        tags: prksWorkPanelTagRows(work),
+        tags: prksWorkPanelTagRows(installed),
         sourceKind: typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(editor) : '',
         publishedDisplay: publishedDisplay == null ? '' : String(publishedDisplay),
         docType: docType ? {
