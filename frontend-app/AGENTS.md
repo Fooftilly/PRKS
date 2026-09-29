@@ -1,0 +1,68 @@
+# PRKS Vue frontend agent instructions
+
+These rules apply to `frontend-app/` work in addition to the repository-root `AGENTS.md`.
+
+`frontend-app/` is the Vue 3 + TypeScript source for the frontend migration. Node/npm are maintainer build tools; the Python runtime serves committed build artifacts. The sibling `frontend/` tree still contains the shipped shell, compatibility/runtime code, offline/sync machinery, and generated Vue bundle. Load `frontend/AGENTS.md` only when a change crosses that bridge or depends on those shared runtime contracts.
+
+## Current migration status
+
+The Vue/legacy bridge is transitional under #230/#303. Preserve current behavior while the migration is active, but do not encode the bridge itself as permanent architecture.
+
+- New migrated UI belongs in `frontend-app/src/`.
+- Do not create a second canonical route, workspace, durable-operation, offline, or server-state model.
+- Delete obsolete compatibility code when the final consumer has crossed and the owning migration slice allows it.
+- Do not add Vue Router, Pinia, another QueryClient, or another workspace snapshot merely because Vue supports them.
+- TanStack Query owns disposable ordinary server-read orchestration where adopted. It does not own PRKS durable semantic operations or become an offline mutation queue.
+- VueUse is for generic browser lifecycle helpers where it reduces plumbing; PRKS route/workspace/durable semantics remain explicit.
+
+## Design and components
+
+`DESIGN.md` is authoritative for user-visible interaction and visual behavior. Read the sections relevant to the changed component rather than loading the whole file by default.
+
+Reuse shared components in `src/components/` and existing PRKS CSS/component families before adding another button, status, card, section-header, tab, or modal family. Storybook is a maintainer catalog and does not define product behavior independently of `DESIGN.md`.
+
+## Route and workspace ownership
+
+`src/route-surface/` is an owner-scoped bridge from the current PRKS route/TabContext runtime into Vue. It is not a second router. Route-local runtime must stay owner-scoped; stale generations or asynchronous completions must not mutate a replaced route owner.
+
+`src/workspace/` owns the typed canonical workspace model and pure transforms. `src/workspace-shell/` renders a detached projection and sends intents. The classic runtime coordinator remains responsible for the live effectful state while #303 is incomplete. Do not introduce a parallel store or second drag/state system.
+
+When a change touches the classic coordinator, offline runtime, service worker, durable operation families, or shared browser lifecycle, also load the relevant sections of `frontend/AGENTS.md` and, for offline/sync work, `docs/agent-context/sync-map.md` plus `docs/agent-rules/offline-pwa.md`.
+
+## API and state boundaries
+
+Use `src/api/` and the typed PRKS service/API boundary rather than issuing arbitrary transport calls from components. Keep generated/transport DTOs separate from PRKS domain semantics.
+
+Accepted target architecture in #310/#311 means the frontend must not assume forever that PRKS is single-owner, SQLite-backed, tied to one host filesystem path, or served by one process. At the same time, do not implement future account/PostgreSQL/storage behavior in an unrelated frontend slice. Consume explicit API/application contracts as they land.
+
+## Toolchain and validation
+
+Use the Node version pinned by `frontend-app/package.json` / repository CI.
+
+During implementation prefer the narrowest relevant checks:
+
+```bash
+cd frontend-app
+npm ci --ignore-scripts
+npm run typecheck
+npm test
+npm run build
+```
+
+Run Storybook/build-storybook when component/story work requires it. Browser E2E follows the repository and `tests/e2e/AGENTS.md` policy: do not iterate with the full browser suite; use it only when the behavior cannot be proven below the browser layer or for final targeted/full-gate validation.
+
+## Generated / shipped artifacts
+
+The committed production bundle is generated from this package and served from `frontend/vue/`; some typed bridge artifacts are emitted into `frontend/js/`. Do not hand-edit generated output when the source lives in `frontend-app/`. Rebuild with the documented package scripts and keep generated artifacts in sync when the owning build contract requires them.
+
+## Cross-boundary changes
+
+A Vue change that modifies semantics owned elsewhere must preserve the owning contract rather than reimplement it:
+
+- UI/interaction: `DESIGN.md`
+- current runtime/offline/workspace bridge: `frontend/AGENTS.md`
+- offline/sync: `docs/agent-context/sync-map.md` and `docs/agent-rules/offline-pwa.md`
+- API/application architecture: #45, #179, #310
+- Work/Manifestation/Asset design: #60 and `docs/work-identity-model.md`, interpreted with #310/#311 for future persistence/storage compatibility
+
+Prefer a small typed adapter at a boundary over duplicating domain, routing, storage, or synchronization logic inside Vue.
