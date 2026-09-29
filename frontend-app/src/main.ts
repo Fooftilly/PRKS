@@ -8,6 +8,7 @@ import { registerPlaylistsBridge } from './features/playlists/session'
 import { registerPositionsBridge } from './features/positions/session'
 import { registerPerformanceDiagnosticsBridge } from './features/performance-diagnostics/activation'
 import { registerProgressBridge } from './features/progress/session'
+import { registerWorkPanelReadBridge } from './features/work/panel-session'
 
 const target = document.getElementById(PRKS_VUE_ROOT_ID)
 if (target) {
@@ -23,3 +24,4 @@ registerArgumentsBridge(window)
 registerPlaylistsBridge(window)
 registerPeopleBridge(window)
 registerPersonGroupsBridge(window)
+registerWorkPanelReadBridge(window)

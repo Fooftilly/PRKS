@@ -2573,6 +2573,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     const panel = prksPrepareRightPanelReplace(ctx);
     if (!panel || typeof prksWorkRightPanelStackHtml !== 'function') return false;
     const mode = prksWorkDetailsMode(ctx, work);
+    prksDismissWorkPanelRead();
     panel.innerHTML = prksWorkRightPanelStackHtml(work, mode, ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
     if (typeof initPrksPrivateNotesEditor === 'function') initPrksPrivateNotesEditor('work', work.id, ctx);
@@ -2592,6 +2593,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
         initWorkDetailRightPanelActions(work, ctx);
     }
     if (mode === 'metadata') prksMountWorkMetaEditor(ctx, work);
+    prksPublishWorkPanelRead(ctx, work);
     return true;
 }
 
@@ -3041,14 +3043,82 @@ function prksWorkRightPanelStackHtml(work, mode = 'view', ownerCtx) {
             : '';
     const folderCard =
         typeof renderFolderAttachControlsHtml === 'function' ? renderFolderAttachControlsHtml(work, ownerCtx) : '';
+    const readAnchor = detailsMode === 'view'
+        ? '<div data-prks-role="work-panel-read-anchor" hidden></div>'
+        : '';
     return (
         '<div class="right-panel-stack">' +
+        readAnchor +
         notes +
         playlistCard +
         folderCard +
         renderWorkMetaTab(work, detailsMode) +
         '</div>'
     );
+}
+
+function prksDismissWorkPanelRead() {
+    const panel = document.getElementById('panel-content');
+    if (panel && panel.__prksWorkPanelReadRequest) delete panel.__prksWorkPanelReadRequest;
+    if (typeof window.prksVueDismissWorkPanelRead === 'function') window.prksVueDismissWorkPanelRead();
+}
+
+function prksWorkPanelTagRows(work) {
+    const tags = work && Array.isArray(work.tags) ? work.tags : [];
+    return tags.map((tag) => ({
+        id: tag && tag.id != null ? String(tag.id) : '',
+        name: tag && tag.name != null ? String(tag.name) : '',
+        color: tag && tag.color != null ? String(tag.color) : '',
+    }));
+}
+
+function prksPublishWorkPanelRead(ctx, work) {
+    if (!ctx || !work || prksWorkDetailsMode(ctx, work) !== 'view') {
+        prksDismissWorkPanelRead();
+        return;
+    }
+    const panel = document.getElementById('panel-content');
+    if (!panel || !prksRightPanelOwnedBy(ctx, panel)) return;
+    const projection = typeof ctx.getResource === 'function' ? ctx.getResource('workRouteProjection') : null;
+    const sameProjection = !!(
+        projection &&
+        String(projection.workId) === String(work.id) &&
+        String(projection.ownerTabId) === String(ctx.tabId) &&
+        String(projection.ownerGeneration) === String(ctx.generation)
+    );
+    const editor = sameProjection && projection.work ? projection.work : work;
+    const effective = sameProjection && projection.effectiveWork ? projection.effectiveWork : work;
+    const docType = typeof prksDocTypeMeta === 'function' ? prksDocTypeMeta(effective.doc_type) : null;
+    const statusText = String((effective && effective.status) || '').trim() || 'Not Started';
+    const statusIcon = typeof PRKS_PROGRESS_STATUS_ICON === 'object' && PRKS_PROGRESS_STATUS_ICON
+        ? PRKS_PROGRESS_STATUS_ICON[statusText] || ''
+        : '';
+    const publishedRaw = effective && effective.published_date;
+    const publishedDisplay = typeof prksFormatPublishedForDisplay === 'function'
+        ? prksFormatPublishedForDisplay(publishedRaw)
+        : (publishedRaw == null ? '' : String(publishedRaw));
+    const request = {
+        ownerTabId: String(ctx.tabId),
+        ownerGeneration: ctx.generation,
+        workId: String(work.id),
+        work: editor,
+        effectiveWork: effective,
+        tags: prksWorkPanelTagRows(work),
+        sourceKind: typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(editor) : '',
+        publishedDisplay: publishedDisplay == null ? '' : String(publishedDisplay),
+        docType: docType ? {
+            value: docType.value,
+            label: docType.label,
+            color: docType.color,
+            border: docType.border,
+        } : null,
+        statusIcon: statusIcon,
+    };
+    if (typeof window.prksVuePresentWorkPanelRead === 'function') {
+        window.prksVuePresentWorkPanelRead(request);
+        return;
+    }
+    panel.__prksWorkPanelReadRequest = request;
 }
 
 function prksFolderRightPanelStackHtml(folder) {
@@ -3077,6 +3147,7 @@ function updatePanelContent(tabId) {
         }
     }
     prksPrepareRightPanelReplace(focusedCtx);
+    prksDismissWorkPanelRead();
     const focusedRoute = focusedCtx && (focusedCtx.lastResolvedRoute || focusedCtx.route);
     const focusedHash =
         (focusedRoute && (focusedRoute.hash || focusedRoute.canonicalHash)) || (window.location.hash || '');
@@ -3094,6 +3165,7 @@ function updatePanelContent(tabId) {
     if (_cw) {
         if (tabId === 'details') {
             const mode = prksWorkDetailsMode(focusedCtx, _cw);
+            prksDismissWorkPanelRead();
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, mode, focusedCtx);
             if (mode !== 'metadata') initPrksPrivateNotesEditor('work', _cw.id, focusedCtx);
             if (mode !== 'metadata' && typeof mountPlaylistAttachControls === 'function') {
@@ -3112,7 +3184,9 @@ function updatePanelContent(tabId) {
                 initWorkDetailRightPanelActions(_cw, focusedCtx);
             }
             if (mode === 'metadata') prksMountWorkMetaEditor(focusedCtx, _cw);
+            prksPublishWorkPanelRead(focusedCtx, _cw);
         } else if (tabId === 'annotations') {
+            prksDismissWorkPanelRead();
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
                 window.applyCachedAnnotationListToPanel();
@@ -3669,6 +3743,7 @@ async function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
         }
         const panel = prksPrepareRightPanelReplace(ownerCtx);
         if (panel) {
+            prksDismissWorkPanelRead();
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, ownerCtx.ui.workDetailsMode, ownerCtx);
             if (!isEditing) initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
             initWorkTagCombobox(_cw.id, ownerCtx);
@@ -3685,6 +3760,7 @@ async function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
                 prksMountWorkMetaEditor(ownerCtx, _cw);
             }
             if (!isEditing) prksBindAutosizeTextareas(panel);
+            prksPublishWorkPanelRead(ownerCtx, _cw);
         }
         if (ownerCtx.ui) ownerCtx.ui.rightPanelTab = 'details';
         prksSyncRightPanelTabStrip('details');
@@ -3896,6 +3972,69 @@ async function prksRefreshUiAfterWorkRoleRemoved(workId, ownerCtx, coherenceToke
     }
 }
 
+function prksWorkPanelViewShellHtml(work, parts) {
+    const yearRow = parts && work.year
+        ? `<p class="meta-row"><strong>Year:</strong> ${escapeHtml(work.year)}</p>`
+        : '';
+    const publishedRow = parts && parts.showPublishedDate && work.published_date
+        ? `<p class="meta-row"><strong>Published:</strong> ${escapeHtml(typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date)}</p>`
+        : '';
+    const originalUrl = parts && parts.originalUrlPdf
+        ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(parts.originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(parts.originalUrlPdf)}</a></p>`
+        : '';
+    const abstractRow = work.abstract
+        ? `<p class="meta-row"><strong>Abstract:</strong> ${escapeHtml(work.abstract)}</p>`
+        : '';
+    const emptyRow = parts && !parts.hasMetadata
+        ? '<p class="meta-row meta-row--muted-italic" data-prks-role="work-meta-empty">No metadata available.</p>'
+        : '';
+    return `
+        <div data-prks-role="work-panel-summary">${parts.stateSummaryHtml || ''}</div>
+        <div class="doc-meta-card">
+            <div class="card-heading-row">
+                <h3>Title</h3>
+                <button type="button" onclick="prksSetWorkDetailsMode('metadata')" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit metadata</button>
+            </div>
+            <div data-prks-role="work-panel-identity">
+                <p class="card-title">${escapeHtml(work.title)}</p>
+                <div class="card-heading-row card-heading-row--wrap">
+                    <span class="meta-row">Status</span>
+                    <span class="status-badge ${parts.statusClass}">${parts.statusIconHtml}${escapeHtml(parts.statusText)}</span>
+                </div>
+                <div class="card-heading-row card-heading-row--wrap">
+                    <span class="meta-row">Document type</span>
+                    ${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}
+                </div>
+            </div>
+        </div>
+        <details class="doc-meta-card work-details-metadata">
+            <summary><span>Metadata</span><span class="meta-row">Bibliographic details</span></summary>
+            <div class="work-details-metadata__body">
+            <div data-prks-role="work-panel-dates">${yearRow}${publishedRow}</div>
+            <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
+            <div data-prks-role="work-panel-source">${originalUrl}${abstractRow}${emptyRow}</div>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm copy-bibtex-btn" aria-live="polite">${typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : ''} Copy BibTeX</button>
+            </div>
+        </details>
+        <div class="doc-meta-card">
+            <div class="card-heading-row card-heading-row--wrap">
+                <h3>Linked Persons</h3>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('people')">Manage relationships</button>
+            </div>
+            <div class="work-linked-persons-by-role" data-prks-role="work-people-read">${buildWorkLinkedPersonsHtml(typeof prksEffectiveWorkDetailRoles === 'function' ? prksEffectiveWorkDetailRoles(work) : work, { editable: false })}</div>
+            <div class="meta-row" data-prks-role="work-people-sync" aria-live="polite"></div>
+        </div>
+        <div class="doc-meta-card">
+            <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('tags')">Manage tags</button></div>
+            <div id="work-tags-list" class="tag-cloud work-tags-list" data-prks-role="work-tags-read">${renderWorkTagsChips(work, { editable: false })}</div>
+        </div>
+        <details class="doc-meta-card work-details-advanced">
+            <summary>More</summary>
+            <button type="button" class="prks-btn prks-btn--danger delete-work-btn" title="Delete this file">${typeof prksIcon === 'function' ? prksIcon('trash', { size: 'sm' }) : ''} Delete File</button>
+        </details>
+    `;
+}
+
 function renderWorkMetaTab(work, mode = 'view') {
     const managingPeople = mode === 'people';
     const managingTags = mode === 'tags';
@@ -3970,6 +4109,18 @@ function renderWorkMetaTab(work, mode = 'view') {
         work.doi ||
         work.abstract ||
         originalUrlPdf;
+
+    if (!managingPeople && !managingTags) {
+        return prksWorkPanelViewShellHtml(work, {
+            stateSummaryHtml,
+            statusText,
+            statusClass,
+            statusIconHtml,
+            showPublishedDate,
+            originalUrlPdf,
+            hasMetadata,
+        });
+    }
 
     return `
         ${stateSummaryHtml}

@@ -134,8 +134,18 @@
         if (!panel) return;
 
         const host = panel.querySelector('.work-linked-persons-by-role');
-        if (host && typeof root.buildWorkLinkedPersonsHtml === 'function') {
-            const effective = root.prksEffectiveWorkDetailRoles(ctx.getEntity('work'));
+        const effective = root.prksEffectiveWorkDetailRoles(ctx.getEntity('work'));
+        if (!state.editable && typeof root.prksWorkPanelReadOwns === 'function' && root.prksWorkPanelReadOwns(ctx)) {
+            if (typeof root.prksVueRefreshWorkPanelRead === 'function') {
+                const roles = effective && Array.isArray(effective.roles) ? effective.roles : [];
+                root.prksVueRefreshWorkPanelRead({
+                    ownerTabId: String(ctx.tabId),
+                    ownerGeneration: ctx.generation,
+                    workId: state.workId,
+                    people: roles,
+                });
+            }
+        } else if (host && typeof root.buildWorkLinkedPersonsHtml === 'function') {
             const html = root.buildWorkLinkedPersonsHtml(effective, { editable: state.editable });
             if (host.innerHTML !== html) host.innerHTML = html;
         }

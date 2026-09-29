@@ -88,6 +88,24 @@
         if (!host || !owns(ctx, state)) return;
         const work = ctx.getEntity('work');
         const effective = root.prksEffectiveWorkMetadata(work, state.operations);
+        if (typeof root.prksWorkPanelReadOwns === 'function' && root.prksWorkPanelReadOwns(ctx)) {
+            const hydration = typeof root.prksPendingWorkMetadataState === 'function'
+                ? root.prksPendingWorkMetadataState() : 'ready';
+            if (hydration !== 'unavailable' && typeof root.prksVueRefreshWorkPanelRead === 'function') {
+                const publishedRaw = effective && effective.published_date;
+                const publishedDisplay = typeof root.prksFormatPublishedForDisplay === 'function'
+                    ? root.prksFormatPublishedForDisplay(publishedRaw)
+                    : (publishedRaw == null ? '' : String(publishedRaw));
+                root.prksVueRefreshWorkPanelRead({
+                    ownerTabId: String(ctx.tabId),
+                    ownerGeneration: ctx.generation,
+                    workId: state.workId,
+                    effectiveWork: effective,
+                    publishedDisplay: publishedDisplay == null ? '' : String(publishedDisplay),
+                });
+            }
+            return;
+        }
         const rows = root.prksWorkBibRowsHtml(effective);
         if (host.innerHTML !== rows) host.innerHTML = rows;
         const empty = document.querySelector('[data-prks-role="work-meta-empty"]');

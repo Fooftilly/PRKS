@@ -624,7 +624,7 @@ function renderPlaylistAttachControlsHtml(work, ownerCtx) {
                 <button type="button" class="prks-btn prks-btn--secondary" id="prks-work-playlist-edit-btn">${editing ? 'Done' : 'Edit'}</button>
             </div>
             <p class="meta-row">Group this video into a course playlist.</p>
-            <p class="meta-row meta-row--follow">${currentLine}</p>
+            <p class="meta-row meta-row--follow" data-prks-role="work-playlist-read">${currentLine}</p>
             <div id="prks-work-playlist-nav" class="prks-playlist-nav"></div>
             ${
                 editing
