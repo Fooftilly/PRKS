@@ -1222,6 +1222,12 @@ def _identity_passed_names(node: ast.expr) -> list[str]:
         return [*_identity_passed_names(node.body), *_identity_passed_names(node.orelse)]
     if isinstance(node, ast.BoolOp):
         return [name for value in node.values for name in _identity_passed_names(value)]
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+        # ``[body for _ in items]`` passes ``body`` itself; a name the
+        # comprehension binds (``[body for body in rows]``) is its own local.
+        element = node.value if isinstance(node, ast.DictComp) else node.elt
+        local = {name for gen in node.generators for name in _stored_names(gen.target)}
+        return [name for name in _identity_passed_names(element) if name not in local]
     return []
 
 

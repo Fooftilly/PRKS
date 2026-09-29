@@ -2556,6 +2556,27 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        mutate({'fields': body if c else other})\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "guarded_dict_escapes_in_list_comprehension_element": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate([body for _ in items])\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_starred_generator": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate(*(body for _ in [1]))\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_dict_comprehension_value": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate({k: body for k in items})\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "guarded_dict_escapes_inside_starred_tuple": (
                 "from backend.services import work_pdf_replace\n"
                 "def patch(db, w_id, body, pdfs_dir):\n"
