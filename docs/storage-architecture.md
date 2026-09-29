@@ -1020,12 +1020,18 @@ on that mirror for these roots.
    discards it and leaves the source untouched, since it was never fenced.
    Both commands still take the destination lock, then the source lock.
    `finalize` and `abort` likewise refuse unless both markers name the same
-   `relocation_id`. The one exception is `finalize` with an unreachable
-   source, which checks the destination marker alone (below). The destination is left `staging`, and the command
+   `relocation_id`. There are two exceptions: `finalize` with an
+   unreachable source, which checks the destination marker alone (below),
+   and an `abort` rerun after the source was already unfenced (below). The destination is left `staging`, and the command
    prints the new path and the `relocation_id`. The old library's data is
-   untouched. **Neither root is bindable now.** Because the selector lives
-   outside PRKS, nothing can prove which way the move went, so both ends stay
-   closed until the administrator says.
+   untouched. **Once `relocate` has fenced the source, neither root is
+   bindable.** Because the selector lives outside PRKS, nothing can prove
+   which way the move went, so both ends stay closed until the administrator
+   says. The one state short of that is the **P1-only crash** above: the
+   source is still `active` with no relocation role and carries no pointer to
+   the destination, so it stays **authoritative and bindable**, and a start
+   that selects it binds it normally. Only the `staging` destination is
+   refused, and a rerun of `relocate` or `abort` resolves it.
 2. The administrator does one of two things:
    - **Complete the move.** Change the environment or the mount so the
      selector names the new root, then run `python prks_app.py storage
@@ -1113,6 +1119,15 @@ on that mirror for these roots.
      3. Discards the destination under the §8.3 deletion rule.
      4. Releases both locks.
 
+     **Rerun after a crash between steps 2 and 3.** The source is then
+     `active` with no relocation role, so it no longer names this
+     `relocation_id`. A rerun of `abort` accepts exactly that pairing, still
+     under both locks: the destination is `staging` with `phase: aborted` for
+     this `relocation_id`, and the source is `active`, has no relocation role,
+     carries the same `storage_root_id`, and is at the path in the
+     destination's `peer_hint`. It then skips steps 1 and 2 and only discards
+     the destination. Any other pairing makes it refuse.
+
    Every crash point leaves the markers in a state with exactly one
    resolution. It holds in a container whose bootstrap file is gone:
    - **committed, not activated:** a start or `finalize` completes the move.
@@ -1127,7 +1142,8 @@ on that mirror for these roots.
 3. The administrator starts PRKS.
 
 If PRKS is started before step 2, whichever root the selector names is
-refused. The message names the relocation and both commands (§7.1). The
+refused, except in the P1-only crash state, where the still-`active` source
+binds normally and only the `staging` destination is refused. The message names the relocation and both commands (§7.1). The
 administrator's configured library is therefore never opened from a stale or
 half-moved copy, and a stopped sequence always resolves with one explicit
 command. `storage verify [--root PATH]` runs
@@ -1448,7 +1464,7 @@ behavior unless stated.
 | **B. Route managed files through the backend** | Managed PDF create, replace, COW, adoption, cleanup and linearization; portraits; import; backup enumeration; locks keyed by `StorageKey`; `processing_files.abs_path` derived from `rel_path` (the column is left unused). Behavior is preserved and proven by the existing managed-PDF, cleanup and backup tests unchanged. | no (dropping `abs_path` is a later migration) | no | no | A |
 | **C. Asset identity coordination** | #60 Slice D lands on Phase B operations: `assets` locators are authoritative keys; the fingerprint pass uses `stat` and `verify`; the text-index fingerprint moves to `content_sha256`/`content_generation`; Slice G serves `/api/assets/{id}/content`. | #60's migrations | #60's typed API | no | **#60 Slice C/D** and B |
 | **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation, and hot-rebinding under the admission-time relocation mode and rebind barrier (§8.1), with the whole rebind held as one transaction under the config lock, a test that no in-flight read observes a mixed binding, and a two-process hot-rebind race test; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes**, after the migration | A (backend); **the frontend migration** (UI); #46 (packaged default and "Open folder") |
-| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
+| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
 | **F. Object storage (optional)** | An S3-compatible backend passing the shared contract tests; restore and backup for it; immutable-object mode (§10.4). **Only when a deployment needs it.** | possibly a `storage_backend` column (#60) | config only | no | C, and in practice the PostgreSQL migration (#310) |
 
 **Why A ships before D.** It gives no user-visible feature, but it makes
