@@ -894,7 +894,14 @@ on that mirror for these roots.
    - **Complete the move.** Change the environment or the mount so the
      selector names the new root, then run `python prks_app.py storage
      finalize --root NEWPATH`. The selector change alone is **not** the commit,
-     because it is not a durable PRKS record. **Precondition, mirroring
+     because it is not a durable PRKS record. **Lock first, then check.** Both `finalize` and `abort` first take the
+     **destination** root lock, then the **source** root lock, always in
+     that order, so the two commands cannot deadlock. Only while holding
+     both do they read and validate `state`, `relocation_id` and `phase` on
+     both markers. They keep both locks until their last marker write. No
+     transition is ever based on a reading taken before the locks were
+     held, so a concurrent `finalize` and `abort` are strictly ordered, and
+     the second one re-reads and refuses. **Precondition, mirroring
      `abort`:** the destination marker is `staging` for this `relocation_id`,
      with `relocation.phase` absent or `"committed"`. The latter case is a
      rerun. `phase: "aborted"` is **terminal**: `finalize` refuses it,
@@ -902,7 +909,8 @@ on that mirror for these roots.
      operator at rerunning `abort` to finish discarding the leftover tree.
      Only then does `finalize` perform the same durable steps as the in-app
      flow, in the same order:
-     1. Take the destination's lease.
+     1. (Both locks are already held, per the rule above; the destination's
+        is its `active_process` lease.)
      2. **P5 (offline commit):** atomically rewrite the **destination marker**
         to `state: staging`, `relocation: {id, role: destination, peer_hint:
         <source root>, phase: "committed"}`. It keeps the P1 `peer_hint`, so a
@@ -929,7 +937,9 @@ on that mirror for these roots.
      `finalize`/`abort`. A `fenced` source whose peer destination is
      committed or active is never unfenced.
    - **Abandon the move.** Leave the selector unchanged and run `python
-     prks_app.py storage abort --root OLDPATH`. **Precondition, the same as
+     prks_app.py storage abort --root OLDPATH`. It follows the same **lock first,
+     then check** rule as `finalize`: destination lock, then source lock, then
+     re-read both markers. **Precondition, the same as
      in-app revert:** the destination marker is still `staging` with this
      `relocation_id`, **and not `phase: committed`**. Once `finalize` has
      written its offline commit, or P6(b) has written `active`, `abort`
@@ -941,6 +951,7 @@ on that mirror for these roots.
         which is never bindable. This is the volume-durable abort record.
      2. Lifts the source fence back to `active`, authorized by that record.
      3. Discards the destination under the §8.3 deletion rule.
+     4. Releases both locks.
 
    Every crash point leaves the markers in a state with exactly one
    resolution. It holds in a container whose bootstrap file is gone:
