@@ -58,6 +58,12 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         owns = clear.index("prksVueWorkMetadataEditorOwns")
         self.assertLess(owns, clear.index("textContent"))
         self.assertIn("return", clear[owns:clear.index("textContent")])
+        bind = _UI[_UI.index("function prksBindWorkMetaDraftEditor"):_UI.index("function prksDismissWorkMetadataEditor")]
+        date_clear = bind[bind.index("const clearDateError"):]
+        vue_owns = date_clear.index("prksVueWorkMetadataEditorOwns")
+        self.assertLess(vue_owns, date_clear.index("textContent"))
+        self.assertLess(date_clear.index("prksVueSetWorkMetadataFieldError"), date_clear.index("textContent"))
+        self.assertLess(date_clear.index("return"), date_clear.index("removeAttribute('aria-invalid')"))
 
     def test_conflict_continuations_stay_on_the_captured_session(self):
         resolve = _META[_META.index("async function actionResolve"):_META.index("root.prksResolveWorkMetadataFieldConflict")]

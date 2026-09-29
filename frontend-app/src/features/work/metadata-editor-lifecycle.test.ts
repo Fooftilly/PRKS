@@ -70,6 +70,8 @@ type LifecycleWindow = {
   prksResolveWorkMetadataFieldConflict: (opId: string, apply: boolean, groupName: string) => Promise<void>
   prksResolveWorkSourceConflict: (opId: string, apply: boolean) => Promise<void>
   prksVuePresentWorkMetadataEditor: (ctx: WorkCtx, sourceKind: string) => boolean
+  prksBindWorkMetaDraftEditor: (ctx: WorkCtx, work: WorkRecord) => void
+  prksVueSetWorkMetadataFieldError: (field: string, message: string) => void
   prksSync: {
     changed: () => void
     subscribe?: (event: { acknowledged?: unknown; operation?: string; op?: unknown }) => () => void
@@ -105,6 +107,7 @@ type LifecycleWindow = {
 const panelWindow = window as unknown as LifecycleWindow
 
 const THUMB_ERROR = 'Enter a page number of 1 or more, or leave it empty for page 1.'
+const DATE_ERROR = 'Use dd/mm/yyyy.'
 
 function work(id = 'work-a', title = 'Alpha'): WorkRecord {
   return { id, title, status: 'Not Started', doc_type: 'article', private_notes: '', source_url: '' }
@@ -408,6 +411,68 @@ describe('work metadata editor lifecycle', () => {
     await panelWindow.prksSaveWorkMetadataFields('work-a', 'bib')
     await nextTick()
     expect(document.getElementById('meta-thumb-page-error')?.textContent).toBe(THUMB_ERROR)
+  })
+
+  it('keeps a repeated published-date error when the date field is edited', async () => {
+    const ctx = mount()
+    const record = ctx.getEntity('work')
+    const panel = document.getElementById('panel-content')
+    if (!record || !panel) throw new Error('panel missing')
+    panel.innerHTML = '<div data-prks-role="work-metadata-editor-anchor"></div>'
+    expect(panelWindow.prksVuePresentWorkMetadataEditor(ctx, 'pdf')).toBe(true)
+    await nextTick()
+    panelWindow.prksBindWorkMetaDraftEditor(ctx, record)
+    editorState(ctx, 'workMetadataEditor')
+    panelWindow.prksWorkFieldToCanonical = (field, value) => (
+      field === 'published_date' && value !== '' ? null : value
+    )
+    panelWindow.prksObservedWorkFields = () => ({})
+    panelWindow.prksRefreshPendingWorkMetadata = () => Promise.resolve([])
+    panelWindow.prksWorkMetadataFieldOperations = () => []
+    panelWindow.prksPendingWorkMetadataState = () => 'ready'
+    panelWindow.prksOfflineRuntimeState = () => 'online'
+    let enqueued = 0
+    panelWindow.prksSync = {
+      changed: () => {},
+      store: {
+        saveWorkMetadataFields: () => {
+          enqueued += 1
+          return Promise.resolve()
+        },
+        saveWorkSource: () => Promise.resolve(),
+        resolveConflict: () => Promise.resolve(),
+      },
+    }
+    if (!ctx.ui.workMetaDraft) throw new Error('draft missing')
+    const originalSet = panelWindow.prksVueSetWorkMetadataFieldError
+    let vueClears = 0
+    panelWindow.prksVueSetWorkMetadataFieldError = (field, message) => {
+      if (!field && !message) vueClears += 1
+      originalSet(field, message)
+    }
+    try {
+      ctx.ui.workMetaDraft.published_date = '31/02/2026'
+      await panelWindow.prksSaveWorkMetadataFields('work-a', 'bib')
+      await nextTick()
+      const date = document.getElementById('meta-date')
+      expect(date).toBeInstanceOf(HTMLInputElement)
+      expect(document.getElementById('meta-date-error')?.textContent).toBe(DATE_ERROR)
+      const input = date as HTMLInputElement
+      vueClears = 0
+      input.value = '32/13/1999'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      expect(vueClears).toBe(1)
+      expect(document.getElementById('meta-date-error')?.textContent).toBe(DATE_ERROR)
+      expect(input.getAttribute('aria-invalid')).toBe('true')
+      ctx.ui.workMetaDraft.published_date = '32/13/1999'
+      await panelWindow.prksSaveWorkMetadataFields('work-a', 'bib')
+      await nextTick()
+      expect(document.getElementById('meta-date-error')?.textContent).toBe(DATE_ERROR)
+      expect(input.getAttribute('aria-invalid')).toBe('true')
+      expect(enqueued).toBe(0)
+    } finally {
+      panelWindow.prksVueSetWorkMetadataFieldError = originalSet
+    }
   })
 
   it('keeps the newer observed base when an older metadata read rejects', async () => {

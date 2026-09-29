@@ -3740,6 +3740,15 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
     const dateError = panel.querySelector('#meta-date-error');
     if (date && dateError) {
         const clearDateError = () => {
+            /* `#meta-date-error` is Vue-owned through chrome.fieldError. Emptying
+             * the node here leaves the next identical message unpainted. */
+            if (typeof prksVueWorkMetadataEditorOwns === 'function' &&
+                prksVueWorkMetadataEditorOwns(ownerCtx)) {
+                if (typeof prksVueSetWorkMetadataFieldError === 'function') {
+                    prksVueSetWorkMetadataFieldError('', '');
+                }
+                return;
+            }
             date.removeAttribute('aria-invalid');
             dateError.textContent = '';
         };
