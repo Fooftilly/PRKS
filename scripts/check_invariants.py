@@ -1064,6 +1064,15 @@ def _is_builtin(func: ast.expr, scopes: list[_Scope], name: str) -> bool:
     return isinstance(func, ast.Name) and func.id == name and not _resolve(scopes, func.id)
 
 
+def _process_primitives(names: Iterable[str]) -> list[str]:
+    """The process-creating callables (INV-ADAPTER-002) among ``names``."""
+    return sorted(
+        name
+        for name in names
+        if name in _PROCESS_CALLS or name.startswith(_PROCESS_CALL_PREFIXES)
+    )
+
+
 def _open_mode_effect(mode: ast.expr | None) -> tuple[bool, bool]:
     """``(may create exclusively, may write)`` for an ``open`` mode argument.
     A missing mode reads; a mode that is not a string literal is opaque, so
@@ -2943,13 +2952,16 @@ class _InvariantVisitor(ast.NodeVisitor):
         names = _qualified_names(func, self.scopes)
         if _is_builtin(func, self.scopes, "open"):
             names = names | {"builtins.open"}
-        spawned = sorted(
-            name
-            for name in names
-            if name in _PROCESS_CALLS or name.startswith(_PROCESS_CALL_PREFIXES)
-        )
+        spawned = _process_primitives(names)
         if spawned:
             self._report_adapter_process(node, f"{spawned[0]}()")
+        for value in [*node.args, *(kw.value for kw in node.keywords)]:
+            # ``executor.submit(os.system, cmd)`` / ``callback=getattr(os, "popen")``:
+            # a process callable handed to another API still runs from here.
+            value = _unwrap_walrus(value.value if isinstance(value, ast.Starred) else value)
+            passed = _process_primitives(_qualified_names(value, self.scopes))
+            if passed:
+                self._report_adapter_process(value, f"{passed[0]} passed as a callable")
         for primitive, exclusive, writes, target in self._adapter_creations(node, func, names):
             if exclusive:
                 self._report_adapter_exclusive_create(node, primitive)

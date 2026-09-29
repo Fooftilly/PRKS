@@ -3767,7 +3767,7 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
 
     def test_blocks_process_orchestration_in_adapter(self):
         run = "['qpdf', '--linearize', a, a + '.tmp']"
-        # The import and the call are reported separately.
+        # The import and the call (or callable reference) are reported separately.
         both = ["INV-ADAPTER-002", "INV-ADAPTER-002"]
         cases = {
             "subprocess_run": (f"import subprocess\ndef f(a):\n    subprocess.run({run})\n", both),
@@ -3776,10 +3776,10 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
                 f"from subprocess import run as r\ndef f(a):\n    x = r\n    x({run})\n",
                 both,
             ),
-            "import_only_passed_uncalled": (
+            "passed_uncalled": (
                 "from subprocess import check_call\n"
                 f"def f(pool, a):\n    pool.submit(check_call, {run})\n",
-                ["INV-ADAPTER-002"],
+                both,
             ),
             "asyncio_subprocess_module": ("from asyncio import subprocess\n", ["INV-ADAPTER-002"]),
             "os_system": ("import os\ndef f(a):\n    os.system('qpdf ' + a)\n", ["INV-ADAPTER-002"]),
@@ -3809,6 +3809,74 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
         for label, (source, expected) in cases.items():
             with self.subTest(case=label):
                 self.assertEqual(_codes(source, self._SERVER), expected)
+
+    def test_blocks_process_callable_passed_out_of_adapter(self):
+        """A process primitive handed to another API (executor, loop, map,
+        callback) still runs on the adapter's behalf."""
+        cases = {
+            "executor_submit": (
+                "import os\ndef f(executor, command):\n    executor.submit(os.system, command)\n"
+            ),
+            "run_in_executor": (
+                "import os\ndef f(loop, command):\n"
+                "    loop.run_in_executor(None, os.system, command)\n"
+            ),
+            "pool_map": "import os\ndef f(pool, commands):\n    pool.map(os.system, commands)\n",
+            "keyword_callback": "import os\ndef f():\n    dispatch(callback=os.system)\n",
+            "local_alias": (
+                "import os\ndef f(executor, command):\n"
+                "    spawn = os.system\n    executor.submit(spawn, command)\n"
+            ),
+            "import_alias": (
+                "from os import popen as p\ndef f(executor, command):\n"
+                "    executor.submit(p, command)\n"
+            ),
+            "getattr_keyword": "import os\ndef f():\n    dispatch(callback=getattr(os, 'popen'))\n",
+            "walrus": "import os\ndef f(pool, cs):\n    pool.map((s := os.system), cs)\n",
+            "asyncio_create_subprocess": (
+                "import asyncio\ndef f(runner, a):\n"
+                "    runner.start(asyncio.create_subprocess_shell, 'qpdf ' + a)\n"
+            ),
+            "partial_of_process_callable": (
+                "import os\nfrom functools import partial\ndef f(executor, c):\n"
+                "    executor.submit(partial(os.system, c))\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-002"])
+
+    def test_direct_process_call_reports_once(self):
+        source = "import os\ndef f(command):\n    os.system(command)\n"
+        self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-002"])
+
+    def test_ordinary_callbacks_pass(self):
+        cases = {
+            "stdlib_callbacks": (
+                "import os\ndef f(executor, pool, loop, paths):\n"
+                "    executor.submit(os.path.exists, paths[0])\n"
+                "    pool.map(os.path.getsize, paths)\n"
+                "    loop.run_in_executor(None, os.stat, paths[0])\n"
+                "    sorted(paths, key=os.path.basename)\n"
+            ),
+            "approved_helper_callbacks": (
+                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "def f(executor, paths):\n"
+                "    executor.submit(maybe_linearize_pdf_in_place, paths[0], context='bulk')\n"
+                "    list(filter(is_pdf_linearized, paths))\n"
+            ),
+            "local_callbacks": (
+                "import threading\ndef work(x):\n    return x\n"
+                "def f(executor, x):\n"
+                "    executor.submit(work, x)\n"
+                "    threading.Thread(target=work, args=(x,), daemon=True).start()\n"
+                "    dispatch(callback=lambda: work(x))\n"
+            ),
+            "shadowed_os": "def f(executor, os, c):\n    executor.submit(os.system, c)\n",
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), [])
 
     def test_messages_point_to_approved_helpers(self):
         exclusive = checker.check_source("def f(p):\n    open(p, 'xb')\n", self._SERVER)
