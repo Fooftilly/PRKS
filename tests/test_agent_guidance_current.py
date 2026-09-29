@@ -166,6 +166,25 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertNotIn("New Concept still disabled offline", self.offline_contract)
         self.assertIn("New Concept available offline", self.offline_contract)
 
+    def test_playlist_mutations_are_not_called_online_only(self):
+        self.assertNotIn("Playlist mutation stays online-only", self.offline_contract)
+        self.assertNotIn("genuine Playlist mutation stays online-only", self.offline_contract)
+        self.assertIn("Playlist create/edit/membership/reorder/delete are also local-first",
+                      self.offline_contract)
+
+    def test_router_covers_remaining_durable_family_routes(self):
+        sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "## Work lifecycle",
+            "## Work-Person roles",
+            "## Tag vocabulary",
+            "backend/work_lifecycle_sync.py",
+            "backend/work_role_sync.py",
+            "backend/tag_sync.py",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, sync_map)
+
     # ---- obsolete phrases that must never come back ------------------------
 
     def test_playlists_are_not_described_as_read_only_offline(self):
