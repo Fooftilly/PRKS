@@ -2,6 +2,10 @@
 
 These rules apply to backend work in addition to the repository-root `AGENTS.md`. The text below is scoped from the former root policy so backend workers receive the invariants they need without unrelated frontend/E2E context.
 
+## Current persistence vs target architecture
+
+These rules describe the backend **implemented today**. SQLite, the current storage tree, and current sync protocol remain correctness constraints while those paths exist, but they are not permanent architecture mandates. Roadmap #310 accepts PostgreSQL as the expected long-term canonical relational store and a server architecture capable of authenticated multi-user/multi-library operation; #311 accepts storage-backend abstraction with a first-class configurable local data root. Preserve current behavior unless the task is an approved migration slice, while avoiding new domain boundaries that unnecessarily encode SQLite-only, single-owner, absolute-path, or process-local assumptions.
+
 ## Cross-domain contracts
 
 Nested `AGENTS.md` applies only within this directory tree. Several backend modules still share load-bearing invariants whose full text currently lives under `frontend/AGENTS.md` (and the docs it routes to). **Do not omit those contracts on a backend-only change** — Cursor will not inject `frontend/AGENTS.md` automatically. Load the smallest applicable route below instead of copying the large sections here.

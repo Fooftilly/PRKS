@@ -46,6 +46,16 @@ reviews:
         regressions in existing UI workflows. Do not invent new product
         behavior that is absent from the documented design or roadmap.
 
+    - path: "frontend-app/**"
+      instructions: |
+        Follow frontend-app/AGENTS.md and DESIGN.md. Treat the Vue/legacy bridge
+        as transitional under #230/#303: preserve current ownership/lifecycle
+        contracts, but do not require bridge implementation details as the
+        permanent architecture. Flag duplicate route/workspace/state owners,
+        raw transport calls around the typed API/service boundary, stale-owner
+        async writes, and new assumptions that PRKS must remain single-owner,
+        SQLite-specific, or tied to one host filesystem path.
+
     - path: "frontend/sw.js"
       instructions: |
         Treat service-worker changes as high risk. Check cache versioning,
@@ -146,6 +156,7 @@ knowledge_base:
     enabled: true
     filePatterns:
       - "AGENTS.md"
+      - "frontend-app/AGENTS.md"
       - "CLAUDE.md"
       - "README.md"
       - "DESIGN.md"

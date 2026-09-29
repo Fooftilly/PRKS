@@ -1,21 +1,21 @@
-"""Architectural guidance must not drift back to the pre-local-first world.
+"""Keep agent guidance honest about both current behavior and future architecture.
 
-`AGENTS.md` is read by people and by agents *before* they write code, so a stale
-sentence there is worse than a stale comment: it actively instructs the next
-contributor to rebuild something that was deliberately removed. Three of PRKS's
-worst offline defects came from exactly that -- a surface was made durable, the
-guidance still said "read-only offline", and the next change re-added a
-connectivity guard in front of an operation that no longer needed one.
+`AGENTS.md` and scoped agent files are read before contributors write code, so
+stale guidance can recreate removed behavior or harden transitional architecture
+into a permanent constraint. Current offline/durable-operation behavior remains
+a correctness contract until deliberately migrated, while #310/#311 define a
+future-capable target that must not be inferred away by SQLite/local-path/
+single-owner implementation details.
 
 The detailed Offline/PWA contract lives in `docs/agent-rules/offline-pwa.md`,
-routed from `frontend/AGENTS.md` (and the root `AGENTS.md` stub). Obsolete-phrase
-and durable-family assertions therefore cover the files agents are expected to
-read for that domain, not root `AGENTS.md` alone.
+routed from the scoped frontend guidance. Obsolete-phrase and durable-family
+assertions cover the files agents read for that domain. Separate assertions pin
+the current-vs-target distinction and ensure Vue source has scoped guidance.
 
 These are deliberately *phrase* assertions rather than a general style check.
 They fail loudly when a specific obsolete claim returns, and they say what is
-true instead. `docs/local-first-rollout-status.md` is the running score and is
-what this test reads the truth from.
+true instead. `docs/local-first-rollout-status.md` remains the running score
+for what is implemented today.
 """
 import pathlib
 import re
@@ -25,6 +25,7 @@ from backend.db_migrations import LATEST_SCHEMA_VERSION
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "AGENTS.md"
+FRONTEND_APP_AGENTS = ROOT / "frontend-app" / "AGENTS.md"
 OFFLINE_PWA = ROOT / "docs" / "agent-rules" / "offline-pwa.md"
 STATUS = ROOT / "docs" / "local-first-rollout-status.md"
 README = ROOT / "README.md"
@@ -88,11 +89,37 @@ class AgentGuidanceTests(unittest.TestCase):
         self.offline_pwa = OFFLINE_PWA.read_text()
         self.frontend_agents = (ROOT / "frontend" / "AGENTS.md").read_text(
             encoding="utf-8")
-        # Combined corpus agents read for offline/local-first guidance.
+        self.frontend_app_agents = FRONTEND_APP_AGENTS.read_text(encoding="utf-8")
+        # Combined corpus agents read for current offline/local-first guidance.
         self.guidance = (
             self.agents + "\n" + self.frontend_agents + "\n" + self.offline_pwa
         )
         self.status = STATUS.read_text()
+
+    # ---- current implementation vs accepted target architecture ------------
+
+    def test_root_distinguishes_current_runtime_from_target_architecture(self):
+        for phrase in ("#310", "#311", "PostgreSQL", "current implementation"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.agents)
+
+    def test_vue_source_has_scoped_agent_guidance(self):
+        self.assertIn("frontend-app/AGENTS.md", self.agents)
+        self.assertIn("DESIGN.md", self.frontend_app_agents)
+        self.assertIn("frontend/AGENTS.md", self.frontend_app_agents)
+        self.assertIn("#310", self.frontend_app_agents)
+        self.assertIn("#311", self.frontend_app_agents)
+
+    def test_test_router_names_vue_and_runtime_frontend_scopes(self):
+        tests_agents = (ROOT / "tests" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("frontend-app/AGENTS.md", tests_agents)
+        self.assertIn("frontend/AGENTS.md", tests_agents)
+
+    def test_offline_contract_is_not_declared_permanent_target_architecture(self):
+        self.assertIn("contract for the offline/sync implementation that exists today",
+                      self.offline_pwa)
+        self.assertIn("#310", self.offline_pwa)
+        self.assertIn("not treat it as the permanent target", self.offline_pwa)
 
     # ---- obsolete phrases that must never come back ------------------------
 

@@ -1,8 +1,8 @@
 # PRKS
 
-PRKS is a local research library. Python 3.12 stdlib HTTP, SQLite, vanilla JS. Exact startup, configuration, and safety contracts live in README.md.
+PRKS is a research-library application in an active architecture transition. The current runtime uses Python 3.12, a stdlib HTTP adapter, SQLite, managed local files, and a Vue 3 + TypeScript frontend that is replacing the legacy JavaScript UI. Exact current startup, configuration, and safety contracts live in README.md; current implementation details are not automatically long-term architecture requirements.
 
-Documentation map: `docs/wiki/` is the reviewed source for the GitHub Wiki and for detailed current feature/user behavior (workspace, research network, Saved Views, command palette, and similar product surfaces). Keep exact run/config/safety contracts (host/port, Docker publish, env vars, schema version, auth warning) in `README.md`, implementation rules in this file, UI/interaction authority in `DESIGN.md`, and fast-moving local-first status in `docs/local-first-rollout-status.md`. Do not update the rendered GitHub Wiki as the only source; repository Markdown is canonical and is published by `.github/workflows/publish-wiki.yml`.
+Documentation map: `docs/wiki/` is the reviewed source for the GitHub Wiki and for detailed current feature/user behavior (workspace, research network, Saved Views, command palette, and similar product surfaces). Keep exact current run/config/safety contracts (host/port, Docker publish, env vars, schema version, auth warning) in `README.md`, implementation rules in this file, UI/interaction authority in `DESIGN.md`, and fast-moving current offline/sync status in `docs/local-first-rollout-status.md`. Accepted long-term architecture direction is tracked by roadmap issues #179, #310, and #311; do not infer the target architecture solely from current runtime documentation. Do not update the rendered GitHub Wiki as the only source; repository Markdown is canonical and is published by `.github/workflows/publish-wiki.yml`.
 
 ## Scoped agent instructions
 
@@ -10,6 +10,7 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 
 - `backend/AGENTS.md`: backend architecture, privacy/logging, performance, persistence, backup/restore, indexing, schema, and mutation rules. Also routes backend sync/offline, research, and Saved Views work to the shared cross-domain contracts (see its "Cross-domain contracts" section).
 - `frontend/AGENTS.md`: UI/runtime behavior, workspace navigation, settings, Saved Views, research surfaces, offline/PWA, and interaction feedback.
+- `frontend-app/AGENTS.md`: Vue 3 + TypeScript source, component/service/state ownership, frontend migration boundaries, and routing to shared runtime/offline/design contracts.
 - `tests/AGENTS.md`: test-only routing to the production-domain instructions the test exercises.
 - `tests/e2e/AGENTS.md`: browser E2E workflow, isolation, assertions/waits, and debugging policy.
 - `tests/ux_tour/AGENTS.md`: UX Interaction Tour safety, interaction, artifact, and isolation policy.
@@ -23,7 +24,18 @@ Do not encode conflicting overrides of load-bearing root invariants (storage
 safety, privacy/logging, issue taxonomy, etc.); keep nested files additive
 refinements and routers instead of relying on root precedence to win a conflict.
 
-For test-only changes, follow `tests/AGENTS.md` and load the scoped production-domain instructions for the behavior under test. Backend persistence/migration tests use `backend/AGENTS.md`; frontend/offline/sync tests use `frontend/AGENTS.md`; mixed-domain tests use both.
+## Current implementation vs target architecture
+
+Agents must distinguish **implemented constraints** from **accepted target architecture**.
+
+- Current SQLite, local-file, stdlib-HTTP, durable-browser-sync, and Vue/legacy-bridge behavior remains authoritative when changing code that implements those paths today.
+- Roadmap #310 accepts a future-capable modular-monolith target: explicit User/Library/LibraryMembership boundaries, authentication separated from authorization, PostgreSQL as the expected long-term canonical relational store, stateless-capable API processes, and durable jobs/outbox where needed.
+- Roadmap #311 requires storage-backend abstraction with a first-class user-configurable local data/library root; physical file location must not become domain identity.
+- Existing offline/local-first machinery is a correctness contract until deliberately migrated, not a requirement that every future client or subsystem use the same replication model forever.
+- Do not perform an incidental PostgreSQL, framework, auth, storage-backend, or sync rewrite inside unrelated work. Conversely, do not harden new domain/schema design around SQLite, absolute local paths, single-owner assumptions, or process-local state when #310/#311 explicitly own the future boundary.
+
+
+For test-only changes, follow `tests/AGENTS.md` and load the scoped production-domain instructions for the behavior under test. Backend persistence/migration tests use `backend/AGENTS.md`; legacy/runtime frontend and offline/sync tests use `frontend/AGENTS.md`; Vue/TypeScript source tests use `frontend-app/AGENTS.md`; mixed-domain tests load each applicable scope.
 
 ## Commands
 
@@ -116,7 +128,7 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
 - `frontend/` legacy UI shell (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs, `frontend/js/workspace-persistence.js` workspace localStorage, `frontend/js/ribbon-create.js` unified New File split button)
-- `frontend-app/` Vue 3 + TypeScript source and maintainer Vite build (not a runtime dependency; see `frontend/AGENTS.md`)
+- `frontend-app/` Vue 3 + TypeScript source and maintainer Vite build (not a runtime dependency; see `frontend-app/AGENTS.md`; load `frontend/AGENTS.md` too when work crosses the legacy/runtime bridge or offline/sync contracts)
 - `frontend/vue/` committed Vite production bundle served with the rest of `frontend/`
 - `frontend/js/offline-store.js` disposable IndexedDB client cache (see `frontend/AGENTS.md` section "Offline / PWA")
 - `frontend/js/offline-runtime.js` online/offline state, read-through/mutation-guard policy (see `frontend/AGENTS.md` section "Offline / PWA")

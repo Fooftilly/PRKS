@@ -1,5 +1,7 @@
 # PRKS frontend agent instructions
 
+This file governs the shipped `frontend/` runtime/compatibility tree. Vue/TypeScript source under the sibling `frontend-app/` tree has its own `frontend-app/AGENTS.md`; load both only when a change crosses the bridge, shared workspace/runtime ownership, or offline/sync behavior. The current Vue/legacy bridge is transitional under #230/#303 and must not be treated as the intended permanent frontend shape.
+
 These rules apply to frontend work in addition to the repository-root `AGENTS.md`. `DESIGN.md` remains authoritative for UI and interaction decisions; read the sections relevant to the component being changed.
 
 ## Vue application

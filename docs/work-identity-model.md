@@ -1,5 +1,8 @@
 # Work identity, editions, versions and Assets: design (#60)
 
+
+> **Target-architecture compatibility note (2026-09-29):** this document remains the approved-in-direction Work → Manifestation → Asset domain design, but many migration/storage mechanics below are intentionally written against the **current SQLite + local-filesystem implementation**. Roadmaps #310 and #311 now define the accepted long-term direction: Library/user authorization boundaries, PostgreSQL as the expected canonical relational store, storage-backend abstraction, and a first-class user-configurable local data/library root. Treat SQLite triggers/table-rebuild details, current archive layout, and managed-basename mechanics as migration implementation choices unless a section explicitly states a domain invariant. Stable Work/Manifestation/Asset identity must not depend on a physical host path or on SQLite remaining permanent.
+
 **Status: approved design (#201). Slice A is implemented at schema 17**
 (`migrate_v16_to_v17`, `backend/work_identity.py`): entities, integrity
 layer, deterministic backfill and the `works` -> new-rows mirror. No reader,
@@ -1967,11 +1970,13 @@ row.
 9. **Automatic merge on DOI/ISBN or high fuzzy score.** A DOI identifies one
    publication form, and fuzzy matches are wrong often enough to destroy data.
    **Rejected.** Every merge is user-confirmed with a preview.
-10. **Store bytes in SQLite, or content-addressed storage replacing basenames.**
-    Blobs in SQLite are ruled out by #60. Content-addressed storage conflicts
-    with in-place materialization and the existing COW, cleanup and backup
-    model. **Rejected for now.** Hashes are metadata, and basenames stay the
-    locator.
+10. **Store bytes in SQLite, or replace the current local-backend locator during the #60 migration.**
+    Blobs in the relational database remain ruled out. Replacing the current
+    basename/COW layout inside the same #60 migration would unnecessarily
+    couple identity work to a storage rewrite, so it is **rejected for the
+    current migration slices**. This is not a permanent rejection of #311's
+    storage-backend abstraction, object storage, or a future content-addressed
+    backend: Asset identity is stable above the backend-specific storage key.
 11. **Dual-writing new and old columns from application code.** Every missed
     write path would silently diverge. **Rejected** in favor of one authority
     per field, with triggers or the single boundary maintaining the other copy
