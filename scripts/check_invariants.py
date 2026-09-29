@@ -187,6 +187,17 @@ MANAGED_PDF_MINTING_HELPERS = frozenset(
 # Fail-closed over-approximation; may only ever *block* a delete.
 WEAK_MANAGED_PDF_ALIAS_HELPERS = frozenset({"referenced_managed_pdf_filename"})
 MANAGED_PDF_ADOPTION_GUARD = "managed_pdf_adoption_guard"
+# Where each ownership-granting helper is defined. Granting (guard entry,
+# minted provenance) requires that canonical identity -- an import from that
+# module, a module alias's attribute, or the definition itself -- never just a
+# same-named method on an arbitrary object.
+_CAPABILITY_HELPER_HOMES = {
+    MANAGED_PDF_ADOPTION_GUARD: "backend/services/work_pdf_replace.py",
+    "allocate_exclusive_managed_filename": "backend/services/work_pdf_replace.py",
+    "store_new_managed_pdf_bytes": "backend/services/work_pdf_replace.py",
+    "store_new_managed_pdf_from_path": "backend/services/work_pdf_replace.py",
+    "mint_managed_pdf_filename": "backend/db_manager.py",
+}
 
 # INV-STORAGE-002: a raw removal of a managed-PDF path is survivor-aware
 # cleanup authority. Only these (file, function) capabilities hold it; every
@@ -487,6 +498,7 @@ class _Scope:
         "function_info",
         "adoption_guards",
         "is_lazy",
+        "relpath",
     )
 
     def __init__(
@@ -512,6 +524,8 @@ class _Scope:
         self.adoption_guards: list[_AdoptionGuard] = []
         # A generator expression body runs lazily, after its creator returns.
         self.is_lazy = False
+        # Only set on the module scope: the repo-relative path being checked.
+        self.relpath = ""
 
     @property
     def is_class(self) -> bool:
@@ -824,6 +838,30 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
             return {func.id}
         return {name.rsplit(".", 1)[-1] for name in _qualified_names(func, scopes)}
     return set()
+
+
+def _canonical_capability_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
+    """Ownership-granting helpers ``func`` is *canonically* bound to.
+
+    Unlike ``_callee_leaf_names`` (fine for sinks, which over-report), an
+    attribute on an unknown receiver (``fake.managed_pdf_adoption_guard``) or
+    a same-named function defined in another module grants nothing.
+    """
+    found: set[str] = set()
+    for qualified in _qualified_names(func, scopes):
+        module, _, leaf = qualified.rpartition(".")
+        home = _CAPABILITY_HELPER_HOMES.get(leaf)
+        if home is None:
+            continue
+        home_module = home.removesuffix(".py").rsplit("/", 1)[-1]
+        if module:
+            # ``backend.services.work_pdf_replace`` / ``.work_pdf_replace``.
+            if module.rsplit(".", 1)[-1] == home_module:
+                found.add(leaf)
+        elif scopes[0].relpath == home:
+            # Defined (or used unqualified) in its own home module.
+            found.add(leaf)
+    return found
 
 
 def _is_builtin(func: ast.expr, scopes: list[_Scope], name: str) -> bool:
@@ -1162,7 +1200,7 @@ def _proven_owned(node: ast.expr, scopes: list[_Scope]) -> set[_Binding] | None:
             return set(bindings)
         return None
     if isinstance(node, ast.Call):
-        if _callee_leaf_names(node.func, scopes) & MANAGED_PDF_MINTING_HELPERS:
+        if _canonical_capability_names(node.func, scopes) & MANAGED_PDF_MINTING_HELPERS:
             return {_MINTED}
         if _is_builtin(node.func, scopes, "str") and len(node.args) == 1:
             return _proven_owned(node.args[0], scopes)
@@ -1743,6 +1781,7 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def visit_Module(self, node: ast.Module) -> None:
         self._push(node.body)
+        self.scopes[0].relpath = self.relpath
         for stmt in node.body:
             self.visit(stmt)
         self._pop()
@@ -2025,8 +2064,8 @@ class _InvariantVisitor(ast.NodeVisitor):
         del scope.adoption_guards[len(scope.adoption_guards) - len(entered) :]
 
     def _is_adoption_guard_call(self, node: ast.expr) -> bool:
-        return isinstance(node, ast.Call) and MANAGED_PDF_ADOPTION_GUARD in _callee_leaf_names(
-            node.func, self.scopes
+        return isinstance(node, ast.Call) and MANAGED_PDF_ADOPTION_GUARD in (
+            _canonical_capability_names(node.func, self.scopes)
         )
 
     def _entered_adoption_guard(self, node: ast.expr) -> ast.Call | None:

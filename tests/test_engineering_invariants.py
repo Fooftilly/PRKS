@@ -2463,6 +2463,23 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        mutate(alias)\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "guard_method_on_unrelated_object": (
+                "def adopt(db, pdfs_dir, fp, fake):\n"
+                "    with fake.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "minting_method_on_unrelated_object": (
+                "def create(db, fake, data):\n"
+                "    name = fake.store_new_managed_pdf_bytes(data)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{name}')\n"
+            ),
+            "lookalike_minting_helper_defined_elsewhere": (
+                "def store_new_managed_pdf_bytes(pdfs_dir, name, data):\n"
+                "    return name\n"
+                "def create(db, pdfs_dir, name):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -2762,6 +2779,18 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
 
     def test_newly_minted_exclusive_pdf_passes(self):
         cases = {
+            "relative_import_minting": (
+                "from .work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "module_alias_minting": (
+                "import backend.services.work_pdf_replace as wpr\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = wpr.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
             "partial_bound_minted_name": (
                 "import functools\n"
                 "from backend.services import work_pdf_replace as wpr\n"
