@@ -1209,14 +1209,19 @@ def _method_call_facts(
 def _positional_or_keyword(
     node: ast.Call, index: int, keywords: tuple[str, ...]
 ) -> ast.expr | None:
-    """The argument at ``index``, or the first keyword spelling of it. A
-    ``*args`` spread at or before ``index`` may supply it."""
+    """The argument bound to the parameter at ``index`` (spelled one of
+    ``keywords``). An explicit keyword wins -- the same parameter cannot also
+    be bound positionally -- otherwise the positional at ``index``, or a
+    ``*args`` spread at or before it that may supply it."""
+    explicit = next((kw.value for kw in node.keywords if kw.arg in keywords), None)
+    if explicit is not None:
+        return explicit
     for position, arg in enumerate(node.args):
         if isinstance(arg, ast.Starred):
             return arg.value
         if position == index:
             return arg
-    return next((kw.value for kw in node.keywords if kw.arg in keywords), None)
+    return None
 
 
 def _identity_passed_names(node: ast.expr) -> list[str]:

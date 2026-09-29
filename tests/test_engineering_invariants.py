@@ -1629,6 +1629,21 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
             ),
+            "os_rename_spread_then_keyword_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(*[scratch], dst=os.path.join(pdfs_dir, name))\n"
+            ),
+            "shutil_move_spread_then_keyword_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(*[scratch], dst=os.path.join(pdfs_dir, name))\n"
+            ),
+            "os_renames_spread_then_keyword_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(*[scratch], new=os.path.join(pdfs_dir, name))\n"
+            ),
             "os_renames_keyword_managed_destination": (
                 "import os\n"
                 "def publish(pdfs_dir, scratch, name):\n"
