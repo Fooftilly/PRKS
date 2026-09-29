@@ -851,16 +851,28 @@ def _publish_ready_archive(
 
     An existing entry may be another backup's archive still registered under a
     live token, so a taken candidate is never removed or replaced; a fresh
-    suffix is drawn instead. The existence check and the rename are separate
-    steps, so two publishers could only race for one name by drawing the same
-    64-bit suffix in the same second. Returns ``(final_path, filename)``.
+    suffix is drawn instead. The name is claimed with an exclusive create
+    (which also refuses any symlink there) before the archive is renamed over
+    that claim, so two publishers can never both win the same name. This works
+    where hard links do not. Returns ``(final_path, filename)``.
     """
     for _attempt in range(_BACKUP_PUBLISH_ATTEMPTS):
         final_path = os.path.join(final_dir, filename)
-        if not os.path.lexists(final_path):
+        try:
+            fd = os.open(final_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            filename = _backup_filename(created, _backup_name_suffix())
+            continue
+        os.close(fd)
+        try:
             os.replace(archive_path, final_path)
-            return final_path, filename
-        filename = _backup_filename(created, _backup_name_suffix())
+        except BaseException:
+            try:
+                os.remove(final_path)
+            except OSError:
+                pass
+            raise
+        return final_path, filename
     raise BackupError(
         "publish_name_unavailable",
         "Backup could not be created.",

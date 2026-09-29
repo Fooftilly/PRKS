@@ -1321,6 +1321,53 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
             self.assertEqual(handle.read(), b"another backup")
         self.assertEqual(os.listdir(root), [os.path.basename(taken)])
 
+    def test_publish_skips_a_symlink_at_the_candidate_name(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        root = self._backup_root(cfg)
+        outside = self._tmpdir("prks-outside-")
+        victim = os.path.join(outside, "victim.prks-backup")
+        with open(victim, "wb") as handle:
+            handle.write(b"keep")
+        frozen = datetime(2026, 9, 29, 10, 0, 0, tzinfo=timezone.utc)
+        link = os.path.join(
+            root, "prks-backup-20260929T100000Z-aaaaaaaaaaaaaaaa.prks-backup"
+        )
+        self._symlink_or_skip(victim, link)
+
+        with patch.object(backup_module, "_utc_now", return_value=frozen), patch.object(
+            backup_module,
+            "_backup_name_suffix",
+            side_effect=["aaaaaaaaaaaaaaaa", "cccccccccccccccc"],
+        ):
+            result = create_backup(cfg)
+
+        self.assertNotEqual(result.archive_path, link)
+        self.assertTrue(os.path.islink(link))
+        with open(victim, "rb") as handle:
+            self.assertEqual(handle.read(), b"keep")
+
+    def test_failed_publish_releases_its_name_claim(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        root = self._backup_root(cfg)
+
+        real_replace = os.replace
+        claimed = []
+
+        def failing_publish(src, dst):
+            if os.path.dirname(dst) == root:
+                claimed.append(os.path.isfile(dst))
+                raise OSError("publish failed")
+            return real_replace(src, dst)
+
+        with patch.object(backup_module.os, "replace", failing_publish):
+            with self.assertRaises(BackupError):
+                create_backup(cfg)
+
+        self.assertEqual(claimed, [True])
+        self.assertEqual(self._ready_names(root), [])
+
     def test_take_then_download_cleanup_is_unchanged(self):
         lib = self._bind_library()
         cfg = lib["cfg"]
