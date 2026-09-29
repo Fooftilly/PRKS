@@ -46,6 +46,25 @@ class EngineeringInvariantTests(unittest.TestCase):
                 codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
                 self.assertEqual(codes, [code])
 
+    def test_blocks_modules_stored_on_attributes(self):
+        """``self.s = shutil; self.s.copy2(...)`` keeps the module identity."""
+        cases = {
+            "copy2": ("shutil", "copy2", "INV-STORAGE-001"),
+            "os_replace": ("os", "replace", "INV-DURABILITY-001"),
+            "os_fsync": ("os", "fsync", "INV-DURABILITY-002"),
+        }
+        for label, (module, attr, code) in cases.items():
+            with self.subTest(case=label):
+                source = (
+                    f"import {module}\n"
+                    "class Pub:\n"
+                    "    def publish(self, a, b):\n"
+                    f"        self.m = {module}\n"
+                    f"        self.m.{attr}(a, b)\n"
+                )
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, [code])
+
     def test_blocks_direct_import_alias(self):
         findings = checker.check_source(
             "from shutil import copyfile as cp\ncp('a', 'b')\n",

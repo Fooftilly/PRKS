@@ -588,9 +588,12 @@ def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, st
         # attribute (``self.cp = shutil.copy2; self.cp(...)``).
         key = _attr_key(fn)
         stored = _lookup_names(scopes, key) if key is not None else set()
+        # The receiver may be a module name or a module stored on a tracked
+        # one-level attribute (``self.s = shutil; self.s.copy2(...)``).
+        receiver = fn.value.id if isinstance(fn.value, ast.Name) else _attr_key(fn.value)
         via_module = (
-            {(module, fn.attr) for module in _lookup_modules(scopes, fn.value.id)}
-            if isinstance(fn.value, ast.Name)
+            {(module, fn.attr) for module in _lookup_modules(scopes, receiver)}
+            if receiver is not None
             else set()
         )
         return sorted(stored | via_module)
