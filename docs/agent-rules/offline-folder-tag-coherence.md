@@ -178,15 +178,15 @@ would let a truncated HTTP-200 row silently reparent a folder to the top level
 of someone's hierarchy. The `parent` summary is exempt — it selects only
 `id`/`title`.
 
-**Folder deletion and folder-tag removal are transactional.**
-`delete_empty_folder()` deletes the folder row and prunes its newly-unused tags
-in one transaction via `_prune_tag_if_unused_on_conn()`, and
-`remove_tag_from_folder()` does the same for the membership row plus its prune.
-`remove_tag_from_work()` had the identical defect and was fixed in the same
-pass. Offline coherence rests on "a failed canonical request keeps the previous
-cache eligible", which is only sound if a failure really means nothing changed
-— two auto-committing statements could otherwise delete the folder, fail the
-prune, and return an error the client would correctly treat as a no-op, leaving
-a permanently stale cache. `tests/test_folder_atomicity.py` forces the prune to
-fail and asserts the first write rolled back; those tests fail against the
-pre-fix implementations.
+**Folder deletion and Work/Folder tag removal preserve Tag identity.**
+`delete_empty_folder()` removes the Folder and lets its relationship rows
+cascade without deleting Tag rows. `remove_tag_from_folder()` and
+`remove_tag_from_work()` remove only their relationship rows. Ordinary
+relationship edits must never garbage-collect an "unused" Tag: Tags are a
+persistent reusable vocabulary, may still be referenced by Processing Files,
+and a surprise delete can turn pending durable operations into
+`ENTITY_NOT_FOUND` conflicts. Only explicit `delete_tag()` and
+`merge_tags_into()` may destroy or transform Tag identity.
+`tests/test_folder_atomicity.py` pins this by installing a trigger that forbids
+Tag deletion and proving Folder deletion, Work/Folder relationship removal, and
+bulk tag removal still succeed while the Tag row remains.
