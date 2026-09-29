@@ -112,7 +112,7 @@ _PATH_RETURNING_ATTRS = frozenset({"parent"})
 # Path attributes naming (part of) the same file as a string.
 _PATH_STRING_ATTRS = frozenset({"name", "stem"})
 # Path methods that take the file away from its managed name.
-_PATH_REMOVAL_METHODS = ("rename", "unlink")
+_PATH_REMOVAL_METHODS = ("rename", "replace", "unlink")
 _PATH_UNBOUND_UNLINK = frozenset(
     f"{cls}.{method}" for cls in PATHLIB_PATH_CLASSES for method in _PATH_REMOVAL_METHODS
 )
@@ -196,7 +196,15 @@ MANAGED_PDF_ADOPTION_GUARD = "managed_pdf_adoption_guard"
 # ``os.rename`` / ``shutil.move`` of a managed source takes its bytes away
 # from every live Work just as an unlink does.
 RAW_REMOVE_CALLS = frozenset(
-    {"os.remove", "os.rename", "os.renames", "os.unlink", "shutil.move", "shutil.rmtree"}
+    {
+        "os.remove",
+        "os.rename",
+        "os.renames",
+        "os.replace",
+        "os.unlink",
+        "shutil.move",
+        "shutil.rmtree",
+    }
 )
 MANAGED_PDF_REMOVE_CAPABILITIES: dict[tuple[str, str], str] = {
     # The canonical survivor-aware cleanup: under managed_pdf_path_lock it
@@ -1345,6 +1353,13 @@ def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
         key = target.id if isinstance(target, ast.Name) else _attr_key(target)
         if key is not None and _is_zip_archive_expr(item.context_expr, scopes):
             pairs.append((key, {_ARCHIVE}))
+        elif (
+            key is not None
+            and isinstance(item.context_expr, ast.Call)
+            and _qualified_names(item.context_expr.func, scopes) & _DIR_ITERATOR_FUNCS
+        ):
+            # ``with os.scandir(d) as entries`` yields the iterator itself.
+            pairs.append((key, _value_bindings(item.context_expr, scopes)))
         else:
             pairs.extend((name, {_OTHER}) for name in _stored_names(target))
     return pairs
@@ -2083,17 +2098,6 @@ class _InvariantVisitor(ast.NodeVisitor):
         enclosing scopes for what is nested in them."""
         return [self.scopes[-1], *(s for s in reversed(self.scopes[:-1]) if not s.is_class)]
 
-    def _forget_guarded_dict(self, name: str) -> None:
-        """Mark ``name`` dirty on this control-flow path if it is a guarded dict."""
-        for scope in self._dirtiable_scopes():
-            if name in scope.current:
-                bindings = scope.current[name]
-                if any(b[0] == "guarded_dict" for b in bindings):
-                    self._mark_dirty(scope, name)
-                return
-            if name in scope.summary:
-                return
-
     def _check_guarded_dict_store(self, target: ast.expr, value: ast.expr | None) -> None:
         """``body["file_path"] = <owned>`` keeps a guarded dict protected; any
         other write to (possibly) that entry invalidates it.
@@ -2142,8 +2146,13 @@ class _InvariantVisitor(ast.NodeVisitor):
             return
         for arg in [*node.args, *(kw.value for kw in node.keywords)]:
             value = arg.value if isinstance(arg, ast.Starred) else arg
-            if isinstance(value, ast.Name):
-                self._forget_guarded_dict(value.id)
+            if isinstance(value, ast.Name) and any(
+                b[0] == "guarded_dict" for b in _resolve(self.scopes, value.id)
+            ):
+                # Dict identity is not tracked: ``alias = body; mutate(alias)``
+                # may rewrite ``body`` too, so every guarded alias is dirtied.
+                self._forget_all_guarded_dicts()
+                return
 
     def _forget_all_guarded_dicts(self) -> None:
         for scope in self._dirtiable_scopes():

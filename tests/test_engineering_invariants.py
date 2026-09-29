@@ -1623,6 +1623,13 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "scandir_context_manager_entries": (
+                "import os\n"
+                "def wipe(pdfs_dir):\n"
+                "    with os.scandir(pdfs_dir) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
             "os_rename_out_of_managed_dir": (
                 "import os\n"
                 "def archive(pdfs_dir, name, dest):\n"
@@ -1812,8 +1819,30 @@ class ManagedPdfRemovalTests(unittest.TestCase):
         self.assertIn("_remove_managed_pdf", finding.message)
         self.assertIn("discard_unowned_managed_pdf", finding.message)
 
+    def test_os_replace_of_managed_source_is_a_removal(self):
+        """Replacing *from* a managed name drops it like os.rename, even in a
+        file whose os.replace durability boundary is allowlisted."""
+        source = (
+            "import os\n"
+            "def move_out(pdfs_dir, name, dest):\n"
+            "    os.replace(os.path.join(pdfs_dir, name), dest)\n"
+        )
+        self.assertEqual(
+            sorted(_codes(source)), ["INV-DURABILITY-001", "INV-STORAGE-002"]
+        )
+        self.assertEqual(
+            _codes(source, "backend/services/work_pdf_replace.py"), ["INV-STORAGE-002"]
+        )
+
     def test_unrelated_file_cleanup_passes(self):
         cases = {
+            "scandir_context_manager_other_dir": (
+                "import os\n"
+                "def prune(thumbs_dir):\n"
+                "    with os.scandir(thumbs_dir) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
             "rename_scratch_file": (
                 "import os, tempfile\n"
                 "def rotate(log_dir):\n"
@@ -2403,6 +2432,14 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('INSERT INTO works (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET '\n"
                 "                 'title = (SELECT t FROM x WHERE y), file_path = excluded.file_path', (w_id,))\n"
+            ),
+            "guarded_dict_alias_escapes_to_helper": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        alias = body\n"
+                "        mutate(alias)\n"
+                "        db.update_work_metadata(w_id, body)\n"
             ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
