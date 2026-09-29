@@ -765,6 +765,7 @@ AFFECTED_RULES = (
         "name": "docs-agents",
         "paths": (
             "AGENTS.md",
+            "**/AGENTS.md",
             "README.md",
             "docs/**",
             ".cursor/**",
