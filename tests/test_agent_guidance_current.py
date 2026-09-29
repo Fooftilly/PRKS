@@ -172,6 +172,15 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("Playlist create/edit/membership/reorder/delete are also local-first",
                       self.offline_contract)
 
+    def test_relationship_removal_never_prunes_tag_identity(self):
+        self.assertNotIn("_prune_tag_if_unused_on_conn", self.offline_contract)
+        self.assertNotIn("prunes its newly-unused tags", self.offline_contract)
+        self.assertIn("Folder deletion and Work/Folder tag removal preserve Tag identity",
+                      self.offline_contract)
+        self.assertIn("Only explicit `delete_tag()` and", self.offline_contract)
+        self.assertIn("`merge_tags_into()` may destroy or transform Tag identity",
+                      self.offline_contract)
+
     def test_router_covers_remaining_durable_family_routes(self):
         sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
         for phrase in (
