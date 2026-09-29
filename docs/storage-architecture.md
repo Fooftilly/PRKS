@@ -58,7 +58,7 @@ Contents:
 | S6 | Precedence | CLI `--storage-root`, then `PRKS_STORAGE`, then the bootstrap config file, then the platform default. The first source that is set wins completely, and PRKS reports which one it used. Testing mode never reads the bootstrap file or the platform default. |
 | S7 | Defaults | Packaged installs default to the platform's per-user application-data location. A source checkout keeps repository `data/` as its development default. A deployment chooses one through a distribution flag, never through a guess. |
 | S8 | Root identity | Every data root carries a small marker file, `prks-root.json`, with a `storage_root_id` and a `layout_version`. The ID identifies the library's file store: it is minted for a new root and **carried** by relocation. PRKS refuses to bind a root whose marker is missing (except when it creates or adopts a root), unreadable, retired, fenced (a relocation source), still staging (a relocation destination), or foreign, unless it can prove how that relocation ended. At most one root per ID is ever bindable, and none while a move is unresolved. After PostgreSQL arrives, the database also records the `storage_root_id` it belongs to. |
-| S9 | Relocation | A move is **fence, copy, verify, commit, activate, retire the source, rebuild, retain**. The one commit point is an atomic replace of the bootstrap config file. From the fence onward neither end of the move is bindable by any other process. The old library's data is never written; before commit only its marker changes (the fence). It is durably revoked by the fence **before** the destination becomes bindable, and it is never deleted except by a later explicit user action. The first implementation copies; it never renames destructively. |
+| S9 | Relocation | A move is **fence, copy, verify, commit, activate, retire the source, rebuild, retain**. There is exactly one commit point per move, and where it lives depends on who selects the root. For a config-file root it is the atomic replace of the bootstrap config file (§8.2 P5). For a CLI- or environment-selected root it is the atomic write of `relocation.phase: committed` into the destination marker (§8.7), because there the bootstrap file is not the selector and may be ephemeral. From the fence onward neither end of the move is bindable by any other process. The old library's data is never written; before commit only its marker changes (the fence). It is durably revoked by the fence **before** the destination becomes bindable, and it is never deleted except by a later explicit user action. The first implementation copies; it never renames destructively. |
 | S10 | Env-managed roots | When the CLI or the environment chooses the root, PRKS shows it read-only and offers no in-app move. That deployment is moved by its administrator, through an offline CLI tool. |
 | S11 | Relational store | The data root holds file-backed data. In the SQLite era the database is one canonical component inside it. With PostgreSQL, database placement is connection configuration, and choosing or moving the data root never moves the database. |
 | S12 | Backend interface | It is small and blob-shaped: exclusive create, atomic replace, open for read, stat, idempotent delete, verify, and list for maintenance only. It is not a repository framework. Absolute paths are available only through a local-only extension that filesystem-specific infrastructure uses. |
@@ -378,8 +378,10 @@ which is outside every data root:
 - **Why JSON.** It is written by PRKS, not by hand, it round-trips with the
   standard library, and it needs no dependency. (`tomllib` only reads.) It is
   written atomically with `fs_durability`: sibling temporary, file fsync,
-  `os.replace`, directory fsync. That atomic replace is the relocation commit
-  point (§8).
+  `os.replace`, directory fsync. For a root this file selects, that atomic
+  replace is the relocation commit point (§8.2 P5). A CLI- or
+  environment-selected root commits in its destination marker instead
+  (§8.7), and this file only mirrors that, best-effort.
 - **It holds no secrets.** When a future object-storage backend needs
   credentials, they come from the environment or a secret store. The config
   file holds at most a reference.
@@ -503,8 +505,13 @@ production library. `run_tests.py` already sets `PRKS_STORAGE` explicitly.
 ```
 
 `state ∈ { active, fenced, staging, retired }`. `relocation` carries
-`{ id, role: "source" | "destination", peer_hint }` while a move is in
-progress, or after it retired this root.
+`{ id, role: "source" | "destination", peer_hint, phase? }` while a move is in
+progress, or after it retired this root. `phase` is absent until a
+volume-recorded outcome exists. It is only ever written on a destination, and
+only by the offline flow (§8.7): `"committed"` (the offline commit) or
+`"aborted"` (never bindable). The marker `state` and `relocation.phase` are
+separate fields. A destination stays `state: staging` through P4 and through
+the offline commit, until P6(b) replaces the whole `relocation` with `null`.
 
 An optional `moved_from: {id, peer_hint}` records, for diagnostics only, that
 a completed relocation created this root. It is not a relocation role and
@@ -825,7 +832,11 @@ in containers it is ephemeral (§5.2): a one-off container that runs
 therefore records every phase in the **two root markers**, which are
 durable wherever the volumes are:
 
-- the destination marker's `relocation.phase`: `staging`, then `committed`;
+- the destination marker: `state: staging` with no `relocation.phase` from
+  P1 through P4. The offline commit then adds `relocation.phase:
+  "committed"`, still with `state: staging`. P6(b) replaces it with `state:
+  active, relocation: null`. An abort sets `relocation.phase: "aborted"`
+  instead;
 - the source marker's `fenced`/`retired` state.
 
 If a persistent bootstrap file happens to exist, `relocate`, `finalize` and
@@ -859,7 +870,13 @@ on that mirror for these roots.
      `finalize`, suppose the selected root is a `staging` destination whose
      marker says `phase: committed` for its `relocation_id`. That marker is
      proof the move committed (§7.1), so PRKS performs P6 and then attempts
-     P7. A `staging` destination **without** `committed` is refused and names
+     P7. Suppose instead the selected root is already `active`, with a
+     `moved_from` note: `finalize` crashed after P6(b) but before P7. It binds
+     normally, and PRKS then retries P7 on the source named by
+     `moved_from.peer_hint`. That retry is a no-op if the source is already
+     `retired` or unreachable, and it never blocks binding. The same retry
+     runs at every start until the source is `retired`. A `staging`
+     destination **without** `committed` is refused and names
      `finalize`/`abort`. A `fenced` source whose peer destination is
      committed or active is never unfenced.
    - **Abandon the move.** Leave the selector unchanged and run `python
