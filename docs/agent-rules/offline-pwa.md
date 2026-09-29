@@ -2,6 +2,8 @@
 
 This document is the detailed implementation contract for PRKS offline, local-first, sync, service-worker, and client-cache work.
 
+**Architecture status:** this is the contract for the offline/sync implementation that exists today. Preserve it while changing those paths, but do not treat it as the permanent target for every PRKS client. Roadmap #310 explicitly allows the future authenticated central-server architecture to reassess Web/Android offline depth and synchronization machinery while preserving user-facing durability guarantees. Planned architecture never overrides implemented behavior until an approved migration lands.
+
 It is routed from the root `AGENTS.md`. Read it before changing any of the following areas: `frontend/js/local-store.js`, `frontend/js/offline-store.js`, `frontend/js/offline-runtime.js`, `frontend/sw.js`, synchronization handlers/coordinators, offline projections, conflict/revision behavior, or tests that encode those contracts.
 
 The root `AGENTS.md` remains authoritative for global repository safety, testing, architecture, storage, audit, and UI rules. Where this document discusses a domain-specific invariant, treat it as the detailed contract for that offline/local-first domain.
