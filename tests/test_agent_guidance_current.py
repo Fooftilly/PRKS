@@ -162,6 +162,10 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("offline-entity-surfaces.md", sync_map)
         self.assertIn("foreground-open semantics", sync_map)
 
+    def test_cached_empty_concepts_keep_offline_creation_available(self):
+        self.assertNotIn("New Concept still disabled offline", self.offline_contract)
+        self.assertIn("New Concept available offline", self.offline_contract)
+
     # ---- obsolete phrases that must never come back ------------------------
 
     def test_playlists_are_not_described_as_read_only_offline(self):
