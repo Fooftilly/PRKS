@@ -1,4 +1,5 @@
 """Work role controls stay on the durable API and refuse a replaced owner."""
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -26,9 +27,21 @@ class WorkRoleEditorContractTests(unittest.TestCase):
         write = save.index("store.saveWorkPersonRole")
         self.assertLess(save.index("if (mounted && !live(ctx, state)) return"), write)
         self.assertLess(save.index("prksOwnerTabId"), write)
+        self.assertLess(save.index("typeof still === 'function'"), write)
         self.assertNotIn("prksVueRefreshWorkPanelRead", _ROLES)
         self.assertIn("prksRefreshOwnedWorkPanelRead", _ROLES)
         self.assertIn("prksEffectiveWorkDetailRoles", _ROLES)
+
+    def test_runtime_owner_and_paint(self):
+        proc = subprocess.run(
+            ["node", str(_PROJECT / "tests" / "browser" / "run_work_role_editor_selftest.js")],
+            cwd=_PROJECT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
 
 
 if __name__ == "__main__":

@@ -679,6 +679,7 @@ function openModal(id) {
         modalEl.dataset.prksOpenGeneration === String(openGeneration)
         && !modalEl.classList.contains('hidden');
     if (id === 'role-modal') {
+        prksCaptureRoleModalOrigin(openGeneration);
         deferBaseline = true;
         modalEl.setAttribute('inert', '');
         const finishRole = () => {
@@ -3201,6 +3202,78 @@ function prksWorkRoleIntentStill(ctx, generation, workId, openedOnWorkId) {
     return true;
 }
 window.prksWorkRoleIntentStill = prksWorkRoleIntentStill;
+
+/**
+ * The role modal's opener, taken when that modal starts opening.
+ * Save consumes this record. It does not read whichever pane is focused later.
+ */
+function prksCaptureRoleModalOrigin(openGeneration) {
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+    const route = ctx && (ctx.lastResolvedRoute || ctx.route);
+    let entityId = '';
+    if (route && route.params) {
+        entityId = String(route.params.workId || route.params.personId || '');
+    }
+    if (!entityId && work && work.id != null) entityId = String(work.id);
+    window.__prksRoleModalOrigin = {
+        tabId: ctx && ctx.tabId ? String(ctx.tabId) : '',
+        generation: ctx && typeof ctx.generation === 'number' ? ctx.generation : null,
+        openedWorkId: work && work.id != null ? String(work.id) : '',
+        entityId: entityId,
+        routeName: route && route.name ? String(route.name) : '',
+        openGeneration: openGeneration,
+    };
+}
+
+function prksRoleModalCapturedOrigin() {
+    const modalEl = document.getElementById('role-modal');
+    const origin = window.__prksRoleModalOrigin;
+    if (!modalEl || !origin || origin.openGeneration == null) return null;
+    if (String(modalEl.dataset.prksOpenGeneration || '') !== String(origin.openGeneration)) return null;
+    if (!origin.tabId || typeof prksGetTabContext !== 'function') return null;
+    const ctx = prksGetTabContext(origin.tabId);
+    if (!ctx || ctx.destroyed) return null;
+    return {
+        ctx: ctx,
+        generation: origin.generation,
+        openedOnWorkId: origin.openedWorkId || '',
+        openGeneration: origin.openGeneration,
+    };
+}
+
+/** Opener session after an await. Focus can move; the opened Work and generation cannot. */
+function prksRoleModalOwnerSessionStill(ctx, generation, openedOnWorkId) {
+    if (!ctx || ctx.destroyed) return false;
+    if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    if (!openedOnWorkId) return true;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!live || String(live.id) !== String(openedOnWorkId)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (route && route.name === 'work' && route.params &&
+        String(route.params.workId || '') !== String(openedOnWorkId)) return false;
+    return true;
+}
+
+/**
+ * Post-save UI belongs to the opener only while that pane is still focused on
+ * the same Work and this role-modal opening is still the visible one.
+ */
+function prksRoleModalMaySettleUi(ctx, generation, openedOnWorkId, openGeneration) {
+    if (!prksRoleModalOwnerSessionStill(ctx, generation, openedOnWorkId)) return false;
+    const modalEl = document.getElementById('role-modal');
+    if (!modalEl || modalEl.classList.contains('hidden')) return false;
+    if (String(modalEl.dataset.prksOpenGeneration || '') !== String(openGeneration)) return false;
+    const origin = window.__prksRoleModalOrigin;
+    if (!origin || String(origin.openGeneration) !== String(openGeneration)) return false;
+    if (String(origin.tabId || '') !== String(ctx.tabId)) return false;
+    if (typeof prksTabContextIsFocused === 'function' && !prksTabContextIsFocused(ctx)) return false;
+    return true;
+}
+window.prksCaptureRoleModalOrigin = prksCaptureRoleModalOrigin;
+window.prksRoleModalCapturedOrigin = prksRoleModalCapturedOrigin;
+window.prksRoleModalOwnerSessionStill = prksRoleModalOwnerSessionStill;
+window.prksRoleModalMaySettleUi = prksRoleModalMaySettleUi;
 
 function prksFolderRightPanelStackHtml(folder) {
     const notes = renderPrksPrivateNotesCard('folder', folder.id, folder.private_notes);

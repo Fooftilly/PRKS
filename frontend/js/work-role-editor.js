@@ -135,9 +135,13 @@
 
         const host = panel.querySelector('.work-linked-persons-by-role');
         const effective = root.prksEffectiveWorkDetailRoles(ctx.getEntity('work'));
-        if (!state.editable && owns(ctx, state) && typeof root.prksRefreshOwnedWorkPanelRead === 'function') {
-            root.prksRefreshOwnedWorkPanelRead(ctx, ctx.getEntity('work'));
-        } else if (host && typeof root.buildWorkLinkedPersonsHtml === 'function') {
+        /* View mode publishes through the owned read. Tags and other modes
+         * keep the classic host: that helper returns false and must not
+         * swallow the chip update. */
+        const refreshed = !state.editable && owns(ctx, state) &&
+            typeof root.prksRefreshOwnedWorkPanelRead === 'function' &&
+            root.prksRefreshOwnedWorkPanelRead(ctx, ctx.getEntity('work')) === true;
+        if (!refreshed && host && typeof root.buildWorkLinkedPersonsHtml === 'function') {
             const html = root.buildWorkLinkedPersonsHtml(effective, { editable: state.editable });
             if (host.innerHTML !== html) host.innerHTML = html;
         }
@@ -214,7 +218,7 @@
         return baseFor({ observed: stateResult.value }, workResult.value, personId, roleType);
     }
 
-    async function save(workId, personId, roleType, desired, person, work) {
+    async function save(workId, personId, roleType, desired, person, work, still) {
         if (!root.prksSync) return { code: 'unavailable' };
         if (desired !== null && typeof desired !== 'string') return { code: 'unavailable' };
         if (desired !== null &&
@@ -236,6 +240,9 @@
         const panel = panelOf();
         if (mounted && panel && panel.dataset.prksOwnerTabId &&
             panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return { code: 'unavailable' };
+        /* Unmounted modal saves have no editor session. The captured opener
+         * is rechecked after the base read, immediately before the write. */
+        if (typeof still === 'function' && !still()) return { code: 'unavailable' };
         try {
             await root.prksSync.store.saveWorkPersonRole(workId,
                 { person_id: personId, role_type: roleType, state: desired },
