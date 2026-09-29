@@ -518,8 +518,9 @@ data is untouched.
 and that carries no relocation role. Every other state needs a finalizer that
 can prove how the move ended:
 
-- **A `staging` destination** becomes `active` only when the move is known to
-  have committed:
+- **A `staging` destination** may be bound, and later becomes `active`, only
+  by a holder of proof that the move committed. That holder is the relocating
+  process in P6, or one of the following:
   - startup recovery, when the bootstrap config says `committed` for the same
     `relocation_id` (§8.3);
   - the offline `storage finalize` command (§8.7).
@@ -682,13 +683,19 @@ revoked by the P2 fence. Crash tests cover each boundary in this sequence.
 | **P1 Intent** | Mint a `relocation_id`. Create the destination with marker `state: staging, storage_root_id: <source's ID>, relocation: {id, role: destination}`. The ID is carried, not minted (§7.1). Write the config file with `storage.relocation = {id, phase: "copying", from, to}`, with `local_root` still the old root. The config write is atomic. | config (`copying`), destination marker (`staging`) |
 | **P2 Quiesce** | Enter the backup scope in the `concurrency` gate: mutations and backups blocked, reads allowed. That is today's backup semantics, and it bounds relocation to the same "reads keep working" user experience. Stop background writers: the cleanup retry, thumbnail and index writers, and processing scans. Then **fence the source**: durably set the old marker to `state: fenced, relocation: {id, role: source, peer_hint: <dest>}`. From here on no other process can bind the old path (§7.1). If the fence cannot be written, the move is refused before any copying. | source marker (`fenced`); the gate itself is process-local (§12 for multi-process) |
 | **P3 Copy** | The database: a `sqlite3` backup-API snapshot, never a file copy, written to the destination under a temporary name and then renamed. Each canonical namespace (`asset-objects`, `portraits`, and the inbox if it is under the root): stream every object into a staging name, hash it while copying, fsync the file, rename it to its key name, and fsync the directory. Derived data, logs and maintenance are **not** copied. Links are refused, as in §7.3. | per-object progress in `<dest>/.prks-maintenance/relocation/<id>/manifest.json`: key, size, sha256. Resumable, but a restart may also discard it and begin P3 again. |
-| **P4 Verify** | Re-read every destination object, and compare size and SHA-256 against the P3 manifest, which was computed from the source. Run `PRAGMA integrity_check` and the schema-version check on the destination database. Audit the catalogue against the destination (`audit_managed_pdfs`): every referenced key present. Keys missing in the source are reported, not fatal, because availability is observed (#60 §9.2). The destination marker **stays `staging`**, so the destination is not bindable (§7.1). Write config `phase: "verified"`. | config (`verified`) |
+| **P4 Verify** | Re-read every destination object, and compare size and SHA-256 against the P3 manifest, which was computed from the source. Run `PRAGMA integrity_check` and the schema-version check on the destination database. Audit the catalogue against the destination (`audit_managed_pdfs`): every referenced key present. Keys missing in the source are reported, not fatal, because availability is observed (#60 §9.2). **The inbox needs a stable final pass**, because users and external tools can write it and PRKS cannot quiesce them. When `for_processing/` is under the root, rescan the source inbox and compare each file's name, size and `st_mtime_ns` with the manifest. Copy and hash any new or changed file, then rescan. Repeat until two consecutive scans agree with the manifest. If it does not settle within a bounded number of passes, refuse the move and ask the user to pause whatever is writing the inbox. The destination marker **stays `staging`**, so the destination is not bindable (§7.1). Write config `phase: "verified"`. | config (`verified`) |
 | **P5 Commit** | **One atomic config replace:** `local_root = to`, `relocation.phase = "committed"`. This is the only switch. | config (`committed`) |
-| **P6 Activate and rebind** | Still under the P2 scope. The source has been durably `fenced` since P2 (the move was refused if that write failed). A `fenced` root is unbindable without proof that its move did not commit, and after P5 that proof cannot exist. So the source is **already revoked**. Set the destination marker, authorized by the committed config for the same `relocation_id`, in **one atomic marker replace**: `state: active`, `relocation: null`, plus an informational `moved_from: {id, peer_hint}`. `moved_from` is not a relocation role, and binding ignores it. Because activation and clearing the role are one write, no crash can leave an `active` destination that still carries a role. On every later start, the destination is an ordinary bindable root, whatever the config phase says. Then `bind_storage(new config)`; the existing rollback-on-failure applies. **Release the scope; mutations resume.** At no instant are two roots with this ID bindable: before P6 neither is, and from P6 only the destination is. | destination marker (`active`) |
+| **P6 Activate and rebind** | Still under the P2 scope. The source has been durably `fenced` since P2 (the move was refused if that write failed). A `fenced` root is unbindable without proof that its move did not commit, and after P5 that proof cannot exist. So the source is **already revoked**. P6 runs in two sub-steps, in this order:
+
+(a) **Bind first, while the destination is still `staging`.** A `staging` root is bindable only by a holder of this relocation's committed config record (§7.1), which is this process or startup recovery. Take the destination's `active_process` lease (§12), then `bind_storage(new config)`; the existing rollback-on-failure applies. If either step fails, release the lease. The destination stays `staging`, so no other process could have bound it, and "revert move" remains safe.
+
+(b) **Only after (a) succeeds**, activate. Authorized by the committed config for the same `relocation_id`, write **one atomic marker replace**: `state: active`, `relocation: null`, an informational `moved_from: {id, peer_hint}`, and the `active_process` lease this process already holds. `moved_from` is not a relocation role, and binding ignores it. The destination becomes generically bindable in the same write that records this process as its owner, so there is no instant at which another process could bind it or take its lease. No crash can leave an `active` destination that still carries a role. On every later start, the destination is an ordinary bindable root, whatever the config phase says.
+
+**Then release the scope; mutations resume.** At no instant are two roots with this ID bindable: before P6 neither is, and from P6 only the destination is. | destination marker (`active`) |
 | **P7 Retire source** | Change the old marker from `fenced` to `state: retired`, keeping `relocation: {id, role: source, peer_hint: <new root>}`. Write config `phase: "source_retired"`. This is **not a safety step**: it turns "a move is in progress" into "this library moved to X" for clearer messages and for P10 cleanup. If the old root cannot be written, for example because a disk was removed, it stays `fenced`, and PRKS retries the change at later starts. A disconnected source that reappears is still `fenced` and still refuses to bind. **No acknowledgement path exists or is needed**: revocation is the durable P2 fence, not P7. | old marker (`retired`), config (`source_retired`) |
 | **P8 Rebuild** | Derived data is rebuilt at the new root by the existing mechanisms: the text-index and research-index reconcile, and thumbnails lazily. `retry_pending_pdf_cleanup` now runs against the **new** root only. | none |
 | **P9 Retain** | Write config `phase: "retained"`, and keep `from` for diagnostics. | config |
-| **P10 Cleanup** (explicit, later) | Offered only after the new root has completed at least one full start, and recommended after a verified backup. It deletes only PRKS-known components of the retired root (the names in §4.2), never unknown files and never through links, and then the marker. Config: `relocation = null`. | config |
+| **P10 Cleanup** (explicit, later) | Offered only after the new root has completed at least one full start, and recommended after a verified backup. It deletes only PRKS-known components of the retired root (the names in §4.2), never unknown files and never through links, and then the marker. **Inbox files are deleted only if an identical copy exists in the destination** (same name and SHA-256). A file that reached the old inbox after P4 is kept, reported in diagnostics, and offered for import into the new library. Config: `relocation = null`. | config |
 
 **Pre-commit guarantee: the old library's data is never written, and the
 destination is never bindable.** The only write to the old root before commit
@@ -717,7 +724,7 @@ At startup, **before** binding, PRKS reads the config's `relocation` record
 | Config phase at startup | `local_root` | Resolution |
 | --- | --- | --- |
 | `copying` or `verified` | old | Old root authoritative. If its marker is `fenced` with this `relocation_id`, lift the fence back to `active`, then bind it normally. Mark the relocation `failed` in config. The destination is staging: delete it automatically **only** when its marker carries this `relocation_id`, `state: staging` and `role: destination`, and it contains nothing but PRKS components; otherwise leave it and report it. The user may retry. |
-| `committed` | new | New root authoritative. The source is already `fenced` (P2). If the destination marker is still `staging` with the same `relocation_id`, perform P6's single activation write. If it is already `active` with no role, P6's write already landed. Then bind normally. Attempt P7, P8 and P9 idempotently. A P7 that cannot reach the old root is retried at later starts and blocks nothing. |
+| `committed` | new | New root authoritative. The source is already `fenced` (P2). If the destination marker is still `staging` with the same `relocation_id`, perform P6 as specified: (a) take the lease and bind the `staging` root under the committed record, then (b) write the single activation. If the marker is already `active` with no role, P6(b) already landed, and PRKS binds normally. Attempt P7, P8 and P9 idempotently. A P7 that cannot reach the old root is retried at later starts and blocks nothing. |
 | `source_retired` | new | Bind normally and redo P8 and P9 idempotently. |
 | `retained` | new | Normal operation. Diagnostics show the retained old copy. |
 | `failed` | old | Normal operation, plus a notice with a "discard failed move" action. |
@@ -726,12 +733,14 @@ A failure during P6 (rebind) after commit is handled like any failed bind of
 the configured root: PRKS reports a configuration error and does **not** fall
 back to the old root. Automatic fallback is refused because, once any mutation
 commits in the new root, the old root is a stale snapshot from P2 and binding
-it would fork the library. Until the scope is released at the end of P6 (that
-is, while P6 itself has failed), the user may explicitly "revert move". That
-sets the config back to `from`, sets the destination marker back to `staging`,
-and lifts the old `fenced` marker back to `active`. Reverting is safe exactly
-because no mutation was accepted after P2. The window closes when P6 releases
-the scope.
+it would fork the library. While the destination is still `staging`, which
+means P6(a) failed and P6(b) never ran, the user may explicitly "revert move".
+That sets the config back to `from` and lifts the old `fenced` marker back to
+`active`; the destination is already `staging`. Reverting is safe because **no
+process** has admitted a mutation to either root since P2. The source has been
+fenced throughout. The destination was never generically bindable, and this
+process never released its scope. Once P6(b) has written `active`, revert is no
+longer offered.
 
 ### 8.4 Identity survives
 
@@ -788,8 +797,10 @@ offline command-line tool. The server is stopped for the whole sequence:
 2. The administrator does one of two things:
    - **Complete the move.** Change the environment or the mount (that change
      is the P5 commit), then run `python prks_app.py storage finalize --root
-     NEWPATH`. It performs P6's activation (the same single write, which clears
-     the destination's relocation role), then attempts P7's retirement of the
+     NEWPATH`. It takes the destination's lease first, then performs P6(b)'s
+     single activation write, which clears the relocation role, and releases
+     the lease on exit. The server is stopped, so there is nothing to bind.
+     It then attempts P7's retirement of the
      fenced source named in the destination marker. When the source is not
      reachable it simply stays `fenced`, which is already unbindable.
    - **Abandon the move.** Leave the selector unchanged and run `python
@@ -802,9 +813,23 @@ refused. The message names the relocation and both commands (§7.1). The
 administrator's configured library is therefore never opened from a stale or
 half-moved copy, and a stopped sequence always resolves with one explicit
 command. `storage verify [--root PATH]` runs
-§7.2 and the catalogue audit read-only. The Docker path stays "stop the
-container, copy the volume, start it with the new mount", and the verify tool
-validates the result.
+§7.2 and the catalogue audit read-only.
+
+**Docker and other volume moves use the same flow.** A raw copy of a stopped
+volume duplicates an `active` marker with the same `storage_root_id`. Both
+copies would then be bindable, and restarting the old Compose setup would fork
+the library. A raw copy is therefore **not a supported move**. The supported
+container runbook runs the same commands in a one-off container with both
+volumes mounted:
+
+1. `storage relocate --to /new`.
+2. Switch the Compose mount.
+3. `storage finalize --root /new`.
+
+The old volume ends `fenced` or `retired` and refuses to bind. A cold copy
+taken as a *backup* (the wiki's emergency procedure) is not a live library.
+Bringing one back into use is a restore decision, and PRKS cannot tell such a
+copy from its original, so the runbook tells the operator never to start both.
 
 ---
 
@@ -954,8 +979,13 @@ These are **not** part of the generic contract:
 ### 10.5 Object storage later
 
 Nothing above requires a POSIX filesystem. An S3-compatible backend maps
-`put_new` to a conditional `PutObject` with `If-None-Match: *`, `replace` to a
-plain `PutObject`, `stat` to `HeadObject`, `delete` to `DeleteObject`, and
+`put_new` to a conditional `PutObject` with `If-None-Match: *`. `replace`
+keeps §10.2's must-exist precondition: it reads the current ETag with
+`HeadObject` (absent means `NotFound`), then issues a conditional `PutObject`
+with `If-Match: <ETag>`. A `412` means the object was deleted or changed in
+between, and it is reported as a failed precondition, never as a silent
+create. The key-scoped lock (§12) makes that case exceptional. `stat` maps to
+`HeadObject`, `delete` to `DeleteObject`, and
 `iter_keys` to `ListObjectsV2` under the namespace prefix. Durability is the
 service's. Phase F adds it only for a real deployment need, and adds no
 dependency before then.
