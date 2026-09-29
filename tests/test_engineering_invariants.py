@@ -108,6 +108,22 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "import os\ndef f(fd):\n    (fn := getattr(os, 'fsync'))(fd)\n",
                 ["INV-DURABILITY-002"],
             ),
+            "inline_partial_copy2": (
+                "import functools, shutil\ndef f(a, b):\n    functools.partial(shutil.copy2)(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "walrus_inline_partial_copy2": (
+                "import functools, shutil\ndef f(a, b):\n    (cp := functools.partial(shutil.copy2))(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "inline_partial_os_replace": (
+                "import functools, os\ndef f(a, b):\n    functools.partial(os.replace)(a, b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "inline_partial_fsync": (
+                "import functools, os\ndef f(fd):\n    functools.partial(os.fsync)(fd)\n",
+                ["INV-DURABILITY-002"],
+            ),
             "path_class_replace": (
                 "from pathlib import Path\ndef f(a, b):\n    getattr(Path, 'replace')(Path(a), b)\n",
                 ["INV-DURABILITY-001"],
@@ -1747,6 +1763,27 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
                 "    getattr(Path(pdfs_dir) / name, 'unlink')()\n"
+            ),
+            "inline_partial_remove": (
+                "import functools, os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    functools.partial(os.remove)(os.path.join(pdfs_dir, name))\n"
+            ),
+            "walrus_inline_partial_remove": (
+                "import functools, os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    (rm := functools.partial(os.remove))(os.path.join(pdfs_dir, name))\n"
+            ),
+            "inline_partial_unbound_path_unlink": (
+                "import functools\n"
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    functools.partial(Path.unlink)(Path(pdfs_dir) / name)\n"
+            ),
+            "inline_partial_prebound_remove_reports_once": (
+                "import functools, os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    functools.partial(os.remove, os.path.join(pdfs_dir, name))()\n"
             ),
             "remove_stored_on_attribute": (
                 "import os\n"

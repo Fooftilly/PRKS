@@ -2777,27 +2777,46 @@ class _InvariantVisitor(ast.NodeVisitor):
             ),
         )
 
+    def _flatten_partial(
+        self,
+        func: ast.expr,
+        args: list[ast.expr],
+        keywords: list[ast.keyword],
+        at: ast.AST,
+    ) -> ast.Call:
+        """The call ``partial(partial(helper, a), b)(c)`` amounts to:
+        ``helper(a, b, c)``. Inner partials are recorded so their own
+        construction is not checked a second time."""
+        func = _unwrap_walrus(func)
+        while isinstance(func, ast.Call) and _is_partial_call(func, self.scopes) and func.args:
+            self._flattened_partials.add(id(func))
+            func, args, keywords = (
+                _unwrap_walrus(func.args[0]),
+                [*func.args[1:], *args],
+                [*func.keywords, *keywords],
+            )
+        # As in ``functools.partial``, the outermost binding of a keyword wins.
+        named = {kw.arg: kw for kw in keywords if kw.arg is not None}
+        keywords = [kw for kw in keywords if kw.arg is None or named[kw.arg] is kw]
+        return ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), at)
+
+    def _effective_call(self, node: ast.Call) -> ast.Call:
+        """An immediately-invoked ``partial(fn, *bound)(*args)`` is checked as
+        ``fn(*bound, *args)``; any other call as itself."""
+        callee = _unwrap_walrus(node.func)
+        if isinstance(callee, ast.Call) and _is_partial_call(callee, self.scopes) and callee.args:
+            return self._flatten_partial(callee, list(node.args), list(node.keywords), node)
+        return node
+
     def _check_managed_pdf_boundary(self, node: ast.Call) -> None:
         if id(node) in self._flattened_partials:
             return
         if _is_partial_call(node, self.scopes) and node.args:
             # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
             # prepares; arguments supplied at invocation are checked there.
-            func, args, keywords = node.args[0], node.args[1:], list(node.keywords)
-            # Flatten inline ``partial(partial(helper, a), b)`` to ``helper(a, b)``.
-            while isinstance(func, ast.Call) and _is_partial_call(func, self.scopes) and func.args:
-                self._flattened_partials.add(id(func))
-                func, args, keywords = (
-                    func.args[0],
-                    [*func.args[1:], *args],
-                    [*func.keywords, *keywords],
-                )
-            # As in ``functools.partial``, the outermost binding of a keyword wins.
-            named = {kw.arg: kw for kw in keywords if kw.arg is not None}
-            keywords = [
-                kw for kw in keywords if kw.arg is None or named[kw.arg] is kw
-            ]
-            prepared = ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), node)
+            prepared = self._flatten_partial(
+                node.args[0], node.args[1:], list(node.keywords), node
+            )
             self._check_managed_pdf_boundary(prepared)
             self._check_partial_bound_file_path(prepared)
             return
@@ -2841,7 +2860,8 @@ class _InvariantVisitor(ast.NodeVisitor):
             # ``getattr(p, "unlink")`` / ``getattr(Path, "replace")`` are the
             # same method references as ``p.unlink`` / ``Path.replace``.
             self._check_path_method_reference(as_attribute)
-        for module, name in _call_identities(node, self.scopes):
+        effective = self._effective_call(node)
+        for module, name in _call_identities(effective, self.scopes):
             if module == "shutil" and name in BANNED_SHUTIL_COPY_CALLS:
                 self.findings.append(
                     Finding(
@@ -2870,7 +2890,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                         ),
                     )
                 )
-        self._check_managed_pdf_boundary(node)
+        self._check_managed_pdf_boundary(effective)
         self.generic_visit(node)
 
 
