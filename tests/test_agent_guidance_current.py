@@ -30,6 +30,7 @@ FRONTEND_APP_AGENTS = ROOT / "frontend-app" / "AGENTS.md"
 OFFLINE_PWA = ROOT / "docs" / "agent-rules" / "offline-pwa.md"
 OFFLINE_RULE_FILES = (
     ROOT / "docs" / "agent-rules" / "offline-foundations.md",
+    ROOT / "docs" / "agent-rules" / "offline-entity-surfaces.md",
     ROOT / "docs" / "agent-rules" / "offline-entity-coherence.md",
     ROOT / "docs" / "agent-rules" / "offline-folder-tag-coherence.md",
     ROOT / "docs" / "agent-rules" / "offline-browse-protocol.md",
@@ -142,6 +143,25 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertNotIn("read `docs/agent-rules/offline-pwa.md` completely",
                          self.guidance)
 
+    def test_offline_foundations_stay_shared(self):
+        foundations = (ROOT / "docs" / "agent-rules" / "offline-foundations.md").read_text(encoding="utf-8")
+        self.assertIn("## Shared coherence-domain framework", foundations)
+        for phrase in (
+            "Concepts are **local-first**",
+            "Positions are **local-first**",
+            "Arguments/Stances are **local-first**",
+            "People are **local-first**",
+            "Research Graph caches the **server-generated projection snapshot**",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, foundations)
+
+    def test_sync_map_loads_cross_projection_rules(self):
+        sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
+        self.assertIn("offline-browse-protocol.md", sync_map)
+        self.assertIn("offline-entity-surfaces.md", sync_map)
+        self.assertIn("foreground-open semantics", sync_map)
+
     # ---- obsolete phrases that must never come back ------------------------
 
     def test_playlists_are_not_described_as_read_only_offline(self):
@@ -225,7 +245,7 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("## Cross-domain contracts", backend)
         self.assertIn("docs/agent-context/sync-map.md", backend)
         self.assertIn("docs/agent-rules/offline-pwa.md", backend)
-        self.assertIn("smallest relevant", backend)
+        self.assertIn("smallest applicable route", backend)
         self.assertNotIn("offline-pwa.md` completely", backend)
         self.assertIn("frontend/AGENTS.md", backend)
         for phrase in (
