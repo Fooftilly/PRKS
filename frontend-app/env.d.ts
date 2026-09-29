@@ -199,6 +199,13 @@ interface Window {
   prksSaveWorkMetadataFields?: (workId: string, groupName?: string) => void
   prksSaveWorkSource?: (workId: string) => void
   prksCancelWorkMetaEdit?: () => void | Promise<void>
+  prksBindPrivateNotesField?: (entityType: string, entityId: string, owner?: object) => void
+  prksEnsureWorkPrivateNoteSession?: (
+    owner: object,
+    workId: string,
+    initialText: string,
+  ) => { draftText: string; retired?: boolean } | null
+  prksPrivateNotesTextForEntity?: (entityType: string, entityId: string, serverText: string) => string
   prksResolveWorkMetadataFieldConflict?: (opId: string, apply: boolean, group: string) => void
   prksResolveWorkSourceConflict?: (opId: string, apply: boolean) => void
   prksVueAcceptWorkMetadataField?: (ctx: object, field: string, value: unknown) => boolean
