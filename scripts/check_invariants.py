@@ -759,6 +759,7 @@ def _value_bindings(value: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
         return {_ARCHIVE}
     if _is_partial_call(value, scopes) and value.args:
         return _partial_bindings(value, scopes)
+    value = _getattr_as_attribute(value, scopes) or value
     if isinstance(value, ast.Attribute):
         aliased = _attribute_alias_bindings(value, scopes)
         if aliased is not None:
@@ -832,6 +833,8 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
     to their bare name. Empty for locals, parameters and unknown names."""
     if isinstance(node, ast.Name):
         return _names_of_bindings(_resolve(scopes, node.id))
+    if isinstance(node, ast.NamedExpr):
+        return _qualified_names(node.value, scopes)
     constant = _constant_getattr(node, scopes)
     if constant is not None:
         # ``getattr(os, "remove")`` names ``os.remove``.
@@ -857,6 +860,14 @@ def _constant_getattr(node: ast.expr, scopes: list[_Scope]) -> tuple[ast.expr, s
     ):
         return node.args[0], node.args[1].value
     return None
+
+
+def _getattr_as_attribute(node: ast.expr, scopes: list[_Scope]) -> ast.Attribute | None:
+    """``getattr(obj, "attr")`` as the equivalent ``obj.attr`` node."""
+    constant = _constant_getattr(node, scopes)
+    if constant is None:
+        return None
+    return ast.copy_location(ast.Attribute(value=constant[0], attr=constant[1], ctx=ast.Load()), node)
 
 
 def _names_of_bindings(bindings: Iterable[_Binding]) -> set[str]:
@@ -912,6 +923,9 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
     aliases; a name bound only to a parameter/local matches nothing, and an
     unbound (global from elsewhere) name matches its own spelling.
     """
+    if isinstance(func, ast.NamedExpr):
+        # ``(sink := db.add_work)(...)`` calls the assigned value.
+        return _callee_leaf_names(func.value, scopes)
     constant = _constant_getattr(func, scopes)
     if constant is not None:
         # ``getattr(db, "add_work")(...)`` -> ``add_work``.
@@ -2460,6 +2474,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         # and unbound calls (``ZipFile.extractall(zf, dest)``) are covered too.
         if node.attr == BANNED_ZIPFILE_METHOD and self._is_zip_receiver(node.value):
             self._report_zip_extractall(node)
+        self._check_path_method_reference(node)
+        self.generic_visit(node)
+
+    def _check_path_method_reference(self, node: ast.Attribute) -> None:
+        """``p.replace`` / ``p.unlink`` / ``p.rename`` (or the class form),
+        called now or saved for later."""
         if (
             node.attr == "replace"
             and self.relpath not in OS_REPLACE_ALLOWLIST
@@ -2473,7 +2493,6 @@ class _InvariantVisitor(ast.NodeVisitor):
         ):
             # Covers ``p.unlink()`` / ``p.rename(dst)`` and a saved bound method.
             self._check_removal_of(node, f"pathlib.Path.{node.attr}()", node.value)
-        self.generic_visit(node)
 
     def _is_path_receiver(self, node: ast.expr) -> bool:
         return _PATH in _expr_facts(node, self.scopes) or _is_path_class_expr(node, self.scopes)
@@ -2792,6 +2811,11 @@ class _InvariantVisitor(ast.NodeVisitor):
             and self._is_zip_receiver(node.args[0])
         ):
             self._report_zip_extractall(node)
+        as_attribute = _getattr_as_attribute(node, self.scopes)
+        if as_attribute is not None:
+            # ``getattr(p, "unlink")`` / ``getattr(Path, "replace")`` are the
+            # same method references as ``p.unlink`` / ``Path.replace``.
+            self._check_path_method_reference(as_attribute)
         for module, name in _call_identities(node, self.scopes):
             if module == "shutil" and name in BANNED_SHUTIL_COPY_CALLS:
                 self.findings.append(

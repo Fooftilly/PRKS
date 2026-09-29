@@ -78,6 +78,26 @@ class EngineeringInvariantTests(unittest.TestCase):
                 codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
                 self.assertEqual(codes, [code])
 
+    def test_blocks_saved_and_path_constant_getattr(self):
+        cases = {
+            "saved_copy2": (
+                "import shutil\ndef f(a, b):\n    cp = getattr(shutil, 'copy2')\n    cp(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "path_instance_replace": (
+                "from pathlib import Path\ndef f(a, b):\n    getattr(Path(a), 'replace')(b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "path_class_replace": (
+                "from pathlib import Path\ndef f(a, b):\n    getattr(Path, 'replace')(Path(a), b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+        }
+        for label, (source, expected) in cases.items():
+            with self.subTest(case=label):
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, expected)
+
     def test_blocks_direct_import_alias(self):
         findings = checker.check_source(
             "from shutil import copyfile as cp\ncp('a', 'b')\n",
@@ -1690,6 +1710,17 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    getattr(os, 'remove')(os.path.join(pdfs_dir, name))\n"
             ),
+            "saved_constant_getattr_remove": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    rm = getattr(os, 'remove')\n"
+                "    rm(os.path.join(pdfs_dir, name))\n"
+            ),
+            "constant_getattr_path_unlink": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    getattr(Path(pdfs_dir) / name, 'unlink')()\n"
+            ),
             "remove_stored_on_attribute": (
                 "import os\n"
                 "class Cleaner:\n"
@@ -2736,6 +2767,15 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
             "constant_getattr_sink": (
                 "def create(db, fp):\n"
                 "    getattr(db, 'add_work')(title='t', file_path=fp)\n"
+            ),
+            "saved_constant_getattr_sink": (
+                "def create(db, fp):\n"
+                "    save = getattr(db, 'add_work')\n"
+                "    save(title='t', file_path=fp)\n"
+            ),
+            "walrus_constant_getattr_sink": (
+                "def create(db, fp):\n"
+                "    (sink := getattr(db, 'add_work'))(title='t', file_path=fp)\n"
             ),
             "sink_stored_on_attribute": (
                 "class Creator:\n"
