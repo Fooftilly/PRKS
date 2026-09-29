@@ -410,20 +410,43 @@ _TEMPFILE_DIR_ARG = {
     "tempfile.mkdtemp": 2,
     "tempfile.mkstemp": 2,
 }
-# Process creation. ``subprocess`` is banned as a module (import or any call).
+# Process creation. ``subprocess`` is banned as a module (import); its
+# launchers are listed explicitly so constants such as ``subprocess.PIPE``
+# passed as arguments are not mistaken for process callables. Only the
+# reviewed ``multiprocessing`` launchers are listed: importing the module
+# itself is not process creation.
 _PROCESS_MODULES = frozenset({"asyncio.subprocess", "subprocess"})
-_PROCESS_CALL_PREFIXES = ("os.exec", "os.posix_spawn", "os.spawn", "subprocess.")
+_PROCESS_CALL_PREFIXES = ("os.exec", "os.posix_spawn", "os.spawn")
 _PROCESS_CALLS = frozenset(
     {
         "asyncio.create_subprocess_exec",
         "asyncio.create_subprocess_shell",
+        "asyncio.subprocess.create_subprocess_exec",
+        "asyncio.subprocess.create_subprocess_shell",
+        "multiprocessing.Pool",
+        "multiprocessing.Process",
+        "multiprocessing.pool.Pool",
         "os.fork",
         "os.forkpty",
         "os.popen",
+        "os.startfile",
         "os.system",
         "pty.spawn",
+        "subprocess.Popen",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        "subprocess.run",
     }
 )
+# asyncio event-loop process launchers. The receiver's type is not tracked:
+# these method names are specific to process creation, and the rule only
+# covers backend/server.py, so the leaf name alone is reported.
+_LOOP_PROCESS_METHODS = frozenset({"subprocess_exec", "subprocess_shell"})
+# Nested stored partials resolved per call (``p2 = partial(p1, ...)``).
+_MAX_PARTIAL_DEPTH = 4
 
 
 @dataclass(frozen=True)
@@ -842,7 +865,11 @@ def _partial_bindings(value: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
     # each one shifts by this layer's positionals.
     prior = {b[1] for b in inner if b[0] == "partial"} or {0}
     added = len(value.args) - 1
-    return {b for b in inner if b[0] != "partial"} | {("partial", n + added) for n in prior}
+    # ``("partial_of", call)`` lets a later invocation be checked as the
+    # combined ``helper(*bound, *args)`` call; an inner stored partial is
+    # reached again through this call's own wrapped callable.
+    kept = {b for b in inner if b[0] not in {"partial", "partial_of"}}
+    return kept | {("partial", n + added) for n in prior} | {("partial_of", value)}
 
 
 def _attribute_alias_bindings(
@@ -854,6 +881,14 @@ def _attribute_alias_bindings(
     if value.attr == "rename" and _PATH in _expr_facts(value.value, scopes):
         # ``move = p.rename``: invoking it overwrites its destination argument.
         return {_BOUND_PATH_RENAME} | _expr_facts(value, scopes)
+    if value.attr in _PATH_OPEN_METHODS and not _is_path_class_expr(value.value, scopes):
+        receiver = _expr_facts(value.value, scopes)
+        if _PATH in receiver:
+            # ``writer = p.open``: the call's mode / ``exist_ok`` decides later
+            # (INV-ADAPTER-001); whether ``p`` is a managed PDF is fixed now.
+            return {("bound_path_method", value.attr, _MANAGED in receiver)} | _expr_facts(
+                value, scopes
+            )
     key = _attr_key(value)
     stored = set(_resolve(scopes, key)) if key is not None else set()
     if stored:
@@ -1939,6 +1974,9 @@ class _InvariantVisitor(ast.NodeVisitor):
         # Inner ``partial(...)`` calls already checked as part of the outer
         # partial they were flattened into (whose keywords may override theirs).
         self._flattened_partials: set[int] = set()
+        # Provenance of a partial's pre-bound arguments where it was built, so
+        # a later invocation judges them as they were bound (INV-ADAPTER-001).
+        self._prebound_facts: dict[int, set[_Binding]] = {}
 
     @property
     def _function(self) -> tuple[str, str]:
@@ -2922,6 +2960,8 @@ class _InvariantVisitor(ast.NodeVisitor):
         if _is_partial_call(node, self.scopes) and node.args:
             # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
             # prepares; arguments supplied at invocation are checked there.
+            if self.relpath == HTTP_ADAPTER_MODULE:
+                self._record_prebound_facts(node)
             prepared = self._flatten_partial(
                 node.args[0], node.args[1:], list(node.keywords), node
             )
@@ -2945,53 +2985,141 @@ class _InvariantVisitor(ast.NodeVisitor):
 
         Called for every effective call and for the call a ``partial(...)``
         prepares, so aliases, ``getattr`` spellings and partials resolve
-        exactly as they do for the INV-STORAGE rules."""
+        exactly as they do for the INV-STORAGE rules. Invoking a stored
+        partial is checked as the combined call, reporting only what the
+        invocation adds to what its construction already reported."""
         if self.relpath != HTTP_ADAPTER_MODULE:
             return
-        func = _unwrap_walrus(node.func)
+        self._check_passed_process_callables(node)
+        findings = self._adapter_call_findings(node)
+        partials = self._stored_partials(node.func)
+        if partials:
+            findings -= set().union(
+                *(self._adapter_call_findings(self._merged_partial_call(p, None), 1) for p in partials)
+            )
+        for kind, primitive in sorted(findings):
+            if kind == "process":
+                self._report_adapter_process(node, primitive)
+            elif kind == "exclusive":
+                self._report_adapter_exclusive_create(node, primitive)
+            else:
+                self._report_adapter_store(node, primitive)
+
+    def _stored_partials(self, func: ast.expr) -> list[ast.Call]:
+        """``partial(...)`` constructions a stored callee may be bound to."""
+        return [b[1] for b in self._callee_bindings(func) if b[0] == "partial_of"]
+
+    def _merged_partial_call(self, partial_call: ast.Call, call: ast.Call | None) -> ast.Call:
+        """``partial(helper, *bound)`` invoked as ``call`` (or with no
+        arguments), as the single call ``helper(*bound, *args)``."""
+        # Merging for analysis must not mark the construction as already checked.
+        flattened = set(self._flattened_partials)
+        try:
+            at: ast.AST = call if call is not None else partial_call
+            args = list(call.args) if call is not None else []
+            keywords = list(call.keywords) if call is not None else []
+            return self._flatten_partial(partial_call, args, keywords, at)
+        finally:
+            self._flattened_partials = flattened
+
+    def _adapter_call_findings(self, call: ast.Call, depth: int = 0) -> set[tuple[str, str]]:
+        """``(kind, primitive)`` the call amounts to: ``process``,
+        ``exclusive`` (create) or ``store`` (managed-PDF write). A stored
+        partial is resolved to the combined call it makes."""
+        partials = self._stored_partials(call.func) if depth <= _MAX_PARTIAL_DEPTH else []
+        if partials:
+            return set().union(
+                *(
+                    self._adapter_call_findings(self._merged_partial_call(p, call), depth + 1)
+                    for p in partials
+                )
+            )
+        func = _unwrap_walrus(call.func)
         names = _qualified_names(func, self.scopes)
         if _is_builtin(func, self.scopes, "open"):
             names = names | {"builtins.open"}
+        found: set[tuple[str, str]] = set()
         spawned = _process_primitives(names)
         if spawned:
-            self._report_adapter_process(node, f"{spawned[0]}()")
-        for value in [*node.args, *(kw.value for kw in node.keywords)]:
-            # ``executor.submit(os.system, cmd)`` / ``callback=getattr(os, "popen")``:
-            # a process callable handed to another API still runs from here.
-            value = _unwrap_walrus(value.value if isinstance(value, ast.Starred) else value)
+            found.add(("process", f"{spawned[0]}()"))
+        method = _getattr_as_attribute(func, self.scopes) or func
+        if isinstance(method, ast.Attribute) and method.attr in _LOOP_PROCESS_METHODS:
+            # ``asyncio.get_running_loop().subprocess_exec(...)``.
+            found.add(("process", f"event loop .{method.attr}()"))
+        for primitive, exclusive, writes, managed in self._adapter_creations(call, func, names):
+            if exclusive:
+                found.add(("exclusive", primitive))
+            elif writes and managed:
+                found.add(("store", primitive))
+        return found
+
+    def _check_passed_process_callables(self, node: ast.Call) -> None:
+        """``executor.submit(os.system, cmd)`` / ``callback=getattr(os, "popen")``:
+        a process callable handed to another API still runs from here. A
+        literal is looked into only where it is unpacked into the call
+        (``*[os.system, cmd]`` / ``**{"callback": os.system}``); an ordinary
+        list argument is data, not a callable being passed."""
+        values: list[ast.expr] = []
+        for arg in node.args:
+            inner = _unwrap_walrus(arg.value if isinstance(arg, ast.Starred) else arg)
+            if isinstance(arg, ast.Starred) and isinstance(inner, (ast.List, ast.Tuple, ast.Set)):
+                values.extend(e.value if isinstance(e, ast.Starred) else e for e in inner.elts)
+            else:
+                values.append(inner)
+        for keyword in node.keywords:
+            if keyword.arg is None and isinstance(keyword.value, ast.Dict):
+                values.extend(
+                    value for key, value in zip(keyword.value.keys, keyword.value.values) if key
+                )
+            else:
+                values.append(keyword.value)
+        for value in values:
+            value = _unwrap_walrus(value)
             passed = _process_primitives(_qualified_names(value, self.scopes))
             if passed:
                 self._report_adapter_process(value, f"{passed[0]} passed as a callable")
-        for primitive, exclusive, writes, target in self._adapter_creations(node, func, names):
-            if exclusive:
-                self._report_adapter_exclusive_create(node, primitive)
-            elif writes:
-                self._check_adapter_write(node, primitive, target)
+
+    def _record_prebound_facts(self, partial_call: ast.Call) -> None:
+        """Provenance of each pre-bound argument (and of a bound method's
+        receiver) as it is at construction."""
+        wrapped = _unwrap_walrus(partial_call.args[0])
+        bound = [*partial_call.args[1:], *(kw.value for kw in partial_call.keywords)]
+        if isinstance(wrapped, ast.Attribute):
+            bound.append(wrapped.value)
+        for value in bound:
+            value = value.value if isinstance(value, ast.Starred) else value
+            self._prebound_facts[id(value)] = _expr_facts(value, self.scopes)
+
+    def _is_managed_target(self, target: ast.expr | None) -> bool:
+        if target is None:
+            return False
+        facts = self._prebound_facts.get(id(target))
+        if facts is None:
+            facts = _expr_facts(target, self.scopes)
+        return _MANAGED in facts
 
     def _adapter_creations(
         self, node: ast.Call, func: ast.expr, names: set[str]
-    ) -> list[tuple[str, bool, bool, ast.expr | None]]:
-        """``(primitive, may create exclusively, may write, target path)`` for
-        each file-creating primitive the call may be. A position a partial
-        pre-bound was checked where the partial was built."""
-        found: list[tuple[str, bool, bool, ast.expr | None]] = []
-        prebound_counts = self._partial_prebound_counts(node.func)
+    ) -> list[tuple[str, bool, bool, bool]]:
+        """``(primitive, may create exclusively, may write, managed target)``
+        for each file-creating primitive the call may be."""
+        found: list[tuple[str, bool, bool, bool]] = []
         arg = self._call_argument
-        for pre in prebound_counts:
-            if names & _OPEN_CALLS:
-                exclusive, writes = _open_mode_effect(arg(node, 1 - pre, "mode"))
-                found.append(("open()", exclusive, writes, arg(node, -pre, "file")))
-            if "os.open" in names:
-                exclusive, writes = _os_open_flags_effect(arg(node, 1 - pre, "flags"), self.scopes)
-                found.append(("os.open()", exclusive, writes, arg(node, -pre, "path")))
-            for creator in sorted(names & set(_TEMPFILE_DIR_ARG)):
-                directory = arg(node, _TEMPFILE_DIR_ARG[creator] - pre, "dir")
-                found.append((f"{creator}()", False, True, directory))
-            for unbound in sorted(names & _PATH_UNBOUND_CREATE):
-                # ``Path.open(p, "xb")``: the receiver is the first argument.
-                method = unbound.rsplit(".", 1)[1]
-                effect = self._path_create_effect(node, method, 1 - pre)
-                found.append((f"pathlib.Path.{method}()", *effect, arg(node, -pre, "self")))
+        managed = self._is_managed_target
+        if names & _OPEN_CALLS:
+            exclusive, writes = _open_mode_effect(arg(node, 1, "mode"))
+            found.append(("open()", exclusive, writes, managed(arg(node, 0, "file"))))
+        if "os.open" in names:
+            exclusive, writes = _os_open_flags_effect(arg(node, 1, "flags"), self.scopes)
+            found.append(("os.open()", exclusive, writes, managed(arg(node, 0, "path"))))
+        for creator in sorted(names & set(_TEMPFILE_DIR_ARG)):
+            directory = arg(node, _TEMPFILE_DIR_ARG[creator], "dir")
+            found.append((f"{creator}()", False, True, managed(directory)))
+        for unbound in sorted(names & _PATH_UNBOUND_CREATE):
+            # ``Path.open(p, "xb")``: the receiver is the first argument.
+            method = unbound.rsplit(".", 1)[1]
+            effect = self._path_create_effect(node, method, 1)
+            found.append((f"pathlib.Path.{method}()", *effect, managed(arg(node, 0, "self"))))
         bound = _getattr_as_attribute(func, self.scopes) or func
         if (
             isinstance(bound, ast.Attribute)
@@ -3000,7 +3128,12 @@ class _InvariantVisitor(ast.NodeVisitor):
             and _PATH in _expr_facts(bound.value, self.scopes)
         ):
             effect = self._path_create_effect(node, bound.attr, 0)
-            found.append((f"pathlib.Path.{bound.attr}()", *effect, bound.value))
+            found.append((f"pathlib.Path.{bound.attr}()", *effect, managed(bound.value)))
+        for binding in self._callee_bindings(func):
+            if binding[0] == "bound_path_method":
+                # ``writer = p.open; writer("wb")`` / ``self.writer(...)``.
+                effect = self._path_create_effect(node, binding[1], 0)
+                found.append((f"pathlib.Path.{binding[1]}()", *effect, binding[2]))
         return found
 
     def _path_create_effect(self, node: ast.Call, method: str, base: int) -> tuple[bool, bool]:
@@ -3018,8 +3151,10 @@ class _InvariantVisitor(ast.NodeVisitor):
         return False, True
 
     def _check_adapter_write(self, node: ast.AST, primitive: str, target: ast.expr | None) -> None:
-        if _MANAGED not in _expr_facts(target, self.scopes):
-            return
+        if self._is_managed_target(target):
+            self._report_adapter_store(node, primitive)
+
+    def _report_adapter_store(self, node: ast.AST, primitive: str) -> None:
         self._report(
             "INV-ADAPTER-001",
             node,
