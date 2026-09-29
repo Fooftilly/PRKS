@@ -57,6 +57,7 @@ class AgentContextBudgetTests(unittest.TestCase):
         router = rules_dir / "offline-pwa.md"
         leaves = (
             rules_dir / "offline-foundations.md",
+            rules_dir / "offline-entity-surfaces.md",
             rules_dir / "offline-entity-coherence.md",
             rules_dir / "offline-folder-tag-coherence.md",
             rules_dir / "offline-browse-protocol.md",
