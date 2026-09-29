@@ -26,8 +26,8 @@ For shared protocol/coordinator changes whose behavior can affect every durable 
 | Progress/Types/Recent/Recently Added projections, shared operation-family protocol/handler semantics | `offline-browse-protocol.md` |
 | Work metadata and Work opens | `offline-work-sync.md` + `offline-browse-protocol.md` |
 | Work source identity and Work Tags | `offline-work-sync.md` |
-| Work lifecycle (`CREATE_WORK` / `DELETE_WORK`) | `offline-browse-protocol.md` + `offline-folder-tag-coherence.md` + `offline-entity-coherence.md` |
-| Work-Person roles | `offline-entity-coherence.md` + `offline-folder-tag-coherence.md` + `offline-browse-protocol.md` |
+| Work lifecycle (`CREATE_WORK` / `DELETE_WORK`) | `offline-browse-protocol.md` + `offline-folder-tag-coherence.md` + `offline-entity-coherence.md` + `offline-entity-surfaces.md` |
+| Work-Person roles | `offline-entity-coherence.md` + `offline-entity-surfaces.md` + `offline-folder-tag-coherence.md` + `offline-browse-protocol.md` |
 | Tag vocabulary (`CREATE_TAG` / `DELETE_TAG` / `MERGE_TAG`) | `offline-work-sync.md` + `offline-folder-tag-coherence.md` + `offline-browse-protocol.md` |
 
 ## Cross-domain cases
