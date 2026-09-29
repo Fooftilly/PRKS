@@ -583,8 +583,17 @@ def _lookup_names(scopes: list[_Scope], name: str) -> set[tuple[str, str]]:
 
 def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, str]]:
     fn = node.func
-    if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-        return sorted((module, fn.attr) for module in _lookup_modules(scopes, fn.value.id))
+    if isinstance(fn, ast.Attribute):
+        # ``mod.fn(...)``, and a callable stored on a tracked one-level
+        # attribute (``self.cp = shutil.copy2; self.cp(...)``).
+        key = _attr_key(fn)
+        stored = _lookup_names(scopes, key) if key is not None else set()
+        via_module = (
+            {(module, fn.attr) for module in _lookup_modules(scopes, fn.value.id)}
+            if isinstance(fn.value, ast.Name)
+            else set()
+        )
+        return sorted(stored | via_module)
     if isinstance(fn, ast.Name):
         return sorted(_lookup_names(scopes, fn.id))
     return []

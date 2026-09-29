@@ -27,6 +27,25 @@ class EngineeringInvariantTests(unittest.TestCase):
         )
         self.assertEqual([f.code for f in findings], ["INV-STORAGE-001"])
 
+    def test_blocks_banned_callables_stored_on_attributes(self):
+        """``self.cp = shutil.copy2; self.cp(...)`` keeps the callable's identity."""
+        cases = {
+            "copy2": ("import shutil\n", "shutil.copy2", "INV-STORAGE-001"),
+            "os_replace": ("import os\n", "os.replace", "INV-DURABILITY-001"),
+            "os_fsync": ("import os\n", "os.fsync", "INV-DURABILITY-002"),
+        }
+        for label, (imports, callable_name, code) in cases.items():
+            with self.subTest(case=label):
+                source = (
+                    imports
+                    + "class Pub:\n"
+                    + "    def publish(self, a, b):\n"
+                    + f"        self.fn = {callable_name}\n"
+                    + "        self.fn(a, b)\n"
+                )
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, [code])
+
     def test_blocks_direct_import_alias(self):
         findings = checker.check_source(
             "from shutil import copyfile as cp\ncp('a', 'b')\n",
