@@ -225,6 +225,7 @@ describe('work private notes session', () => {
     const panel = ownPanel(ownerA)
     const anchor = document.createElement('div')
     anchor.dataset.prksRole = 'work-private-notes-anchor'
+    anchor.innerHTML = '<textarea id="prks-private-notes-work-work-a" class="prks-private-notes-input">shell</textarea>'
     panel.appendChild(anchor)
     expect(panelWindow.prksVuePresentWorkPrivateNotes(ownerA, 'work-a')).toBe(true)
     const fields = panel.querySelectorAll('#prks-private-notes-work-work-a')

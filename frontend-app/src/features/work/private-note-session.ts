@@ -61,9 +61,16 @@ export function presentWorkPrivateNotes(ctx: WorkPrivateNoteOwner, workId: strin
     : server
   const session = root.prksEnsureWorkPrivateNoteSession?.(ctx, id, painted) || null
   const initialText = session && !session.retired ? String(session.draftText || '') : painted
-  if (mounted && (mounted.anchor !== anchor || mounted.workId !== id || mounted.tabId !== String(ctx.tabId || ''))) {
-    dismissWorkPrivateNotes()
-  }
+  const sameMount = !!(
+    mounted &&
+    mounted.anchor === anchor &&
+    mounted.workId === id &&
+    mounted.tabId === String(ctx.tabId || '')
+  )
+  if (mounted && !sameMount) dismissWorkPrivateNotes()
+  /* Vue render appends. The shell card is already in the anchor so the panel
+   * is usable before this module loads; leaving it would duplicate the field. */
+  if (!sameMount) anchor.replaceChildren()
   render(h(WorkPrivateNotes, { workId: id, initialText, owner: ctx }), anchor)
   mounted = { anchor, workId: id, tabId: String(ctx.tabId || '') }
   return true
