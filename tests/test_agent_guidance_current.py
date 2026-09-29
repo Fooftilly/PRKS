@@ -7,10 +7,11 @@ a correctness contract until deliberately migrated, while #310/#311 define a
 future-capable target that must not be inferred away by SQLite/local-path/
 single-owner implementation details.
 
-The detailed Offline/PWA contract lives in `docs/agent-rules/offline-pwa.md`,
-routed from the scoped frontend guidance. Obsolete-phrase and durable-family
-assertions cover the files agents read for that domain. Separate assertions pin
-the current-vs-target distinction and ensure Vue source has scoped guidance.
+The detailed Offline/PWA contract is routed by `docs/agent-rules/offline-pwa.md`
+into bounded leaf files. Obsolete-phrase and durable-family assertions cover the
+combined rule set while routing assertions ensure agents are not instructed to
+load the former monolith. Separate assertions pin the current-vs-target
+distinction and ensure Vue source has scoped guidance.
 
 These are deliberately *phrase* assertions rather than a general style check.
 They fail loudly when a specific obsolete claim returns, and they say what is
@@ -27,6 +28,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "AGENTS.md"
 FRONTEND_APP_AGENTS = ROOT / "frontend-app" / "AGENTS.md"
 OFFLINE_PWA = ROOT / "docs" / "agent-rules" / "offline-pwa.md"
+OFFLINE_RULE_FILES = (
+    ROOT / "docs" / "agent-rules" / "offline-foundations.md",
+    ROOT / "docs" / "agent-rules" / "offline-entity-surfaces.md",
+    ROOT / "docs" / "agent-rules" / "offline-entity-coherence.md",
+    ROOT / "docs" / "agent-rules" / "offline-folder-tag-coherence.md",
+    ROOT / "docs" / "agent-rules" / "offline-browse-protocol.md",
+    ROOT / "docs" / "agent-rules" / "offline-work-sync.md",
+)
 STATUS = ROOT / "docs" / "local-first-rollout-status.md"
 README = ROOT / "README.md"
 
@@ -86,13 +95,19 @@ DURABLE_FAMILIES = (
 class AgentGuidanceTests(unittest.TestCase):
     def setUp(self):
         self.agents = AGENTS.read_text()
-        self.offline_pwa = OFFLINE_PWA.read_text()
+        self.offline_pwa = OFFLINE_PWA.read_text(encoding="utf-8")
+        self.offline_rule_texts = [
+            path.read_text(encoding="utf-8") for path in OFFLINE_RULE_FILES
+        ]
+        self.offline_contract = "\n".join(
+            [self.offline_pwa, *self.offline_rule_texts]
+        )
         self.frontend_agents = (ROOT / "frontend" / "AGENTS.md").read_text(
             encoding="utf-8")
         self.frontend_app_agents = FRONTEND_APP_AGENTS.read_text(encoding="utf-8")
         # Combined corpus agents read for current offline/local-first guidance.
         self.guidance = (
-            self.agents + "\n" + self.frontend_agents + "\n" + self.offline_pwa
+            self.agents + "\n" + self.frontend_agents + "\n" + self.offline_contract
         )
         self.status = STATUS.read_text()
 
@@ -116,10 +131,79 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("frontend/AGENTS.md", tests_agents)
 
     def test_offline_contract_is_not_declared_permanent_target_architecture(self):
-        self.assertIn("contract for the offline/sync implementation that exists today",
+        self.assertIn("current implemented offline/synchronization contract",
                       self.offline_pwa)
         self.assertIn("#310", self.offline_pwa)
-        self.assertIn("not treat it as the permanent target", self.offline_pwa)
+        self.assertIn("until an approved migration lands", self.offline_pwa)
+
+    def test_offline_router_points_to_bounded_leaf_rules(self):
+        for path in OFFLINE_RULE_FILES:
+            with self.subTest(path=path.name):
+                self.assertIn(path.name, self.offline_pwa)
+        self.assertNotIn("read `docs/agent-rules/offline-pwa.md` completely",
+                         self.guidance)
+
+    def test_offline_foundations_stay_shared(self):
+        foundations = (ROOT / "docs" / "agent-rules" / "offline-foundations.md").read_text(encoding="utf-8")
+        self.assertIn("## Shared coherence-domain framework", foundations)
+        for phrase in (
+            "Concepts are **local-first**",
+            "Positions are **local-first**",
+            "Arguments/Stances are **local-first**",
+            "People are **local-first**",
+            "Research Graph caches the **server-generated projection snapshot**",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, foundations)
+
+    def test_sync_map_loads_cross_projection_rules(self):
+        sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
+        self.assertIn("offline-browse-protocol.md", sync_map)
+        self.assertIn("offline-entity-surfaces.md", sync_map)
+        self.assertIn("foreground-open semantics", sync_map)
+
+    def test_cached_empty_concepts_keep_offline_creation_available(self):
+        self.assertNotIn("New Concept still disabled offline", self.offline_contract)
+        self.assertIn("New Concept available offline", self.offline_contract)
+
+    def test_playlist_mutations_are_not_called_online_only(self):
+        self.assertNotIn("Playlist mutation stays online-only", self.offline_contract)
+        self.assertNotIn("genuine Playlist mutation stays online-only", self.offline_contract)
+        self.assertIn("Playlist create/edit/membership/reorder/delete are also local-first",
+                      self.offline_contract)
+
+    def test_relationship_removal_never_prunes_tag_identity(self):
+        self.assertNotIn("_prune_tag_if_unused_on_conn", self.offline_contract)
+        self.assertNotIn("prunes its newly-unused tags", self.offline_contract)
+        self.assertIn("Folder deletion and Work/Folder tag removal preserve Tag identity",
+                      self.offline_contract)
+        normalized_contract = re.sub(r"\s+", " ", self.offline_contract)
+        self.assertIn(
+            "Only explicit `delete_tag()` and `merge_tags_into()` "
+            "may destroy or transform Tag identity",
+            normalized_contract,
+        )
+
+    def test_router_covers_remaining_durable_family_routes(self):
+        sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
+        router = self.offline_pwa
+        for phrase in (
+            "## Work lifecycle",
+            "## Work-Person roles",
+            "## Tag vocabulary",
+            "backend/work_lifecycle_sync.py",
+            "backend/work_role_sync.py",
+            "backend/tag_sync.py",
+            "Research Graph Work-delete invalidation",
+            "Research Graph core/People projection invalidation",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, sync_map)
+        for row in ("Work lifecycle", "Work-Person roles"):
+            with self.subTest(row=row):
+                matching = next(line for line in router.splitlines() if f"| {row}" in line)
+                self.assertIn("offline-entity-surfaces.md", matching)
+        self.assertNotIn("transactional pruning", sync_map)
 
     # ---- obsolete phrases that must never come back ------------------------
 
@@ -181,14 +265,12 @@ class AgentGuidanceTests(unittest.TestCase):
 
     # ---- and the positive half: the truth has to be stated ----------------
 
-    def test_offline_pwa_contract_names_every_durable_family(self):
-        """Not a vague "everything works offline": the exact operation names, so
-        a reader can tell a durable surface from a server-bound one. Lives in
-        the scoped Offline/PWA contract, not the root routing stub."""
-        missing = [f for f in DURABLE_FAMILIES if f not in self.offline_pwa]
+    def test_offline_rule_set_names_every_durable_family(self):
+        """The split rule set retains every exact durable operation family."""
+        missing = [f for f in DURABLE_FAMILIES if f not in self.offline_contract]
         self.assertEqual(missing, [],
-                         "docs/agent-rules/offline-pwa.md must name each "
-                         "durable family explicitly")
+                         "split offline agent rules must retain every durable "
+                         "family explicitly")
 
     def test_agents_md_routes_to_offline_pwa_contract(self):
         """Root routes frontend work to the scoped policy, which then routes
@@ -206,7 +288,8 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("## Cross-domain contracts", backend)
         self.assertIn("docs/agent-context/sync-map.md", backend)
         self.assertIn("docs/agent-rules/offline-pwa.md", backend)
-        self.assertIn("completely", backend)
+        self.assertIn("smallest applicable route", backend)
+        self.assertNotIn("offline-pwa.md` completely", backend)
         self.assertIn("frontend/AGENTS.md", backend)
         for phrase in (
             "Research network",
@@ -226,7 +309,7 @@ class AgentGuidanceTests(unittest.TestCase):
         for phrase in ("PDF annotations",
                        "multi-user sync", "server push"):
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, self.offline_pwa)
+                self.assertIn(phrase, self.offline_contract)
 
     def test_the_status_doc_and_offline_contract_agree_on_the_durable_set(self):
         """The two documents are written by hand and drift apart silently."""
