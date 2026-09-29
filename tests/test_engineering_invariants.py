@@ -92,6 +92,22 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "import os\ndef f(a, b):\n    rep = getattr(os, 'replace')\n    rep(a, b)\n",
                 ["INV-DURABILITY-001"],
             ),
+            "walrus_getattr_copy2": (
+                "import shutil\ndef f(a, b):\n    (cp := getattr(shutil, 'copy2'))(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "walrus_attribute_copy2": (
+                "import shutil\ndef f(a, b):\n    (cp := shutil.copy2)(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "walrus_os_replace": (
+                "import os\ndef f(a, b):\n    (rep := os.replace)(a, b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "walrus_getattr_fsync": (
+                "import os\ndef f(fd):\n    (fn := getattr(os, 'fsync'))(fd)\n",
+                ["INV-DURABILITY-002"],
+            ),
             "path_class_replace": (
                 "from pathlib import Path\ndef f(a, b):\n    getattr(Path, 'replace')(Path(a), b)\n",
                 ["INV-DURABILITY-001"],
@@ -1781,6 +1797,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def publish(pdfs_dir, scratch, name):\n"
                 "    os.renames(scratch, **{'new': os.path.join(pdfs_dir, name)})\n"
             ),
+            "walrus_saved_path_rename": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    move = Path(scratch).rename\n"
+                "    (m := move)(Path(pdfs_dir) / name)\n"
+            ),
             "saved_path_rename_on_attribute": (
                 "from pathlib import Path\n"
                 "class Pub:\n"
@@ -2785,6 +2807,12 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    def create(self, db, fp):\n"
                 "        self.save = functools.partial(db.add_work, 't')\n"
                 "        self.save('Not Started', '', '', '', fp)\n"
+            ),
+            "walrus_partial_offset": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    save = functools.partial(db.add_work, 't')\n"
+                "    (s := save)('Not Started', '', '', '', fp)\n"
             ),
             "saved_constant_getattr_sink": (
                 "def create(db, fp):\n"

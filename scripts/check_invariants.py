@@ -584,8 +584,15 @@ def _lookup_names(scopes: list[_Scope], name: str) -> set[tuple[str, str]]:
     return {(b[1], b[2]) for b in _resolve(scopes, name) if b[0] == "name"}
 
 
+def _unwrap_walrus(node: ast.expr) -> ast.expr:
+    """``(name := value)`` evaluates to ``value``."""
+    while isinstance(node, ast.NamedExpr):
+        node = node.value
+    return node
+
+
 def _call_identities(node: ast.Call, scopes: list[_Scope]) -> list[tuple[str, str]]:
-    fn = node.func
+    fn = _unwrap_walrus(node.func)
     constant = _constant_getattr(fn, scopes)
     if constant is not None:
         # ``getattr(shutil, "copy2")(...)``.
@@ -2554,7 +2561,9 @@ class _InvariantVisitor(ast.NodeVisitor):
         return []
 
     def _callee_bindings(self, func: ast.expr) -> set[_Binding]:
-        """What a bare-name or tracked one-level attribute callee is bound to."""
+        """What a bare-name or tracked one-level attribute callee is bound to
+        (through a walrus: ``(s := save)(...)``)."""
+        func = _unwrap_walrus(func)
         if isinstance(func, ast.Name):
             return set(_resolve(self.scopes, func.id))
         key = _attr_key(func) if isinstance(func, ast.Attribute) else None
