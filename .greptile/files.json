@@ -11,31 +11,49 @@
     {
       "path": "backend/AGENTS.md",
       "description": "Backend persistence, privacy-safe logging, filesystem, backup/restore, database, indexing, durability, and cross-domain invariants.",
-      "scope": ["backend/**"]
+      "scope": [
+        "backend/**"
+      ]
     },
     {
       "path": "frontend/AGENTS.md",
       "description": "Frontend runtime, workspace, TabContext, navigation, offline/PWA, interaction, and cross-boundary behavior invariants.",
-      "scope": ["frontend/**"]
+      "scope": [
+        "frontend/**"
+      ]
+    },
+    {
+      "path": "frontend-app/AGENTS.md",
+      "description": "Vue 3 + TypeScript source, migration ownership boundaries, typed API/state guidance, and routing to shared frontend/offline contracts.",
+      "scope": [
+        "frontend-app/**"
+      ]
     },
     {
       "path": "DESIGN.md",
       "description": "Authoritative PRKS visual and interaction design contract for user-visible frontend changes.",
-      "scope": ["frontend/**"]
+      "scope": [
+        "frontend/**",
+        "frontend-app/**"
+      ]
     },
     {
       "path": "tests/AGENTS.md",
       "description": "Test-layer routing, storage safety, and rules for loading the production-domain invariants exercised by a test.",
-      "scope": ["tests/**"]
+      "scope": [
+        "tests/**"
+      ]
     },
     {
       "path": "tests/e2e/AGENTS.md",
       "description": "Browser E2E isolation, synchronization, tiering, performance, and debugging policy.",
-      "scope": ["tests/e2e/**"]
+      "scope": [
+        "tests/e2e/**"
+      ]
     },
     {
       "path": "docs/work-identity-model.md",
-      "description": "Approved-in-direction Work/Manifestation/Asset architecture design. Treat it as staged architecture: use it only when reviewing implementation that touches this model, and do not assume every proposed slice is already implemented.",
+      "description": "Approved-in-direction Work/Manifestation/Asset domain design. Treat SQLite/local-storage mechanics as current migration details; #310/#311 own the long-term PostgreSQL, Library/account, configurable-data-root, and storage-backend target.",
       "scope": [
         "backend/db_*.py",
         "backend/**/*work*.py",
