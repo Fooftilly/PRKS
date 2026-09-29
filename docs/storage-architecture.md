@@ -841,7 +841,14 @@ offline command-line tool. The server is stopped for the whole sequence:
         `committed`, so later starts retry P7.
      5. Release the lease on exit. The server is stopped, so nothing is bound.
    - **Abandon the move.** Leave the selector unchanged and run `python
-     prks_app.py storage abort --root OLDPATH`. It follows revert's order:
+     prks_app.py storage abort --root OLDPATH`. **Precondition, the same as
+     in-app revert:** the destination marker is still `staging` with this
+     `relocation_id`. Once P6(b) has written `active`, for example after
+     `finalize` crashed after activation, `abort` refuses. It tells the
+     operator to run `finalize` again, or to start PRKS so §8.3 `committed`
+     recovery completes the move. It never unfences the source next to an
+     active destination. When the precondition holds, it follows revert's
+     order:
      1. Atomically write the config with `local_root = from` and
         `relocation.phase = "failed"`.
      2. Lift the fence back to `active`.
