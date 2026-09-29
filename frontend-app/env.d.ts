@@ -209,6 +209,11 @@ interface Window {
   prksResolveWorkMetadataFieldConflict?: (opId: string, apply: boolean, group: string) => void
   prksResolveWorkSourceConflict?: (opId: string, apply: boolean) => void
   prksVueAcceptWorkMetadataField?: (ctx: object, field: string, value: unknown) => boolean
+  prksVuePresentWorkResearchNotes?: (
+    ctx: object,
+    work: { id?: unknown },
+    initialText: string,
+  ) => boolean
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
   prksVueDismissProgress?: (owner: object) => void
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
