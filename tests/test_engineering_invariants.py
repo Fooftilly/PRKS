@@ -3646,5 +3646,557 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
             with self.subTest(case=label):
                 self.assertEqual(_codes(self._IMPORT + source), [])
 
+class HttpAdapterBoundaryTests(unittest.TestCase):
+    """INV-ADAPTER-001/002: backend/server.py stays a thin HTTP adapter."""
+
+    _SERVER = "backend/server.py"
+
+    def test_existing_durability_invariants_cover_the_adapter(self):
+        """The #188 durability/removal primitives are owned by existing rules
+        with no server.py exemption; this pins that adapter coverage."""
+        cases = {
+            "shutil_copy2": (
+                "import shutil\ndef f(a, b):\n    shutil.copy2(a, b)\n",
+                "INV-STORAGE-001",
+            ),
+            "shutil_copyfile_alias": (
+                "from shutil import copyfile as cp\ndef f(a, b):\n    cp(a, b)\n",
+                "INV-STORAGE-001",
+            ),
+            "os_replace": ("import os\ndef f(a, b):\n    os.replace(a, b)\n", "INV-DURABILITY-001"),
+            "path_replace": (
+                "from pathlib import Path\ndef f(a, b):\n    Path(a).replace(b)\n",
+                "INV-DURABILITY-001",
+            ),
+            "os_fsync": ("import os\ndef f(fd):\n    os.fsync(fd)\n", "INV-DURABILITY-002"),
+            "managed_os_remove": (
+                "import os\ndef f(n):\n    os.remove(os.path.join(pdfs_dir, n))\n",
+                "INV-STORAGE-002",
+            ),
+            "managed_path_unlink": (
+                "from pathlib import Path\ndef f(n):\n    (Path(pdfs_dir) / n).unlink()\n",
+                "INV-STORAGE-002",
+            ),
+            "managed_shutil_move": (
+                "import shutil\ndef f(n, d):\n    shutil.move(_safe_pdf_path_in_pdfs_dir(n), d)\n",
+                "INV-STORAGE-002",
+            ),
+        }
+        for label, (source, code) in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), [code])
+
+    def test_blocks_exclusive_create_in_adapter(self):
+        cases = {
+            "open_xb": "def f(p):\n    with open(p, 'xb') as fh:\n        fh.write(b'')\n",
+            "open_keywords": "def f(p):\n    open(file=p, mode='x')\n",
+            "local_alias": "o = open\ndef f(p):\n    o(p, 'xb')\n",
+            "io_open_module_alias": "import io as i\ndef f(p):\n    i.open(p, 'xb')\n",
+            "io_open_import_alias": "from io import open as op\ndef f(p):\n    op(p, 'xb')\n",
+            "builtins_getattr": (
+                "import builtins\ndef f(p):\n    getattr(builtins, 'open')(p, 'xb')\n"
+            ),
+            "walrus_callee": "def f(p):\n    (o := open)(p, 'xb')\n",
+            "stored_on_attribute": (
+                "class H:\n    def f(self, p):\n        self.o = open\n        self.o(p, 'xb')\n"
+            ),
+            "partial_prebound_mode": (
+                "import functools\ndef f(p):\n    o = functools.partial(open, p, 'xb')\n    o()\n"
+            ),
+            "partial_mode_at_call": (
+                "from functools import partial\ndef f(p):\n    o = partial(open, p)\n    o('xb')\n"
+            ),
+            "opaque_mode": "def f(p, mode):\n    open(p, mode)\n",
+            "os_open_excl": (
+                "import os\ndef f(p):\n"
+                "    os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n"
+            ),
+            "os_open_import_aliases": (
+                "from os import open as oo, O_CREAT, O_EXCL as X\ndef f(p):\n    oo(p, O_CREAT | X)\n"
+            ),
+            "os_open_opaque_flags": (
+                "import os\ndef f(p):\n    flags = os.O_CREAT | os.O_EXCL\n    os.open(p, flags)\n"
+            ),
+            "path_open_x": "from pathlib import Path\ndef f(n):\n    Path(n).open('xb')\n",
+            "path_open_unbound": (
+                "import pathlib\ndef f(n):\n    pathlib.Path.open(pathlib.Path(n), mode='xb')\n"
+            ),
+            "path_open_getattr": (
+                "from pathlib import Path\ndef f(n):\n    getattr(Path(n), 'open')('xb')\n"
+            ),
+            "path_touch_exclusive": (
+                "from pathlib import Path\ndef f(n):\n    Path(n).touch(exist_ok=False)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-001"])
+
+    def test_blocks_managed_pdf_store_in_adapter(self):
+        """Non-exclusive writes are adapter-legal except into a managed-PDF path."""
+        cases = {
+            "open_wb": "import os\ndef f(n, d):\n    open(os.path.join(pdfs_dir, n), 'wb').write(d)\n",
+            "open_append": "def f(n):\n    open(_safe_pdf_path_in_pdfs_dir(n), 'ab')\n",
+            "path_open_update": (
+                "from pathlib import Path\ndef f(n):\n    (Path(pdfs_dir) / n).open('r+b')\n"
+            ),
+            "write_bytes": (
+                "from pathlib import Path\ndef f(n, d):\n    (Path(pdfs_dir) / n).write_bytes(d)\n"
+            ),
+            "saved_write_bytes": (
+                "from pathlib import Path\ndef f(n, d):\n"
+                "    w = Path(safe_pdf_path_under_dir(pdfs_dir, n)).write_bytes\n    w(d)\n"
+            ),
+            "unbound_write_text": (
+                "from pathlib import Path\ndef f(n):\n    Path.write_text(Path(pdfs_dir, n), 'x')\n"
+            ),
+            "touch": "from pathlib import Path\ndef f(n):\n    (Path(pdfs_dir) / n).touch()\n",
+            "os_open_trunc": (
+                "import os\ndef f(n):\n"
+                "    os.open(safe_pdf_path_under_dir(pdfs_dir, n), os.O_WRONLY | os.O_TRUNC)\n"
+            ),
+            "mkstemp_in_managed_dir": "import tempfile\ndef f():\n    tempfile.mkstemp(dir=pdfs_dir)\n",
+            "named_temp_in_managed_dir": (
+                "from tempfile import NamedTemporaryFile as T\ndef f():\n"
+                "    T(delete=False, dir=pdfs_dir)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-001"])
+
+    def test_blocks_process_orchestration_in_adapter(self):
+        run = "['qpdf', '--linearize', a, a + '.tmp']"
+        # The import and the call (or callable reference) are reported separately.
+        both = ["INV-ADAPTER-002", "INV-ADAPTER-002"]
+        cases = {
+            "subprocess_run": (f"import subprocess\ndef f(a):\n    subprocess.run({run})\n", both),
+            "module_alias": (f"import subprocess as sp\ndef f(a):\n    sp.Popen({run})\n", both),
+            "import_alias_rebound": (
+                f"from subprocess import run as r\ndef f(a):\n    x = r\n    x({run})\n",
+                both,
+            ),
+            "passed_uncalled": (
+                "from subprocess import check_call\n"
+                f"def f(pool, a):\n    pool.submit(check_call, {run})\n",
+                both,
+            ),
+            "asyncio_subprocess_module": ("from asyncio import subprocess\n", ["INV-ADAPTER-002"]),
+            "os_system": ("import os\ndef f(a):\n    os.system('qpdf ' + a)\n", ["INV-ADAPTER-002"]),
+            "os_popen_getattr": (
+                "import os\ndef f(a):\n    getattr(os, 'popen')('qpdf ' + a)\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "os_posix_spawnp_alias": (
+                "from os import posix_spawnp as sp\ndef f(a, env):\n    sp('qpdf', ['qpdf', a], env)\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "stored_on_attribute": (
+                "import os\nclass H:\n    def f(self, a):\n"
+                "        self.sh = os.system\n        self.sh('qpdf ' + a)\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "inline_partial": (
+                "import os, functools\ndef f(a):\n"
+                "    functools.partial(os.execv, 'qpdf')(['qpdf', a])\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "asyncio_exec": (
+                "import asyncio\nasync def f(a):\n    await asyncio.create_subprocess_exec('qpdf', a)\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "asyncio_subprocess_attribute_exec": (
+                "import asyncio\nasync def f(a):\n"
+                "    await asyncio.subprocess.create_subprocess_exec('qpdf', a)\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "asyncio_subprocess_attribute_shell": (
+                "import asyncio\nasync def f(a):\n"
+                "    await asyncio.subprocess.create_subprocess_shell('qpdf ' + a)\n",
+                ["INV-ADAPTER-002"],
+            ),
+            "os_startfile": ("import os\ndef f(p):\n    os.startfile(p)\n", ["INV-ADAPTER-002"]),
+            "os_startfile_import_alias": (
+                "from os import startfile as sf\ndef f(p):\n    sf(p)\n",
+                ["INV-ADAPTER-002"],
+            ),
+        }
+        for label, (source, expected) in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), expected)
+
+    def test_blocks_process_callable_passed_out_of_adapter(self):
+        """A process primitive handed to another API (executor, loop, map,
+        callback) still runs on the adapter's behalf."""
+        cases = {
+            "executor_submit": (
+                "import os\ndef f(executor, command):\n    executor.submit(os.system, command)\n"
+            ),
+            "run_in_executor": (
+                "import os\ndef f(loop, command):\n"
+                "    loop.run_in_executor(None, os.system, command)\n"
+            ),
+            "pool_map": "import os\ndef f(pool, commands):\n    pool.map(os.system, commands)\n",
+            "keyword_callback": "import os\ndef f():\n    dispatch(callback=os.system)\n",
+            "local_alias": (
+                "import os\ndef f(executor, command):\n"
+                "    spawn = os.system\n    executor.submit(spawn, command)\n"
+            ),
+            "import_alias": (
+                "from os import popen as p\ndef f(executor, command):\n"
+                "    executor.submit(p, command)\n"
+            ),
+            "getattr_keyword": "import os\ndef f():\n    dispatch(callback=getattr(os, 'popen'))\n",
+            "walrus": "import os\ndef f(pool, cs):\n    pool.map((s := os.system), cs)\n",
+            "asyncio_create_subprocess": (
+                "import asyncio\ndef f(runner, a):\n"
+                "    runner.start(asyncio.create_subprocess_shell, 'qpdf ' + a)\n"
+            ),
+            "starred_list_literal": (
+                "import os\ndef f(executor, command):\n    executor.submit(*[os.system, command])\n"
+            ),
+            "starred_tuple_literal": (
+                "import os\ndef f(executor, command):\n    executor.submit(*(os.popen, command))\n"
+            ),
+            "double_starred_dict_literal": (
+                "import os\ndef f():\n    dispatch(**{'callback': os.system})\n"
+            ),
+            "partial_of_process_callable": (
+                "import os\nfrom functools import partial\ndef f(executor, c):\n"
+                "    executor.submit(partial(os.system, c))\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-002"])
+
+    def test_direct_process_call_reports_once(self):
+        source = "import os\ndef f(command):\n    os.system(command)\n"
+        self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-002"])
+
+    def test_ordinary_callbacks_pass(self):
+        cases = {
+            "stdlib_callbacks": (
+                "import os\ndef f(executor, pool, loop, paths):\n"
+                "    executor.submit(os.path.exists, paths[0])\n"
+                "    pool.map(os.path.getsize, paths)\n"
+                "    loop.run_in_executor(None, os.stat, paths[0])\n"
+                "    sorted(paths, key=os.path.basename)\n"
+            ),
+            "approved_helper_callbacks": (
+                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "def f(executor, paths):\n"
+                "    executor.submit(maybe_linearize_pdf_in_place, paths[0], context='bulk')\n"
+                "    list(filter(is_pdf_linearized, paths))\n"
+            ),
+            "local_callbacks": (
+                "import threading\ndef work(x):\n    return x\n"
+                "def f(executor, x):\n"
+                "    executor.submit(work, x)\n"
+                "    threading.Thread(target=work, args=(x,), daemon=True).start()\n"
+                "    dispatch(callback=lambda: work(x))\n"
+            ),
+            "shadowed_os": "def f(executor, os, c):\n    executor.submit(os.system, c)\n",
+            # A list that merely contains the callable is data, not a passed callable.
+            "plain_list_argument": "import os\ndef f():\n    consume([os.system])\n",
+            "starred_non_literal": "import os\ndef f(executor, items):\n    executor.submit(*items)\n",
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), [])
+
+    def test_blocks_saved_bound_path_open_and_touch(self):
+        """A saved bound ``Path.open`` / ``Path.touch`` keeps its method and
+        its receiver's managed-PDF provenance until it is called."""
+        path = "from pathlib import Path\n"
+        cases = {
+            "saved_open_managed_write": (
+                "def f(n):\n    managed_path = Path(pdfs_dir) / n\n"
+                "    writer = managed_path.open\n    writer('wb')\n"
+            ),
+            "saved_touch_exclusive": (
+                "def f(n):\n    path = Path(n)\n    creator = path.touch\n    creator(exist_ok=False)\n"
+            ),
+            "attribute_stored_open": (
+                "class H:\n    def f(self, n):\n        managed_path = Path(pdfs_dir) / n\n"
+                "        self.writer = managed_path.open\n        self.writer('wb')\n"
+            ),
+            "saved_getattr_open_exclusive": (
+                "def f(n):\n    managed_path = Path(n)\n"
+                "    writer = getattr(managed_path, 'open')\n    writer('xb')\n"
+            ),
+            "saved_touch_managed": (
+                "def f(n):\n    creator = (Path(pdfs_dir) / n).touch\n    creator()\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(path + source, self._SERVER), ["INV-ADAPTER-001"])
+        controls = {
+            "saved_open_read": (
+                "def f(n):\n    reader = (Path(pdfs_dir) / n).open\n    reader('rb')\n"
+            ),
+            "saved_open_non_managed_write": (
+                "def f(n):\n    writer = (Path(thumbs_dir) / n).open\n    writer('wb')\n"
+            ),
+            "saved_touch_default": "def f(n):\n    creator = Path(n).touch\n    creator()\n",
+        }
+        for label, source in controls.items():
+            with self.subTest(control=label):
+                self.assertEqual(_codes(path + source, self._SERVER), [])
+
+    def test_stored_partial_is_checked_as_the_combined_call(self):
+        """Construction and invocation are analyzed together; pre-bound
+        arguments keep the provenance they had where the partial was built."""
+        cases = {
+            "open_target_bound_mode_at_call": (
+                "import functools, os\ndef f(n):\n"
+                "    managed_path = os.path.join(pdfs_dir, n)\n"
+                "    writer = functools.partial(open, managed_path)\n    writer('wb')\n"
+            ),
+            "open_mode_bound_target_at_call": (
+                "import functools, os\ndef f(n):\n"
+                "    writer = functools.partial(open, mode='wb')\n"
+                "    writer(os.path.join(pdfs_dir, n))\n"
+            ),
+            "os_open_target_bound_flags_at_call": (
+                "import functools, os\ndef f(n):\n"
+                "    o = functools.partial(os.open, safe_pdf_path_under_dir(pdfs_dir, n))\n"
+                "    o(os.O_WRONLY | os.O_TRUNC)\n"
+            ),
+            "unbound_path_open_receiver_bound": (
+                "import functools\nfrom pathlib import Path\ndef f(n):\n"
+                "    w = functools.partial(Path.open, Path(pdfs_dir) / n)\n    w('wb')\n"
+            ),
+            "attribute_stored_partial": (
+                "from functools import partial\nclass H:\n    def f(self, n):\n"
+                "        self.w = partial(open, _safe_pdf_path_in_pdfs_dir(n))\n        self.w('ab')\n"
+            ),
+            "nested_stored_partials": (
+                "import functools, os\ndef f(n):\n"
+                "    p1 = functools.partial(open, os.path.join(pdfs_dir, n))\n"
+                "    p2 = functools.partial(p1, 'wb')\n    p2()\n"
+            ),
+            "inline_nested_target_rebound_away": (
+                "import functools, os\ndef f(n):\n"
+                "    p = os.path.join(pdfs_dir, n)\n"
+                "    writer = functools.partial(functools.partial(open, p))\n"
+                "    p = os.path.join(thumbs_dir, n)\n    writer('wb')\n"
+            ),
+            "inline_nested_bound_method_receiver": (
+                "import functools\nfrom pathlib import Path\ndef f(n):\n"
+                "    p = Path(pdfs_dir) / n\n"
+                "    writer = functools.partial(functools.partial(p.open))\n"
+                "    p = Path(thumbs_dir) / n\n    writer('wb')\n"
+            ),
+            "exclusive_mode_at_call": (
+                "import functools\ndef f(p):\n    o = functools.partial(open, p)\n    o('xb')\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-001"])
+        controls = {
+            "non_managed_target": (
+                "import functools, os\ndef f(n):\n"
+                "    writer = functools.partial(open, os.path.join(thumbs_dir, n))\n    writer('wb')\n"
+            ),
+            "inline_nested_target_rebound_to_managed": (
+                "import functools, os\ndef f(n):\n"
+                "    p = os.path.join(thumbs_dir, n)\n"
+                "    writer = functools.partial(functools.partial(open, p))\n"
+                "    p = os.path.join(pdfs_dir, n)\n    writer('wb')\n"
+            ),
+            "target_rebound_after_construction": (
+                "import functools, os\ndef f(n):\n"
+                "    p = os.path.join(thumbs_dir, n)\n    writer = functools.partial(open, p)\n"
+                "    p = os.path.join(pdfs_dir, n)\n    writer('wb')\n"
+            ),
+            "managed_read": (
+                "import functools, os\ndef f(n):\n"
+                "    reader = functools.partial(open, os.path.join(pdfs_dir, n))\n    reader('rb')\n"
+            ),
+            "unknown_target": "import functools\ndef f(p):\n    w = functools.partial(open, p)\n    w('wb')\n",
+        }
+        for label, source in controls.items():
+            with self.subTest(control=label):
+                self.assertEqual(_codes(source, self._SERVER), [])
+
+    def test_blocks_event_loop_process_methods(self):
+        cases = {
+            "running_loop_exec": (
+                "import asyncio\nasync def f(a):\n    loop = asyncio.get_running_loop()\n"
+                "    await loop.subprocess_exec(Proto, 'qpdf', a)\n"
+            ),
+            "event_loop_shell": (
+                "import asyncio\nasync def f(a):\n"
+                "    await asyncio.get_event_loop().subprocess_shell(Proto, 'qpdf ' + a)\n"
+            ),
+            "getattr_exec": (
+                "import asyncio\nasync def f(a):\n    loop = asyncio.get_running_loop()\n"
+                "    await getattr(loop, 'subprocess_exec')(Proto, 'qpdf', a)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-002"])
+        control = (
+            "import asyncio\nasync def f(work):\n    loop = asyncio.get_running_loop()\n"
+            "    await loop.run_in_executor(None, work)\n    loop.call_soon(work)\n"
+            "    runner.subprocess_executor_count()\n"
+        )
+        self.assertEqual(_codes(control, self._SERVER), [])
+
+    def test_blocks_multiprocessing_process_creation(self):
+        cases = {
+            "module_alias_process": (
+                "import multiprocessing as mp\ndef f(w):\n    mp.Process(target=w).start()\n"
+            ),
+            "module_alias_pool": (
+                "import multiprocessing as mp\ndef f(w, xs):\n    with mp.Pool(2) as pool:\n"
+                "        pool.map(w, xs)\n"
+            ),
+            "import_alias_process": (
+                "from multiprocessing import Process as P\ndef f(w):\n    P(target=w).start()\n"
+            ),
+            "import_alias_pool": "from multiprocessing import Pool as Q\ndef f():\n    Q()\n",
+            "pool_module": "import multiprocessing.pool\ndef f():\n    multiprocessing.pool.Pool()\n",
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), ["INV-ADAPTER-002"])
+        # Importing or inspecting the module is not process creation.
+        control = "import multiprocessing\ndef f():\n    return multiprocessing.cpu_count()\n"
+        self.assertEqual(_codes(control, self._SERVER), [])
+
+    def test_no_duplicate_findings(self):
+        cases = {
+            "direct_call": "import os\ndef f(c):\n    os.system(c)\n",
+            "stored_partial_of_process": (
+                "import os\nfrom functools import partial\ndef f(c):\n"
+                "    p = partial(os.system, c)\n    p()\n"
+            ),
+            "fully_bound_stored_partial": (
+                "import functools, os\ndef f(n):\n"
+                "    w = functools.partial(open, os.path.join(pdfs_dir, n), 'wb')\n    w()\n"
+            ),
+            "asyncio_pipe_argument": (
+                "import asyncio\nasync def f(a):\n"
+                "    await asyncio.create_subprocess_exec('qpdf', a, stdout=asyncio.subprocess.PIPE)\n"
+            ),
+            "saved_bound_open": (
+                "from pathlib import Path\ndef f(n):\n    w = Path(n).open\n    w('xb')\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(len(_codes(source, self._SERVER)), 1)
+        # ``subprocess.PIPE`` is a constant, not a callable passed along:
+        # only the import and the call are reported.
+        pipe = "import subprocess\ndef f(c):\n    subprocess.run(c, stdout=subprocess.PIPE)\n"
+        self.assertEqual(_codes(pipe, self._SERVER), ["INV-ADAPTER-002", "INV-ADAPTER-002"])
+
+    def test_messages_point_to_approved_helpers(self):
+        exclusive = checker.check_source("def f(p):\n    open(p, 'xb')\n", self._SERVER)
+        store = checker.check_source(
+            "def f(n):\n    open(_safe_pdf_path_in_pdfs_dir(n), 'wb')\n", self._SERVER
+        )
+        process = checker.check_source("import os\ndef f(a):\n    os.system(a)\n", self._SERVER)
+        self.assertEqual(len(exclusive), 1)
+        self.assertEqual(len(store), 1)
+        for finding in [*exclusive, *store]:
+            self.assertIn("backend.services.work_pdf_replace", finding.message)
+            self.assertIn("store_new_managed_pdf_bytes", finding.message)
+        self.assertEqual(len(process), 1)
+        self.assertIn("backend.pdf_linearize", process[0].message)
+        self.assertIn("maybe_linearize_pdf_in_place", process[0].message)
+
+    def test_same_orchestration_passes_in_focused_modules(self):
+        """The rules are scoped to the adapter: the focused modules that own
+        these primitives keep using them."""
+        cases = {
+            "backend/services/work_pdf_replace.py": (
+                "import os\ndef _create(pdfs_dir, name, data):\n"
+                "    with open(os.path.join(pdfs_dir, name), 'xb') as fp:\n"
+                "        fp.write(data)\n"
+            ),
+            "backend/pdf_linearize.py": (
+                "import shutil, subprocess\ndef lin(pdf_path, tmp_path):\n"
+                "    qpdf = shutil.which('qpdf')\n"
+                "    return subprocess.run([qpdf, '--linearize', pdf_path, tmp_path],\n"
+                "                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n"
+            ),
+            "backend/derived_cache_publish.py": (
+                "import os\ndef stage(tmp_path):\n"
+                "    return os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n"
+            ),
+            "backend/api/new_controller.py": "import subprocess\n",
+        }
+        for relpath, source in cases.items():
+            with self.subTest(relpath=relpath):
+                self.assertEqual(_codes(source, relpath), [])
+
+    def test_ordinary_adapter_code_passes(self):
+        cases = {
+            "approved_storage_and_linearize_helpers": (
+                "from backend.services import work_pdf_replace\n"
+                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "def post(name, data):\n"
+                "    stored = work_pdf_replace.store_new_managed_pdf_bytes(pdfs_dir, name, data)\n"
+                "    abs_path = _safe_pdf_path_in_pdfs_dir(stored)\n"
+                "    if abs_path and not is_pdf_linearized(abs_path):\n"
+                "        maybe_linearize_pdf_in_place(abs_path, context='upload')\n"
+            ),
+            "serve_managed_pdf": (
+                "import os\ndef get(path):\n"
+                "    pdf_path = _safe_pdf_path_for_route(path)\n"
+                "    size = os.path.getsize(pdf_path)\n"
+                "    with open(pdf_path, 'rb') as f:\n"
+                "        return size, f.read()\n"
+            ),
+            "default_mode_and_pathlib_reads": (
+                "from pathlib import Path\ndef get(n):\n"
+                "    p = Path(pdfs_dir) / n\n"
+                "    with p.open('rb') as fh:\n"
+                "        fh.read()\n"
+                "    open(p).close()\n"
+                "    return p.read_bytes(), p.stat().st_size\n"
+            ),
+            "non_managed_writes": (
+                "import os, tempfile\nfrom pathlib import Path\ndef f(n, d):\n"
+                "    with open(os.path.join(thumbs_dir, n), 'wb') as fh:\n"
+                "        fh.write(d)\n"
+                "    Path(thumbs_dir, n).write_bytes(d)\n"
+                "    Path(thumbs_dir, n).touch()\n"
+                "    tempfile.mkstemp()\n"
+            ),
+            "read_only_os_open": "import os\ndef f(p):\n    os.close(os.open(p, os.O_RDONLY))\n",
+            "path_parsing": (
+                "import os\nfrom urllib.parse import urlparse, unquote\ndef f(raw):\n"
+                "    path = unquote(urlparse(raw).path)\n"
+                "    return os.path.basename(path), path.replace('/', '_')\n"
+            ),
+            "unrelated_open_methods": (
+                "import fitz, webbrowser\ndef f(p, zf, url):\n"
+                "    fitz.open(p)\n    zf.open('member', 'r')\n    webbrowser.open(url)\n"
+            ),
+            "shadowed_open": "def f(open, p):\n    open(p, 'xb')\n",
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, self._SERVER), [])
+
+    def test_repo_scan_reports_adapter_violations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "backend").mkdir()
+            (root / "backend" / "server.py").write_text(
+                "import subprocess\ndef f(p):\n    open(p, 'xb')\n",
+                encoding="utf-8",
+            )
+            codes = sorted(f.code for f in checker.check_repo(root))
+            self.assertEqual(codes, ["INV-ADAPTER-001", "INV-ADAPTER-002"])
+
+
 if __name__ == "__main__":
     unittest.main()
