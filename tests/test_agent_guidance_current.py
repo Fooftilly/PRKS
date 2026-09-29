@@ -110,6 +110,11 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertIn("#310", self.frontend_app_agents)
         self.assertIn("#311", self.frontend_app_agents)
 
+    def test_test_router_names_vue_and_runtime_frontend_scopes(self):
+        tests_agents = (ROOT / "tests" / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("frontend-app/AGENTS.md", tests_agents)
+        self.assertIn("frontend/AGENTS.md", tests_agents)
+
     def test_offline_contract_is_not_declared_permanent_target_architecture(self):
         self.assertIn("contract for the offline/sync implementation that exists today",
                       self.offline_pwa)
