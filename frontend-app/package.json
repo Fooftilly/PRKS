@@ -13,6 +13,7 @@
     "test": "vitest run",
     "build": "node scripts/build.mjs",
     "build:workspace-model": "node scripts/build-workspace-model.mjs",
+    "build:work-route": "node scripts/build-work-route.mjs",
     "storybook": "storybook dev -p 6006 --no-open --disable-telemetry",
     "build-storybook": "storybook build --output-dir storybook-static --disable-telemetry"
   },

@@ -4395,7 +4395,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 // share one implementation rather than diverging.
                 // Fire-and-forget, and deliberately never awaited: recording
                 // the activity must not delay or endanger showing the Work.
-                if (!internalRefresh && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
+                const recordWorkOpen = typeof prksWorkOpenShouldRecord === 'function'
+                    ? prksWorkOpenShouldRecord(internalRefresh, offlineWork.value)
+                    : (!internalRefresh && !!offlineWork.value);
+                if (recordWorkOpen && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
                     void prksRecordWorkOpened(offlineWork.value);
                 }
                 /* Where this file has been FILED and which PLAYLIST it is in,
@@ -4436,6 +4439,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (typeof prksRefreshPendingWorkNotes === 'function') {
                     void prksRefreshPendingWorkNotes();
                 }
+                /* Folder and playlist refresh stays parallel with the video
+                 * source read. It must not wait for that read, and the source
+                 * read must not wait for it. A fast result corrects the
+                 * in-flight Work; a late result updates only this owner. */
                 if (work) {
                     void Promise.all([
                         typeof prksRefreshPendingWorkFolders === 'function'
@@ -4443,12 +4450,29 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         typeof prksRefreshPendingWorkPlaylists === 'function'
                             ? prksRefreshPendingWorkPlaylists() : null,
                     ]).then(function () {
-                        if (stale() || !ctx.getEntity) return;
-                        const current = ctx.getEntity('work');
-                        if (!current || current.id !== work.id) return;
-                        const next = prksPlacePendingWork(current);
-                        if (next === current) return;
-                        ctx.setEntity('work', next);
+                        if (stale() || !work) return;
+                        const projection = ctx.getResource
+                            ? ctx.getResource('workRouteProjection') : null;
+                        const owned = !!(projection
+                            && projection.ownerTabId === ctx.tabId
+                            && projection.ownerGeneration === generation
+                            && projection.workId === work.id
+                            && projection.availability === 'ready');
+                        const entity = ctx.getEntity ? ctx.getEntity('work') : null;
+                        const samePainted = !!(entity && entity.id === work.id);
+                        const base = (owned && samePainted) ? entity : work;
+                        const next = prksPlacePendingWork(base);
+                        if (!next || next === base) return;
+                        work = next;
+                        if (typeof prksReplaceWorkRoutePlacement === 'function') {
+                            if (!owned) return;
+                            const replaced = prksReplaceWorkRoutePlacement(ctx, generation, next);
+                            if (!replaced) return;
+                        } else if (samePainted && ctx.setEntity) {
+                            ctx.setEntity('work', next);
+                        } else {
+                            return;
+                        }
                         /* Only when this tab actually owns the shared panel. A
                          * background tab whose bookkeeping happens to land late
                          * must never replace what the user is looking at. */
@@ -4459,13 +4483,86 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
                 }
+                /* Sync overlays only. Metadata and roles use the in-memory
+                 * maps; they do not start a durable-queue read. Video source
+                 * refresh stays the one await the painter already performed,
+                 * and only for an acknowledged video. */
+                if (work && typeof prksEffectiveWorkSync === 'function') {
+                    work = prksEffectiveWorkSync(work);
+                }
+                if (work && typeof prksEffectiveWorkDetailRoles === 'function') {
+                    work = prksEffectiveWorkDetailRoles(work);
+                }
+                const acknowledgedKind = work && typeof prksInferWorkSourceKind === 'function'
+                    ? prksInferWorkSourceKind(work) : '';
+                if (work && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
+                    await prksRefreshPendingWorkSources();
+                    if (stale()) return;
+                }
+                if (work && acknowledgedKind === 'video' && typeof prksEffectiveWorkSource === 'function') {
+                    work = prksEffectiveWorkSource(work);
+                }
+                if (stale()) return;
+                const workAvailability = (workUnsent && work)
+                    ? 'ready'
+                    : (workDeleted || (!work && offlineWork.source === 'unavailable'))
+                        ? 'unavailable'
+                        : work
+                            ? 'ready'
+                            : 'not-found';
+                const workLifecycle = workDeleted ? 'pending-delete' : (workUnsent ? 'unsent-create' : 'ordinary');
+                const workProvenance = workUnsent
+                    ? 'local-unsent'
+                    : (offlineWork.source === 'cache' ? 'cache' : 'server');
+                if (typeof prksProjectWorkRoute === 'function' && typeof prksPublishWorkRouteProjection === 'function') {
+                    const workProjection = prksProjectWorkRoute({
+                        workId: workId,
+                        owner: { tabId: ctx.tabId, generation: generation },
+                        availability: workAvailability,
+                        lifecycle: workLifecycle,
+                        provenance: workProvenance,
+                        work: work,
+                        recordOpen: recordWorkOpen,
+                    });
+                    const publishedWork = prksPublishWorkRouteProjection(ctx, generation, workProjection);
+                    if (!publishedWork) return;
+                    if (publishedWork.work) work = publishedWork.work;
+                    else work = null;
+                }
                 if (!work && (workDeleted || offlineWork.source === 'unavailable')) {
                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };
                     break;
                 }
-                await renderWorkDetails(ctx, work, { generation: generation, signal: routeSignal });
+                await renderWorkDetails(ctx, work, {
+                    generation: generation,
+                    signal: routeSignal,
+                    sourcePrepared: true,
+                });
                 if (stale()) return;
+                if (work && typeof prksAdoptPaintedWorkRoute === 'function') {
+                    prksAdoptPaintedWorkRoute(ctx, generation, work.id);
+                }
+                /* The painter publishes the Work it was given. If the folder
+                 * or playlist refresh landed during that paint, reapply the
+                 * in-memory placement onto this same owner. */
+                if (work && ctx.getEntity && typeof prksReplaceWorkRoutePlacement === 'function') {
+                    const painted = ctx.getEntity('work');
+                    if (painted && painted.id === work.id) {
+                        const placed = prksPlacePendingWork(painted);
+                        if (placed && placed !== painted) {
+                            const replaced = prksReplaceWorkRoutePlacement(ctx, generation, placed);
+                            if (replaced) {
+                                work = replaced.work || placed;
+                                const focused = typeof prksTabContextIsFocused === 'function'
+                                    ? prksTabContextIsFocused(ctx) : true;
+                                if (focused && typeof updatePanelContent === 'function') {
+                                    updatePanelContent('details');
+                                }
+                            }
+                        }
+                    }
+                }
                 if (!workUnsent) prksOfflinePrependBanner(contentDiv, offlineWork);
                 titleOpts = work
                     ? { entityTitle: String(work.title || '').trim() || 'File' }

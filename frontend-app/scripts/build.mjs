@@ -81,6 +81,14 @@ if (modelBuild.status !== 0) {
   process.exit(modelBuild.status || 1);
 }
 
+const workRouteBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-work-route.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (workRouteBuild.status !== 0) {
+  process.exit(workRouteBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,
