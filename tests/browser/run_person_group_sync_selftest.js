@@ -794,6 +794,63 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
         const fields = await fieldWrites();
         assert.equal(fields.length, 1, "a live session still writes Group A's parent");
         assert.equal(fields[0].payload.value, created[0].entity_id);
+        assert.deepEqual(fields[0].depends_on, [created[0].op_id],
+            "the reparent waits for the parent created in the same save");
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksAcknowledgedPersonGroupBase = previous.base;
+        globalThis.prksEffectivePersonGroupCatalogue = previous.catalogue;
+    }
+}
+
+async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const runtime = runtimeForStore(store);
+    const base = baseAt(
+        { name: 1, description: 1, parent_id: 3 },
+        { name: "Group A", description: "Kept", parent_id: "" });
+    const seeded = await store.savePersonGroupFields("PG-A", { parent_id: "PG-OLD" }, base);
+    assert.equal(seeded[0].operation, "SET_PERSON_GROUP_FIELD");
+    await store.updateOperationSyncState(seeded[0].op_id, { status: "syncing" });
+    const before = operationFingerprint(await store.listOperations());
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        base: globalThis.prksAcknowledgedPersonGroupBase,
+        catalogue: globalThis.prksEffectivePersonGroupCatalogue,
+    };
+    const alerts = [];
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => [];
+    globalThis.prksAcknowledgedPersonGroupBase = async () => base;
+    globalThis.prksEffectivePersonGroupCatalogue = async () => [];
+    const ctx = {
+        destroyed: false,
+        ui: { personGroupEditing: true, personGroupEditSession: 4 },
+        lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-A" } },
+        getEntity: () => ({ id: "PG-A", name: "Group A" }),
+    };
+    try {
+        const beforeNotify = runtime.notifications();
+        const result = await globalThis.savePersonGroupEditor(
+            ctx, "PG-A",
+            { name: "Group A", description: "Kept", parent_id: "", parent_name: "Refused Parent" },
+            { name: "Group A", description: "Kept", parent_id: "", parent_name: "" },
+            ctx.ui.personGroupEditSession);
+        assert.equal(result && result.ok, false, "a busy field save is refused");
+        assert.notEqual(result && result.quiet, true, "the editor still owns the refusal");
+        assert.equal(alerts.length, 1, "the refusal is shown");
+        const after = await store.listOperations();
+        assert.equal(operationFingerprint(after), before,
+            "a refused field save rolls the typed parent back with it");
+        assert.equal(after.some(row => row.operation === "CREATE_PERSON_GROUP"), false,
+            "the refused update leaves no CREATE_PERSON_GROUP");
+        assert.equal(after.find(row => row.payload && row.payload.field === "parent_id").payload.value,
+            "PG-OLD", "the syncing field write is unchanged");
+        assert.equal(runtime.notifications(), beforeNotify,
+            "a rolled-back parent create does not notify sync");
     } finally {
         globalThis.prksAlertMessage = previous.alert;
         globalThis.prksDurableOperationsOrNone = previous.ops;
@@ -830,6 +887,7 @@ async function main() {
     await anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement();
     await aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn();
     await aStaleGroupEditDoesNotCreateATypedParent();
+    await aRefusedGroupUpdateDoesNotLeaveTheTypedParent();
     console.log("All " + checks + " person group checks passed");
 }
 

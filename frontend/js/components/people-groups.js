@@ -24,21 +24,22 @@ function escapeHtmlGroup(s) {
  *
  * The combobox writes an id; a free-typed name is resolved against the
  * EFFECTIVE catalogue, which includes groups created on this device and not
- * yet sent. A name that matches nothing becomes a new group, created durably
- * and named as this one's prerequisite -- the ordinary endpoint resolved the
- * same "or create it" server-side, and doing it as two visible operations is
- * what lets it happen with no server at all.
+ * yet sent. A name that matches nothing is a parent this save still has to
+ * create. That creation commits with the Group update, so a refused update
+ * cannot leave the parent queued on its own.
  *
- * Returns the id, '' for "top level", or undefined when it was refused.
+ * Returns `{id}` for an existing parent or top level, `{create}` when the
+ * name is new, or undefined when the edit session is gone. A new parent is
+ * not stored here: the Group field save creates it in the same transaction.
  */
-async function prksResolvePersonGroupParent(parentId, parentName, selfId, stillOwns) {
+async function prksMatchPersonGroupParent(parentId, parentName, selfId, stillOwns) {
     const dropped = () => typeof stillOwns === 'function' && !stillOwns();
     const typed = String(parentName || '').trim();
     // Both answers are known without reading anything. The catalogue read
     // below goes through the ordinary read-through, which offline has to let a
     // request fail before the cache answers -- so it is worth not doing.
-    if (String(parentId || '').trim()) return String(parentId).trim();
-    if (!typed) return '';
+    if (String(parentId || '').trim()) return { id: String(parentId).trim() };
+    if (!typed) return { id: '' };
     if (dropped()) return undefined;
     const catalogue = typeof prksEffectivePersonGroupCatalogue === 'function'
         ? await prksEffectivePersonGroupCatalogue() : [];
@@ -47,10 +48,26 @@ async function prksResolvePersonGroupParent(parentId, parentName, selfId, stillO
     const match = (catalogue || []).find(row => row && row.id !== selfId &&
         (label(row) === typed.toLowerCase() ||
             prksGroupRowLabel(row, catalogue).toLowerCase() === typed.toLowerCase()));
-    if (match) return dropped() ? undefined : match.id;
+    if (match) return dropped() ? undefined : { id: match.id };
+    if (dropped()) return undefined;
+    return { create: { name: typed, description: '' } };
+}
+
+/**
+ * Resolve a parent id, creating a brand-new group when the name is new.
+ *
+ * The new-group modal uses this. Reparenting an existing group does not:
+ * that creation has to commit with the field update or not at all.
+ *
+ * Returns the id, '' for "top level", or undefined when it was refused.
+ */
+async function prksResolvePersonGroupParent(parentId, parentName, selfId, stillOwns) {
+    const dropped = () => typeof stillOwns === 'function' && !stillOwns();
+    const matched = await prksMatchPersonGroupParent(parentId, parentName, selfId, stillOwns);
+    if (matched === undefined) return undefined;
+    if (!matched.create) return matched.id;
     try {
-        const created = await prksCreatePersonGroupDurably(
-            { name: typed, description: '' }, stillOwns);
+        const created = await prksCreatePersonGroupDurably(matched.create, stillOwns);
         if (dropped()) return undefined;
         if (!created || !created.entity_id) {
             await prksAlertMessage(prksPersonGroupSaveMessage(
@@ -504,16 +521,20 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
     const parentShownId = String(baseFields.parent_id == null ? '' : baseFields.parent_id);
     const parentShownName = String(baseFields.parent_name == null ? '' : baseFields.parent_name);
     let parentId = parentDraftId;
+    let createParent = null;
     if (parentDraftId !== parentShownId || parentDraftName.trim() !== parentShownName.trim()) {
-        const resolvedParent = await prksResolvePersonGroupParent(
+        const matchedParent = await prksMatchPersonGroupParent(
             parentDraftId, parentDraftName, groupId, stillOwns);
-        if (resolvedParent === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
-        parentId = resolvedParent;
+        if (matchedParent === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
+        if (matchedParent.create) createParent = matchedParent.create;
+        else parentId = matchedParent.id;
     }
     const next = {
         name: name,
         description: String(draft && draft.description != null ? draft.description : ''),
-        parent_id: String(parentId || ''),
+        parent_id: createParent
+            ? String(baseFields.parent_id == null ? '' : baseFields.parent_id)
+            : String(parentId || ''),
     };
     const changes = {};
     ['name', 'description', 'parent_id'].forEach((field) => {
@@ -521,9 +542,9 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
         const shown = String(baseFields[field] == null ? '' : baseFields[field]);
         if (desired !== shown) changes[field] = desired;
     });
-    if (!Object.keys(changes).length) return { ok: true };
+    if (!Object.keys(changes).length && !createParent) return { ok: true };
     try {
-        await prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns);
+        await prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns, createParent);
     } catch (error) {
         if (!stillOwns()) return { ok: true, quiet: true };
         await prksAlertMessage(prksPersonGroupSaveMessage(error, 'save this group'), 'Could not save');

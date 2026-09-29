@@ -515,12 +515,12 @@
         return op;
     }
 
-    async function saveGroupFieldsDurably(groupId, changes, base, stillOwns) {
+    async function saveGroupFieldsDurably(groupId, changes, base, stillOwns, newParent) {
         const runtime = sync();
         let written;
         try {
             written = await runtime.store.savePersonGroupFields(
-                groupId, changes, base, stillOwns);
+                groupId, changes, base, stillOwns, newParent);
         } catch (error) {
             if (ownershipDropped(stillOwns)) return [];
             throw error;

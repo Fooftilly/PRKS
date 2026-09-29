@@ -336,9 +336,9 @@ process.stdout.write('ok');
     def test_failed_save_does_not_create_a_parent(self):
         src = _read(_GROUPS)
         save = _extract_function(src, "savePersonGroupEditor")
-        self.assertLess(save.index("prksAcknowledgedPersonGroupBase"), save.index("prksResolvePersonGroupParent"))
+        self.assertLess(save.index("prksAcknowledgedPersonGroupBase"), save.index("prksMatchPersonGroupParent"))
         script = "\n".join((
-            _extract_function(src, "prksResolvePersonGroupParent"),
+            _extract_function(src, "prksMatchPersonGroupParent"),
             _extract_function(src, "savePersonGroupEditor"),
             r"""
 let created = 0;
@@ -372,18 +372,22 @@ savePersonGroupEditor(ctx, 'g1', {
     def test_failed_parent_create_does_not_write_group_fields(self):
         src = _read(_GROUPS)
         script = "\n".join((
-            _extract_function(src, "prksResolvePersonGroupParent"),
+            _extract_function(src, "prksMatchPersonGroupParent"),
             _extract_function(src, "savePersonGroupEditor"),
             r"""
-let wrote = 0;
+let created = 0;
+let handed = null;
 function prksPersonGroupEditSessionStill() { return true; }
 function prksDurableOperationsOrNone() { return Promise.resolve([]); }
 function prksAcknowledgedPersonGroupBase() { return Promise.resolve({ name: 'Child' }); }
-function prksCreatePersonGroupDurably() { return Promise.reject(new Error('create failed')); }
+function prksCreatePersonGroupDurably() { created += 1; return Promise.resolve({ entity_id: 'orphan' }); }
 function prksEffectivePersonGroupCatalogue() { return Promise.resolve([]); }
 function prksPersonGroupSaveMessage() { return 'failed'; }
 function prksAlertMessage() { return Promise.resolve(); }
-function prksSavePersonGroupFieldsDurably() { wrote += 1; return Promise.resolve(); }
+function prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns, newParent) {
+  handed = newParent;
+  return Promise.reject({ prksLocalStoreCode: 'scope_busy' });
+}
 const ctx = {
   tabId: 'origin',
   ui: { personGroupEditing: true, personGroupEditSession: 2 },
@@ -396,7 +400,8 @@ savePersonGroupEditor(ctx, 'g1', {
   parent_id: '',
   parent_name: 'Brand new parent',
 }, { name: 'Child', description: '', parent_id: '', parent_name: '' }, 2).then((result) => {
-  if (wrote !== 0) throw new Error('failed parent create still wrote group fields');
+  if (created !== 0) throw new Error('the editor created the parent before the field save');
+  if (!handed || handed.name !== 'Brand new parent') throw new Error('the field save was not given the new parent');
   if (!result || result.ok || result.quiet) throw new Error('failed parent create was treated as saved');
   process.stdout.write('ok');
 }).catch((error) => { console.error(error.stack || error); process.exit(1); });
