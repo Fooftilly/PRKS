@@ -2441,7 +2441,7 @@ const PRKS_FOLDERS_DOMAIN = 'folders';
  * Work cards through prksWorkCardHtml() and the right-panel tag list. Backend
  * hierarchy rules (cycles, unique titles, count correctness) stay canonical --
  * this only stops a malformed payload from being cached or rendered. See
- * docs/agent-rules/offline-pwa.md, "Offline coherence domains". */
+ * docs/agent-rules/offline-folder-tag-coherence.md. */
 function prksIsFolderCount(value) {
     return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
 }
@@ -2529,8 +2529,7 @@ const PRKS_PLAYLISTS_DOMAIN = 'playlists';
  * endpoint happens to join in. `renderPlaylistsIndex()` uses id/title/
  * item_count; `renderPlaylistDetail()` and the right-panel editor use
  * id/title/description/original_url plus each item's id (-> #/works/:id),
- * title, author_text and published_date. See docs/agent-rules/offline-pwa.md,
- * "Offline coherence domains". */
+ * title, author_text and published_date. See docs/agent-rules/offline-entity-coherence.md. */
 function prksIsPlaylistItemCount(value) {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }

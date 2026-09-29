@@ -184,6 +184,66 @@ class AgentGuidanceTests(unittest.TestCase):
             normalized_contract,
         )
 
+    def test_source_comments_point_to_offline_leaf_rules_not_router(self):
+        api = (ROOT / "frontend" / "js" / "api.js").read_text(encoding="utf-8")
+        app = (ROOT / "frontend" / "js" / "app.js").read_text(encoding="utf-8")
+        db_manager = (ROOT / "backend" / "db_manager.py").read_text(encoding="utf-8")
+
+        for path, text in (
+            ("frontend/js/api.js", api),
+            ("frontend/js/app.js", app),
+            ("backend/db_manager.py", db_manager),
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn(
+                    "docs/agent-rules/offline-pwa.md",
+                    text,
+                    "domain-specific source comments should point to the owning "
+                    "offline leaf, not the rule router",
+                )
+
+        expected_comment_mappings = (
+            (
+                "api Positions coherence",
+                api,
+                "Independent of the Concepts domain by construction -- see\n"
+                " * docs/agent-rules/offline-entity-coherence.md.",
+            ),
+            (
+                "api browse projection coherence",
+                api,
+                "deleteList('works-browse:index') would have to be rewritten everywhere.\n"
+                " * See docs/agent-rules/offline-browse-protocol.md.",
+            ),
+            (
+                "api Folder coherence",
+                api,
+                "A cached Folder detail also embeds whole Work cards, so Work display changes\n"
+                " * stale it too -- see docs/agent-rules/offline-folder-tag-coherence.md.",
+            ),
+            (
+                "app Folder validator",
+                app,
+                "this only stops a malformed payload from being cached or rendered. See\n"
+                " * docs/agent-rules/offline-folder-tag-coherence.md.",
+            ),
+            (
+                "app Playlist validator",
+                app,
+                "title, author_text and published_date. See "
+                "docs/agent-rules/offline-entity-coherence.md.",
+            ),
+            (
+                "backend browse projection",
+                db_manager,
+                "its first 100 characters. See "
+                "docs/agent-rules/offline-browse-protocol.md.",
+            ),
+        )
+        for label, text, expected in expected_comment_mappings:
+            with self.subTest(comment=label):
+                self.assertIn(expected, text)
+
     def test_router_covers_remaining_durable_family_routes(self):
         sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
         router = self.offline_pwa
