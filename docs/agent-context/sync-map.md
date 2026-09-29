@@ -38,7 +38,7 @@ Code: `backend/work_open_sync.py`.
 Read:
 - `offline-foundations.md`;
 - `offline-work-sync.md`: "Local-first Work Tags";
-- `offline-folder-tag-coherence.md` when a tag change affects Folder/Work cached projections or transactional pruning/invalidation;
+- `offline-folder-tag-coherence.md` when a tag change affects Folder/Work cached projections, identity-preserving relationship invalidation, or delete/merge reconciliation;
 - `docs/local-first-sync.md`: "Local coalescing and overlay (Work Tags)".
 
 Code: `backend/work_tag_sync.py`.
@@ -49,12 +49,14 @@ For `CREATE_WORK` / `DELETE_WORK` and `backend/work_lifecycle_sync.py`, read:
 - `offline-browse-protocol.md` for browse/Recent/Recently Added projection effects;
 - `offline-folder-tag-coherence.md` for Folder/Home membership/count coherence;
 - `offline-entity-coherence.md` for People/Person Group/Concept/Argument/Playlist coherence affected by Work creation/deletion;
+- `offline-entity-surfaces.md` for Research Graph Work-delete invalidation and the deliberate rule that plain Work creation does not invalidate Graph;
 - the Work lifecycle sections in `docs/local-first-sync.md`.
 
 ## Work-Person roles
 For `ADD_WORK_PERSON_ROLE`, `REMOVE_WORK_PERSON_ROLE`, `SET_WORK_PERSON_ROLE_CREDIT`, and `backend/work_role_sync.py`, read:
 - `offline-foundations.md`;
-- `offline-entity-coherence.md` for People, Person Group, Argument, and Research Graph dependencies;
+- `offline-entity-coherence.md` for People, Person Group, and Argument dependencies;
+- `offline-entity-surfaces.md` for Research Graph core/People projection invalidation rules affected by Author-role changes;
 - `offline-folder-tag-coherence.md` for Author/Editor effects on Folder Work-card credits;
 - `offline-browse-protocol.md` for Author/Editor effects on browse/Recent projections;
 - the Work-role sections in `docs/local-first-sync.md`.
