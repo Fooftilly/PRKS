@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import docTypesSource from '../../../../frontend/js/doc-types.js?raw'
 import { applyWorkMetadataChrome, presentWorkMetadataEditor, resetWorkMetadataEditorForTests } from './metadata-session'
 import type { WorkMetadataOwner } from './metadata-session'
 import { cloneWorkMetaDraft } from './metadata-draft'
@@ -28,6 +29,10 @@ function owner(tabId: string, workId: string, title: string): WorkMetadataOwner 
 }
 
 describe('work metadata editor session', () => {
+  beforeAll(() => {
+    ;(window as unknown as { eval: (code: string) => void }).eval(docTypesSource)
+  })
+
   afterEach(() => {
     document.body.innerHTML = ''
     resetWorkMetadataEditorForTests()
@@ -61,5 +66,37 @@ describe('work metadata editor session', () => {
     }])).toBe(false)
     expect((document.getElementById('meta-title') as HTMLInputElement).value).toBe('Beta')
     expect(main.ui.workMetaDraft.title).toBe('Only Work A Draft')
+  })
+
+  it('clears the document-type menu aria-disabled state when chrome becomes editable', async () => {
+    document.body.innerHTML = `
+      <div id="panel-content" data-prks-owner-tab-id="main" data-prks-owner-generation="1">
+        <div data-prks-role="work-metadata-editor-anchor"></div>
+      </div>`
+    const main = owner('main', 'A', 'Alpha')
+    expect(presentWorkMetadataEditor(main, 'pdf')).toBe(true)
+    await nextTick()
+    const trigger = document.getElementById('meta-doc-type-trigger')
+    expect(trigger).toBeInstanceOf(HTMLButtonElement)
+    const button = trigger as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    const close = document.querySelector('[aria-label="Close metadata editor"]')
+    expect(close).toBeInstanceOf(HTMLButtonElement)
+    expect(close?.querySelector('[aria-hidden="true"]')?.textContent).toBe('×')
+
+    expect(applyWorkMetadataChrome('main', 'A', [{
+      name: 'identity',
+      status: 'All changes synced',
+      saveDisabled: false,
+      fields: {
+        title: { disabled: false, title: '' },
+        doc_type: { disabled: false, title: '' },
+      },
+      conflicts: [],
+    }])).toBe(true)
+    await nextTick()
+    expect(button.disabled).toBe(false)
+    expect(button.hasAttribute('aria-disabled')).toBe(false)
   })
 })

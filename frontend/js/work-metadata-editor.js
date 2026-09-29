@@ -273,7 +273,14 @@
         if (error) error.textContent = message;
     }
 
-    function clearFieldErrors() {
+    function clearFieldErrors(ctx) {
+        /* The Vue editor owns its error text. Clearing the DOM here races a
+         * same-message set: Vue batches them into no patch, and the emptied
+         * node never gets the text back. */
+        if (typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+            root.prksVueWorkMetadataEditorOwns(ctx)) {
+            return;
+        }
         document.querySelectorAll('[data-prks-work-field]').forEach(input => {
             input.removeAttribute('aria-invalid');
             const error = fieldErrorElement(input);
@@ -454,7 +461,7 @@
             if (typeof root.prksVueSetWorkMetadataFieldError === 'function') {
                 root.prksVueSetWorkMetadataFieldError('', '');
             }
-            clearFieldErrors();
+            clearFieldErrors(ctx);
             const names = fieldsFor(group, ctx.getEntity('work'));
             const source = ctx.ui && ctx.ui.workMetaDraft;
             const draft = {};
@@ -508,13 +515,13 @@
             }
             if (!sessionOwned()) return;
             await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
+            root.prksSync.changed();
             if (!sessionOwned()) return;
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, Object.keys(changes));
             }
             setError(state, group, null);
             await safePaint(ctx, state);
-            root.prksSync.changed();
         } catch (error) {
             if (!sessionOwned()) return;
             setError(state, group, error && error.prksLocalStoreCode === 'scope_busy'
@@ -531,6 +538,8 @@
     }
 
     async function actionResolve(ctx, state, op, apply, group) {
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        const still = () => sessionStill(ctx, state.workId, session);
         try {
             const result = op.server_result || {};
             /* With only a preview there is no authoritative value to write,
@@ -542,18 +551,21 @@
                     value: result.current_value, server_revision: result.current_revision,
                     changed: false, code: 'ACKNOWLEDGED' };
                 if (!await root.prksOfflineReconcileWorkField(ack)) throw new Error();
-                acceptAck(ctx, state, ack);
+                if (still()) acceptAck(ctx, state, ack);
             } else if (!apply) {
                 root.prksOfflineMarkEntityChanged('work', state.workId);
                 root.prksOfflineMarkEntityChanged('work-metadata-state', state.workId);
-                state.observed = null;
+                if (still()) state.observed = null;
             }
             await root.prksSync.store.resolveConflict(op.op_id, apply);
-            setError(state, group, null);
             root.prksSync.changed();
+            if (!still()) return;
+            setError(state, group, null);
         } catch (_) {
+            if (!still()) return;
             setError(state, group, 'Could not save that resolution locally. Please retry.');
         }
+        if (!still()) return;
         await safePaint(ctx, state);
     }
 

@@ -76,7 +76,8 @@
         ui.workMetaDraft = null;
         ui.workMetaBaseline = null;
         ui.workMetaDraftWorkId = null;
-        ui.workMetaEditSession = 0;
+        /* Monotonic for this TabContext. Resetting the token to 0 would let a
+         * save captured as session 1 match the next time Edit metadata opens. */
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
     }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
 import type { WorkMetadataChrome, WorkMetadataConflict, WorkMetadataGroupChrome } from './metadata-session'
 
@@ -105,24 +105,36 @@ function closeEditor(): void {
   if (typeof close === 'function') void close()
 }
 
-onMounted(() => {
+function docTypeDisabled(): boolean {
+  return isVideo || fieldOff('doc_type')
+}
+
+function syncDocTypeMenu(): void {
   const hidden = document.getElementById('meta-doc-type')
   const init = window.initPrksDocTypeMenu
-  if (hidden && typeof init === 'function') {
-    const before = props.draft.doc_type
-    init('meta-doc-type', { disabled: isVideo || fieldOff('doc_type'), selectedValue: before || 'article' })
-    const shown = hidden instanceof HTMLInputElement ? hidden.value : before
-    if (shown && shown !== props.draft.doc_type) props.draft.doc_type = shown
-    const wrap = hidden.closest('.prks-doc-type-menu')
-    wrap?.addEventListener('click', () => {
-      if (!(hidden instanceof HTMLInputElement)) return
-      props.draft.doc_type = hidden.value
-    })
-  }
+  if (!hidden || typeof init !== 'function') return
+  const before = props.draft.doc_type
+  init('meta-doc-type', { disabled: docTypeDisabled(), selectedValue: before || 'article' })
+  const shown = hidden instanceof HTMLInputElement ? hidden.value : before
+  if (shown && shown !== props.draft.doc_type) props.draft.doc_type = shown
+}
+
+onMounted(() => {
+  syncDocTypeMenu()
+  const hidden = document.getElementById('meta-doc-type')
+  const wrap = hidden?.closest('.prks-doc-type-menu')
+  wrap?.addEventListener('click', () => {
+    if (!(hidden instanceof HTMLInputElement)) return
+    props.draft.doc_type = hidden.value
+  })
   docMenuReady.value = true
   const panel = document.getElementById('panel-content')
   if (panel && typeof window.prksBindAutosizeTextareas === 'function') window.prksBindAutosizeTextareas(panel)
   if (typeof window.prksRefreshIcons === 'function') window.prksRefreshIcons(panel)
+})
+
+watch(docTypeDisabled, () => {
+  syncDocTypeMenu()
 })
 </script>
 
@@ -130,7 +142,7 @@ onMounted(() => {
   <div class="doc-meta-card form-pane doc-meta-card--editing work-meta-editor">
     <div class="card-heading-row">
       <h3 class="doc-meta-card__accent-title">Edit Metadata</h3>
-      <button type="button" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close" @click="closeEditor">&times;</button>
+      <button type="button" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close" aria-label="Close metadata editor" @click="closeEditor"><span aria-hidden="true">&times;</span></button>
     </div>
 
     <section class="work-meta-editor__section" data-prks-role="work-identity-editor">
@@ -161,7 +173,7 @@ onMounted(() => {
           aria-expanded="false"
           aria-controls="meta-doc-type-listbox"
           aria-label="BibLaTeX document type"
-          :disabled="isVideo || fieldOff('doc_type')"
+          :disabled="docTypeDisabled()"
         >
           <span class="prks-doc-type-menu__label">Document type</span>
           <span class="prks-doc-type-menu__caret"></span>

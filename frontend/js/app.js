@@ -3391,8 +3391,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonEditing = !!(ctx.ui && ctx.ui.personDetailEditing);
     const previousPersonWorksEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
     const previousPersonDraft = ctx.ui && ctx.ui.personProfileDraft ? ctx.ui.personProfileDraft : null;
-    const previousWorkEntity = ctx.getEntity && ctx.getEntity('work');
-    const previousWorkId = previousWorkEntity && previousWorkEntity.id ? String(previousWorkEntity.id) : '';
+    const previousWorkId = typeof prksWorkMetaRetainWorkId === 'function'
+        ? prksWorkMetaRetainWorkId(ctx)
+        : '';
     const previousWorkMetaEditing = !!(ctx.ui && ctx.ui.workDetailsMode === 'metadata');
     const previousWorkMetaSaved = ctx.ui ? {
         draft: ctx.ui.workMetaDraft,

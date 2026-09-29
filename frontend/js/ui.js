@@ -3663,6 +3663,18 @@ function prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, fields) {
     });
 }
 
+function prksWorkMetaRetainWorkId(ctx) {
+    const entity = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+    if (entity && entity.id) return String(entity.id);
+    /* beginRoute clears the entity before the route's reads return. A second
+     * render in that gap still has the retained draft, and that Work id is
+     * what a same-route refresh must keep. */
+    if (ctx && ctx.ui && ctx.ui.workMetaDraft && ctx.ui.workMetaDraftWorkId) {
+        return String(ctx.ui.workMetaDraftWorkId);
+    }
+    return '';
+}
+
 function prksRetainWorkMetaEditAcrossRefresh(ctx, keep, saved) {
     if (!ctx || !ctx.ui) return;
     if (keep && saved && saved.draft && saved.baseline && saved.workId) {
@@ -3679,6 +3691,7 @@ function prksRetainWorkMetaEditAcrossRefresh(ctx, keep, saved) {
 }
 window.prksWorkMetaSessionStill = prksWorkMetaSessionStill;
 window.prksCommitWorkMetaBaseline = prksCommitWorkMetaBaseline;
+window.prksWorkMetaRetainWorkId = prksWorkMetaRetainWorkId;
 window.prksRetainWorkMetaEditAcrossRefresh = prksRetainWorkMetaEditAcrossRefresh;
 window.prksBeginWorkMetaSession = prksBeginWorkMetaSession;
 window.prksEndWorkMetaSession = prksEndWorkMetaSession;

@@ -143,6 +143,9 @@
     }
 
     async function resolveSource(ctx, state, op, apply) {
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        const still = () => typeof root.prksWorkMetaSessionStill !== 'function' ||
+            root.prksWorkMetaSessionStill(ctx, state.workId, session);
         try {
             if (!apply) {
                 /* "Use server" is a decision to adopt a source this device
@@ -155,26 +158,29 @@
                  * authoritatively. Dropping only the Work left the cached
                  * source REVISION at its pre-conflict value, which is the
                  * base the next save would have been measured against. */
-                state.observed = null;
+                if (still()) state.observed = null;
                 root.prksOfflineMarkEntityChanged('work', state.workId);
                 root.prksOfflineMarkEntityChanged('work-source-state', state.workId);
             }
             await root.prksSync.store.resolveConflict(op.op_id, apply);
-            state.error = null;
-            if (apply) {
-                /* The replacement operation was created against the
-                 * revision the server reported, so the editor's base has
-                 * to move there too -- BOTH halves. The replacement is
-                 * still never-sent and therefore still coalescible: with a
-                 * stale base, changing one's mind again would rewrite it
-                 * against a revision the server has already passed, and
-                 * returning to the server's own video would read as a
-                 * change rather than as a cancellation. */
-                state.observed = baseOf(op.server_result.current_revision,
-                    root.prksWorkSourceConflictIdentity(op.server_result));
-            }
             root.prksSync.changed();
+            if (still()) {
+                state.error = null;
+                if (apply) {
+                    /* The replacement operation was created against the
+                     * revision the server reported, so the editor's base has
+                     * to move there too -- BOTH halves. The replacement is
+                     * still never-sent and therefore still coalescible: with a
+                     * stale base, changing one's mind again would rewrite it
+                     * against a revision the server has already passed, and
+                     * returning to the server's own video would read as a
+                     * change rather than as a cancellation. */
+                    state.observed = baseOf(op.server_result.current_revision,
+                        root.prksWorkSourceConflictIdentity(op.server_result));
+                }
+            }
         } catch (_) {
+            if (!still()) return;
             state.error = 'Could not save that resolution locally. Please retry.';
             await safePaint(ctx, state);
             return;
@@ -182,9 +188,10 @@
         /* After the discard, and only then: re-establish the authoritative
          * source. If it cannot be read -- offline, say -- the base stays
          * null and the editor stays explicitly unavailable rather than
-         * falling back to the stale pre-conflict Work. */
-        if (!apply) await readBase(ctx, state, { adopt: true });
-        await safePaint(ctx, state);
+         * falling back to the stale pre-conflict Work. A session that ended
+         * during the resolution must not adopt that re-read. */
+        if (!apply && still()) await readBase(ctx, state, { adopt: true, still: still });
+        if (still()) await safePaint(ctx, state);
     }
 
     /**
@@ -283,6 +290,7 @@
                     { validate: value => !!value && value.id === state.workId }),
             ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            if (options && typeof options.still === 'function' && !options.still()) return;
             const usable = stateResult && stateResult.source !== 'unavailable' &&
                 stateResult.value && workResult && workResult.source !== 'unavailable' &&
                 workResult.value;
@@ -362,8 +370,12 @@
             if (typeof root.prksVueSetWorkMetadataFieldError === 'function') {
                 root.prksVueSetWorkMetadataFieldError('', '');
             }
-            if (error) error.textContent = '';
-            if (input) input.removeAttribute('aria-invalid');
+            const vueOwnsErrors = typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+                root.prksVueWorkMetadataEditorOwns(ctx);
+            if (!vueOwnsErrors) {
+                if (error) error.textContent = '';
+                if (input) input.removeAttribute('aria-invalid');
+            }
             const typed = ctx.ui && ctx.ui.workMetaDraft && ctx.ui.workMetaDraft.source_url != null
                 ? String(ctx.ui.workMetaDraft.source_url)
                 : (input ? input.value : '');
@@ -372,10 +384,9 @@
                 /* Refused, never guessed at: an unreadable URL is not an
                  * instruction to clear the video. */
                 const message = 'Use a YouTube link, for example https://www.youtube.com/watch?v=…';
-                if (typeof root.prksVueSetWorkMetadataFieldError === 'function' &&
-                    typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
-                    root.prksVueWorkMetadataEditorOwns(ctx)) {
+                if (vueOwnsErrors && typeof root.prksVueSetWorkMetadataFieldError === 'function') {
                     root.prksVueSetWorkMetadataFieldError('source_url', message);
+                    return;
                 }
                 if (input) { input.setAttribute('aria-invalid', 'true'); input.focus(); }
                 if (error) error.textContent = message;
@@ -405,13 +416,13 @@
                 url: source.source_url,
                 identity: root.prksWorkSourceIdentity(source),
             }, state.observed);
+            root.prksSync.changed();
             if (!still()) return;
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, { source_url: typed }, ['source_url']);
             }
             state.error = null;
             await safePaint(ctx, state);
-            root.prksSync.changed();
         } catch (error_) {
             if (!still()) return;
             state.error = error_ && error_.prksLocalStoreCode === 'scope_busy'

@@ -28,9 +28,14 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         self.assertNotIn("prksEffectiveWorkSync", save)
         self.assertIn("prksCommitWorkMetaBaseline", save)
         self.assertIn("scope_busy", save)
+        changed = save.index("prksSync.changed()", write)
+        self.assertLess(changed, save.index("if (!sessionOwned()) return;", changed))
         source = _SOURCE[_SOURCE.index("async function save(workId)"):_SOURCE.index("root.prksResolveWorkSourceConflict")]
         self.assertLess(source.index("if (!still()) return;"), source.index("store.saveWorkSource"))
         self.assertIn("workMetaDraft.source_url", source)
+        source_write = source.index("store.saveWorkSource")
+        source_changed = source.index("prksSync.changed()", source_write)
+        self.assertLess(source_changed, source.index("if (!still()) return;", source_changed))
 
     def test_vue_session_does_not_read_the_queue(self):
         for source in (_DRAFT, _SESSION):
@@ -39,6 +44,30 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         self.assertIn("workMetaSessionStill", _DRAFT)
         self.assertIn("registerWorkMetadataEditorBridge", _SESSION)
         self.assertIn("data-prks-role=\"work-metadata-editor-anchor\"", _UI)
+
+    def test_route_teardown_keeps_a_monotonic_edit_session(self):
+        context = (_PROJECT / "frontend" / "js" / "tab-context.js").read_text(encoding="utf-8")
+        reset = context.split("function resetEditUi(ui)", 1)[1].split("function safeCall", 1)[0]
+        self.assertNotIn("workMetaEditSession = 0", reset)
+        self.assertIn("prksWorkMetaRetainWorkId(ctx)", _APP)
+        retain = _UI[_UI.index("function prksWorkMetaRetainWorkId"):_UI.index("function prksRetainWorkMetaEditAcrossRefresh")]
+        self.assertIn("workMetaDraftWorkId", retain)
+
+    def test_vue_owned_errors_are_not_cleared_in_the_dom(self):
+        clear = _META[_META.index("function clearFieldErrors"):_META.index("const PREVIEW_CHARS")]
+        owns = clear.index("prksVueWorkMetadataEditorOwns")
+        self.assertLess(owns, clear.index("textContent"))
+        self.assertIn("return", clear[owns:clear.index("textContent")])
+
+    def test_conflict_continuations_stay_on_the_captured_session(self):
+        resolve = _META[_META.index("async function actionResolve"):_META.index("root.prksResolveWorkMetadataFieldConflict")]
+        self.assertLess(resolve.index("const still"), resolve.index("await root.prksOfflineReconcileWorkField"))
+        self.assertLess(resolve.index("prksSync.changed()"), resolve.index("if (!still()) return;"))
+        source = _SOURCE[_SOURCE.index("async function resolveSource"):_SOURCE.index("function writeInput")]
+        self.assertLess(source.index("const still"), source.index("await root.prksSync.store.resolveConflict"))
+        self.assertLess(source.index("prksSync.changed()"), source.index("state.error = null"))
+        base = _SOURCE[_SOURCE.index("async function readBase"):_SOURCE.index("async function prepare")]
+        self.assertLess(base.index("options.still"), base.index("ctx.setEntity"))
 
 
 if __name__ == "__main__":
