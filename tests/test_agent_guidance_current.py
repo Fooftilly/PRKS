@@ -177,7 +177,7 @@ class AgentGuidanceTests(unittest.TestCase):
         self.assertNotIn("prunes its newly-unused tags", self.offline_contract)
         self.assertIn("Folder deletion and Work/Folder tag removal preserve Tag identity",
                       self.offline_contract)
-        normalized_contract = re.sub(r"\\s+", " ", self.offline_contract)
+        normalized_contract = re.sub(r"\s+", " ", self.offline_contract)
         self.assertIn(
             "Only explicit `delete_tag()` and `merge_tags_into()` "
             "may destroy or transform Tag identity",
