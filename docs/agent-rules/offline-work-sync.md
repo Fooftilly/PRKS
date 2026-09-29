@@ -280,8 +280,10 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   -- destroying usable offline snapshots for a change whose shape is known is
   the opposite of the reconciler's purpose.
 - The Playlist inline rename is a WORK TITLE change, not Playlist state: it
-  uses the same durable operation and therefore works offline, while every
-  genuine Playlist mutation stays online-only.
+  uses the same durable Work-title operation and therefore works offline.
+  Playlist create/edit/membership/reorder/delete are also local-first, but are
+  owned by the Playlist rules in `offline-entity-coherence.md`; only the
+  catalogue-search surfaces called out there remain online-only.
 
 ### Local-first Work opens (Milestone 2C)
 
