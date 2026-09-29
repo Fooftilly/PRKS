@@ -1629,6 +1629,16 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
             ),
+            "os_renames_keyword_managed_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(old=scratch, new=os.path.join(pdfs_dir, name))\n"
+            ),
+            "os_renames_keyword_managed_source": (
+                "import os\n"
+                "def archive(pdfs_dir, name, elsewhere):\n"
+                "    os.renames(old=os.path.join(pdfs_dir, name), new=elsewhere)\n"
+            ),
             "os_rename_overwrites_managed_destination": (
                 "import os\n"
                 "def publish(pdfs_dir, scratch, name):\n"

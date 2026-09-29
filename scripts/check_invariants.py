@@ -1206,6 +1206,19 @@ def _method_call_facts(
     return facts
 
 
+def _positional_or_keyword(
+    node: ast.Call, index: int, keywords: tuple[str, ...]
+) -> ast.expr | None:
+    """The argument at ``index``, or the first keyword spelling of it. A
+    ``*args`` spread at or before ``index`` may supply it."""
+    for position, arg in enumerate(node.args):
+        if isinstance(arg, ast.Starred):
+            return arg.value
+        if position == index:
+            return arg
+    return next((kw.value for kw in node.keywords if kw.arg in keywords), None)
+
+
 def _identity_passed_names(node: ast.expr) -> list[str]:
     """Names whose *object* an argument expression passes on: the name itself,
     unpacked / collected into a display, or chosen by a conditional, walrus
@@ -2394,12 +2407,11 @@ class _InvariantVisitor(ast.NodeVisitor):
         primitives = names & RAW_REMOVE_CALLS
         if primitives:
             primitive = f"{sorted(primitives)[0]}()"
-            source = node.args[0] if node.args else next(
-                (kw.value for kw in node.keywords if kw.arg in ("path", "src")), None
-            )
-            targets = [(primitive, source)]
+            # ``os.remove(path=)`` / ``os.rename(src=, dst=)`` /
+            # ``os.renames(old=, new=)`` / ``shutil.move(src=, dst=)``.
+            targets = [(primitive, _positional_or_keyword(node, 0, ("path", "src", "old")))]
             if primitives & _OVERWRITING_MOVE_CALLS:
-                targets.append((primitive, self._call_argument(node, 1, "dst")))
+                targets.append((primitive, _positional_or_keyword(node, 1, ("dst", "new"))))
             return targets
         unbound = names & _PATH_UNBOUND_UNLINK
         if unbound:
