@@ -815,7 +815,7 @@ revoked by the P2 fence. Crash tests cover each boundary in this sequence.
 | **P7 Retire source** | Change the old marker from `fenced` to `state: retired`, keeping `relocation: {id, role: source, peer_hint: <new root>}`. Write config `phase: "source_retired"`, as a guarded compare-and-set expecting `(local_root = to, this relocation_id, committed)` (§5.1). This is **not a safety step**: it turns "a move is in progress" into "this library moved to X" for clearer messages and for P10 cleanup. If the old root cannot be written, for example because a disk was removed, it stays `fenced`, and PRKS retries the change at later starts. A disconnected source that reappears is still `fenced` and still refuses to bind. **No acknowledgement path exists or is needed**: revocation is the durable P2 fence, not P7. | old marker (`retired`), config (`source_retired`) |
 | **P8 Rebuild** | Derived data is rebuilt at the new root by the existing mechanisms: the text-index and research-index reconcile, and thumbnails lazily. `retry_pending_pdf_cleanup` now runs against the **new** root only. | none |
 | **P9 Retain** | Write config `phase: "retained"`, and keep `from` for diagnostics. Like every config write it is a guarded compare-and-set (§5.1): it expects `(local_root = to, this relocation_id, committed or source_retired)`, and it is a no-op if anything else has since been recorded. It does not wait for a P7 that could not reach the old root. | config |
-| **P10 Cleanup** (explicit, later) | Offered only after the new root has completed at least one full start, and recommended after a verified backup. It deletes only PRKS-known components of the retired root (the names in §4.2), never unknown files and never through links, and then the marker. It holds the retired root's `root.lock` (§12) while it works, in an order that also works on Windows, where a held `LockFileEx` file cannot be deleted: first every known component except the marker and `.prks-maintenance/root.lock`; then it closes the lock handle; then it removes the marker, `root.lock` and the emptied `.prks-maintenance/`. Closing the handle first is safe because a `retired` root is never bindable. A crash after that leaves a `retired` marker, which a P10 rerun finishes, or a lone `root.lock`, which V3 treats as preflight scaffold. **Inbox files are deleted only if an identical copy exists in the destination** (same name and SHA-256). A file that reached the old inbox after P4 is kept, reported in diagnostics, and offered for import into the new library. Config: `relocation = null`, guarded like every config write (§5.1): it expects `(local_root = to, this relocation_id, retained)`. | config |
+| **P10 Cleanup** (explicit, later) | Offered only after the new root has completed at least one full start, and recommended after a verified backup. It deletes only PRKS-known components of the retired root (the names in §4.2), never unknown files and never through links, and then the marker. It takes the retired root's `root.lock` and removes it with the §12 **terminal teardown** procedure (the marker is already `retired`), which closes the lock handle before removing the marker and `root.lock`, as Windows requires. **Inbox files are deleted only if an identical copy exists in the destination** (same name and SHA-256). A file that reached the old inbox after P4 is kept, reported in diagnostics, and offered for import into the new library. Config: `relocation = null`, guarded like every config write (§5.1): it expects `(local_root = to, this relocation_id, retained)`. | config |
 
 **Pre-commit guarantee: the old library's data is never written, and the
 destination is never bindable.** The only write to the old root before commit
@@ -868,12 +868,12 @@ The table, for config-file roots:
 
 | Config phase at startup | `local_root` | Resolution |
 | --- | --- | --- |
-| `preparing` | old | P1 crashed between its two writes. The source was never fenced, so bind it normally. If a destination exists whose marker is `staging` with this `relocation_id` and it contains nothing outside the P1-owned set (see P1; `root.lock` and marker-write temporaries included, and any member may be missing), discard it. Otherwise leave it and report it. Mark the relocation `failed`. |
-| `copying` or `verified` | old | Old root authoritative. If its marker is `fenced` with this `relocation_id`, lift the fence back to `active`, then bind it normally. Mark the relocation `failed` in config. The destination is staging: delete it automatically **only** when its marker carries this `relocation_id`, `state: staging` and `role: destination`, and it contains nothing but PRKS components; otherwise leave it and report it. The user may retry. |
+| `preparing` | old | P1 crashed between its two writes. The source was never fenced, so bind it normally. If a destination exists whose marker is `staging` with this `relocation_id` and it contains nothing outside the P1-owned set (see P1; `root.lock` and marker-write temporaries included, and any member may be missing), discard it with the §12 terminal teardown procedure. Otherwise leave it and report it. Mark the relocation `failed`. |
+| `copying` or `verified` | old | Old root authoritative. If its marker is `fenced` with this `relocation_id`, lift the fence back to `active`, then bind it normally. Mark the relocation `failed` in config. The destination is staging: delete it automatically **only** when its marker carries this `relocation_id`, `state: staging` and `role: destination` (with or without a `phase: aborted` left by an interrupted teardown), and it contains nothing but PRKS components, using the §12 terminal teardown procedure; otherwise leave it and report it. The user may retry. |
 | `committed` | new | New root authoritative. The source is already `fenced` (P2). If the destination marker is still `staging` with the same `relocation_id`, perform P6 as specified: (a) take the lease and bind the `staging` root under the committed record, then (b) write the single activation. If the marker is already `active` with no role, P6(b) already landed, and PRKS binds normally. Attempt P7, P8 and P9 idempotently. A P7 that cannot reach the old root is retried at later starts and blocks nothing. |
 | `source_retired` | new | Bind normally and redo P8 and P9 idempotently. |
 | `retained` | new | Normal operation. Diagnostics show the retained old copy. |
-| `failed` | old | Old root authoritative. If its marker is still `fenced` with this `relocation_id` (a crash between revert steps 2 and 3, or a failed-move recovery interrupted before unfencing), lift the fence back to `active` before binding, the same step as in the `copying`/`verified` row. Then operate normally, with a notice offering "discard failed move", which only cleans up a leftover `staging` destination. |
+| `failed` | old | Old root authoritative. If its marker is still `fenced` with this `relocation_id` (a crash between revert steps 2 and 3, or a failed-move recovery interrupted before unfencing), lift the fence back to `active` before binding, the same step as in the `copying`/`verified` row. Then operate normally, with a notice offering "discard failed move", which only cleans up a leftover `staging` destination, with the §12 terminal teardown procedure. |
 
 A failure during P6 (rebind) after commit is handled like any failed bind of
 the configured root: PRKS reports a configuration error and does **not** fall
@@ -1126,16 +1126,10 @@ on that mirror for these roots.
      1. Atomically rewrites the destination marker to `phase: aborted`,
         which is never bindable. This is the volume-durable abort record.
      2. Lifts the source fence back to `active`, authorized by that record.
-     3. Discards the destination under the §8.3 deletion rule, in an order
-        that works while its lock file is held (Windows `LockFileEx` cannot
-        delete a held file): first everything except the marker and
-        `.prks-maintenance/root.lock`; then it closes the destination lock
-        handle; then it removes the marker, `root.lock` and the emptied
-        directories. Releasing the lock first is safe: the durable `aborted`
-        marker and the reactivated source already make `finalize` and a
-        `relocate` resume refuse. A crash after the handle is closed leaves an
-        `aborted` marker, which a rerun finishes, or a lone `root.lock`, which
-        V3 treats as preflight scaffold.
+     3. Discards the destination under the §8.3 deletion rule, using the
+        §12 **terminal teardown** procedure (the marker is already `aborted`
+        from step 1). That procedure closes the destination lock handle
+        before removing the marker and `root.lock`, which Windows requires.
      4. Releases the source lock.
 
      **Rerun after a crash between steps 2 and 3** (`--to NEWPATH` required, as above). The source is then
@@ -1450,7 +1444,9 @@ renewal can race a fence or a state transition. During a move:
     of P4. If it cannot get the source lock, it drops the destination lock
     and its lock-only scaffold and refuses, before any marker exists.
   - `finalize` and `abort` take both locks before validating anything, and
-    hold them through their last write (§8.7). The one exception: `finalize`
+    hold them through their last write (§8.7), except that `abort`'s
+    destination teardown releases the destination lock at step 3 of the
+    terminal teardown procedure below. The other exception: `finalize`
     may proceed under the destination lock alone when the source is
     **unreachable**, not merely busy, and the destination marker carries
     `verified: true`.
@@ -1461,6 +1457,31 @@ renewal can race a fence or a state transition. During a move:
 
 A marker is therefore never written by two processes at once, and it is never
 written by a process that does not own that root at that moment.
+
+**Terminal teardown: the one exception.** Removing a root (discarding a
+`staging` destination in-app or by `storage abort`, or P10 cleanup of a
+retired source) ends with the marker and `root.lock` themselves being deleted.
+Windows `LockFileEx` cannot delete a held file, so every teardown, on every
+platform, uses this one procedure:
+
+1. Under the root's lock, make the marker **durably terminal**: `phase:
+   aborted` on a `staging` destination (in-app discard writes it too, not only
+   the offline `abort`), or `state: retired` on a P10 source, which P7 has
+   already written.
+2. Still under the lock, delete every PRKS-known component except the marker
+   and `.prks-maintenance/root.lock`.
+3. Close the lock handle.
+4. Remove the marker, then `root.lock`, then the emptied
+   `.prks-maintenance/` and, for a discarded destination, the emptied root
+   directory.
+
+Step 4 changes a marker without holding the lock. That is allowed only here,
+because the marker is already terminal and never bindable: binding, `finalize`
+and a `relocate` resume all refuse an `aborted` or `retired` marker, so no
+process can act on the root in the gap. A crash after step 3 leaves either the
+terminal marker, which a rerun of the same teardown finishes (`abort`,
+"discard failed move", §8.3 recovery or P10), or a lone `root.lock`, which V3
+treats as preflight scaffold.
 
 The lock depends on the filesystem honoring advisory locks, which is one of
 the local-filesystem semantics §7.4 already requires for a live SQLite-era
@@ -1483,7 +1504,7 @@ behavior unless stated.
 | **B. Route managed files through the backend** | Managed PDF create, replace, COW, adoption, cleanup and linearization; portraits; import; backup enumeration; locks keyed by `StorageKey`; `processing_files.abs_path` derived from `rel_path` (the column is left unused). Behavior is preserved and proven by the existing managed-PDF, cleanup and backup tests unchanged. | no (dropping `abs_path` is a later migration) | no | no | A |
 | **C. Asset identity coordination** | #60 Slice D lands on Phase B operations: `assets` locators are authoritative keys; the fingerprint pass uses `stat` and `verify`; the text-index fingerprint moves to `content_sha256`/`content_generation`; Slice G serves `/api/assets/{id}/content`. | #60's migrations | #60's typed API | no | **#60 Slice C/D** and B |
 | **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation, and hot-rebinding under the admission-time relocation mode and rebind barrier (§8.1), with the whole rebind held as one transaction under the config lock, a test that no in-flight read observes a mixed binding, a two-process hot-rebind race test, and a test that opening an existing library leaves its `storage_root_id` unchanged; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes**, after the migration | A (backend); **the frontend migration** (UI); #46 (packaged default and "Open folder") |
-| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. Further offline tests cover `abort --to` after a P1-only crash and after unfencing, and a Windows `abort` and P10 that each delete a root with its lock file released in the stated order. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
+| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. Further offline tests cover `abort --to` after a P1-only crash and after unfencing, and Windows tests of the §12 terminal teardown for offline `abort`, P10 and one in-app discard path, asserting that the lock is released only after the marker is terminal and that a crash after the release leaves a state a rerun finishes. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
 | **F. Object storage (optional)** | An S3-compatible backend passing the shared contract tests; restore and backup for it; immutable-object mode (§10.4). **Only when a deployment needs it.** | possibly a `storage_backend` column (#60) | config only | no | C, and in practice the PostgreSQL migration (#310) |
 
 **Why A ships before D.** It gives no user-visible feature, but it makes
