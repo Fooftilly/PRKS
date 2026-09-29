@@ -43,6 +43,30 @@ Read:
 
 Code: `backend/work_tag_sync.py`.
 
+## Work lifecycle
+For `CREATE_WORK` / `DELETE_WORK` and `backend/work_lifecycle_sync.py`, read:
+- `offline-foundations.md`;
+- `offline-browse-protocol.md` for browse/Recent/Recently Added projection effects;
+- `offline-folder-tag-coherence.md` for Folder/Home membership/count coherence;
+- `offline-entity-coherence.md` for People/Person Group/Concept/Argument/Playlist coherence affected by Work creation/deletion;
+- the Work lifecycle sections in `docs/local-first-sync.md`.
+
+## Work-Person roles
+For `ADD_WORK_PERSON_ROLE`, `REMOVE_WORK_PERSON_ROLE`, `SET_WORK_PERSON_ROLE_CREDIT`, and `backend/work_role_sync.py`, read:
+- `offline-foundations.md`;
+- `offline-entity-coherence.md` for People, Person Group, Argument, and Research Graph dependencies;
+- `offline-folder-tag-coherence.md` for Author/Editor effects on Folder Work-card credits;
+- `offline-browse-protocol.md` for Author/Editor effects on browse/Recent projections;
+- the Work-role sections in `docs/local-first-sync.md`.
+
+## Tag vocabulary
+For `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG`, and `backend/tag_sync.py`, read:
+- `offline-foundations.md`;
+- `offline-work-sync.md` for tag identity/lifecycle and durable-operation rules;
+- `offline-folder-tag-coherence.md` for Work/Folder tag invalidation and delete/merge reconciliation;
+- `offline-browse-protocol.md` for shared durable-operation handler/coordinator semantics;
+- the Tag vocabulary sections in `docs/local-first-sync.md`.
+
 ## People and groups
 Read:
 - `offline-foundations.md`;
