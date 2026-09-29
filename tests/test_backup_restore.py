@@ -1368,6 +1368,64 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
         self.assertEqual(claimed, [True])
         self.assertEqual(self._ready_names(root), [])
 
+    def test_concurrent_publishers_of_one_name_both_survive(self):
+        # Two publishers hold the same initial candidate and are released
+        # together into the name claim, so a non-atomic check-then-create
+        # would let both win and one archive would replace the other.
+        final_dir = self._tmpdir("prks-publish-race-")
+        created = datetime(2026, 9, 29, 10, 0, 0, tzinfo=timezone.utc)
+        first = backup_module._backup_filename(created, "aaaaaaaaaaaaaaaa")
+        retry = backup_module._backup_filename(created, "bbbbbbbbbbbbbbbb")
+        sources = {}
+        for label in ("one", "two"):
+            work_dir = self._tmpdir("prks-publish-work-")
+            path = os.path.join(work_dir, first)
+            with open(path, "wb") as handle:
+                handle.write(f"archive {label}".encode())
+            sources[label] = path
+        first_path = os.path.join(final_dir, first)
+        barrier = threading.Barrier(2, timeout=10)
+        real_open = os.open
+
+        def contended_open(path, flags, *args, **kwargs):
+            if path == first_path:
+                barrier.wait()
+            return real_open(path, flags, *args, **kwargs)
+
+        results = {}
+        errors = []
+
+        def publish(label):
+            try:
+                results[label] = backup_module._publish_ready_archive(
+                    sources[label], final_dir, created, first
+                )
+            except BaseException as exc:  # surfaced below
+                errors.append(exc)
+
+        with patch.object(backup_module.os, "open", contended_open), patch.object(
+            backup_module, "_backup_name_suffix", return_value="bbbbbbbbbbbbbbbb"
+        ):
+            threads = [threading.Thread(target=publish, args=(label,)) for label in sources]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(results), ["one", "two"])
+        winners = [label for label, (path, _name) in results.items() if path == first_path]
+        self.assertEqual(len(winners), 1)
+        (winner,) = winners
+        (loser,) = [label for label in results if label != winner]
+        self.assertEqual(results[winner], (first_path, first))
+        self.assertEqual(results[loser], (os.path.join(final_dir, retry), retry))
+        for label, (path, _name) in results.items():
+            with open(path, "rb") as handle:
+                self.assertEqual(handle.read(), f"archive {label}".encode())
+            self.assertFalse(os.path.lexists(sources[label]))
+        self.assertEqual(sorted(os.listdir(final_dir)), sorted([first, retry]))
+
     def test_take_then_download_cleanup_is_unchanged(self):
         lib = self._bind_library()
         cfg = lib["cfg"]
