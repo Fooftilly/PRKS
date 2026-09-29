@@ -733,14 +733,31 @@ A failure during P6 (rebind) after commit is handled like any failed bind of
 the configured root: PRKS reports a configuration error and does **not** fall
 back to the old root. Automatic fallback is refused because, once any mutation
 commits in the new root, the old root is a stale snapshot from P2 and binding
-it would fork the library. While the destination is still `staging`, which
-means P6(a) failed and P6(b) never ran, the user may explicitly "revert move".
-That sets the config back to `from` and lifts the old `fenced` marker back to
-`active`; the destination is already `staging`. Reverting is safe because **no
-process** has admitted a mutation to either root since P2. The source has been
-fenced throughout. The destination was never generically bindable, and this
-process never released its scope. Once P6(b) has written `active`, revert is no
-longer offered.
+it would fork the library.
+
+**Revert move** is offered whenever the destination marker is still
+`staging`. That covers two cases: P6(a) failed, or P6(a) succeeded and P6(b)
+failed. In the second case this process may already hold the destination's
+lease and a live binding. Revert therefore runs in this fixed order, with the
+**P2 scope held throughout**:
+
+1. Unbind the destination: rebind to the old root's config, or to no storage,
+   through `bind_storage`'s existing rollback path.
+2. Release the destination's `active_process` lease.
+3. Atomically set the config back to `from`, with phase `failed`.
+4. Lift the old `fenced` marker back to `active`.
+5. Only then release the scope.
+
+A crash in the middle of revert is resolved by §8.3 recovery. While the config
+still says `committed`, recovery completes the move instead: P6 is idempotent
+on a `staging` destination. Once the config says `failed` with `local_root =
+from`, recovery lifts the fence. Either way a crash leaves exactly one
+bindable outcome, and a stale lease expires by its heartbeat rule (§12).
+
+Reverting is safe because **no process** has admitted a mutation to either root
+since P2. The source has been fenced throughout, the destination was never
+generically bindable, and this process never released its scope. Once P6(b)
+has written `active`, revert is no longer offered.
 
 ### 8.4 Identity survives
 
