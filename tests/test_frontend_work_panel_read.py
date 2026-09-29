@@ -69,7 +69,9 @@ class WorkPanelReadContractTests(unittest.TestCase):
         self.assertIn("prksEffectiveWorkSync", publish)
         self.assertIn("prksEffectiveWorkDetailRoles", publish)
         self.assertNotIn("people: []", _ROLES)
-        self.assertIn("people: roles", _ROLES)
+        self.assertNotIn("prksVueRefreshWorkPanelRead", _ROLES)
+        self.assertIn("prksRefreshOwnedWorkPanelRead", _ROLES)
+        self.assertIn("prksEffectiveWorkDetailRoles", _UI)
         self.assertLess(_TAGS.index("await root.prksSync.store.listOperations()"), _TAGS.index("prksVueRefreshWorkPanelRead"))
         self.assertIn("prksEffectiveWorkTags(work, state.operations)", _TAGS)
 

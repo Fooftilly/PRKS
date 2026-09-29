@@ -135,16 +135,8 @@
 
         const host = panel.querySelector('.work-linked-persons-by-role');
         const effective = root.prksEffectiveWorkDetailRoles(ctx.getEntity('work'));
-        if (!state.editable && typeof root.prksWorkPanelReadOwns === 'function' && root.prksWorkPanelReadOwns(ctx)) {
-            if (typeof root.prksVueRefreshWorkPanelRead === 'function') {
-                const roles = effective && Array.isArray(effective.roles) ? effective.roles : [];
-                root.prksVueRefreshWorkPanelRead({
-                    ownerTabId: String(ctx.tabId),
-                    ownerGeneration: ctx.generation,
-                    workId: state.workId,
-                    people: roles,
-                });
-            }
+        if (!state.editable && owns(ctx, state) && typeof root.prksRefreshOwnedWorkPanelRead === 'function') {
+            root.prksRefreshOwnedWorkPanelRead(ctx, ctx.getEntity('work'));
         } else if (host && typeof root.buildWorkLinkedPersonsHtml === 'function') {
             const html = root.buildWorkLinkedPersonsHtml(effective, { editable: state.editable });
             if (host.innerHTML !== html) host.innerHTML = html;
@@ -240,6 +232,10 @@
             base = await baseForAnyWork(workId, personId, roleType);
         }
         if (!base) return { code: 'unavailable' };
+        if (mounted && !live(ctx, state)) return { code: 'unavailable' };
+        const panel = panelOf();
+        if (mounted && panel && panel.dataset.prksOwnerTabId &&
+            panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return { code: 'unavailable' };
         try {
             await root.prksSync.store.saveWorkPersonRole(workId,
                 { person_id: personId, role_type: roleType, state: desired },
