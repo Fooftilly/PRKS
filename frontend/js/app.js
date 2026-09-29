@@ -3073,6 +3073,46 @@ function prksPresentVuePeople(ctx, contentDiv, detail) {
     host.__prksVueRouteRequest = request;
 }
 
+/**
+ * Mount the Vue Person Groups index or detail surface in this pane.
+ * `detail` must already be the authoritative effective Group projection.
+ * Same-owner Group refresh reuses the existing host.
+ */
+function prksPresentVuePersonGroups(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const feature = detail.feature === 'person-group-detail' ? 'person-group-detail' : 'person-groups';
+    const request = {
+        feature: feature,
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        items: detail.items,
+        group: detail.group,
+        groupId: detail.groupId,
+        editing: detail.editing === true,
+        membersEditing: detail.membersEditing === true,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (feature === 'person-group-detail' && typeof window.prksVuePresentPersonGroupDetail === 'function') {
+        window.prksVuePresentPersonGroupDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    if (feature === 'person-groups' && typeof window.prksVuePresentPersonGroupsIndex === 'function') {
+        window.prksVuePresentPersonGroupsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksRenderRouteLoading(contentDiv, hash) {
     if (!contentDiv) return;
     const title = prksRouteTitleFromHash(hash);
@@ -3322,6 +3362,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonGroup = ctx.getEntity && ctx.getEntity('personGroup');
     const previousPersonGroupId = previousPersonGroup ? String(previousPersonGroup.id) : '';
     const previousPersonGroupMembersEditing = !!(ctx.ui && ctx.ui.personGroupMembersEditing);
+    const previousPersonGroupEditing = !!(ctx.ui && ctx.ui.personGroupEditing);
     const previousPerson = ctx.getEntity && ctx.getEntity('person');
     const previousPersonId = previousPerson ? String(previousPerson.id) : '';
     const previousPersonEditing = !!(ctx.ui && ctx.ui.personDetailEditing);
@@ -3394,6 +3435,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (samePeopleWorkspace) {
         ctx.__prksRetainPeopleSurface = true;
     }
+    /* Groups→Groups in the same mounted TabContext keeps the Vue host so an
+     * in-place refresh does not drop search or an open group draft. */
+    const samePersonGroupsWorkspace = !!(
+        (route.name === 'people-groups' || route.name === 'person-group-detail') &&
+        contentDiv.querySelector(
+            '[data-prks-person-groups-index-view], [data-prks-person-group-detail-view]'
+        )
+    );
+    if (samePersonGroupsWorkspace) {
+        ctx.__prksRetainPersonGroupsSurface = true;
+    }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
@@ -3412,6 +3464,24 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
     if (samePeopleWorkspace) {
         ctx.__prksRetainPeopleSurface = false;
+    }
+    if (samePersonGroupsWorkspace) {
+        ctx.__prksRetainPersonGroupsSurface = false;
+    }
+    /* beginRoute cleared the edit flags. Put a same-group editor back before
+     * the awaited reads, so a save already in flight still owns this session. */
+    const sameGroupDetail = !!(
+        route.name === 'person-group-detail' &&
+        previousPersonGroupId &&
+        route.params &&
+        String(route.params.groupId) === previousPersonGroupId
+    );
+    if (sameGroupDetail && typeof prksRetainPersonGroupEditAcrossRefresh === 'function') {
+        prksRetainPersonGroupEditAcrossRefresh(
+            ctx,
+            previousPersonGroupEditing,
+            previousPersonGroupMembersEditing
+        );
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;
@@ -3452,6 +3522,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
         !sameArgumentsWorkspace &&
         !samePlaylistsWorkspace &&
         !samePeopleWorkspace &&
+        !samePersonGroupsWorkspace &&
         typeof window.prksReleaseLazyWorkThumbs === 'function'
     ) {
         window.prksReleaseLazyWorkThumbs(contentDiv);
@@ -3465,7 +3536,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (typeof window.prksReleaseWorkThumbPreview === 'function') {
         window.prksReleaseWorkThumbPreview(contentDiv);
     }
-    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace && !samePeopleWorkspace) {
+    if (!sameFolderWorkspace && !sameConceptsWorkspace && !sameFolderLibraryWorkspace && !samePositionsWorkspace && !sameArgumentsWorkspace && !samePlaylistsWorkspace && !samePeopleWorkspace && !samePersonGroupsWorkspace) {
         if (typeof window.prksVueDismissProgress === 'function') {
             window.prksVueDismissProgress(ctx);
         }
@@ -3487,6 +3558,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissPeople === 'function') {
             window.prksVueDismissPeople(ctx);
         }
+        if (typeof window.prksVueDismissPersonGroups === 'function') {
+            window.prksVueDismissPersonGroups(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -3497,8 +3571,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSetFolderPendingOwnerInert === 'function') {
             prksSetFolderPendingOwnerInert(ctx, contentDiv, true);
         }
-    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace || samePlaylistsWorkspace || samePeopleWorkspace) {
-        // Folder Library / Concepts / Positions / Arguments / Playlists in-place refresh: keep the Vue host; mark busy until paint.
+    } else if (sameFolderLibraryWorkspace || sameConceptsWorkspace || samePositionsWorkspace || sameArgumentsWorkspace || samePlaylistsWorkspace || samePeopleWorkspace || samePersonGroupsWorkspace) {
+        // Folder Library / Concepts / Positions / Arguments / Playlists / People / Groups in-place refresh: keep the Vue host; mark busy until paint.
         contentDiv.setAttribute('aria-busy', 'true');
     }
 
@@ -3818,12 +3892,37 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     : await prksEffectivePersonGroupRows(cachedGroups, ops);
                 if (stale()) return;
                 if (!groups) {
-                    prksOfflineRenderUnavailable(contentDiv, 'Person Groups not available offline');
+                    if (typeof prksPresentVuePersonGroups === 'function') {
+                        prksPresentVuePersonGroups(ctx, contentDiv, {
+                            feature: 'person-groups',
+                            availability: 'unavailable',
+                            items: [],
+                            generation: generation,
+                        });
+                    } else {
+                        prksOfflineRenderUnavailable(contentDiv, 'Person Groups not available offline');
+                    }
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Person Groups not available offline',
+                        skipPageEnter: samePersonGroupsWorkspace,
+                    };
                     break;
                 }
                 publishSidebar({ groupCount: Array.isArray(groups) ? groups.length : 0 });
-                renderPersonGroupsPage(groups, contentDiv, ctx);
+                if (typeof prksPresentVuePersonGroups === 'function') {
+                    prksPresentVuePersonGroups(ctx, contentDiv, {
+                        feature: 'person-groups',
+                        availability: 'ready',
+                        items: groups,
+                        generation: generation,
+                    });
+                } else if (typeof renderPersonGroupsPage === 'function') {
+                    renderPersonGroupsPage(groups, contentDiv, ctx);
+                }
                 prksOfflinePrependBanner(contentDiv, offlineGroups);
+                titleOpts = { skipPageEnter: samePersonGroupsWorkspace };
                 break;
             }
             case 'person-group-detail': {
@@ -3858,32 +3957,96 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 if (resolvedGroup.unavailable) {
                     ctx.setEntity('personGroup', null);
-                    prksOfflineRenderUnavailable(contentDiv, 'Group not available offline');
-                    titleOpts = { notFound: true, notFoundTitle: 'Group not available offline' };
+                    if (ctx.ui) {
+                        ctx.ui.personGroupEditing = false;
+                        ctx.ui.personGroupMembersEditing = false;
+                        ctx.ui.personGroupFieldBaseline = null;
+                    }
+                    if (typeof prksPresentVuePersonGroups === 'function') {
+                        prksPresentVuePersonGroups(ctx, contentDiv, {
+                            feature: 'person-group-detail',
+                            availability: 'unavailable',
+                            group: null,
+                            groupId: groupId,
+                            generation: generation,
+                        });
+                    } else {
+                        prksOfflineRenderUnavailable(contentDiv, 'Group not available offline');
+                    }
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Group not available offline',
+                        skipPageEnter: samePersonGroupsWorkspace,
+                    };
                     break;
                 }
                 const group = await prksEffectivePersonGroupRecord(resolvedGroup.group);
                 if (stale()) return;
                 if (!group) {
-                    contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
-                    titleOpts = { notFound: true, notFoundTitle: 'Group not found' };
+                    ctx.setEntity('personGroup', null);
+                    if (typeof prksPresentVuePersonGroups === 'function') {
+                        prksPresentVuePersonGroups(ctx, contentDiv, {
+                            feature: 'person-group-detail',
+                            availability: 'not-found',
+                            group: null,
+                            groupId: groupId,
+                            generation: generation,
+                        });
+                    } else {
+                        contentDiv.innerHTML =
+                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Group not found</h2></div><p class="meta-row"><a href="#/people/groups" class="route-sidebar__link">Back to groups</a></p>';
+                    }
+                    prksOfflinePrependBanner(contentDiv, null);
+                    titleOpts = {
+                        notFound: true,
+                        notFoundTitle: 'Group not found',
+                        skipPageEnter: samePersonGroupsWorkspace,
+                    };
                 } else {
                     const preserveMembersEditing =
-                        previousPersonGroupId &&
-                        previousPersonGroupId === String(group.id) &&
-                        previousPersonGroupMembersEditing && offlineGroup.source === 'server';
+                        sameGroupDetail &&
+                        previousPersonGroupMembersEditing &&
+                        !!(ctx.ui && ctx.ui.personGroupMembersEditing) &&
+                        offlineGroup.source === 'server';
+                    const preserveGroupEditing =
+                        sameGroupDetail &&
+                        previousPersonGroupEditing &&
+                        !!(ctx.ui && ctx.ui.personGroupEditing);
                     ctx.setEntity('personGroup', group);
-                    ctx.ui.personGroupEditing = false;
-                    ctx.ui.personGroupMembersEditing = preserveMembersEditing;
+                    if (typeof prksRetainPersonGroupEditAcrossRefresh === 'function') {
+                        prksRetainPersonGroupEditAcrossRefresh(
+                            ctx,
+                            preserveGroupEditing,
+                            preserveMembersEditing
+                        );
+                    } else {
+                        ctx.ui.personGroupEditing = preserveGroupEditing;
+                        ctx.ui.personGroupMembersEditing = preserveMembersEditing;
+                    }
                     publishSidebar({
                         groupName: group.name,
                         memberCount: Array.isArray(group.members) ? group.members.length : 0,
                         subgroupCount: Array.isArray(group.children) ? group.children.length : 0,
                     });
-                    renderPersonGroupDetail(group, contentDiv, ctx);
+                    if (typeof prksPresentVuePersonGroups === 'function') {
+                        prksPresentVuePersonGroups(ctx, contentDiv, {
+                            feature: 'person-group-detail',
+                            availability: 'ready',
+                            group: group,
+                            groupId: group.id,
+                            editing: !!(ctx.ui && ctx.ui.personGroupEditing),
+                            membersEditing: !!(ctx.ui && ctx.ui.personGroupMembersEditing),
+                            generation: generation,
+                        });
+                    } else if (typeof renderPersonGroupDetail === 'function') {
+                        renderPersonGroupDetail(group, contentDiv, ctx);
+                    }
                     prksOfflinePrependBanner(contentDiv, offlineGroup);
-                    titleOpts = { entityTitle: group.name || 'Group' };
+                    titleOpts = {
+                        entityTitle: group.name || 'Group',
+                        skipPageEnter: samePersonGroupsWorkspace,
+                    };
                 }
                 break;
             }
@@ -4942,6 +5105,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (samePeopleWorkspace && typeof window.prksVueDismissPeople === 'function') {
             window.prksVueDismissPeople(ctx);
         }
+        if (samePersonGroupsWorkspace && typeof window.prksVueDismissPersonGroups === 'function') {
+            window.prksVueDismissPersonGroups(ctx);
+        }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);
         }
@@ -5922,9 +6088,21 @@ function initForms() {
                 });
                 closeModals();
                 /* No reload and no refetch: the record is local, and a reload
-                 * would throw away every other pending change on the page. */
+                 * would throw away every other pending change on the page.
+                 * A Groups-index origin navigates that pane. A stale origin
+                 * does not navigate a replaced owner. Ribbon and command
+                 * palette opens do not record one, so they stay unscoped. */
+                const groupNav = typeof window.prksTakePersonGroupCreateNavigation === 'function'
+                    ? window.prksTakePersonGroupCreateNavigation()
+                    : { mode: 'unscoped' };
+                if (groupNav && groupNav.mode === 'stale') return;
                 if (created && created.entity_id && typeof prksNavigate === 'function') {
-                    prksNavigate('#/people/groups/' + encodeURIComponent(created.entity_id));
+                    const hash = '#/people/groups/' + encodeURIComponent(created.entity_id);
+                    if (groupNav && groupNav.mode === 'owner' && groupNav.tabId) {
+                        prksNavigate(hash, { tabId: groupNav.tabId });
+                    } else {
+                        prksNavigate(hash);
+                    }
                 }
             } catch (e) {
                 await prksAlertMessage(

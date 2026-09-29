@@ -3450,7 +3450,7 @@
 
         /* ---- Person Groups: construction, fields, membership, deletion ---- */
 
-        function createPersonGroup(fields) {
+        function createPersonGroup(fields, stillOwns) {
             const payload = canonicalPersonGroupPayload(fields);
             if (!payload.name) {
                 return Promise.reject(localStoreError('invalid_envelope',
@@ -3459,6 +3459,10 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* The catalogue await and this read can both outlive the
+                     * editor that typed the parent. Leave every operation row
+                     * as it was. */
+                    if (!callerStillOwns(stillOwns)) { setResult(null); return; }
                     /* A group created under a parent this device also created
                      * offline waits for that parent: the server validates the
                      * hierarchy, and a parent it has never heard of is a
@@ -3474,7 +3478,7 @@
                         payload: payload,
                         base_revision: null,
                         depends_on: parentOp ? [parentOp.op_id] : [],
-                    }, null));
+                    }, null, stillOwns));
                 });
         }
 
@@ -3488,7 +3492,7 @@
          * change, and leaving the row would send a write the server does not
          * need and a revision it would advance.
          */
-        function savePersonGroupFields(groupId, changes, base) {
+        function savePersonGroupFields(groupId, changes, base, stillOwns, newParent) {
             if (!isNonBlankString(groupId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid group save.'));
             }
@@ -3509,15 +3513,55 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'A group needs a name.'));
             }
+            /* A typed parent and the move into it are one decision. The parent
+             * row is inserted in this transaction, so a later refusal rolls
+             * it back with the field write. */
+            let parentPayload = null;
+            if (newParent != null) {
+                if (!isPlainObject(newParent)) {
+                    return Promise.reject(localStoreError('invalid_envelope', 'Invalid group save.'));
+                }
+                parentPayload = canonicalPersonGroupPayload(newParent);
+                if (!parentPayload.name) {
+                    return Promise.reject(localStoreError('invalid_envelope',
+                        'A group needs a name.'));
+                }
+                const observedParent = base.parent_id;
+                if (!isPlainObject(observedParent) || typeof observedParent.value !== 'string' ||
+                    !Number.isSafeInteger(observedParent.revision) || observedParent.revision < 0) {
+                    return Promise.reject(localStoreError('invalid_base',
+                        'Invalid observed field state.'));
+                }
+            }
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* The read above is the gap a check before this call cannot
+                     * see. Leave every operation row as it was. */
+                    if (!callerStillOwns(stillOwns)) { setResult([]); return; }
                     assertGroupIsNotBeingDeleted(rows, groupId, 'edited');
                     const createOp = personGroupCreationDependency(rows, groupId,
                         'it cannot be edited');
                     const written = [];
-                    for (const field of Object.keys(changes)) {
-                        const desired = changes[field];
+                    let mutated = false;
+                    let createdParent = null;
+                    const desiredChanges = Object.assign({}, changes);
+                    if (parentPayload) {
+                        if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
+                        createdParent = await insertEnvelopeIn(request, {
+                            operation: 'CREATE_PERSON_GROUP',
+                            entity_type: 'person-group',
+                            entity_id: generateEntityId('PG', uuid),
+                            payload: parentPayload,
+                            base_revision: null,
+                            depends_on: [],
+                        }, null, stillOwns);
+                        mutated = true;
+                        abandonUnownedWrite(stillOwns, true);
+                        desiredChanges.parent_id = createdParent.entity_id;
+                    }
+                    for (const field of Object.keys(desiredChanges)) {
+                        const desired = desiredChanges[field];
                         const observed = base[field];
                         const existing = rows.find(r => r.operation === 'SET_PERSON_GROUP_FIELD' &&
                             r.entity_type === 'person-group' && r.entity_id === groupId &&
@@ -3531,16 +3575,22 @@
                                 written.push(existing);
                                 continue;
                             }
+                            if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                             await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                            mutated = true;
+                            abandonUnownedWrite(stillOwns, true);
                         }
                         if (desired === observed.value) continue;
+                        if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                         /* Moving a group INTO one this device also created
                          * offline waits for that group too: the server
                          * validates the hierarchy, and a parent it has never
                          * heard of is a refusal rather than a tree. */
                         const parentOp = field === 'parent_id' && desired
-                            ? personGroupCreationDependency(rows, desired,
-                                'nothing can be moved into it')
+                            ? (createdParent && createdParent.entity_id === desired
+                                ? createdParent
+                                : personGroupCreationDependency(rows, desired,
+                                    'nothing can be moved into it'))
                             : null;
                         written.push(await insertEnvelopeIn(request, {
                             operation: 'SET_PERSON_GROUP_FIELD', entity_type: 'person-group',
@@ -3548,7 +3598,9 @@
                             base_revision: observed.revision,
                             depends_on: [createOp, parentOp].filter(Boolean)
                                 .map(op => op.op_id),
-                        }, null));
+                        }, null, stillOwns));
+                        mutated = true;
+                        abandonUnownedWrite(stillOwns, true);
                     }
                     setResult(written);
                 });

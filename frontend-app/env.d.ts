@@ -210,6 +210,44 @@ interface Window {
   prksVuePresentPeopleIndex?: (input: PeopleIndexPresentRequest) => void
   prksVuePresentPersonDetail?: (input: PersonDetailPresentRequest) => void
   prksVueDismissPeople?: (owner: object) => void
+  prksVuePresentPersonGroupsIndex?: (input: {
+    owner: object
+    host: HTMLElement
+    availability?: string
+    items?: unknown
+    generation?: number
+    shell?: boolean
+  }) => void
+  prksVuePresentPersonGroupDetail?: (input: {
+    owner: object
+    host: HTMLElement
+    availability?: string
+    group?: unknown
+    groupId?: string
+    editing?: boolean
+    membersEditing?: boolean
+    editorActive?: boolean
+    generation?: number
+    shell?: boolean
+  }) => void
+  prksVueDismissPersonGroups?: (owner: object) => void
+  prksOpenNewGroupModalFromGroupsPage?: (owner?: object) => void
+  prksTakePersonGroupCreateNavigation?: () => { mode?: string; tabId?: string }
+  prksClearPersonGroupIndexCreateOrigin?: () => void
+  openPersonGroupEdit?: (owner?: object) => void
+  closePersonGroupEdit?: (owner?: object) => void
+  prksTogglePersonGroupMembersEdit?: (owner?: object) => void
+  prksBindPersonGroupDetailChrome?: (owner?: object) => void
+  prksSetButtonBusy?: (button: HTMLElement | null, busy: boolean, options?: { busyLabel?: string }) => void
+  prksHintBtnHtml?: (hintType: string, ariaLabel: string, extraClass?: string) => string
+  savePersonGroupEditor?: (
+    owner: object | null | undefined,
+    groupId: string,
+    draft: { name: string; description: string; parent_id: string; parent_name: string },
+    baseline: { name: string; description: string; parent_id: string; parent_name: string },
+    session: number,
+  ) => Promise<{ ok: boolean; quiet?: boolean; message?: string }>
+  deletePersonGroupEditor?: (owner: object | null | undefined, groupId: string, session: number) => Promise<void>
   prksTabContextIsFocused?: (ctx: unknown) => boolean
   prksApplyPersonOfflineState?: (container: ParentNode | null) => void
   personDateToDisplayFormat?: (stored: string) => string
