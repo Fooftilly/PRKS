@@ -1289,6 +1289,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    work_route_path = root / "frontend" / "js" / "work-route-projection.js"
+    if work_route_path.is_file():
+        entries.append(
+            {
+                "name": "prks-work-route-projection",
+                "version": "1",
+                "source_category": "frontend-app:work-route-projection",
+                "runtime_files": [
+                    {
+                        "path": "/js/work-route-projection.js",
+                        "sha256": sha256_file(work_route_path),
+                    }
+                ],
+            }
+        )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,

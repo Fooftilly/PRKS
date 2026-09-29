@@ -1773,6 +1773,29 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
+/** A queue read that keeps failure distinct from an empty queue.
+ *  null means the store could not be read. [] means it was read and held nothing. */
+async function prksReadDurableOperations() {
+    try {
+        if (typeof prksSync !== 'undefined' && prksSync && prksSync.store &&
+            typeof prksSync.store.listOperations === 'function') {
+            const ops = await prksSync.store.listOperations();
+            if (Array.isArray(ops)) return ops;
+        }
+    } catch (_e) { /* a failed read is not an empty queue */ }
+    return null;
+}
+
+/** Publish a successful operation list into the in-memory maps.
+ *  A failed read must not call this: setPending([]) marks hydration ready and drops unsynced values. */
+function prksApplyReadWorkOperations(ops) {
+    if (!Array.isArray(ops)) return false;
+    if (typeof prksSetPendingWorkMetadata === 'function') prksSetPendingWorkMetadata(ops);
+    if (typeof prksSetPendingWorkRoles === 'function') prksSetPendingWorkRoles(ops);
+    if (typeof prksSetPendingPersonNames === 'function') prksSetPendingPersonNames(ops);
+    return true;
+}
+
 /** The Folder hierarchy this device holds, with pending intent applied. */
 async function prksEffectiveFolderRows(rows, ops) {
     if (!Array.isArray(rows) || typeof prksEffectiveFolders !== 'function') return rows;
@@ -4306,11 +4329,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                  * scan on every cached open. Pending CREATE_WORK has no
                  * cache row — only then await the queue before any network
                  * GET. */
-                const workOpsPromise = prksDurableOperationsOrNone().then(function (ops) {
-                    if (typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
-                        prksApplyLiveWorkLifecycleFromOperations(ops || []);
+                const workOpsPromise = prksReadDurableOperations().then(function (ops) {
+                    if (Array.isArray(ops) && typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
+                        prksApplyLiveWorkLifecycleFromOperations(ops);
                     }
-                    return ops || [];
+                    return ops;
                 });
                 let cachedWorkRow = null;
                 try {
@@ -4322,6 +4345,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 if (stale()) return;
                 let workOps = [];
+                let workOpsKnown = false;
                 let offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                 const lifecycle = typeof prksResolveWorkLifecycle === 'function'
                     ? await prksResolveWorkLifecycle(workId)
@@ -4329,10 +4353,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (stale()) return;
                 const liveDeleted = lifecycle === 'delete';
                 const liveUnsent = lifecycle === 'create';
+                let workDeleted = false;
+                let work = null;
                 if (cachedWorkRow && cachedWorkRow.value) {
                     if (liveDeleted) {
                         offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                         workOps = await workOpsPromise;
+                        workOpsKnown = Array.isArray(workOps);
+                        if (!workOpsKnown) workOps = [];
                         if (stale()) return;
                     } else {
                         offlineWork = await prksOfflineDetailFetch(
@@ -4342,24 +4370,103 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             routeSignal
                         );
                         if (stale()) return;
-                        /* Background: keep live set coherent with the queue.
-                         * The persisted marker already classified delete
-                         * before paint, so this must not be the first time
-                         * a pending DELETE becomes visible. */
+                        /* Background: a cached ordinary Work paints without
+                         * waiting on this read. When it resolves, a missed
+                         * pending DELETE drops the projection, and metadata
+                         * or role overlays republish onto effectiveWork only. */
                         void workOpsPromise.then(function (ops) {
                             if (stale()) return;
+                            /* null is a failed read. Do not treat it as an empty queue. */
+                            if (!Array.isArray(ops)) return;
                             workOps = ops;
                             if (typeof prksPendingWorkDeletions === 'function' &&
-                                prksPendingWorkDeletions(ops).has(workId)) {
+                                prksPendingWorkDeletions(workOps).has(workId)) {
+                                /* The cached row may already be a ready projection.
+                                 * Clearing the entity alone leaves that projection
+                                 * for a later placement refresh to republish. */
+                                workDeleted = true;
+                                work = null;
+                                if (typeof prksProjectWorkRoute === 'function' &&
+                                    typeof prksPublishWorkRouteProjection === 'function') {
+                                    const deletedProjection = prksPublishWorkRouteProjection(
+                                        ctx,
+                                        generation,
+                                        prksProjectWorkRoute({
+                                            workId: workId,
+                                            owner: { tabId: ctx.tabId, generation: generation },
+                                            availability: 'unavailable',
+                                            lifecycle: 'pending-delete',
+                                            provenance: 'cache',
+                                            work: null,
+                                            effectiveWork: null,
+                                            recordOpen: false,
+                                        })
+                                    );
+                                    if (!deletedProjection) return;
+                                } else if (ctx.setEntity) {
+                                    ctx.setEntity('work', null);
+                                }
                                 if (typeof prksOfflineRenderUnavailable === 'function') {
                                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                                 }
-                                if (ctx.setEntity) ctx.setEntity('work', null);
+                                return;
                             }
+                            if (!prksApplyReadWorkOperations(workOps)) return;
+                            if (stale()) return;
+                            if (typeof prksProjectWorkRoute !== 'function' ||
+                                typeof prksPublishWorkRouteProjection !== 'function' ||
+                                !ctx.getResource) return;
+                            const current = ctx.getResource('workRouteProjection');
+                            if (!current || current.availability !== 'ready' || current.workId !== workId) return;
+                            if (current.ownerTabId !== ctx.tabId || current.ownerGeneration !== generation) return;
+                            const entity = ctx.getEntity ? ctx.getEntity('work') : null;
+                            const base = entity && entity.id === workId ? entity : null;
+                            if (!base) return;
+                            let effective = base;
+                            if (typeof prksEffectiveWorkSync === 'function') {
+                                effective = prksEffectiveWorkSync(base);
+                            }
+                            if (effective && typeof prksEffectiveWorkDetailRoles === 'function') {
+                                effective = prksEffectiveWorkDetailRoles(effective);
+                            }
+                            if (effective === base && current.effectiveWork === current.work) return;
+                            if (stale()) return;
+                            const refreshed = prksPublishWorkRouteProjection(
+                                ctx,
+                                generation,
+                                prksProjectWorkRoute({
+                                    workId: workId,
+                                    owner: { tabId: ctx.tabId, generation: generation },
+                                    availability: 'ready',
+                                    lifecycle: current.lifecycle,
+                                    provenance: current.provenance,
+                                    work: base,
+                                    effectiveWork: effective,
+                                    recordOpen: false,
+                                })
+                            );
+                            if (!refreshed) return;
+                            if (refreshed.work) work = refreshed.work;
+                            /* The first paint used the maps it already had.
+                             * Refresh the selected panel so pending metadata
+                             * appears, without switching Annotations to Details. */
+                            if (stale()) return;
+                            const ownedNow = ctx.getResource('workRouteProjection');
+                            if (!ownedNow || ownedNow.ownerTabId !== ctx.tabId ||
+                                ownedNow.ownerGeneration !== generation ||
+                                ownedNow.workId !== workId ||
+                                ownedNow.availability !== 'ready') return;
+                            const focused = typeof prksTabContextIsFocused === 'function'
+                                ? prksTabContextIsFocused(ctx) : true;
+                            if (!focused || typeof updatePanelContent !== 'function') return;
+                            const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+                            updatePanelContent(panelTab);
                         });
                     }
                 } else {
                     workOps = await workOpsPromise;
+                    workOpsKnown = Array.isArray(workOps);
+                    if (!workOpsKnown) workOps = [];
                     if (stale()) return;
                     const workDeletedEarly = liveDeleted ||
                         (typeof prksPendingWorkDeletions === 'function' &&
@@ -4377,7 +4484,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         if (stale()) return;
                     }
                 }
-                const workDeleted = liveDeleted ||
+                workDeleted = liveDeleted ||
                     (typeof prksPendingWorkDeletions === 'function' &&
                         prksPendingWorkDeletions(workOps).has(workId));
                 const workUnsent = liveUnsent || (!workDeleted &&
@@ -4395,7 +4502,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 // share one implementation rather than diverging.
                 // Fire-and-forget, and deliberately never awaited: recording
                 // the activity must not delay or endanger showing the Work.
-                if (!internalRefresh && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
+                const recordWorkOpen = typeof prksWorkOpenShouldRecord === 'function'
+                    ? prksWorkOpenShouldRecord(internalRefresh, offlineWork.value)
+                    : (!internalRefresh && !!offlineWork.value);
+                if (recordWorkOpen && offlineWork.value && typeof prksRecordWorkOpened === 'function') {
                     void prksRecordWorkOpened(offlineWork.value);
                 }
                 /* Where this file has been FILED and which PLAYLIST it is in,
@@ -4418,7 +4528,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     }
                     return placed;
                 };
-                let work = prksPlacePendingWork(offlineWork.value);
+                work = prksPlacePendingWork(offlineWork.value);
                 if (workDeleted) {
                     work = null;
                 }
@@ -4436,6 +4546,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 if (typeof prksRefreshPendingWorkNotes === 'function') {
                     void prksRefreshPendingWorkNotes();
                 }
+                /* Folder and playlist refresh stays parallel with the video
+                 * source read. It must not wait for that read, and the source
+                 * read must not wait for it. A fast result corrects the
+                 * in-flight Work; a late result updates only this owner. */
                 if (work) {
                     void Promise.all([
                         typeof prksRefreshPendingWorkFolders === 'function'
@@ -4443,29 +4557,137 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         typeof prksRefreshPendingWorkPlaylists === 'function'
                             ? prksRefreshPendingWorkPlaylists() : null,
                     ]).then(function () {
-                        if (stale() || !ctx.getEntity) return;
-                        const current = ctx.getEntity('work');
-                        if (!current || current.id !== work.id) return;
-                        const next = prksPlacePendingWork(current);
-                        if (next === current) return;
-                        ctx.setEntity('work', next);
-                        /* Only when this tab actually owns the shared panel. A
-                         * background tab whose bookkeeping happens to land late
-                         * must never replace what the user is looking at. */
+                        if (stale() || !work) return;
+                        const projection = ctx.getResource
+                            ? ctx.getResource('workRouteProjection') : null;
+                        const owned = !!(projection
+                            && projection.ownerTabId === ctx.tabId
+                            && projection.ownerGeneration === generation
+                            && projection.workId === work.id
+                            && projection.availability === 'ready');
+                        const entity = ctx.getEntity ? ctx.getEntity('work') : null;
+                        const samePainted = !!(entity && entity.id === work.id);
+                        const base = (owned && samePainted) ? entity : work;
+                        const next = prksPlacePendingWork(base);
+                        if (!next || next === base) return;
+                        work = next;
+                        if (typeof prksReplaceWorkRoutePlacement === 'function') {
+                            if (!owned) return;
+                            const replaced = prksReplaceWorkRoutePlacement(ctx, generation, next);
+                            if (!replaced) return;
+                        } else if (samePainted && ctx.setEntity) {
+                            ctx.setEntity('work', next);
+                        } else {
+                            return;
+                        }
+                        /* Re-check the owner. A late filing must not repaint
+                         * after this generation moved on, and it must not
+                         * replace Annotations with Details. */
+                        if (stale()) return;
+                        if (typeof prksReplaceWorkRoutePlacement === 'function') {
+                            const still = ctx.getResource ? ctx.getResource('workRouteProjection') : null;
+                            if (!still || still.ownerTabId !== ctx.tabId ||
+                                still.ownerGeneration !== generation ||
+                                still.workId !== workId ||
+                                still.availability !== 'ready') return;
+                        }
                         const focused = typeof prksTabContextIsFocused === 'function'
                             ? prksTabContextIsFocused(ctx) : true;
-                        if (focused && typeof updatePanelContent === 'function') {
-                            updatePanelContent('details');
+                        const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+                        if (focused && panelTab === 'details' && typeof updatePanelContent === 'function') {
+                            updatePanelContent(panelTab);
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
+                }
+                /* Maps already in memory can overlay this paint. A successful
+                 * queue read — including a genuinely empty one — may replace
+                 * them. A failed read leaves workOpsKnown false so the
+                 * last-known maps stay put. */
+                if (work && workOpsKnown) prksApplyReadWorkOperations(workOps);
+                const acknowledgedKind = work && typeof prksInferWorkSourceKind === 'function'
+                    ? prksInferWorkSourceKind(work) : '';
+                if (work && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
+                    await prksRefreshPendingWorkSources();
+                    if (stale()) return;
+                }
+                if (work && acknowledgedKind === 'video' && typeof prksEffectiveWorkSource === 'function') {
+                    work = prksEffectiveWorkSource(work);
+                }
+                /* Metadata and role overlays are for the projection's read
+                 * surface. Role, metadata, and source editors measure saves
+                 * against the entity, so those overlays must not replace it. */
+                let effectiveWork = work;
+                if (work && typeof prksEffectiveWorkSync === 'function') {
+                    effectiveWork = prksEffectiveWorkSync(work);
+                }
+                if (effectiveWork && typeof prksEffectiveWorkDetailRoles === 'function') {
+                    effectiveWork = prksEffectiveWorkDetailRoles(effectiveWork);
+                }
+                if (stale()) return;
+                const workAvailability = (workUnsent && work)
+                    ? 'ready'
+                    : (workDeleted || (!work && offlineWork.source === 'unavailable'))
+                        ? 'unavailable'
+                        : work
+                            ? 'ready'
+                            : 'not-found';
+                const workLifecycle = workDeleted ? 'pending-delete' : (workUnsent ? 'unsent-create' : 'ordinary');
+                const workProvenance = workUnsent
+                    ? 'local-unsent'
+                    : (offlineWork.source === 'cache' ? 'cache' : 'server');
+                if (typeof prksProjectWorkRoute === 'function' && typeof prksPublishWorkRouteProjection === 'function') {
+                    const workProjection = prksProjectWorkRoute({
+                        workId: workId,
+                        owner: { tabId: ctx.tabId, generation: generation },
+                        availability: workAvailability,
+                        lifecycle: workLifecycle,
+                        provenance: workProvenance,
+                        work: work,
+                        effectiveWork: effectiveWork,
+                        recordOpen: recordWorkOpen,
+                    });
+                    const publishedWork = prksPublishWorkRouteProjection(ctx, generation, workProjection);
+                    if (!publishedWork) return;
+                    if (publishedWork.work) work = publishedWork.work;
+                    else work = null;
                 }
                 if (!work && (workDeleted || offlineWork.source === 'unavailable')) {
                     prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
                     titleOpts = { notFound: true, notFoundTitle: 'File not available offline' };
                     break;
                 }
-                await renderWorkDetails(ctx, work, { generation: generation, signal: routeSignal });
+                await renderWorkDetails(ctx, work, {
+                    generation: generation,
+                    signal: routeSignal,
+                    sourcePrepared: true,
+                });
                 if (stale()) return;
+                if (work && typeof prksAdoptPaintedWorkRoute === 'function') {
+                    prksAdoptPaintedWorkRoute(ctx, generation, work.id);
+                }
+                /* The painter publishes the Work it was given. If the folder
+                 * or playlist refresh landed during that paint, reapply the
+                 * in-memory placement onto this same owner. */
+                if (work && ctx.getEntity && typeof prksReplaceWorkRoutePlacement === 'function') {
+                    const painted = ctx.getEntity('work');
+                    if (painted && painted.id === work.id) {
+                        const placed = prksPlacePendingWork(painted);
+                        if (placed && placed !== painted) {
+                            const replaced = prksReplaceWorkRoutePlacement(ctx, generation, placed);
+                            if (replaced) {
+                                work = replaced.work || placed;
+                                const focused = typeof prksTabContextIsFocused === 'function'
+                                    ? prksTabContextIsFocused(ctx) : true;
+                                /* A refresh that lands during paint must not
+                                 * replace Annotations with Details. */
+                                const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+                                if (focused && panelTab === 'details' && typeof updatePanelContent === 'function') {
+                                    updatePanelContent(panelTab);
+                                }
+                            }
+                        }
+                    }
+                }
                 if (!workUnsent) prksOfflinePrependBanner(contentDiv, offlineWork);
                 titleOpts = work
                     ? { entityTitle: String(work.title || '').trim() || 'File' }

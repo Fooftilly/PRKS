@@ -17,9 +17,10 @@
     // DEPENDENCY_REVISION is derived from frontend/vendor/DEPENDENCY-MANIFEST.json
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
     // --repo fails if it drifts. Changing manifest bytes (vendor files, the
-    // committed Vue bundle, or frontend/js/workspace-model.js) retires old
+    // committed Vue bundle, frontend/js/workspace-model.js, or
+    // frontend/js/work-route-projection.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '58d059b44f09';
+    const DEPENDENCY_REVISION = '9386bc7353af';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -168,6 +169,7 @@
         '/js/work-selection.js',
         '/js/saved-views.js',
         '/js/command-palette.js',
+        '/js/work-route-projection.js',
         '/js/app.js',
         // Vue bootstrap module from the committed Vite build. Required because
         // index.html loads it; not a legacy route module.

@@ -828,7 +828,10 @@ async function renderWorkDetails(ctx, work, requestCtx) {
      * looking at nothing, for a value that Work could not have. */
     const acknowledgedKind =
         typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-    if (acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
+    /* The Work route already refreshed and overlaid an acknowledged video.
+     * Repeating that read here would wait twice for the same pending map. */
+    const sourcePrepared = !!(requestCtx && requestCtx.sourcePrepared);
+    if (!sourcePrepared && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
         await prksRefreshPendingWorkSources();
         if (!isCurrent()) return;
     }
