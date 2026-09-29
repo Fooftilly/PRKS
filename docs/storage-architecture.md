@@ -741,17 +741,21 @@ failed. In the second case this process may already hold the destination's
 lease and a live binding. Revert therefore runs in this fixed order, with the
 **P2 scope held throughout**:
 
-1. Unbind the destination: rebind to the old root's config, or to no storage,
-   through `bind_storage`'s existing rollback path. **Keep holding the
-   destination's lease.**
+1. Drop the destination binding and bind **no storage**; storage requests
+   are refused while the scope is held. Do **not** bind the source yet: it is
+   still `fenced`, and the config still says `committed`, so §7.1 does not
+   authorize it. **Keep holding the destination's lease.**
 2. Atomically set the config back to `from`, with phase `failed`. From this
    write on, no committed record exists that could authorize activating the
    destination.
-3. Lift the old `fenced` marker back to `active`.
-4. Release the destination's lease.
-5. Only then release the scope.
+3. Lift the old `fenced` marker back to `active`. The `failed` record for
+   this `relocation_id` authorizes this, exactly as §8.3 recovery would.
+4. Bind the now-`active` source through the ordinary binding rule, taking its
+   lease.
+5. Release the destination's lease.
+6. Only then release the scope.
 
-The lease is held through steps 2 and 3 because the P2 scope is process-local
+The destination lease is held through steps 2–4 because the P2 scope is process-local
 (§12). If the lease were released while the config still said `committed`,
 another process could take it, activate the `staging` destination from that
 record and bind it, leaving two active roots.
