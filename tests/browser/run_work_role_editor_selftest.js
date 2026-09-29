@@ -75,8 +75,11 @@ require(path.join(rootDir, 'frontend/js/work-role-state.js'));
 (0, eval)(fs.readFileSync(path.join(rootDir, 'frontend/js/ui.js'), 'utf8'));
 require(path.join(rootDir, 'frontend/js/work-role-editor.js'));
 
+const roleAlerts = [];
 global.prepareRoleModal = async function () {};
-global.prksAlertDialog = async function () {};
+global.prksAlertDialog = async function (opts) {
+    roleAlerts.push(String(opts && opts.message || ''));
+};
 global.prksAlertMessage = async function () {};
 global.updatePanelContent = function () {};
 global.prksPromptTextDialog = async function () { return null; };
@@ -159,6 +162,7 @@ async function openedOnAThenOwnerChangesBeforeSave() {
 
 async function differentTargetChangesDuringBaseRead() {
     writes.length = 0;
+    roleAlerts.length = 0;
     resetModal();
     focus('main');
     const main = prksMountTabContext('main', document.getElementById('main-host'));
@@ -179,6 +183,11 @@ async function differentTargetChangesDuringBaseRead() {
     await pending;
     assert('a deferred base read does not write after the opener changes', writes.length === 0,
         'writes=' + writes.length);
+    assert('a stale opener does not show the offline-prep alert',
+        roleAlerts.length === 0 && roleAlerts.every(function (message) {
+            return message.indexOf('Open it once') === -1;
+        }),
+        roleAlerts.join(' | '));
     prksDestroyAllTabContexts();
 }
 

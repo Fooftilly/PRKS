@@ -241,8 +241,10 @@
         if (mounted && panel && panel.dataset.prksOwnerTabId &&
             panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return { code: 'unavailable' };
         /* Unmounted modal saves have no editor session. The captured opener
-         * is rechecked after the base read, immediately before the write. */
-        if (typeof still === 'function' && !still()) return { code: 'unavailable' };
+         * is rechecked after the base read, immediately before the write.
+         * `stale` is not an unprepared base: Create Link must not show the
+         * offline-prep copy for an opener that has already moved on. */
+        if (typeof still === 'function' && !still()) return { code: 'stale' };
         try {
             await root.prksSync.store.saveWorkPersonRole(workId,
                 { person_id: personId, role_type: roleType, state: desired },

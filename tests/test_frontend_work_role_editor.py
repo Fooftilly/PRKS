@@ -19,6 +19,7 @@ class WorkRoleEditorContractTests(unittest.TestCase):
         for body, name in ((unlink, "unlink"), (credit, "credit"), (add, "add"), (modal, "modal")):
             write = body.index("prksSaveWorkPersonRoleDurably")
             self.assertLess(body.index(still), write, name)
+        self.assertLess(modal.index("result.code === 'stale'"), modal.index("Open it once"))
         self.assertIn("prksTabContextOwnsEntityRoute", unlink)
         self.assertNotIn("listOperations", _UI[_UI.index("function prksRefreshOwnedWorkPanelRead"):_UI.index("function prksWorkRoleIntentStill")])
 
@@ -27,7 +28,9 @@ class WorkRoleEditorContractTests(unittest.TestCase):
         write = save.index("store.saveWorkPersonRole")
         self.assertLess(save.index("if (mounted && !live(ctx, state)) return"), write)
         self.assertLess(save.index("prksOwnerTabId"), write)
-        self.assertLess(save.index("typeof still === 'function'"), write)
+        still_at = save.index("typeof still === 'function'")
+        self.assertLess(still_at, write)
+        self.assertIn("return { code: 'stale' }", save[still_at:write])
         self.assertNotIn("prksVueRefreshWorkPanelRead", _ROLES)
         self.assertIn("prksRefreshOwnedWorkPanelRead", _ROLES)
         self.assertIn("prksEffectiveWorkDetailRoles", _ROLES)

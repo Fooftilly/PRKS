@@ -6425,6 +6425,7 @@ function initForms() {
                     return typeof prksRoleModalOwnerSessionStill === 'function' &&
                         prksRoleModalOwnerSessionStill(ownerCtx, generation, openedOnWorkId);
                 });
+            if (result.code === 'stale') return;
             if (result.code !== 'saved') {
                 const message = result.code === 'unavailable'
                     ? 'This file\u2019s linked people cannot be changed right now. Open it once '
