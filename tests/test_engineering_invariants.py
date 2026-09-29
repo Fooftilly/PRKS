@@ -1623,6 +1623,26 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "os_rename_overwrites_managed_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(scratch, os.path.join(pdfs_dir, name))\n"
+            ),
+            "shutil_move_keyword_managed_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(src=scratch, dst=os.path.join(pdfs_dir, name))\n"
+            ),
+            "path_rename_onto_managed_destination": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path(scratch).rename(Path(pdfs_dir) / name)\n"
+            ),
+            "unbound_path_rename_onto_managed_destination": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path.rename(Path(scratch), Path(pdfs_dir) / name)\n"
+            ),
             "os_remove_pure_path_join": (
                 "import os\n"
                 "from pathlib import PurePath\n"
@@ -2835,6 +2855,22 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
         for label, source in cases.items():
             with self.subTest(case=label):
                 self.assertEqual(_codes(source, "backend/server.py"), [])
+
+    def test_package_relative_import_is_canonical(self):
+        """``from . import work_pdf_replace`` inside ``backend/services`` is the
+        canonical module, not ``backend.work_pdf_replace``."""
+        source = (
+            "from . import work_pdf_replace\n"
+            "def create(db, pdfs_dir, body, fp):\n"
+            "    stored = work_pdf_replace.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+            "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+            "        db.add_work(title='t', file_path=fp)\n"
+        )
+        self.assertEqual(_codes(source, "backend/services/new_feature.py"), [])
+        self.assertEqual(
+            _codes(source, "backend/new_feature.py"), ["INV-STORAGE-003", "INV-STORAGE-003"]
+        )
 
     def test_newly_minted_exclusive_pdf_passes(self):
         cases = {

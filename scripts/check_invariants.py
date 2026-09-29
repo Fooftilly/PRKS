@@ -213,6 +213,10 @@ _CAPABILITY_HELPER_HOMES = {
 # references included.
 # ``os.rename`` / ``shutil.move`` of a managed source takes its bytes away
 # from every live Work just as an unlink does.
+# Primitives that also overwrite their destination (POSIX rename semantics).
+# ``os.replace`` is excluded: replacing onto a canonical name is the reviewed
+# durable publish, governed by INV-DURABILITY-001's allowlist.
+_OVERWRITING_MOVE_CALLS = frozenset({"os.rename", "os.renames", "shutil.move"})
 RAW_REMOVE_CALLS = frozenset(
     {
         "os.remove",
@@ -789,7 +793,9 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
             if binding[0] == "module":
                 names.add(binding[1])
             elif binding[0] == "name":
-                names.add(f"{binding[1]}.{binding[2]}")
+                # ``from . import m`` binds module ``"."``: no extra separator.
+                sep = "" if binding[1].endswith(".") else "."
+                names.add(f"{binding[1]}{sep}{binding[2]}")
             elif binding[0] == "function" and binding[1].name:
                 names.add(binding[1].name)
         return names
@@ -2350,30 +2356,45 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _report(self, code: str, node: ast.AST, message: str) -> None:
         self.findings.append(Finding(code, self.relpath, getattr(node, "lineno", 1), message))
 
-    def _removal_target(self, node: ast.Call) -> tuple[str, ast.expr | None] | None:
+    def _removal_targets(self, node: ast.Call) -> list[tuple[str, ast.expr | None]]:
         """``(primitive, target)`` for os.remove/os.unlink/os.rename/shutil.move/
-        shutil.rmtree and unbound Path.unlink/Path.rename calls (the target is
-        the removed or moved-away source)."""
+        shutil.rmtree and unbound Path.unlink/Path.rename calls: the removed or
+        moved-away source, plus the destination a rename/move may overwrite."""
         func = node.func
-        primitives = _qualified_names(func, self.scopes) & RAW_REMOVE_CALLS
+        names = _qualified_names(func, self.scopes)
+        primitives = names & RAW_REMOVE_CALLS
         if primitives:
-            target = node.args[0] if node.args else next(
+            primitive = f"{sorted(primitives)[0]}()"
+            source = node.args[0] if node.args else next(
                 (kw.value for kw in node.keywords if kw.arg in ("path", "src")), None
             )
-            return f"{sorted(primitives)[0]}()", target
-        unbound = _qualified_names(func, self.scopes) & _PATH_UNBOUND_UNLINK
+            targets = [(primitive, source)]
+            if primitives & _OVERWRITING_MOVE_CALLS:
+                targets.append((primitive, self._call_argument(node, 1, "dst")))
+            return targets
+        unbound = names & _PATH_UNBOUND_UNLINK
         if unbound:
             # ``Path.unlink(p)`` or an alias of it: the path is the first argument.
             method = sorted(unbound)[0].rsplit(".", 1)[1]
-            return f"pathlib.Path.{method}()", node.args[0] if node.args else None
+            targets = [(f"pathlib.Path.{method}()", node.args[0] if node.args else None)]
+            if method == "rename":
+                targets.append((f"pathlib.Path.{method}()", self._call_argument(node, 1, "target")))
+            return targets
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "rename"
+            and _PATH in _expr_facts(func.value, self.scopes)
+        ):
+            # ``p.rename(dst)``: the source is checked at the attribute
+            # (visit_Attribute); the overwritten destination is checked here.
+            return [("pathlib.Path.rename()", self._call_argument(node, 0, "target"))]
         # ``path.unlink`` on a Path value is checked at the attribute itself
         # (visit_Attribute), so a saved bound method is covered too.
-        return None
+        return []
 
     def _check_managed_pdf_removal(self, node: ast.Call) -> None:
-        removal = self._removal_target(node)
-        if removal is not None:
-            self._check_removal_of(node, *removal)
+        for primitive, target in self._removal_targets(node):
+            self._check_removal_of(node, primitive, target)
 
     def _check_removal_of(self, node: ast.AST, primitive: str, target: ast.expr | None) -> None:
         facts = _expr_facts(target, self.scopes)
