@@ -3275,6 +3275,22 @@ window.prksRoleModalCapturedOrigin = prksRoleModalCapturedOrigin;
 window.prksRoleModalOwnerSessionStill = prksRoleModalOwnerSessionStill;
 window.prksRoleModalMaySettleUi = prksRoleModalMaySettleUi;
 
+/* Pending tags stay on the read surface. The tag editor does not write chips. */
+function prksRefreshOwnedWorkPanelTags(ctx, work, tags) {
+    if (!ctx || !work || prksWorkDetailsMode(ctx, work) !== 'view') return false;
+    if (!prksRightPanelOwnedBy(ctx)) return false;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!live || String(live.id) !== String(work.id)) return false;
+    if (typeof window.prksVueRefreshWorkPanelRead !== 'function') return false;
+    return window.prksVueRefreshWorkPanelRead({
+        ownerTabId: String(ctx.tabId),
+        ownerGeneration: ctx.generation,
+        workId: String(work.id),
+        tags: Array.isArray(tags) ? tags : [],
+    });
+}
+window.prksRefreshOwnedWorkPanelTags = prksRefreshOwnedWorkPanelTags;
+
 function prksFolderRightPanelStackHtml(folder) {
     const notes = renderPrksPrivateNotesCard('folder', folder.id, folder.private_notes);
     return (

@@ -827,8 +827,9 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
 
     setBtn.onclick = async () => {
         const pid = String(hidden.value || '').trim();
-        if (!pid) return;
+        if (!pid || !ownsPanel(panel)) return;
         try {
+            if (!ownsPanel(panel)) return;
             const coherenceToken = await addWorkToPlaylist(pid, wid);
             if (!ownsPanel(status)) return;
             if (status) status.textContent = 'Playlist set.';
@@ -863,6 +864,7 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
             return;
         }
         try {
+            if (!ownsPanel(panel)) return;
             const coherenceToken = await removeWorkFromPlaylist(currentPid, wid);
             if (!ownsPanel(panel)) return;
             input.value = '';

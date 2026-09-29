@@ -31,18 +31,13 @@
         const effectiveTags = root.prksEffectiveWorkTags(work, state.operations);
         const effective = { ...work, tags: effectiveTags };
         const editable = ctx.ui.workDetailsMode === 'tags';
-        if (!editable && typeof root.prksWorkPanelReadOwns === 'function' && root.prksWorkPanelReadOwns(ctx) &&
-            typeof root.prksVueRefreshWorkPanelRead === 'function') {
-            root.prksVueRefreshWorkPanelRead({
-                ownerTabId: String(ctx.tabId),
-                ownerGeneration: ctx.generation,
-                workId: state.workId,
-                tags: (effectiveTags || []).map(tag => ({
-                    id: tag && tag.id != null ? String(tag.id) : '',
-                    name: tag && tag.name != null ? String(tag.name) : '',
-                    color: tag && tag.color != null ? String(tag.color) : '',
-                })),
-            });
+        if (!editable && owns(ctx, state) && typeof root.prksRefreshOwnedWorkPanelTags === 'function') {
+            const rows = (effectiveTags || []).map(tag => ({
+                id: tag && tag.id != null ? String(tag.id) : '',
+                name: tag && tag.name != null ? String(tag.name) : '',
+                color: tag && tag.color != null ? String(tag.color) : '',
+            }));
+            root.prksRefreshOwnedWorkPanelTags(ctx, work, rows);
         } else {
         // Identical markup is not a repaint. Rewriting innerHTML needlessly
         // churns the DOM other tiles may be reading, and the first paint now
@@ -253,6 +248,9 @@
                 state.catalog = state.catalog.concat([knownTag]);
             }
             const base = root.prksWorkTagBase(state.options, tagId);
+            if (!live(ctx, state)) return;
+            const panel = document.getElementById('panel-content');
+            if (panel && panel.dataset.prksOwnerTabId && panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return;
             await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, base.present, base.revision, tag);
             if (!live(ctx, state)) { root.prksSync.changed(); return; }
             state.error = null;
