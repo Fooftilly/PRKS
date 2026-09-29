@@ -14,9 +14,11 @@ Nested `AGENTS.md` applies only within this directory tree. Several backend modu
 
 Before changing `*_sync.py`, `sync_protocol.py`, durable-operation handlers, conflict/revision semantics, acknowledgement/ledger behavior, or other offline/local-first backend surfaces:
 
-1. read `docs/agent-context/sync-map.md` for the smallest relevant map entry;
-2. **read `docs/agent-rules/offline-pwa.md` completely**;
+1. read `docs/agent-rules/offline-pwa.md` as the rule router;
+2. use `docs/agent-context/sync-map.md` to load `offline-foundations.md` plus only the relevant domain leaf files and semantic sections;
 3. also follow the Offline / PWA section in `frontend/AGENTS.md` for the shared durable-intent / disposable-cache / online↔offline convergence invariants that apply across HTTP and sync.
+
+Only shared protocol/coordinator changes that genuinely span many durable families should load many leaves; a single-family backend change should not pay the context cost of unrelated families.
 
 ### Research network / Research Graph
 
