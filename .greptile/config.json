@@ -59,7 +59,8 @@
         "frontend/js/**",
         "frontend-app/src/workspace/**",
         "frontend-app/src/workspace-shell/**",
-        "frontend-app/src/route-surface/**"
+        "frontend-app/src/route-surface/**",
+        "frontend-app/src/features/**"
       ],
       "severity": "high"
     },
