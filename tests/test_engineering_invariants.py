@@ -1629,6 +1629,13 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
             ),
+            "remove_stored_on_attribute": (
+                "import os\n"
+                "class Cleaner:\n"
+                "    def drop(self, pdfs_dir, name):\n"
+                "        self.rm = os.remove\n"
+                "        self.rm(os.path.join(pdfs_dir, name))\n"
+            ),
             "saved_path_rename_onto_managed_destination": (
                 "from pathlib import Path\n"
                 "def publish(pdfs_dir, scratch, name):\n"
@@ -2607,6 +2614,24 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
                 "        mutate({k: body for k in items})\n"
                 "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "sink_stored_on_attribute": (
+                "class Creator:\n"
+                "    def create(self, db, fp):\n"
+                "        self.save = db.add_work\n"
+                "        self.save(title='t', file_path=fp)\n"
+            ),
+            "raw_sql_double_quoted_returning_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"RETURNING\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "raw_sql_double_quoted_order_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"ORDER\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "raw_sql_double_quoted_limit_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"LIMIT\", file_path=? WHERE id=?', (fp, w_id))\n"
             ),
             "guarded_dict_attribute_alias_escapes": (
                 "from backend.services import work_pdf_replace\n"

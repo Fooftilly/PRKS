@@ -335,8 +335,11 @@ _SQL_STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
 _SQL_DOUBLE_QUOTED_RE = re.compile(r'"((?:[^"]|"")*)"')
 _SQL_KEYWORDS = frozenset(
     {
-        "AND", "AS", "DO", "FROM", "INDEXED", "INSERT", "INTO", "NOT", "ON",
-        "OR", "REPLACE", "SELECT", "SET", "UPDATE", "VALUES", "WHERE", "WITH",
+        # Every keyword a clause regex anchors on, including all SET-list
+        # terminators, so a double-quoted spelling of one is masked.
+        "AND", "AS", "DO", "FROM", "INDEXED", "INSERT", "INTO", "LIMIT", "NOT",
+        "ON", "OR", "ORDER", "REPLACE", "RETURNING", "SELECT", "SET", "UPDATE",
+        "VALUES", "WHERE", "WITH",
     }
 )
 _SQL_IDENTIFIER_QUOTES_RE = re.compile(r'["`\[\]]')
@@ -795,20 +798,28 @@ def _qualified_names(node: ast.expr, scopes: list[_Scope]) -> set[str]:
     ``pathlib.Path``, ``backend.db_manager.helper``); same-module defs resolve
     to their bare name. Empty for locals, parameters and unknown names."""
     if isinstance(node, ast.Name):
-        names: set[str] = set()
-        for binding in _resolve(scopes, node.id):
-            if binding[0] == "module":
-                names.add(binding[1])
-            elif binding[0] == "name":
-                # ``from . import m`` binds module ``"."``: no extra separator.
-                sep = "" if binding[1].endswith(".") else "."
-                names.add(f"{binding[1]}{sep}{binding[2]}")
-            elif binding[0] == "function" and binding[1].name:
-                names.add(binding[1].name)
-        return names
+        return _names_of_bindings(_resolve(scopes, node.id))
     if isinstance(node, ast.Attribute):
-        return {f"{base}.{node.attr}" for base in _qualified_names(node.value, scopes)}
+        # A callable stored on a tracked one-level attribute
+        # (``self.rm = os.remove``) keeps its identity.
+        key = _attr_key(node)
+        stored = _names_of_bindings(_resolve(scopes, key)) if key is not None else set()
+        return stored | {f"{base}.{node.attr}" for base in _qualified_names(node.value, scopes)}
     return set()
+
+
+def _names_of_bindings(bindings: Iterable[_Binding]) -> set[str]:
+    names: set[str] = set()
+    for binding in bindings:
+        if binding[0] == "module":
+            names.add(binding[1])
+        elif binding[0] == "name":
+            # ``from . import m`` binds module ``"."``: no extra separator.
+            sep = "" if binding[1].endswith(".") else "."
+            names.add(f"{binding[1]}{sep}{binding[2]}")
+        elif binding[0] == "function" and binding[1].name:
+            names.add(binding[1].name)
+    return names
 
 
 def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> bool:
@@ -851,7 +862,10 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
     unbound (global from elsewhere) name matches its own spelling.
     """
     if isinstance(func, ast.Attribute):
-        return {func.attr}
+        # ``self.save = db.add_work; self.save(...)`` -> ``add_work`` too.
+        return {func.attr} | {
+            name.rsplit(".", 1)[-1] for name in _qualified_names(func, scopes)
+        }
     if isinstance(func, ast.Name):
         bindings = _resolve(scopes, func.id)
         if not bindings:
