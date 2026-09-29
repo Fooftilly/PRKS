@@ -506,6 +506,10 @@ production library. `run_tests.py` already sets `PRKS_STORAGE` explicitly.
 `{ id, role: "source" | "destination", peer_hint }` while a move is in
 progress, or after it retired this root.
 
+An optional `moved_from: {id, peer_hint}` records, for diagnostics only, that
+a completed relocation created this root. It is not a relocation role and
+never affects binding.
+
 `fenced` marks a **relocation source** whose move is in progress. It is
 written at P2, before any copying (§8.2). Only the marker changes; canonical
 data is untouched.
@@ -676,7 +680,7 @@ library appears, the user panics" failure mode.
 | **P3 Copy** | The database: a `sqlite3` backup-API snapshot, never a file copy, written to the destination under a temporary name and then renamed. Each canonical namespace (`asset-objects`, `portraits`, and the inbox if it is under the root): stream every object into a staging name, hash it while copying, fsync the file, rename it to its key name, and fsync the directory. Derived data, logs and maintenance are **not** copied. Links are refused, as in §7.3. | per-object progress in `<dest>/.prks-maintenance/relocation/<id>/manifest.json`: key, size, sha256. Resumable, but a restart may also discard it and begin P3 again. |
 | **P4 Verify** | Re-read every destination object, and compare size and SHA-256 against the P3 manifest, which was computed from the source. Run `PRAGMA integrity_check` and the schema-version check on the destination database. Audit the catalogue against the destination (`audit_managed_pdfs`): every referenced key present. Keys missing in the source are reported, not fatal, because availability is observed (#60 §9.2). The destination marker **stays `staging`**, so the destination is not bindable (§7.1). Write config `phase: "verified"`. | config (`verified`) |
 | **P5 Commit** | **One atomic config replace:** `local_root = to`, `relocation.phase = "committed"`. This is the only switch. | config (`committed`) |
-| **P6 Activate and rebind** | Still under the P2 scope. The source has been durably `fenced` since P2 (the move was refused if that write failed). A `fenced` root is unbindable without proof that its move did not commit, and after P5 that proof cannot exist. So the source is **already revoked**. Set the destination marker to `state: active` (keeping `relocation.role: destination` for diagnostics), authorized by the committed config for the same `relocation_id`. Then `bind_storage(new config)`; the existing rollback-on-failure applies. **Release the scope; mutations resume.** At no instant are two roots with this ID bindable: before P6 neither is, and from P6 only the destination is. | destination marker (`active`) |
+| **P6 Activate and rebind** | Still under the P2 scope. The source has been durably `fenced` since P2 (the move was refused if that write failed). A `fenced` root is unbindable without proof that its move did not commit, and after P5 that proof cannot exist. So the source is **already revoked**. Set the destination marker, authorized by the committed config for the same `relocation_id`, in **one atomic marker replace**: `state: active`, `relocation: null`, plus an informational `moved_from: {id, peer_hint}`. `moved_from` is not a relocation role, and binding ignores it. Because activation and clearing the role are one write, no crash can leave an `active` destination that still carries a role. On every later start, the destination is an ordinary bindable root, whatever the config phase says. Then `bind_storage(new config)`; the existing rollback-on-failure applies. **Release the scope; mutations resume.** At no instant are two roots with this ID bindable: before P6 neither is, and from P6 only the destination is. | destination marker (`active`) |
 | **P7 Retire source** | Change the old marker from `fenced` to `state: retired`, keeping `relocation: {id, role: source, peer_hint: <new root>}`. Write config `phase: "source_retired"`. This is **not a safety step**: it turns "a move is in progress" into "this library moved to X" for clearer messages and for P10 cleanup. If the old root cannot be written, for example because a disk was removed, it stays `fenced`, and PRKS retries the change at later starts. A disconnected source that reappears is still `fenced` and still refuses to bind. **No acknowledgement path exists or is needed**: revocation is the durable P2 fence, not P7. | old marker (`retired`), config (`source_retired`) |
 | **P8 Rebuild** | Derived data is rebuilt at the new root by the existing mechanisms: the text-index and research-index reconcile, and thumbnails lazily. `retry_pending_pdf_cleanup` now runs against the **new** root only. | none |
 | **P9 Retain** | Write config `phase: "retained"`, and keep `from` for diagnostics. | config |
@@ -709,7 +713,7 @@ At startup, **before** binding, PRKS reads the config's `relocation` record
 | Config phase at startup | `local_root` | Resolution |
 | --- | --- | --- |
 | `copying` or `verified` | old | Old root authoritative. If its marker is `fenced` with this `relocation_id`, lift the fence back to `active`, then bind it normally. Mark the relocation `failed` in config. The destination is staging: delete it automatically **only** when its marker carries this `relocation_id`, `state: staging` and `role: destination`, and it contains nothing but PRKS components; otherwise leave it and report it. The user may retry. |
-| `committed` | new | New root authoritative. The source is already `fenced` (P2). Activate the destination if its marker is still `staging` with the same `relocation_id` (P6), then bind normally. Attempt P7, P8 and P9 idempotently. A P7 that cannot reach the old root is retried at later starts and blocks nothing. |
+| `committed` | new | New root authoritative. The source is already `fenced` (P2). If the destination marker is still `staging` with the same `relocation_id`, perform P6's single activation write. If it is already `active` with no role, P6's write already landed. Then bind normally. Attempt P7, P8 and P9 idempotently. A P7 that cannot reach the old root is retried at later starts and blocks nothing. |
 | `source_retired` | new | Bind normally and redo P8 and P9 idempotently. |
 | `retained` | new | Normal operation. Diagnostics show the retained old copy. |
 | `failed` | old | Normal operation, plus a notice with a "discard failed move" action. |
@@ -780,7 +784,8 @@ offline command-line tool. The server is stopped for the whole sequence:
 2. The administrator does one of two things:
    - **Complete the move.** Change the environment or the mount (that change
      is the P5 commit), then run `python prks_app.py storage finalize --root
-     NEWPATH`. It performs P6's activation, then attempts P7's retirement of the
+     NEWPATH`. It performs P6's activation (the same single write, which clears
+     the destination's relocation role), then attempts P7's retirement of the
      fenced source named in the destination marker. When the source is not
      reachable it simply stays `fenced`, which is already unbindable.
    - **Abandon the move.** Leave the selector unchanged and run `python
