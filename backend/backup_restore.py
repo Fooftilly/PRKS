@@ -84,9 +84,20 @@ DEFAULT_MAX_COMPRESSION_RATIO = 200
 DISK_MARGIN_BYTES = 64 * 1024 * 1024
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
-# The exact name ``_backup_filename()`` gives a finished archive. Only a direct
-# child of the backup subroot with this name is ever reclaimed as a ready backup.
-_READY_BACKUP_NAME_RE = re.compile(r"^prks-backup-[0-9]{8}T[0-9]{6}Z\.prks-backup$")
+# The exact names ``_backup_filename()`` gives a finished archive: the UTC
+# second it was created plus a random hex suffix, so two backups published in
+# the same second never share a path (#283). The timestamp-only form is what
+# earlier releases produced; it stays recognized so their abandoned archives
+# remain reclaimable. Only a direct child of the backup subroot with one of these
+# names is ever reclaimed as a ready backup.
+_BACKUP_NAME_SUFFIX_BYTES = 8
+_READY_BACKUP_NAME_RE = re.compile(
+    r"^prks-backup-(?P<stamp>[0-9]{8}T[0-9]{6}Z)"
+    r"(?:-(?P<suffix>[0-9a-f]{%d}))?\.prks-backup$" % (_BACKUP_NAME_SUFFIX_BYTES * 2)
+)
+# Fresh suffixes tried before publication gives up rather than replace an
+# existing archive.
+_BACKUP_PUBLISH_ATTEMPTS = 8
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 _STORED_SUFFIXES = frozenset({".pdf", ".jpg", ".jpeg", ".png", ".webp"})
 _UNIX_IFMT = 0o170000
@@ -436,17 +447,18 @@ def _registered_ready_backups_unlocked() -> tuple[set[str], set[tuple[int, int]]
 def _is_generated_backup_name(name: str) -> bool:
     """Whether ``name`` round-trips through ``_backup_filename()``.
 
+    Both the current suffixed form and the legacy timestamp-only form qualify.
     The pattern alone admits digits that are no real timestamp; a name PRKS
     could never have produced is somebody else's file.
     """
-    if not _READY_BACKUP_NAME_RE.fullmatch(name):
+    match = _READY_BACKUP_NAME_RE.fullmatch(name)
+    if not match:
         return False
-    stamp = name[len("prks-backup-"):-len(BACKUP_EXTENSION)]
     try:
-        parsed = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ")
+        parsed = datetime.strptime(match["stamp"], "%Y%m%dT%H%M%SZ")
     except ValueError:
         return False
-    return _backup_filename(parsed) == name
+    return _backup_filename(parsed, match["suffix"]) == name
 
 
 def _abandoned_ready_backup_stat(
@@ -820,9 +832,40 @@ def _iso_z(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _backup_filename(dt: datetime) -> str:
+def _backup_name_suffix() -> str:
+    return secrets.token_hex(_BACKUP_NAME_SUFFIX_BYTES)
+
+
+def _backup_filename(dt: datetime, suffix: Optional[str]) -> str:
+    """A ready archive's name; ``suffix=None`` is the legacy timestamp-only form."""
     stamp = dt.strftime("%Y%m%dT%H%M%SZ")
-    return f"prks-backup-{stamp}{BACKUP_EXTENSION}"
+    if suffix is None:
+        return f"prks-backup-{stamp}{BACKUP_EXTENSION}"
+    return f"prks-backup-{stamp}-{suffix}{BACKUP_EXTENSION}"
+
+
+def _publish_ready_archive(
+    archive_path: str, final_dir: str, created: datetime, filename: str
+) -> tuple[str, str]:
+    """Move a verified archive to a ready name no existing entry already holds.
+
+    An existing entry may be another backup's archive still registered under a
+    live token, so a taken candidate is never removed or replaced; a fresh
+    suffix is drawn instead. The existence check and the rename are separate
+    steps, so two publishers could only race for one name by drawing the same
+    64-bit suffix in the same second. Returns ``(final_path, filename)``.
+    """
+    for _attempt in range(_BACKUP_PUBLISH_ATTEMPTS):
+        final_path = os.path.join(final_dir, filename)
+        if not os.path.lexists(final_path):
+            os.replace(archive_path, final_path)
+            return final_path, filename
+        filename = _backup_filename(created, _backup_name_suffix())
+    raise BackupError(
+        "publish_name_unavailable",
+        "Backup could not be created.",
+        http_status=500,
+    )
 
 
 def _safe_remove(path: str) -> None:
@@ -1759,7 +1802,7 @@ def create_backup(
     _assert_testing_safe(config)
     LOGGER.info("backup_started request_id=none")
     created = _utc_now()
-    filename = _backup_filename(created)
+    filename = _backup_filename(created, _backup_name_suffix())
     tmp_paths: list[str] = []
     tracker = _BackupProgress(progress, cancel_event)
     t0 = clock_ns()
@@ -1922,10 +1965,9 @@ def create_backup(
                 http_status=500,
             )
         final_dir = os.path.join(maint, "backup")
-        final_path = os.path.join(final_dir, filename)
-        if os.path.lexists(final_path):
-            _safe_remove(final_path)
-        os.replace(archive_path, final_path)
+        final_path, filename = _publish_ready_archive(
+            archive_path, final_dir, created, filename
+        )
         _chmod_file(final_path)
         LOGGER.info(
             "backup_verified format_version=%s schema_version=%s works=%s pdfs=%s persons=%s missing_pdfs=%s fk_violations=%s processing_included=%s",

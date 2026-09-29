@@ -12,6 +12,7 @@ import time
 import unittest
 import zipfile
 from dataclasses import fields, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1018,7 +1019,30 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
         os.utime(path, (old, old), follow_symlinks=False)
 
     def _generated_name(self, index):
+        # Legacy timestamp-only form; see _suffixed_name() for the current one.
         return f"prks-backup-20240101T0000{index:02d}Z{backup_module.BACKUP_EXTENSION}"
+
+    def _suffixed_name(self, index, suffix="0123456789abcdef"):
+        return f"prks-backup-20240101T0000{index:02d}Z-{suffix}{backup_module.BACKUP_EXTENSION}"
+
+    def _same_second_backups(self, cfg, *, between=None):
+        """Create and stash backups A and B under one frozen UTC second (#283)."""
+        frozen = datetime(2026, 9, 29, 10, 0, 0, tzinfo=timezone.utc)
+        with patch.object(backup_module, "_utc_now", return_value=frozen), patch.object(
+            backup_module,
+            "_backup_name_suffix",
+            side_effect=["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"],
+        ):
+            result_a = create_backup(cfg)
+            token_a = backup_module.stash_ready_backup(result_a)
+            if between is not None:
+                between()
+            result_b = create_backup(cfg)
+            token_b = backup_module.stash_ready_backup(result_b)
+        return result_a, token_a, result_b, token_b
+
+    def _add_second_work(self):
+        server_module.db.add_work("Beta Work", source_kind="pdf")
 
     def _fake_archive(self, root, name, *, stale=True):
         path = os.path.join(root, name)
@@ -1118,6 +1142,19 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
             self._fake_archive(root, "prks-backup-20240101T000000.prks-backup"),
             self._fake_archive(root, "prks-backup-99999999T999999Z.prks-backup"),
             self._fake_archive(root, "prks-backup-20241340T250000Z.prks-backup"),
+            # Look-alikes of the suffixed form PRKS never generates.
+            self._fake_archive(root, "prks-backup-20240101T000000Z-0123456789ABCDEF.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z-0123456789abcde.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z-0123456789abcdef0.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z-0123456789abcdeg.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z0123456789abcdef.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z-.prks-backup"),
+            self._fake_archive(root, "prks-backup-20240101T000000Z-latest.prks-backup"),
+            self._fake_archive(root, "prks-backup-20241340T250000Z-0123456789abcdef.prks-backup"),
+            self._fake_archive(
+                root, "prks-backup-20240101T000000Z-0123456789abcdef.prks-backup.part"
+            ),
+            self._fake_archive(root, "prks-backup-0123456789abcdef-20240101T000000Z.prks-backup"),
         ]
         named_dir = os.path.join(root, self._generated_name(1))
         os.makedirs(named_dir)
@@ -1148,6 +1185,141 @@ class TestReadyBackupReclamation(BackupRestoreTestCase):
         for path in stale:
             self.assertFalse(os.path.lexists(path))
         self.assertTrue(os.path.isfile(fresh))
+
+    def test_stale_suffixed_archive_is_reclaimed(self):
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        stale = self._fake_archive(root, self._suffixed_name(20))
+        fresh = self._fake_archive(root, self._suffixed_name(21), stale=False)
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertFalse(os.path.lexists(stale))
+        self.assertTrue(os.path.isfile(fresh))
+
+    def test_stale_legacy_timestamp_only_archive_is_still_reclaimed(self):
+        # Archives from releases before #283 carry no suffix; an upgrade must
+        # not leave them permanently unreclaimable.
+        cfg = self._cfg()
+        root = self._backup_root(cfg)
+        legacy = self._fake_archive(root, "prks-backup-20240101T000022Z.prks-backup")
+
+        backup_module.cleanup_expired_backup_jobs(cfg)
+
+        self.assertFalse(os.path.lexists(legacy))
+
+    def test_generated_name_recognizes_both_formats(self):
+        stamp = datetime(2024, 2, 29, 23, 59, 58)
+        legacy = backup_module._backup_filename(stamp, None)
+        suffixed = backup_module._backup_filename(stamp, backup_module._backup_name_suffix())
+        self.assertEqual(legacy, "prks-backup-20240229T235958Z.prks-backup")
+        self.assertRegex(suffixed, r"^prks-backup-20240229T235958Z-[0-9a-f]{16}\.prks-backup$")
+        self.assertTrue(backup_module._is_generated_backup_name(legacy))
+        self.assertTrue(backup_module._is_generated_backup_name(suffixed))
+        self.assertFalse(
+            backup_module._is_generated_backup_name(
+                "prks-backup-20230229T235958Z-0123456789abcdef.prks-backup"
+            )
+        )
+
+    def test_same_second_backups_get_distinct_ready_paths(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+
+        result_a, _token_a, result_b, _token_b = self._same_second_backups(cfg)
+
+        self.assertNotEqual(result_a.filename, result_b.filename)
+        self.assertNotEqual(result_a.archive_path, result_b.archive_path)
+        self.assertEqual(
+            result_a.filename, "prks-backup-20260929T100000Z-aaaaaaaaaaaaaaaa.prks-backup"
+        )
+        self.assertEqual(
+            result_b.filename, "prks-backup-20260929T100000Z-bbbbbbbbbbbbbbbb.prks-backup"
+        )
+        self.assertEqual(os.path.basename(result_a.archive_path), result_a.filename)
+        self.assertTrue(os.path.isfile(result_a.archive_path))
+        self.assertTrue(os.path.isfile(result_b.archive_path))
+
+    def test_same_second_tokens_resolve_to_their_own_archives(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        result_a, token_a, result_b, token_b = self._same_second_backups(
+            cfg, between=self._add_second_work
+        )
+
+        path_b, filename_b, _warnings = backup_module.take_ready_backup(token_b)
+        path_a, filename_a, _warnings = backup_module.take_ready_backup(token_a)
+
+        self.assertEqual((path_a, filename_a), (result_a.archive_path, result_a.filename))
+        self.assertEqual((path_b, filename_b), (result_b.archive_path, result_b.filename))
+        # The snapshots differ, so each token reached its own bytes.
+        self.assertEqual(_read_manifest(path_a)["summary"]["works"], 1)
+        self.assertEqual(_read_manifest(path_b)["summary"]["works"], 2)
+
+    def test_download_cleanup_of_one_token_keeps_the_other_archive(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        _result_a, token_a, result_b, token_b = self._same_second_backups(
+            cfg, between=self._add_second_work
+        )
+
+        path_a, _filename, _warnings = backup_module.take_ready_backup(token_a)
+        # What the download handler does once it has streamed the archive.
+        os.remove(path_a)
+
+        self.assertTrue(os.path.isfile(result_b.archive_path))
+        path_b, filename_b, _warnings = backup_module.take_ready_backup(token_b)
+        self.assertEqual(path_b, result_b.archive_path)
+        self.assertEqual(filename_b, result_b.filename)
+        self.assertEqual(_read_manifest(path_b)["summary"]["works"], 2)
+
+    def test_publish_never_replaces_an_existing_ready_archive(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        root = self._backup_root(cfg)
+        frozen = datetime(2026, 9, 29, 10, 0, 0, tzinfo=timezone.utc)
+        taken = os.path.join(
+            root, "prks-backup-20260929T100000Z-aaaaaaaaaaaaaaaa.prks-backup"
+        )
+        with open(taken, "wb") as handle:
+            handle.write(b"another backup")
+
+        with patch.object(backup_module, "_utc_now", return_value=frozen), patch.object(
+            backup_module,
+            "_backup_name_suffix",
+            side_effect=["aaaaaaaaaaaaaaaa", "cccccccccccccccc"],
+        ):
+            result = create_backup(cfg)
+
+        self.assertEqual(
+            result.filename, "prks-backup-20260929T100000Z-cccccccccccccccc.prks-backup"
+        )
+        self.assertEqual(os.path.basename(result.archive_path), result.filename)
+        self.assertTrue(os.path.isfile(result.archive_path))
+        with open(taken, "rb") as handle:
+            self.assertEqual(handle.read(), b"another backup")
+
+    def test_publish_fails_safely_when_no_free_name_is_found(self):
+        lib = self._bind_library()
+        cfg = lib["cfg"]
+        root = self._backup_root(cfg)
+        frozen = datetime(2026, 9, 29, 10, 0, 0, tzinfo=timezone.utc)
+        taken = os.path.join(
+            root, "prks-backup-20260929T100000Z-aaaaaaaaaaaaaaaa.prks-backup"
+        )
+        with open(taken, "wb") as handle:
+            handle.write(b"another backup")
+
+        with patch.object(backup_module, "_utc_now", return_value=frozen), patch.object(
+            backup_module, "_backup_name_suffix", return_value="aaaaaaaaaaaaaaaa"
+        ):
+            with self.assertRaises(BackupError) as ctx:
+                create_backup(cfg)
+
+        self.assertEqual(ctx.exception.reason, "publish_name_unavailable")
+        with open(taken, "rb") as handle:
+            self.assertEqual(handle.read(), b"another backup")
+        self.assertEqual(os.listdir(root), [os.path.basename(taken)])
 
     def test_take_then_download_cleanup_is_unchanged(self):
         lib = self._bind_library()
