@@ -131,8 +131,9 @@ jobs:
       - name: Run Pyright data-flow checks
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
 
-      # Genuine basic type checking for the first #69 slice: backend/storage.
-      - name: Run Pyright typed slice (backend/storage, basic)
+      # Genuine basic type checking for the #69 typed slice (scopes pinned in
+      # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
+      - name: Run Pyright typed slice (backend/storage, entity_ids, concurrency; basic)
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
 
   eslint:
