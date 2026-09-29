@@ -53,7 +53,9 @@
             workPlaylistEditing: false,
             workDetailsMode: 'view',
             workMetaDraft: null,
+            workMetaBaseline: null,
             workMetaDraftWorkId: null,
+            workMetaEditSession: 0,
             currentSavedView: null,
             researchNotesHints: null,
         };
@@ -72,7 +74,10 @@
         ui.workPlaylistEditing = false;
         ui.workDetailsMode = 'view';
         ui.workMetaDraft = null;
+        ui.workMetaBaseline = null;
         ui.workMetaDraftWorkId = null;
+        /* Monotonic for this TabContext. Resetting the token to 0 would let a
+         * save captured as session 1 match the next time Edit metadata opens. */
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
     }

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
+import { registerWorkMetadataEditorBridge, resetWorkMetadataEditorForTests } from './metadata-session'
 
 type WorkRecord = {
   id: string
@@ -49,9 +50,11 @@ const panelWindow = window as unknown as PanelWindow
 beforeAll(() => {
   panelWindow.eval(tabContextSource)
   panelWindow.eval(uiSource)
+  registerWorkMetadataEditorBridge(window)
 })
 
 afterEach(() => {
+  resetWorkMetadataEditorForTests()
   panelWindow.prksResetPrivateNoteDraftsForTest()
   panelWindow.prksDestroyAllTabContexts()
   document.body.innerHTML = ''

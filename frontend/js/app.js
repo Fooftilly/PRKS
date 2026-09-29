@@ -3390,6 +3390,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
     const previousPersonEditing = !!(ctx.ui && ctx.ui.personDetailEditing);
     const previousPersonWorksEditing = !!(ctx.ui && ctx.ui.personWorksEditing);
     const previousPersonDraft = ctx.ui && ctx.ui.personProfileDraft ? ctx.ui.personProfileDraft : null;
+    const previousWorkId = typeof prksWorkMetaRetainWorkId === 'function'
+        ? prksWorkMetaRetainWorkId(ctx)
+        : '';
+    const previousWorkMetaEditing = !!(ctx.ui && ctx.ui.workDetailsMode === 'metadata');
+    const previousWorkMetaSaved = ctx.ui ? {
+        draft: ctx.ui.workMetaDraft,
+        baseline: ctx.ui.workMetaBaseline,
+        session: ctx.ui.workMetaEditSession,
+        workId: ctx.ui.workMetaDraftWorkId,
+    } : null;
     /* Concepts→Concepts (index or detail) in the same mounted TabContext keeps
      * the Vue host mounted so local search/filter state survives an accepted
      * in-place refresh. Flag the owner before beginRoute: TabContext cleanups
@@ -3504,6 +3514,15 @@ async function prksRenderTabRoute(ctx, hash, options) {
             previousPersonGroupEditing,
             previousPersonGroupMembersEditing
         );
+    }
+    const sameWorkDetail = !!(
+        route.name === 'work' &&
+        previousWorkId &&
+        route.params &&
+        String(route.params.workId) === previousWorkId
+    );
+    if (sameWorkDetail && typeof prksRetainWorkMetaEditAcrossRefresh === 'function') {
+        prksRetainWorkMetaEditAcrossRefresh(ctx, previousWorkMetaEditing, previousWorkMetaSaved);
     }
     const routeAbort = ctx.abortController;
     const routeSignal = routeAbort && routeAbort.signal;

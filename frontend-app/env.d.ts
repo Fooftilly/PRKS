@@ -193,6 +193,15 @@ interface Window {
   prksTagSearchIconHtml?: () => string
   prksInitLazyWorkThumbs?: (root: ParentNode | null) => void
   prksRefreshIcons?: (root: ParentNode | Document | null) => void
+  prksBindAutosizeTextareas?: (root: ParentNode | null) => void
+  prksProgressStatusIconHtml?: (status: string, opts?: { size?: string | number }) => string
+  initPrksDocTypeMenu?: (hiddenInputId: string, opts?: { disabled?: boolean; selectedValue?: string }) => void
+  prksSaveWorkMetadataFields?: (workId: string, groupName?: string) => void
+  prksSaveWorkSource?: (workId: string) => void
+  prksCancelWorkMetaEdit?: () => void | Promise<void>
+  prksResolveWorkMetadataFieldConflict?: (opId: string, apply: boolean, group: string) => void
+  prksResolveWorkSourceConflict?: (opId: string, apply: boolean) => void
+  prksVueAcceptWorkMetadataField?: (ctx: object, field: string, value: unknown) => boolean
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
   prksVueDismissProgress?: (owner: object) => void
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void

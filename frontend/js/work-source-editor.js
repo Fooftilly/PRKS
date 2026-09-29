@@ -47,6 +47,25 @@
 
         const editable = !!state.observed;
         const busy = state.operations.some(o => o.status !== 'pending' || o.attempt_count > 0);
+        if (typeof root.prksVueApplyWorkMetadataChrome === 'function' &&
+            typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+            root.prksVueWorkMetadataEditorOwns(ctx)) {
+            root.prksVueApplyWorkMetadataChrome(String(ctx.tabId), state.workId, [{
+                name: 'source',
+                status: state.error || (editable ? statusText(state.operations) : unavailable),
+                saveDisabled: !editable || busy,
+                fields: {
+                    source_url: {
+                        disabled: !editable || busy,
+                        title: !editable || busy
+                            ? (editable ? 'This source is syncing or needs resolution.' : unavailable)
+                            : '',
+                    },
+                },
+                conflicts: state.operations.filter(o => o.status === 'conflict').map(sourceConflictDescriptor),
+            }]);
+            return;
+        }
         const input = section.querySelector('#meta-video-url');
         if (input) {
             input.disabled = !editable || busy;
@@ -75,38 +94,39 @@
         return points.length <= 160 ? points.join('') : points.slice(0, 160).join('') + '…';
     }
 
-    function conflictRow(ctx, state, op) {
+    function sourceConflictDescriptor(op) {
         const result = op.server_result || {};
-        const item = document.createElement('div');
-        item.dataset.prksWorkSourceConflict = state.workId;
+        let text;
         if (result.code === 'SOURCE_REVISION_CONFLICT' || result.code === 'FUTURE_REVISION') {
             /* ONE question: which video should this file be? Never separate
              * questions about `provider` and `provider_id` -- nobody chose
              * those, they were derived from this very URL. */
-            item.appendChild(document.createTextNode(
-                'This file’s video differs. This device: "' +
+            text = 'This file’s video differs. This device: "' +
                 preview(op.payload.source.url) + '". Server: "' +
-                preview(result.current_preview) + '". '));
+                preview(result.current_preview) + '". ';
         } else if (result.code === 'ENTITY_NOT_FOUND') {
-            item.appendChild(document.createTextNode('This file no longer exists on the server. '));
+            text = 'This file no longer exists on the server. ';
         } else if (result.code === 'UNSUPPORTED_SOURCE_TRANSITION') {
-            item.appendChild(document.createTextNode(
-                'This file is no longer a video on the server, so its video source cannot be changed. '));
+            text = 'This file is no longer a video on the server, so its video source cannot be changed. ';
         } else if (result.code === 'INVALID_SOURCE_STATE') {
-            /* An older row the product reads as a video but whose stored link
-             * names no video PRKS can resolve. Nothing is guessed on the
-             * user's behalf -- saying which video it is, is the user's to do. */
-            item.appendChild(document.createTextNode(
-                'This file\u2019s existing video link cannot be read, so it cannot be '
-                + 'changed from here yet. '));
+            text = 'This file\u2019s existing video link cannot be read, so it cannot be '
+                + 'changed from here yet. ';
         } else {
-            item.appendChild(document.createTextNode(
-                'The video source could not synchronize (' + (result.code || 'protocol error') + '). '));
+            text = 'The video source could not synchronize (' + (result.code || 'protocol error') + '). ';
         }
         const reappliable = result.code === 'SOURCE_REVISION_CONFLICT' &&
             Number.isSafeInteger(result.current_revision);
-        action(item, ctx, state, op, reappliable ? 'Use server' : 'Discard my source', false);
-        if (reappliable) action(item, ctx, state, op, 'Apply my source', true);
+        const actions = [{ label: reappliable ? 'Use server' : 'Discard my source', apply: false }];
+        if (reappliable) actions.push({ label: 'Apply my source', apply: true });
+        return { opId: op.op_id, field: 'source_url', group: 'source', text: text, actions: actions };
+    }
+
+    function conflictRow(ctx, state, op) {
+        const described = sourceConflictDescriptor(op);
+        const item = document.createElement('div');
+        item.dataset.prksWorkSourceConflict = state.workId;
+        item.appendChild(document.createTextNode(described.text));
+        described.actions.forEach(choice => action(item, ctx, state, op, choice.label, choice.apply));
         return item;
     }
 
@@ -117,23 +137,34 @@
         button.textContent = label;
         button.onclick = async () => {
             button.disabled = true;
-            try {
-                if (!apply) {
-                    /* "Use server" is a decision to adopt a source this device
-                     * has never held, and the terminal result cannot supply
-                     * it: the URL came back as a BOUNDED PREVIEW, deliberately
-                     * shortenable, so fabricating a Work from it could store a
-                     * truncated URL as though it were canonical.
-                     *
-                     * So both representations are dropped and re-read
-                     * authoritatively. Dropping only the Work left the cached
-                     * source REVISION at its pre-conflict value, which is the
-                     * base the next save would have been measured against. */
-                    state.observed = null;
-                    root.prksOfflineMarkEntityChanged('work', state.workId);
-                    root.prksOfflineMarkEntityChanged('work-source-state', state.workId);
-                }
-                await root.prksSync.store.resolveConflict(op.op_id, apply);
+            await resolveSource(ctx, state, op, apply);
+        };
+        item.appendChild(button);
+    }
+
+    async function resolveSource(ctx, state, op, apply) {
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        const still = () => typeof root.prksWorkMetaSessionStill !== 'function' ||
+            root.prksWorkMetaSessionStill(ctx, state.workId, session);
+        try {
+            if (!apply) {
+                /* "Use server" is a decision to adopt a source this device
+                 * has never held, and the terminal result cannot supply
+                 * it: the URL came back as a BOUNDED PREVIEW, deliberately
+                 * shortenable, so fabricating a Work from it could store a
+                 * truncated URL as though it were canonical.
+                 *
+                 * So both representations are dropped and re-read
+                 * authoritatively. Dropping only the Work left the cached
+                 * source REVISION at its pre-conflict value, which is the
+                 * base the next save would have been measured against. */
+                if (still()) state.observed = null;
+                root.prksOfflineMarkEntityChanged('work', state.workId);
+                root.prksOfflineMarkEntityChanged('work-source-state', state.workId);
+            }
+            await root.prksSync.store.resolveConflict(op.op_id, apply);
+            root.prksSync.changed();
+            if (still()) {
                 state.error = null;
                 if (apply) {
                     /* The replacement operation was created against the
@@ -147,20 +178,23 @@
                     state.observed = baseOf(op.server_result.current_revision,
                         root.prksWorkSourceConflictIdentity(op.server_result));
                 }
-                root.prksSync.changed();
-            } catch (_) {
-                state.error = 'Could not save that resolution locally. Please retry.';
-                await safePaint(ctx, state);
-                return;
             }
-            /* After the discard, and only then: re-establish the authoritative
-             * source. If it cannot be read -- offline, say -- the base stays
-             * null and the editor stays explicitly unavailable rather than
-             * falling back to the stale pre-conflict Work. */
-            if (!apply) await readBase(ctx, state, { adopt: true });
+        } catch (_) {
+            if (!still()) return;
+            state.error = 'Could not save that resolution locally. Please retry.';
             await safePaint(ctx, state);
-        };
-        item.appendChild(button);
+            return;
+        }
+        /* After the discard, and only then: re-establish the authoritative
+         * source. If it cannot be read -- offline, say -- the base stays
+         * null and the editor stays explicitly unavailable rather than
+         * falling back to the stale pre-conflict Work. A session that ended
+         * during the resolution must not adopt that re-read. */
+        if (!apply && still()) {
+            const settled = await readBase(ctx, state, { adopt: true, still: still });
+            if (!settled) return;
+        }
+        if (still()) await safePaint(ctx, state);
     }
 
     /**
@@ -174,6 +208,12 @@
      * of the shared panel may write into it at all.
      */
     function writeInput(ctx, state, url) {
+        if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
+            typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+            root.prksVueWorkMetadataEditorOwns(ctx)) {
+            root.prksVueAcceptWorkMetadataField(ctx, 'source_url', url == null ? '' : String(url));
+            return;
+        }
         const section = owns(ctx, state) ? sectionOf() : null;
         const input = section && section.querySelector('#meta-video-url');
         if (input && document.activeElement !== input) input.value = url;
@@ -252,14 +292,15 @@
                     '/api/works/' + encodeURIComponent(state.workId),
                     { validate: value => !!value && value.id === state.workId }),
             ]);
-            if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+            if (options && typeof options.still === 'function' && !options.still()) return false;
             const usable = stateResult && stateResult.source !== 'unavailable' &&
                 stateResult.value && workResult && workResult.source !== 'unavailable' &&
                 workResult.value;
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
-            if (!usable) { state.observed = null; return; }
+            if (!usable) { state.observed = null; return true; }
             state.observed = baseOf(stateResult.value.revision,
                 root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
             /* The server's Work replaces what this tab was holding. After
@@ -271,11 +312,17 @@
                 ctx.setEntity('work', workResult.value);
                 writeInput(ctx, state, workResult.value.source_url || '');
             }
-        } catch (_) { state.observed = null; }
+            return true;
+        } catch (_) {
+            if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+            if (options && typeof options.still === 'function' && !options.still()) return false;
+            state.observed = null;
+            return true;
+        }
     }
 
     async function prepare(ctx, state) {
-        await readBase(ctx, state);
+        if (!(await readBase(ctx, state))) return;
         await safePaint(ctx, state);
     }
 
@@ -298,7 +345,9 @@
                  * back, the editor has to go and get it, or the control stays
                  * dead until the user navigates away and returns. */
                 if (!state.observed && root.prksOfflineRuntimeState() === 'online') {
-                    void readBase(ctx, state, { adopt: true }).then(() => safePaint(ctx, state));
+                    void readBase(ctx, state, { adopt: true }).then(settled => {
+                        if (settled) void safePaint(ctx, state);
+                    });
                     return;
                 }
                 void safePaint(ctx, state);
@@ -314,25 +363,44 @@
         const ctx = root.prksGetFocusedTabContext ? root.prksGetFocusedTabContext() : null;
         const state = ctx && ctx.getResource('workSourceEditor');
         if (!state || !live(ctx, state) || state.workId !== workId) return;
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        const still = () => typeof root.prksWorkMetaSessionStill !== 'function' ||
+            root.prksWorkMetaSessionStill(ctx, workId, session);
+        if (!still()) return;
         const section = sectionOf();
-        if (!section) return;
-        const input = section.querySelector('#meta-video-url');
-        const error = section.querySelector('#meta-video-url-error');
-        const button = section.querySelector('#save-work-source-btn');
+        const input = section && section.querySelector('#meta-video-url');
+        const error = section && section.querySelector('#meta-video-url-error');
+        const button = section && section.querySelector('#save-work-source-btn');
         if (button && root.prksSetButtonBusy) {
             root.prksSetButtonBusy(button, true, { busyLabel: 'Saving…' });
         }
         try {
             if (state.preparing) await state.preparing;
+            if (!still()) return;
             if (!state.observed) throw new Error('no observed base');
-            if (error) error.textContent = '';
-            if (input) input.removeAttribute('aria-invalid');
-            const source = root.prksCanonicalWorkSource(input ? input.value : '');
+            if (typeof root.prksVueSetWorkMetadataFieldError === 'function') {
+                root.prksVueSetWorkMetadataFieldError('', '');
+            }
+            const vueOwnsErrors = typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+                root.prksVueWorkMetadataEditorOwns(ctx);
+            if (!vueOwnsErrors) {
+                if (error) error.textContent = '';
+                if (input) input.removeAttribute('aria-invalid');
+            }
+            const typed = ctx.ui && ctx.ui.workMetaDraft && ctx.ui.workMetaDraft.source_url != null
+                ? String(ctx.ui.workMetaDraft.source_url)
+                : (input ? input.value : '');
+            const source = root.prksCanonicalWorkSource(typed);
             if (!source) {
                 /* Refused, never guessed at: an unreadable URL is not an
                  * instruction to clear the video. */
+                const message = 'Use a YouTube link, for example https://www.youtube.com/watch?v=…';
+                if (vueOwnsErrors && typeof root.prksVueSetWorkMetadataFieldError === 'function') {
+                    root.prksVueSetWorkMetadataFieldError('source_url', message);
+                    return;
+                }
                 if (input) { input.setAttribute('aria-invalid', 'true'); input.focus(); }
-                if (error) error.textContent = 'Use a YouTube link, for example https://www.youtube.com/watch?v=…';
+                if (error) error.textContent = message;
                 return;
             }
             const work = ctx.getEntity('work');
@@ -343,6 +411,9 @@
                 // video over a pending change is a different case and is the
                 // store's to cancel -- it owns the durable row.)
                 state.error = null;
+                if (still() && typeof root.prksCommitWorkMetaBaseline === 'function') {
+                    root.prksCommitWorkMetaBaseline(ctx, workId, session, { source_url: typed }, ['source_url']);
+                }
                 await safePaint(ctx, state);
                 return;
             }
@@ -350,15 +421,21 @@
              * there is at most one unsynchronized intent for a Work. Choosing
              * B and then C must leave ONE operation naming C, and returning to
              * the acknowledged video must leave none. */
+            if (!still()) return;
             await root.prksSync.store.saveWorkSource(workId, {
                 kind: 'video',
                 url: source.source_url,
                 identity: root.prksWorkSourceIdentity(source),
             }, state.observed);
+            root.prksSync.changed();
+            if (!still()) return;
+            if (typeof root.prksCommitWorkMetaBaseline === 'function') {
+                root.prksCommitWorkMetaBaseline(ctx, workId, session, { source_url: typed }, ['source_url']);
+            }
             state.error = null;
             await safePaint(ctx, state);
-            root.prksSync.changed();
         } catch (error_) {
+            if (!still()) return;
             state.error = error_ && error_.prksLocalStoreCode === 'scope_busy'
                 ? 'This source is still syncing or needs a decision below.'
                 : 'Could not save the video source locally. Please retry.';
@@ -368,6 +445,17 @@
         }
     }
 
+    root.prksResolveWorkSourceConflict = function (opId, apply) {
+        const ctx = root.prksGetFocusedTabContext ? root.prksGetFocusedTabContext() : null;
+        const state = ctx && ctx.getResource('workSourceEditor');
+        if (!state || !live(ctx, state)) return;
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        if (typeof root.prksWorkMetaSessionStill === 'function' &&
+            !root.prksWorkMetaSessionStill(ctx, state.workId, session)) return;
+        const op = (state.operations || []).find(item => item.op_id === opId);
+        if (!op) return;
+        return resolveSource(ctx, state, op, !!apply);
+    };
     root.prksMountWorkSourceEditor = mount;
     root.prksSaveWorkSource = save;
 })(typeof window === 'undefined' ? globalThis : window);

@@ -2573,6 +2573,7 @@ function prksReplaceFocusedWorkDetailsPanel(ctx, work) {
     const panel = prksPrepareRightPanelReplace(ctx);
     if (!panel || typeof prksWorkRightPanelStackHtml !== 'function') return false;
     const mode = prksWorkDetailsMode(ctx, work);
+    prksDismissWorkMetadataEditor();
     prksDismissWorkPanelRead();
     panel.innerHTML = prksWorkRightPanelStackHtml(work, mode, ctx);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(panel);
@@ -3166,6 +3167,7 @@ function updatePanelContent(tabId) {
         }
     }
     prksPrepareRightPanelReplace(focusedCtx);
+    prksDismissWorkMetadataEditor();
     prksDismissWorkPanelRead();
     const focusedRoute = focusedCtx && (focusedCtx.lastResolvedRoute || focusedCtx.route);
     const focusedHash =
@@ -3596,10 +3598,103 @@ function prksWorkMetaDraftFromWork(rawWork) {
 
 function prksWorkMetaDraftIsDirty(ctx, work) {
     if (!ctx || !ctx.ui || ctx.ui.workMetaDraftWorkId !== String(work.id) || !ctx.ui.workMetaDraft) return false;
-    const original = prksWorkMetaDraftFromWork(work);
+    const baseline = ctx.ui.workMetaBaseline;
+    if (!baseline) return false;
+    /* The baseline is the session the form opened with, including a pending
+     * overlay that was already saved. It is not recomputed from effectiveWork,
+     * and it is not the acknowledged server base a save diffs against. */
+    if (typeof prksVueWorkMetaDraftIsDirty === 'function') {
+        return prksVueWorkMetaDraftIsDirty(ctx.ui.workMetaDraft, baseline);
+    }
     const draft = ctx.ui.workMetaDraft;
-    return Object.keys(original).some((key) => String(original[key] || '') !== String(draft[key] || ''));
+    return Object.keys(baseline).some((key) => String(baseline[key] || '') !== String(draft[key] || ''));
 }
+
+function prksBeginWorkMetaSession(ctx, work) {
+    if (!ctx || !ctx.ui || !work) return;
+    if (ctx.ui.workMetaDraftWorkId === String(work.id) && ctx.ui.workMetaDraft && ctx.ui.workMetaBaseline) return;
+    const seed = prksWorkMetaDraftFromWork(work);
+    if (typeof prksInferWorkSourceKind === 'function' && prksInferWorkSourceKind(work) === 'video' &&
+        typeof prksNormalizeDocType === 'function') {
+        seed.doc_type = prksNormalizeDocType('online');
+    }
+    ctx.ui.workMetaDraft = seed;
+    ctx.ui.workMetaBaseline = Object.assign({}, seed);
+    ctx.ui.workMetaDraftWorkId = String(work.id);
+    const current = Number(ctx.ui.workMetaEditSession);
+    ctx.ui.workMetaEditSession = (Number.isFinite(current) ? current : 0) + 1;
+}
+
+function prksEndWorkMetaSession(ctx) {
+    if (!ctx || !ctx.ui) return;
+    const current = Number(ctx.ui.workMetaEditSession);
+    ctx.ui.workMetaEditSession = (Number.isFinite(current) ? current : 0) + 1;
+    ctx.ui.workMetaDraft = null;
+    ctx.ui.workMetaBaseline = null;
+    ctx.ui.workMetaDraftWorkId = null;
+}
+
+function prksWorkMetaSessionStill(ctx, workId, session) {
+    if (typeof prksVueWorkMetaSessionStill === 'function') {
+        return prksVueWorkMetaSessionStill(ctx, workId, session);
+    }
+    if (!ctx || ctx.destroyed || !ctx.ui) return false;
+    if (ctx.ui.workDetailsMode !== 'metadata') return false;
+    if (ctx.ui.workMetaEditSession !== session) return false;
+    if (String(ctx.ui.workMetaDraftWorkId || '') !== String(workId)) return false;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (live && String(live.id) !== String(workId)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (route && route.name === 'work' && route.params && route.params.workId &&
+        String(route.params.workId) !== String(workId)) return false;
+    const panel = document.getElementById('panel-content');
+    if (panel && panel.dataset.prksOwnerTabId && panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return false;
+    return true;
+}
+
+function prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, fields) {
+    if (!prksWorkMetaSessionStill(ctx, workId, session)) return;
+    const draft = ctx.ui && ctx.ui.workMetaDraft;
+    const baseline = ctx.ui && ctx.ui.workMetaBaseline;
+    if (!draft || !baseline || !snapshot) return;
+    (fields || []).forEach((field) => {
+        const saved = snapshot[field] == null ? '' : String(snapshot[field]);
+        if (String(draft[field] == null ? '' : draft[field]) === saved) baseline[field] = saved;
+    });
+}
+
+function prksWorkMetaRetainWorkId(ctx) {
+    const entity = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+    if (entity && entity.id) return String(entity.id);
+    /* beginRoute clears the entity before the route's reads return. A second
+     * render in that gap still has the retained draft, and that Work id is
+     * what a same-route refresh must keep. */
+    if (ctx && ctx.ui && ctx.ui.workMetaDraft && ctx.ui.workMetaDraftWorkId) {
+        return String(ctx.ui.workMetaDraftWorkId);
+    }
+    return '';
+}
+
+function prksRetainWorkMetaEditAcrossRefresh(ctx, keep, saved) {
+    if (!ctx || !ctx.ui) return;
+    if (keep && saved && saved.draft && saved.baseline && saved.workId) {
+        ctx.ui.workDetailsMode = 'metadata';
+        ctx.ui.workMetaDraft = saved.draft;
+        ctx.ui.workMetaBaseline = saved.baseline;
+        ctx.ui.workMetaDraftWorkId = String(saved.workId);
+        if (typeof saved.session === 'number' && Number.isFinite(saved.session)) {
+            ctx.ui.workMetaEditSession = saved.session;
+        }
+        return;
+    }
+    ctx.ui.workDetailsMode = 'view';
+}
+window.prksWorkMetaSessionStill = prksWorkMetaSessionStill;
+window.prksCommitWorkMetaBaseline = prksCommitWorkMetaBaseline;
+window.prksWorkMetaRetainWorkId = prksWorkMetaRetainWorkId;
+window.prksRetainWorkMetaEditAcrossRefresh = prksRetainWorkMetaEditAcrossRefresh;
+window.prksBeginWorkMetaSession = prksBeginWorkMetaSession;
+window.prksEndWorkMetaSession = prksEndWorkMetaSession;
 
 function prksCaptureWorkMetaDraft(ownerCtx) {
     if (!ownerCtx || !ownerCtx.ui || ownerCtx.ui.workDetailsMode !== 'metadata') return;
@@ -3625,6 +3720,9 @@ function prksCaptureWorkMetaDraft(ownerCtx) {
         const el = panel.querySelector('#' + fields[key]);
         if (el) draft[key] = el.value;
     });
+    const videoUrl = panel.querySelector('#meta-video-url');
+    if (videoUrl) draft.source_url = videoUrl.value;
+    if (typeof prksVueCaptureWorkMetaDraft === 'function') prksVueCaptureWorkMetaDraft(ownerCtx);
     ownerCtx.ui.workMetaDraft = draft;
 }
 
@@ -3642,6 +3740,15 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
     const dateError = panel.querySelector('#meta-date-error');
     if (date && dateError) {
         const clearDateError = () => {
+            /* One chrome.fieldError slot serves every field. This listener is
+             * only for Published Date, so it must not drop a thumbnail error. */
+            if (typeof prksVueWorkMetadataEditorOwns === 'function' &&
+                prksVueWorkMetadataEditorOwns(ownerCtx)) {
+                if (typeof prksVueSetWorkMetadataFieldError === 'function') {
+                    prksVueSetWorkMetadataFieldError('published_date', '');
+                }
+                return;
+            }
             date.removeAttribute('aria-invalid');
             dateError.textContent = '';
         };
@@ -3658,13 +3765,17 @@ function prksBindWorkMetaDraftEditor(ownerCtx, work) {
     }
 }
 
+function prksDismissWorkMetadataEditor() {
+    if (typeof prksVueDismissWorkMetadataEditor === 'function') prksVueDismissWorkMetadataEditor();
+}
+
 function prksMountWorkMetaEditor(ownerCtx, work) {
     if (!ownerCtx || !work || !prksRightPanelOwnedBy(ownerCtx)) return;
     if (prksWorkDetailsMode(ownerCtx, work) !== 'metadata') return;
-    prksBindSegmentedHidden('meta-status');
-    if (typeof initPrksDocTypeMenu === 'function') {
-        const sourceKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-        initPrksDocTypeMenu('meta-doc-type', { disabled: sourceKind === 'video' });
+    prksBeginWorkMetaSession(ownerCtx, work);
+    const sourceKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
+    if (typeof prksVuePresentWorkMetadataEditor === 'function') {
+        prksVuePresentWorkMetadataEditor(ownerCtx, sourceKind);
     }
     prksBindWorkMetaDraftEditor(ownerCtx, work);
     const panel = document.getElementById('panel-content');
@@ -3712,15 +3823,10 @@ async function prksSetWorkDetailsMode(mode) {
                 const current = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
                 if (!current || current.id !== work.id) return;
             }
-            ownerCtx.ui.workMetaDraft = prksWorkMetaDraftFromWork(work);
-            ownerCtx.ui.workMetaDraftWorkId = String(work.id);
+            prksBeginWorkMetaSession(ownerCtx, work);
         }
-    } else if (next !== 'metadata' && ownerCtx.ui.workDetailsMode !== 'metadata') {
-        /* A metadata draft only lives while metadata editing is active. */
-    }
-    if (next !== 'metadata') {
-        ownerCtx.ui.workMetaDraft = null;
-        ownerCtx.ui.workMetaDraftWorkId = null;
+    } else if (next !== 'metadata') {
+        prksEndWorkMetaSession(ownerCtx);
     }
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
 }
@@ -3738,6 +3844,14 @@ async function prksCancelWorkMetaEdit() {
             confirmLabel: 'Discard changes',
         });
         if (!confirmed) return;
+    }
+    if (!ownerCtx.ui || ownerCtx.destroyed || ownerCtx.ui.workDetailsMode !== 'metadata') return;
+    const current = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    if (!current || String(current.id) !== String(work.id)) return;
+    if (!prksOwnerTabIsFocused(ownerCtx)) {
+        prksEndWorkMetaSession(ownerCtx);
+        ownerCtx.ui.workDetailsMode = 'view';
+        return;
     }
     await toggleWorkMetaEditForContext(ownerCtx, false);
 }
@@ -3758,16 +3872,15 @@ async function toggleWorkMetaEditForContext(ownerCtx, isEditing) {
                     const current = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
                     if (!current || current.id !== _cw.id) return;
                 }
-                ownerCtx.ui.workMetaDraft = prksWorkMetaDraftFromWork(_cw);
-                ownerCtx.ui.workMetaDraftWorkId = String(_cw.id);
+                prksBeginWorkMetaSession(ownerCtx, _cw);
             }
         } else {
+            prksEndWorkMetaSession(ownerCtx);
             ownerCtx.ui.workDetailsMode = 'view';
-            ownerCtx.ui.workMetaDraft = null;
-            ownerCtx.ui.workMetaDraftWorkId = null;
         }
         const panel = prksPrepareRightPanelReplace(ownerCtx);
         if (panel) {
+            prksDismissWorkMetadataEditor();
             prksDismissWorkPanelRead();
             panel.innerHTML = prksWorkRightPanelStackHtml(_cw, ownerCtx.ui.workDetailsMode, ownerCtx);
             if (!isEditing) initPrksPrivateNotesEditor('work', _cw.id, ownerCtx);
@@ -5017,197 +5130,12 @@ function prksWorkBibRowsHtml(work) {
 }
 
 function renderWorkMetaEditTab(work, draft) {
-    const hasDraft = !!draft;
-    // Same reason as prksWorkMetaDraftFromWork(): a pending durable edit is
-    // what the user last saved, so it is what the form must show.
-    const effective = typeof prksEffectiveWorkSync === 'function' ? prksEffectiveWorkSync(work) : work;
-    work = Object.assign({}, effective || {}, draft || {});
-    const safeStr = (str) => (str || '').toString().replace(/"/g, '&quot;');
-    const filePath = work && work.file_path ? String(work.file_path).trim() : '';
-    const inferredKind = typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(work) : '';
-    const isVideo = inferredKind === 'video';
-    const thumbPage = (() => {
-        const raw = work && work.thumb_page != null ? String(work.thumb_page).trim() : '';
-        if (!raw) return '';
-        const n = Number(raw);
-        if (!Number.isFinite(n)) return '';
-        const i = Math.floor(n);
-        return i >= 1 ? String(i) : '';
-    })();
-    
-    const metaDocNorm =
-        typeof prksNormalizeDocType === 'function'
-            ? prksNormalizeDocType(isVideo ? 'online' : work.doc_type)
-            : 'misc';
-    const metaDocMenu =
-        typeof prksDocTypeMenuShellHtml === 'function'
-            ? prksDocTypeMenuShellHtml('meta-doc-type', metaDocNorm, isVideo,
-                { workField: 'doc_type' })
-            : '';
-    const dateLabel = isVideo ? 'Published date' : 'Published Date';
-    const publishedDateValue =
-        !hasDraft && typeof prksIsoToDdMmYyyy === 'function'
-            ? prksIsoToDdMmYyyy(work.published_date)
-            : safeStr(work.published_date);
-    /* `author_text` is synchronized, so its control lives INSIDE the durable
-     * section below -- for a video as "Channel name", for everything else as
-     * the textual Author. A second copy outside that section would be a second
-     * mutation path for one field. */
-    const channelField = '';
-    const bibFields = isVideo
-        ? ''
-        : `
-        `;
-    /* Status has its own bounded Save. It is not a bibliographic detail -- it
-     * decides which Progress group the Work appears in -- so it must not ride
-     * along on a button labelled "Save bibliographic details", and the
-     * bibliographic fields must not ride along on this one. Both are durable
-     * and behave identically online and offline. */
-    /* Video source is its own bounded save, deliberately NOT part of the
-     * bibliographic group. It is not a scalar: one decision rewrites
-     * `source_kind`, `provider`, `provider_id` and `source_url` together, so
-     * it has its own operation, its own revision and its own conflict. Putting
-     * it beside the scalars would say it was one of them. */
-    const videoSourceSection = !isVideo
-        ? ''
-        : `
-            <section class="work-meta-editor__section" data-prks-role="work-source-editor">
-                <h4>Video source</h4>
-                <label for="meta-video-url">YouTube URL</label>
-                <input type="url" id="meta-video-url" placeholder="https://www.youtube.com/watch?v=…" value="${safeStr(work.source_url)}" autocomplete="off" aria-describedby="meta-video-url-error">
-                <p id="meta-video-url-error" class="field-error" aria-live="polite"></p>
-                <p class="meta-row meta-row--hint">Replaces which video this file is. Different links to the same video are the same source.</p>
-                <div class="prks-form-actions form-actions">
-                    <button type="button" id="save-work-source-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkSource('${work.id}')">Save video source</button>
-                </div>
-                <div class="meta-row" data-prks-role="work-source-sync" aria-live="polite"></div>
-            </section>
-        `;
-    const statusSection = `
-            <section class="work-meta-editor__section" data-prks-role="work-status-editor">
-                <h4>Progress</h4>
-                <div class="prks-work-upload-status-field">
-                    <label for="meta-status">Status</label>
-                    ${prksSegmentedControlHtml('meta-status', 'Status', PRKS_WORK_STATUS_LABELS, work.status, 'status', { workField: 'status' })}
-                </div>
-                <div class="prks-form-actions form-actions">
-                    <button type="button" id="save-work-status-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}', 'status')">Save status</button>
-                </div>
-                <div class="meta-row" data-prks-role="work-status-sync" aria-live="polite"></div>
-            </section>
-        `;
-    /* The synchronized bibliographic fields are their own section with their
-     * own Save. One button must not quietly mean "these fields into the
-     * durable local queue, the rest over HTTP, either half able to fail
-     * alone" -- that is a partial-save contract nobody could explain
-     * afterwards. */
-    const syncedBibSection = isVideo
-        ? `
-            <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
-                <h4>Channel</h4>
-                <label for="meta-author-text">Channel name</label>
-                <input type="text" id="meta-author-text" data-prks-work-field="author_text" value="${safeStr(work.author_text)}" autocomplete="off">
-                <div class="prks-form-actions form-actions">
-                    <button type="button" id="save-work-bib-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}')">Save channel name</button>
-                </div>
-                <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite"></div>
-            </section>
-        `
-        : `
-            <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
-                <h4>Bibliographic details</h4>
-                <label for="meta-author-text">Author (text)</label>
-                <input type="text" id="meta-author-text" data-prks-work-field="author_text" value="${safeStr(work.author_text)}" autocomplete="off">
-                <p class="meta-row meta-row--hint">Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.</p>
-
-                <div class="form-grid-2 form-grid-2--compact">
-                    <div><label for="meta-year">Year</label><input type="text" id="meta-year" data-prks-work-field="year" value="${safeStr(work.year)}"></div>
-                    <div><label for="meta-date">${dateLabel}</label><input type="text" id="meta-date" data-prks-work-field="published_date" value="${safeStr(publishedDateValue)}" placeholder="dd/mm/yyyy" inputmode="numeric" autocomplete="off" aria-describedby="meta-date-error"></div>
-                </div>
-                <p id="meta-date-error" class="field-error" aria-live="polite"></p>
-
-                <label for="meta-publisher">Publisher</label>
-                <input type="text" id="meta-publisher" data-prks-work-field="publisher" value="${safeStr(work.publisher)}">
-
-                <label for="meta-location">Location (place of publication)</label>
-                <input type="text" id="meta-location" data-prks-work-field="location" value="${safeStr(work.location)}" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off">
-                <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
-
-                <label for="meta-edition">Edition</label>
-                <input type="text" id="meta-edition" data-prks-work-field="edition" value="${safeStr(work.edition)}" placeholder="e.g. 2 or revised" autocomplete="off">
-
-                <label for="meta-journal">Journal</label>
-                <input type="text" id="meta-journal" data-prks-work-field="journal" value="${safeStr(work.journal)}">
-
-                <div class="form-grid-2 form-grid-2--compact">
-                    <div><label for="meta-volume">Volume</label><input type="text" id="meta-volume" data-prks-work-field="volume" value="${safeStr(work.volume)}"></div>
-                    <div><label for="meta-issue">Issue</label><input type="text" id="meta-issue" data-prks-work-field="issue" value="${safeStr(work.issue)}"></div>
-                </div>
-
-                <div class="form-grid-2 form-grid-2--compact">
-                    <div><label for="meta-pages">Pages</label><input type="text" id="meta-pages" data-prks-work-field="pages" value="${safeStr(work.pages)}"></div>
-                    <div><label for="meta-isbn">ISBN</label><input type="text" id="meta-isbn" data-prks-work-field="isbn" value="${safeStr(work.isbn)}"></div>
-                </div>
-
-                <label for="meta-doi">DOI</label>
-                <input type="text" id="meta-doi" data-prks-work-field="doi" value="${safeStr(work.doi)}">
-
-                <label for="meta-source-url">Original URL (optional)</label>
-                <input type="url" id="meta-source-url" data-prks-work-field="source_url" placeholder="https://…" value="${safeStr(work.source_url)}" autocomplete="off">
-                <p class="meta-row meta-row--hint">Online location if this file was converted or downloaded from the web. This is provenance only: it does not change what kind of file PRKS treats this as.</p>
-
-                <label for="meta-abstract">Abstract</label>
-                <textarea id="meta-abstract" class="textarea-md" data-prks-work-field="abstract">${safeStr(work.abstract)}</textarea>
-
-                <label for="meta-thumb-page">Thumbnail page</label>
-                <input type="number" id="meta-thumb-page" data-prks-work-field="thumb_page" min="1" step="1" inputmode="numeric" placeholder="1" value="${safeStr(thumbPage)}" aria-describedby="meta-thumb-page-error">
-                <p id="meta-thumb-page-error" class="field-error" aria-live="polite"></p>
-                <p class="meta-row meta-row--hint">Which page of the PDF to use as the card image. Leave empty for page 1.</p>
-
-                <div class="prks-form-actions form-actions">
-                    <button type="button" id="save-work-bib-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}')">Save bibliographic details</button>
-                </div>
-                <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite"></div>
-            </section>
-        `;
-    // Rendered INSIDE the synchronized section below, never here: a second
-    // control for one field would be a second mutation path for it.
-    const thumbField = '';
-
-    return `
-        <div class="doc-meta-card form-pane doc-meta-card--editing work-meta-editor">
-            <div class="card-heading-row">
-                <h3 class="doc-meta-card__accent-title">Edit Metadata</h3>
-                <button type="button" onclick="void prksCancelWorkMetaEdit()" class="prks-icon-btn prks-icon-btn--ghost inline-action-btn inline-action-btn--close">&times;</button>
-            </div>
-            
-            <section class="work-meta-editor__section" data-prks-role="work-identity-editor">
-                <h4>Identity</h4>
-                <label for="meta-title">Title</label>
-                <input type="text" id="meta-title" data-prks-work-field="title" value="${safeStr(work.title)}" aria-describedby="meta-title-error">
-                <p id="meta-title-error" class="field-error" aria-live="polite"></p>
-
-                <label for="meta-doc-type-trigger">Document type (BibLaTeX)</label>
-                ${metaDocMenu}
-                <div class="prks-form-actions form-actions">
-                    <button type="button" id="save-work-identity-btn" class="prks-btn prks-btn--secondary" onclick="void prksSaveWorkMetadataFields('${work.id}', 'identity')">Save identity</button>
-                </div>
-                <div class="meta-row" data-prks-role="work-identity-sync" aria-live="polite"></div>
-            </section>
-            
-            <section class="work-meta-editor__section"><h4>Publication</h4>
-            ${channelField}
-
-            ${bibFields}
-            </section>
-            ${statusSection}
-            ${videoSourceSection}
-            ${syncedBibSection}
-            <div class="prks-form-actions prks-form-actions--split form-actions work-meta-editor__sticky-actions">
-                <button type="button" class="prks-btn prks-btn--secondary" onclick="void prksCancelWorkMetaEdit()">Close</button>
-            </div>
-        </div>
-    `;
+    /* The form itself is the Vue metadata editor. This shell is the mount
+     * point. `draft` stays on the owning TabContext; the DOM is not the copy
+     * that saves or the leave guard measure against. */
+    void work;
+    void draft;
+    return '<div data-prks-role="work-metadata-editor-anchor"></div>';
 }
 
 function prksHintBtnHtml(hintType, ariaLabel, extraClass) {
