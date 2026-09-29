@@ -665,12 +665,16 @@ library appears, the user panics" failure mode.
 ### 8.2 The protocol
 
 ```
-  P0 preflight ─► P1 intent ─► P2 quiesce ─► P3 copy ─► P4 verify ─► P5 COMMIT ─► P6 activate+rebind ─► P7 retire source ─► release ─► P8 rebuild ─► P9 retain ─► (later) P10 cleanup
-  old root authoritative ──────────────────────────────────────────┤ new root authoritative ────────────────────────────────────────────►
-  old canonical data never written; destination stays `staging` ───┤
-  old marker `fenced` (not bindable by any other process) from P2 ──────────────────────────────────┤ `retired`
-  mutations blocked (P2) ────────────────────────────────────────────────────────────────────────────────────┤
+  P0 preflight ─► P1 intent ─► P2 quiesce+fence ─► P3 copy ─► P4 verify ─► P5 COMMIT ─► P6 activate+rebind+RELEASE ─► P7 retire source ─► P8 rebuild ─► P9 retain ─► (later) P10 cleanup
+  old root authoritative ───────────────────────────────────────────────┤ new root authoritative ──────────────────────────────────────────────►
+  old canonical data never written; destination stays `staging` ────────┤
+  old marker `fenced` (not bindable by any other process) from P2 ─────────────────────────────────────────────┤ `retired` (P7, non-blocking)
+  mutations blocked from P2 ─────────────────────────────────────────────────────────────────────┤ released at the end of P6
 ```
+
+**The release boundary is the end of P6, and only there.** P7–P10 run with
+mutations admitted. A P7 failure blocks nothing: the source is already
+revoked by the P2 fence. Crash tests cover each boundary in this sequence.
 
 | Step | Action | Durable record |
 | --- | --- | --- |
