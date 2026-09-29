@@ -505,12 +505,13 @@ production library. `run_tests.py` already sets `PRKS_STORAGE` explicitly.
 ```
 
 `state ∈ { active, fenced, staging, retired }`. `relocation` carries
-`{ id, role: "source" | "destination", peer_hint, phase? }` while a move is in
+`{ id, role: "source" | "destination", peer_hint, verified?, phase? }` while a move is in
 progress, or after it retired this root. `phase` is absent until a
 volume-recorded outcome exists. It is only ever written on a destination, and
 only by the offline flow (§8.7): `"committed"` (the offline commit) or
-`"aborted"` (never bindable). The marker `state` and `relocation.phase` are
-separate fields. A destination stays `state: staging` through P4 and through
+`"aborted"` (never bindable). `verified` (offline flow, destination only) is set to `true` at the end of
+P4. It is the destination-side proof that the P2 fence landed. The marker
+`state` and `relocation.phase` are separate fields. A destination stays `state: staging` through P4 and through
 the offline commit, until P6(b) replaces the whole `relocation` with `null`.
 
 An optional `moved_from: {id, peer_hint}` records that a completed
@@ -878,7 +879,11 @@ on that mirror for these roots.
    P2 fence on the source. **It holds the destination lock from P1, and the
    source lock from the P2 fence, until it exits at the end of P4** (§12).
    A concurrent `finalize` or `abort` therefore finds a lock busy and refuses
-   for the whole copy. **Its durable progress lives on the volumes, not in
+   for the whole copy. As its last write, after P4 has verified the copy and
+   while it still holds both locks, `relocate` sets `relocation.verified:
+   true` on the destination marker. Because P4 follows the durable P2 fence,
+   `verified: true` is volume-durable proof on the destination that the
+   source was fenced. **Its durable progress lives on the volumes, not in
    the bootstrap config.** P1's record is the destination marker, written
    under the destination lock: `state: staging` with `relocation: {id, role:
    destination, peer_hint}`. The copy manifest lives in
@@ -909,9 +914,15 @@ on that mirror for these roots.
      distinguishes a source lock that is **busy** from a source that
      **cannot be opened**, for example a removed disk or an unmounted volume.
      If the lock is busy, it refuses. If the source is unreachable, it
-     proceeds under the destination lock alone: it validates only the
-     destination marker (its `relocation_id` and `peer_hint`), performs P5
-     and P6(b), and leaves P7 to the best-effort retry. This is safe because
+     proceeds under the destination lock alone, **but only if the destination
+     marker proves that P2 completed**. That proof is
+     `relocation.verified: true` (below), which `relocate` writes only after
+     the source fence is durable. It then validates the destination marker
+     (`relocation_id`, `peer_hint`, `verified`), performs P5 and P6(b), and
+     leaves P7 to the best-effort retry. Without `verified: true` the fence
+     may never have landed, and activating would leave an unfenced source
+     with the same ID. So `finalize` refuses, and tells the operator to
+     restore access to the source or to discard the staging tree. This is safe because
      `abort` must hold the destination lock too, so the two still exclude
      each other. `abort` has no such exception: unfencing the source needs
      the source, so `abort` always requires both locks. **Precondition, mirroring
@@ -922,8 +933,9 @@ on that mirror for these roots.
      operator at rerunning `abort` to finish discarding the leftover tree.
      Only then does `finalize` perform the same durable steps as the in-app
      flow, in the same order:
-     1. (Both locks are already held, per the rule above; the destination's
-        is its `active_process` lease.)
+     1. (The locks are already held, per the rule above: both of them, or
+        only the destination's under the unreachable-source exception. The
+        destination's is its `active_process` lease.)
      2. **P5 (offline commit):** atomically rewrite the **destination marker**
         to `state: staging`, `relocation: {id, role: destination, peer_hint:
         <source root>, phase: "committed"}`. It keeps the P1 `peer_hint`, so a
@@ -1267,7 +1279,10 @@ renewal can race a fence or a state transition. During a move:
     destination, and holds it until it exits at the end of P4. It takes the
     source lock at the P2 fence, and also holds it until it exits.
   - `finalize` and `abort` take both locks before validating anything, and
-    hold them through their last write (§8.7).
+    hold them through their last write (§8.7). The one exception: `finalize`
+    may proceed under the destination lock alone when the source is
+    **unreachable**, not merely busy, and the destination marker carries
+    `verified: true`.
 
   Each command refuses to start if a lock it needs is held by someone else.
   So `finalize` and `abort` cannot run while `relocate` is still copying, and
