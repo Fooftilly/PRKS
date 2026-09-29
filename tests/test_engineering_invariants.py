@@ -1674,6 +1674,18 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "        self.rm = os.remove\n"
                 "        self.rm(os.path.join(pdfs_dir, name))\n"
             ),
+            "unbound_path_rename_args_spread_then_dict_target": (
+                "import os\n"
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path.rename(*[Path(scratch)], **{'target': Path(os.path.join(pdfs_dir, name))})\n"
+            ),
+            "path_rename_args_spread_then_dict_target": (
+                "import os\n"
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path(scratch).rename(*[], **{'target': Path(os.path.join(pdfs_dir, name))})\n"
+            ),
             "os_rename_args_spread_then_dict_spread_destination": (
                 "import os\n"
                 "def publish(pdfs_dir, scratch, name):\n"
@@ -2750,6 +2762,10 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    else:\n"
                 "        save = functools.partial(db.add_work, 't', 's', 'a')\n"
                 "    save('text', 'date', fp)\n"
+            ),
+            "add_work_args_spread_then_dict_file_path": (
+                "def create(db, fp, rest):\n"
+                "    db.add_work(*rest, **{'file_path': fp})\n"
             ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"

@@ -2583,27 +2583,15 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     @staticmethod
     def _call_argument(node: ast.Call, index: int, keyword: str) -> ast.expr | None:
-        """The expression a call binds to parameter ``keyword`` (at ``index``)."""
-        explicit = next((kw.value for kw in node.keywords if kw.arg == keyword), None)
-        if explicit is not None:
-            return explicit
+        """The expression a call binds to parameter ``keyword`` (at ``index``).
+
+        A negative ``index`` means a partial already bound that position, so
+        only an explicit keyword can name it; otherwise the resolution order
+        of ``_positional_or_keyword`` applies (a dict-literal ``**`` naming the
+        parameter is as decisive as ``keyword=`` and precedes ``*args``)."""
         if index < 0:
-            return None
-        for position, arg in enumerate(node.args):
-            if isinstance(arg, ast.Starred):
-                # ``*args`` may reach the parameter's position.
-                return arg.value
-            if position == index:
-                return arg
-        for kw in node.keywords:
-            if kw.arg is None:
-                if isinstance(kw.value, ast.Dict):
-                    found = _dict_file_path_value(kw.value, key=keyword)
-                    if found is not None:
-                        return found
-                    continue
-                return kw.value
-        return None
+            return next((kw.value for kw in node.keywords if kw.arg == keyword), None)
+        return _positional_or_keyword(node, index, (keyword,))
 
     def _is_owned_value(self, value: ast.expr, *, under_guard: bool = True) -> bool:
         """A clear / non-managed literal, minted bytes, or a value an active
