@@ -19,4 +19,4 @@ Placement, in order:
 3. Use `backend/services/` when an operation coordinates multiple concerns such as DB + filesystem + PDF + indexing.
 4. Prefer `backend/api/<domain>.py` when extracting a cohesive HTTP route family from `server.py` (parse/validate, invoke domain, map HTTP errors). Do not invent `routes/`, extra architectural layers, or a framework ahead of real behavior.
 
-Incremental decomposition of `server.py` into `backend/api/` controllers is allowed. Controllers must not own domain SQL or filesystem mutation. Do not introduce a framework (no Starlette migration as an incidental follow-on). Do not move unrelated helpers solely to shrink line count.
+Incremental decomposition of `server.py` into `backend/api/` controllers is allowed. Controllers must not own domain SQL or filesystem mutation. The stdlib adapter is the current implementation, not a permanent architecture mandate: do not introduce a framework as an incidental follow-on, but a separately approved #310/#179 migration may replace the outer adapter later without moving domain semantics back into transport code. Do not move unrelated helpers solely to shrink line count.
