@@ -131,7 +131,11 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertIn("ctx.setEntity('work', projection.work)", publish)
         self.assertNotIn("effectiveWork", publish[publish.index("setEntity"):])
         main = _MAIN.read_text(encoding="utf-8")
-        self.assertNotIn("features/work", main)
+        self.assertNotIn("features/work/projection", main)
+        self.assertNotIn("features/work/browser-entry", main)
+        self.assertNotIn("work-route-projection", main)
+        self.assertIn("registerWorkPanelReadBridge", main)
+        self.assertIn("features/work/panel-session", main)
         built = _BUILT.read_text(encoding="utf-8")
         for name in (
             "prksProjectWorkRoute",

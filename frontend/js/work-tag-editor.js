@@ -28,13 +28,28 @@
         const list = panel.querySelector('#work-tags-list');
         if (!list) return;
         const work = ctx.getEntity('work');
-        const effective = { ...work, tags: root.prksEffectiveWorkTags(work, state.operations) };
+        const effectiveTags = root.prksEffectiveWorkTags(work, state.operations);
+        const effective = { ...work, tags: effectiveTags };
         const editable = ctx.ui.workDetailsMode === 'tags';
+        if (!editable && typeof root.prksWorkPanelReadOwns === 'function' && root.prksWorkPanelReadOwns(ctx) &&
+            typeof root.prksVueRefreshWorkPanelRead === 'function') {
+            root.prksVueRefreshWorkPanelRead({
+                ownerTabId: String(ctx.tabId),
+                ownerGeneration: ctx.generation,
+                workId: state.workId,
+                tags: (effectiveTags || []).map(tag => ({
+                    id: tag && tag.id != null ? String(tag.id) : '',
+                    name: tag && tag.name != null ? String(tag.name) : '',
+                    color: tag && tag.color != null ? String(tag.color) : '',
+                })),
+            });
+        } else {
         // Identical markup is not a repaint. Rewriting innerHTML needlessly
         // churns the DOM other tiles may be reading, and the first paint now
         // produces exactly what the panel was rendered with.
         const chips = root.renderWorkTagsChips(effective, { editable });
         if (list.innerHTML !== chips) list.innerHTML = chips;
+        }
         list.querySelectorAll('[data-tag-id]').forEach(button => {
             button.disabled = !state.options || blocked(state, button.dataset.tagId);
             if (button.disabled) button.title = state.options ? 'This change is syncing or needs resolution.' : unavailable;

@@ -1806,7 +1806,7 @@ function renderFolderAttachControlsHtml(work, ownerCtx) {
         return `
         <div class="doc-meta-card prks-work-folder-card prks-work-folder-card--compact">
             <div class="card-heading-row">
-                <span class="prks-work-folder-summary"${summaryTitleAttr}>
+                <span class="prks-work-folder-summary" data-prks-role="work-folder-read"${summaryTitleAttr}>
                     ${currentSummary}
                 </span>
                 <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" id="prks-work-folder-edit-btn" aria-expanded="false">Edit</button>
