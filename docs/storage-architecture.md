@@ -606,7 +606,7 @@ subset), and before relocation (the full set, against the destination).
 | --- | --- | --- | --- | --- |
 | V1 | **Normalization.** Expand `~` and environment references once, make absolute, collapse `.`/`..` lexically. Store the user's spelling in config, and use the normalized form for all checks. | ✓ | ✓ | error (empty or unparseable) |
 | V2 | **Exists or creatable.** For a new root, the parent exists and the directory can be created with owner-only permissions. For an existing root, it is a directory, not a file. | ✓ | ✓ | error |
-| V3 | **Marker state.** `active` for binding. For a **resumed move** (P0 same-move resume): the destination must be `staging` with this `relocation_id`, or match the §8.7 P1-only state, and its non-empty contents are expected; the new-root emptiness rule below does not apply. For a new root (a fresh destination): absent, and the directory is empty or contains only hidden OS metadata (`.DS_Store`, `desktop.ini`, `Thumbs.db`, `lost+found`) and/or a leftover **preflight scaffold** (V4). A lone `.prks-maintenance/root.lock` with no marker, left by an offline `relocate` that lost the source-lock race or crashed before P1, also counts as scaffold. | ✓ | ✓ | error; show the retirement pointer when `retired` |
+| V3 | **Marker state.** `active` for binding. For a **resumed move** (P0 same-move resume): the destination must be `staging` with this `relocation_id`, or match the §8.7 P1-only state, and its non-empty contents are expected; the new-root emptiness rule below does not apply. For a new root (a fresh destination): absent, and the directory is empty or contains only hidden OS metadata (`.DS_Store`, `desktop.ini`, `Thumbs.db`, `lost+found`) and/or a leftover **preflight scaffold** (V4). A lone `.prks-maintenance/root.lock` with no marker, left by an offline `relocate` that lost the source-lock race or crashed before P1, also counts as scaffold, and so does an **empty** `.prks-maintenance/` with no other children, left by a crash partway through any scaffold cleanup. The next preflight removes all three forms. | ✓ | ✓ | error; show the retirement pointer when `retired` |
 | V4 | **Readable and writable.** Create, write, fsync, rename and delete a probe file, not by checking permission bits. Every capability probe (V4, V5, V6, V8) runs only inside a **preflight scaffold**: `.prks-maintenance/preflight/`, which contains only `.prks-probe-*` files and two probe subdirectories, `preflight/a/` and `preflight/b/`, holding only `.prks-probe-*` files. V6's cross-directory rename moves a probe from `a/` to `b/`. Preflight removes the scaffold, including an emptied `.prks-maintenance/`, on every exit. A scaffold left behind by a crash is recognized by V3 and removed by the next preflight, so a crash in P0 never strands the directory. | ✓ | ✓ | error |
 | V5 | **Exclusive create.** `O_CREAT` with `O_EXCL` on the probe name fails when it exists. | once per root (recorded in the marker) | ✓ | error |
 | V6 | **Atomic rename over an existing file within one directory**, and across directories within the root (restore and relocation rely on it). | once | ✓ | error |
@@ -880,7 +880,9 @@ on that mirror for these roots.
    P2 fence on the source. **Before writing any P1 state, it takes the
    destination lock and then the source lock, and holds both until it exits
    at the end of P4** (§12). If the source lock is busy, it releases the
-   destination lock and removes the lock scaffold it created. That scaffold
+   destination lock and removes the lock scaffold it created: `root.lock`,
+   then the emptied `.prks-maintenance/`, then the destination directory
+   itself if `relocate` created it and it is now empty. That scaffold
    is `.prks-maintenance/root.lock` with no marker, which V3 treats as a
    preflight scaffold. It then refuses, so a losing `relocate` never leaves
    a P1 marker behind.
