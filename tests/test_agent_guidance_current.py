@@ -184,6 +184,37 @@ class AgentGuidanceTests(unittest.TestCase):
             normalized_contract,
         )
 
+    def test_source_comments_do_not_reference_removed_monolith_sections(self):
+        source_paths = (
+            ROOT / "frontend" / "js" / "api.js",
+            ROOT / "frontend" / "js" / "app.js",
+            ROOT / "backend" / "db_manager.py",
+        )
+        stale_references = (
+            'offline-pwa.md "Offline coherence domains"',
+            'offline-pwa.md, "Offline coherence domains"',
+            'offline-pwa.md,\n * "Offline coherence domains"',
+            'offline-pwa.md,\n# "Offline browse catalogs"',
+            'offline-pwa.md, "Offline browse catalogs"',
+        )
+        for path in source_paths:
+            text = path.read_text(encoding="utf-8")
+            for phrase in stale_references:
+                with self.subTest(path=str(path.relative_to(ROOT)), phrase=phrase):
+                    self.assertNotIn(phrase, text)
+        self.assertIn(
+            "docs/agent-rules/offline-entity-coherence.md",
+            (ROOT / "frontend" / "js" / "api.js").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "docs/agent-rules/offline-folder-tag-coherence.md",
+            (ROOT / "frontend" / "js" / "app.js").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "docs/agent-rules/offline-browse-protocol.md",
+            (ROOT / "backend" / "db_manager.py").read_text(encoding="utf-8"),
+        )
+
     def test_router_covers_remaining_durable_family_routes(self):
         sync_map = (ROOT / "docs" / "agent-context" / "sync-map.md").read_text(encoding="utf-8")
         router = self.offline_pwa
