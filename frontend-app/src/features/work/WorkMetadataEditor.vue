@@ -13,6 +13,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   focusField: [field: string]
   blurField: [field: string]
+  updateField: [field: WorkMetaField, value: string]
 }>()
 
 const isVideo = props.sourceKind === 'video'
@@ -62,9 +63,19 @@ function statusLine(name: string): string {
   return group(name)?.status || ''
 }
 
+function setField(field: WorkMetaField, value: string): void {
+  emit('updateField', field, value)
+}
+
+function onInput(field: WorkMetaField, event: Event): void {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return
+  setField(field, target.value)
+}
+
 function chooseStatus(value: string): void {
   if (fieldOff('status')) return
-  props.draft.status = value
+  setField('status', value)
 }
 
 function statusIcon(label: string): string {
@@ -116,7 +127,7 @@ function syncDocTypeMenu(): void {
   const before = props.draft.doc_type
   init('meta-doc-type', { disabled: docTypeDisabled(), selectedValue: before || 'article' })
   const shown = hidden instanceof HTMLInputElement ? hidden.value : before
-  if (shown && shown !== props.draft.doc_type) props.draft.doc_type = shown
+  if (shown && shown !== props.draft.doc_type) setField('doc_type', shown)
 }
 
 onMounted(() => {
@@ -125,7 +136,7 @@ onMounted(() => {
   const wrap = hidden?.closest('.prks-doc-type-menu')
   wrap?.addEventListener('click', () => {
     if (!(hidden instanceof HTMLInputElement)) return
-    props.draft.doc_type = hidden.value
+    setField('doc_type', hidden.value)
   })
   docMenuReady.value = true
   const panel = document.getElementById('panel-content')
@@ -152,7 +163,8 @@ watch(docTypeDisabled, () => {
         id="meta-title"
         type="text"
         data-prks-work-field="title"
-        v-model="draft.title"
+        :value="draft.title"
+        @input="onInput('title', $event)"
         :disabled="fieldOff('title')"
         :title="fieldTitle('title')"
         :aria-invalid="invalid('title') ? 'true' : undefined"
@@ -251,7 +263,8 @@ watch(docTypeDisabled, () => {
         type="url"
         placeholder="https://www.youtube.com/watch?v=…"
         autocomplete="off"
-        v-model="draft.source_url"
+        :value="draft.source_url"
+        @input="onInput('source_url', $event)"
         :disabled="fieldOff('source_url')"
         :title="fieldTitle('source_url')"
         :aria-invalid="invalid('source_url') ? 'true' : undefined"
@@ -279,58 +292,28 @@ watch(docTypeDisabled, () => {
       </div>
     </section>
 
-    <section v-if="isVideo" class="work-meta-editor__section" data-prks-role="work-bib-editor">
-      <h4>Channel</h4>
-      <label for="meta-author-text">Channel name</label>
+    <section class="work-meta-editor__section" data-prks-role="work-bib-editor">
+      <h4>{{ isVideo ? 'Channel' : 'Bibliographic details' }}</h4>
+      <label for="meta-author-text">{{ isVideo ? 'Channel name' : 'Author (text)' }}</label>
       <input
         id="meta-author-text"
         type="text"
         data-prks-work-field="author_text"
         autocomplete="off"
-        v-model="draft.author_text"
+        :value="draft.author_text"
+        @input="onInput('author_text', $event)"
         :disabled="fieldOff('author_text')"
         :title="fieldTitle('author_text')"
         @focus="onFocus('author_text')"
         @blur="onBlur('author_text')"
       >
-      <div class="prks-form-actions form-actions">
-        <button id="save-work-bib-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">Save channel name</button>
-      </div>
-      <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite">
-        <span>{{ statusLine('bib') }}</span>
-        <div v-for="conflict in conflicts('bib')" :key="conflict.opId">
-          {{ conflict.text }}
-          <button
-            v-for="action in conflict.actions"
-            :key="action.label"
-            type="button"
-            class="prks-btn prks-btn--secondary prks-btn--sm"
-            @click="resolveField(conflict, action.apply)"
-          >{{ action.label }}</button>
-        </div>
-      </div>
-    </section>
-
-    <section v-else class="work-meta-editor__section" data-prks-role="work-bib-editor">
-      <h4>Bibliographic details</h4>
-      <label for="meta-author-text">Author (text)</label>
-      <input
-        id="meta-author-text"
-        type="text"
-        data-prks-work-field="author_text"
-        autocomplete="off"
-        v-model="draft.author_text"
-        :disabled="fieldOff('author_text')"
-        :title="fieldTitle('author_text')"
-        @focus="onFocus('author_text')"
-        @blur="onBlur('author_text')"
-      >
-      <p class="meta-row meta-row--hint">Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.</p>
+      <p v-if="!isVideo" class="meta-row meta-row--hint">Used for the credit line only when no Author is linked to this file. A linked Author always takes precedence; a linked Editor stands in when this is empty.</p>
+      <template v-if="!isVideo">
 
       <div class="form-grid-2 form-grid-2--compact">
         <div>
           <label for="meta-year">Year</label>
-          <input id="meta-year" type="text" data-prks-work-field="year" v-model="draft.year" :disabled="fieldOff('year')" :title="fieldTitle('year')" @focus="onFocus('year')" @blur="onBlur('year')">
+          <input id="meta-year" type="text" data-prks-work-field="year" :value="draft.year" @input="onInput('year', $event)" :disabled="fieldOff('year')" :title="fieldTitle('year')" @focus="onFocus('year')" @blur="onBlur('year')">
         </div>
         <div>
           <label for="meta-date">Published Date</label>
@@ -342,7 +325,8 @@ watch(docTypeDisabled, () => {
             inputmode="numeric"
             autocomplete="off"
             aria-describedby="meta-date-error"
-            v-model="draft.published_date"
+            :value="draft.published_date"
+            @input="onInput('published_date', $event)"
             :disabled="fieldOff('published_date')"
             :title="fieldTitle('published_date')"
             :aria-invalid="invalid('published_date') ? 'true' : undefined"
@@ -354,42 +338,42 @@ watch(docTypeDisabled, () => {
       <p id="meta-date-error" class="field-error" aria-live="polite">{{ errorText('published_date') }}</p>
 
       <label for="meta-publisher">Publisher</label>
-      <input id="meta-publisher" type="text" data-prks-work-field="publisher" v-model="draft.publisher" :disabled="fieldOff('publisher')" :title="fieldTitle('publisher')" @focus="onFocus('publisher')" @blur="onBlur('publisher')">
+      <input id="meta-publisher" type="text" data-prks-work-field="publisher" :value="draft.publisher" @input="onInput('publisher', $event)" :disabled="fieldOff('publisher')" :title="fieldTitle('publisher')" @focus="onFocus('publisher')" @blur="onBlur('publisher')">
 
       <label for="meta-location">Location (place of publication)</label>
-      <input id="meta-location" type="text" data-prks-work-field="location" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off" v-model="draft.location" :disabled="fieldOff('location')" :title="fieldTitle('location')" @focus="onFocus('location')" @blur="onBlur('location')">
+      <input id="meta-location" type="text" data-prks-work-field="location" placeholder="e.g. Cambridge, UK or Paris; Berlin" autocomplete="off" :value="draft.location" @input="onInput('location', $event)" :disabled="fieldOff('location')" :title="fieldTitle('location')" @focus="onFocus('location')" @blur="onBlur('location')">
       <p class="meta-row meta-row--hint">Separate multiple places with semicolons; BibLaTeX export joins them with &quot; and &quot;.</p>
 
       <label for="meta-edition">Edition</label>
-      <input id="meta-edition" type="text" data-prks-work-field="edition" placeholder="e.g. 2 or revised" autocomplete="off" v-model="draft.edition" :disabled="fieldOff('edition')" :title="fieldTitle('edition')" @focus="onFocus('edition')" @blur="onBlur('edition')">
+      <input id="meta-edition" type="text" data-prks-work-field="edition" placeholder="e.g. 2 or revised" autocomplete="off" :value="draft.edition" @input="onInput('edition', $event)" :disabled="fieldOff('edition')" :title="fieldTitle('edition')" @focus="onFocus('edition')" @blur="onBlur('edition')">
 
       <label for="meta-journal">Journal</label>
-      <input id="meta-journal" type="text" data-prks-work-field="journal" v-model="draft.journal" :disabled="fieldOff('journal')" :title="fieldTitle('journal')" @focus="onFocus('journal')" @blur="onBlur('journal')">
+      <input id="meta-journal" type="text" data-prks-work-field="journal" :value="draft.journal" @input="onInput('journal', $event)" :disabled="fieldOff('journal')" :title="fieldTitle('journal')" @focus="onFocus('journal')" @blur="onBlur('journal')">
 
       <div class="form-grid-2 form-grid-2--compact">
         <div>
           <label for="meta-volume">Volume</label>
-          <input id="meta-volume" type="text" data-prks-work-field="volume" v-model="draft.volume" :disabled="fieldOff('volume')" :title="fieldTitle('volume')" @focus="onFocus('volume')" @blur="onBlur('volume')">
+          <input id="meta-volume" type="text" data-prks-work-field="volume" :value="draft.volume" @input="onInput('volume', $event)" :disabled="fieldOff('volume')" :title="fieldTitle('volume')" @focus="onFocus('volume')" @blur="onBlur('volume')">
         </div>
         <div>
           <label for="meta-issue">Issue</label>
-          <input id="meta-issue" type="text" data-prks-work-field="issue" v-model="draft.issue" :disabled="fieldOff('issue')" :title="fieldTitle('issue')" @focus="onFocus('issue')" @blur="onBlur('issue')">
+          <input id="meta-issue" type="text" data-prks-work-field="issue" :value="draft.issue" @input="onInput('issue', $event)" :disabled="fieldOff('issue')" :title="fieldTitle('issue')" @focus="onFocus('issue')" @blur="onBlur('issue')">
         </div>
       </div>
 
       <div class="form-grid-2 form-grid-2--compact">
         <div>
           <label for="meta-pages">Pages</label>
-          <input id="meta-pages" type="text" data-prks-work-field="pages" v-model="draft.pages" :disabled="fieldOff('pages')" :title="fieldTitle('pages')" @focus="onFocus('pages')" @blur="onBlur('pages')">
+          <input id="meta-pages" type="text" data-prks-work-field="pages" :value="draft.pages" @input="onInput('pages', $event)" :disabled="fieldOff('pages')" :title="fieldTitle('pages')" @focus="onFocus('pages')" @blur="onBlur('pages')">
         </div>
         <div>
           <label for="meta-isbn">ISBN</label>
-          <input id="meta-isbn" type="text" data-prks-work-field="isbn" v-model="draft.isbn" :disabled="fieldOff('isbn')" :title="fieldTitle('isbn')" @focus="onFocus('isbn')" @blur="onBlur('isbn')">
+          <input id="meta-isbn" type="text" data-prks-work-field="isbn" :value="draft.isbn" @input="onInput('isbn', $event)" :disabled="fieldOff('isbn')" :title="fieldTitle('isbn')" @focus="onFocus('isbn')" @blur="onBlur('isbn')">
         </div>
       </div>
 
       <label for="meta-doi">DOI</label>
-      <input id="meta-doi" type="text" data-prks-work-field="doi" v-model="draft.doi" :disabled="fieldOff('doi')" :title="fieldTitle('doi')" @focus="onFocus('doi')" @blur="onBlur('doi')">
+      <input id="meta-doi" type="text" data-prks-work-field="doi" :value="draft.doi" @input="onInput('doi', $event)" :disabled="fieldOff('doi')" :title="fieldTitle('doi')" @focus="onFocus('doi')" @blur="onBlur('doi')">
 
       <label for="meta-source-url">Original URL (optional)</label>
       <input
@@ -398,7 +382,8 @@ watch(docTypeDisabled, () => {
         data-prks-work-field="source_url"
         placeholder="https://…"
         autocomplete="off"
-        v-model="draft.source_url"
+        :value="draft.source_url"
+        @input="onInput('source_url', $event)"
         :disabled="fieldOff('source_url')"
         :title="fieldTitle('source_url')"
         @focus="onFocus('source_url')"
@@ -411,7 +396,8 @@ watch(docTypeDisabled, () => {
         id="meta-abstract"
         class="textarea-md"
         data-prks-work-field="abstract"
-        v-model="draft.abstract"
+        :value="draft.abstract"
+        @input="onInput('abstract', $event)"
         :disabled="fieldOff('abstract')"
         :title="fieldTitle('abstract')"
         @focus="onFocus('abstract')"
@@ -428,7 +414,8 @@ watch(docTypeDisabled, () => {
         inputmode="numeric"
         placeholder="1"
         aria-describedby="meta-thumb-page-error"
-        v-model="draft.thumb_page"
+        :value="draft.thumb_page"
+        @input="onInput('thumb_page', $event)"
         :disabled="fieldOff('thumb_page')"
         :title="fieldTitle('thumb_page')"
         :aria-invalid="invalid('thumb_page') ? 'true' : undefined"
@@ -437,9 +424,10 @@ watch(docTypeDisabled, () => {
       >
       <p id="meta-thumb-page-error" class="field-error" aria-live="polite">{{ errorText('thumb_page') }}</p>
       <p class="meta-row meta-row--hint">Which page of the PDF to use as the card image. Leave empty for page 1.</p>
+      </template>
 
       <div class="prks-form-actions form-actions">
-        <button id="save-work-bib-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">Save bibliographic details</button>
+        <button id="save-work-bib-btn" type="button" class="prks-btn prks-btn--secondary" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">{{ isVideo ? 'Save channel name' : 'Save bibliographic details' }}</button>
       </div>
       <div class="meta-row" data-prks-role="work-bib-sync" aria-live="polite">
         <span>{{ statusLine('bib') }}</span>

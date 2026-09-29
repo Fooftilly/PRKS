@@ -99,4 +99,24 @@ describe('work metadata editor session', () => {
     expect(button.disabled).toBe(false)
     expect(button.hasAttribute('aria-disabled')).toBe(false)
   })
+
+  it('writes a typed field onto the owning draft', async () => {
+    document.body.innerHTML = `
+      <div id="panel-content" data-prks-owner-tab-id="main" data-prks-owner-generation="1">
+        <div data-prks-role="work-metadata-editor-anchor"></div>
+      </div>`
+    const main = owner('main', 'A', 'Alpha')
+    expect(presentWorkMetadataEditor(main, 'pdf')).toBe(true)
+    await nextTick()
+    const title = document.getElementById('meta-title') as HTMLInputElement
+    title.value = 'Typed title'
+    title.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(main.ui.workMetaDraft.title).toBe('Typed title')
+    const author = document.getElementById('meta-author-text') as HTMLInputElement
+    const save = document.getElementById('save-work-bib-btn')
+    expect(author).toBeInstanceOf(HTMLInputElement)
+    expect(save).toBeInstanceOf(HTMLButtonElement)
+    expect(document.querySelectorAll('#meta-author-text')).toHaveLength(1)
+    expect(document.querySelectorAll('#save-work-bib-btn')).toHaveLength(1)
+  })
 })

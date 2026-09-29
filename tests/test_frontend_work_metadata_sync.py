@@ -86,6 +86,11 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         for field in SYNCED:
             with self.subTest(field=field):
                 self.assertIn('data-prks-work-field="%s"' % field, editor, field)
+        # Sonar reads the template source. v-if branches are not mutually
+        # exclusive there, and v-model writes the draft prop in place.
+        self.assertNotIn('v-model="draft.', editor)
+        self.assertEqual(editor.count('id="meta-author-text"'), 1)
+        self.assertEqual(editor.count('id="save-work-bib-btn"'), 1)
 
     def test_no_frontend_code_patches_a_local_first_work_field(self):
         """The regression this exists to catch, in the general case.

@@ -5,12 +5,14 @@
 import { h, isReactive, reactive, render } from 'vue'
 import WorkMetadataEditor from './WorkMetadataEditor.vue'
 import {
+  WORK_META_FIELDS,
   acceptWorkMetaField,
   cloneWorkMetaDraft,
   workMetaDraftIsDirty,
   workMetaGroupFields,
   workMetaSessionStill,
   type WorkMetaDraft,
+  type WorkMetaField,
   type WorkMetaSessionView,
 } from './metadata-draft'
 
@@ -121,6 +123,11 @@ export function presentWorkMetadataEditor(ctx: WorkMetadataOwner, sourceKind: st
   const blur = (field: string) => {
     if (mounted && mounted.draft === draft && mounted.focusedField === field) mounted.focusedField = ''
   }
+  const updateField = (field: string, value: string) => {
+    if ((WORK_META_FIELDS as readonly string[]).includes(field)) {
+      draft[field as WorkMetaField] = value
+    }
+  }
   render(
     h(WorkMetadataEditor, {
       workId,
@@ -129,6 +136,7 @@ export function presentWorkMetadataEditor(ctx: WorkMetadataOwner, sourceKind: st
       chrome,
       onFocusField: focus,
       onBlurField: blur,
+      onUpdateField: updateField,
     }),
     anchor,
   )
