@@ -402,7 +402,9 @@ Offline/local-first work has a large, load-bearing domain contract that is
 intentionally scoped out of this global file. **Before changing offline,
 local-first, synchronization, service-worker, conflict/revision, or client-cache
 behavior — or tests that encode those contracts — read
-`docs/agent-rules/offline-pwa.md` completely.**
+`docs/agent-rules/offline-pwa.md` as the router, then load
+`offline-foundations.md` plus only the relevant leaf files selected by
+`docs/agent-context/sync-map.md`.**
 
 Global rules still apply, especially:
 
@@ -418,8 +420,8 @@ Global rules still apply, especially:
 
 The detailed operation families, projection rules, dependency ordering,
 conflict semantics, service-worker behavior, test contracts, and historical
-load-bearing constraints are maintained in
-`docs/agent-rules/offline-pwa.md`.
+load-bearing constraints are maintained in the bounded leaf files routed by
+`docs/agent-rules/offline-pwa.md` and `docs/agent-context/sync-map.md`.
 
 ## Interaction feedback
 
