@@ -45,6 +45,7 @@
             personWorksEditing: false,
             personGroupEditing: false,
             personGroupMembersEditing: false,
+            personGroupIndex: { query: '', expandedIds: [] },
             playlistEditing: false,
             playlistRename: {},
             argumentEditing: false,

@@ -15,6 +15,7 @@ export interface PersonGroupIntentOwner {
     personGroupEditSession?: number
     personGroupMemberSession?: number
     personGroupFieldBaseline?: PersonGroupFieldDraft & { groupId?: string } | null
+    personGroupIndex?: { query?: string; expandedIds?: string[] }
   }
   getEntity?: (type: string) => { id?: string; name?: string } | null
   setEntity?: (type: string, value: unknown) => void
@@ -40,6 +41,8 @@ export interface PersonGroupIntents {
   save(groupId: string, draft: PersonGroupFieldDraft, baseline: PersonGroupFieldDraft, session: number): Promise<PersonGroupSaveResult>
   remove(groupId: string, session: number): Promise<void>
   bindChrome(): void
+  indexChrome(): { query: string; expandedIds: string[] }
+  writeIndexChrome(query: string, expandedIds: readonly string[]): void
 }
 
 export const personGroupIntentsKey: InjectionKey<PersonGroupIntents> = Symbol('prks-person-group-intents')
@@ -131,6 +134,25 @@ export function browserPersonGroupIntents(owner: PersonGroupIntentOwner | null |
     bindChrome() {
       const bind = window.prksBindPersonGroupDetailChrome
       if (typeof bind === 'function' && owner) bind(owner)
+    },
+
+    indexChrome() {
+      const stored = owner?.ui?.personGroupIndex
+      const expandedIds = Array.isArray(stored?.expandedIds)
+        ? stored.expandedIds.map((id) => String(id))
+        : []
+      return {
+        query: typeof stored?.query === 'string' ? stored.query : '',
+        expandedIds,
+      }
+    },
+
+    writeIndexChrome(query, expandedIds) {
+      if (!owner?.ui) return
+      owner.ui.personGroupIndex = {
+        query: String(query ?? ''),
+        expandedIds: [...expandedIds].map((id) => String(id)),
+      }
     },
   }
 }

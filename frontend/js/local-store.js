@@ -3450,7 +3450,7 @@
 
         /* ---- Person Groups: construction, fields, membership, deletion ---- */
 
-        function createPersonGroup(fields) {
+        function createPersonGroup(fields, stillOwns) {
             const payload = canonicalPersonGroupPayload(fields);
             if (!payload.name) {
                 return Promise.reject(localStoreError('invalid_envelope',
@@ -3459,6 +3459,10 @@
             return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    /* The catalogue await and this read can both outlive the
+                     * editor that typed the parent. Leave every operation row
+                     * as it was. */
+                    if (!callerStillOwns(stillOwns)) { setResult(null); return; }
                     /* A group created under a parent this device also created
                      * offline waits for that parent: the server validates the
                      * hierarchy, and a parent it has never heard of is a
@@ -3474,7 +3478,7 @@
                         payload: payload,
                         base_revision: null,
                         depends_on: parentOp ? [parentOp.op_id] : [],
-                    }, null));
+                    }, null, stillOwns));
                 });
         }
 

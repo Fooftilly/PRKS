@@ -26,6 +26,8 @@ require("../../frontend/js/person-state.js");
 require("../../frontend/js/person-metadata-state.js");
 require("../../frontend/js/person-group-state.js");
 require("../../frontend/js/work-role-state.js");
+globalThis.window = globalThis.window || globalThis;
+require("../../frontend/js/components/people-groups.js");
 
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
@@ -697,6 +699,109 @@ async function aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn() {
     assert.ok(runtime.notifications() >= 1, "a committed field edit still notifies sync");
 }
 
+async function aStaleGroupEditDoesNotCreateATypedParent() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const runtime = runtimeForStore(store);
+    await store.listOperations();
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        base: globalThis.prksAcknowledgedPersonGroupBase,
+        catalogue: globalThis.prksEffectivePersonGroupCatalogue,
+    };
+    const alerts = [];
+    const base = baseAt(
+        { name: 1, description: 1, parent_id: 1 },
+        { name: "Group A", description: "Kept", parent_id: "" });
+    const shown = { name: "Group A", description: "Kept", parent_id: "", parent_name: "" };
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => [];
+    globalThis.prksAcknowledgedPersonGroupBase = async () => base;
+
+    function editingContext() {
+        return {
+            destroyed: false,
+            ui: { personGroupEditing: true, personGroupEditSession: 4 },
+            lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-A" } },
+            getEntity: () => ({ id: "PG-A", name: "Group A" }),
+        };
+    }
+    function draft(parentName) {
+        return { name: "Group A", description: "Kept", parent_id: "", parent_name: parentName };
+    }
+    function parentCreates(name) {
+        return store.listOperations().then(rows => rows.filter(row =>
+            row.operation === "CREATE_PERSON_GROUP" && row.payload && row.payload.name === name));
+    }
+    function fieldWrites() {
+        return store.listOperations().then(rows => rows.filter(row =>
+            row.operation === "SET_PERSON_GROUP_FIELD" && row.entity_id === "PG-A"));
+    }
+
+    try {
+        const duringCatalogue = editingContext();
+        let releaseCatalogue;
+        globalThis.prksEffectivePersonGroupCatalogue = () => new Promise((resolve) => {
+            releaseCatalogue = () => {
+                duringCatalogue.ui.personGroupEditing = false;
+                resolve([]);
+            };
+        });
+        const catalogueSave = globalThis.savePersonGroupEditor(
+            duringCatalogue, "PG-A", draft("Catalogue Parent"), shown,
+            duringCatalogue.ui.personGroupEditSession);
+        await settle();
+        releaseCatalogue();
+        const catalogueResult = await catalogueSave;
+        assert.equal(catalogueResult && catalogueResult.quiet, true,
+            "a catalogue that outlives the editor stays quiet");
+        assert.deepEqual(await parentCreates("Catalogue Parent"), [],
+            "losing the session during the catalogue does not create a parent");
+        assert.deepEqual(await fieldWrites(), [],
+            "losing the session during the catalogue does not write Group A");
+
+        globalThis.prksEffectivePersonGroupCatalogue = async () => [];
+        const duringCreate = editingContext();
+        const gate = {
+            set owned(value) {
+                if (value === false) duringCreate.ui.personGroupEditing = false;
+            },
+        };
+        loseOwnershipOnNextOperationsPut(idb, gate);
+        const beforeNotify = runtime.notifications();
+        const createResult = await globalThis.savePersonGroupEditor(
+            duringCreate, "PG-A", draft("Idb Parent"), shown,
+            duringCreate.ui.personGroupEditSession);
+        assert.equal(createResult && createResult.quiet, true,
+            "a parent create that loses the editor stays quiet");
+        assert.equal(duringCreate.ui.personGroupEditing, false,
+            "ownership changed during the parent create");
+        assert.deepEqual(await parentCreates("Idb Parent"), [],
+            "aborting the parent create leaves no CREATE_PERSON_GROUP");
+        assert.deepEqual(await fieldWrites(), [],
+            "aborting the parent create leaves no field write for Group A");
+        assert.equal(runtime.notifications(), beforeNotify,
+            "a rolled-back parent create does not notify sync");
+        assert.deepEqual(alerts, [], "a stale parent create does not alert");
+
+        const owned = editingContext();
+        const saved = await globalThis.savePersonGroupEditor(
+            owned, "PG-A", draft("Owned Parent"), shown, owned.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true, "an edit that still owns the session saves");
+        const created = await parentCreates("Owned Parent");
+        assert.equal(created.length, 1, "a live session still creates the typed parent");
+        const fields = await fieldWrites();
+        assert.equal(fields.length, 1, "a live session still writes Group A's parent");
+        assert.equal(fields[0].payload.value, created[0].entity_id);
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksAcknowledgedPersonGroupBase = previous.base;
+        globalThis.prksEffectivePersonGroupCatalogue = previous.catalogue;
+    }
+}
+
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
@@ -724,6 +829,7 @@ async function main() {
     await anOlderSessionCannotCommitAGroupFieldDuringTheRead();
     await anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement();
     await aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn();
+    await aStaleGroupEditDoesNotCreateATypedParent();
     console.log("All " + checks + " person group checks passed");
 }
 

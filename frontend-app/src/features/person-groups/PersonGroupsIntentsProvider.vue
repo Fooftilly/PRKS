@@ -23,6 +23,8 @@ provide(personGroupIntentsKey, {
   save: (groupId, draft, baseline, session) => current.value.save(groupId, draft, baseline, session),
   remove: (groupId, session) => current.value.remove(groupId, session),
   bindChrome: () => current.value.bindChrome(),
+  indexChrome: () => current.value.indexChrome(),
+  writeIndexChrome: (query, expandedIds) => current.value.writeIndexChrome(query, expandedIds),
 })
 </script>
 

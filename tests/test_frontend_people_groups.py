@@ -130,8 +130,16 @@ class FrontendPeopleGroupsTests(unittest.TestCase):
         self.assertNotIn("searchByOwner", index)
         self.assertNotIn("expandedByOwner", index)
         self.assertNotIn("new Map", index)
-        self.assertIn("const query = ref('')", index)
-        self.assertIn("const expandedIds = ref(new Set<string>())", index)
+        self.assertIn("indexChrome()", index)
+        self.assertIn("writeIndexChrome", index)
+        intents = _read(_VUE_INTENTS)
+        self.assertIn("personGroupIndex", intents)
+        self.assertIn("writeIndexChrome", intents)
+        context = _read(_TAB_CONTEXT)
+        empty_ui = context.split("function emptyUi()", 1)[1].split("function resetEditUi", 1)[0]
+        reset_ui = context.split("function resetEditUi(ui)", 1)[1].split("function safeCall", 1)[0]
+        self.assertIn("personGroupIndex:", empty_ui)
+        self.assertNotIn("personGroupIndex", reset_ui)
         self.assertFalse(os.path.exists(os.path.join(os.path.dirname(_VUE_INDEX), "ui-state.ts")))
         self.assertIn("prks-group-tree__toggle-spacer", tree)
         self.assertIn("node.hasChildren ? (node.collapsed ? 'false' : 'true') : undefined", tree)

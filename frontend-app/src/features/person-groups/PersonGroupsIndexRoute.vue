@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { personGroupIntentsKey } from './intents'
 import { buildGroupTree, collapsibleGroupIds } from './projection'
 import type { PersonGroupsIndexProjection } from './projection'
@@ -10,8 +10,13 @@ const props = defineProps<{
 }>()
 
 const intents = inject(personGroupIntentsKey)
-const query = ref('')
-const expandedIds = ref(new Set<string>())
+const chrome = intents?.indexChrome() ?? { query: '', expandedIds: [] as string[] }
+const query = ref(chrome.query)
+const expandedIds = ref(new Set(chrome.expandedIds))
+
+watch([query, expandedIds], () => {
+  intents?.writeIndexChrome(query.value, [...expandedIds.value])
+}, { flush: 'sync' })
 
 const unavailable = computed(() => props.projection.availability === 'unavailable')
 const groups = computed(() => props.projection.groups)

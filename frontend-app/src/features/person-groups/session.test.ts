@@ -46,6 +46,7 @@ function owner(tabId: string) {
         parent_name: string
         groupId?: string
       },
+      personGroupIndex: { query: '', expandedIds: [] as string[] },
     },
     getEntity: () => null as { id?: string; name?: string } | null,
     registerCleanup(fn: () => void) {
@@ -68,31 +69,75 @@ function typeSearch(input: HTMLInputElement, value: string): void {
 }
 
 describe('Person Groups session', () => {
-  it('keeps Main and Secondary search apart and drops it when the surface unmounts', async () => {
+  it('restores each pane search and collapse after index, detail, and index', async () => {
     const main = owner('main')
     const secondary = owner('secondary')
     const mainHost = host()
     const secondaryHost = host()
+    const detail = {
+      id: 'G1',
+      name: 'Parent Branch',
+      description: '',
+      parent: null,
+      children: [],
+      members: [],
+    }
     presentPersonGroupsIndex({ owner: main, host: mainHost, items: [parent, child], generation: 1 })
     presentPersonGroupsIndex({ owner: secondary, host: secondaryHost, items: [parent, child], generation: 1 })
     await flushView()
+    const mainToggle = mainHost.querySelector('.prks-group-tree__toggle')
+    expect(mainToggle).toBeInstanceOf(HTMLButtonElement)
+    mainToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     const mainSearch = mainHost.querySelector('#prks-group-library-search')
     const secondarySearch = secondaryHost.querySelector('#prks-group-library-search')
     expect(mainSearch).toBeInstanceOf(HTMLInputElement)
     expect(secondarySearch).toBeInstanceOf(HTMLInputElement)
     typeSearch(mainSearch as HTMLInputElement, 'Parent')
-    typeSearch(secondarySearch as HTMLInputElement, 'zzzz-only')
+    typeSearch(secondarySearch as HTMLInputElement, 'side-only')
     await flushView()
-    expect(mainHost.textContent).toContain('Parent Branch')
+    expect(main.ui.personGroupIndex).toEqual({ query: 'Parent', expandedIds: ['G1'] })
+    expect(secondary.ui.personGroupIndex).toEqual({ query: 'side-only', expandedIds: [] })
     expect(secondaryHost.textContent).toContain('No groups match your search.')
-    expect(secondaryHost.textContent).not.toContain('Parent Branch')
-    dismissPersonGroups(secondary)
-    presentPersonGroupsIndex({ owner: secondary, host: secondaryHost, items: [parent, child], generation: 2 })
+
+    presentPersonGroupDetail({ owner: main, host: mainHost, group: detail, generation: 2 })
+    presentPersonGroupDetail({ owner: secondary, host: secondaryHost, group: detail, generation: 2 })
     await flushView()
-    const remounted = secondaryHost.querySelector('#prks-group-library-search')
-    expect(remounted).toBeInstanceOf(HTMLInputElement)
-    expect((remounted as HTMLInputElement).value).toBe('')
-    expect(secondaryHost.textContent).toContain('Parent Branch')
+    expect(mainHost.querySelector('[data-prks-person-groups-index-view]')).toBeNull()
+    expect(secondaryHost.querySelector('[data-prks-person-groups-index-view]')).toBeNull()
+
+    presentPersonGroupsIndex({ owner: main, host: mainHost, items: [parent, child], generation: 3 })
+    presentPersonGroupsIndex({ owner: secondary, host: secondaryHost, items: [parent, child], generation: 3 })
+    await flushView()
+    const mainRestored = mainHost.querySelector('#prks-group-library-search')
+    const secondaryRestored = secondaryHost.querySelector('#prks-group-library-search')
+    expect(mainRestored).toBeInstanceOf(HTMLInputElement)
+    expect(secondaryRestored).toBeInstanceOf(HTMLInputElement)
+    expect((mainRestored as HTMLInputElement).value).toBe('Parent')
+    expect((secondaryRestored as HTMLInputElement).value).toBe('side-only')
+    expect(main.ui.personGroupIndex.expandedIds).toEqual(['G1'])
+    expect(secondary.ui.personGroupIndex.expandedIds).toEqual([])
+    expect(secondaryHost.textContent).not.toContain('Parent Branch')
+
+    mainHost.querySelector('#prks-group-library-search-clear')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushView()
+    const mainRow = mainHost.querySelector('[role="treeitem"][data-group-id="G1"]')
+    const mainBranch = mainHost.querySelector('.prks-group-tree__branch[data-group-id="G1"]')
+    expect(mainRow?.getAttribute('aria-expanded')).toBe('true')
+    expect(mainBranch?.classList.contains('is-collapsed')).toBe(false)
+    expect(mainHost.textContent).toContain('Child Branch')
+    expect((secondaryHost.querySelector('#prks-group-library-search') as HTMLInputElement).value).toBe('side-only')
+    expect(secondary.ui.personGroupIndex).toEqual({ query: 'side-only', expandedIds: [] })
+
+    const fresh = owner('fresh')
+    const freshHost = host()
+    presentPersonGroupsIndex({ owner: fresh, host: freshHost, items: [parent, child], generation: 1 })
+    await flushView()
+    const freshSearch = freshHost.querySelector('#prks-group-library-search')
+    const freshRow = freshHost.querySelector('[role="treeitem"][data-group-id="G1"]')
+    expect(freshSearch).toBeInstanceOf(HTMLInputElement)
+    expect((freshSearch as HTMLInputElement).value).toBe('')
+    expect(freshRow?.getAttribute('aria-expanded')).toBe('false')
+    expect(main.ui.personGroupIndex.expandedIds).toEqual(['G1'])
   })
 
   it('retains the mounted surface across beginRoute and dismisses when the flag is clear', async () => {

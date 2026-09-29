@@ -31,24 +31,36 @@ function escapeHtmlGroup(s) {
  *
  * Returns the id, '' for "top level", or undefined when it was refused.
  */
-async function prksResolvePersonGroupParent(parentId, parentName, selfId) {
+async function prksResolvePersonGroupParent(parentId, parentName, selfId, stillOwns) {
+    const dropped = () => typeof stillOwns === 'function' && !stillOwns();
     const typed = String(parentName || '').trim();
     // Both answers are known without reading anything. The catalogue read
     // below goes through the ordinary read-through, which offline has to let a
     // request fail before the cache answers -- so it is worth not doing.
     if (String(parentId || '').trim()) return String(parentId).trim();
     if (!typed) return '';
+    if (dropped()) return undefined;
     const catalogue = typeof prksEffectivePersonGroupCatalogue === 'function'
         ? await prksEffectivePersonGroupCatalogue() : [];
+    if (dropped()) return undefined;
     const label = row => (row && String(row.name || '')).toLowerCase();
     const match = (catalogue || []).find(row => row && row.id !== selfId &&
         (label(row) === typed.toLowerCase() ||
             prksGroupRowLabel(row, catalogue).toLowerCase() === typed.toLowerCase()));
-    if (match) return match.id;
+    if (match) return dropped() ? undefined : match.id;
     try {
-        const created = await prksCreatePersonGroupDurably({ name: typed, description: '' });
+        const created = await prksCreatePersonGroupDurably(
+            { name: typed, description: '' }, stillOwns);
+        if (dropped()) return undefined;
+        if (!created || !created.entity_id) {
+            await prksAlertMessage(prksPersonGroupSaveMessage(
+                { prksLocalStoreCode: 'invalid_envelope' }, 'create that parent group'),
+                'Could not save');
+            return undefined;
+        }
         return created.entity_id;
     } catch (error) {
+        if (dropped() || (error && error.prksLocalStoreCode === 'ownership_lost')) return undefined;
         await prksAlertMessage(prksPersonGroupSaveMessage(error, 'create that parent group'),
             'Could not save');
         return undefined;
@@ -493,7 +505,8 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
     const parentShownName = String(baseFields.parent_name == null ? '' : baseFields.parent_name);
     let parentId = parentDraftId;
     if (parentDraftId !== parentShownId || parentDraftName.trim() !== parentShownName.trim()) {
-        const resolvedParent = await prksResolvePersonGroupParent(parentDraftId, parentDraftName, groupId);
+        const resolvedParent = await prksResolvePersonGroupParent(
+            parentDraftId, parentDraftName, groupId, stillOwns);
         if (resolvedParent === undefined || !stillOwns()) return { ok: false, quiet: !stillOwns() };
         parentId = resolvedParent;
     }

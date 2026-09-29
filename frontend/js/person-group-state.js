@@ -495,9 +495,22 @@
         return runtime;
     }
 
-    async function createGroupDurably(fields) {
+    async function createGroupDurably(fields, stillOwns) {
+        if (ownershipDropped(stillOwns)) return null;
         const runtime = sync();
-        const op = await runtime.store.createPersonGroup(fields);
+        let op;
+        try {
+            op = await runtime.store.createPersonGroup(fields, stillOwns);
+        } catch (error) {
+            /* Rejected means the transaction aborted. A session that ended
+             * during the parent create is not an error to show. */
+            if (ownershipDropped(stillOwns) ||
+                (error && error.prksLocalStoreCode === 'ownership_lost')) return null;
+            throw error;
+        }
+        /* A clean return stored nothing. A resolved envelope committed, so
+         * notify even when the editor that started it has moved on. */
+        if (!op) return null;
         if (typeof runtime.changed === 'function') runtime.changed();
         return op;
     }
