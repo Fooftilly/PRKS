@@ -888,7 +888,8 @@ on that mirror for these roots.
    interrupted `relocate` is resumed by rerunning it, which verifies the
    matching `relocation_id` on both markers, or undone with `abort`.
    `finalize` and `abort` likewise refuse unless both markers name the same
-   `relocation_id`. The destination is left `staging`, and the command
+   `relocation_id`. The one exception is `finalize` with an unreachable
+   source, which checks the destination marker alone (below). The destination is left `staging`, and the command
    prints the new path and the `relocation_id`. The old library's data is
    untouched. **Neither root is bindable now.** Because the selector lives
    outside PRKS, nothing can prove which way the move went, so both ends stay
@@ -904,7 +905,16 @@ on that mirror for these roots.
      both markers. They keep both locks until their last marker write. No
      transition is ever based on a reading taken before the locks were
      held, so a concurrent `finalize` and `abort` are strictly ordered, and
-     the second one re-reads and refuses. **Precondition, mirroring
+     the second one re-reads and refuses. **Unreachable source.** `finalize`
+     distinguishes a source lock that is **busy** from a source that
+     **cannot be opened**, for example a removed disk or an unmounted volume.
+     If the lock is busy, it refuses. If the source is unreachable, it
+     proceeds under the destination lock alone: it validates only the
+     destination marker (its `relocation_id` and `peer_hint`), performs P5
+     and P6(b), and leaves P7 to the best-effort retry. This is safe because
+     `abort` must hold the destination lock too, so the two still exclude
+     each other. `abort` has no such exception: unfencing the source needs
+     the source, so `abort` always requires both locks. **Precondition, mirroring
      `abort`:** the destination marker is `staging` for this `relocation_id`,
      with `relocation.phase` absent or `"committed"`. The latter case is a
      rerun. `phase: "aborted"` is **terminal**: `finalize` refuses it,
