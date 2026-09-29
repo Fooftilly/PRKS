@@ -69,6 +69,19 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         base = _SOURCE[_SOURCE.index("async function readBase"):_SOURCE.index("async function prepare")]
         self.assertLess(base.index("options.still"), base.index("ctx.setEntity"))
 
+    def test_rejected_base_reads_stay_on_the_current_read(self):
+        prepare = _META[_META.index("async function prepare"):_META.index("function mount")]
+        catch = prepare[prepare.index("} catch"):]
+        self.assertLess(catch.index("readVersion !== state.readVersion"), catch.index("state.observed = null"))
+        self.assertLess(catch.index("return"), catch.index("state.observed = null"))
+        base = _SOURCE[_SOURCE.index("async function readBase"):_SOURCE.index("async function prepare")]
+        source_catch = base[base.index("} catch"):]
+        self.assertLess(source_catch.index("readVersion !== state.readVersion"), source_catch.index("state.observed = null"))
+        self.assertLess(source_catch.index("options.still"), source_catch.index("state.observed = null"))
+        self.assertLess(source_catch.index("return false"), source_catch.index("state.observed = null"))
+        source_prepare = _SOURCE[_SOURCE.index("async function prepare"):_SOURCE.index("function mount")]
+        self.assertLess(source_prepare.index("if (!(await readBase"), source_prepare.index("safePaint"))
+
 
 if __name__ == "__main__":
     unittest.main()

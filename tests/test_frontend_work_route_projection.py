@@ -8,6 +8,13 @@ _PROJECT = Path(__file__).resolve().parents[1]
 _APP = _PROJECT / "frontend" / "js" / "app.js"
 _WORKS = _PROJECT / "frontend" / "js" / "components" / "works.js"
 _FEATURE = _PROJECT / "frontend-app" / "src" / "features" / "work"
+# The route projection boundary only. Later Work editors live beside it and
+# may name the existing durable sync API; that must not fail this contract.
+_BOUNDARY = (
+    _FEATURE / "projection.ts",
+    _FEATURE / "browser-entry.ts",
+    _FEATURE / "types.ts",
+)
 _BUILT = _PROJECT / "frontend" / "js" / "work-route-projection.js"
 _MAIN = _PROJECT / "frontend-app" / "src" / "main.ts"
 _INDEX = _PROJECT / "frontend" / "index.html"
@@ -121,8 +128,9 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertEqual(app.count("renderWorkDetails("), 1)
 
     def test_typed_boundary_does_not_own_durable_state_or_vue(self):
-        sources = sorted(_FEATURE.glob("*.ts"))
-        self.assertGreaterEqual(len(sources), 3)
+        sources = list(_BOUNDARY)
+        for path in sources:
+            self.assertTrue(path.is_file(), path.name)
         blob = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         for token in _FORBIDDEN:
             self.assertNotIn(token, blob, token)

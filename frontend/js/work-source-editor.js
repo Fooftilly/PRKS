@@ -190,7 +190,10 @@
          * null and the editor stays explicitly unavailable rather than
          * falling back to the stale pre-conflict Work. A session that ended
          * during the resolution must not adopt that re-read. */
-        if (!apply && still()) await readBase(ctx, state, { adopt: true, still: still });
+        if (!apply && still()) {
+            const settled = await readBase(ctx, state, { adopt: true, still: still });
+            if (!settled) return;
+        }
         if (still()) await safePaint(ctx, state);
     }
 
@@ -289,15 +292,15 @@
                     '/api/works/' + encodeURIComponent(state.workId),
                     { validate: value => !!value && value.id === state.workId }),
             ]);
-            if (!live(ctx, state) || readVersion !== state.readVersion) return;
-            if (options && typeof options.still === 'function' && !options.still()) return;
+            if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+            if (options && typeof options.still === 'function' && !options.still()) return false;
             const usable = stateResult && stateResult.source !== 'unavailable' &&
                 stateResult.value && workResult && workResult.source !== 'unavailable' &&
                 workResult.value;
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
-            if (!usable) { state.observed = null; return; }
+            if (!usable) { state.observed = null; return true; }
             state.observed = baseOf(stateResult.value.revision,
                 root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
             /* The server's Work replaces what this tab was holding. After
@@ -309,11 +312,17 @@
                 ctx.setEntity('work', workResult.value);
                 writeInput(ctx, state, workResult.value.source_url || '');
             }
-        } catch (_) { state.observed = null; }
+            return true;
+        } catch (_) {
+            if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+            if (options && typeof options.still === 'function' && !options.still()) return false;
+            state.observed = null;
+            return true;
+        }
     }
 
     async function prepare(ctx, state) {
-        await readBase(ctx, state);
+        if (!(await readBase(ctx, state))) return;
         await safePaint(ctx, state);
     }
 
@@ -336,7 +345,9 @@
                  * back, the editor has to go and get it, or the control stays
                  * dead until the user navigates away and returns. */
                 if (!state.observed && root.prksOfflineRuntimeState() === 'online') {
-                    void readBase(ctx, state, { adopt: true }).then(() => safePaint(ctx, state));
+                    void readBase(ctx, state, { adopt: true }).then(settled => {
+                        if (settled) void safePaint(ctx, state);
+                    });
                     return;
                 }
                 void safePaint(ctx, state);

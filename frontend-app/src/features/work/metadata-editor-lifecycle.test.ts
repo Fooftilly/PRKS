@@ -31,6 +31,8 @@ type EditorState = {
   observed: unknown
   error: string | null
   errors?: Record<string, string | null>
+  readVersion?: number
+  preparing?: Promise<void>
 }
 
 type WorkCtx = {
@@ -70,12 +72,17 @@ type LifecycleWindow = {
   prksVuePresentWorkMetadataEditor: (ctx: WorkCtx, sourceKind: string) => boolean
   prksSync: {
     changed: () => void
+    subscribe?: (event: { acknowledged?: unknown; operation?: string; op?: unknown }) => () => void
     store: {
       saveWorkMetadataFields: (workId: string, changes: unknown, observed: unknown) => Promise<void>
       saveWorkSource: (workId: string, source: unknown, observed: unknown) => Promise<void>
       resolveConflict: (opId: string, apply: boolean) => Promise<void>
     }
   }
+  prksOfflineRuntimeSubscribe: (listener: () => void) => () => void
+  prksReadWorkMetadataState: (workId: string) => Promise<{ value: unknown }>
+  prksMountWorkMetadataEditor: (ctx: WorkCtx, workId: string, options?: { editing?: boolean }) => void
+  prksMountWorkSourceEditor: (ctx: WorkCtx, workId: string, options?: { editing?: boolean }) => void
   prksWorkFieldToCanonical: (field: string, value: string) => string | null
   prksDirtyWorkMetadataFields: () => Record<string, string>
   prksObservedWorkFields: () => Record<string, string>
@@ -402,4 +409,103 @@ describe('work metadata editor lifecycle', () => {
     await nextTick()
     expect(document.getElementById('meta-thumb-page-error')?.textContent).toBe(THUMB_ERROR)
   })
+
+  it('keeps the newer observed base when an older metadata read rejects', async () => {
+    const ctx = mount()
+    const older = deferred<{ value: { fields: { title: string } } }>()
+    const newer = deferred<{ value: { fields: { title: string } } }>()
+    let calls = 0
+    let paints = 0
+    installEditorRuntime()
+    panelWindow.prksReadWorkMetadataState = () => {
+      calls += 1
+      return calls === 1 ? older.promise : newer.promise
+    }
+    panelWindow.prksRefreshPendingWorkMetadata = () => {
+      paints += 1
+      return Promise.resolve([])
+    }
+    panelWindow.prksMountWorkMetadataEditor(ctx, 'work-a', { editing: true })
+    const state = ctx.getResource('workMetadataEditor')
+    const firstPrepare = state?.preparing
+    panelWindow.prksMountWorkMetadataEditor(ctx, 'work-a', { editing: true })
+    const secondPrepare = state?.preparing
+    if (!state || !firstPrepare || !secondPrepare) throw new Error('metadata read missing')
+    newer.resolve({ value: { fields: { title: 'Newer title' } } })
+    await secondPrepare
+    expect(state.observed).toEqual({ fields: { title: 'Newer title' } })
+    const paintsAfterNewer = paints
+    older.reject(new Error('stale metadata read'))
+    await firstPrepare
+    expect(state.observed).toEqual({ fields: { title: 'Newer title' } })
+    expect(paints).toBe(paintsAfterNewer)
+  })
+
+  it('keeps the newer observed source when an older source read rejects', async () => {
+    const ctx = mount()
+    installEditorRuntime()
+    panelWindow.prksWorkSourceOf = record => {
+      const source = record as { source_url?: string }
+      return { source_url: String(source.source_url || '') }
+    }
+    panelWindow.prksWorkSourceIdentity = source => source.source_url || ''
+    const reads: Array<ReturnType<typeof deferred<{ source: string; value: WorkRecord & { revision?: number } }>>> = []
+    let paints = 0
+    panelWindow.prksOfflineReadEntity = () => {
+      const gate = deferred<{ source: string; value: WorkRecord & { revision?: number } }>()
+      reads.push(gate)
+      return gate.promise
+    }
+    panelWindow.prksRefreshPendingWorkSources = () => {
+      paints += 1
+      return Promise.resolve([])
+    }
+    panelWindow.prksMountWorkSourceEditor(ctx, 'work-a', { editing: true })
+    const state = ctx.getResource('workSourceEditor')
+    const firstPrepare = state?.preparing
+    panelWindow.prksMountWorkSourceEditor(ctx, 'work-a', { editing: true })
+    const secondPrepare = state?.preparing
+    if (!state || !firstPrepare || !secondPrepare) throw new Error('source read missing')
+    expect(reads.length).toBe(4)
+    const newerWork = work()
+    newerWork.source_url = 'https://example.test/newer'
+    reads[2].resolve({ source: 'server', value: { ...newerWork, revision: 7 } })
+    reads[3].resolve({ source: 'server', value: newerWork })
+    await secondPrepare
+    expect(state.observed).toEqual({ revision: 7, identity: 'https://example.test/newer' })
+    const paintsAfterNewer = paints
+    reads[0].reject(new Error('stale source read'))
+    await firstPrepare
+    expect(state.observed).toEqual({ revision: 7, identity: 'https://example.test/newer' })
+    expect(paints).toBe(paintsAfterNewer)
+  })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+function installEditorRuntime() {
+  panelWindow.prksSync = {
+    changed: () => {},
+    subscribe: () => () => {},
+    store: {
+      saveWorkMetadataFields: () => Promise.resolve(),
+      saveWorkSource: () => Promise.resolve(),
+      resolveConflict: () => Promise.resolve(),
+    },
+  }
+  panelWindow.prksOfflineRuntimeSubscribe = () => () => {}
+  panelWindow.prksRefreshPendingWorkMetadata = () => Promise.resolve([])
+  panelWindow.prksWorkMetadataFieldOperations = () => []
+  panelWindow.prksPendingWorkMetadataState = () => 'ready'
+  panelWindow.prksOfflineRuntimeState = () => 'online'
+  panelWindow.prksRefreshPendingWorkSources = () => Promise.resolve([])
+  panelWindow.prksWorkSourceOperations = () => []
+}

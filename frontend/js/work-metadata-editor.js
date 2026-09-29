@@ -399,7 +399,14 @@
             const result = await root.prksReadWorkMetadataState(state.workId);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
             state.observed = result.value;
-        } catch (_) { state.observed = null; }
+        } catch (_) {
+            /* A rejected read is the same generation of work as a successful
+             * one. Closing and reopening Edit metadata reuses this state and
+             * starts a newer read; the older rejection must not clear the
+             * base that newer read installed, or repaint from the failure. */
+            if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            state.observed = null;
+        }
         await safePaint(ctx, state);
     }
 
