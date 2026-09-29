@@ -61,9 +61,11 @@ class EngineeringInvariantTests(unittest.TestCase):
                     "    def publish(self, a, b):\n"
                     f"        self.m = {module}\n"
                     f"        self.m.{attr}(a, b)\n"
+                    "        m = self.m\n"
+                    f"        m.{attr}(a, b)\n"
                 )
                 codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
-                self.assertEqual(codes, [code])
+                self.assertEqual(codes, [code, code])
 
     def test_blocks_direct_import_alias(self):
         findings = checker.check_source(

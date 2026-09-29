@@ -779,12 +779,17 @@ def _attribute_alias_bindings(
         # ``move = p.rename``: invoking it overwrites its destination argument.
         return {_BOUND_PATH_RENAME} | _expr_facts(value, scopes)
     key = _attr_key(value)
-    if key is not None and _BOUND_PATH_RENAME in _resolve(scopes, key):
-        # ``x = self.move`` after ``self.move = p.rename``.
-        return {_BOUND_PATH_RENAME} | _expr_facts(value, scopes)
-    qualified = [name.rsplit(".", 1) for name in _qualified_names(value, scopes)]
+    stored = set(_resolve(scopes, key)) if key is not None else set()
+    if stored:
+        # ``x = self.m`` / ``x = self.move`` copies whatever the tracked
+        # one-level attribute holds (a module, a callable, a saved rename).
+        return stored | _expr_facts(value, scopes)
+    qualified = _qualified_names(value, scopes)
     if qualified:
-        return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(value, scopes)
+        return {
+            ("name", *name.rsplit(".", 1)) if "." in name else ("module", name)
+            for name in qualified
+        } | _expr_facts(value, scopes)
     if value.attr in _TRACKED_HELPER_NAMES:
         owner = "<unbound>" if _is_class_receiver(value.value, scopes) else "<bound>"
         return {("name", owner, value.attr)} | _expr_facts(value, scopes)
