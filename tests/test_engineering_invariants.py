@@ -27,6 +27,113 @@ class EngineeringInvariantTests(unittest.TestCase):
         )
         self.assertEqual([f.code for f in findings], ["INV-STORAGE-001"])
 
+    def test_blocks_banned_callables_stored_on_attributes(self):
+        """``self.cp = shutil.copy2; self.cp(...)`` keeps the callable's identity."""
+        cases = {
+            "copy2": ("import shutil\n", "shutil.copy2", "INV-STORAGE-001"),
+            "os_replace": ("import os\n", "os.replace", "INV-DURABILITY-001"),
+            "os_fsync": ("import os\n", "os.fsync", "INV-DURABILITY-002"),
+        }
+        for label, (imports, callable_name, code) in cases.items():
+            with self.subTest(case=label):
+                source = (
+                    imports
+                    + "class Pub:\n"
+                    + "    def publish(self, a, b):\n"
+                    + f"        self.fn = {callable_name}\n"
+                    + "        self.fn(a, b)\n"
+                )
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, [code])
+
+    def test_blocks_modules_stored_on_attributes(self):
+        """``self.s = shutil; self.s.copy2(...)`` keeps the module identity."""
+        cases = {
+            "copy2": ("shutil", "copy2", "INV-STORAGE-001"),
+            "os_replace": ("os", "replace", "INV-DURABILITY-001"),
+            "os_fsync": ("os", "fsync", "INV-DURABILITY-002"),
+        }
+        for label, (module, attr, code) in cases.items():
+            with self.subTest(case=label):
+                source = (
+                    f"import {module}\n"
+                    "class Pub:\n"
+                    "    def publish(self, a, b):\n"
+                    f"        self.m = {module}\n"
+                    f"        self.m.{attr}(a, b)\n"
+                    "        m = self.m\n"
+                    f"        m.{attr}(a, b)\n"
+                )
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, [code, code])
+
+    def test_blocks_constant_getattr_banned_callables(self):
+        cases = {
+            "copy2": ("shutil", "copy2", "INV-STORAGE-001"),
+            "os_replace": ("os", "replace", "INV-DURABILITY-001"),
+        }
+        for label, (module, attr, code) in cases.items():
+            with self.subTest(case=label):
+                source = f"import {module}\ndef f(a, b):\n    getattr({module}, '{attr}')(a, b)\n"
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, [code])
+
+    def test_blocks_saved_and_path_constant_getattr(self):
+        cases = {
+            "saved_copy2": (
+                "import shutil\ndef f(a, b):\n    cp = getattr(shutil, 'copy2')\n    cp(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "path_instance_replace": (
+                "from pathlib import Path\ndef f(a, b):\n    getattr(Path(a), 'replace')(b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "saved_os_replace": (
+                "import os\ndef f(a, b):\n    rep = getattr(os, 'replace')\n    rep(a, b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "walrus_getattr_copy2": (
+                "import shutil\ndef f(a, b):\n    (cp := getattr(shutil, 'copy2'))(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "walrus_attribute_copy2": (
+                "import shutil\ndef f(a, b):\n    (cp := shutil.copy2)(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "walrus_os_replace": (
+                "import os\ndef f(a, b):\n    (rep := os.replace)(a, b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "walrus_getattr_fsync": (
+                "import os\ndef f(fd):\n    (fn := getattr(os, 'fsync'))(fd)\n",
+                ["INV-DURABILITY-002"],
+            ),
+            "inline_partial_copy2": (
+                "import functools, shutil\ndef f(a, b):\n    functools.partial(shutil.copy2)(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "walrus_inline_partial_copy2": (
+                "import functools, shutil\ndef f(a, b):\n    (cp := functools.partial(shutil.copy2))(a, b)\n",
+                ["INV-STORAGE-001"],
+            ),
+            "inline_partial_os_replace": (
+                "import functools, os\ndef f(a, b):\n    functools.partial(os.replace)(a, b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+            "inline_partial_fsync": (
+                "import functools, os\ndef f(fd):\n    functools.partial(os.fsync)(fd)\n",
+                ["INV-DURABILITY-002"],
+            ),
+            "path_class_replace": (
+                "from pathlib import Path\ndef f(a, b):\n    getattr(Path, 'replace')(Path(a), b)\n",
+                ["INV-DURABILITY-001"],
+            ),
+        }
+        for label, (source, expected) in cases.items():
+            with self.subTest(case=label):
+                codes = [f.code for f in checker.check_source(source, "backend/new_feature.py")]
+                self.assertEqual(codes, expected)
+
     def test_blocks_direct_import_alias(self):
         findings = checker.check_source(
             "from shutil import copyfile as cp\ncp('a', 'b')\n",
@@ -1415,6 +1522,2129 @@ class EngineeringInvariantTests(unittest.TestCase):
         findings = checker.check_pyright_configs(_ROOT)
         self.assertEqual(findings, [], "\n".join(f.render() for f in findings))
 
+
+
+def _codes(source: str, relpath: str = "backend/new_feature.py") -> list[str]:
+    return [f.code for f in checker.check_source(source, relpath)]
+
+
+class PathReplaceDurabilityTests(unittest.TestCase):
+    """INV-DURABILITY-001 also covers pathlib.Path.replace (#187)."""
+
+    def test_blocks_path_replace_binding_forms(self):
+        cases = {
+            "direct_constructor": (
+                "from pathlib import Path\n"
+                "Path(src).replace(dst)\n"
+            ),
+            "imported_alias": (
+                "from pathlib import Path as P\n"
+                "P(src).replace(dst)\n"
+            ),
+            "module": (
+                "import pathlib\n"
+                "pathlib.Path(src).replace(dst)\n"
+            ),
+            "module_alias_assigned_instance": (
+                "import pathlib as pl\n"
+                "p = pl.Path(src)\n"
+                "p.replace(dst)\n"
+            ),
+            "class_alias_and_local_alias": (
+                "from pathlib import Path\n"
+                "PathCls = Path\n"
+                "q = PathCls(src)\n"
+                "r = q\n"
+                "r.replace(dst)\n"
+            ),
+            "posix_path": (
+                "from pathlib import PosixPath\n"
+                "PosixPath(src).replace(dst)\n"
+            ),
+            "div_join": (
+                "from pathlib import Path\n"
+                "(Path(base) / 'x.pdf').replace(dst)\n"
+            ),
+            "path_method_chain": (
+                "from pathlib import Path\n"
+                "tmp = Path(src).resolve().with_suffix('.tmp')\n"
+                "tmp.replace(dst)\n"
+            ),
+            "parent_attribute": (
+                "from pathlib import Path\n"
+                "Path(src).parent.replace(dst)\n"
+            ),
+            "cwd_factory": (
+                "from pathlib import Path\n"
+                "Path.cwd().replace(dst)\n"
+            ),
+            "annotated_parameter": (
+                "from pathlib import Path\n"
+                "def publish(tmp: Path, dst):\n"
+                "    tmp.replace(dst)\n"
+            ),
+            "annotated_optional_string": (
+                "import pathlib\n"
+                "def publish(tmp: 'pathlib.Path | None', dst):\n"
+                "    tmp.replace(dst)\n"
+            ),
+            "annotated_local": (
+                "from pathlib import Path\n"
+                "tmp: Path = make()\n"
+                "tmp.replace(dst)\n"
+            ),
+            "unbound_class_call": (
+                "from pathlib import Path\n"
+                "Path.replace(Path(src), dst)\n"
+            ),
+            "method_reference": (
+                "from pathlib import Path\n"
+                "publish = Path(src).replace\n"
+                "publish(dst)\n"
+            ),
+            "walrus": (
+                "from pathlib import Path\n"
+                "if (tmp := Path(src)).exists():\n"
+                "    tmp.replace(dst)\n"
+            ),
+            "may_alias_branch": (
+                "from pathlib import Path\n"
+                "tmp = Path(src) if flag else str(src)\n"
+                "tmp.replace(dst)\n"
+            ),
+            "deferred_import": (
+                "def publish():\n"
+                "    Path(src).replace(dst)\n"
+                "from pathlib import Path\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source), ["INV-DURABILITY-001"])
+
+    def test_annotation_applies_to_imported_values(self):
+        """An imported *value* annotated as Path / ZipFile is an instance."""
+        path_value = (
+            "from pathlib import Path\n"
+            "from backend.settings import TMP\n"
+            "tmp: Path = TMP\n"
+            "tmp.replace(dst)\n"
+        )
+        self.assertEqual(_codes(path_value), ["INV-DURABILITY-001"])
+        zip_value = (
+            "from zipfile import ZipFile\n"
+            "from backend.archives import current\n"
+            "zf: ZipFile = current\n"
+            "zf.extractall(dest)\n"
+        )
+        self.assertEqual(_codes(zip_value), ["INV-BACKUP-001"])
+        class_alias = (
+            "from pathlib import Path\n"
+            "P: type[Path] = Path\n"
+            "P.cwd()\n"
+            "'x'.replace('a', 'b')\n"
+        )
+        self.assertEqual(_codes(class_alias), [])
+
+    def test_path_replace_message_names_boundary(self):
+        [finding] = checker.check_source(
+            "from pathlib import Path\nPath(src).replace(dst)\n", "backend/new_feature.py"
+        )
+        self.assertIn("pathlib.Path.replace()", finding.message)
+        self.assertIn("backend.fs_durability", finding.message)
+
+    def test_path_replace_uses_the_os_replace_boundary(self):
+        source = "from pathlib import Path\nPath(src).replace(dst)\n"
+        self.assertEqual(_codes(source, "backend/fs_durability.py"), [])
+        self.assertEqual(_codes(source, "backend/server.py"), ["INV-DURABILITY-001"])
+
+    def test_unrelated_replace_calls_pass(self):
+        cases = {
+            "unknown_object": "record.replace(title='x')\n",
+            "string_literal": "'a-b'.replace('-', '_')\n",
+            "string_name": "name = 'a-b'\nname.replace('-', '_')\n",
+            "str_of_path": (
+                "from pathlib import Path\n"
+                "text = str(Path(src))\n"
+                "text.replace('/', '_')\n"
+            ),
+            "path_name_attribute": (
+                "from pathlib import Path\n"
+                "Path(src).name.replace('.pdf', '')\n"
+            ),
+            "datetime_replace": (
+                "import datetime\n"
+                "datetime.datetime.now().replace(microsecond=0)\n"
+            ),
+            "shadowed_by_parameter": (
+                "from pathlib import Path\n"
+                "def f(Path):\n"
+                "    Path(src).replace(dst)\n"
+            ),
+            "shadowed_by_other_import": (
+                "from pathlib import Path\n"
+                "from mylib import Path\n"
+                "Path(src).replace(dst)\n"
+            ),
+            "shadowed_by_assignment": (
+                "from pathlib import Path\n"
+                "Path = Template\n"
+                "Path(src).replace(dst)\n"
+            ),
+            "rebound_to_string": (
+                "from pathlib import Path\n"
+                "p = Path(src)\n"
+                "p = p.name\n"
+                "p.replace('a', 'b')\n"
+            ),
+            "rebound_to_literal": (
+                "from pathlib import Path\n"
+                "p = Path(src)\n"
+                "p = 'text'\n"
+                "p.replace('t', 'x')\n"
+            ),
+            "binding_does_not_leak_across_functions": (
+                "from pathlib import Path\n"
+                "def a():\n"
+                "    p = Path(src)\n"
+                "def b(p):\n"
+                "    p.replace('a', 'b')\n"
+            ),
+            "pure_path_name": (
+                "import pathlib\n"
+                "pathlib.PurePath(src).name.replace('a', 'b')\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source), [])
+
+    def test_os_replace_still_reported(self):
+        self.assertEqual(
+            _codes("import os as o\no.replace('a', 'b')\n"), ["INV-DURABILITY-001"]
+        )
+
+
+class ManagedPdfRemovalTests(unittest.TestCase):
+    """INV-STORAGE-002: raw managed-PDF deletes bypass survivor-aware cleanup."""
+
+    def test_blocks_raw_managed_pdf_removals(self):
+        cases = {
+            "os_remove_pure_path_joinpath": (
+                "import os\n"
+                "from pathlib import PurePath\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
+            ),
+            "os_unlink_relpath_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.unlink(os.path.relpath(os.path.join(pdfs_dir, name)))\n"
+            ),
+            "constant_getattr_remove": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    getattr(os, 'remove')(os.path.join(pdfs_dir, name))\n"
+            ),
+            "saved_constant_getattr_remove": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    rm = getattr(os, 'remove')\n"
+                "    rm(os.path.join(pdfs_dir, name))\n"
+            ),
+            "constant_getattr_stored_on_attribute": (
+                "import os\n"
+                "class Cleaner:\n"
+                "    def drop(self, pdfs_dir, name):\n"
+                "        self.rm = getattr(os, 'remove')\n"
+                "        self.rm(os.path.join(pdfs_dir, name))\n"
+            ),
+            "constant_getattr_path_unlink": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    getattr(Path(pdfs_dir) / name, 'unlink')()\n"
+            ),
+            "inline_partial_remove": (
+                "import functools, os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    functools.partial(os.remove)(os.path.join(pdfs_dir, name))\n"
+            ),
+            "walrus_inline_partial_remove": (
+                "import functools, os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    (rm := functools.partial(os.remove))(os.path.join(pdfs_dir, name))\n"
+            ),
+            "inline_partial_unbound_path_unlink": (
+                "import functools\n"
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    functools.partial(Path.unlink)(Path(pdfs_dir) / name)\n"
+            ),
+            "inline_partial_prebound_remove_reports_once": (
+                "import functools, os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    functools.partial(os.remove, os.path.join(pdfs_dir, name))()\n"
+            ),
+            "remove_stored_on_attribute": (
+                "import os\n"
+                "class Cleaner:\n"
+                "    def drop(self, pdfs_dir, name):\n"
+                "        self.rm = os.remove\n"
+                "        self.rm(os.path.join(pdfs_dir, name))\n"
+            ),
+            "unbound_path_rename_args_spread_then_dict_target": (
+                "import os\n"
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path.rename(*[Path(scratch)], **{'target': Path(os.path.join(pdfs_dir, name))})\n"
+            ),
+            "path_rename_args_spread_then_dict_target": (
+                "import os\n"
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path(scratch).rename(*[], **{'target': Path(os.path.join(pdfs_dir, name))})\n"
+            ),
+            "os_rename_args_spread_then_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(*[scratch], **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "shutil_move_args_spread_then_dict_spread_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(*[scratch], **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "os_renames_args_spread_then_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(*[scratch], **{'new': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "os_rename_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(scratch, **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "shutil_move_dict_spread_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(scratch, **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "os_renames_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(scratch, **{'new': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "walrus_saved_path_rename": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    move = Path(scratch).rename\n"
+                "    (m := move)(Path(pdfs_dir) / name)\n"
+            ),
+            "saved_path_rename_on_attribute": (
+                "from pathlib import Path\n"
+                "class Pub:\n"
+                "    def publish(self, pdfs_dir, scratch, name):\n"
+                "        self.move = Path(scratch).rename\n"
+                "        self.move(Path(pdfs_dir) / name)\n"
+            ),
+            "saved_path_rename_copied_from_attribute": (
+                "from pathlib import Path\n"
+                "class Pub:\n"
+                "    def publish(self, pdfs_dir, scratch, name):\n"
+                "        self.move = Path(scratch).rename\n"
+                "        x = self.move\n"
+                "        x(Path(pdfs_dir) / name)\n"
+            ),
+            "saved_path_rename_onto_managed_destination": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    move = Path(scratch).rename\n"
+                "    move(Path(pdfs_dir) / name)\n"
+            ),
+            "os_rename_spread_then_keyword_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(*[scratch], dst=os.path.join(pdfs_dir, name))\n"
+            ),
+            "shutil_move_spread_then_keyword_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(*[scratch], dst=os.path.join(pdfs_dir, name))\n"
+            ),
+            "os_renames_spread_then_keyword_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(*[scratch], new=os.path.join(pdfs_dir, name))\n"
+            ),
+            "os_renames_keyword_managed_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(old=scratch, new=os.path.join(pdfs_dir, name))\n"
+            ),
+            "os_renames_keyword_managed_source": (
+                "import os\n"
+                "def archive(pdfs_dir, name, elsewhere):\n"
+                "    os.renames(old=os.path.join(pdfs_dir, name), new=elsewhere)\n"
+            ),
+            "os_rename_overwrites_managed_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(scratch, os.path.join(pdfs_dir, name))\n"
+            ),
+            "shutil_move_keyword_managed_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(src=scratch, dst=os.path.join(pdfs_dir, name))\n"
+            ),
+            "path_rename_onto_managed_destination": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path(scratch).rename(Path(pdfs_dir) / name)\n"
+            ),
+            "unbound_path_rename_onto_managed_destination": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    Path.rename(Path(scratch), Path(pdfs_dir) / name)\n"
+            ),
+            "os_remove_pure_path_join": (
+                "import os\n"
+                "from pathlib import PurePath\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(PurePath(pdfs_dir) / name)\n"
+            ),
+            "os_remove_normcase_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(os.path.normcase(os.path.join(pdfs_dir, name)))\n"
+            ),
+            "scandir_context_manager_walrus": (
+                "import os\n"
+                "def wipe(pdfs_dir):\n"
+                "    with (cm := os.scandir(pdfs_dir)) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "scandir_context_manager_assigned": (
+                "import os\n"
+                "def wipe(pdfs_dir):\n"
+                "    cm = os.scandir(pdfs_dir)\n"
+                "    with cm as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "scandir_context_manager_conditional": (
+                "import os\n"
+                "def wipe(pdfs_dir, other, flag):\n"
+                "    with (os.scandir(pdfs_dir) if flag else os.scandir(other)) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "scandir_context_manager_entries": (
+                "import os\n"
+                "def wipe(pdfs_dir):\n"
+                "    with os.scandir(pdfs_dir) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "os_rename_out_of_managed_dir": (
+                "import os\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    os.rename(os.path.join(pdfs_dir, name), dest)\n"
+            ),
+            "shutil_move_keyword_src": (
+                "import os, shutil\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    shutil.move(src=os.path.join(pdfs_dir, name), dst=dest)\n"
+            ),
+            "path_rename_managed": (
+                "from pathlib import Path\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    (Path(pdfs_dir) / name).rename(dest)\n"
+            ),
+            "unbound_path_rename": (
+                "from pathlib import Path\n"
+                "def archive(pdfs_dir, name, dest):\n"
+                "    Path.rename(Path(pdfs_dir) / name, dest)\n"
+            ),
+            "shutil_rmtree_managed_dir": (
+                "import shutil\n"
+                "def wipe(pdfs_dir):\n"
+                "    shutil.rmtree(pdfs_dir)\n"
+            ),
+            "shutil_rmtree_alias_keyword": (
+                "from shutil import rmtree as nuke\n"
+                "def wipe(db):\n"
+                "    nuke(path=db.storage.pdfs_dir, ignore_errors=True)\n"
+            ),
+            "os_remove_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(os.path.join(pdfs_dir, name))\n"
+            ),
+            "os_remove_fsencoded_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(os.fsencode(os.path.join(pdfs_dir, name)))\n"
+            ),
+            "os_unlink_contained_helper": (
+                "import os\n"
+                "from backend.db_manager import safe_pdf_path_under_dir\n"
+                "def drop(db, name):\n"
+                "    path = safe_pdf_path_under_dir(db.storage.pdfs_dir, name)\n"
+                "    if path:\n"
+                "        os.unlink(path)\n"
+            ),
+            "os_module_alias": (
+                "import os as operating_system\n"
+                "def drop(self, name):\n"
+                "    path = operating_system.path.join(self.storage.pdfs_dir, name)\n"
+                "    operating_system.remove(path)\n"
+            ),
+            "from_import_alias": (
+                "import os\n"
+                "from os import remove as rm\n"
+                "def drop(pdfs_dir, name):\n"
+                "    rm(os.path.join(pdfs_dir, name))\n"
+            ),
+            "local_function_alias": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    delete = os.unlink\n"
+                "    delete(f'{pdfs_dir}/{name}')\n"
+            ),
+            "helper_module_alias": (
+                "import os\n"
+                "import backend.db_manager as dbm\n"
+                "def drop(storage, name):\n"
+                "    os.remove(dbm.safe_pdf_path_under_dir(storage.pdfs_dir, name))\n"
+            ),
+            "helper_import_alias": (
+                "import os\n"
+                "from backend.db_manager import safe_pdf_path_under_dir as contain\n"
+                "def drop(root, name):\n"
+                "    os.remove(contain(root, name))\n"
+            ),
+            "path_unlink_constructor": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    Path(pdfs_dir, name).unlink(missing_ok=True)\n"
+            ),
+            "path_unlink_div_alias": (
+                "import pathlib as pl\n"
+                "def drop(db, name):\n"
+                "    target = pl.Path(db.storage.pdfs_dir) / name\n"
+                "    victim = target\n"
+                "    victim.unlink()\n"
+            ),
+            "path_unlink_bound_method": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    unlink = (Path(pdfs_dir) / name).unlink\n"
+                "    unlink()\n"
+            ),
+            "path_glob_loop": (
+                "from pathlib import Path\n"
+                "def purge(pdfs_dir):\n"
+                "    for path in Path(pdfs_dir).glob('*.pdf'):\n"
+                "        path.unlink()\n"
+            ),
+            "path_iterdir_comprehension": (
+                "from pathlib import Path\n"
+                "def purge(db):\n"
+                "    for path in [p for p in Path(db.storage.pdfs_dir).iterdir()]:\n"
+                "        path.unlink()\n"
+            ),
+            "path_as_posix_string": (
+                "import os\n"
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    path = (Path(pdfs_dir) / name).as_posix()\n"
+                "    os.remove(path)\n"
+            ),
+            "path_walk_root": (
+                "from pathlib import Path\n"
+                "def purge(pdfs_dir):\n"
+                "    for root, _, files in Path(pdfs_dir).walk():\n"
+                "        (root / files[0]).unlink()\n"
+            ),
+            "path_unlink_unbound_alias": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    delete = Path.unlink\n"
+                "    delete(Path(pdfs_dir) / name)\n"
+            ),
+            "os_scandir_entry_path": (
+                "import os\n"
+                "def purge(pdfs_dir):\n"
+                "    for entry in os.scandir(pdfs_dir):\n"
+                "        os.remove(entry.path)\n"
+            ),
+            "os_walk_root": (
+                "import os\n"
+                "def purge(pdfs_dir):\n"
+                "    for root, _, files in os.walk(pdfs_dir):\n"
+                "        os.remove(os.path.join(root, files[0]))\n"
+            ),
+            "relative_import_helper": (
+                "import os\n"
+                "from .db_manager import safe_pdf_path_under_dir as contain\n"
+                "def drop(root, name):\n"
+                "    os.remove(contain(root, name))\n"
+            ),
+            "os_fwalk_root": (
+                "import os\n"
+                "def purge(pdfs_dir):\n"
+                "    for root, _, files, _ in os.fwalk(pdfs_dir):\n"
+                "        os.remove(os.path.join(root, files[0]))\n"
+            ),
+            "path_unlink_unbound": (
+                "from pathlib import Path\n"
+                "def drop(pdfs_dir, name):\n"
+                "    Path.unlink(Path(pdfs_dir) / name)\n"
+            ),
+            "http_route_helper": (
+                "import os\n"
+                "def drop(path):\n"
+                "    pdf_path = _safe_pdf_path_for_route(path)\n"
+                "    os.remove(pdf_path)\n"
+            ),
+            "str_format_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove('{}/{}'.format(pdfs_dir, name))\n"
+            ),
+            "server_style_realpath": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    base = os.path.realpath(pdfs_dir)\n"
+                "    full = os.path.normpath(os.path.join(base, os.path.basename(name)))\n"
+                "    os.remove(full)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source), ["INV-STORAGE-002"])
+
+    def test_removal_message_names_capability(self):
+        [finding] = checker.check_source(
+            "import os\ndef drop(pdfs_dir, n):\n    os.remove(os.path.join(pdfs_dir, n))\n",
+            "backend/new_feature.py",
+        )
+        self.assertIn("os.remove()", finding.message)
+        self.assertIn("survivor-aware", finding.message)
+        self.assertIn("_remove_managed_pdf", finding.message)
+        self.assertIn("discard_unowned_managed_pdf", finding.message)
+
+    def test_os_replace_of_managed_source_is_a_removal(self):
+        """Replacing *from* a managed name drops it like os.rename, even in a
+        file whose os.replace durability boundary is allowlisted."""
+        source = (
+            "import os\n"
+            "def move_out(pdfs_dir, name, dest):\n"
+            "    os.replace(os.path.join(pdfs_dir, name), dest)\n"
+        )
+        self.assertEqual(
+            sorted(_codes(source)), ["INV-DURABILITY-001", "INV-STORAGE-002"]
+        )
+        self.assertEqual(
+            _codes(source, "backend/services/work_pdf_replace.py"), ["INV-STORAGE-002"]
+        )
+
+    def test_unrelated_file_cleanup_passes(self):
+        cases = {
+            "pure_path_other_dir": (
+                "import os\n"
+                "from pathlib import PurePath\n"
+                "def prune(thumbs_dir, name):\n"
+                "    os.remove(PurePath(thumbs_dir) / name)\n"
+            ),
+            "scandir_context_manager_other_dir": (
+                "import os\n"
+                "def prune(thumbs_dir):\n"
+                "    with os.scandir(thumbs_dir) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "rename_scratch_file": (
+                "import os, tempfile\n"
+                "def rotate(log_dir):\n"
+                "    os.rename(os.path.join(log_dir, 'a.log'), os.path.join(log_dir, 'a.1'))\n"
+            ),
+            "rmtree_scratch_dir": (
+                "import shutil, tempfile\n"
+                "def cleanup():\n"
+                "    scratch = tempfile.mkdtemp()\n"
+                "    shutil.rmtree(scratch)\n"
+            ),
+            "temp_file_in_managed_dir": (
+                "import os, tempfile\n"
+                "def publish(pdfs_dir):\n"
+                "    fd, tmp = tempfile.mkstemp(dir=os.path.realpath(pdfs_dir))\n"
+                "    os.remove(tmp)\n"
+            ),
+            "thumbnail_cache": (
+                "import os\n"
+                "def prune(thumbs_dir, fname):\n"
+                "    os.remove(os.path.join(thumbs_dir, fname))\n"
+            ),
+            "person_image_cache_path": (
+                "from pathlib import Path\n"
+                "def prune(people_dir, fname):\n"
+                "    Path(people_dir, fname).unlink()\n"
+            ),
+            "index_files": (
+                "import os\n"
+                "def discard(db_path):\n"
+                "    for suffix in ('', '-wal'):\n"
+                "        os.remove(db_path + suffix)\n"
+            ),
+            "processing_inbox_source": (
+                "import os\n"
+                "def finish(source_abs):\n"
+                "    os.remove(source_abs)\n"
+            ),
+            "backup_archive": (
+                "import os\n"
+                "def cleanup(archive_path):\n"
+                "    os.unlink(archive_path)\n"
+            ),
+            "rebound_away_from_managed": (
+                "import os\n"
+                "def f(pdfs_dir, cache_dir, n):\n"
+                "    path = os.path.join(pdfs_dir, n)\n"
+                "    path = os.path.join(cache_dir, n)\n"
+                "    os.remove(path)\n"
+            ),
+            "shadowed_os": (
+                "def f(os, pdfs_dir, n):\n"
+                "    os.remove(pdfs_dir + n)\n"
+            ),
+            "shadowed_helper": (
+                "import os\n"
+                "def f(safe_pdf_path_under_dir, cache, n):\n"
+                "    os.remove(safe_pdf_path_under_dir(cache, n))\n"
+            ),
+            "cache_dir_glob": (
+                "from pathlib import Path\n"
+                "def purge(thumbs_dir):\n"
+                "    for path in Path(thumbs_dir).glob('*.webp'):\n"
+                "        path.unlink()\n"
+            ),
+            "cache_scandir": (
+                "import os\n"
+                "def purge(thumbs_dir):\n"
+                "    for entry in os.scandir(thumbs_dir):\n"
+                "        os.remove(entry.path)\n"
+            ),
+            "unrelated_unlink_method": (
+                "def f(pdfs_dir, link):\n"
+                "    link.unlink(pdfs_dir)\n"
+            ),
+            "exists_check_only": (
+                "import os\n"
+                "def f(pdfs_dir, n):\n"
+                "    return os.path.exists(os.path.join(pdfs_dir, n))\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source), [])
+
+    def _real(self, relpath: str) -> str:
+        return (_ROOT / relpath).read_text(encoding="utf-8")
+
+    def test_approved_survivor_aware_cleanup_passes(self):
+        """The real _remove_managed_pdf / retry pass hold the capability."""
+        deletion = "backend/work_deletion.py"
+        self.assertEqual(_codes(self._real(deletion), deletion), [])
+        replace = "backend/services/work_pdf_replace.py"
+        self.assertEqual(_codes(self._real(replace), replace), [])
+
+    def test_capability_is_function_level_not_file_level(self):
+        rogue = (
+            "\n\ndef _fast_delete(db, filename):\n"
+            "    os.remove(safe_pdf_path_under_dir(db.storage.pdfs_dir, filename))\n"
+        )
+        deletion = "backend/work_deletion.py"
+        self.assertEqual(_codes(self._real(deletion) + rogue, deletion), ["INV-STORAGE-002"])
+        nested = (
+            "import os\n"
+            "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
+            "    def later():\n"
+            "        os.remove(os.path.join(pdfs_dir, filename))\n"
+            "    return later\n"
+        )
+        self.assertEqual(_codes(nested, deletion), ["INV-STORAGE-002"])
+        # The approved name in another module is not the capability.
+        moved = (
+            "import os\n"
+            "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
+            "    os.remove(os.path.join(pdfs_dir, filename))\n"
+        )
+        self.assertEqual(_codes(moved, "backend/server.py"), ["INV-STORAGE-002"])
+        self.assertEqual(_codes(moved, deletion), [])
+        # Deferred bodies run outside the capability's lock and re-check.
+        deferred = {
+            "lambda": (
+                "import os\n"
+                "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
+                "    return lambda: os.remove(os.path.join(pdfs_dir, filename))\n"
+            ),
+            "generator": (
+                "import os\n"
+                "def _remove_managed_pdf(db, names, pdfs_dir):\n"
+                "    return (os.remove(os.path.join(pdfs_dir, n)) for n in names)\n"
+            ),
+        }
+        for label, source in deferred.items():
+            with self.subTest(deferred=label):
+                self.assertEqual(_codes(source, deletion), ["INV-STORAGE-002"])
+
+    def test_raw_unlink_helper_is_reserved_for_minted_rollback(self):
+        call_sites = {
+            "server_attribute": (
+                "from backend.services import work_pdf_replace\n"
+                "def handler(pdfs_dir, name):\n"
+                "    work_pdf_replace.unlink_managed_pdf_best_effort(pdfs_dir, name)\n"
+            ),
+            "import_alias": (
+                "from backend.services.work_pdf_replace import (\n"
+                "    unlink_managed_pdf_best_effort as unlink,\n"
+                ")\n"
+                "def handler(pdfs_dir, name):\n"
+                "    unlink(pdfs_dir, name)\n"
+            ),
+        }
+        for label, source in call_sites.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, "backend/server.py"), ["INV-STORAGE-002"])
+        rogue = (
+            "\n\ndef _drop_shared(pdfs_dir, name):\n"
+            "    unlink_managed_pdf_best_effort(pdfs_dir, name)\n"
+        )
+        replace = "backend/services/work_pdf_replace.py"
+        self.assertEqual(_codes(self._real(replace) + rogue, replace), ["INV-STORAGE-002"])
+
+    def test_survivor_aware_entry_points_are_callable_anywhere(self):
+        source = (
+            "from backend.work_deletion import cleanup_released_managed_pdfs, _remove_managed_pdf\n"
+            "from backend.services import work_pdf_replace\n"
+            "def f(db, pdfs_dir, names, stored):\n"
+            "    cleanup_released_managed_pdfs(db, names)\n"
+            "    _remove_managed_pdf(db, stored, pdfs_dir)\n"
+            "    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored, db=db)\n"
+        )
+        self.assertEqual(_codes(source, "backend/server.py"), [])
+
+
+class ManagedPdfAdoptionTests(unittest.TestCase):
+    """INV-STORAGE-003: claiming existing managed bytes needs the adoption guard."""
+
+    def test_blocks_unguarded_adoption(self):
+        cases = {
+            "request_file_path_create": (
+                "def create(db, data):\n"
+                "    db.add_work(title='t', file_path=data.get('file_path'))\n"
+            ),
+            "request_basename_fstring": (
+                "def create(db, data):\n"
+                "    name = data['name']\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{name}')\n"
+            ),
+            "positional_file_path": (
+                "def create(db, fp):\n"
+                "    db.add_work('t', 'Not Started', '', '', '', fp)\n"
+            ),
+            "literal_managed_path": (
+                "def create(db):\n"
+                "    db.add_work(title='t', file_path='/api/pdfs/shared.pdf')\n"
+            ),
+            "patch_fields_dict": (
+                "def patch(db, w_id, fp):\n"
+                "    db.update_work_metadata(w_id, {'file_path': fp, 'title': 'x'})\n"
+            ),
+            "patch_opaque_body": (
+                "def patch(db, w_id, body):\n"
+                "    db.update_work_metadata(w_id, body)\n"
+            ),
+            "patch_spread_body": (
+                "def patch(db, w_id, body):\n"
+                "    db.update_work_metadata(w_id, {'title': 'x', **body})\n"
+            ),
+            "retarget_helper_alias": (
+                "from backend.services.work_pdf_replace import (\n"
+                "    retarget_work_managed_file_path as retarget,\n"
+                ")\n"
+                "def adopt(db, w_id, name):\n"
+                "    retarget(db, w_id, '/api/pdfs/' + name)\n"
+            ),
+            "raw_sql_update": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_through_variable": (
+                "def adopt(db, w_id, fp):\n"
+                "    query = '''\n"
+                "        UPDATE works\n"
+                "        SET title = ?, file_path = ?, updated_at = CURRENT_TIMESTAMP\n"
+                "        WHERE id = ?\n"
+                "    '''\n"
+                "    db.execute_query(query, ('t', fp, w_id))\n"
+            ),
+            "raw_sql_insert": (
+                "def create(conn, w_id, fp):\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO works (id, title, file_path) VALUES (?, ?, ?)',\n"
+                "        (w_id, 't', fp),\n"
+                "    )\n"
+            ),
+            "minted_only_on_one_path": (
+                "from backend.services.work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, data, pdfs_dir):\n"
+                "    fp = data.get('file_path')\n"
+                "    if data.get('file_b64'):\n"
+                "        stored = store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', b'')\n"
+                "        fp = f'/api/pdfs/{stored}'\n"
+                "    db.add_work(title='t', file_path=fp)\n"
+            ),
+            "wrong_context_manager": (
+                "import contextlib\n"
+                "def create(db, fp, lock):\n"
+                "    with lock, contextlib.nullcontext():\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "guard_does_not_cover_deferred_def": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        def later():\n"
+                "            db.add_work(title='t', file_path=fp)\n"
+                "    return later\n"
+            ),
+            "guard_ends_with_block": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        pass\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{name}')\n"
+            ),
+            "guard_for_other_path": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp, other_fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        db.add_work(title='t', file_path=other_fp)\n"
+            ),
+            "guard_constructed_not_entered": (
+                "from contextlib import nullcontext\n"
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with nullcontext(work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp)):\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "conditional_with_non_noop_arm": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp, lock, flag):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) if flag else lock:\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "generator_escapes_guard": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        return (db.add_work(title=i, file_path=fp) for i in items)\n"
+            ),
+            "kwargs_body": (
+                "def create(db, body):\n"
+                "    db.add_work(**body)\n"
+            ),
+            "kwargs_after_title": (
+                "def create(db, extra):\n"
+                "    db.add_work('t', **extra)\n"
+            ),
+            "kwargs_literal": (
+                "def create(db, fp):\n"
+                "    db.add_work(title='t', **{'file_path': fp})\n"
+            ),
+            "star_args": (
+                "def create(db, args):\n"
+                "    db.add_work(*args)\n"
+            ),
+            "spread_overrides_cleared_path": (
+                "def patch(db, w_id, body):\n"
+                "    db.update_work_metadata(w_id, {'file_path': '', **body})\n"
+            ),
+            "raw_sql_fstring": (
+                "def adopt(conn, w_id, fp, col):\n"
+                "    conn.execute(f'UPDATE works SET file_path = ? WHERE {col} = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_concatenated": (
+                "def adopt(conn, w_id, fp, where_sql):\n"
+                "    conn.execute('UPDATE works SET file_path = ? ' + where_sql, (fp, w_id))\n"
+            ),
+            "raw_sql_percent_and_strip": (
+                "def adopt(conn, w_id, fp, key):\n"
+                "    query = ('UPDATE works SET file_path = ? WHERE %s = ?' % key).strip()\n"
+                "    conn.execute(query, (fp, w_id))\n"
+            ),
+            "raw_sql_quoted_identifiers": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE \"works\" SET \"file_path\" = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_bracket_and_schema": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO main.[works] ([id], `file_path`) VALUES (?, ?)', (w_id, fp))\n"
+            ),
+            "guarded_input_with_suffix": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp + '.other')\n"
+            ),
+            "guarded_input_fstring_suffix": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=f'{fp}.other')\n"
+            ),
+            "guarded_name_with_suffix": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as n:\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{n}.bak')\n"
+            ),
+            "minted_name_with_prefix": (
+                "from backend.services.work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/old_{stored}')\n"
+            ),
+            "guarded_path_rewrapped": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{fp}')\n"
+            ),
+            "raw_sql_keyword_query": (
+                "def adopt(db, w_id, fp):\n"
+                "    db.execute_query(query='UPDATE works SET file_path = ? WHERE id = ?', params=(fp, w_id))\n"
+            ),
+            "raw_sql_replace_into": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('REPLACE INTO works (id, file_path) VALUES (?, ?)', (w_id, fp))\n"
+            ),
+            "bound_method_alias": (
+                "def create(db, fp):\n"
+                "    save = db.add_work\n"
+                "    save(title='t', file_path=fp)\n"
+            ),
+            "bound_sql_alias": (
+                "def adopt(conn, w_id, fp):\n"
+                "    run = conn.execute\n"
+                "    run('UPDATE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_upsert_do_update": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO works (id) VALUES (?) '\n"
+                "        'ON CONFLICT(id) DO UPDATE SET file_path = ?', (w_id, fp))\n"
+            ),
+            "guarded_dict_mutated_via_alias": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    fields = body\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        fields['file_path'] = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated_via_alias": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, extra, pdfs_dir):\n"
+                "    fields = body\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        fields.update(extra)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "raw_sql_update_or_replace": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE OR REPLACE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "guarded_dict_union_via_alias": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    fields = body\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        fields |= {'file_path': other}\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "raw_sql_update_table_alias": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works AS w SET file_path = ? WHERE w.id = ?', (fp, w_id))\n"
+            ),
+            "guarded_dict_annotated_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path']: str = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "raw_sql_update_indexed_by": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works INDEXED BY idx SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "raw_sql_update_not_indexed": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works NOT INDEXED SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "unbound_update_metadata": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def patch(db, body):\n"
+                "    PRKSDatabase.update_work_metadata(db, 'id', body)\n"
+            ),
+            "unbound_update_metadata_alias": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def patch(db, body):\n"
+                "    upd = PRKSDatabase.update_work_metadata\n"
+                "    upd(db, 'id', body)\n"
+            ),
+            "unbound_add_work_positional": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def create(db, fp):\n"
+                "    PRKSDatabase.add_work(db, 't', 'Not Started', '', '', '', fp)\n"
+            ),
+            "guarded_dict_passed_to_helper": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        apply_defaults(body)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated_in_comprehension": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        _ = [body.update(x) for x in items]\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_comprehension": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        _ = {apply_defaults(body) for _ in items}\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated_in_consumed_generator": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        list(body.update(x) for x in items)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dirtied_before_break": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            if x:\n"
+                "                body.update(x)\n"
+                "                break\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dirtied_before_continue": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            db.update_work_metadata(w_id, body)\n"
+                "            if x:\n"
+                "                body.update(x)\n"
+                "                continue\n"
+            ),
+            "guarded_dict_dirtied_for_next_iteration": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            db.update_work_metadata(w_id, body)\n"
+                "            body.update(x)\n"
+            ),
+            "guarded_dict_dirtied_before_while_break": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        while items:\n"
+                "            if items.pop():\n"
+                "                apply_defaults(body)\n"
+                "                break\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dirtied_before_raise": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        try:\n"
+                "            body.update(other)\n"
+                "            validate(other)\n"
+                "            body['file_path'] = body.get('file_path')\n"
+                "        except ValueError:\n"
+                "            db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_tuple_unpack_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path'], _ = other, 1\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_starred_unpack_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path'], *_ = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_loop_target_store": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items, other):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for body['file_path'] in items:\n"
+                "            pass\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "partial_bound_under_guard_invoked_after": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        save = functools.partial(db.add_work, file_path=fp)\n"
+                "    save(title='t')\n"
+            ),
+            "partial_bound_guarded_basename_positional": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        save = functools.partial(db.add_work, 't', 's', '', '', '', f'/api/pdfs/{name}')\n"
+                "    save()\n"
+            ),
+            "inline_nested_partial_bound_under_guard": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        save = functools.partial(functools.partial(db.add_work, 't'), file_path=fp)\n"
+                "    save()\n"
+            ),
+            "inline_nested_partial_unguarded": (
+                "import functools\n"
+                "def adopt(db, fp):\n"
+                "    functools.partial(functools.partial(db.add_work, 't'), file_path=fp)()\n"
+            ),
+            "inline_nested_partial_outer_keyword_wins": (
+                "import functools\n"
+                "def adopt(db, fp):\n"
+                "    functools.partial(\n"
+                "        functools.partial(db.add_work, 't', file_path=''), file_path=fp)()\n"
+            ),
+            "raw_sql_subquery_where_before_file_path": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title = (SELECT title FROM works WHERE id = ?), '\n"
+                "                 'file_path = ? WHERE id = ?', (w_id, fp, w_id))\n"
+            ),
+            "raw_sql_upsert_subquery_where": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO works (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET '\n"
+                "                 'title = (SELECT t FROM x WHERE y), file_path = excluded.file_path', (w_id,))\n"
+            ),
+            "guarded_dict_alias_escapes_to_helper": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        alias = body\n"
+                "        mutate(alias)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guard_method_on_unrelated_object": (
+                "def adopt(db, pdfs_dir, fp, fake):\n"
+                "    with fake.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "minting_method_on_unrelated_object": (
+                "def create(db, fake, data):\n"
+                "    name = fake.store_new_managed_pdf_bytes(data)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{name}')\n"
+            ),
+            "lookalike_minting_helper_defined_elsewhere": (
+                "def store_new_managed_pdf_bytes(pdfs_dir, name, data):\n"
+                "    return name\n"
+                "def create(db, pdfs_dir, name):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "minting_helper_from_lookalike_module": (
+                "from fake.work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, name):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "guard_from_lookalike_module": (
+                "import fake.work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with fake.work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "relative_import_resolving_elsewhere": (
+                "from .work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, name):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "guarded_dict_may_be_rebound": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir, cond):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        if cond:\n"
+                "            body = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_via_conditional_or_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, other, c):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate({'fields': body if c else other})\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_list_comprehension_element": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate([body for _ in items])\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_starred_generator": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate(*(body for _ in [1]))\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_escapes_in_dict_comprehension_value": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate({k: body for k in items})\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "constant_getattr_sink": (
+                "def create(db, fp):\n"
+                "    getattr(db, 'add_work')(title='t', file_path=fp)\n"
+            ),
+            "partial_stored_on_attribute": (
+                "import functools\n"
+                "class H:\n"
+                "    def create(self, db, fp):\n"
+                "        self.save = functools.partial(db.add_work, 't')\n"
+                "        self.save('Not Started', '', '', '', fp)\n"
+            ),
+            "walrus_unbound_add_work": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def create(db, fp):\n"
+                "    (save := PRKSDatabase.add_work)(db, 't', '', '', '', '', fp)\n"
+            ),
+            "attribute_stored_unbound_partial": (
+                "import functools\n"
+                "from backend.db_manager import PRKSDatabase\n"
+                "class H:\n"
+                "    def create(self, db, fp):\n"
+                "        self.save = functools.partial(PRKSDatabase.add_work, db)\n"
+                "        self.save('t', '', '', '', '', fp)\n"
+            ),
+            "walrus_inline_partial": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    (save := functools.partial(db.add_work, 't'))('Not Started', '', '', '', fp)\n"
+            ),
+            "immediately_called_partial": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    functools.partial(db.add_work, 't')('Not Started', '', '', '', fp)\n"
+            ),
+            "walrus_partial_offset": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    save = functools.partial(db.add_work, 't')\n"
+                "    (s := save)('Not Started', '', '', '', fp)\n"
+            ),
+            "saved_constant_getattr_sink": (
+                "def create(db, fp):\n"
+                "    save = getattr(db, 'add_work')\n"
+                "    save(title='t', file_path=fp)\n"
+            ),
+            "walrus_constant_getattr_sink": (
+                "def create(db, fp):\n"
+                "    (sink := getattr(db, 'add_work'))(title='t', file_path=fp)\n"
+            ),
+            "sink_stored_on_attribute": (
+                "class Creator:\n"
+                "    def create(self, db, fp):\n"
+                "        self.save = db.add_work\n"
+                "        self.save(title='t', file_path=fp)\n"
+            ),
+            "raw_sql_double_quoted_returning_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"RETURNING\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "raw_sql_double_quoted_order_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"ORDER\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "raw_sql_double_quoted_limit_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"LIMIT\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "guarded_dict_attribute_alias_escapes": (
+                "from backend.services import work_pdf_replace\n"
+                "class Patcher:\n"
+                "    def patch(self, db, w_id, body, pdfs_dir):\n"
+                "        with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "            self.fields = body\n"
+                "            mutate(self.fields)\n"
+                "            db.update_work_metadata(w_id, body)\n"
+            ),
+            "wrapped_joined_partial_offsets": (
+                "import functools\n"
+                "def create(db, fp, cond, text):\n"
+                "    if cond:\n"
+                "        p = functools.partial(db.add_work, 't')\n"
+                "    else:\n"
+                "        p = functools.partial(db.add_work, 't', 's', 'a')\n"
+                "    q = functools.partial(p, text)\n"
+                "    q('date', fp)\n"
+            ),
+            "guarded_dict_escapes_inside_starred_tuple": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate(*(body,))\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "partial_offsets_joined_across_branches": (
+                "import functools\n"
+                "def create(db, fp, cond):\n"
+                "    if cond:\n"
+                "        save = functools.partial(db.add_work, 't')\n"
+                "    else:\n"
+                "        save = functools.partial(db.add_work, 't', 's', 'a')\n"
+                "    save('text', 'date', fp)\n"
+            ),
+            "add_work_args_spread_then_dict_file_path": (
+                "def create(db, fp, rest):\n"
+                "    db.add_work(*rest, **{'file_path': fp})\n"
+            ),
+            "raw_sql_row_value_set": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
+            ),
+            "raw_sql_upsert_row_value": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO works (id) VALUES (?) ON CONFLICT(id) '\n"
+                "                 'DO UPDATE SET (file_path, title) = (?, ?)', (w_id, fp, 't'))\n"
+            ),
+            "functools_partial_sink": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    save = functools.partial(db.add_work, title='t', file_path=fp)\n"
+                "    save()\n"
+            ),
+            "partial_alias_invoked_with_file_path": (
+                "from functools import partial\n"
+                "def create(db, fp):\n"
+                "    save = partial(db.add_work, title='t')\n"
+                "    save(file_path=fp)\n"
+            ),
+            "guarded_dict_explicit_ior": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body.__ior__({'file_path': other})\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "raw_sql_block_comment": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE /* reason */ works SET file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "raw_sql_line_comment": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works -- note\\n SET file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "unbound_connection_execute": (
+                "import sqlite3\n"
+                "def adopt(conn, w_id, fp):\n"
+                "    sqlite3.Connection.execute(conn, 'UPDATE works SET file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "later_manager_mutates_guarded_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')), mutate(body):\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "raw_sql_where_inside_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute(\"UPDATE works SET title='WHERE', file_path=? WHERE id=?\", (fp, w_id))\n"
+            ),
+            "raw_sql_executescript": (
+                "def adopt(conn):\n"
+                "    conn.executescript(\"UPDATE works SET file_path='/api/pdfs/shared.pdf' WHERE id='1'\")\n"
+            ),
+            "raw_sql_columnless_insert": (
+                "def create(conn, w_id, fp):\n"
+                "    conn.execute('INSERT INTO works VALUES (?, ?, ?)', (w_id, 't', fp))\n"
+            ),
+            "raw_sql_insert_select": (
+                "def copy(conn):\n"
+                "    conn.execute('INSERT INTO works SELECT * FROM staged_works')\n"
+            ),
+            "partial_prebound_positional": (
+                "from functools import partial\n"
+                "def create(db, fp):\n"
+                "    save = partial(db.add_work, 't')\n"
+                "    save('Not Started', '', '', '', fp)\n"
+            ),
+            "raw_sql_double_quoted_literal": (
+                "def adopt(conn, w_id, fp):\n"
+                "    conn.execute('UPDATE works SET title=\"WHERE\", file_path=? WHERE id=?', (fp, w_id))\n"
+            ),
+            "nested_partial_offsets": (
+                "from functools import partial\n"
+                "def create(db, fp, status, abstract):\n"
+                "    p = partial(db.add_work, 't')\n"
+                "    q = partial(p, status, abstract)\n"
+                "    q('text', 'date', fp)\n"
+            ),
+            "raw_sql_under_guard": (
+                "from backend.services import work_pdf_replace\n"
+                "def adopt(conn, pdfs_dir, w_id, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        conn.execute('UPDATE works SET file_path = ? WHERE id = ?', (fp, w_id))\n"
+            ),
+            "guarded_dict_rebound": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_entry_replaced": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other_fp, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body['file_path'] = other_fp\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_updated": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, extra, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body.update(extra)\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_dynamic_key": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, key, val, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        body[key] = val\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "shadowed_guard_name": (
+                "def create(db, pdfs_dir, fp, managed_pdf_adoption_guard):\n"
+                "    with managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, "backend/server.py"), ["INV-STORAGE-003"])
+
+    def test_adoption_message_names_guard(self):
+        [finding] = checker.check_source(
+            "def f(db, fp):\n    db.add_work(title='t', file_path=fp)\n", "backend/server.py"
+        )
+        self.assertIn("managed_pdf_adoption_guard", finding.message)
+        self.assertIn("store_new_managed_pdf_bytes", finding.message)
+
+    _CREATE_SITE = (
+        "from contextlib import nullcontext\n"
+        "from backend.services import work_pdf_replace\n"
+        "class PRKSHandler:\n"
+        "    def handle_api_post(self, db, data, pdfs_dir):\n"
+        "        stored_name = None\n"
+        "        file_path = data.get('file_path', '')\n"
+        "        if data.get('file_b64'):\n"
+        "            stored_name = work_pdf_replace.store_new_managed_pdf_bytes(\n"
+        "                pdfs_dir, data['file_name'], b'')\n"
+        "            file_path = f'/api/pdfs/{stored_name}'\n"
+        "        with (\n"
+        "            work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, file_path)\n"
+        "            if {cond}\n"
+        "            else nullcontext()\n"
+        "        ) as adopted_name:\n"
+        "            if adopted_name:\n"
+        "                file_path = f'/api/pdfs/{adopted_name}'\n"
+        "            return db.add_work(title='t', file_path=file_path)\n"
+    )
+    _PATCH_SITE = (
+        "from contextlib import nullcontext\n"
+        "from backend.services import work_pdf_replace\n"
+        "class PRKSHandler:\n"
+        "    def handle_api_patch(self, db, w_id, body, pdfs_dir, file_path_changing, other):\n"
+        "        with (\n"
+        "            work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))\n"
+        "            if {cond}\n"
+        "            else nullcontext()\n"
+        "        ) as adopted_name:\n"
+        "            if adopted_name:\n"
+        "                body['file_path'] = f'/api/pdfs/{adopted_name}'\n"
+        "            return db.update_work_metadata(w_id, body)\n"
+    )
+
+    def test_reviewed_conditional_guard_sites_pass(self):
+        for label, template, cond in (
+            ("create", self._CREATE_SITE, "not stored_name"),
+            ("patch", self._PATCH_SITE, "file_path_changing"),
+        ):
+            with self.subTest(site=label):
+                source = template.replace("{cond}", cond)
+                self.assertEqual(_codes(source, "backend/server.py"), [])
+
+    def test_unreviewed_conditional_guard_is_not_protective(self):
+        """``guard(...) if c else nullcontext()`` may skip the guard, so it only
+        protects the reviewed (file, function, condition) sites."""
+        cases = {
+            "independent_condition": (
+                "from contextlib import nullcontext\n"
+                "from backend.services.work_pdf_replace import managed_pdf_adoption_guard\n"
+                "def create(db, pdfs_dir, fp, unrelated_condition):\n"
+                "    with (\n"
+                "        managed_pdf_adoption_guard(pdfs_dir, fp)\n"
+                "        if unrelated_condition\n"
+                "        else nullcontext()\n"
+                "    ):\n"
+                "        db.add_work(title='t', file_path=fp)\n",
+                "backend/new_feature.py",
+            ),
+            "reviewed_create_with_other_condition": (
+                self._CREATE_SITE.replace("{cond}", "data.get('adopt')"),
+                "backend/server.py",
+            ),
+            "reviewed_patch_with_other_condition": (
+                self._PATCH_SITE.replace("{cond}", "other"),
+                "backend/server.py",
+            ),
+            "reviewed_condition_in_other_file": (
+                self._PATCH_SITE.replace("{cond}", "file_path_changing"),
+                "backend/new_feature.py",
+            ),
+            "reviewed_condition_in_other_function": (
+                self._PATCH_SITE.replace("{cond}", "file_path_changing").replace(
+                    "handle_api_patch", "handle_api_put"
+                ),
+                "backend/server.py",
+            ),
+            "reversed_arms": (
+                self._PATCH_SITE.replace("{cond}", "file_path_changing").replace(
+                    "work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))\n"
+                    "            if file_path_changing\n"
+                    "            else nullcontext()",
+                    "nullcontext()\n"
+                    "            if not file_path_changing\n"
+                    "            else work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))",
+                ),
+                "backend/server.py",
+            ),
+        }
+        for label, (source, relpath) in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, relpath), ["INV-STORAGE-003"])
+
+    def test_current_guarded_adoption_shapes_pass(self):
+        cases = {
+            "guarded_dict_other_key_written": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')) as n:\n"
+                "        body['title'] = 'x'\n"
+                "        body['file_path'] = f'/api/pdfs/{n}'\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "comprehension_shadows_guarded_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, rows):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        _ = [apply_defaults(body) for body in rows]\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_tuple_unpack_owned": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')) as n:\n"
+                "        body['file_path'], body['title'] = f'/api/pdfs/{n}', 't'\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_loop_without_mutation": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        for x in items:\n"
+                "            if not x:\n"
+                "                break\n"
+                "            db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_read_passed_to_helper": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        helper(body.get('title'))\n"
+                "        helper(body['title'], body.keys())\n"
+                "        helper([x for body in items])\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "dict_mutated_only_on_returning_branch": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir, fail):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        if fail:\n"
+                "            body['file_path'] = other\n"
+                "            return None\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guard_input_subscript_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body['file_path']):\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "list_comprehension_runs_under_guard": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        return [db.add_work(title=i, file_path=fp) for i in items]\n"
+            ),
+            "guarded_name_or_none": (
+                "from backend.services import work_pdf_replace\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp) as name:\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{name}' if name else None)\n"
+                "        db.add_work(title='t', file_path=name and f'/api/pdfs/{name}')\n"
+            ),
+            "guard_import_alias": (
+                "from backend.services.work_pdf_replace import managed_pdf_adoption_guard as adopt\n"
+                "def create(db, pdfs_dir, fp):\n"
+                "    with adopt(pdfs_dir, fp) as name:\n"
+                "        db.add_work(title='t', file_path=f'/api/pdfs/{name}' if name else fp)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, "backend/server.py"), [])
+
+    def test_package_relative_import_is_canonical(self):
+        """``from . import work_pdf_replace`` inside ``backend/services`` is the
+        canonical module, not ``backend.work_pdf_replace``."""
+        source = (
+            "from . import work_pdf_replace\n"
+            "def create(db, pdfs_dir, body, fp):\n"
+            "    stored = work_pdf_replace.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+            "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+            "        db.add_work(title='t', file_path=fp)\n"
+        )
+        self.assertEqual(_codes(source, "backend/services/new_feature.py"), [])
+        self.assertEqual(
+            _codes(source, "backend/new_feature.py"), ["INV-STORAGE-003", "INV-STORAGE-003"]
+        )
+
+    def test_newly_minted_exclusive_pdf_passes(self):
+        cases = {
+            "relative_import_minting": (
+                "from .services.work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "module_alias_minting": (
+                "import backend.services.work_pdf_replace as wpr\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = wpr.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "partial_bound_minted_name": (
+                "import functools\n"
+                "from backend.services import work_pdf_replace as wpr\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = wpr.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    save = functools.partial(db.add_work, file_path=f'/api/pdfs/{stored}')\n"
+                "    save(title='t')\n"
+            ),
+            "upload_bytes": (
+                "from backend.services import work_pdf_replace as wpr\n"
+                "def create(db, pdfs_dir, body):\n"
+                "    stored = wpr.store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "processing_import_try": (
+                "def import_file(self, pdfs_dir, src):\n"
+                "    from backend.services.work_pdf_replace import (\n"
+                "        ManagedPdfStoreError, store_new_managed_pdf_from_path)\n"
+                "    try:\n"
+                "        local_filename = store_new_managed_pdf_from_path(pdfs_dir, 'a', src)\n"
+                "    except ManagedPdfStoreError:\n"
+                "        raise ValueError('no')\n"
+                "    try:\n"
+                "        self.add_work(title='t', file_path=f'/api/pdfs/{local_filename}')\n"
+                "    except Exception:\n"
+                "        raise\n"
+            ),
+            "exclusive_retarget": (
+                "from backend.services.work_pdf_replace import (\n"
+                "    allocate_exclusive_managed_filename, retarget_work_managed_file_path)\n"
+                "def cow(db, w_id, shared):\n"
+                "    exclusive = allocate_exclusive_managed_filename(w_id, shared)\n"
+                "    target_fp = '/api/pdfs/' + exclusive\n"
+                "    retarget_work_managed_file_path(db, w_id, target_fp)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, "backend/server.py"), [])
+
+    def test_clearing_and_non_managed_values_pass(self):
+        cases = {
+            "immediately_called_partial_without_file_path": (
+                "import functools\n"
+                "def f(db):\n"
+                "    functools.partial(db.add_work, 't')('Not Started', '', '', '', '')\n"
+            ),
+            "inline_nested_partial_outer_clear_wins": (
+                "import functools\n"
+                "def f(db, fp):\n"
+                "    functools.partial(\n"
+                "        functools.partial(db.add_work, 't', file_path=fp), file_path='')()\n"
+            ),
+            "no_file_path": "def f(db):\n    db.add_work(title='t')\n",
+            "empty_file_path": "def f(db):\n    db.add_work(title='t', file_path='')\n",
+            "none_file_path": "def f(db):\n    db.add_work(title='t', file_path=None)\n",
+            "video": (
+                "def f(db, url):\n"
+                "    db.add_work(title='t', file_path='', source_url=url, source_kind='video')\n"
+            ),
+            "clear_on_patch": "def f(db, w):\n    db.update_work_metadata(w, {'file_path': ''})\n",
+            "metadata_only_patch": "def f(db, w, t):\n    db.update_work_metadata(w, {'title': t})\n",
+            "kwargs_literal_without_file_path": (
+                "def f(db, t):\n    db.add_work(title='t', **{'status': t})\n"
+            ),
+            "dynamic_column_primitive": (
+                "def set_field(conn, field, value, w):\n"
+                "    conn.execute('UPDATE works SET %s = ? WHERE id = ?' % field, (value, w))\n"
+            ),
+            "sql_clear": (
+                "def f(conn, w):\n"
+                "    conn.execute('UPDATE works SET file_path = NULL WHERE id = ?', (w,))\n"
+            ),
+            "sql_file_path_only_in_where": (
+                "def f(conn, t, fp):\n"
+                "    conn.execute('UPDATE works SET title = (SELECT ?) WHERE file_path = ?', (t, fp))\n"
+            ),
+            "sql_file_path_only_in_update_from": (
+                "def f(conn):\n"
+                "    conn.execute('UPDATE works SET title = s.title FROM src AS s WHERE s.file_path = works.file_path')\n"
+            ),
+            "sql_insert_null_file_path": (
+                "def f(conn, w, t):\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO works (id, title, file_path) VALUES (?, ?, NULL)', (w, t))\n"
+            ),
+            "sql_other_columns": (
+                "def f(conn, w, t):\n"
+                "    conn.execute('UPDATE works SET title = ? WHERE id = ?', (t, w))\n"
+            ),
+            "sql_upsert_other_columns": (
+                "def f(conn, w, t):\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO works (id, title) VALUES (?, ?) '\n"
+                "        'ON CONFLICT(id) DO UPDATE SET title = excluded.title', (w, t))\n"
+            ),
+            "sql_row_value_clear": (
+                "def f(conn, w):\n"
+                "    conn.execute('UPDATE works SET (file_path, status) = (NULL, ?) WHERE id = ?', ('s', w))\n"
+            ),
+            "sql_comment_mentions_file_path": (
+                "def f(conn, w, t):\n"
+                "    conn.execute('UPDATE works SET title = ? /* not file_path = ? */ WHERE id = ?', (t, w))\n"
+            ),
+            "sql_literal_clear": (
+                "def f(conn):\n"
+                "    conn.executescript(\"UPDATE works SET file_path='' WHERE id='1'\")\n"
+            ),
+            "sql_read": (
+                "def f(conn, w):\n"
+                "    conn.execute('SELECT file_path FROM works WHERE id = ?', (w,))\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, "backend/server.py"), [])
+
+    def test_persistence_primitives_are_function_level_exemptions(self):
+        primitive = (
+            "class PRKSDatabase:\n"
+            "    def add_work(self, file_path):\n"
+            "        self.execute_query(\n"
+            "            'INSERT INTO works (id, file_path) VALUES (?, ?)', ('w', file_path))\n"
+        )
+        self.assertEqual(_codes(primitive, "backend/db_manager.py"), [])
+        renamed = primitive.replace("def add_work", "def add_work_fast")
+        self.assertEqual(_codes(renamed, "backend/db_manager.py"), ["INV-STORAGE-003"])
+
+
+class WeakManagedPdfAliasTests(unittest.TestCase):
+    """INV-STORAGE-004: referenced_managed_pdf_filename may only block."""
+
+    _IMPORT = "from backend.db_manager import referenced_managed_pdf_filename\n"
+
+    def test_blocks_weak_alias_authority(self):
+        cases = {
+            "mint_cleanup_claim": (
+                "def f(conn, fp):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "settle_claim": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp))\n"
+            ),
+            "delete_authority": (
+                "def f(db, fp, pdfs_dir):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    _remove_managed_pdf(db, name, pdfs_dir)\n"
+            ),
+            "delete_batch": (
+                "def f(db, fp):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    cleanup_released_managed_pdfs(db, [name])\n"
+            ),
+            "raw_claim_sql": (
+                "def f(conn, fp):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    conn.execute(\n"
+                "        'INSERT INTO pending_pdf_cleanup (filename) VALUES (?) '\n"
+                "        'ON CONFLICT(filename) DO NOTHING', (name,))\n"
+            ),
+            "loop_over_weak_names": (
+                "def f(conn, fps):\n"
+                "    for name in [referenced_managed_pdf_filename(fps[0])]:\n"
+                "        record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "set_comprehension_batch": (
+                "def f(db, rows):\n"
+                "    names = {referenced_managed_pdf_filename(r['file_path']) for r in rows}\n"
+                "    cleanup_released_managed_pdfs(db, names)\n"
+            ),
+            "weak_upper": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).upper())\n"
+            ),
+            "path_name_of_weak": (
+                "from pathlib import Path\n"
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, Path(referenced_managed_pdf_filename(fp)).name)\n"
+            ),
+            "relative_import_weak": (
+                "from ..db_manager import referenced_managed_pdf_filename as loose\n"
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, loose(fp))\n"
+            ),
+            "loop_over_named_list": (
+                "def f(conn, fp):\n"
+                "    weak = [referenced_managed_pdf_filename(fp)]\n"
+                "    for name in weak:\n"
+                "        record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "claim_sql_replace_into_keyword": (
+                "def f(db, fp):\n"
+                "    db.execute_query(sql='REPLACE INTO pending_pdf_cleanup (filename) VALUES (?)',\n"
+                "                     params=(referenced_managed_pdf_filename(fp),))\n"
+            ),
+            "bound_claim_helper": (
+                "from backend import work_deletion\n"
+                "def f(conn, fp):\n"
+                "    claim = work_deletion.record_pending_pdf_cleanup_on_conn\n"
+                "    claim(conn, referenced_managed_pdf_filename(fp))\n"
+            ),
+            "claim_sql_concatenated": (
+                "def f(conn, fp, suffix):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    conn.execute('INSERT INTO pending_pdf_cleanup (filename) VALUES (?) ' + suffix, (name,))\n"
+            ),
+            "weak_str_replace": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).replace('x', 'x'))\n"
+            ),
+            "weak_encode_fsdecode": (
+                "import os\n"
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, os.fsdecode(referenced_managed_pdf_filename(fp).encode()))\n"
+            ),
+            "weak_encode_decode": (
+                "def f(db, fp):\n"
+                "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).encode().decode())\n"
+            ),
+            "weak_str_join": (
+                "def f(db, fp):\n"
+                "    name = ''.join([referenced_managed_pdf_filename(fp)])\n"
+                "    forget_pending_pdf_cleanup(db, name)\n"
+            ),
+            "weak_through_mapping_get": (
+                "def f(db, fp):\n"
+                "    names = {'pdf': referenced_managed_pdf_filename(fp)}\n"
+                "    forget_pending_pdf_cleanup(db, names.get('pdf'))\n"
+            ),
+            "claim_sql_interpolated_weak": (
+                "def f(conn, fp):\n"
+                "    weak = referenced_managed_pdf_filename(fp)\n"
+                "    conn.execute(f\"INSERT INTO pending_pdf_cleanup (filename) VALUES ('{weak}')\")\n"
+            ),
+            "adoption_guard_input": (
+                "from backend.services import work_pdf_replace\n"
+                "def f(pdfs_dir, fp):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, f'/api/pdfs/{name}'):\n"
+                "        pass\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(self._IMPORT + source), ["INV-STORAGE-004"])
+
+    def test_weak_alias_as_ownership_fails_even_under_guard(self):
+        source = self._IMPORT + (
+            "from backend.services.work_pdf_replace import managed_pdf_adoption_guard\n"
+            "def f(db, pdfs_dir, fp):\n"
+            "    with managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+            "        name = referenced_managed_pdf_filename(fp)\n"
+            "        db.add_work(title='t', file_path=f'/api/pdfs/{name}')\n"
+        )
+        # The weak name is not what the guard validated, so it is not owned
+        # either: both the weak-authority and the adoption rule fire.
+        self.assertEqual(sorted(_codes(source)), ["INV-STORAGE-003", "INV-STORAGE-004"])
+        weak_dict = self._IMPORT + (
+            "from backend.services.work_pdf_replace import managed_pdf_adoption_guard\n"
+            "def f(db, w, pdfs_dir, fp):\n"
+            "    fields = {'file_path': f'/api/pdfs/{referenced_managed_pdf_filename(fp)}'}\n"
+            "    with managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+            "        db.update_work_metadata(w, fields)\n"
+        )
+        self.assertEqual(sorted(_codes(weak_dict)), ["INV-STORAGE-003", "INV-STORAGE-004"])
+        unguarded = self._IMPORT + (
+            "def f(db, w, fp):\n"
+            "    name = referenced_managed_pdf_filename(fp).strip()\n"
+            "    db.update_work_metadata(w, {'file_path': '/api/pdfs/' + name})\n"
+        )
+        self.assertEqual(sorted(_codes(unguarded)), ["INV-STORAGE-003", "INV-STORAGE-004"])
+
+    def test_weak_alias_cannot_authorize_unlink_inside_capability(self):
+        source = (
+            "import os\n"
+            + self._IMPORT
+            + "def _remove_managed_pdf(db, fp, pdfs_dir):\n"
+            "    name = referenced_managed_pdf_filename(fp)\n"
+            "    os.remove(safe_pdf_path_under_dir(pdfs_dir, name))\n"
+        )
+        self.assertEqual(_codes(source, "backend/work_deletion.py"), ["INV-STORAGE-004"])
+
+    def test_weak_alias_import_forms(self):
+        cases = {
+            "import_alias": (
+                "from backend.db_manager import referenced_managed_pdf_filename as loose\n"
+                "def f(conn, fp):\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, loose(fp))\n"
+            ),
+            "module_alias": (
+                "import backend.db_manager as dbm\n"
+                "def f(conn, fp):\n"
+                "    name = dbm.referenced_managed_pdf_filename(fp)\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "local_callable_alias": (
+                "from backend import db_manager\n"
+                "def f(conn, fp):\n"
+                "    weak = db_manager.referenced_managed_pdf_filename\n"
+                "    alias = weak(fp)\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, alias)\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source), ["INV-STORAGE-004"])
+
+    def test_weak_alias_message_explains_contract(self):
+        [finding] = checker.check_source(
+            self._IMPORT
+            + "def f(conn, fp):\n"
+            "    record_pending_pdf_cleanup_on_conn(conn, referenced_managed_pdf_filename(fp))\n",
+            "backend/new_feature.py",
+        )
+        self.assertIn("fail-closed", finding.message)
+        self.assertIn("record_pending_pdf_cleanup_on_conn()", finding.message)
+        self.assertIn("managed_basenames_protected_by", finding.message)
+
+    def test_fail_closed_blocking_uses_pass(self):
+        cases = {
+            "row_references_blocker": (
+                "def row_references_managed_pdf(file_path, filename):\n"
+                "    if referenced_managed_pdf_filename(file_path) == filename:\n"
+                "        return True\n"
+                "    return owned_managed_pdf_basename(file_path) == filename\n"
+            ),
+            "adoption_rejection": (
+                "def _adoption_managed_basename(value):\n"
+                "    trimmed = str(value or '').strip()\n"
+                "    if trimmed.startswith('/api/pdfs/') or referenced_managed_pdf_filename(trimmed):\n"
+                "        raise ManagedPdfStoreError('invalid_file_name', 'bad')\n"
+                "    return None\n"
+            ),
+            "defer_strong_claim": (
+                "def f(db, conn, fp, name):\n"
+                "    if referenced_managed_pdf_filename(fp) == name:\n"
+                "        _note_attempt(db, name)\n"
+                "        return False\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, name)\n"
+                "    _remove_managed_pdf(db, name, db.storage.pdfs_dir)\n"
+            ),
+            "blocked_flag": (
+                "def f(conn, fp, name):\n"
+                "    blocked = referenced_managed_pdf_filename(fp) is not None\n"
+                "    if blocked:\n"
+                "        return\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "rebound_to_strong_identity": (
+                "def f(conn, fp):\n"
+                "    name = referenced_managed_pdf_filename(fp)\n"
+                "    name = owned_managed_pdf_basename(fp)\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, name)\n"
+            ),
+            "shadowed_helper": (
+                "def f(conn, fp, referenced_managed_pdf_filename):\n"
+                "    record_pending_pdf_cleanup_on_conn(conn, referenced_managed_pdf_filename(fp))\n"
+            ),
+            "lock_only": (
+                "def f(pdfs_dir, fp):\n"
+                "    with managed_pdf_path_lock(pdfs_dir, referenced_managed_pdf_filename(fp)):\n"
+                "        pass\n"
+            ),
+        }
+        for label, source in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(self._IMPORT + source), [])
 
 if __name__ == "__main__":
     unittest.main()
