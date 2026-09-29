@@ -1,7 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import docTypesSource from '../../../../frontend/js/doc-types.js?raw'
-import { applyWorkMetadataChrome, presentWorkMetadataEditor, resetWorkMetadataEditorForTests } from './metadata-session'
+import { applyWorkMetadataChrome, presentWorkMetadataEditor, registerWorkMetadataEditorBridge, resetWorkMetadataEditorForTests } from './metadata-session'
 import type { WorkMetadataOwner } from './metadata-session'
 import { cloneWorkMetaDraft } from './metadata-draft'
 
@@ -98,6 +98,35 @@ describe('work metadata editor session', () => {
     await nextTick()
     expect(button.disabled).toBe(false)
     expect(button.hasAttribute('aria-disabled')).toBe(false)
+  })
+
+  it('shows an acknowledged document type on the visible picker', async () => {
+    document.body.innerHTML = `
+      <div id="panel-content" data-prks-owner-tab-id="main" data-prks-owner-generation="1">
+        <div data-prks-role="work-metadata-editor-anchor"></div>
+      </div>`
+    const main = owner('main', 'A', 'Alpha')
+    expect(presentWorkMetadataEditor(main, 'pdf')).toBe(true)
+    await nextTick()
+    const hidden = document.getElementById('meta-doc-type')
+    expect(hidden).toBeInstanceOf(HTMLInputElement)
+    expect((hidden as HTMLInputElement).value).toBe('article')
+    expect(document.querySelector('.prks-doc-type-menu__label')?.textContent).toBe('Article')
+    expect(document.querySelector('[data-value="article"]')?.getAttribute('aria-selected')).toBe('true')
+
+    registerWorkMetadataEditorBridge(window)
+    const accept = window.prksVueAcceptWorkMetadataField
+    expect(typeof accept).toBe('function')
+    expect(accept!(main, 'doc_type', 'book')).toBe(true)
+    await nextTick()
+
+    expect((hidden as HTMLInputElement).value).toBe('book')
+    expect(document.querySelector('.prks-doc-type-menu__label')?.textContent).toBe('Book')
+    const book = document.querySelector('[data-value="book"]')
+    expect(book?.classList.contains('is-selected')).toBe(true)
+    expect(book?.getAttribute('aria-selected')).toBe('true')
+    expect(document.querySelector('[data-value="article"]')?.getAttribute('aria-selected')).toBe('false')
+    expect(main.ui.workMetaDraft.doc_type).toBe('book')
   })
 
   it('writes a typed field onto the owning draft', async () => {

@@ -147,6 +147,13 @@ onMounted(() => {
 watch(docTypeDisabled, () => {
   syncDocTypeMenu()
 })
+
+/* The label and listbox are imperative. An acknowledgement can change
+ * draft.doc_type without a click, so the menu has to follow that value.
+ * syncDocTypeMenu keeps its equality check so this watch does not loop. */
+watch(() => props.draft.doc_type, () => {
+  syncDocTypeMenu()
+})
 </script>
 
 <template>

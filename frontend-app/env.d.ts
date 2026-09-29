@@ -201,6 +201,7 @@ interface Window {
   prksCancelWorkMetaEdit?: () => void | Promise<void>
   prksResolveWorkMetadataFieldConflict?: (opId: string, apply: boolean, group: string) => void
   prksResolveWorkSourceConflict?: (opId: string, apply: boolean) => void
+  prksVueAcceptWorkMetadataField?: (ctx: object, field: string, value: unknown) => boolean
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
   prksVueDismissProgress?: (owner: object) => void
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
