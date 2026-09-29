@@ -3603,7 +3603,13 @@ function prksCaptureWorkMetaDraft(ownerCtx) {
     const work = ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
     if (!work || ownerCtx.ui.workMetaDraftWorkId !== String(work.id)) return;
     const panel = document.getElementById('panel-content');
-    if (!prksRightPanelOwnedBy(ownerCtx, panel)) return;
+    /* Focus commits before the panel refresh, so the previous owner is no
+     * longer the focused tab while its form is still the one on screen. */
+    if (!panel || ownerCtx.destroyed || !ownerCtx.mounted) return;
+    const ownerTabId = panel.dataset.prksOwnerTabId || '';
+    const ownerGeneration = panel.dataset.prksOwnerGeneration || '';
+    if (ownerTabId !== String(ownerCtx.tabId)) return;
+    if (ownerGeneration && ownerGeneration !== String(ownerCtx.generation)) return;
     const draft = ownerCtx.ui.workMetaDraft || prksWorkMetaDraftFromWork(work);
     const fields = {
         title: 'meta-title', status: 'meta-status', doc_type: 'meta-doc-type', year: 'meta-year',

@@ -21,6 +21,7 @@ def _update_panel(source: str) -> str:
 
 class WorkPanelReadContractTests(unittest.TestCase):
     def test_focus_switch_captures_draft_and_flushes_notes_before_replace(self):
+        """Call order only. The executable path is panel-focus-switch.test.ts."""
         body = _update_panel(_UI)
         capture = body.index("prksCaptureWorkMetaDraft(previousOwner)")
         flush = body.index("prksFlushPendingPrivateNotes(previousOwner)")
