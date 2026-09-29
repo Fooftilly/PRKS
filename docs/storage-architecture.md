@@ -825,17 +825,33 @@ offline command-line tool. The server is stopped for the whole sequence:
    outside PRKS, nothing can prove which way the move went, so both ends stay
    closed until the administrator says.
 2. The administrator does one of two things:
-   - **Complete the move.** Change the environment or the mount (that change
-     is the P5 commit), then run `python prks_app.py storage finalize --root
-     NEWPATH`. It takes the destination's lease first, then performs P6(b)'s
-     single activation write, which clears the relocation role, and releases
-     the lease on exit. The server is stopped, so there is nothing to bind.
-     It then attempts P7's retirement of the
-     fenced source named in the destination marker. When the source is not
-     reachable it simply stays `fenced`, which is already unbindable.
+   - **Complete the move.** Change the environment or the mount so the
+     selector names the new root, then run `python prks_app.py storage
+     finalize --root NEWPATH`. The selector change alone is **not** the commit,
+     because it is not a durable PRKS record. `finalize` performs the same
+     durable steps as the in-app flow, in the same order:
+     1. Take the destination's lease.
+     2. **P5:** atomically write the bootstrap config with `local_root = to`
+        and `relocation.phase = "committed"` for this `relocation_id`.
+     3. **P6(b):** the single activation write, which clears the relocation
+        role and records the lease.
+     4. **P7:** retire the fenced source named in the destination marker, then
+        write `phase: "source_retired"`. If the source is not reachable it
+        stays `fenced`, which is already unbindable, and the phase stays
+        `committed`, so later starts retry P7.
+     5. Release the lease on exit. The server is stopped, so nothing is bound.
    - **Abandon the move.** Leave the selector unchanged and run `python
-     prks_app.py storage abort --root OLDPATH`. It lifts the fence back to
-     `active` and discards the destination under the §8.3 deletion rule.
+     prks_app.py storage abort --root OLDPATH`. It follows revert's order:
+     1. Atomically write the config with `local_root = from` and
+        `relocation.phase = "failed"`.
+     2. Lift the fence back to `active`.
+     3. Discard the destination under the §8.3 deletion rule.
+     4. Clear `relocation`.
+
+   Whatever durable state a crash leaves, §8.3 recovery then reaches the same
+   outcome as `finalize` or `abort`. After a completed `finalize`, the config
+   can never still say `copying`/`verified`. So pre-commit recovery can never
+   unfence a source whose destination is already `active`.
 3. The administrator starts PRKS.
 
 If PRKS is started before step 2, whichever root the selector names is
