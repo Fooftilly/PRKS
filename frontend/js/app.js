@@ -1773,6 +1773,29 @@ async function prksDurableOperationsOrNone() {
     return [];
 }
 
+/** A queue read that keeps failure distinct from an empty queue.
+ *  null means the store could not be read. [] means it was read and held nothing. */
+async function prksReadDurableOperations() {
+    try {
+        if (typeof prksSync !== 'undefined' && prksSync && prksSync.store &&
+            typeof prksSync.store.listOperations === 'function') {
+            const ops = await prksSync.store.listOperations();
+            if (Array.isArray(ops)) return ops;
+        }
+    } catch (_e) { /* a failed read is not an empty queue */ }
+    return null;
+}
+
+/** Publish a successful operation list into the in-memory maps.
+ *  A failed read must not call this: setPending([]) marks hydration ready and drops unsynced values. */
+function prksApplyReadWorkOperations(ops) {
+    if (!Array.isArray(ops)) return false;
+    if (typeof prksSetPendingWorkMetadata === 'function') prksSetPendingWorkMetadata(ops);
+    if (typeof prksSetPendingWorkRoles === 'function') prksSetPendingWorkRoles(ops);
+    if (typeof prksSetPendingPersonNames === 'function') prksSetPendingPersonNames(ops);
+    return true;
+}
+
 /** The Folder hierarchy this device holds, with pending intent applied. */
 async function prksEffectiveFolderRows(rows, ops) {
     if (!Array.isArray(rows) || typeof prksEffectiveFolders !== 'function') return rows;
@@ -4306,11 +4329,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                  * scan on every cached open. Pending CREATE_WORK has no
                  * cache row — only then await the queue before any network
                  * GET. */
-                const workOpsPromise = prksDurableOperationsOrNone().then(function (ops) {
-                    if (typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
-                        prksApplyLiveWorkLifecycleFromOperations(ops || []);
+                const workOpsPromise = prksReadDurableOperations().then(function (ops) {
+                    if (Array.isArray(ops) && typeof prksApplyLiveWorkLifecycleFromOperations === 'function') {
+                        prksApplyLiveWorkLifecycleFromOperations(ops);
                     }
-                    return ops || [];
+                    return ops;
                 });
                 let cachedWorkRow = null;
                 try {
@@ -4336,7 +4359,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     if (liveDeleted) {
                         offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                         workOps = await workOpsPromise;
-                        workOpsKnown = true;
+                        workOpsKnown = Array.isArray(workOps);
+                        if (!workOpsKnown) workOps = [];
                         if (stale()) return;
                     } else {
                         offlineWork = await prksOfflineDetailFetch(
@@ -4352,7 +4376,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
                          * or role overlays republish onto effectiveWork only. */
                         void workOpsPromise.then(function (ops) {
                             if (stale()) return;
-                            workOps = ops || [];
+                            /* null is a failed read. Do not treat it as an empty queue. */
+                            if (!Array.isArray(ops)) return;
+                            workOps = ops;
                             if (typeof prksPendingWorkDeletions === 'function' &&
                                 prksPendingWorkDeletions(workOps).has(workId)) {
                                 /* The cached row may already be a ready projection.
@@ -4385,15 +4411,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                                 }
                                 return;
                             }
-                            if (typeof prksSetPendingWorkMetadata === 'function') {
-                                prksSetPendingWorkMetadata(workOps);
-                            }
-                            if (typeof prksSetPendingWorkRoles === 'function') {
-                                prksSetPendingWorkRoles(workOps);
-                            }
-                            if (typeof prksSetPendingPersonNames === 'function') {
-                                prksSetPendingPersonNames(workOps);
-                            }
+                            if (!prksApplyReadWorkOperations(workOps)) return;
                             if (stale()) return;
                             if (typeof prksProjectWorkRoute !== 'function' ||
                                 typeof prksPublishWorkRouteProjection !== 'function' ||
@@ -4447,7 +4465,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     }
                 } else {
                     workOps = await workOpsPromise;
-                    workOpsKnown = true;
+                    workOpsKnown = Array.isArray(workOps);
+                    if (!workOpsKnown) workOps = [];
                     if (stale()) return;
                     const workDeletedEarly = liveDeleted ||
                         (typeof prksPendingWorkDeletions === 'function' &&
@@ -4580,22 +4599,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
                 }
-                /* Maps already in memory can overlay this paint. Filling them
-                 * from the queue is the background read above on a cached
-                 * open, or the read this path already awaited when there was
-                 * no cache row. An empty cached queue must not be written
-                 * over maps that are already hydrated. */
-                if (work && workOpsKnown) {
-                    if (typeof prksSetPendingWorkMetadata === 'function') {
-                        prksSetPendingWorkMetadata(workOps);
-                    }
-                    if (typeof prksSetPendingWorkRoles === 'function') {
-                        prksSetPendingWorkRoles(workOps);
-                    }
-                    if (typeof prksSetPendingPersonNames === 'function') {
-                        prksSetPendingPersonNames(workOps);
-                    }
-                }
+                /* Maps already in memory can overlay this paint. A successful
+                 * queue read — including a genuinely empty one — may replace
+                 * them. A failed read leaves workOpsKnown false so the
+                 * last-known maps stay put. */
+                if (work && workOpsKnown) prksApplyReadWorkOperations(workOps);
                 const acknowledgedKind = work && typeof prksInferWorkSourceKind === 'function'
                     ? prksInferWorkSourceKind(work) : '';
                 if (work && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {

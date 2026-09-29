@@ -66,8 +66,12 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertIn("lifecycle: 'pending-delete'", body)
         self.assertLess(body.index("lifecycle: 'pending-delete'"), body.index("prksOfflineRenderUnavailable(contentDiv, 'File not available offline')"))
         self.assertLess(body.index("if (!deletedProjection) return;"), body.index("prksOfflineRenderUnavailable(contentDiv, 'File not available offline')"))
-        self.assertLess(body.index("prksSetPendingWorkMetadata(workOps)"), body.index("prksEffectiveWorkSync"))
-        self.assertLess(body.index("prksSetPendingWorkRoles(workOps)"), body.index("prksEffectiveWorkDetailRoles"))
+        self.assertLess(body.index("prksApplyReadWorkOperations("), body.index("prksEffectiveWorkSync"))
+        self.assertLess(body.index("prksApplyReadWorkOperations("), body.index("prksEffectiveWorkDetailRoles"))
+        self.assertNotIn("prksSetPendingWorkMetadata(workOps)", body)
+        self.assertNotIn("prksDurableOperationsOrNone()", body)
+        self.assertIn("prksReadDurableOperations()", body)
+        self.assertEqual(body.count("workOpsKnown = Array.isArray(workOps)"), 2)
         before_paint = body[:body.index("await renderWorkDetails")]
         self.assertEqual(before_paint.count("workOps = await workOpsPromise"), 2)
         self.assertNotIn("if (work && !workOps.length)", body)
@@ -75,10 +79,10 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         callback = body[callback_at:body.index("                        });", callback_at)]
         self.assertNotIn("await ", callback)
         self.assertIn("if (stale()) return;", callback)
-        self.assertIn("prksSetPendingWorkMetadata(workOps)", callback)
-        self.assertIn("prksSetPendingWorkRoles(workOps)", callback)
-        self.assertIn("prksSetPendingPersonNames(workOps)", callback)
-        self.assertLess(callback.index("lifecycle: 'pending-delete'"), callback.index("prksSetPendingWorkMetadata(workOps)"))
+        self.assertIn("if (!Array.isArray(ops)) return;", callback)
+        self.assertLess(callback.index("if (!Array.isArray(ops)) return;"), callback.index("lifecycle: 'pending-delete'"))
+        self.assertLess(callback.index("lifecycle: 'pending-delete'"), callback.index("prksApplyReadWorkOperations"))
+        self.assertNotIn("prksSetPendingWorkMetadata", callback)
         self.assertIn("work: base", callback)
         self.assertIn("effectiveWork: effective", callback)
         self.assertLess(callback.index("const refreshed = prksPublishWorkRouteProjection"), callback.index("updatePanelContent(panelTab)"))
@@ -254,6 +258,106 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertEqual(payload["entityTitle"], "Acknowledged")
         self.assertEqual(payload["entityRoles"], 0)
         self.assertFalse(payload["entityIsEffective"])
+
+    def test_failed_queue_read_keeps_pending_overlays(self):
+        """A rejected listOperations() is not an empty queue. Pending maps
+        stay, and metadata hydration is not promoted to ready-and-empty."""
+        ops = [
+            {
+                "operation": "SET_WORK_METADATA_FIELD",
+                "entity_type": "work",
+                "entity_id": "w1",
+                "status": "pending",
+                "payload": {"field": "title", "value": "Pending title"},
+            },
+            {
+                "operation": "ADD_WORK_PERSON_ROLE",
+                "entity_type": "work",
+                "entity_id": "w1",
+                "status": "pending",
+                "payload": {"person_id": "p1", "role_type": "Author", "credit_name": ""},
+                "local_context": {
+                    "person": {
+                        "id": "p1",
+                        "first_name": "Ada",
+                        "last_name": "Lovelace",
+                        "canonical_name": "Ada Lovelace",
+                    }
+                },
+            },
+        ]
+        script = r"""
+        const fs = require('fs');
+        const root = process.argv[1];
+        function loadTopLevel(source, name) {
+            const at = source.indexOf('async function ' + name + '(');
+            const atFn = at === -1 ? source.indexOf('function ' + name + '(') : at;
+            if (atFn === -1) throw new Error('missing ' + name);
+            const brace = source.indexOf('{', atFn);
+            let depth = 0;
+            for (let i = brace; i < source.length; i++) {
+                if (source[i] === '{') depth += 1;
+                else if (source[i] === '}') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        (0, eval)(source.slice(atFn, i + 1));
+                        return;
+                    }
+                }
+            }
+            throw new Error('unclosed ' + name);
+        }
+        require(root + '/frontend/js/date-format.js');
+        require(root + '/frontend/js/work-metadata-state.js');
+        require(root + '/frontend/js/work-role-state.js');
+        require(root + '/frontend/js/person-metadata-state.js');
+        const app = fs.readFileSync(root + '/frontend/js/app.js', 'utf8');
+        loadTopLevel(app, 'prksReadDurableOperations');
+        loadTopLevel(app, 'prksApplyReadWorkOperations');
+        const ops = JSON.parse(process.argv[2]);
+        const acknowledged = { id: 'w1', title: 'Acknowledged', roles: [] };
+        globalThis.prksSetPendingWorkMetadata(ops);
+        globalThis.prksSetPendingWorkRoles(ops);
+        globalThis.prksSync = {
+            store: {
+                listOperations() { return Promise.reject(new Error('idb blocked')); },
+            },
+        };
+        globalThis.prksRefreshPendingWorkMetadata().then(function () {
+            return prksReadDurableOperations();
+        }).then(function (read) {
+            const applied = prksApplyReadWorkOperations(read);
+            const effective = globalThis.prksEffectiveWorkDetailRoles(
+                globalThis.prksEffectiveWorkSync(acknowledged));
+            const role = effective.roles && effective.roles[0];
+            process.stdout.write(JSON.stringify({
+                read: read,
+                applied: applied,
+                title: effective.title,
+                roleType: role && role.role_type,
+                hydration: globalThis.prksPendingWorkMetadataState(),
+            }));
+        }).catch(function (error) {
+            console.error(error);
+            process.exit(1);
+        });
+        """
+        proc = subprocess.run(
+            ["node", "-e", script, str(_PROJECT), json.dumps(ops)],
+            cwd=_PROJECT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertIsNone(payload["read"])
+        self.assertFalse(payload["applied"])
+        self.assertEqual(payload["title"], "Pending title")
+        self.assertEqual(payload["roleType"], "Author")
+        self.assertEqual(payload["hydration"], "unavailable")
+        self.assertNotEqual(payload["hydration"], "ready")
 
 
 if __name__ == "__main__":
