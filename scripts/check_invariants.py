@@ -1344,6 +1344,23 @@ def _for_pairs(node: ast.For | ast.AsyncFor, scopes: list[_Scope]) -> _Pairs:
     return _loop_target_pairs(node.target, node.iter, scopes)
 
 
+def _dir_iterator_context_facts(node: ast.expr, scopes: list[_Scope]) -> set[_Binding]:
+    """Provenance an ``as`` target receives from a directory-iterator context
+    manager, which returns itself: ``os.scandir(d)``, ``(cm := os.scandir(d))``,
+    ``a if c else b``, or a name bound to one (``cm = os.scandir(d)``)."""
+    if isinstance(node, ast.NamedExpr):
+        return _dir_iterator_context_facts(node.value, scopes)
+    if isinstance(node, ast.IfExp):
+        return _dir_iterator_context_facts(node.body, scopes) | _dir_iterator_context_facts(
+            node.orelse, scopes
+        )
+    if isinstance(node, ast.Call) and _qualified_names(node.func, scopes) & _DIR_ITERATOR_FUNCS:
+        return _value_bindings(node, scopes)
+    if isinstance(node, ast.Name):
+        return _facts_of(_resolve(scopes, node.id))
+    return set()
+
+
 def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
     pairs: _Pairs = []
     for item in node.items:
@@ -1353,13 +1370,9 @@ def _with_pairs(node: ast.With | ast.AsyncWith, scopes: list[_Scope]) -> _Pairs:
         key = target.id if isinstance(target, ast.Name) else _attr_key(target)
         if key is not None and _is_zip_archive_expr(item.context_expr, scopes):
             pairs.append((key, {_ARCHIVE}))
-        elif (
-            key is not None
-            and isinstance(item.context_expr, ast.Call)
-            and _qualified_names(item.context_expr.func, scopes) & _DIR_ITERATOR_FUNCS
-        ):
+        elif key is not None and (entered := _dir_iterator_context_facts(item.context_expr, scopes)):
             # ``with os.scandir(d) as entries`` yields the iterator itself.
-            pairs.append((key, _value_bindings(item.context_expr, scopes)))
+            pairs.append((key, entered))
         else:
             pairs.extend((name, {_OTHER}) for name in _stored_names(target))
     return pairs

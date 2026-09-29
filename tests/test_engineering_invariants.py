@@ -1623,6 +1623,28 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "scandir_context_manager_walrus": (
+                "import os\n"
+                "def wipe(pdfs_dir):\n"
+                "    with (cm := os.scandir(pdfs_dir)) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "scandir_context_manager_assigned": (
+                "import os\n"
+                "def wipe(pdfs_dir):\n"
+                "    cm = os.scandir(pdfs_dir)\n"
+                "    with cm as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
+            "scandir_context_manager_conditional": (
+                "import os\n"
+                "def wipe(pdfs_dir, other, flag):\n"
+                "    with (os.scandir(pdfs_dir) if flag else os.scandir(other)) as entries:\n"
+                "        for entry in entries:\n"
+                "            os.remove(entry.path)\n"
+            ),
             "scandir_context_manager_entries": (
                 "import os\n"
                 "def wipe(pdfs_dir):\n"
