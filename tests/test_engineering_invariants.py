@@ -88,6 +88,10 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "from pathlib import Path\ndef f(a, b):\n    getattr(Path(a), 'replace')(b)\n",
                 ["INV-DURABILITY-001"],
             ),
+            "saved_os_replace": (
+                "import os\ndef f(a, b):\n    rep = getattr(os, 'replace')\n    rep(a, b)\n",
+                ["INV-DURABILITY-001"],
+            ),
             "path_class_replace": (
                 "from pathlib import Path\ndef f(a, b):\n    getattr(Path, 'replace')(Path(a), b)\n",
                 ["INV-DURABILITY-001"],
@@ -1716,6 +1720,13 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "    rm = getattr(os, 'remove')\n"
                 "    rm(os.path.join(pdfs_dir, name))\n"
             ),
+            "constant_getattr_stored_on_attribute": (
+                "import os\n"
+                "class Cleaner:\n"
+                "    def drop(self, pdfs_dir, name):\n"
+                "        self.rm = getattr(os, 'remove')\n"
+                "        self.rm(os.path.join(pdfs_dir, name))\n"
+            ),
             "constant_getattr_path_unlink": (
                 "from pathlib import Path\n"
                 "def drop(pdfs_dir, name):\n"
@@ -2767,6 +2778,13 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
             "constant_getattr_sink": (
                 "def create(db, fp):\n"
                 "    getattr(db, 'add_work')(title='t', file_path=fp)\n"
+            ),
+            "partial_stored_on_attribute": (
+                "import functools\n"
+                "class H:\n"
+                "    def create(self, db, fp):\n"
+                "        self.save = functools.partial(db.add_work, 't')\n"
+                "        self.save('Not Started', '', '', '', fp)\n"
             ),
             "saved_constant_getattr_sink": (
                 "def create(db, fp):\n"

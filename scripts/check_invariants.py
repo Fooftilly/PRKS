@@ -2638,9 +2638,8 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _partial_prebound_counts(self, func: ast.expr) -> list[int]:
         """Positionals a ``functools.partial`` bound to ``func`` may pre-supply."""
-        if not isinstance(func, ast.Name):
-            return [0]
-        counts = {b[1] for b in _resolve(self.scopes, func.id) if b[0] == "partial"}
+        # A bare name or a tracked one-level attribute (``self.save = partial(...)``).
+        counts = {b[1] for b in self._callee_bindings(func) if b[0] == "partial"}
         return sorted(counts) if counts else [0]
 
     @staticmethod
