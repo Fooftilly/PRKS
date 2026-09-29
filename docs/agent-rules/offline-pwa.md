@@ -32,6 +32,15 @@ For shared protocol/coordinator changes whose behavior can affect every durable 
 - service-worker/cache eligibility/connectivity state: foundations first; add entity/browse leaves only for the projections touched.
 - a new durable family: foundations + browse/protocol + the nearest existing family leaf, then the "Adding a family" section in `docs/local-first-sync.md`.
 
+## Former section-name lookup
+
+Existing code comments may still name sections from the former monolithic file. Resolve them as follows:
+
+- "Offline coherence domains" → `offline-entity-coherence.md` and, for Folder/Tag-specific continuation, `offline-folder-tag-coherence.md`.
+- "Offline browse catalogs" → `offline-browse-protocol.md`.
+- "Synchronized operation families" → `offline-browse-protocol.md`.
+- Work metadata/source/open/tag milestone headings → `offline-work-sync.md`.
+
 ## Canonical status
 
 These split files together replace the former single `offline-pwa.md` contract. Do not duplicate their rules back into `AGENTS.md`. Keep this router small; detailed implementation invariants belong in the leaf files.
