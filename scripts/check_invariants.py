@@ -406,6 +406,8 @@ _WEAK: _Binding = ("weak_alias",)
 _MINTED: _Binding = ("minted", "name")
 # A guarded fields dict mutated (possibly) on this control-flow path.
 _DICT_DIRTY: _Binding = ("dict_dirty",)
+# A saved bound ``Path.rename`` method (``move = p.rename``).
+_BOUND_PATH_RENAME: _Binding = ("bound_path_rename",)
 _FACT_TAGS = frozenset({"path", "managed_pdf", "weak_alias", "minted", "sql_write"})
 # Tags a works.file_path value may be built from without claiming existing bytes.
 _OWNED_TAGS = frozenset({"minted", "guarded"})
@@ -745,9 +747,11 @@ def _partial_bindings(value: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
     identity and how many positionals it pre-binds; nested partials
     (``partial(partial(f, a), b)``) accumulate their offsets."""
     inner = _value_bindings(value.args[0], scopes)
-    prior = [b[1] for b in inner if b[0] == "partial"]
-    bound = len(value.args) - 1 + (min(prior) if prior else 0)
-    return {b for b in inner if b[0] != "partial"} | {("partial", bound)}
+    # A branch-joined inner partial may pre-bind any of several counts;
+    # each one shifts by this layer's positionals.
+    prior = {b[1] for b in inner if b[0] == "partial"} or {0}
+    added = len(value.args) - 1
+    return {b for b in inner if b[0] != "partial"} | {("partial", n + added) for n in prior}
 
 
 def _attribute_alias_bindings(
@@ -756,6 +760,9 @@ def _attribute_alias_bindings(
     """``mod.attr`` / ``pkg.mod.attr`` keep their import identity, and a bound
     method of a tracked helper keeps its name (``save = db.add_work``);
     ``upd = Cls.method`` stays unbound (receiver passed explicitly)."""
+    if value.attr == "rename" and _PATH in _expr_facts(value.value, scopes):
+        # ``move = p.rename``: invoking it overwrites its destination argument.
+        return {_BOUND_PATH_RENAME} | _expr_facts(value, scopes)
     qualified = [name.rsplit(".", 1) for name in _qualified_names(value, scopes)]
     if qualified:
         return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(value, scopes)
@@ -1230,6 +1237,10 @@ def _identity_passed_names(node: ast.expr) -> list[str]:
     or ``and``/``or``. Attribute, call and subscript interiors only read."""
     if isinstance(node, ast.Name):
         return [node.id]
+    if isinstance(node, ast.Attribute):
+        # A tracked one-level alias (``self.fields = body``) is the object.
+        key = _attr_key(node)
+        return [key] if key is not None else []
     if isinstance(node, (ast.Starred, ast.NamedExpr)):
         return _identity_passed_names(node.value)
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
@@ -2430,6 +2441,8 @@ class _InvariantVisitor(ast.NodeVisitor):
             isinstance(func, ast.Attribute)
             and func.attr == "rename"
             and _PATH in _expr_facts(func.value, self.scopes)
+        ) or (
+            isinstance(func, ast.Name) and _BOUND_PATH_RENAME in _resolve(self.scopes, func.id)
         ):
             # ``p.rename(dst)``: the source is checked at the attribute
             # (visit_Attribute); the overwritten destination is checked here.

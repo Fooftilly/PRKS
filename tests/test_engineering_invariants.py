@@ -1629,6 +1629,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "def drop(pdfs_dir, name):\n"
                 "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
             ),
+            "saved_path_rename_onto_managed_destination": (
+                "from pathlib import Path\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    move = Path(scratch).rename\n"
+                "    move(Path(pdfs_dir) / name)\n"
+            ),
             "os_rename_spread_then_keyword_destination": (
                 "import os\n"
                 "def publish(pdfs_dir, scratch, name):\n"
@@ -2601,6 +2607,25 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
                 "        mutate({k: body for k in items})\n"
                 "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_attribute_alias_escapes": (
+                "from backend.services import work_pdf_replace\n"
+                "class Patcher:\n"
+                "    def patch(self, db, w_id, body, pdfs_dir):\n"
+                "        with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "            self.fields = body\n"
+                "            mutate(self.fields)\n"
+                "            db.update_work_metadata(w_id, body)\n"
+            ),
+            "wrapped_joined_partial_offsets": (
+                "import functools\n"
+                "def create(db, fp, cond, text):\n"
+                "    if cond:\n"
+                "        p = functools.partial(db.add_work, 't')\n"
+                "    else:\n"
+                "        p = functools.partial(db.add_work, 't', 's', 'a')\n"
+                "    q = functools.partial(p, text)\n"
+                "    q('date', fp)\n"
             ),
             "guarded_dict_escapes_inside_starred_tuple": (
                 "from backend.services import work_pdf_replace\n"
