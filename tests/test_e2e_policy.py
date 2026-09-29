@@ -877,6 +877,26 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertEqual(plan["features"], [])
                 self.assertTrue(plan["run"])
 
+    def test_scoped_agent_guidance_is_docs_only_for_e2e(self):
+        paths = (
+            "AGENTS.md",
+            "backend/AGENTS.md",
+            "frontend/AGENTS.md",
+            "frontend-app/AGENTS.md",
+            "tests/AGENTS.md",
+            "tests/e2e/AGENTS.md",
+            "tests/ux_tour/AGENTS.md",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                rule, features, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "docs-agents")
+                self.assertEqual(features, ())
+                self.assertTrue(skip)
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "skip")
+                self.assertFalse(plan["run"])
+
     def test_plan_ci_unknown_production_fails_closed_to_full(self):
         plan = policy.plan_ci_e2e(["frontend/js/brand-new-unmapped-helper.js"])
         self.assertEqual(plan["mode"], "full")
