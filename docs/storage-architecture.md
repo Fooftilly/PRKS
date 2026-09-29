@@ -875,7 +875,10 @@ If a persistent bootstrap file happens to exist, `relocate`, `finalize` and
 on that mirror for these roots.
 
 1. `python prks_app.py storage relocate --to PATH` performs P0–P4, including the
-   P2 fence on the source. **Its durable progress lives on the volumes, not in
+   P2 fence on the source. **It holds the destination lock from P1, and the
+   source lock from the P2 fence, until it exits at the end of P4** (§12).
+   A concurrent `finalize` or `abort` therefore finds a lock busy and refuses
+   for the whole copy. **Its durable progress lives on the volumes, not in
    the bootstrap config.** P1's record is the destination marker, written
    under the destination lock: `state: staging` with `relocation: {id, role:
    destination, peer_hint}`. The copy manifest lives in
@@ -1248,8 +1251,17 @@ renewal can race a fence or a state transition. During a move:
   source bound, and it writes the P2 fence and the P7 retirement under it;
 - it takes the destination lock at P1, when it creates the destination, and
   holds it through P6, so P6(a) finds it already held;
-- the offline commands take the lock of each root they write, and refuse if
-  either lock is held by someone else.
+- the offline commands hold their locks for the **whole command**, not per
+  write, in the same destination-then-source order:
+  - `storage relocate` takes the destination lock when P1 creates the
+    destination, and holds it until it exits at the end of P4. It takes the
+    source lock at the P2 fence, and also holds it until it exits.
+  - `finalize` and `abort` take both locks before validating anything, and
+    hold them through their last write (§8.7).
+
+  Each command refuses to start if a lock it needs is held by someone else.
+  So `finalize` and `abort` cannot run while `relocate` is still copying, and
+  neither can start a second `relocate`.
 
 A marker is therefore never written by two processes at once, and it is never
 written by a process that does not own that root at that moment.
