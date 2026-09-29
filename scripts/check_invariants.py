@@ -1187,6 +1187,10 @@ def _method_call_facts(
         facts = _path_method_facts(node, func.attr, receiver, scopes)
         if facts is not None:
             return facts
+    elif receiver and func.attr in _PATH_RETURNING_METHODS:
+        # A pure path (``PurePath(d).joinpath(n)``) derives another pure path
+        # naming a file under the same provenance, still without ``path``.
+        return receiver | _element_facts(_call_argument_facts(node, scopes))
     if func.attr not in _STR_TRANSFORM_METHODS or (func.attr == "replace" and _PATH in receiver):
         # ``Path.replace(target)`` renames; it is not a string transform.
         return None
@@ -1200,6 +1204,25 @@ def _method_call_facts(
     if func.attr in ("format", "replace"):
         facts |= _element_facts(_call_argument_facts(node, scopes))
     return facts
+
+
+def _identity_passed_names(node: ast.expr) -> list[str]:
+    """Names whose *object* an argument expression passes on: the name itself,
+    unpacked / collected into a display, or chosen by a conditional, walrus
+    or ``and``/``or``. Attribute, call and subscript interiors only read."""
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, (ast.Starred, ast.NamedExpr)):
+        return _identity_passed_names(node.value)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return [name for elt in node.elts for name in _identity_passed_names(elt)]
+    if isinstance(node, ast.Dict):
+        return [name for value in node.values for name in _identity_passed_names(value)]
+    if isinstance(node, ast.IfExp):
+        return [*_identity_passed_names(node.body), *_identity_passed_names(node.orelse)]
+    if isinstance(node, ast.BoolOp):
+        return [name for value in node.values for name in _identity_passed_names(value)]
+    return []
 
 
 def _path_method_facts(
@@ -2235,11 +2258,11 @@ class _InvariantVisitor(ast.NodeVisitor):
             return
         for arg in [*node.args, *(kw.value for kw in node.keywords)]:
             # ``mutate(body)``, ``mutate(*(body,))``, ``mutate([body])``, ...:
-            # any guarded name inside the argument may reach the callee.
+            # the dict object itself reaches the callee. A read through it
+            # (``helper(body.get("title"))``) does not.
             if any(
-                isinstance(sub, ast.Name)
-                and any(b[0] == "guarded_dict" for b in _resolve(self.scopes, sub.id))
-                for sub in ast.walk(arg)
+                any(b[0] == "guarded_dict" for b in _resolve(self.scopes, name))
+                for name in _identity_passed_names(arg)
             ):
                 # Dict identity is not tracked: ``alias = body; mutate(alias)``
                 # may rewrite ``body`` too, so every guarded alias is dirtied.

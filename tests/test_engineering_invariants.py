@@ -1623,6 +1623,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "os_remove_pure_path_joinpath": (
+                "import os\n"
+                "from pathlib import PurePath\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(PurePath(pdfs_dir).joinpath(name))\n"
+            ),
             "os_rename_overwrites_managed_destination": (
                 "import os\n"
                 "def publish(pdfs_dir, scratch, name):\n"
@@ -2543,6 +2549,13 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "            body = other\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "guarded_dict_escapes_via_conditional_or_dict": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, other, c):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate({'fields': body if c else other})\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "guarded_dict_escapes_inside_starred_tuple": (
                 "from backend.services import work_pdf_replace\n"
                 "def patch(db, w_id, body, pdfs_dir):\n"
@@ -2816,6 +2829,15 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "            if not x:\n"
                 "                break\n"
                 "            db.update_work_metadata(w_id, body)\n"
+            ),
+            "guarded_dict_read_passed_to_helper": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir, items):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        helper(body.get('title'))\n"
+                "        helper(body['title'], body.keys())\n"
+                "        helper([x for body in items])\n"
+                "        db.update_work_metadata(w_id, body)\n"
             ),
             "dict_mutated_only_on_returning_branch": (
                 "from backend.services import work_pdf_replace\n"
