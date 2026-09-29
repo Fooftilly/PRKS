@@ -1623,6 +1623,11 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "os_remove_normcase_join": (
+                "import os\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(os.path.normcase(os.path.join(pdfs_dir, name)))\n"
+            ),
             "scandir_context_manager_walrus": (
                 "import os\n"
                 "def wipe(pdfs_dir):\n"
@@ -2480,6 +2485,32 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
                 "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
             ),
+            "minting_helper_from_lookalike_module": (
+                "from fake.work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, name):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "guard_from_lookalike_module": (
+                "import fake.work_pdf_replace\n"
+                "def adopt(db, pdfs_dir, fp):\n"
+                "    with fake.work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, fp):\n"
+                "        db.add_work(title='t', file_path=fp)\n"
+            ),
+            "relative_import_resolving_elsewhere": (
+                "from .work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "def create(db, pdfs_dir, name):\n"
+                "    stored = store_new_managed_pdf_bytes(pdfs_dir, name, b'')\n"
+                "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"
+            ),
+            "guarded_dict_may_be_rebound": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, other, pdfs_dir, cond):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        if cond:\n"
+                "            body = other\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -2780,7 +2811,7 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
     def test_newly_minted_exclusive_pdf_passes(self):
         cases = {
             "relative_import_minting": (
-                "from .work_pdf_replace import store_new_managed_pdf_bytes\n"
+                "from .services.work_pdf_replace import store_new_managed_pdf_bytes\n"
                 "def create(db, pdfs_dir, body):\n"
                 "    stored = store_new_managed_pdf_bytes(pdfs_dir, 'a.pdf', body)\n"
                 "    db.add_work(title='t', file_path=f'/api/pdfs/{stored}')\n"

@@ -130,6 +130,7 @@ _PATH_STRING_FUNCS = frozenset(
         "os.path.abspath",
         "os.path.basename",
         "os.path.join",
+        "os.path.normcase",
         "os.path.normpath",
         "os.path.realpath",
     }
@@ -840,6 +841,20 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
     return set()
 
 
+def _absolute_module(module: str, relpath: str) -> str:
+    """``..services.work_pdf_replace`` from ``backend/x/y.py`` ->
+    ``backend.services.work_pdf_replace``; absolute names are unchanged."""
+    level = len(module) - len(module.lstrip("."))
+    if not level:
+        return module
+    package = relpath.split("/")[:-1]
+    if level - 1 > len(package):
+        return module
+    base = package[: len(package) - (level - 1)]
+    rest = module[level:]
+    return ".".join([*base, rest] if rest else base)
+
+
 def _canonical_capability_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
     """Ownership-granting helpers ``func`` is *canonically* bound to.
 
@@ -853,10 +868,12 @@ def _canonical_capability_names(func: ast.expr, scopes: list[_Scope]) -> set[str
         home = _CAPABILITY_HELPER_HOMES.get(leaf)
         if home is None:
             continue
-        home_module = home.removesuffix(".py").rsplit("/", 1)[-1]
         if module:
-            # ``backend.services.work_pdf_replace`` / ``.work_pdf_replace``.
-            if module.rsplit(".", 1)[-1] == home_module:
+            # The full module: ``backend.services.work_pdf_replace``, or a
+            # relative import resolved against this file's package.
+            if _absolute_module(module, scopes[0].relpath) == home.removesuffix(".py").replace(
+                "/", "."
+            ):
                 found.add(leaf)
         elif scopes[0].relpath == home:
             # Defined (or used unqualified) in its own home module.
@@ -2112,8 +2129,10 @@ class _InvariantVisitor(ast.NodeVisitor):
             pairs.append((value.id, {guard.tag("path")} | weak))
         fields = self._file_path_entry_owner(value)
         if fields is not None:
-            current = set(_resolve(self.scopes, fields)) - {_DICT_DIRTY}
-            pairs.append((fields, current | {("guarded_dict", guard.key)}))
+            # Only the guarded identity (plus provenance facts): a later
+            # may-rebinding joins other bindings in, which then disqualify it.
+            facts = _facts_of(_resolve(self.scopes, fields))
+            pairs.append((fields, facts | {("guarded_dict", guard.key)}))
         if isinstance(target, ast.Name):
             pairs.append((target.id, {guard.tag("name")}))
         self._bind(pairs)
@@ -2452,9 +2471,11 @@ class _InvariantVisitor(ast.NodeVisitor):
             )
         active = {g.key for g in self._active_adoption_guards()} if under_guard else set()
         if isinstance(value, ast.Name):
-            bindings = _resolve(self.scopes, value.id)
-            if _DICT_DIRTY not in bindings and any(
-                b[0] == "guarded_dict" and b[1] in active for b in bindings
+            # Every reaching binding must be this guarded dict: after
+            # ``if c: body = other`` the joined value may be ``other``.
+            identities = [b for b in _resolve(self.scopes, value.id) if b[0] not in _FACT_TAGS]
+            if identities and all(
+                b[0] == "guarded_dict" and b[1] in active for b in identities
             ):
                 return True
         owned = _proven_owned(value, self.scopes)
