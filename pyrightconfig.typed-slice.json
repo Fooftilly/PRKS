@@ -1,6 +1,8 @@
 {
   "include": [
-    "backend/storage"
+    "backend/storage",
+    "backend/entity_ids.py",
+    "backend/concurrency.py"
   ],
   "exclude": [
     "**/__pycache__"

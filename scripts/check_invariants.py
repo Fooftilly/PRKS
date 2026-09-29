@@ -21,17 +21,25 @@ from typing import Any, Callable, Iterable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# First #69 Pyright slice: genuine basic type checking for backend/storage.
+# #69 Pyright typed slice: genuine basic type checking for the protected
+# scopes below (backend/storage first, then small backend utility modules).
 # Kept next to the AST invariants so Fast Static Analysis fails if the typed
-# slice silently reverts to effectively-off mode.
+# slice silently reverts to effectively-off mode or loses a protected scope.
 PYRIGHT_DATAFLOW_CONFIG = "pyrightconfig.json"
 PYRIGHT_DATAFLOW_REQUIRED_INCLUDE = "backend"
 PYRIGHT_TYPED_SLICE_CONFIG = "pyrightconfig.typed-slice.json"
-PYRIGHT_TYPED_SLICE_INCLUDE = ("backend/storage",)
-PYRIGHT_TYPED_SLICE_ROOT = "backend/storage"
+# Every protected scope must stay in ``include``, exist on disk (Pyright only
+# warns and still exits 0 for a missing include path), and stay free of
+# ignore/exclude suppression. Expand only in focused follow-up PRs.
+PYRIGHT_TYPED_SLICE_SCOPES = (
+    "backend/storage",
+    "backend/entity_ids.py",
+    "backend/concurrency.py",
+)
+PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
 # Only __pycache__ exclusions are permitted on the typed slice; anything else
-# that covers backend/storage could silently suppress the checked scope.
+# that covers a protected scope could silently suppress it.
 PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES = frozenset(
     {
         "**/__pycache__",
@@ -3533,18 +3541,18 @@ def _path_covers_root(entry: object, root: str) -> bool:
 
 
 def _path_covers_typed_slice(entry: object) -> bool:
-    """True when ignore/exclude can match ``backend/storage`` or anything under it."""
-    return _path_covers_root(entry, PYRIGHT_TYPED_SLICE_ROOT)
+    """True when ignore/exclude can match any protected typed-slice scope."""
+    return any(_path_covers_root(entry, scope) for scope in PYRIGHT_TYPED_SLICE_SCOPES)
 
 
 def _reject_ignore_exclude_covering(
     cfg: dict,
     *,
-    protected_root: str,
+    protected_roots: Sequence[str],
     config_name: str,
     code: str,
 ) -> list[Finding]:
-    """Reject ignore/exclude entries that would silence ``protected_root``."""
+    """Reject ignore/exclude entries that would silence any ``protected_roots``."""
     findings: list[Finding] = []
     for key in ("ignore", "exclude"):
         value = cfg.get(key)
@@ -3561,7 +3569,8 @@ def _reject_ignore_exclude_covering(
             )
             continue
         for entry in value:
-            if _path_covers_root(entry, protected_root):
+            covered = [root for root in protected_roots if _path_covers_root(entry, root)]
+            if covered:
                 findings.append(
                     Finding(
                         code,
@@ -3569,7 +3578,7 @@ def _reject_ignore_exclude_covering(
                         1,
                         (
                             f"{config_name} {key} entry {entry!r} would suppress "
-                            f"{protected_root}; only __pycache__ exclusions are allowed"
+                            f"{', '.join(covered)}; only __pycache__ exclusions are allowed"
                         ),
                     )
                 )
@@ -3577,10 +3586,10 @@ def _reject_ignore_exclude_covering(
 
 
 def _reject_typed_slice_suppression(cfg: dict) -> list[Finding]:
-    """Reject ignore/exclude entries that would silence the typed slice."""
+    """Reject ignore/exclude entries that would silence any typed-slice scope."""
     return _reject_ignore_exclude_covering(
         cfg,
-        protected_root=PYRIGHT_TYPED_SLICE_ROOT,
+        protected_roots=PYRIGHT_TYPED_SLICE_SCOPES,
         config_name=PYRIGHT_TYPED_SLICE_CONFIG,
         code="INV-PYRIGHT-002",
     )
@@ -3681,7 +3690,8 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
 
     The data-flow config may stay on ``typeCheckingMode: off`` (narrow
     diagnostics only) but must still include ``backend``. The typed-slice
-    config must enable genuine analysis for ``backend/storage`` without
+    config must enable genuine analysis for every protected scope in
+    ``PYRIGHT_TYPED_SLICE_SCOPES`` (each present on disk) without
     ignore/exclude suppression, and CI must execute ``pyright --project``
     for both configs (filename mentions in comments do not count).
     """
@@ -3732,7 +3742,7 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
             findings.extend(
                 _reject_ignore_exclude_covering(
                     dataflow,
-                    protected_root=PYRIGHT_DATAFLOW_REQUIRED_INCLUDE,
+                    protected_roots=(PYRIGHT_DATAFLOW_REQUIRED_INCLUDE,),
                     config_name=PYRIGHT_DATAFLOW_CONFIG,
                     code="INV-PYRIGHT-001",
                 )
@@ -3745,7 +3755,7 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
                 "INV-PYRIGHT-002",
                 PYRIGHT_TYPED_SLICE_CONFIG,
                 1,
-                "missing Pyright typed-slice config (first #69 scope)",
+                "missing Pyright typed-slice config (#69 typed scopes)",
             )
         )
         return findings
@@ -3791,7 +3801,8 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
         )
     else:
         normalized = tuple(_normalize_pyright_path(item) for item in include)
-        if normalized != PYRIGHT_TYPED_SLICE_INCLUDE:
+        if sorted(normalized) != sorted(PYRIGHT_TYPED_SLICE_INCLUDE):
+            missing = [s for s in PYRIGHT_TYPED_SLICE_INCLUDE if s not in normalized]
             findings.append(
                 Finding(
                     "INV-PYRIGHT-002",
@@ -3800,7 +3811,23 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
                     (
                         "typed-slice include must be exactly "
                         f"{list(PYRIGHT_TYPED_SLICE_INCLUDE)} "
-                        f"(found {list(normalized)!r}); expand only in a focused follow-up PR"
+                        f"(found {list(normalized)!r}; missing {missing!r}); "
+                        "expand only in a focused follow-up PR"
+                    ),
+                )
+            )
+
+    for scope in PYRIGHT_TYPED_SLICE_SCOPES:
+        if not (root / scope).exists():
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-002",
+                    PYRIGHT_TYPED_SLICE_CONFIG,
+                    1,
+                    (
+                        f"protected typed-slice scope {scope!r} does not exist; "
+                        "Pyright would skip it silently. Update the #69 scope list "
+                        "together with the move or rename"
                     ),
                 )
             )
