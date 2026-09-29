@@ -127,15 +127,26 @@ describe('projectWorkRoute', () => {
     expect(projection.work).toBeNull()
   })
 
-  it('keeps effective pending metadata on the projected Work', () => {
+  it('keeps an unsent metadata overlay off the editor Work', () => {
+    const acknowledged = { id: 'w1', title: 'Acknowledged', status: 'unread', roles: [] as unknown[] }
+    const overlaid = {
+      id: 'w1',
+      title: 'Pending title',
+      status: 'reading',
+      roles: [{ id: 'p1', role_type: 'Author' }],
+    }
     const projection = projectWorkRoute(
-      input({
-        workId: 'w1',
-        work: { id: 'w1', title: 'Pending title', status: 'reading' },
-      }),
+      input({ workId: 'w1', work: acknowledged, effectiveWork: overlaid }),
     )
-    expect(projection.work?.title).toBe('Pending title')
-    expect(projection.work?.status).toBe('reading')
+    expect(projection.work?.title).toBe('Acknowledged')
+    expect(projection.work?.status).toBe('unread')
+    expect(projection.work?.roles).toEqual([])
+    expect(projection.effectiveWork?.title).toBe('Pending title')
+    expect(projection.effectiveWork?.status).toBe('reading')
+    expect(projection.effectiveWork?.roles).toEqual([{ id: 'p1', role_type: 'Author' }])
+    expect(projection.work).not.toBe(projection.effectiveWork)
+    expect(projection.work).not.toBe(acknowledged)
+    expect(projection.effectiveWork).not.toBe(overlaid)
   })
 
   it('keeps an effective video source as one identity', () => {
@@ -270,10 +281,56 @@ describe('owner publication', () => {
     expect(deleted?.availability).toBe('unavailable')
     expect(deleted?.lifecycle).toBe('pending-delete')
     expect(deleted?.work).toBeNull()
+    expect(deleted?.effectiveWork).toBeNull()
     expect(ctx.getEntity('work')).toBeNull()
     expect(replaceWorkRoutePlacement(ctx, 1, { id: 'w1', title: 'Cached', folder_id: 'later' })).toBeNull()
     expect(ctx.getEntity('work')).toBeNull()
     expect((ctx.getResource('workRouteProjection') as WorkRouteProjection).work).toBeNull()
+  })
+
+  it('stores the projection it was given and keeps overlays off the entity', () => {
+    const ctx = ctxFor('main', 1)
+    const projection = projectWorkRoute(
+      input({
+        workId: 'w1',
+        work: { id: 'w1', title: 'Acknowledged', roles: [] },
+        effectiveWork: {
+          id: 'w1',
+          title: 'Pending title',
+          roles: [{ id: 'p1', role_type: 'Author', first_name: 'Ada' }],
+        },
+      }),
+    )
+    const published = publishWorkRouteProjection(ctx, 1, projection)
+    expect(published).toBe(projection)
+    expect(ctx.getResource('workRouteProjection')).toBe(projection)
+    expect(ctx.getEntity('work')).toBe(projection.work)
+    expect(ctx.getEntity('work')).not.toBe(projection.effectiveWork)
+    expect((ctx.getEntity('work') as { title: string }).title).toBe('Acknowledged')
+    expect(projection.effectiveWork?.title).toBe('Pending title')
+  })
+
+  it('keeps a pending title when placement replaces the editor Work', () => {
+    const ctx = ctxFor('main', 1)
+    publishWorkRouteProjection(
+      ctx,
+      1,
+      projectWorkRoute(
+        input({
+          workId: 'w1',
+          work: { id: 'w1', title: 'Acknowledged', folder_id: 'old' },
+          effectiveWork: { id: 'w1', title: 'Pending title', folder_id: 'old' },
+        }),
+      ),
+    )
+    const replaced = replaceWorkRoutePlacement(ctx, 1, { id: 'w1', title: 'Acknowledged', folder_id: 'new', folder_title: 'Notes' })
+    expect(replaced?.work?.title).toBe('Acknowledged')
+    expect(replaced?.work?.folder_id).toBe('new')
+    expect(replaced?.effectiveWork?.title).toBe('Pending title')
+    expect(replaced?.effectiveWork?.folder_id).toBe('new')
+    expect(replaced?.effectiveWork?.folder_title).toBe('Notes')
+    expect((ctx.getEntity('work') as { title: string }).title).toBe('Acknowledged')
+    expect(ctx.getEntity('work')).not.toBe(replaced?.effectiveWork)
   })
 
   it('does not adopt a painted Work after the generation moves', () => {

@@ -128,7 +128,7 @@
       "runtime_files": [
         {
           "path": "/js/work-route-projection.js",
-          "sha256": "bee7d4e7498632fa8100f210e9a278a79ef3a21ddec1922eee0e9a942a3749b2"
+          "sha256": "1cbe084094d7eeaefaf3111fab39ad6eb968a6b1a7479d111ff8b71ba497993c"
         }
       ],
       "source_category": "frontend-app:work-route-projection",

@@ -4322,6 +4322,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 if (stale()) return;
                 let workOps = [];
+                let workOpsKnown = false;
                 let offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                 const lifecycle = typeof prksResolveWorkLifecycle === 'function'
                     ? await prksResolveWorkLifecycle(workId)
@@ -4335,6 +4336,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     if (liveDeleted) {
                         offlineWork = { value: null, source: 'unavailable', cachedAt: null };
                         workOps = await workOpsPromise;
+                        workOpsKnown = true;
                         if (stale()) return;
                     } else {
                         offlineWork = await prksOfflineDetailFetch(
@@ -4344,45 +4346,93 @@ async function prksRenderTabRoute(ctx, hash, options) {
                             routeSignal
                         );
                         if (stale()) return;
-                        /* Background: this cached open did not wait on the queue.
-                         * A pending DELETE the marker missed must drop the
-                         * projection, not only the entity. */
+                        /* Background: a cached ordinary Work paints without
+                         * waiting on this read. When it resolves, a missed
+                         * pending DELETE drops the projection, and metadata
+                         * or role overlays republish onto effectiveWork only. */
                         void workOpsPromise.then(function (ops) {
                             if (stale()) return;
-                            workOps = ops;
-                            if (typeof prksPendingWorkDeletions !== 'function' ||
-                                !prksPendingWorkDeletions(ops).has(workId)) return;
-                            /* The cached row may already be a ready projection.
-                             * Clearing the entity alone leaves that projection
-                             * for a later placement refresh to republish. */
-                            workDeleted = true;
-                            work = null;
-                            if (typeof prksProjectWorkRoute === 'function' &&
-                                typeof prksPublishWorkRouteProjection === 'function') {
-                                const deletedProjection = prksPublishWorkRouteProjection(
-                                    ctx,
-                                    generation,
-                                    prksProjectWorkRoute({
-                                        workId: workId,
-                                        owner: { tabId: ctx.tabId, generation: generation },
-                                        availability: 'unavailable',
-                                        lifecycle: 'pending-delete',
-                                        provenance: 'cache',
-                                        work: null,
-                                        recordOpen: false,
-                                    })
-                                );
-                                if (!deletedProjection) return;
-                            } else if (ctx.setEntity) {
-                                ctx.setEntity('work', null);
+                            workOps = ops || [];
+                            if (typeof prksPendingWorkDeletions === 'function' &&
+                                prksPendingWorkDeletions(workOps).has(workId)) {
+                                /* The cached row may already be a ready projection.
+                                 * Clearing the entity alone leaves that projection
+                                 * for a later placement refresh to republish. */
+                                workDeleted = true;
+                                work = null;
+                                if (typeof prksProjectWorkRoute === 'function' &&
+                                    typeof prksPublishWorkRouteProjection === 'function') {
+                                    const deletedProjection = prksPublishWorkRouteProjection(
+                                        ctx,
+                                        generation,
+                                        prksProjectWorkRoute({
+                                            workId: workId,
+                                            owner: { tabId: ctx.tabId, generation: generation },
+                                            availability: 'unavailable',
+                                            lifecycle: 'pending-delete',
+                                            provenance: 'cache',
+                                            work: null,
+                                            effectiveWork: null,
+                                            recordOpen: false,
+                                        })
+                                    );
+                                    if (!deletedProjection) return;
+                                } else if (ctx.setEntity) {
+                                    ctx.setEntity('work', null);
+                                }
+                                if (typeof prksOfflineRenderUnavailable === 'function') {
+                                    prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
+                                }
+                                return;
                             }
-                            if (typeof prksOfflineRenderUnavailable === 'function') {
-                                prksOfflineRenderUnavailable(contentDiv, 'File not available offline');
+                            if (typeof prksSetPendingWorkMetadata === 'function') {
+                                prksSetPendingWorkMetadata(workOps);
                             }
+                            if (typeof prksSetPendingWorkRoles === 'function') {
+                                prksSetPendingWorkRoles(workOps);
+                            }
+                            if (typeof prksSetPendingPersonNames === 'function') {
+                                prksSetPendingPersonNames(workOps);
+                            }
+                            if (stale()) return;
+                            if (typeof prksProjectWorkRoute !== 'function' ||
+                                typeof prksPublishWorkRouteProjection !== 'function' ||
+                                !ctx.getResource) return;
+                            const current = ctx.getResource('workRouteProjection');
+                            if (!current || current.availability !== 'ready' || current.workId !== workId) return;
+                            if (current.ownerTabId !== ctx.tabId || current.ownerGeneration !== generation) return;
+                            const entity = ctx.getEntity ? ctx.getEntity('work') : null;
+                            const base = entity && entity.id === workId ? entity : null;
+                            if (!base) return;
+                            let effective = base;
+                            if (typeof prksEffectiveWorkSync === 'function') {
+                                effective = prksEffectiveWorkSync(base);
+                            }
+                            if (effective && typeof prksEffectiveWorkDetailRoles === 'function') {
+                                effective = prksEffectiveWorkDetailRoles(effective);
+                            }
+                            if (effective === base && current.effectiveWork === current.work) return;
+                            if (stale()) return;
+                            const refreshed = prksPublishWorkRouteProjection(
+                                ctx,
+                                generation,
+                                prksProjectWorkRoute({
+                                    workId: workId,
+                                    owner: { tabId: ctx.tabId, generation: generation },
+                                    availability: 'ready',
+                                    lifecycle: current.lifecycle,
+                                    provenance: current.provenance,
+                                    work: base,
+                                    effectiveWork: effective,
+                                    recordOpen: false,
+                                })
+                            );
+                            if (refreshed && refreshed.work) work = refreshed.work;
                         });
                     }
                 } else {
                     workOps = await workOpsPromise;
+                    workOpsKnown = true;
                     if (stale()) return;
                     const workDeletedEarly = liveDeleted ||
                         (typeof prksPendingWorkDeletions === 'function' &&
@@ -4506,20 +4556,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         }
                     }).catch(function () { /* bookkeeping never breaks the page */ });
                 }
-                /* Sync overlays read maps. Fill those maps from the durable
-                 * read this route already started. The shared hydration hook
-                 * would issue further queue reads (folders, playlists, and
-                 * other names) that this route does not wait on. */
-                if (work && !workOps.length) {
-                    workOps = await workOpsPromise;
-                    if (stale()) return;
-                }
-                if (work && typeof prksPendingWorkDeletions === 'function' &&
-                    prksPendingWorkDeletions(workOps).has(workId)) {
-                    workDeleted = true;
-                    work = null;
-                }
-                if (work) {
+                /* Maps already in memory can overlay this paint. Filling them
+                 * from the queue is the background read above on a cached
+                 * open, or the read this path already awaited when there was
+                 * no cache row. An empty cached queue must not be written
+                 * over maps that are already hydrated. */
+                if (work && workOpsKnown) {
                     if (typeof prksSetPendingWorkMetadata === 'function') {
                         prksSetPendingWorkMetadata(workOps);
                     }
@@ -4530,12 +4572,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         prksSetPendingPersonNames(workOps);
                     }
                 }
-                if (work && typeof prksEffectiveWorkSync === 'function') {
-                    work = prksEffectiveWorkSync(work);
-                }
-                if (work && typeof prksEffectiveWorkDetailRoles === 'function') {
-                    work = prksEffectiveWorkDetailRoles(work);
-                }
                 const acknowledgedKind = work && typeof prksInferWorkSourceKind === 'function'
                     ? prksInferWorkSourceKind(work) : '';
                 if (work && acknowledgedKind === 'video' && typeof prksRefreshPendingWorkSources === 'function') {
@@ -4544,6 +4580,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 if (work && acknowledgedKind === 'video' && typeof prksEffectiveWorkSource === 'function') {
                     work = prksEffectiveWorkSource(work);
+                }
+                /* Metadata and role overlays are for the projection's read
+                 * surface. Role, metadata, and source editors measure saves
+                 * against the entity, so those overlays must not replace it. */
+                let effectiveWork = work;
+                if (work && typeof prksEffectiveWorkSync === 'function') {
+                    effectiveWork = prksEffectiveWorkSync(work);
+                }
+                if (effectiveWork && typeof prksEffectiveWorkDetailRoles === 'function') {
+                    effectiveWork = prksEffectiveWorkDetailRoles(effectiveWork);
                 }
                 if (stale()) return;
                 const workAvailability = (workUnsent && work)
@@ -4565,6 +4611,7 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         lifecycle: workLifecycle,
                         provenance: workProvenance,
                         work: work,
+                        effectiveWork: effectiveWork,
                         recordOpen: recordWorkOpen,
                     });
                     const publishedWork = prksPublishWorkRouteProjection(ctx, generation, workProjection);
@@ -4599,8 +4646,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                                 work = replaced.work || placed;
                                 const focused = typeof prksTabContextIsFocused === 'function'
                                     ? prksTabContextIsFocused(ctx) : true;
-                                if (focused && typeof updatePanelContent === 'function') {
-                                    updatePanelContent('details');
+                                /* A refresh that lands during paint must not
+                                 * replace Annotations with Details. */
+                                const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';
+                                if (focused && panelTab === 'details' && typeof updatePanelContent === 'function') {
+                                    updatePanelContent(panelTab);
                                 }
                             }
                         }

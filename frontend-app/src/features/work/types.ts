@@ -19,7 +19,7 @@ export interface WorkRouteOwner {
   readonly generation: number
 }
 
-/** Effective Work already overlaid by the coordinator's canonical helpers. */
+/** Work record the coordinator has already shaped. This module does not overlay it. */
 export type EffectiveWork = Record<string, unknown> & { id?: unknown }
 
 export interface WorkRouteProjection {
@@ -29,8 +29,17 @@ export interface WorkRouteProjection {
   readonly provenance: WorkRouteProvenance
   readonly ownerTabId: string
   readonly ownerGeneration: number
-  /** Null unless availability is ready. Never a shared object across panes. */
+  /**
+   * Editor base. Acknowledged Work plus video-source and folder/playlist
+   * placement. Null unless availability is ready. Never shared across panes.
+   */
   readonly work: EffectiveWork | null
+  /**
+   * Metadata and role overlays for later read surfaces.
+   * Same object as `work` when those overlays did not change it.
+   * Not the record editors measure a save against.
+   */
+  readonly effectiveWork: EffectiveWork | null
   /** True only for a genuine foreground open the coordinator already decided. */
   readonly recordOpen: boolean
 }
@@ -42,6 +51,8 @@ export interface WorkRouteProjectInput {
   readonly lifecycle: WorkRouteLifecycle
   readonly provenance: WorkRouteProvenance
   readonly work: EffectiveWork | null
+  /** Metadata and role overlays. Omitted when they did not produce a new record. */
+  readonly effectiveWork?: EffectiveWork | null
   readonly recordOpen: boolean
 }
 

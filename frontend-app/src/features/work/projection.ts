@@ -9,11 +9,21 @@ import type {
 } from './types'
 
 const RESOURCE = 'workRouteProjection'
+const PLACEMENT_FIELDS = ['folder_id', 'folder_title', 'playlist_id', 'playlist_title'] as const
 
 function cloneWork(work: EffectiveWork | null): EffectiveWork | null {
   if (!work) return null
   if (typeof structuredClone === 'function') return structuredClone(work)
   return JSON.parse(JSON.stringify(work)) as EffectiveWork
+}
+
+/** Folder and playlist fields move together onto a distinct effective record. */
+function withPlacement(base: EffectiveWork, placed: EffectiveWork): EffectiveWork {
+  const next: EffectiveWork = { ...base }
+  for (const field of PLACEMENT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(placed, field)) next[field] = placed[field]
+  }
+  return next
 }
 
 function freezeProjection(projection: WorkRouteProjection): WorkRouteProjection {
@@ -31,20 +41,34 @@ export function projectWorkRoute(input: WorkRouteProjectInput): WorkRouteProject
   let lifecycle: WorkRouteLifecycle = input.lifecycle
   let provenance: WorkRouteProvenance = input.provenance
   let work = input.work
+  let effectiveWork = input.effectiveWork ?? null
 
   if (lifecycle === 'pending-delete') {
     availability = 'unavailable'
     work = null
+    effectiveWork = null
   }
   if (lifecycle === 'unsent-create') {
     provenance = 'local-unsent'
   }
   if (work && String(work.id ?? '') !== workId) {
     work = null
+    effectiveWork = null
     if (availability === 'ready') availability = 'not-found'
   }
-  if (availability !== 'ready') work = null
-  else if (!work) availability = 'not-found'
+  if (effectiveWork && String(effectiveWork.id ?? '') !== workId) effectiveWork = null
+  if (availability !== 'ready') {
+    work = null
+    effectiveWork = null
+  } else if (!work) {
+    availability = 'not-found'
+    effectiveWork = null
+  }
+
+  const storedWork = availability === 'ready' ? cloneWork(work) : null
+  const storedEffective = storedWork
+    ? (effectiveWork && effectiveWork !== work ? cloneWork(effectiveWork) : storedWork)
+    : null
 
   return freezeProjection({
     workId,
@@ -53,7 +77,8 @@ export function projectWorkRoute(input: WorkRouteProjectInput): WorkRouteProject
     provenance,
     ownerTabId: String(input.owner.tabId),
     ownerGeneration: input.owner.generation,
-    work: availability === 'ready' ? cloneWork(work) : null,
+    work: storedWork,
+    effectiveWork: storedEffective,
     recordOpen: input.recordOpen === true && availability === 'ready',
   })
 }
@@ -67,26 +92,21 @@ function sameOwner(ctx: WorkRouteOwnerContext, projection: WorkRouteProjection, 
   )
 }
 
-/** Publish onto the originating TabContext. A stale generation publishes nothing. */
+/**
+ * Publish onto the originating TabContext. A stale generation publishes nothing.
+ * The projection is stored as given. Rebuilding it would copy the Work again.
+ * Editors receive `work`, never the metadata or role overlay.
+ */
 export function publishWorkRouteProjection(
   ctx: WorkRouteOwnerContext,
   generation: number,
   projection: WorkRouteProjection,
 ): WorkRouteProjection | null {
   if (!sameOwner(ctx, projection, generation)) return null
-  const stored = projectWorkRoute({
-    workId: projection.workId,
-    owner: { tabId: projection.ownerTabId, generation: projection.ownerGeneration },
-    availability: projection.availability,
-    lifecycle: projection.lifecycle,
-    provenance: projection.provenance,
-    work: projection.work,
-    recordOpen: projection.recordOpen,
-  })
-  ctx.setResource(RESOURCE, stored)
-  if (stored.availability === 'ready' && stored.work) ctx.setEntity('work', stored.work)
+  ctx.setResource(RESOURCE, projection)
+  if (projection.availability === 'ready' && projection.work) ctx.setEntity('work', projection.work)
   else ctx.setEntity('work', null)
-  return stored
+  return projection
 }
 
 /**
@@ -103,6 +123,9 @@ export function replaceWorkRoutePlacement(
   if (!current || !sameOwner(ctx, current, generation)) return null
   if (!work || String(work.id ?? '') !== current.workId) return null
   if (current.availability !== 'ready') return null
+  const effectiveSource = current.effectiveWork && current.effectiveWork !== current.work
+    ? withPlacement(current.effectiveWork, work)
+    : work
   return publishWorkRouteProjection(
     ctx,
     generation,
@@ -113,6 +136,7 @@ export function replaceWorkRoutePlacement(
       lifecycle: current.lifecycle,
       provenance: current.provenance,
       work,
+      effectiveWork: effectiveSource,
       recordOpen: false,
     }),
   )
@@ -134,6 +158,7 @@ export function adoptPaintedWorkRoute(
   const painted = ctx.getEntity('work') as EffectiveWork | null
   if (!painted || String(painted.id ?? '') !== current.workId) return null
   if (current.work === painted) return current
+  const effectiveFollowsWork = current.effectiveWork === current.work
   const stored = freezeProjection({
     workId: current.workId,
     availability: current.availability,
@@ -142,6 +167,7 @@ export function adoptPaintedWorkRoute(
     ownerTabId: current.ownerTabId,
     ownerGeneration: current.ownerGeneration,
     work: painted,
+    effectiveWork: effectiveFollowsWork ? painted : current.effectiveWork,
     recordOpen: current.recordOpen,
   })
   ctx.setResource(RESOURCE, stored)

@@ -68,7 +68,27 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertLess(body.index("if (!deletedProjection) return;"), body.index("prksOfflineRenderUnavailable(contentDiv, 'File not available offline')"))
         self.assertLess(body.index("prksSetPendingWorkMetadata(workOps)"), body.index("prksEffectiveWorkSync"))
         self.assertLess(body.index("prksSetPendingWorkRoles(workOps)"), body.index("prksEffectiveWorkDetailRoles"))
-        self.assertLess(body.index("workOps = await workOpsPromise;"), body.index("prksSetPendingWorkMetadata(workOps)"))
+        before_paint = body[:body.index("await renderWorkDetails")]
+        self.assertEqual(before_paint.count("workOps = await workOpsPromise"), 2)
+        self.assertNotIn("if (work && !workOps.length)", body)
+        callback_at = body.index("void workOpsPromise.then(function (ops) {")
+        callback = body[callback_at:body.index("                        });", callback_at)]
+        self.assertNotIn("await ", callback)
+        self.assertIn("if (stale()) return;", callback)
+        self.assertIn("prksSetPendingWorkMetadata(workOps)", callback)
+        self.assertIn("prksSetPendingWorkRoles(workOps)", callback)
+        self.assertIn("prksSetPendingPersonNames(workOps)", callback)
+        self.assertLess(callback.index("lifecycle: 'pending-delete'"), callback.index("prksSetPendingWorkMetadata(workOps)"))
+        self.assertIn("work: base", callback)
+        self.assertIn("effectiveWork: effective", callback)
+        self.assertIn("if (work && workOpsKnown)", body)
+        self.assertIn("effectiveWork: effectiveWork", body)
+        self.assertNotIn("work = prksEffectiveWorkSync(work)", body)
+        self.assertNotIn("work = prksEffectiveWorkDetailRoles(work)", body)
+        reapply = body[body.index("prksReplaceWorkRoutePlacement(ctx, generation, placed)"):]
+        self.assertIn("const panelTab = (ctx.ui && ctx.ui.rightPanelTab) || 'details';", reapply)
+        self.assertIn("panelTab === 'details'", reapply)
+        self.assertNotIn("updatePanelContent('details')", reapply)
         self.assertNotIn("prksHydratePendingWorkMetadata", body)
         self.assertNotIn("currentWorkProjection", body)
         self.assertNotIn(".listOperations(", body)
@@ -88,6 +108,10 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         blob = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         for token in _FORBIDDEN:
             self.assertNotIn(token, blob, token)
+        publish = blob.split("export function publishWorkRouteProjection", 1)[1].split("export function replaceWorkRoutePlacement", 1)[0]
+        self.assertNotIn("projectWorkRoute(", publish)
+        self.assertIn("ctx.setEntity('work', projection.work)", publish)
+        self.assertNotIn("effectiveWork", publish[publish.index("setEntity"):])
         main = _MAIN.read_text(encoding="utf-8")
         self.assertNotIn("features/work", main)
         built = _BUILT.read_text(encoding="utf-8")
@@ -161,8 +185,8 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         globalThis.prksSetPendingWorkMetadata(ops);
         globalThis.prksSetPendingWorkRoles(ops);
         globalThis.prksSetPendingPersonNames(ops);
-        let work = globalThis.prksEffectiveWorkSync(acknowledged);
-        work = globalThis.prksEffectiveWorkDetailRoles(work);
+        let effectiveWork = globalThis.prksEffectiveWorkSync(acknowledged);
+        effectiveWork = globalThis.prksEffectiveWorkDetailRoles(effectiveWork);
         const ctx = {
             tabId: 'main',
             generation: 1,
@@ -174,20 +198,28 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
             setResource(_name, value) { this.resource = value; },
             getResource() { return this.resource; },
         };
-        const published = globalThis.prksPublishWorkRouteProjection(
-            ctx, 1, globalThis.prksProjectWorkRoute({
-                workId: 'w1',
-                owner: { tabId: 'main', generation: 1 },
-                availability: 'ready',
-                lifecycle: 'ordinary',
-                provenance: 'cache',
-                work: work,
-                recordOpen: false,
-            })
-        );
+        const projection = globalThis.prksProjectWorkRoute({
+            workId: 'w1',
+            owner: { tabId: 'main', generation: 1 },
+            availability: 'ready',
+            lifecycle: 'ordinary',
+            provenance: 'cache',
+            work: acknowledged,
+            effectiveWork: effectiveWork,
+            recordOpen: false,
+        });
+        const published = globalThis.prksPublishWorkRouteProjection(ctx, 1, projection);
+        const entity = ctx.entity;
+        const role = published.effectiveWork && published.effectiveWork.roles && published.effectiveWork.roles[0];
         process.stdout.write(JSON.stringify({
-            title: published.work && published.work.title,
-            role: published.work && published.work.roles && published.work.roles[0],
+            sameProjection: published === projection,
+            effectiveTitle: published.effectiveWork && published.effectiveWork.title,
+            roleId: role && role.id,
+            roleType: role && role.role_type,
+            roleFirst: role && role.first_name,
+            entityTitle: entity && entity.title,
+            entityRoles: entity && entity.roles ? entity.roles.length : null,
+            entityIsEffective: entity === published.effectiveWork,
         }));
         """
         proc = subprocess.run(
@@ -200,10 +232,14 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         payload = json.loads(proc.stdout)
-        self.assertEqual(payload["title"], "Pending title")
-        self.assertEqual(payload["role"]["id"], "p1")
-        self.assertEqual(payload["role"]["role_type"], "Author")
-        self.assertEqual(payload["role"]["first_name"], "Ada")
+        self.assertTrue(payload["sameProjection"])
+        self.assertEqual(payload["effectiveTitle"], "Pending title")
+        self.assertEqual(payload["roleId"], "p1")
+        self.assertEqual(payload["roleType"], "Author")
+        self.assertEqual(payload["roleFirst"], "Ada")
+        self.assertEqual(payload["entityTitle"], "Acknowledged")
+        self.assertEqual(payload["entityRoles"], 0)
+        self.assertFalse(payload["entityIsEffective"])
 
 
 if __name__ == "__main__":
