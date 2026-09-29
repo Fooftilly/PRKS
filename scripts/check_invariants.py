@@ -1245,27 +1245,29 @@ def _positional_or_keyword(
 ) -> ast.expr | None:
     """The argument bound to the parameter at ``index`` (spelled one of
     ``keywords``). An explicit keyword wins -- the same parameter cannot also
-    be bound positionally -- then the positional at ``index`` (or a ``*args``
-    spread at or before it), then a ``**`` mapping that may supply it."""
+    be bound positionally -- or a dict-literal ``**`` spread naming it; then
+    the positional at ``index`` (or a ``*args`` spread at or before it); then
+    an opaque ``**mapping`` that may supply it."""
     explicit = next((kw.value for kw in node.keywords if kw.arg in keywords), None)
     if explicit is not None:
         return explicit
+    # ``**{'dst': x}`` names the parameter as decisively as ``dst=x``.
+    for kw in node.keywords:
+        if kw.arg is None and isinstance(kw.value, ast.Dict):
+            for keyword in keywords:
+                found = _dict_file_path_value(kw.value, key=keyword)
+                if found is not None:
+                    return found
     for position, arg in enumerate(node.args):
         if isinstance(arg, ast.Starred):
             return arg.value
         if position == index:
             return arg
-    for kw in node.keywords:
-        if kw.arg is not None:
-            continue
-        # ``**{'dst': x}`` supplies it; an opaque ``**mapping`` may.
-        if not isinstance(kw.value, ast.Dict):
-            return kw.value
-        for keyword in keywords:
-            found = _dict_file_path_value(kw.value, key=keyword)
-            if found is not None:
-                return found
-    return None
+    # An opaque ``**mapping`` may supply it.
+    return next(
+        (kw.value for kw in node.keywords if kw.arg is None and not isinstance(kw.value, ast.Dict)),
+        None,
+    )
 
 
 def _identity_passed_names(node: ast.expr) -> list[str]:

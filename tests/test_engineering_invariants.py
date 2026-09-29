@@ -1655,6 +1655,21 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "        self.rm = os.remove\n"
                 "        self.rm(os.path.join(pdfs_dir, name))\n"
             ),
+            "os_rename_args_spread_then_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(*[scratch], **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "shutil_move_args_spread_then_dict_spread_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(*[scratch], **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "os_renames_args_spread_then_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(*[scratch], **{'new': os.path.join(pdfs_dir, name)})\n"
+            ),
             "os_rename_dict_spread_destination": (
                 "import os\n"
                 "def publish(pdfs_dir, scratch, name):\n"
