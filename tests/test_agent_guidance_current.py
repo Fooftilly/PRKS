@@ -184,24 +184,21 @@ class AgentGuidanceTests(unittest.TestCase):
             normalized_contract,
         )
 
-    def test_source_comments_do_not_reference_removed_monolith_sections(self):
+    def test_source_comments_point_to_offline_leaf_rules_not_router(self):
         source_paths = (
             ROOT / "frontend" / "js" / "api.js",
             ROOT / "frontend" / "js" / "app.js",
             ROOT / "backend" / "db_manager.py",
         )
-        stale_references = (
-            'offline-pwa.md "Offline coherence domains"',
-            'offline-pwa.md, "Offline coherence domains"',
-            'offline-pwa.md,\n * "Offline coherence domains"',
-            'offline-pwa.md,\n# "Offline browse catalogs"',
-            'offline-pwa.md, "Offline browse catalogs"',
-        )
         for path in source_paths:
             text = path.read_text(encoding="utf-8")
-            for phrase in stale_references:
-                with self.subTest(path=str(path.relative_to(ROOT)), phrase=phrase):
-                    self.assertNotIn(phrase, text)
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertNotIn(
+                    "docs/agent-rules/offline-pwa.md",
+                    text,
+                    "domain-specific source comments should point to the owning "
+                    "offline leaf, not the rule router",
+                )
         self.assertIn(
             "docs/agent-rules/offline-entity-coherence.md",
             (ROOT / "frontend" / "js" / "api.js").read_text(encoding="utf-8"),
