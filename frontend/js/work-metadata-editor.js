@@ -82,6 +82,21 @@
             (o.status !== 'pending' || o.attempt_count > 0));
     }
 
+    function fieldsFor(group, work) {
+        const kind = work && typeof root.prksInferWorkSourceKind === 'function'
+            ? root.prksInferWorkSourceKind(work) : '';
+        if (typeof root.prksWorkMetadataGroupFields === 'function') {
+            return root.prksWorkMetadataGroupFields(group.name, kind);
+        }
+        const section = groupSection(group);
+        return section ? groupInputs(section).map(input => input.dataset.prksWorkField) : [];
+    }
+
+    function sessionStill(ctx, workId, session) {
+        return typeof root.prksWorkMetaSessionStill !== 'function' ||
+            root.prksWorkMetaSessionStill(ctx, workId, session);
+    }
+
     /** Acknowledged Work + durable pending edits, for the read-only card. */
     async function repaintDisplay(ctx, state) {
         const host = document.querySelector('[data-prks-role="work-bib-rows"]');
@@ -146,6 +161,35 @@
         const readable = durable !== 'unavailable';
         const editable = !!state.observed && readable;
         const blockedText = readable ? unavailable : unreadable;
+
+        if (typeof root.prksVueApplyWorkMetadataChrome === 'function' &&
+            typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+            root.prksVueWorkMetadataEditorOwns(ctx)) {
+            const work = ctx.getEntity('work');
+            const groups = SAVE_GROUPS.map(group => {
+                const fields = fieldsFor(group, work);
+                const ops = state.operations.filter(op => fields.indexOf(op.payload.field) !== -1);
+                const fieldChrome = {};
+                fields.forEach(field => {
+                    const blocked = !editable || busy(state, field);
+                    fieldChrome[field] = {
+                        disabled: blocked,
+                        title: blocked
+                            ? (!readable ? unreadable : (state.observed ? 'This field is syncing or needs resolution.' : unavailable))
+                            : '',
+                    };
+                });
+                return {
+                    name: group.name,
+                    status: errorFor(state, group) || (editable ? statusText(ops) : blockedText),
+                    saveDisabled: !editable,
+                    fields: fieldChrome,
+                    conflicts: ops.filter(o => o.status === 'conflict').map(op => conflictDescriptor(op, group.name)),
+                };
+            });
+            root.prksVueApplyWorkMetadataChrome(String(ctx.tabId), state.workId, groups);
+            return;
+        }
 
         for (const group of SAVE_GROUPS) {
             const section = groupSection(group);
@@ -215,11 +259,18 @@
     }
 
     /** Inline, field-local feedback for a value the codec rejected. */
-    function showFieldError(field) {
+    function showFieldError(ctx, field) {
+        const message = FIELD_ERRORS[field] || 'That value cannot be saved.';
+        if (typeof root.prksVueSetWorkMetadataFieldError === 'function' &&
+            typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
+            root.prksVueWorkMetadataEditorOwns(ctx)) {
+            root.prksVueSetWorkMetadataFieldError(field, message);
+            return;
+        }
         const input = document.querySelector('[data-prks-work-field="' + field + '"]');
         if (input) { input.setAttribute('aria-invalid', 'true'); input.focus(); }
         const error = fieldErrorElement(input);
-        if (error) error.textContent = FIELD_ERRORS[field] || 'That value cannot be saved.';
+        if (error) error.textContent = message;
     }
 
     function clearFieldErrors() {
@@ -245,43 +296,46 @@
         return bytes < 1024 ? bytes + ' bytes' : Math.ceil(bytes / 1024) + ' KB';
     }
 
-    function conflictRow(ctx, state, op, group) {
+    function conflictDescriptor(op, groupName) {
         const result = op.server_result || {};
         const field = op.payload.field;
         const label = root.PRKS_SYNCED_WORK_FIELD_LABELS[field] || field;
-        const item = document.createElement('div');
-        item.dataset.prksWorkFieldConflict = field;
+        let text;
         if (result.code === 'REVISION_CONFLICT' || result.code === 'FUTURE_REVISION') {
             /* Never dump a megabyte of Abstract into a one-line conflict
              * sentence. A byte-limited field reports bounded previews and
              * sizes, which is what the user needs to tell the two apart. */
             if (typeof result.current_preview === 'string') {
                 const mine = op.payload.value;
-                item.appendChild(document.createTextNode(
-                    label + ' differs. This device (' + sizeLabel(root.prksWorkFieldUtf8Bytes(mine)) +
+                text = label + ' differs. This device (' + sizeLabel(root.prksWorkFieldUtf8Bytes(mine)) +
                     '): "' + preview(mine) + '". Server (' + sizeLabel(result.current_bytes) +
-                    '): "' + preview(result.current_preview) + '". '));
+                    '): "' + preview(result.current_preview) + '". ';
             } else {
-                item.appendChild(document.createTextNode(
-                    label + ' — this device: "' + op.payload.value + '". Server: "' +
-                    (result.current_value || '') + '". '));
+                text = label + ' — this device: "' + op.payload.value + '". Server: "' +
+                    (result.current_value || '') + '". ';
             }
         } else if (result.code === 'ENTITY_NOT_FOUND') {
-            item.appendChild(document.createTextNode('This Work no longer exists on the server. '));
+            text = 'This Work no longer exists on the server. ';
         } else if (result.code === 'WRONG_OPERATION_FOR_SOURCE') {
-            /* Not a disagreement about a value -- the value simply is not a
-             * field-scoped one on this Work. Nothing to choose between, so the
-             * only offer is to discard the local edit. */
-            item.appendChild(document.createTextNode(
-                'This file\u2019s source is a video, so its URL is part of the video\u2019s '
-                + 'identity and is changed from the Video source section instead. '));
+            text = 'This file\u2019s source is a video, so its URL is part of the video\u2019s '
+                + 'identity and is changed from the Video source section instead. ';
         } else {
-            item.appendChild(document.createTextNode(
-                label + ' could not synchronize (' + (result.code || 'protocol error') + '). '));
+            text = label + ' could not synchronize (' + (result.code || 'protocol error') + '). ';
         }
         const reappliable = result.code === 'REVISION_CONFLICT' && Number.isSafeInteger(result.current_revision);
-        action(item, ctx, state, op, reappliable ? 'Use server' : 'Discard my value', false, group);
-        if (reappliable) action(item, ctx, state, op, 'Apply my value', true, group);
+        const actions = [{ label: reappliable ? 'Use server' : 'Discard my value', apply: false }];
+        if (reappliable) actions.push({ label: 'Apply my value', apply: true });
+        return { opId: op.op_id, field: field, group: groupName, text: text, actions: actions };
+    }
+
+    function conflictRow(ctx, state, op, group) {
+        const described = conflictDescriptor(op, group.name);
+        const result = op.server_result || {};
+        const field = op.payload.field;
+        const item = document.createElement('div');
+        item.dataset.prksWorkFieldConflict = field;
+        item.appendChild(document.createTextNode(described.text));
+        described.actions.forEach(choice => action(item, ctx, state, op, choice.label, choice.apply, group));
         return item;
     }
 
@@ -292,34 +346,7 @@
         button.textContent = label;
         button.onclick = async () => {
             button.disabled = true;
-            try {
-                const result = op.server_result || {};
-                /* With only a preview there is no authoritative value to write,
-                 * so taking the server's version discards the local intent and
-                 * lets the next read fetch the real text rather than trusting a
-                 * truncated copy. */
-                if (!apply && typeof result.current_value === 'string') {
-                    // Taking the server value is itself an acknowledged state:
-                    // reconcile it so the cache and the form agree immediately.
-                    const ack = { work_id: state.workId, field: op.payload.field,
-                        value: result.current_value, server_revision: result.current_revision,
-                        changed: false, code: 'ACKNOWLEDGED' };
-                    if (!await root.prksOfflineReconcileWorkField(ack)) throw new Error();
-                    acceptAck(ctx, state, ack);
-                } else if (!apply) {
-                    // No server value to fall back on; drop the local intent and
-                    // let the next authoritative read re-establish the truth.
-                    root.prksOfflineMarkEntityChanged('work', state.workId);
-                    root.prksOfflineMarkEntityChanged('work-metadata-state', state.workId);
-                    state.observed = null;
-                }
-                await root.prksSync.store.resolveConflict(op.op_id, apply);
-                setError(state, group, null);
-                root.prksSync.changed();
-            } catch (_) {
-                setError(state, group, 'Could not save that resolution locally. Please retry.');
-            }
-            await safePaint(ctx, state);
+            await actionResolve(ctx, state, op, apply, group);
         };
         item.appendChild(button);
     }
@@ -346,6 +373,10 @@
          * input is the acknowledgement publishing into another Work. Only the
          * owner of the panel may touch the panel, and only within it. */
         const panel = owns(ctx, state) ? panelOf() : null;
+        if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
+            root.prksVueAcceptWorkMetadataField(ctx, ack.field, ack.value == null ? '' : String(ack.value))) {
+            return;
+        }
         const input = panel && panel.querySelector('[data-prks-work-field="' + ack.field + '"]');
         /* Not conditioned on the control being enabled: it is disabled
          * precisely BECAUSE this operation is in flight, so an enabled-only
@@ -405,28 +436,53 @@
         if (!state || !live(ctx, state) || state.workId !== workId) return;
         const group = SAVE_GROUPS.find(g => g.name === (groupName || 'bib'));
         if (!group) return;
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        const hasSession = !!(ctx.ui && ctx.ui.workMetaDraft);
+        const sessionOwned = () => {
+            const liveSession = !!(ctx.ui && ctx.ui.workMetaDraft);
+            if (!liveSession) return !hasSession;
+            return sessionStill(ctx, workId, session);
+        };
+        if (!sessionOwned()) return;
         const section = groupSection(group);
-        if (!section) return;
-        const button = section.querySelector('#' + group.saveId);
+        const button = section && section.querySelector('#' + group.saveId);
         if (button && root.prksSetButtonBusy) root.prksSetButtonBusy(button, true, { busyLabel: 'Saving…' });
         try {
             if (state.preparing) await state.preparing;
+            if (!sessionOwned()) return;
             if (!state.observed) throw new Error('no observed base');
+            if (typeof root.prksVueSetWorkMetadataFieldError === 'function') {
+                root.prksVueSetWorkMetadataFieldError('', '');
+            }
             clearFieldErrors();
+            const names = fieldsFor(group, ctx.getEntity('work'));
+            const source = ctx.ui && ctx.ui.workMetaDraft;
             const draft = {};
-            groupInputs(section).forEach(input => {
-                draft[input.dataset.prksWorkField] = input.value;
-            });
+            if (source) {
+                names.forEach(field => {
+                    draft[field] = source[field] == null ? '' : String(source[field]);
+                });
+            } else if (section) {
+                groupInputs(section).forEach(input => {
+                    draft[input.dataset.prksWorkField] = input.value;
+                });
+            } else {
+                return;
+            }
+            const snapshot = Object.assign({}, draft);
             // A byte-limited field's acknowledged base lives on the Work
             // record, not in the projection -- see prksObservedWorkFields().
+            // The draft above is the edit session. observed.fields is the
+            // server base. effectiveWork is neither.
             const observed = { fields: root.prksObservedWorkFields(state.observed, ctx.getEntity('work')) };
             /* A value the codec cannot interpret -- `31/02/2026` -- must not
              * become an operation. The existing inline date error says so, the
              * draft stays, and nothing is stored or sent. */
             for (const field of Object.keys(draft)) {
                 if (root.prksWorkFieldToCanonical(field, draft[field]) !== null) continue;
+                if (!sessionOwned()) return;
                 setError(state, group, null);
-                showFieldError(field);
+                showFieldError(ctx, field);
                 await safePaint(ctx, state);
                 return;
             }
@@ -438,22 +494,29 @@
                 /* Named the way the FORM names it: a video's control says
                  * "Channel name", and a refusal naming a control the user
                  * cannot see is a refusal they cannot act on. */
-                const control = section.querySelector('[data-prks-work-field="' + field + '"]');
-                const labelEl = control && control.id
+                const control = section && section.querySelector('[data-prks-work-field="' + field + '"]');
+                const labelEl = control && control.id && section
                     ? section.querySelector('label[for="' + control.id + '"]') : null;
-                const label = labelEl ? labelEl.textContent.trim() : '';
+                const label = labelEl ? labelEl.textContent.trim() : (root.PRKS_SYNCED_WORK_FIELD_LABELS[field] || '');
                 const tooLong = root.prksWorkFieldLimitError(field, changes[field], label);
                 if (tooLong) {
+                    if (!sessionOwned()) return;
                     setError(state, group, tooLong);
                     await safePaint(ctx, state);
                     return;
                 }
             }
+            if (!sessionOwned()) return;
             await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
+            if (!sessionOwned()) return;
+            if (typeof root.prksCommitWorkMetaBaseline === 'function') {
+                root.prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, Object.keys(changes));
+            }
             setError(state, group, null);
             await safePaint(ctx, state);
             root.prksSync.changed();
         } catch (error) {
+            if (!sessionOwned()) return;
             setError(state, group, error && error.prksLocalStoreCode === 'scope_busy'
                 ? 'One of these fields is still syncing or needs a decision below.'
                 : group.failure);
@@ -462,6 +525,49 @@
             if (button && root.prksSetButtonBusy) root.prksSetButtonBusy(button, false);
         }
     }
+
+    function resolveFieldConflict(ctx, state, op, apply, group) {
+        return actionResolve(ctx, state, op, apply, group);
+    }
+
+    async function actionResolve(ctx, state, op, apply, group) {
+        try {
+            const result = op.server_result || {};
+            /* With only a preview there is no authoritative value to write,
+             * so taking the server's version discards the local intent and
+             * lets the next read fetch the real text rather than trusting a
+             * truncated copy. */
+            if (!apply && typeof result.current_value === 'string') {
+                const ack = { work_id: state.workId, field: op.payload.field,
+                    value: result.current_value, server_revision: result.current_revision,
+                    changed: false, code: 'ACKNOWLEDGED' };
+                if (!await root.prksOfflineReconcileWorkField(ack)) throw new Error();
+                acceptAck(ctx, state, ack);
+            } else if (!apply) {
+                root.prksOfflineMarkEntityChanged('work', state.workId);
+                root.prksOfflineMarkEntityChanged('work-metadata-state', state.workId);
+                state.observed = null;
+            }
+            await root.prksSync.store.resolveConflict(op.op_id, apply);
+            setError(state, group, null);
+            root.prksSync.changed();
+        } catch (_) {
+            setError(state, group, 'Could not save that resolution locally. Please retry.');
+        }
+        await safePaint(ctx, state);
+    }
+
+    root.prksResolveWorkMetadataFieldConflict = function (opId, apply, groupName) {
+        const ctx = root.prksGetFocusedTabContext ? root.prksGetFocusedTabContext() : null;
+        const state = ctx && ctx.getResource('workMetadataEditor');
+        if (!state || !live(ctx, state)) return;
+        const session = ctx.ui && typeof ctx.ui.workMetaEditSession === 'number' ? ctx.ui.workMetaEditSession : 0;
+        if (!sessionStill(ctx, state.workId, session)) return;
+        const op = (state.operations || []).find(item => item.op_id === opId);
+        const group = SAVE_GROUPS.find(item => item.name === groupName);
+        if (!op || !group) return;
+        return resolveFieldConflict(ctx, state, op, apply, group);
+    };
 
     root.prksMountWorkMetadataEditor = mount;
     root.prksSaveWorkMetadataFields = save;

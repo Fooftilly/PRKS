@@ -66,11 +66,13 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         online-only Work metadata save, and every synchronized field has a
         control that belongs to a durable group."""
         ui = (FRONTEND / 'ui.js').read_text()
+        editor = (ROOT / 'frontend-app' / 'src' / 'features' / 'work' / 'WorkMetadataEditor.vue').read_text()
         self.assertNotIn('async function submitWorkMetaEdit(', ui)
         self.assertNotIn('inline-save-metadata-btn', ui)
         self.assertNotIn('data-prks-role="work-meta-online-only"', ui)
+        self.assertNotIn('data-prks-role="work-meta-online-only"', editor)
 
-        # Four durable groups, each with its own bounded save.
+        # Four durable groups, each with its own bounded save, now in the Vue editor.
         for role, button in (
             ('work-identity-editor', 'save-work-identity-btn'),
             ('work-status-editor', 'save-work-status-btn'),
@@ -78,21 +80,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             ('work-source-editor', 'save-work-source-btn'),
         ):
             with self.subTest(group=role):
-                self.assertIn('data-prks-role="%s"' % role, ui)
-                self.assertIn('id="%s"' % button, ui)
+                self.assertIn('data-prks-role="%s"' % role, editor)
+                self.assertIn('id="%s"' % button, editor)
 
-        # Every synchronized field is reachable through one of them. The
-        # segmented and doc-type controls stamp their marker from a helper, so
-        # the call is what proves it rather than a literal attribute.
-        markers = ui.count('data-prks-work-field=')
-        self.assertGreaterEqual(markers, 10)
         for field in SYNCED:
-            if field in ('status', 'doc_type'):
-                continue   # emitted by prksSegmentedControlHtml / the doc-type menu
             with self.subTest(field=field):
-                self.assertIn('data-prks-work-field="%s"' % field, ui, field)
-        self.assertIn("{ workField: 'status' }", ui)
-        self.assertIn("{ workField: 'doc_type' }", ui)
+                self.assertIn('data-prks-work-field="%s"' % field, editor, field)
 
     def test_no_frontend_code_patches_a_local_first_work_field(self):
         """The regression this exists to catch, in the general case.

@@ -53,7 +53,9 @@
             workPlaylistEditing: false,
             workDetailsMode: 'view',
             workMetaDraft: null,
+            workMetaBaseline: null,
             workMetaDraftWorkId: null,
+            workMetaEditSession: 0,
             currentSavedView: null,
             researchNotesHints: null,
         };
@@ -72,7 +74,9 @@
         ui.workPlaylistEditing = false;
         ui.workDetailsMode = 'view';
         ui.workMetaDraft = null;
+        ui.workMetaBaseline = null;
         ui.workMetaDraftWorkId = null;
+        ui.workMetaEditSession = 0;
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
     }
