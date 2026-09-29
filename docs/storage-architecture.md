@@ -523,12 +523,18 @@ can prove how the move ended:
   process in P6, or one of the following:
   - startup recovery, when the bootstrap config says `committed` for the same
     `relocation_id` (§8.3);
-  - the offline `storage finalize` command (§8.7).
+  - the destination marker's own `relocation.phase: committed`, the
+    volume-durable offline commit (§8.7), acted on by `storage finalize` or
+    by startup recovery.
+
+  A destination marked `phase: aborted` is never bindable.
 - **A `fenced` source** goes back to `active` only when the move is known
   *not* to have committed:
   - startup recovery, when the bootstrap config still selects this root with
     phase `copying`/`verified`/`failed` for the same `relocation_id`;
-  - an explicit `storage abort` (§8.7).
+  - an explicit `storage abort` (§8.7), after it has durably marked the
+    destination `aborted`. Its precondition is that the destination was
+    neither committed nor active.
 
   Otherwise it becomes `retired` (P7). A process that finds a `fenced` root
   and has no such proof, such as a second installation pointed at the old path
@@ -816,7 +822,21 @@ exclusive: each refuses to start while the other's journal is open.
 ### 8.7 Administrator-managed roots
 
 When the root comes from `--storage-root` or `PRKS_STORAGE`, PRKS offers an
-offline command-line tool. The server is stopped for the whole sequence:
+offline command-line tool. The server is stopped for the whole sequence.
+
+**The offline journal lives on the volumes, not in the bootstrap config.** For
+CLI- and environment-selected roots the bootstrap file is not the selector, and
+in containers it is ephemeral (§5.2): a one-off container that runs
+`relocate` or `finalize` takes its config directory with it. The offline flow
+therefore records every phase in the **two root markers**, which are
+durable wherever the volumes are:
+
+- the destination marker's `relocation.phase`: `staging`, then `committed`;
+- the source marker's `fenced`/`retired` state.
+
+If a persistent bootstrap file happens to exist, `relocate`, `finalize` and
+`abort` also mirror the phase into it, best-effort. Recovery **never** depends
+on that mirror for these roots.
 
 1. `python prks_app.py storage relocate --to PATH` performs P0–P4, including the
    P2 fence on the source. The destination is left `staging`, and the command
@@ -831,34 +851,41 @@ offline command-line tool. The server is stopped for the whole sequence:
      because it is not a durable PRKS record. `finalize` performs the same
      durable steps as the in-app flow, in the same order:
      1. Take the destination's lease.
-     2. **P5:** atomically write the bootstrap config with `local_root = to`
-        and `relocation.phase = "committed"` for this `relocation_id`.
-     3. **P6(b):** the single activation write, which clears the relocation
-        role and records the lease.
-     4. **P7:** retire the fenced source named in the destination marker, then
-        write `phase: "source_retired"`. If the source is not reachable it
-        stays `fenced`, which is already unbindable, and the phase stays
-        `committed`, so later starts retry P7.
+     2. **P5 (offline commit):** atomically rewrite the **destination marker**
+        to `state: staging`, `relocation: {id, role: destination, phase:
+        "committed"}`. This volume-durable write is the commit.
+     3. **P6(b):** the single activation write on the same marker, which
+        clears the relocation role and records the lease.
+     4. **P7:** retire the fenced source named in the destination marker. If
+        the source is not reachable it stays `fenced`, which is already
+        unbindable.
      5. Release the lease on exit. The server is stopped, so nothing is bound.
+
+     **Recovery from the markers alone.** On the next start, or on a rerun of
+     `finalize`, suppose the selected root is a `staging` destination whose
+     marker says `phase: committed` for its `relocation_id`. That marker is
+     proof the move committed (§7.1), so PRKS performs P6 and then attempts
+     P7. A `staging` destination **without** `committed` is refused and names
+     `finalize`/`abort`. A `fenced` source whose peer destination is
+     committed or active is never unfenced.
    - **Abandon the move.** Leave the selector unchanged and run `python
      prks_app.py storage abort --root OLDPATH`. **Precondition, the same as
      in-app revert:** the destination marker is still `staging` with this
-     `relocation_id`. Once P6(b) has written `active`, for example after
-     `finalize` crashed after activation, `abort` refuses. It tells the
-     operator to run `finalize` again, or to start PRKS so §8.3 `committed`
-     recovery completes the move. It never unfences the source next to an
-     active destination. When the precondition holds, it follows revert's
-     order:
-     1. Atomically write the config with `local_root = from` and
-        `relocation.phase = "failed"`.
-     2. Lift the fence back to `active`.
-     3. Discard the destination under the §8.3 deletion rule.
-     4. Clear `relocation`.
+     `relocation_id`, **and not `phase: committed`**. Once `finalize` has
+     written its offline commit, or P6(b) has written `active`, `abort`
+     refuses. It tells the operator to rerun `finalize` or start PRKS, and
+     either completes the move from the markers. It never unfences the source
+     next to a committed or active destination. When the precondition holds,
+     `abort`:
+     1. Atomically rewrites the destination marker to `phase: aborted`,
+        which is never bindable. This is the volume-durable abort record.
+     2. Lifts the source fence back to `active`, authorized by that record.
+     3. Discards the destination under the §8.3 deletion rule.
 
-   Whatever durable state a crash leaves, §8.3 recovery then reaches the same
-   outcome as `finalize` or `abort`. After a completed `finalize`, the config
-   can never still say `copying`/`verified`. So pre-commit recovery can never
-   unfence a source whose destination is already `active`.
+   Every crash point therefore leaves the markers in a state that the next
+   `finalize`, `abort` or start resolves one way. That holds in a container
+   whose bootstrap file is gone. §8.3's bootstrap-journal recovery applies to
+   in-app moves of config-file roots, not to this flow.
 3. The administrator starts PRKS.
 
 If PRKS is started before step 2, whichever root the selector names is
