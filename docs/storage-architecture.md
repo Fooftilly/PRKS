@@ -513,9 +513,11 @@ only by the offline flow (§8.7): `"committed"` (the offline commit) or
 separate fields. A destination stays `state: staging` through P4 and through
 the offline commit, until P6(b) replaces the whole `relocation` with `null`.
 
-An optional `moved_from: {id, peer_hint}` records, for diagnostics only, that
-a completed relocation created this root. It is not a relocation role and
-never affects binding.
+An optional `moved_from: {id, peer_hint}` records that a completed
+relocation created this root. It is not a relocation role and never affects
+**binding**. It is operational for one purpose: `peer_hint` is how startup
+finds the source to retry P7 (retirement) after a crash. It is therefore
+written by every activation, in-app and offline.
 
 `fenced` marks a **relocation source** whose move is in progress. It is
 written at P2, before any copying (§8.2). Only the marker changes; canonical
@@ -693,7 +695,7 @@ revoked by the P2 fence. Crash tests cover each boundary in this sequence.
 | Step | Action | Durable record |
 | --- | --- | --- |
 | **P0 Preflight** | Run the full §7.2 checklist on the destination, including V10 space, computed from the actual canonical inventory, and V14 names. Refuse if any relocation or restore journal is already open. | none |
-| **P1 Intent** | Mint a `relocation_id`. Create the destination with marker `state: staging, storage_root_id: <source's ID>, relocation: {id, role: destination}`. The ID is carried, not minted (§7.1). Write the config file with `storage.relocation = {id, phase: "copying", from, to}`, with `local_root` still the old root. The config write is atomic. | config (`copying`), destination marker (`staging`) |
+| **P1 Intent** | Mint a `relocation_id`. Create the destination with marker `state: staging, storage_root_id: <source's ID>, relocation: {id, role: destination, peer_hint: <source root>}`. The `peer_hint` is required from here until activation. The ID is carried, not minted (§7.1). Write the config file with `storage.relocation = {id, phase: "copying", from, to}`, with `local_root` still the old root. The config write is atomic. | config (`copying`), destination marker (`staging`) |
 | **P2 Quiesce** | Enter the backup scope in the `concurrency` gate: mutations and backups blocked, reads allowed. That is today's backup semantics, and it bounds relocation to the same "reads keep working" user experience. Stop background writers: the cleanup retry, thumbnail and index writers, and processing scans. Then **fence the source**: durably set the old marker to `state: fenced, relocation: {id, role: source, peer_hint: <dest>}`. From here on no other process can bind the old path (§7.1). If the fence cannot be written, the move is refused before any copying. | source marker (`fenced`); the gate itself is process-local (§12 for multi-process) |
 | **P3 Copy** | The database: a `sqlite3` backup-API snapshot, never a file copy, written to the destination under a temporary name and then renamed. Each canonical namespace (`asset-objects`, `portraits`, and the inbox if it is under the root): stream every object into a staging name, hash it while copying, fsync the file, rename it to its key name, and fsync the directory. Derived data, logs and maintenance are **not** copied. Links are refused, as in §7.3. | per-object progress in `<dest>/.prks-maintenance/relocation/<id>/manifest.json`: key, size, sha256. Resumable, but a restart may also discard it and begin P3 again. |
 | **P4 Verify** | Re-read every destination object, and compare size and SHA-256 against the P3 manifest, which was computed from the source. Run `PRAGMA integrity_check` and the schema-version check on the destination database. Audit the catalogue against the destination (`audit_managed_pdfs`): every referenced key present. Keys missing in the source are reported, not fatal, because availability is observed (#60 §9.2). **The inbox needs a stable final pass**, because users and external tools can write it and PRKS cannot quiesce them. When `for_processing/` is under the root, rescan the source inbox and compare each file's name, size and `st_mtime_ns` with the manifest. Copy and hash any new or changed file, then rescan. Repeat until two consecutive scans agree with the manifest. If it does not settle within a bounded number of passes, refuse the move and ask the user to pause whatever is writing the inbox. The destination marker **stays `staging`**, so the destination is not bindable (§7.1). Write config `phase: "verified"`. | config (`verified`) |
@@ -879,10 +881,12 @@ on that mirror for these roots.
      flow, in the same order:
      1. Take the destination's lease.
      2. **P5 (offline commit):** atomically rewrite the **destination marker**
-        to `state: staging`, `relocation: {id, role: destination, phase:
-        "committed"}`. This volume-durable write is the commit.
+        to `state: staging`, `relocation: {id, role: destination, peer_hint:
+        <source root>, phase: "committed"}`. It keeps the P1 `peer_hint`, so a
+        committed destination always names its source. This volume-durable write is the commit.
      3. **P6(b):** the single activation write on the same marker, which
-        clears the relocation role and records the lease.
+        clears the relocation role, records the lease, and **must** write
+        `moved_from: {id, peer_hint}`, copied from the committed marker.
      4. **P7:** retire the fenced source named in the destination marker. If
         the source is not reachable it stays `fenced`, which is already
         unbindable.
