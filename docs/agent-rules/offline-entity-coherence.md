@@ -2,34 +2,9 @@
 
 This leaf contains the current cross-entity/cache-coherence rules for People, Person Groups, Playlists, Concepts, Positions, Arguments/Stances, PDF annotations, and adjacent entity projections. Read `offline-foundations.md` first.
 
-### Offline coherence domains
+The shared `prksOfflineMarkDomainChanged` generation/block/sweep and domain-independence contract lives in `offline-foundations.md` and applies to every coherence domain below.
 
-Some cached read models span multiple canonical records, so per-entity
-invalidation is not enough and must not be pretended to be. Those use an
-explicit **offline coherence domain**: a named group of entity kinds and list
-keys that are invalidated together.
-
-`prksOfflineMarkDomainChanged(domain, { entityKinds, listKeys })` increments the
-domain's generation and blocks its cached fallback **synchronously**, then
-sweeps the disposable cache (`deleteEntitiesByKind()` / `deleteList()`) in the
-background. During that window no cached value in the domain may be served. The
-domain unblocks only when the sweep **for that same generation** completed
-successfully: a superseded generation's completion may never unblock, reset, or
-publish eligibility for a newer one, and a failed sweep leaves the domain
-conservatively blocked for the life of the runtime. Safe degradation is
-"unavailable offline," never "known-stale shown offline"; online PRKS keeps
-working normally either way. A read associated with a domain captures its
-generation when the authoritative request begins and may publish a cache write
-only while that generation is still current — an authoritative read never waits
-for the sweep before rendering, and a skipped cache write is acceptable because
-a later normal read repopulates it.
-
-Domains are **independent**. Each is keyed by name in the runtime's
-generation map, blocked set, and pending-invalidation map, so invalidating one
-must never increment another's generation, block another's fallback, delete
-another's disposable cache, or settle/unblock another's pending invalidation. A
-domain whose cleanup failed degrades only itself: the others keep serving
-offline, and PRKS keeps working online regardless.
+### Entity coherence domains
 
 The first domain is `concepts` (`entityKinds: ['concept']`,
 `listKeys: ['concepts:index']`), defined once in
