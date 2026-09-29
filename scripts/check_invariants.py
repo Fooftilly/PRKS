@@ -234,6 +234,24 @@ WORK_FILE_PATH_SINKS: dict[str, tuple[int, str, bool]] = {
     "update_work_metadata": (1, "fields", True),
     "retarget_work_managed_file_path": (2, "file_path", False),
 }
+# ``guard(...) if <cond> else nullcontext()`` enters the guard only when
+# ``<cond>`` holds, and the checker cannot relate ``<cond>`` to the value the
+# body persists. So the conditional form protects nothing, except for these
+# reviewed (file, function, exact condition) sites, where the no-op arm is
+# taken only when nothing existing is adopted:
+CONDITIONAL_ADOPTION_GUARDS: dict[tuple[str, str, str], str] = {
+    # Create: ``stored_name`` is truthy only after this request minted it via
+    # store_new_managed_pdf_bytes and set ``file_path = /api/pdfs/<stored_name>``;
+    # a caller-supplied file_path leaves it None and takes the guard.
+    ("backend/server.py", "PRKSHandler.handle_api_post", "not stored_name"): (
+        "create: no-op arm only for a just-minted upload"
+    ),
+    # PATCH: ``file_path_changing`` is False only when the body has no
+    # file_path or its unchanged echo was popped from the body.
+    ("backend/server.py", "PRKSHandler.handle_api_patch", "file_path_changing"): (
+        "PATCH: no-op arm only when file_path is absent or popped"
+    ),
+}
 # Functions that own a file_path persistence primitive (raw SQL) or a
 # documented non-adoption write. Their callers are what the rule checks.
 WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
@@ -1986,28 +2004,26 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _entered_adoption_guard(self, node: ast.expr) -> ast.Call | None:
         """The guard call this context expression actually enters.
 
-        ``guard(...)`` itself, or the canonical conditional form
-        ``guard(...) if cond else nullcontext()`` (either order). A guard merely
-        constructed inside another context manager -- ``nullcontext(guard(...))``
-        -- is never entered and does not count.
+        ``guard(...)`` itself. A guard merely constructed inside another
+        context manager -- ``nullcontext(guard(...))`` -- is never entered and
+        does not count.
 
-        The conditional form is trusted on the assumption, visible at both
-        current call sites, that the no-op arm is taken only when nothing
-        existing is adopted (a just-minted upload; an unchanged ``file_path``
-        echo removed from the body). That correlation between the condition
-        and the persisted value is runtime state an intraprocedural checker
-        cannot prove; reviewers own it.
+        ``guard(...) if cond else nullcontext()`` may skip the guard, and
+        which arm runs is runtime state the checker cannot relate to the
+        persisted value; it counts only at the reviewed sites in
+        ``CONDITIONAL_ADOPTION_GUARDS`` (same file, function and condition,
+        guard in the true arm). Anywhere else the body is unguarded.
         """
         if isinstance(node, ast.Call) and self._is_adoption_guard_call(node):
             return node
-        if isinstance(node, ast.IfExp):
-            for arm, other in ((node.body, node.orelse), (node.orelse, node.body)):
-                if (
-                    isinstance(arm, ast.Call)
-                    and self._is_adoption_guard_call(arm)
-                    and self._is_nullcontext_call(other)
-                ):
-                    return arm
+        if (
+            isinstance(node, ast.IfExp)
+            and isinstance(node.body, ast.Call)
+            and self._is_adoption_guard_call(node.body)
+            and self._is_nullcontext_call(node.orelse)
+            and (*self._function, ast.unparse(node.test)) in CONDITIONAL_ADOPTION_GUARDS
+        ):
+            return node.body
         return None
 
     def _is_nullcontext_call(self, node: ast.expr) -> bool:

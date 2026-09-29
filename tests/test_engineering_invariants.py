@@ -2535,41 +2535,102 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
         self.assertIn("managed_pdf_adoption_guard", finding.message)
         self.assertIn("store_new_managed_pdf_bytes", finding.message)
 
+    _CREATE_SITE = (
+        "from contextlib import nullcontext\n"
+        "from backend.services import work_pdf_replace\n"
+        "class PRKSHandler:\n"
+        "    def handle_api_post(self, db, data, pdfs_dir):\n"
+        "        stored_name = None\n"
+        "        file_path = data.get('file_path', '')\n"
+        "        if data.get('file_b64'):\n"
+        "            stored_name = work_pdf_replace.store_new_managed_pdf_bytes(\n"
+        "                pdfs_dir, data['file_name'], b'')\n"
+        "            file_path = f'/api/pdfs/{stored_name}'\n"
+        "        with (\n"
+        "            work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, file_path)\n"
+        "            if {cond}\n"
+        "            else nullcontext()\n"
+        "        ) as adopted_name:\n"
+        "            if adopted_name:\n"
+        "                file_path = f'/api/pdfs/{adopted_name}'\n"
+        "            return db.add_work(title='t', file_path=file_path)\n"
+    )
+    _PATCH_SITE = (
+        "from contextlib import nullcontext\n"
+        "from backend.services import work_pdf_replace\n"
+        "class PRKSHandler:\n"
+        "    def handle_api_patch(self, db, w_id, body, pdfs_dir, file_path_changing, other):\n"
+        "        with (\n"
+        "            work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))\n"
+        "            if {cond}\n"
+        "            else nullcontext()\n"
+        "        ) as adopted_name:\n"
+        "            if adopted_name:\n"
+        "                body['file_path'] = f'/api/pdfs/{adopted_name}'\n"
+        "            return db.update_work_metadata(w_id, body)\n"
+    )
+
+    def test_reviewed_conditional_guard_sites_pass(self):
+        for label, template, cond in (
+            ("create", self._CREATE_SITE, "not stored_name"),
+            ("patch", self._PATCH_SITE, "file_path_changing"),
+        ):
+            with self.subTest(site=label):
+                source = template.replace("{cond}", cond)
+                self.assertEqual(_codes(source, "backend/server.py"), [])
+
+    def test_unreviewed_conditional_guard_is_not_protective(self):
+        """``guard(...) if c else nullcontext()`` may skip the guard, so it only
+        protects the reviewed (file, function, condition) sites."""
+        cases = {
+            "independent_condition": (
+                "from contextlib import nullcontext\n"
+                "from backend.services.work_pdf_replace import managed_pdf_adoption_guard\n"
+                "def create(db, pdfs_dir, fp, unrelated_condition):\n"
+                "    with (\n"
+                "        managed_pdf_adoption_guard(pdfs_dir, fp)\n"
+                "        if unrelated_condition\n"
+                "        else nullcontext()\n"
+                "    ):\n"
+                "        db.add_work(title='t', file_path=fp)\n",
+                "backend/new_feature.py",
+            ),
+            "reviewed_create_with_other_condition": (
+                self._CREATE_SITE.replace("{cond}", "data.get('adopt')"),
+                "backend/server.py",
+            ),
+            "reviewed_patch_with_other_condition": (
+                self._PATCH_SITE.replace("{cond}", "other"),
+                "backend/server.py",
+            ),
+            "reviewed_condition_in_other_file": (
+                self._PATCH_SITE.replace("{cond}", "file_path_changing"),
+                "backend/new_feature.py",
+            ),
+            "reviewed_condition_in_other_function": (
+                self._PATCH_SITE.replace("{cond}", "file_path_changing").replace(
+                    "handle_api_patch", "handle_api_put"
+                ),
+                "backend/server.py",
+            ),
+            "reversed_arms": (
+                self._PATCH_SITE.replace("{cond}", "file_path_changing").replace(
+                    "work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))\n"
+                    "            if file_path_changing\n"
+                    "            else nullcontext()",
+                    "nullcontext()\n"
+                    "            if not file_path_changing\n"
+                    "            else work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))",
+                ),
+                "backend/server.py",
+            ),
+        }
+        for label, (source, relpath) in cases.items():
+            with self.subTest(case=label):
+                self.assertEqual(_codes(source, relpath), ["INV-STORAGE-003"])
+
     def test_current_guarded_adoption_shapes_pass(self):
         cases = {
-            "create_upload_or_adopt": (
-                "from contextlib import nullcontext\n"
-                "from backend.services import work_pdf_replace\n"
-                "def create(db, data, pdfs_dir):\n"
-                "    stored_name = None\n"
-                "    file_path = data.get('file_path', '')\n"
-                "    if data.get('file_b64'):\n"
-                "        stored_name = work_pdf_replace.store_new_managed_pdf_bytes(\n"
-                "            pdfs_dir, data['file_name'], b'')\n"
-                "        file_path = f'/api/pdfs/{stored_name}'\n"
-                "    with (\n"
-                "        work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, file_path)\n"
-                "        if not stored_name\n"
-                "        else nullcontext()\n"
-                "    ) as adopted_name:\n"
-                "        if adopted_name:\n"
-                "            file_path = f'/api/pdfs/{adopted_name}'\n"
-                "        w_id = db.add_work(title='t', file_path=file_path)\n"
-                "    return w_id\n"
-            ),
-            "patch_guarded": (
-                "from contextlib import nullcontext\n"
-                "from backend.services import work_pdf_replace\n"
-                "def patch(db, w_id, body, pdfs_dir, changing):\n"
-                "    with (\n"
-                "        work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path'))\n"
-                "        if changing\n"
-                "        else nullcontext()\n"
-                "    ) as adopted_name:\n"
-                "        if adopted_name:\n"
-                "            body['file_path'] = f'/api/pdfs/{adopted_name}'\n"
-                "        return db.update_work_metadata(w_id, body)\n"
-            ),
             "guarded_dict_other_key_written": (
                 "from backend.services import work_pdf_replace\n"
                 "def patch(db, w_id, body, pdfs_dir):\n"
