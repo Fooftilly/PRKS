@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectWorkPanelRead, refreshWorkPanelDisplay } from './panel-read'
+import { projectWorkPanelRead, refreshWorkPanelDisplay, workPanelBibFields } from './panel-read'
 
 const server = {
   id: 'w1',
@@ -166,6 +166,11 @@ describe('projectWorkPanelRead', () => {
     expect(next.display.statusIcon).toBe('check')
     expect(next.display.sourceUrl).toBe('https://example.test/new')
     expect(next.display.showOriginalUrl).toBe(true)
+    expect(workPanelBibFields(next.display)).toContainEqual({
+      field: 'source_url',
+      label: 'Original URL',
+      value: 'https://example.test/new',
+    })
     expect(next.editor.fields.author_text).toBe('Acknowledged author')
     expect(next.editor.fields.thumb_page).toBe('2')
     expect(next.editor.fields.source_url).toBe('https://example.test/old')

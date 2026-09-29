@@ -319,9 +319,14 @@ export function workPanelBibFields(display: WorkPanelDisplay): readonly { field:
     isbn: 'ISBN',
     doi: 'DOI',
   }
-  return BIB_FIELDS.filter((field) => text(display[field]).trim()).map((field) =>
-    Object.freeze({ field, label: labels[field], value: text(display[field]) }),
-  )
+  const rows: { field: string; label: string; value: string }[] = BIB_FIELDS.filter((field) =>
+    text(display[field]).trim(),
+  ).map((field) => Object.freeze({ field, label: labels[field], value: text(display[field]) }))
+  // `prksWorkBibRowsHtml` lists every synced field here, including source_url.
+  // The PDF card still renders that same value as the Original URL link.
+  const sourceUrl = text(display.sourceUrl).trim()
+  if (sourceUrl) rows.push(Object.freeze({ field: 'source_url', label: 'Original URL', value: sourceUrl }))
+  return rows
 }
 
 function personToRole(person: WorkPanelPerson): Record<string, unknown> {
