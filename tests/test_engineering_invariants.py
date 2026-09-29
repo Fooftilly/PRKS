@@ -2808,6 +2808,19 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        self.save = functools.partial(db.add_work, 't')\n"
                 "        self.save('Not Started', '', '', '', fp)\n"
             ),
+            "walrus_unbound_add_work": (
+                "from backend.db_manager import PRKSDatabase\n"
+                "def create(db, fp):\n"
+                "    (save := PRKSDatabase.add_work)(db, 't', '', '', '', '', fp)\n"
+            ),
+            "attribute_stored_unbound_partial": (
+                "import functools\n"
+                "from backend.db_manager import PRKSDatabase\n"
+                "class H:\n"
+                "    def create(self, db, fp):\n"
+                "        self.save = functools.partial(PRKSDatabase.add_work, db)\n"
+                "        self.save('t', '', '', '', '', fp)\n"
+            ),
             "walrus_partial_offset": (
                 "import functools\n"
                 "def create(db, fp):\n"

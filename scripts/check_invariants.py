@@ -910,16 +910,25 @@ def _is_class_receiver(node: ast.expr, scopes: list[_Scope]) -> bool:
 
 
 def _is_unbound_method_call(func: ast.expr, scopes: list[_Scope]) -> bool:
-    """``Cls.method(receiver, ...)`` or an alias of such an unbound method."""
+    """``Cls.method(receiver, ...)`` or an alias of such an unbound method,
+    including a walrus callee and one saved on a tracked one-level attribute
+    (``self.save = partial(DB.add_work, db)``)."""
+    func = _unwrap_walrus(func)
     if isinstance(func, ast.Attribute):
-        return _is_class_receiver(func.value, scopes)
-    if isinstance(func, ast.Name):
-        for binding in _resolve(scopes, func.id):
-            if binding[0] != "name":
-                continue
-            owner = str(binding[1])
-            if owner == "<unbound>" or owner.rsplit(".", 1)[-1][:1].isupper():
-                return True
+        if _is_class_receiver(func.value, scopes):
+            return True
+        key = _attr_key(func)
+        bindings = _resolve(scopes, key) if key is not None else set()
+    elif isinstance(func, ast.Name):
+        bindings = _resolve(scopes, func.id)
+    else:
+        return False
+    for binding in bindings:
+        if binding[0] != "name":
+            continue
+        owner = str(binding[1])
+        if owner == "<unbound>" or owner.rsplit(".", 1)[-1][:1].isupper():
+            return True
     return False
 
 
