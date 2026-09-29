@@ -606,7 +606,7 @@ subset), and before relocation (the full set, against the destination).
 | --- | --- | --- | --- | --- |
 | V1 | **Normalization.** Expand `~` and environment references once, make absolute, collapse `.`/`..` lexically. Store the user's spelling in config, and use the normalized form for all checks. | ✓ | ✓ | error (empty or unparseable) |
 | V2 | **Exists or creatable.** For a new root, the parent exists and the directory can be created with owner-only permissions. For an existing root, it is a directory, not a file. | ✓ | ✓ | error |
-| V3 | **Marker state.** `active` for binding. For a new root: absent, and the directory is empty or contains only hidden OS metadata (`.DS_Store`, `desktop.ini`, `Thumbs.db`, `lost+found`) and/or a leftover **preflight scaffold** (V4). | ✓ | ✓ | error; show the retirement pointer when `retired` |
+| V3 | **Marker state.** `active` for binding. For a new root: absent, and the directory is empty or contains only hidden OS metadata (`.DS_Store`, `desktop.ini`, `Thumbs.db`, `lost+found`) and/or a leftover **preflight scaffold** (V4). A lone `.prks-maintenance/root.lock` with no marker, left by an offline `relocate` that lost the source-lock race or crashed before P1, also counts as scaffold. | ✓ | ✓ | error; show the retirement pointer when `retired` |
 | V4 | **Readable and writable.** Create, write, fsync, rename and delete a probe file, not by checking permission bits. Every capability probe (V4, V5, V6, V8) runs only inside a **preflight scaffold**: `.prks-maintenance/preflight/` containing only `.prks-probe-*` files. Preflight removes the scaffold, including an emptied `.prks-maintenance/`, on every exit. A scaffold left behind by a crash is recognized by V3 and removed by the next preflight, so a crash in P0 never strands the directory. | ✓ | ✓ | error |
 | V5 | **Exclusive create.** `O_CREAT` with `O_EXCL` on the probe name fails when it exists. | once per root (recorded in the marker) | ✓ | error |
 | V6 | **Atomic rename over an existing file within one directory**, and across directories within the root (restore and relocation rely on it). | once | ✓ | error |
@@ -877,8 +877,13 @@ If a persistent bootstrap file happens to exist, `relocate`, `finalize` and
 on that mirror for these roots.
 
 1. `python prks_app.py storage relocate --to PATH` performs P0–P4, including the
-   P2 fence on the source. **It holds the destination lock from P1, and the
-   source lock from the P2 fence, until it exits at the end of P4** (§12).
+   P2 fence on the source. **Before writing any P1 state, it takes the
+   destination lock and then the source lock, and holds both until it exits
+   at the end of P4** (§12). If the source lock is busy, it releases the
+   destination lock and removes the lock scaffold it created. That scaffold
+   is `.prks-maintenance/root.lock` with no marker, which V3 treats as a
+   preflight scaffold. It then refuses, so a losing `relocate` never leaves
+   a P1 marker behind.
    A concurrent `finalize` or `abort` therefore finds a lock busy and refuses
    for the whole copy. As its last write, after P4 has verified the copy and
    while it still holds both locks, `relocate` sets `relocation.verified:
@@ -1290,9 +1295,10 @@ renewal can race a fence or a state transition. During a move:
   holds it through P6, so P6(a) finds it already held;
 - the offline commands hold their locks for the **whole command**, not per
   write, in the same destination-then-source order:
-  - `storage relocate` takes the destination lock when P1 creates the
-    destination, and holds it until it exits at the end of P4. It takes the
-    source lock at the P2 fence, and also holds it until it exits.
+  - `storage relocate` takes the destination lock and then the source lock
+    **before writing any P1 state**, and holds both until it exits at the end
+    of P4. If it cannot get the source lock, it drops the destination lock
+    and its lock-only scaffold and refuses, before any marker exists.
   - `finalize` and `abort` take both locks before validating anything, and
     hold them through their last write (§8.7). The one exception: `finalize`
     may proceed under the destination lock alone when the source is
@@ -1327,7 +1333,7 @@ behavior unless stated.
 | **B. Route managed files through the backend** | Managed PDF create, replace, COW, adoption, cleanup and linearization; portraits; import; backup enumeration; locks keyed by `StorageKey`; `processing_files.abs_path` derived from `rel_path` (the column is left unused). Behavior is preserved and proven by the existing managed-PDF, cleanup and backup tests unchanged. | no (dropping `abs_path` is a later migration) | no | no | A |
 | **C. Asset identity coordination** | #60 Slice D lands on Phase B operations: `assets` locators are authoritative keys; the fingerprint pass uses `stat` and `verify`; the text-index fingerprint moves to `content_sha256`/`content_generation`; Slice G serves `/api/assets/{id}/content`. | #60's migrations | #60's typed API | no | **#60 Slice C/D** and B |
 | **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes**, after the migration | A (backend); **the frontend migration** (UI); #46 (packaged default and "Open folder") |
-| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
+| **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. | no | yes (move command, progress) | yes, after the migration | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
 | **F. Object storage (optional)** | An S3-compatible backend passing the shared contract tests; restore and backup for it; immutable-object mode (§10.4). **Only when a deployment needs it.** | possibly a `storage_backend` column (#60) | config only | no | C, and in practice the PostgreSQL migration (#310) |
 
 **Why A ships before D.** It gives no user-visible feature, but it makes
