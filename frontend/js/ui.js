@@ -2667,7 +2667,10 @@ function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
     }
     const entry = prksPrivateNoteDrafts.get(key);
     if (!entry) return acknowledged;
-    if (entry.state === 'committed' && !entry.promise && entry.draftText === acknowledged) {
+    /* Drop the draft only when the stored body matches it. A pending overlay
+     * can equal the draft and then clear before that body is updated; pruning
+     * on the overlay lets the next Reminders paint show the stale text. */
+    if (entry.state === 'committed' && !entry.promise && entry.draftText === server) {
         prksPrivateNoteDrafts.delete(key);
         return acknowledged;
     }
