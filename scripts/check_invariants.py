@@ -3081,11 +3081,16 @@ class _InvariantVisitor(ast.NodeVisitor):
 
     def _record_prebound_facts(self, partial_call: ast.Call) -> None:
         """Provenance of each pre-bound argument (and of a bound method's
-        receiver) as it is at construction."""
-        wrapped = _unwrap_walrus(partial_call.args[0])
-        bound = [*partial_call.args[1:], *(kw.value for kw in partial_call.keywords)]
-        if isinstance(wrapped, ast.Attribute):
-            bound.append(wrapped.value)
+        receiver) as it is at construction, for every inline layer of
+        ``partial(partial(helper, a), b)``: the inner layers are flattened
+        into this one and never checked (or recorded) on their own."""
+        bound: list[ast.expr] = []
+        layer: ast.expr = partial_call
+        while isinstance(layer, ast.Call) and _is_partial_call(layer, self.scopes) and layer.args:
+            bound.extend([*layer.args[1:], *(kw.value for kw in layer.keywords)])
+            layer = _unwrap_walrus(layer.args[0])
+        if isinstance(layer, ast.Attribute):
+            bound.append(layer.value)
         for value in bound:
             value = value.value if isinstance(value, ast.Starred) else value
             self._prebound_facts[id(value)] = _expr_facts(value, self.scopes)

@@ -3977,6 +3977,18 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
                 "    p1 = functools.partial(open, os.path.join(pdfs_dir, n))\n"
                 "    p2 = functools.partial(p1, 'wb')\n    p2()\n"
             ),
+            "inline_nested_target_rebound_away": (
+                "import functools, os\ndef f(n):\n"
+                "    p = os.path.join(pdfs_dir, n)\n"
+                "    writer = functools.partial(functools.partial(open, p))\n"
+                "    p = os.path.join(thumbs_dir, n)\n    writer('wb')\n"
+            ),
+            "inline_nested_bound_method_receiver": (
+                "import functools\nfrom pathlib import Path\ndef f(n):\n"
+                "    p = Path(pdfs_dir) / n\n"
+                "    writer = functools.partial(functools.partial(p.open))\n"
+                "    p = Path(thumbs_dir) / n\n    writer('wb')\n"
+            ),
             "exclusive_mode_at_call": (
                 "import functools\ndef f(p):\n    o = functools.partial(open, p)\n    o('xb')\n"
             ),
@@ -3988,6 +4000,12 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
             "non_managed_target": (
                 "import functools, os\ndef f(n):\n"
                 "    writer = functools.partial(open, os.path.join(thumbs_dir, n))\n    writer('wb')\n"
+            ),
+            "inline_nested_target_rebound_to_managed": (
+                "import functools, os\ndef f(n):\n"
+                "    p = os.path.join(thumbs_dir, n)\n"
+                "    writer = functools.partial(functools.partial(open, p))\n"
+                "    p = os.path.join(pdfs_dir, n)\n    writer('wb')\n"
             ),
             "target_rebound_after_construction": (
                 "import functools, os\ndef f(n):\n"
