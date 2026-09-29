@@ -94,6 +94,11 @@ BANNED_ZIPFILE_METHOD = "extractall"
 # pathlib classes whose instances expose the filesystem ``replace``/``unlink``.
 # (PurePath has neither.)
 PATHLIB_PATH_CLASSES = frozenset({"pathlib.Path", "pathlib.PosixPath", "pathlib.WindowsPath"})
+# Pure paths name the same file (``os.PathLike``) but cannot touch the
+# filesystem themselves: they carry provenance without being a Path value.
+_PURE_PATH_CLASSES = frozenset(
+    {"pathlib.PurePath", "pathlib.PurePosixPath", "pathlib.PureWindowsPath"}
+)
 _PATH_CLASS_FACTORIES = frozenset({"cwd", "home"})
 _PATH_RETURNING_METHODS = frozenset(
     {
@@ -146,6 +151,7 @@ _STR_TRANSFORM_METHODS = frozenset(
         "decode",
         "encode",
         "format",
+        "join",
         "lower",
         "lstrip",
         "removeprefix",
@@ -1151,7 +1157,10 @@ def _call_facts(node: ast.Call, scopes: list[_Scope]) -> set[_Binding]:
     if _qualified_names(func, scopes) & _DIR_ITERATOR_FUNCS:
         # Entries under the directory argument carry its provenance.
         return _element_facts(_call_argument_facts(node, scopes))
-    if _qualified_names(func, scopes) & _PATH_STRING_FUNCS or _is_builtin(func, scopes, "str"):
+    if (
+        _qualified_names(func, scopes) & (_PATH_STRING_FUNCS | _PURE_PATH_CLASSES)
+        or _is_builtin(func, scopes, "str")
+    ):
         return _element_facts(_call_argument_facts(node, scopes))
     leaves = _callee_leaf_names(func, scopes)
     if leaves & MANAGED_PDF_PATH_HELPERS:
@@ -1179,6 +1188,9 @@ def _method_call_facts(
     # ``.replace()`` / ``.format()`` and the like; ``.format()`` and
     # ``.replace()`` also build their result from their arguments.
     facts = _without_path(receiver)
+    if func.attr == "join":
+        # ``sep.join(parts)``: built from the iterable's elements.
+        facts |= _element_facts(_call_argument_facts(node, scopes))
     if func.attr in ("format", "replace"):
         facts |= _element_facts(_call_argument_facts(node, scopes))
     return facts
@@ -2216,9 +2228,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         if leaves & set(WORK_FILE_PATH_SINKS):
             return
         for arg in [*node.args, *(kw.value for kw in node.keywords)]:
-            value = arg.value if isinstance(arg, ast.Starred) else arg
-            if isinstance(value, ast.Name) and any(
-                b[0] == "guarded_dict" for b in _resolve(self.scopes, value.id)
+            # ``mutate(body)``, ``mutate(*(body,))``, ``mutate([body])``, ...:
+            # any guarded name inside the argument may reach the callee.
+            if any(
+                isinstance(sub, ast.Name)
+                and any(b[0] == "guarded_dict" for b in _resolve(self.scopes, sub.id))
+                for sub in ast.walk(arg)
             ):
                 # Dict identity is not tracked: ``alias = body; mutate(alias)``
                 # may rewrite ``body`` too, so every guarded alias is dirtied.
@@ -2399,6 +2414,12 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _file_path_sink_value(
         self, node: ast.Call, leaves: set[str]
     ) -> tuple[str, ast.expr] | None:
+        values = self._file_path_sink_values(node, leaves)
+        return values[0] if values else None
+
+    def _file_path_sink_values(
+        self, node: ast.Call, leaves: set[str]
+    ) -> list[tuple[str, ast.expr]]:
         """``(sink, value)`` when the call may persist ``works.file_path``.
 
         ``value`` is opaque (the ``fields`` dict, a ``**kwargs`` mapping or a
@@ -2406,31 +2427,32 @@ class _InvariantVisitor(ast.NodeVisitor):
         literal without that key and without ``**spread`` writes nothing.
         """
         unbound = _is_unbound_method_call(node.func, self.scopes)
-        prebound = self._partial_prebound(node.func)
+        found: list[tuple[str, ast.expr]] = []
         for sink in sorted(leaves & set(WORK_FILE_PATH_SINKS)):
-            index, keyword, is_fields = WORK_FILE_PATH_SINKS[sink]
+            base, keyword, is_fields = WORK_FILE_PATH_SINKS[sink]
             if unbound and sink != "retarget_work_managed_file_path":
                 # ``PRKSDatabase.add_work(db, ...)``: the receiver comes first.
-                index += 1
+                base += 1
             # ``save = partial(db.add_work, "t")``: positionals shift left; one
-            # bound at construction was checked there.
-            index -= prebound
-            value = self._call_argument(node, index, keyword)
-            if value is None:
-                continue
-            if is_fields and isinstance(value, ast.Dict):
-                value = _dict_file_path_value(value)
+            # bound at construction was checked there. A joined binding may
+            # pre-bind different counts on different paths: check each.
+            for prebound in self._partial_prebound_counts(node.func):
+                value = self._call_argument(node, base - prebound, keyword)
                 if value is None:
                     continue
-            return sink, value
-        return None
+                if is_fields and isinstance(value, ast.Dict):
+                    value = _dict_file_path_value(value)
+                    if value is None:
+                        continue
+                found.append((sink, value))
+        return found
 
-    def _partial_prebound(self, func: ast.expr) -> int:
-        """Positionals a ``functools.partial`` bound to ``func`` pre-supplies."""
+    def _partial_prebound_counts(self, func: ast.expr) -> list[int]:
+        """Positionals a ``functools.partial`` bound to ``func`` may pre-supply."""
         if not isinstance(func, ast.Name):
-            return 0
-        counts = [b[1] for b in _resolve(self.scopes, func.id) if b[0] == "partial"]
-        return min(counts) if counts else 0
+            return [0]
+        counts = {b[1] for b in _resolve(self.scopes, func.id) if b[0] == "partial"}
+        return sorted(counts) if counts else [0]
 
     @staticmethod
     def _call_argument(node: ast.Call, index: int, keyword: str) -> ast.expr | None:
@@ -2484,15 +2506,14 @@ class _InvariantVisitor(ast.NodeVisitor):
         return all(tag[0] == "minted" or tag[1] in active for tag in owned)
 
     def _check_file_path_write(self, node: ast.Call, leaves: set[str]) -> None:
-        sink_value = self._file_path_sink_value(node, leaves)
-        if sink_value is not None:
-            sink, value = sink_value
-            if _WEAK in _expr_facts(value, self.scopes):
-                self._report_weak_alias(node, f"the works.file_path written by {sink}()")
-            if not (
-                self._is_owned_value(value) or self._function in WORK_FILE_PATH_CAPABILITIES
-            ):
-                self._report_adoption(node, f"{sink}()")
+        values = self._file_path_sink_values(node, leaves)
+        weak = next((sink for sink, value in values if _WEAK in _expr_facts(value, self.scopes)), None)
+        if weak is not None:
+            self._report_weak_alias(node, f"the works.file_path written by {weak}()")
+        if self._function not in WORK_FILE_PATH_CAPABILITIES:
+            unowned = next((sink for sink, value in values if not self._is_owned_value(value)), None)
+            if unowned is not None:
+                self._report_adoption(node, f"{unowned}()")
         if leaves & _SQL_EXECUTE_METHODS:
             self._check_sql_write(node)
 

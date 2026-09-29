@@ -1623,6 +1623,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_blocks_raw_managed_pdf_removals(self):
         cases = {
+            "os_remove_pure_path_join": (
+                "import os\n"
+                "from pathlib import PurePath\n"
+                "def drop(pdfs_dir, name):\n"
+                "    os.remove(PurePath(pdfs_dir) / name)\n"
+            ),
             "os_remove_normcase_join": (
                 "import os\n"
                 "def drop(pdfs_dir, name):\n"
@@ -1863,6 +1869,12 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def test_unrelated_file_cleanup_passes(self):
         cases = {
+            "pure_path_other_dir": (
+                "import os\n"
+                "from pathlib import PurePath\n"
+                "def prune(thumbs_dir, name):\n"
+                "    os.remove(PurePath(thumbs_dir) / name)\n"
+            ),
             "scandir_context_manager_other_dir": (
                 "import os\n"
                 "def prune(thumbs_dir):\n"
@@ -2511,6 +2523,22 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "            body = other\n"
                 "        db.update_work_metadata(w_id, body)\n"
             ),
+            "guarded_dict_escapes_inside_starred_tuple": (
+                "from backend.services import work_pdf_replace\n"
+                "def patch(db, w_id, body, pdfs_dir):\n"
+                "    with work_pdf_replace.managed_pdf_adoption_guard(pdfs_dir, body.get('file_path')):\n"
+                "        mutate(*(body,))\n"
+                "        db.update_work_metadata(w_id, body)\n"
+            ),
+            "partial_offsets_joined_across_branches": (
+                "import functools\n"
+                "def create(db, fp, cond):\n"
+                "    if cond:\n"
+                "        save = functools.partial(db.add_work, 't')\n"
+                "    else:\n"
+                "        save = functools.partial(db.add_work, 't', 's', 'a')\n"
+                "    save('text', 'date', fp)\n"
+            ),
             "raw_sql_row_value_set": (
                 "def adopt(conn, w_id, fp):\n"
                 "    conn.execute('UPDATE works SET (file_path, status) = (?, ?) WHERE id = ?', (fp, 's', w_id))\n"
@@ -3037,6 +3065,11 @@ class WeakManagedPdfAliasTests(unittest.TestCase):
             "weak_encode_decode": (
                 "def f(db, fp):\n"
                 "    forget_pending_pdf_cleanup(db, referenced_managed_pdf_filename(fp).encode().decode())\n"
+            ),
+            "weak_str_join": (
+                "def f(db, fp):\n"
+                "    name = ''.join([referenced_managed_pdf_filename(fp)])\n"
+                "    forget_pending_pdf_cleanup(db, name)\n"
             ),
             "claim_sql_interpolated_weak": (
                 "def f(conn, fp):\n"
