@@ -914,6 +914,8 @@ def _is_unbound_method_call(func: ast.expr, scopes: list[_Scope]) -> bool:
     including a walrus callee and one saved on a tracked one-level attribute
     (``self.save = partial(DB.add_work, db)``)."""
     func = _unwrap_walrus(func)
+    if isinstance(func, ast.Call) and _is_partial_call(func, scopes) and func.args:
+        return _is_unbound_method_call(func.args[0], scopes)
     if isinstance(func, ast.Attribute):
         if _is_class_receiver(func.value, scopes):
             return True
@@ -942,6 +944,9 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
     if isinstance(func, ast.NamedExpr):
         # ``(sink := db.add_work)(...)`` calls the assigned value.
         return _callee_leaf_names(func.value, scopes)
+    if isinstance(func, ast.Call) and _is_partial_call(func, scopes) and func.args:
+        # ``partial(db.add_work, "t")(...)`` calls the wrapped helper.
+        return _callee_leaf_names(func.args[0], scopes)
     constant = _constant_getattr(func, scopes)
     if constant is not None:
         # ``getattr(db, "add_work")(...)`` -> ``add_work``.
@@ -2573,6 +2578,9 @@ class _InvariantVisitor(ast.NodeVisitor):
         """What a bare-name or tracked one-level attribute callee is bound to
         (through a walrus: ``(s := save)(...)``)."""
         func = _unwrap_walrus(func)
+        if isinstance(func, ast.Call) and _is_partial_call(func, self.scopes) and func.args:
+            # An inline ``partial(helper, *bound)(...)``.
+            return _partial_bindings(func, self.scopes)
         if isinstance(func, ast.Name):
             return set(_resolve(self.scopes, func.id))
         key = _attr_key(func) if isinstance(func, ast.Attribute) else None

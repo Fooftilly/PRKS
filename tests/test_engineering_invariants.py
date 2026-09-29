@@ -2821,6 +2821,16 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
                 "        self.save = functools.partial(PRKSDatabase.add_work, db)\n"
                 "        self.save('t', '', '', '', '', fp)\n"
             ),
+            "walrus_inline_partial": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    (save := functools.partial(db.add_work, 't'))('Not Started', '', '', '', fp)\n"
+            ),
+            "immediately_called_partial": (
+                "import functools\n"
+                "def create(db, fp):\n"
+                "    functools.partial(db.add_work, 't')('Not Started', '', '', '', fp)\n"
+            ),
             "walrus_partial_offset": (
                 "import functools\n"
                 "def create(db, fp):\n"
@@ -3271,6 +3281,11 @@ class ManagedPdfAdoptionTests(unittest.TestCase):
 
     def test_clearing_and_non_managed_values_pass(self):
         cases = {
+            "immediately_called_partial_without_file_path": (
+                "import functools\n"
+                "def f(db):\n"
+                "    functools.partial(db.add_work, 't')('Not Started', '', '', '', '')\n"
+            ),
             "inline_nested_partial_outer_clear_wins": (
                 "import functools\n"
                 "def f(db, fp):\n"
