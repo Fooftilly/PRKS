@@ -727,7 +727,7 @@ At startup, **before** binding, PRKS reads the config's `relocation` record
 | `committed` | new | New root authoritative. The source is already `fenced` (P2). If the destination marker is still `staging` with the same `relocation_id`, perform P6 as specified: (a) take the lease and bind the `staging` root under the committed record, then (b) write the single activation. If the marker is already `active` with no role, P6(b) already landed, and PRKS binds normally. Attempt P7, P8 and P9 idempotently. A P7 that cannot reach the old root is retried at later starts and blocks nothing. |
 | `source_retired` | new | Bind normally and redo P8 and P9 idempotently. |
 | `retained` | new | Normal operation. Diagnostics show the retained old copy. |
-| `failed` | old | Normal operation, plus a notice with a "discard failed move" action. |
+| `failed` | old | Old root authoritative. If its marker is still `fenced` with this `relocation_id` (a crash between revert steps 2 and 3, or a failed-move recovery interrupted before unfencing), lift the fence back to `active` before binding, the same step as in the `copying`/`verified` row. Then operate normally, with a notice offering "discard failed move", which only cleans up a leftover `staging` destination. |
 
 A failure during P6 (rebind) after commit is handled like any failed bind of
 the configured root: PRKS reports a configuration error and does **not** fall
