@@ -1636,6 +1636,36 @@ class ManagedPdfRemovalTests(unittest.TestCase):
                 "        self.rm = os.remove\n"
                 "        self.rm(os.path.join(pdfs_dir, name))\n"
             ),
+            "os_rename_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.rename(scratch, **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "shutil_move_dict_spread_destination": (
+                "import os, shutil\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    shutil.move(scratch, **{'dst': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "os_renames_dict_spread_destination": (
+                "import os\n"
+                "def publish(pdfs_dir, scratch, name):\n"
+                "    os.renames(scratch, **{'new': os.path.join(pdfs_dir, name)})\n"
+            ),
+            "saved_path_rename_on_attribute": (
+                "from pathlib import Path\n"
+                "class Pub:\n"
+                "    def publish(self, pdfs_dir, scratch, name):\n"
+                "        self.move = Path(scratch).rename\n"
+                "        self.move(Path(pdfs_dir) / name)\n"
+            ),
+            "saved_path_rename_copied_from_attribute": (
+                "from pathlib import Path\n"
+                "class Pub:\n"
+                "    def publish(self, pdfs_dir, scratch, name):\n"
+                "        self.move = Path(scratch).rename\n"
+                "        x = self.move\n"
+                "        x(Path(pdfs_dir) / name)\n"
+            ),
             "saved_path_rename_onto_managed_destination": (
                 "from pathlib import Path\n"
                 "def publish(pdfs_dir, scratch, name):\n"

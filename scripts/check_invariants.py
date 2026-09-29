@@ -766,6 +766,10 @@ def _attribute_alias_bindings(
     if value.attr == "rename" and _PATH in _expr_facts(value.value, scopes):
         # ``move = p.rename``: invoking it overwrites its destination argument.
         return {_BOUND_PATH_RENAME} | _expr_facts(value, scopes)
+    key = _attr_key(value)
+    if key is not None and _BOUND_PATH_RENAME in _resolve(scopes, key):
+        # ``x = self.move`` after ``self.move = p.rename``.
+        return {_BOUND_PATH_RENAME} | _expr_facts(value, scopes)
     qualified = [name.rsplit(".", 1) for name in _qualified_names(value, scopes)]
     if qualified:
         return {("name", owner, attr) for owner, attr in qualified} | _expr_facts(value, scopes)
@@ -1232,8 +1236,8 @@ def _positional_or_keyword(
 ) -> ast.expr | None:
     """The argument bound to the parameter at ``index`` (spelled one of
     ``keywords``). An explicit keyword wins -- the same parameter cannot also
-    be bound positionally -- otherwise the positional at ``index``, or a
-    ``*args`` spread at or before it that may supply it."""
+    be bound positionally -- then the positional at ``index`` (or a ``*args``
+    spread at or before it), then a ``**`` mapping that may supply it."""
     explicit = next((kw.value for kw in node.keywords if kw.arg in keywords), None)
     if explicit is not None:
         return explicit
@@ -1242,6 +1246,16 @@ def _positional_or_keyword(
             return arg.value
         if position == index:
             return arg
+    for kw in node.keywords:
+        if kw.arg is not None:
+            continue
+        # ``**{'dst': x}`` supplies it; an opaque ``**mapping`` may.
+        if not isinstance(kw.value, ast.Dict):
+            return kw.value
+        for keyword in keywords:
+            found = _dict_file_path_value(kw.value, key=keyword)
+            if found is not None:
+                return found
     return None
 
 
@@ -2455,15 +2469,20 @@ class _InvariantVisitor(ast.NodeVisitor):
             isinstance(func, ast.Attribute)
             and func.attr == "rename"
             and _PATH in _expr_facts(func.value, self.scopes)
-        ) or (
-            isinstance(func, ast.Name) and _BOUND_PATH_RENAME in _resolve(self.scopes, func.id)
-        ):
+        ) or _BOUND_PATH_RENAME in self._callee_bindings(func):
             # ``p.rename(dst)``: the source is checked at the attribute
             # (visit_Attribute); the overwritten destination is checked here.
             return [("pathlib.Path.rename()", self._call_argument(node, 0, "target"))]
         # ``path.unlink`` on a Path value is checked at the attribute itself
         # (visit_Attribute), so a saved bound method is covered too.
         return []
+
+    def _callee_bindings(self, func: ast.expr) -> set[_Binding]:
+        """What a bare-name or tracked one-level attribute callee is bound to."""
+        if isinstance(func, ast.Name):
+            return set(_resolve(self.scopes, func.id))
+        key = _attr_key(func) if isinstance(func, ast.Attribute) else None
+        return set(_resolve(self.scopes, key)) if key is not None else set()
 
     def _check_managed_pdf_removal(self, node: ast.Call) -> None:
         for primitive, target in self._removal_targets(node):
