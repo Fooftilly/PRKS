@@ -12,6 +12,7 @@ Canonical references:
 Read:
 - `offline-foundations.md`;
 - `offline-work-sync.md`: "Field-scoped Work metadata", "High fan-out fields", "Group-changing fields", "Fields whose stored value is not what is shown", and "Typed fields and derived resources";
+- `offline-browse-protocol.md`: "Offline browse catalogs" and its dependency matrix for Work-field projection fan-out;
 - `docs/local-first-sync.md`: "Work metadata fields", "Metadata: overlay, atomic save and per-field conflicts", and the field-specific sections that follow.
 
 Code: `backend/work_metadata_sync.py`, `frontend/js/sync-runtime.js`, related work-metadata tests.
@@ -24,19 +25,29 @@ Read:
 
 Code: `backend/work_source_sync.py`, related frontend/selftests/E2E.
 
-## Work opens and tags
+## Work opens
 Read:
 - `offline-foundations.md`;
-- `offline-work-sync.md`: "Local-first Work opens" and "Local-first Work Tags";
-- `offline-folder-tag-coherence.md` when a tag change affects Folder/Work cached projections or transactional pruning/invalidation;
-- `docs/local-first-sync.md`: "Work open events" and "Local coalescing and overlay (Work Tags)".
+- `offline-work-sync.md`: "Local-first Work opens";
+- `offline-browse-protocol.md`: foreground-open semantics, Recent eligibility, and acknowledgement reconciliation;
+- `docs/local-first-sync.md`: "Work open events".
 
-Code: `backend/work_open_sync.py`, `backend/work_tag_sync.py`.
+Code: `backend/work_open_sync.py`.
+
+## Work tags
+Read:
+- `offline-foundations.md`;
+- `offline-work-sync.md`: "Local-first Work Tags";
+- `offline-folder-tag-coherence.md` when a tag change affects Folder/Work cached projections or transactional pruning/invalidation;
+- `docs/local-first-sync.md`: "Local coalescing and overlay (Work Tags)".
+
+Code: `backend/work_tag_sync.py`.
 
 ## People and groups
 Read:
 - `offline-foundations.md`;
-- `offline-entity-coherence.md`;
+- `offline-entity-surfaces.md`: People route/edit/create/offline-media semantics;
+- `offline-entity-coherence.md`: People and Person Group coherence domains;
 - `docs/local-first-sync.md`: "Offline Person editing", "Offline Person creation", "Person Groups".
 
 Code: `backend/person_sync.py`, `backend/person_metadata_sync.py`, `backend/person_group_sync.py`.
@@ -58,11 +69,24 @@ Read:
 Code: `backend/playlist_sync.py`.
 
 ## Research entities
-Read `offline-foundations.md` + `offline-entity-coherence.md`, then the relevant `docs/local-first-sync.md` section:
+Read `offline-foundations.md` + `offline-entity-surfaces.md` + `offline-entity-coherence.md`, then the relevant `docs/local-first-sync.md` section:
 - Concepts: "Concepts (3H)" and `backend/concept_sync.py`.
 - Positions: "Positions (3I)" and `backend/position_sync.py`.
 - Arguments/Stances: "Arguments and Stances (3J)" and `backend/argument_sync.py`.
 - Research graph offline behavior: `backend/research_graph.py` plus the research-graph offline tests.
+
+## Work notes
+Read:
+- `offline-foundations.md`;
+- `offline-entity-surfaces.md`: Work notes;
+- `offline-entity-coherence.md` when Research Notes can stale Concept/Argument/Graph projections;
+- the Work-note sections of `docs/local-first-sync.md`.
+
+## Research Graph
+Read:
+- `offline-foundations.md`;
+- `offline-entity-surfaces.md`: Research Graph;
+- the relevant Research Graph sections/tests when projection semantics change.
 
 ## PDF annotations
 Read:
