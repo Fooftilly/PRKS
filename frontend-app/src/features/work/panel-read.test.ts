@@ -166,11 +166,13 @@ describe('projectWorkPanelRead', () => {
     expect(next.display.statusIcon).toBe('check')
     expect(next.display.sourceUrl).toBe('https://example.test/new')
     expect(next.display.showOriginalUrl).toBe(true)
-    expect(workPanelBibFields(next.display)).toContainEqual({
-      field: 'source_url',
-      label: 'Original URL',
-      value: 'https://example.test/new',
-    })
+    expect(workPanelBibFields(next.display)).toEqual(
+      expect.arrayContaining([
+        { field: 'thumb_page', label: 'Thumbnail page', value: '4' },
+        { field: 'author_text', label: 'Author', value: 'Overlay author' },
+        { field: 'source_url', label: 'Original URL', value: 'https://example.test/new' },
+      ]),
+    )
     expect(next.editor.fields.author_text).toBe('Acknowledged author')
     expect(next.editor.fields.thumb_page).toBe('2')
     expect(next.editor.fields.source_url).toBe('https://example.test/old')
@@ -196,6 +198,48 @@ describe('projectWorkPanelRead', () => {
     expect(next.display.docType.label).toBe('book')
     expect(next.display.status).toBe('Completed')
     expect(next.display.statusIcon).toBe('')
+  })
+
+  it('lists author, thumbnail page, and a non-PDF source url without calling the card empty', () => {
+    const model = projectWorkPanelRead({
+      ownerTabId: 'main',
+      ownerGeneration: 1,
+      workId: 'w1',
+      work: { id: 'w1', title: 'Server title', author_text: 'Server author', thumb_page: '1' },
+      effectiveWork: {
+        id: 'w1',
+        title: 'Server title',
+        author_text: 'Ada Lovelace',
+        thumb_page: '3',
+        source_url: 'https://example.test/video',
+      },
+      tags: [],
+      sourceKind: 'video',
+    })
+    expect(model.editor.fields.author_text).toBe('Server author')
+    expect(model.editor.fields.thumb_page).toBe('1')
+    expect(model.display.showOriginalUrl).toBe(false)
+    expect(model.display.hasBibliographicText).toBe(true)
+    expect(workPanelBibFields(model.display).map((field) => field.field)).toEqual([
+      'thumb_page',
+      'author_text',
+      'source_url',
+    ])
+
+    const urlOnly = projectWorkPanelRead({
+      ownerTabId: 'main',
+      ownerGeneration: 1,
+      workId: 'w2',
+      work: { id: 'w2', title: 'Clip' },
+      effectiveWork: { id: 'w2', source_url: 'https://example.test/only' },
+      tags: [],
+      sourceKind: 'video',
+    })
+    expect(urlOnly.display.showOriginalUrl).toBe(false)
+    expect(urlOnly.display.hasBibliographicText).toBe(true)
+    expect(workPanelBibFields(urlOnly.display)).toEqual([
+      { field: 'source_url', label: 'Original URL', value: 'https://example.test/only' },
+    ])
   })
 
   it('does not link a folder that has a title and no id', () => {

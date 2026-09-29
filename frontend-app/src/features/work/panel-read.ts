@@ -62,6 +62,8 @@ export interface WorkPanelDisplay {
   readonly isbn: string
   readonly doi: string
   readonly abstract: string
+  readonly authorText: string
+  readonly thumbPage: string
   readonly sourceUrl: string
   readonly showOriginalUrl: boolean
   readonly hasBibliographicText: boolean
@@ -241,6 +243,8 @@ export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadMo
   const pages = text(effective?.pages)
   const isbn = text(effective?.isbn)
   const doi = text(effective?.doi)
+  const authorText = text(effective?.author_text).trim()
+  const thumbPage = text(effective?.thumb_page).trim()
   const showOriginalUrl = sourceKind === 'pdf' && !!sourceUrl
   const showPublishedDate = !year
   const publishedDisplay = text(input.publishedDisplay).trim()
@@ -257,7 +261,9 @@ export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadMo
     isbn ||
     doi ||
     abstract ||
-    showOriginalUrl
+    authorText ||
+    thumbPage ||
+    sourceUrl
   )
   const status = text(effective?.status).trim() || 'Not Started'
   const display: WorkPanelDisplay = Object.freeze({
@@ -277,6 +283,8 @@ export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadMo
     isbn,
     doi,
     abstract,
+    authorText,
+    thumbPage,
     sourceUrl,
     showOriginalUrl,
     hasBibliographicText,
@@ -319,11 +327,18 @@ export function workPanelBibFields(display: WorkPanelDisplay): readonly { field:
     isbn: 'ISBN',
     doi: 'DOI',
   }
-  const rows: { field: string; label: string; value: string }[] = BIB_FIELDS.filter((field) =>
-    text(display[field]).trim(),
-  ).map((field) => Object.freeze({ field, label: labels[field], value: text(display[field]) }))
-  // `prksWorkBibRowsHtml` lists every synced field here, including source_url.
-  // The PDF card still renders that same value as the Original URL link.
+  const rows: { field: string; label: string; value: string }[] = []
+  // Same order as `PRKS_SYNCED_WORK_FIELDS` inside `prksWorkBibRowsHtml`.
+  // Title, status, type, year, published date, and abstract already have their own slots.
+  const thumbPage = text(display.thumbPage).trim()
+  if (thumbPage) rows.push(Object.freeze({ field: 'thumb_page', label: 'Thumbnail page', value: thumbPage }))
+  const authorText = text(display.authorText).trim()
+  if (authorText) rows.push(Object.freeze({ field: 'author_text', label: 'Author', value: authorText }))
+  for (const field of BIB_FIELDS) {
+    const value = text(display[field]).trim()
+    if (value) rows.push(Object.freeze({ field, label: labels[field], value }))
+  }
+  // Listed for every source kind. The PDF card still renders the same value as the link.
   const sourceUrl = text(display.sourceUrl).trim()
   if (sourceUrl) rows.push(Object.freeze({ field: 'source_url', label: 'Original URL', value: sourceUrl }))
   return rows
@@ -356,6 +371,8 @@ function displayRecord(current: WorkPanelReadModel): Record<string, unknown> {
     isbn: display.isbn,
     doi: display.doi,
     abstract: display.abstract,
+    author_text: display.authorText,
+    thumb_page: display.thumbPage,
     source_url: display.sourceUrl,
     roles: current.display.people.map(personToRole),
   }

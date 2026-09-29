@@ -97,4 +97,35 @@ describe('work panel read session', () => {
     expect(panel.querySelector('[data-prks-role="work-bib-rows"]')?.textContent).toContain('Later Press')
     expect(workPanelReadOwns({ tabId: 'main', generation: 4, getEntity: () => ({ id: 'w-a' }) })).toBe(false)
   })
+
+  it('renders author, thumbnail page, and a non-PDF source url in the bibliographic host', () => {
+    const panel = mountPanel('main', 1)
+    expect(
+      presentWorkPanelRead({
+        ownerTabId: 'main',
+        ownerGeneration: 1,
+        workId: 'w-a',
+        work: { id: 'w-a', title: 'Server Alpha', author_text: 'Server author', thumb_page: '1' },
+        effectiveWork: {
+          id: 'w-a',
+          title: 'Alpha',
+          author_text: 'Ada Lovelace',
+          thumb_page: '3',
+          source_url: 'https://example.test/video',
+        },
+        tags: [],
+        sourceKind: 'video',
+      }),
+    ).toBe(true)
+    const rows = panel.querySelector('[data-prks-role="work-bib-rows"]')?.textContent || ''
+    expect(rows).toContain('Author')
+    expect(rows).toContain('Ada Lovelace')
+    expect(rows).toContain('Thumbnail page')
+    expect(rows).toContain('3')
+    expect(rows).toContain('https://example.test/video')
+    expect(panel.querySelector('[data-prks-role="work-panel-source"]')?.textContent).not.toContain(
+      'No metadata available',
+    )
+    expect(panel.querySelector('[data-prks-role="work-panel-source"] a')).toBeNull()
+  })
 })
