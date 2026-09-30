@@ -20,6 +20,11 @@ export type PdfSearchFlightSlot = {
     current: PdfSearchFlight | null;
 };
 
+/** Drop a task that clear or close has invalidated, so the next commit cannot retarget it. */
+export function clearPdfSearchFlight(slot: PdfSearchFlightSlot | null | undefined): void {
+    if (slot) slot.current = null;
+}
+
 function settleIfCurrent(
     seq: number,
     currentSeq: () => number,

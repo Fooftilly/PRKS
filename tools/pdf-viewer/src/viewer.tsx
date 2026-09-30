@@ -22,7 +22,7 @@ import type { PdfAnnotationObject } from '@embedpdf/models';
 import { ViewerController } from './controller';
 import { buildPluginRegistrations, srcToInitialDocument } from './plugins';
 import { PageView } from './page-view';
-import { commitPdfSearch, type PdfSearchFlightSlot } from './search-commit';
+import { clearPdfSearchFlight, commitPdfSearch, type PdfSearchFlightSlot } from './search-commit';
 import { PdfSearchBar } from './search-bar';
 import { Toolbar } from './toolbar';
 import { WheelZoom } from './gestures';
@@ -298,6 +298,7 @@ function ApiBinder({
                     controller.focusSearch();
                 },
                 closeSearch: () => {
+                    clearPdfSearchFlight(searchFlight.current);
                     controller.nextSearchSeq();
                     controller.dismissSearch();
                     try {
@@ -307,6 +308,7 @@ function ApiBinder({
                     }
                 },
                 clearSearchMatches: () => {
+                    clearPdfSearchFlight(searchFlight.current);
                     controller.nextSearchSeq();
                     const scope = searchCap?.forDocument(activeDocumentId);
                     if (!scope) return;

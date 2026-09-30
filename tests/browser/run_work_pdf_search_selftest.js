@@ -2,6 +2,7 @@
 'use strict';
 
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
@@ -447,7 +448,7 @@ function testCommitSearchFailurePaths() {
     const controllerPath = path.join(rootDir, 'tools/pdf-viewer/src/controller.ts');
     const runtimePath = path.join(rootDir, 'frontend/js/pdf-work-runtime.js');
     const runner = [
-        'import { commitPdfSearch } from ' + JSON.stringify(helper) + ';',
+        'import { clearPdfSearchFlight, commitPdfSearch } from ' + JSON.stringify(helper) + ';',
         'import { pdfSearchBarView } from ' + JSON.stringify(view) + ';',
         'import { ViewerController } from ' + JSON.stringify(controllerPath) + ';',
         'import { createRequire } from "node:module";',
@@ -625,7 +626,54 @@ function testCommitSearchFailurePaths() {
         '  await Promise.resolve();',
         '  check("completed task settles latest epoch", settled.slice(), [{ epoch: 2, total: 4, activeIndex: 0 }]);',
         '}',
-        'coalesce().then(function () { process.stdout.write(JSON.stringify(rows)); }).catch(function (err) {',
+        'async function clearThenSameQuery() {',
+        '  let calls = 0;',
+        '  const queries = [];',
+        '  const pending = [];',
+        '  const settled = [];',
+        '  let seq = 0;',
+        '  let pluginTotal = 1;',
+        '  const flight = { current: null };',
+        '  const scope = {',
+        '    searchAllPages: function (query) {',
+        '      calls += 1;',
+        '      queries.push(query);',
+        '      let resolve;',
+        '      const promise = new Promise(function (res) { resolve = res; });',
+        '      pending.push({ resolve: resolve, promise: promise });',
+        '      return { toPromise: function () { return promise; } };',
+        '    },',
+        '    getState: function () {',
+        '      return { total: pluginTotal, activeResultIndex: 0 };',
+        '    },',
+        '  };',
+        '  function commit(epoch, query) {',
+        '    commitPdfSearch({',
+        '      query: query, epoch: epoch, scope: scope, flight: flight,',
+        '      beginSeq: function () { seq += 1; return seq; },',
+        '      currentSeq: function () { return seq; },',
+        '      settle: function (result) { settled.push(result); },',
+        '    });',
+        '  }',
+        '  commit(1, "term");',
+        '  check("clear starts from one search", calls, 1);',
+        '  clearPdfSearchFlight(flight);',
+        '  seq += 1;',
+        '  pluginTotal = 0;',
+        '  commit(2, "term");',
+        '  check("clear then same query starts a fresh search", calls, 2);',
+        '  check("fresh search query", queries[1], "term");',
+        '  pending[0].resolve();',
+        '  await pending[0].promise;',
+        '  await Promise.resolve();',
+        '  check("pre-clear task does not settle", settled.slice(), []);',
+        '  pluginTotal = 3;',
+        '  pending[1].resolve();',
+        '  await pending[1].promise;',
+        '  await Promise.resolve();',
+        '  check("fresh search settles its epoch", settled.slice(), [{ epoch: 2, total: 3, activeIndex: 0 }]);',
+        '}',
+        'coalesce().then(function () { return clearThenSameQuery(); }).then(function () { process.stdout.write(JSON.stringify(rows)); }).catch(function (err) {',
         '  console.error(err);',
         '  process.exit(1);',
         '});',
@@ -651,6 +699,23 @@ function testCommitSearchFailurePaths() {
     });
 }
 
+function testClearAndCloseDropTheSearchFlight() {
+    const src = fs.readFileSync(path.join(rootDir, 'tools/pdf-viewer/src/viewer.tsx'), 'utf8');
+    function between(start, end) {
+        const at = src.indexOf(start);
+        const until = src.indexOf(end, at + start.length);
+        return src.slice(at, until);
+    }
+    function dropsBeforeSeq(name, text) {
+        const drop = text.indexOf('clearPdfSearchFlight(searchFlight.current)');
+        const seq = text.indexOf('controller.nextSearchSeq()');
+        assert(name + ' clears the flight', drop >= 0);
+        assert(name + ' clears the flight before the sequence bump', seq >= 0 && drop < seq);
+    }
+    dropsBeforeSeq('close', between('closeSearch: () => {', 'clearSearchMatches: () => {'));
+    dropsBeforeSeq('clear', between('clearSearchMatches: () => {', 'commitSearch: (query, epoch) => {'));
+}
+
 testQueryChangesDoNotReplaceTheViewer();
 testNextPreviousAndNoResults();
 testRouteReplacementDropsTheSearch();
@@ -659,6 +724,7 @@ testSearchBeforeViewerAttachesToTheSameInstance();
 testCowRemountRehydratesQueryAndRebindsFind();
 testRebindDoesNotStackListeners();
 testCommitSearchFailurePaths();
+testClearAndCloseDropTheSearchFlight();
 
 console.log((failed ? 'FAILED ' : 'OK ') + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exit(1);
