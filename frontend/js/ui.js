@@ -3275,19 +3275,42 @@ window.prksRoleModalCapturedOrigin = prksRoleModalCapturedOrigin;
 window.prksRoleModalOwnerSessionStill = prksRoleModalOwnerSessionStill;
 window.prksRoleModalMaySettleUi = prksRoleModalMaySettleUi;
 
-/* Pending tags stay on the read surface. The tag editor does not write chips. */
+/**
+ * The Work-panel opener captured with a pending Folder or Playlist attach.
+ * Save revalidates this record. It does not read whichever pane is focused later.
+ * A failed check is a stale no-op: creating the Folder or Playlist may finish.
+ */
+function prksCapturedWorkPanelStill(pending) {
+    if (!pending || pending.workId == null || String(pending.workId) === '') return false;
+    if (!pending.tabId || typeof prksGetTabContext !== 'function') return false;
+    const ctx = prksGetTabContext(String(pending.tabId));
+    if (!ctx || ctx.destroyed) return false;
+    const workId = String(pending.workId);
+    if (typeof prksTabContextOwnsEntityRoute === 'function') {
+        if (!prksTabContextOwnsEntityRoute(ctx, pending.generation, 'work', workId, 'work')) return false;
+    } else if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(pending.generation)) {
+        return false;
+    }
+    if (typeof prksRightPanelOwnedBy === 'function' && !prksRightPanelOwnedBy(ctx)) return false;
+    return true;
+}
+window.prksCapturedWorkPanelStill = prksCapturedWorkPanelStill;
+
+/* Pending tags stay on the read surface. The tag editor does not write chips.
+ * null means the Vue bridge is not installed, so the caller may paint the
+ * legacy list. false means do not overwrite a Vue-owned target. */
 function prksRefreshOwnedWorkPanelTags(ctx, work, tags) {
     if (!ctx || !work || prksWorkDetailsMode(ctx, work) !== 'view') return false;
     if (!prksRightPanelOwnedBy(ctx)) return false;
     const live = ctx.getEntity ? ctx.getEntity('work') : null;
     if (!live || String(live.id) !== String(work.id)) return false;
-    if (typeof window.prksVueRefreshWorkPanelRead !== 'function') return false;
+    if (typeof window.prksVueRefreshWorkPanelRead !== 'function') return null;
     return window.prksVueRefreshWorkPanelRead({
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
         workId: String(work.id),
         tags: Array.isArray(tags) ? tags : [],
-    });
+    }) === true;
 }
 window.prksRefreshOwnedWorkPanelTags = prksRefreshOwnedWorkPanelTags;
 

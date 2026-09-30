@@ -31,17 +31,22 @@
         const effectiveTags = root.prksEffectiveWorkTags(work, state.operations);
         const effective = { ...work, tags: effectiveTags };
         const editable = ctx.ui.workDetailsMode === 'tags';
+        let useLegacyTags = true;
         if (!editable && owns(ctx, state) && typeof root.prksRefreshOwnedWorkPanelTags === 'function') {
             const rows = (effectiveTags || []).map(tag => ({
                 id: tag && tag.id != null ? String(tag.id) : '',
                 name: tag && tag.name != null ? String(tag.name) : '',
                 color: tag && tag.color != null ? String(tag.color) : '',
             }));
-            root.prksRefreshOwnedWorkPanelTags(ctx, work, rows);
-        } else {
+            const refreshed = root.prksRefreshOwnedWorkPanelTags(ctx, work, rows);
+            useLegacyTags = refreshed == null;
+        }
+        if (useLegacyTags) {
         // Identical markup is not a repaint. Rewriting innerHTML needlessly
         // churns the DOM other tiles may be reading, and the first paint now
         // produces exactly what the panel was rendered with.
+        // A null refresh means the Vue bridge is unavailable. false from an
+        // already-mounted bridge must not overwrite a Vue-owned target.
         const chips = root.renderWorkTagsChips(effective, { editable });
         if (list.innerHTML !== chips) list.innerHTML = chips;
         }
@@ -249,8 +254,7 @@
             }
             const base = root.prksWorkTagBase(state.options, tagId);
             if (!live(ctx, state)) return;
-            const panel = document.getElementById('panel-content');
-            if (panel && panel.dataset.prksOwnerTabId && panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return;
+            if (!owns(ctx, state)) return;
             await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, base.present, base.revision, tag);
             if (!live(ctx, state)) { root.prksSync.changed(); return; }
             state.error = null;

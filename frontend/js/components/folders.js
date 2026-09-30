@@ -1899,7 +1899,7 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
 
     async function assignToNewFolderAndRefresh(newFolderId, message) {
         if (!folderStill() || typeof patchWorkFolder !== 'function') return;
-        const coherenceToken = await patchWorkFolder(wid, newFolderId);
+        const coherenceToken = await patchWorkFolder(wid, newFolderId, folderStill);
         if (!folderStill()) return;
         folderRows = await fetchFolders();
         if (!Array.isArray(folderRows)) folderRows = [];
@@ -1982,7 +1982,11 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     }
 
     newBtn.onclick = () => {
-        window.__prksPendingWorkFolderAttach = { workId: wid };
+        window.__prksPendingWorkFolderAttach = {
+            workId: wid,
+            tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+            generation: generation,
+        };
         const titleEl = document.getElementById('folder-title');
         const descEl = document.getElementById('folder-description');
         const parentInputEl = document.getElementById('folder-parent-search');
@@ -2011,7 +2015,7 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
         try {
             if (typeof patchWorkFolder !== 'function') return;
             if (!folderStill()) return;
-            const coherenceToken = await patchWorkFolder(wid, pid);
+            const coherenceToken = await patchWorkFolder(wid, pid, folderStill);
             if (!folderStill()) return;
             if (status) status.textContent = 'Folder updated.';
             if (typeof fetchWorkDetails === 'function') {
@@ -2035,7 +2039,7 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     clearBtn.onclick = async () => {
         try {
             if (!folderStill() || typeof patchWorkFolder !== 'function') return;
-            const coherenceToken = await patchWorkFolder(wid, null);
+            const coherenceToken = await patchWorkFolder(wid, null, folderStill);
             if (!folderStill()) return;
             input.value = '';
             hidden.value = '';
