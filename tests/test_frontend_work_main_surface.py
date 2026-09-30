@@ -34,7 +34,8 @@ class WorkMainSurfaceContractTests(unittest.TestCase):
         self.assertIn("registerWorkMainSurfaceBridge", _MAIN)
         self.assertIn("prksVuePresentWorkMainSurface", _BUNDLE)
         self.assertIn("ctx.isCurrent(model.generation)", _SURFACE)
-        self.assertIn("workMainSurface", _SURFACE)
+        self.assertIn("registerCleanup", _SURFACE)
+        self.assertNotIn("workMainSurface", _SURFACE)
         self.assertIn('data-prks-role="pdf-viewer"', _VIEW)
         self.assertIn('data-prks-role="work-research-notes-anchor"', _VIEW)
         self.assertIn("viewerHtml", _VIEW)
@@ -47,8 +48,12 @@ class WorkMainSurfaceContractTests(unittest.TestCase):
         self.assertLess(fallback.index("if (!isCurrent()) return;"), fallback.index("getEntity('work')"))
         self.assertLess(fallback.index("getEntity('work')"), fallback.index("container.innerHTML = prksWorkDetailsShellHtml(shell)"))
         self.assertNotIn("prksVueDismissWorkMainSurface", body[gate:reject + 80])
-        self.assertIn('role="slider"', _VIEW)
-        self.assertNotIn('role="separator"', _VIEW)
+        self.assertIn('role="separator"', _VIEW)
+        self.assertNotIn('role="slider"', _VIEW)
+        self.assertNotIn("aria-valuemin", _VIEW)
+        self.assertNotIn("aria-valuemax", _VIEW)
+        self.assertNotIn("aria-valuenow", _VIEW)
+        self.assertNotIn("aria-orientation", _VIEW)
 
 
 if __name__ == "__main__":

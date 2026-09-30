@@ -31,6 +31,7 @@ export interface WorkMainSurfaceOwner {
   getEntity?: (type: string) => { id?: unknown } | null
   getResource?: (name: string) => unknown
   setResource?: (name: string, value: unknown, disposer?: () => void) => unknown
+  registerCleanup?: (fn: () => void) => (() => void) | void
 }
 
 interface MountedSurface {
@@ -40,9 +41,19 @@ interface MountedSurface {
 }
 
 const mountedByTab = new Map<string, MountedSurface>()
+const shellCleanupArmed = new WeakMap<object, true>()
 
 function unmountRecord(record: MountedSurface | undefined): void {
   if (record) render(null, record.root)
+}
+
+function armWorkMainSurfaceCleanup(ctx: WorkMainSurfaceOwner): void {
+  if (typeof ctx.registerCleanup !== 'function' || shellCleanupArmed.has(ctx)) return
+  shellCleanupArmed.set(ctx, true)
+  ctx.registerCleanup(() => {
+    shellCleanupArmed.delete(ctx)
+    dismissWorkMainSurface(ctx)
+  })
 }
 
 export function dismissWorkMainSurface(ctx?: { tabId?: unknown }): void {
@@ -78,11 +89,10 @@ export function presentWorkMainSurface(
   const root = ctx.root
   const previous = mountedByTab.get(tabId)
   if (previous && previous.root !== root) unmountRecord(previous)
-  if (typeof ctx.getResource === 'function' && typeof ctx.setResource === 'function') {
-    if (ctx.getResource('workMainSurface') !== 'mounted') {
-      ctx.setResource('workMainSurface', 'mounted', () => dismissWorkMainSurface(ctx))
-    }
-  }
+  /* Child resources (pdf, workNotes) dispose in insertion order during
+   * clearAllResources. The shell unmount is a cleanup so it runs after them
+   * and the PDF host and Research Notes anchor are still connected. */
+  armWorkMainSurfaceCleanup(ctx)
   const kind = model.kind === 'pdf' || model.kind === 'video' ? model.kind : 'empty'
   // The route paints "Loading view..." into this root before the tile exists.
   // Vue's first mount appends; it does not remove that placeholder. A warm

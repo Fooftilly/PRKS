@@ -7,7 +7,11 @@ import {
   resetWorkMainSurfaceForTests,
   type WorkMainSurfaceModel,
 } from './main-surface'
-import { presentWorkResearchNotes, resetWorkResearchNotesForTests } from './research-note-session'
+import {
+  dismissWorkResearchNotes,
+  presentWorkResearchNotes,
+  resetWorkResearchNotesForTests,
+} from './research-note-session'
 
 type WorkCtx = {
   tabId: string
@@ -29,6 +33,7 @@ type SurfaceWindow = {
   prksMountTabContext: (tabId: string, host: HTMLElement) => void
   prksGetTabContext: (tabId: string) => WorkCtx
   prksDestroyAllTabContexts: () => void
+  prksDestroyTabContext: (tabId: string) => void
   renderVideoViewerPane: (work: { source_url?: string; provider?: string; provider_id?: string }) => string
 }
 
@@ -206,8 +211,12 @@ describe('work main surface', () => {
     ctx.setEntity('work', { id: 'work-a' })
     expect(presentWorkMainSurface(ctx, surface(ctx, { kind: 'empty' }))).toBe(true)
     const handle = ctx.root.querySelector('.work-split-handle')
-    expect(handle?.getAttribute('role')).toBe('slider')
+    expect(handle?.getAttribute('role')).toBe('separator')
     expect(handle?.getAttribute('tabindex')).toBe('0')
+    expect(handle?.hasAttribute('aria-orientation')).toBe(false)
+    expect(handle?.hasAttribute('aria-valuemin')).toBe(false)
+    expect(handle?.hasAttribute('aria-valuemax')).toBe(false)
+    expect(handle?.hasAttribute('aria-valuenow')).toBe(false)
     const shellField = ctx.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement
     const notesEditorId = `${ctx.domId('work-notes-editor-region')}-field`
     expect(shellField.id).toBe(notesEditorId)
@@ -218,5 +227,89 @@ describe('work main surface', () => {
     expect(field.value).toBe('Kept buffer')
     expect(field.closest('[data-prks-role="work-research-notes-anchor"]')).toBeTruthy()
     expect(ctx.root.querySelectorAll('.work-notes-pane')).toHaveLength(1)
+  })
+
+  it('disposes Research Notes and the PDF runtime before the shell on route teardown and tab destroy', async () => {
+    async function openPair(mainId: string, sideId: string) {
+      const main = mount(mainId)
+      const side = mount(sideId)
+      main.setEntity('work', { id: 'work-a' })
+      side.setEntity('work', { id: 'work-b' })
+      const paint = (ctx: WorkCtx, workId: string) => {
+        expect(presentWorkMainSurface(ctx, surface(ctx, {
+          workId,
+          kind: 'pdf',
+          hasFile: true,
+          showHeader: false,
+        }))).toBe(true)
+        expect(presentWorkResearchNotes(ctx, { id: workId }, `${workId} notes`)).toBe(true)
+      }
+      paint(main, 'work-a')
+      paint(side, 'work-b')
+      await nextTick()
+      return { main, side }
+    }
+
+    function watchChildren(ctx: WorkCtx, log: string[]) {
+      const host = ctx.root.querySelector('[data-prks-role="pdf-viewer"]') as HTMLElement
+      const anchor = ctx.root.querySelector('[data-prks-role="work-research-notes-anchor"]') as HTMLElement
+      const runtime = {
+        destroy() {
+          log.push(host.isConnected ? 'pdf-connected' : 'pdf-detached')
+        },
+      }
+      ctx.setResource('pdf', runtime, () => runtime.destroy())
+      const notes = {
+        destroy() {
+          log.push('easymde')
+        },
+      }
+      ctx.setResource('workNotes', notes, () => {
+        log.push(anchor.isConnected ? 'notes-connected' : 'notes-detached')
+        notes.destroy()
+        dismissWorkResearchNotes(ctx)
+        log.push(anchor.querySelector('.work-notes-pane') ? 'notes-vue-mounted' : 'notes-vue-unmounted')
+        log.push(ctx.root.querySelector('.work-workspace') ? 'shell-present' : 'shell-gone')
+        log.push(host.isConnected ? 'pdf-host-connected' : 'pdf-host-detached')
+      })
+      return { host }
+    }
+
+    async function expectMainTeardownLeavesSide(trigger: 'route' | 'destroy') {
+      const mainId = trigger === 'route' ? 'main-route' : 'main-destroy'
+      const sideId = trigger === 'route' ? 'side-route' : 'side-destroy'
+      const { main, side } = await openPair(mainId, sideId)
+      const mainLog: string[] = []
+      const sideLog: string[] = []
+      const { host } = watchChildren(main, mainLog)
+      watchChildren(side, sideLog)
+      const sideHost = side.root.querySelector('[data-prks-role="pdf-viewer"]')
+      const sideNotes = side.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement
+      const mainRoot = main.root
+      expect(main.getResource('workMainSurface')).toBeUndefined()
+      if (trigger === 'route') {
+        main.beginRoute({ name: 'work', params: { workId: 'work-b' } })
+      } else {
+        surfaceWindow.prksDestroyTabContext(mainId)
+      }
+      expect(mainLog).toEqual([
+        'pdf-connected',
+        'notes-connected',
+        'easymde',
+        'notes-vue-unmounted',
+        'shell-present',
+        'pdf-host-connected',
+      ])
+      expect(sideLog).toEqual([])
+      expect(mainRoot.querySelector('.work-workspace')).toBeNull()
+      expect(host.isConnected).toBe(false)
+      expect(side.root.querySelector('.work-workspace')).toBe(sideHost?.closest('.work-workspace'))
+      expect(sideHost?.isConnected).toBe(true)
+      expect(sideNotes.isConnected).toBe(true)
+      expect(sideNotes.value).toBe('work-b notes')
+    }
+
+    await expectMainTeardownLeavesSide('route')
+    await expectMainTeardownLeavesSide('destroy')
   })
 })

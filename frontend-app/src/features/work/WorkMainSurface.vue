@@ -40,12 +40,8 @@ const notesEditorId = computed(() => `${props.editorRegionId}-field`)
           </div>
           <div
             class="work-split-handle"
-            role="slider"
-            aria-orientation="horizontal"
+            role="separator"
             aria-label="Resize between document and research notes"
-            aria-valuemin="160"
-            aria-valuemax="900"
-            aria-valuenow="320"
             tabindex="0"
           >
             <span class="work-split-handle-grip" aria-hidden="true"></span>
