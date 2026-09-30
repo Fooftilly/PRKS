@@ -116,13 +116,50 @@ describe('work PDF adapter', () => {
     }, captured)).toBe(true)
     expect(seen).toEqual(['/api/pdfs/a'])
     expect(resourceWrites).toBe(0)
-    expect(intentMountWorkPdf(ctx, { file_path: '/api/pdfs/a' }, {
-      initPdfViewerForWork: () => { seen.push('no-id') },
-    }, captured)).toBe(false)
     expect(intentMountWorkPdf(ctx, { id: 'work-a' }, {
       initPdfViewerForWork: () => { seen.push('no-file') },
     }, captured)).toBe(false)
     expect(seen).toEqual(['/api/pdfs/a'])
+  })
+
+  it('requires a Work id from a typed caller and still rejects a missing id at runtime', () => {
+    type MountArg = NonNullable<Parameters<typeof intentMountWorkPdf>[1]>
+    type MountIdIsRequired = {} extends Pick<MountArg, 'id'> ? false : true
+    const mountIdIsRequired: MountIdIsRequired = true
+    expect(mountIdIsRequired).toBe(true)
+
+    const ctx = mount('typed-id')
+    ctx.setEntity('work', { id: 'work-a' })
+    const captured = { generation: ctx.generation, workId: 'work-a' }
+    const orchestration = { initPdfViewerForWork: () => {} }
+    intentMountWorkPdf(
+      ctx,
+      // @ts-expect-error a typed mount must include the Work id
+      { file_path: '/api/pdfs/a' },
+      orchestration,
+      captured,
+    )
+
+    const calls: string[] = []
+    const recording = {
+      initPdfViewerForWork: () => { calls.push('called') },
+    }
+    const untypedMount = intentMountWorkPdf as (
+      owner: WorkPdfOwner,
+      work: { id?: unknown; file_path?: unknown } | null,
+      next: typeof recording,
+      ownerCapture: typeof captured,
+    ) => boolean
+    expect(untypedMount(ctx, { file_path: '/api/pdfs/a' }, recording, captured)).toBe(false)
+    expect(untypedMount(ctx, { id: '', file_path: '/api/pdfs/a' }, recording, captured)).toBe(false)
+    expect(untypedMount(ctx, { id: null, file_path: '/api/pdfs/a' }, recording, captured)).toBe(false)
+    expect(intentMountWorkPdf(
+      ctx,
+      { id: 'work-b', file_path: '/api/pdfs/b' },
+      recording,
+      captured,
+    )).toBe(false)
+    expect(calls).toEqual([])
   })
 
   it('does not mount a stale Work after the same context advances', () => {

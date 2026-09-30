@@ -2,8 +2,8 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const vm = require('vm');
 
 const rootDir = path.resolve(__dirname, '../..');
 const tabContext = require(path.join(rootDir, 'frontend/js/tab-context.js'));
@@ -150,7 +150,65 @@ pdfSource = pdfSource.replace(
         'const createPrksPdfViewer = globalThis.__createPrksPdfViewer;\n'
 );
 pdfSource = pdfSource.replace('export function initPdfViewerForWork', 'function initPdfViewerForWork');
-vm.runInThisContext(pdfSource, { filename: 'works-pdf.js' });
+
+// works-pdf.js is browser ESM, and the route slices live inside app.js.
+// Other Node selftests load browser scripts with require(). Dynamic execution
+// is Sonar javascript:S1523 on new code, so these slices are loaded the same way.
+const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prks-work-pdf-lifecycle-'));
+
+function loadScript(source, filename) {
+    const file = path.join(scriptDir, filename);
+    fs.writeFileSync(file, source);
+    return require(file);
+}
+
+function sliceBetween(source, startMarker, endMarker) {
+    const start = source.indexOf(startMarker);
+    const end = start < 0 ? -1 : source.indexOf(endMarker, start);
+    if (start < 0 || end < 0) throw new Error('missing slice ' + startMarker);
+    return source.slice(start, end);
+}
+
+const initPdfViewerForWork = loadScript(
+    pdfSource + '\nmodule.exports = { initPdfViewerForWork: initPdfViewerForWork };\n',
+    'works-pdf.cjs'
+).initPdfViewerForWork;
+
+function loadRouteFlush(app) {
+    const body = sliceBetween(
+        app,
+        "const prevPdf = ctx.getResource && ctx.getResource('pdf');",
+        'prksMaybeFlushPdfLastPageOnRouteChange'
+    );
+    return loadScript(
+        'module.exports = function flushPdfBeforeRouteChange(ctx) {\n' + body + '\nreturn true;\n};\n',
+        'route-flush.cjs'
+    );
+}
+
+function loadLeaveGuard(app) {
+    const body = sliceBetween(
+        app,
+        'function prksCanLeaveTabContext(ctx, nextHash)',
+        'function prksCanLeaveTabContextOwnedDraft'
+    );
+    return loadScript(body + '\nmodule.exports = prksCanLeaveTabContext;\n', 'leave-guard.cjs');
+}
+
+function loadRenderLeave(app) {
+    const pendingCall = 'window.prksHasPendingWorkAnnotationSync(ctx)';
+    const firstCall = app.indexOf(pendingCall);
+    const renderCall = app.indexOf(pendingCall, firstCall + 1);
+    const renderIf = app.lastIndexOf('if (', renderCall);
+    const end = app.indexOf('const draftLeaveApproved', renderCall);
+    if (renderCall < 0 || renderIf < 0 || end < 0) throw new Error('missing route leave slice');
+    return loadScript(
+        'module.exports = function renderPendingLeave(ctx, leavingWorkPage) {\n' +
+            app.slice(renderIf, end) +
+            '\nreturn null;\n};\n',
+        'render-leave.cjs'
+    );
+}
 
 async function settle() {
     for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -162,12 +220,14 @@ function annotationPosts() {
     });
 }
 
-(async function () {
+function assertPdfSourceContract() {
     const legacyPost = pdfSource.indexOf('`/api/works/${workId}/annotations`') !== -1
         && pdfSource.indexOf("method: 'POST'") !== -1;
     assert('legacy annotation POST path is still in works-pdf.js', legacyPost);
     assert('init still installs the pdf resource', pdfSource.indexOf("ctx.setResource('pdf', runtime, function () {") !== -1);
+}
 
+async function scenarioCurrentMount() {
     resetWorld();
     const current = openTab('current');
     initPdfViewerForWork(current.ctx, { id: 'work-current', file_path: '/api/pdfs/current' });
@@ -185,7 +245,9 @@ function annotationPosts() {
     assertEq('current mount does not post annotations', annotationPosts().length, 0);
     const currentViewer = currentRuntime && currentRuntime.viewer;
     assert('current viewer is the created viewer', currentViewer === viewers[0]);
+}
 
+async function scenarioCancelledDeferredSetup() {
     resetWorld();
     const stale = openTab('stale');
     const generation = stale.ctx.generation;
@@ -198,7 +260,10 @@ function annotationPosts() {
     assertEq('no viewer after cancelled A to B', viewers.length, 0);
     assert('no pdf resource after cancelled A to B', stale.ctx.getResource('pdf') == null);
     assertEq('host untouched when the timer never runs', stale.node.innerHTML, 'placeholder');
+}
 
+async function scenarioStaleCallback() {
+    resetWorld();
     const late = openTab('late');
     initPdfViewerForWork(late.ctx, { id: 'work-a', file_path: '/api/pdfs/a' });
     const lateTimer = timers[timers.length - 1];
@@ -214,7 +279,9 @@ function annotationPosts() {
     assertEq('stale callback does not create a viewer', viewers.length, 0);
     assert('stale callback does not install a pdf resource', late.ctx.getResource('pdf') == null);
     assertEq('stale callback leaves the host', late.node.innerHTML, 'placeholder');
+}
 
+async function scenarioRemount() {
     resetWorld();
     const remount = openTab('remount');
     initPdfViewerForWork(remount.ctx, { id: 'work-first', file_path: '/api/pdfs/first' });
@@ -264,7 +331,9 @@ function annotationPosts() {
     assert('destroying the first generation does not repaint the second', remount.node.innerHTML === 'second-painted');
     assert('second resource stays current', remount.ctx.getResource('pdf') === secondRuntime);
     assert('first generation is no longer current', remount.ctx.isCurrent(firstGeneration) === false);
+}
 
+async function scenarioMainAndSecondary() {
     resetWorld();
     global.prksWorkspaceSnapshot = function () {
         return { mainTabId: 'main', focusedTabId: 'main' };
@@ -290,7 +359,9 @@ function annotationPosts() {
     assert('secondary close destroys its viewer', sideViewer && sideViewer.destroyed);
     assert('main runtime remains after secondary close', main.ctx.getResource('pdf') === mainRuntime);
     assert('main viewer remains', mainRuntime.viewer && mainRuntime.viewer.destroyed !== true);
+}
 
+async function scenarioRouteReplacementFlush(app) {
     resetWorld();
     const routed = openTab('routed');
     initPdfViewerForWork(routed.ctx, { id: 'work-routed', file_path: '/api/pdfs/routed' });
@@ -308,11 +379,7 @@ function annotationPosts() {
         events.push('destroy');
         originalDestroy();
     };
-    const app = fs.readFileSync(path.join(rootDir, 'frontend/js/app.js'), 'utf8');
-    const flushAt = app.indexOf("const prevPdf = ctx.getResource && ctx.getResource('pdf');");
-    const flushEnd = app.indexOf('prksMaybeFlushPdfLastPageOnRouteChange', flushAt);
-    const flushRoute = new Function('ctx', app.slice(flushAt, flushEnd) + '\nreturn true;');
-    flushRoute(routed.ctx);
+    loadRouteFlush(app)(routed.ctx);
     assertEq('route replacement flushes before teardown', events.join(','), 'flush');
     routed.ctx.beginRoute({ name: 'folder', hash: '#/folders' });
     assert('teardown runs after the flush', events[0] === 'flush' && events.indexOf('destroy') > 0);
@@ -320,7 +387,9 @@ function annotationPosts() {
     assert('route replacement destroys the viewer', routedRuntime.viewer == null || viewers.some(function (viewer) {
         return viewer.destroyed;
     }));
+}
 
+async function scenarioTabClose() {
     resetWorld();
     const closing = openTab('closing');
     initPdfViewerForWork(closing.ctx, { id: 'work-close', file_path: '/api/pdfs/close' });
@@ -330,7 +399,9 @@ function annotationPosts() {
     prksDestroyTabContext('closing');
     assert('tab close destroys the viewer', closingViewer.destroyed === true);
     assert('tab close drops the context', tabContext.prksGetTabContext('closing') == null);
+}
 
+async function scenarioColdPark() {
     resetWorld();
     const cold = openTab('cold');
     initPdfViewerForWork(cold.ctx, { id: 'work-cold', file_path: '/api/pdfs/cold' });
@@ -344,7 +415,9 @@ function annotationPosts() {
     assert('cold park drops the host', cold.ctx.root == null);
     assert('cold park is not a warm suspend', cold.ctx.suspended !== true);
     assert('cold park detached the root', coldRoot.parentNode == null);
+}
 
+async function scenarioWarmParkResume() {
     resetWorld();
     const warm = openTab('warm');
     initPdfViewerForWork(warm.ctx, { id: 'work-warm', file_path: '/api/pdfs/warm' });
@@ -367,7 +440,9 @@ function annotationPosts() {
     assertEq('warm resume does not create a viewer', viewers.length, viewersBeforeResume);
     assertEq('warm resume resizes the existing viewer', warmViewer.resized, 1);
     assert('warm resume places the same host', warm.ctx.root === warmRoot && warmRoot.parentNode === visible);
+}
 
+async function scenarioWarmEviction() {
     resetWorld();
     const parked = [];
     for (let i = 1; i <= 4; i++) {
@@ -389,7 +464,9 @@ function annotationPosts() {
         assert('survivor ' + (i + 1) + ' keeps its runtime', parked[i].ctx.getResource('pdf') != null);
         assert('survivor ' + (i + 1) + ' viewer stays', parked[i].ctx.getResource('pdf').viewer.destroyed !== true);
     }
+}
 
+async function scenarioOfflineReopen() {
     resetWorld();
     const first = openTab('offline');
     initPdfViewerForWork(first.ctx, { id: 'work-offline', file_path: '/api/pdfs/offline' });
@@ -411,7 +488,9 @@ function annotationPosts() {
     assertEq('offline reopen is not an annotation post', annotationPosts().length, 0);
     assert('offline reopen creates a viewer', viewers.length === viewerCount + 1);
     assert('offline reopen viewer loads that file', String(viewers[viewers.length - 1].src).indexOf('/api/pdfs/offline') === 0);
+}
 
+async function scenarioPendingLeave(app) {
     resetWorld();
     const leaving = openTab('pending');
     const pendingRuntime = createWorkPdfRuntime({ workId: 'work-pending' });
@@ -424,9 +503,7 @@ function annotationPosts() {
         return { name: 'folders', canonicalHash: value, hash: value };
     };
     global.prksCanLeaveTabContextOwnedDraft = function () { return true; };
-    const leaveStart = app.indexOf('function prksCanLeaveTabContext(ctx, nextHash)');
-    const leaveEnd = app.indexOf('function prksCanLeaveTabContextOwnedDraft', leaveStart);
-    vm.runInThisContext(app.slice(leaveStart, leaveEnd), { filename: 'app-leave.js' });
+    const prksCanLeaveTabContext = loadLeaveGuard(app);
     const prompts = [];
     global.confirm = function (message) {
         prompts.push(message);
@@ -449,24 +526,35 @@ function annotationPosts() {
     assertEq('settled sync does not confirm', prksCanLeaveTabContext(leaving.ctx, '#/folders'), true);
     assertEq('settled sync adds no prompt', prompts.length, promptsBeforeClear);
 
-    const pendingCall = 'window.prksHasPendingWorkAnnotationSync(ctx)';
-    const renderCall = app.indexOf(pendingCall, app.indexOf(pendingCall) + 1);
-    const renderIf = app.lastIndexOf('if (', renderCall);
-    const renderFn = new Function(
-        'ctx',
-        'leavingWorkPage',
-        app.slice(renderIf, app.indexOf('const draftLeaveApproved', renderCall)) + '\nreturn null;'
-    );
+    const renderFn = loadRenderLeave(app);
     pendingRuntime.syncState.pendingChanges = true;
     prompts.length = 0;
     global.confirm = function () { prompts.push('render'); return false; };
     const cancelled = renderFn(leaving.ctx, true);
     assertEq('route leave cancel reason', cancelled && cancelled.reason, 'pending-sync');
     assertEq('route leave confirm ran', prompts.length, 1);
+}
 
+async function main() {
+    assertPdfSourceContract();
+    const app = fs.readFileSync(path.join(rootDir, 'frontend/js/app.js'), 'utf8');
+    await scenarioCurrentMount();
+    await scenarioCancelledDeferredSetup();
+    await scenarioStaleCallback();
+    await scenarioRemount();
+    await scenarioMainAndSecondary();
+    await scenarioRouteReplacementFlush(app);
+    await scenarioTabClose();
+    await scenarioColdPark();
+    await scenarioWarmParkResume();
+    await scenarioWarmEviction();
+    await scenarioOfflineReopen();
+    await scenarioPendingLeave(app);
     console.log((failed ? 'FAILED ' : 'OK ') + passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
-})().catch(function (err) {
+}
+
+main().catch(function (err) {
     console.error(err && err.stack ? err.stack : err);
     process.exit(1);
 });

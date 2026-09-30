@@ -8,8 +8,9 @@
  * This module does not store PDF state and does not perform those writes.
  */
 
+/** A mount Work. `id` is required so a typed caller cannot omit the owner. */
 export interface WorkPdfWorkRef {
-  id?: unknown
+  id: unknown
   file_path?: unknown
 }
 
