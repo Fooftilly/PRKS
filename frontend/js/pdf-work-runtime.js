@@ -230,6 +230,7 @@
             generation: null,
             custom: null,
             docId: null,
+            deletable: false,
         };
     }
 
@@ -637,6 +638,7 @@
                 comment: popup.open ? String(popup.comment || '') : '',
                 meta: popup.open ? String(popup.meta || '') : '',
                 epoch: typeof popup.epoch === 'number' ? popup.epoch : 0,
+                deletable: !!(popup.open && popup.deletable),
             };
         };
 
@@ -652,6 +654,9 @@
                 popup.annId = annId;
                 popup.comment = info.comment == null ? '' : String(info.comment);
                 popup.custom = null;
+                popup.deletable = info.deletable === true;
+            } else if (typeof info.deletable === 'boolean') {
+                popup.deletable = info.deletable;
             }
             if (info.pageIndex != null && Number.isFinite(Number(info.pageIndex))) {
                 popup.pageIndex = Number(info.pageIndex);
@@ -677,6 +682,7 @@
             popup.pageIndex = null;
             popup.custom = null;
             popup.docId = null;
+            popup.deletable = false;
             publishAnnotationEditorState();
             return true;
         };
@@ -686,10 +692,12 @@
             const popup = runtime.annotationPopup;
             const directId = captured && captured.directId != null ? String(captured.directId) : '';
             if (directId) {
+                const blocked = popup.open && popup.annId === directId && popup.deletable !== true;
                 return {
                     annId: directId,
                     epoch: null,
                     direct: true,
+                    deletable: !blocked,
                     pageIndex: captured.pageIndex != null && Number.isFinite(Number(captured.pageIndex))
                         ? Number(captured.pageIndex)
                         : null,
@@ -719,6 +727,7 @@
                 viewer: runtime.viewer,
                 viewerToken: runtime.viewerSetupToken,
                 custom: popup.custom && typeof popup.custom === 'object' ? popup.custom : {},
+                deletable: popup.deletable === true,
             };
         };
 

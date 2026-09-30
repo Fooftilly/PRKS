@@ -40,6 +40,7 @@ function emptyView(): AnnotationPopupView {
     meta: '',
     pageIndex: null,
     generation: null,
+    deletable: false,
   }
 }
 
@@ -106,6 +107,7 @@ function applyRead(state: AnnotationPopupView, ctx: AnnotationPopupOwner): void 
   state.meta = read.meta
   state.pageIndex = read.pageIndex
   state.generation = typeof ctx.generation === 'number' ? ctx.generation : null
+  state.deletable = read.deletable
 }
 
 export function syncWorkPdfAnnotationPopup(ctx: AnnotationPopupOwner | null | undefined): boolean {

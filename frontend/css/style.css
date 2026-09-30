@@ -6511,7 +6511,8 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     position: absolute;
     z-index: var(--z-dropdown);
     box-sizing: border-box;
-    width: min(20rem, calc(100vw - 16px));
+    width: min(20rem, 100%);
+    max-width: 100%;
     padding: var(--space-sm);
     background: var(--surface);
     color: var(--text-primary);
@@ -6543,13 +6544,15 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
 
 .pdf-annotation-popup__actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-sm);
     margin-top: 6px;
 }
 
 .pdf-annotation-popup__actions > button {
-    flex: 1;
+    flex: 1 1 8rem;
     margin-top: 0;
+    white-space: nowrap;
 }
 
 .annotation-row {

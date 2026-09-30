@@ -19,7 +19,11 @@ export function PageView({
     documentId: string;
     layout: PageLayout;
     workMode: boolean;
-    onCommentRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    onCommentRequest?: (info: {
+        annotationId: string;
+        pageIndex: number;
+        deletable: boolean;
+    }) => void;
     onCommentDismiss?: (info: { annotationId: string }) => void;
     onDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
 }) {

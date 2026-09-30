@@ -79,6 +79,7 @@ export interface WorkPdfAnnotationPopupRead {
   comment: string
   meta: string
   epoch: number
+  deletable: boolean
 }
 
 export interface WorkPdfOrchestration {
@@ -268,6 +269,7 @@ const EMPTY_ANNOTATION_POPUP: WorkPdfAnnotationPopupRead = {
   comment: '',
   meta: '',
   epoch: 0,
+  deletable: false,
 }
 
 /** Reflects the pdf runtime's comment popup. Does not keep a copy. */
@@ -288,6 +290,7 @@ export function readWorkPdfAnnotationPopup(
     comment: read.open && read.comment != null ? String(read.comment) : '',
     meta: read.open && read.meta != null ? String(read.meta) : '',
     epoch: typeof read.epoch === 'number' ? read.epoch : 0,
+    deletable: !!(read.open && read.deletable),
   }
 }
 

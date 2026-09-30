@@ -6159,7 +6159,15 @@ class WorkspaceTilingTests(_BrowserE2E):
             }""",
             arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
         )
-        page.wait_for_timeout(150)
+        page.wait_for_function(
+            """(ids) => {
+                const a = window.prksGetTabContext(ids.a);
+                const pdfA = a && a.getResource ? a.getResource('pdf') : null;
+                const readA = pdfA && pdfA.readAnnotationPopup ? pdfA.readAnnotationPopup() : null;
+                return !!(readA && readA.open === false);
+            }""",
+            arg={"a": ids["mainTabId"]},
+        )
         after = page.evaluate(
             """(ids) => {
                 const a = window.prksGetTabContext(ids.a);

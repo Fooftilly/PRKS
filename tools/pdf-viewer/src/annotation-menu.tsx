@@ -20,7 +20,11 @@ export function AnnotationMenu({
     onDeleteRequest,
 }: AnnotationSelectionMenuProps & {
     documentId: string;
-    onCommentRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    onCommentRequest?: (info: {
+        annotationId: string;
+        pageIndex: number;
+        deletable: boolean;
+    }) => void;
     onCommentDismiss?: (info: { annotationId: string }) => void;
     onDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
 }) {
@@ -46,7 +50,7 @@ export function AnnotationMenu({
 
     useEffect(() => {
         if (!commentable || !id) return;
-        requestRef.current?.({ annotationId: id, pageIndex });
+        requestRef.current?.({ annotationId: id, pageIndex, deletable: !!actions?.deletable });
         return () => {
             dismissRef.current?.({ annotationId: id });
         };

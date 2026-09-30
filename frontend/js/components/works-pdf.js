@@ -497,6 +497,7 @@ function prksOpenAnnotationPopupSession(owner, annId, item, opts) {
         custom: source.custom && typeof source.custom === 'object' ? source.custom : {},
         docId: viewer && typeof viewer.getDocumentId === 'function' ? viewer.getDocumentId() : null,
         generation: owner && typeof owner.generation === 'number' ? owner.generation : null,
+        deletable: opts && typeof opts.deletable === 'boolean' ? opts.deletable : undefined,
     });
     if (!opened) return false;
     if (!(opts && opts.reason === 'viewer') && viewer && typeof viewer.selectAnnotation === 'function') {
@@ -712,6 +713,7 @@ window.deletePdfAnnotationFromEditor = async function (ctx, captured) {
     if (!pdf || typeof pdf.captureAnnotationPopupTicket !== 'function') return;
     const ticket = pdf.captureAnnotationPopupTicket(captured);
     if (!ticket || !ticket.annId) return;
+    if (ticket.deletable !== true) return;
     // Confirm first — do not hold the dialog behind materialization/handoff.
     // Capability is re-checked after the gate before the viewer mutation.
     const confirmed =
@@ -1045,6 +1047,8 @@ ${commentHtml}
             const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
             const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
             if (!annId) return;
+            const read = pdf && typeof pdf.readAnnotationPopup === 'function' ? pdf.readAnnotationPopup() : null;
+            if (read && read.open && String(read.annId) === String(annId) && read.deletable !== true) return;
             // Confirm immediately. Waiting out materialization before the dialog
             // delayed Cancel/OK for the whole critical section and stranded the
             // opener under load (sidebar may also repaint while waiting).
@@ -3436,7 +3440,10 @@ function prksPdfAnnotationPopupCallbacks(ctx, runtime, generation, viewerRef) {
         onAnnotationCommentRequest: function (info) {
             if (!stillThisViewer() || runtime.mode !== 'work' || !info || !info.annotationId) return;
             if (typeof window.openPdfAnnotationEditorById === 'function') {
-                void window.openPdfAnnotationEditorById(ctx, info.annotationId, { reason: 'viewer' });
+                void window.openPdfAnnotationEditorById(ctx, info.annotationId, {
+                    reason: 'viewer',
+                    deletable: info.deletable === true,
+                });
             }
         },
         onAnnotationCommentDismiss: function (info) {

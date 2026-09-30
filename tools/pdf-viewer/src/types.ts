@@ -24,7 +24,11 @@ export interface PrksPdfViewerOptions {
     onPageChange?: (info: { pageNumber: number; pageCount: number }) => void;
     onAnnotationChange?: (event: PrksAnnotationEvent) => void;
     onAnnotationSelect?: (info: { annotationId: string; pageIndex: number }) => void;
-    onAnnotationCommentRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    onAnnotationCommentRequest?: (info: {
+        annotationId: string;
+        pageIndex: number;
+        deletable: boolean;
+    }) => void;
     onAnnotationCommentDismiss?: (info: { annotationId: string }) => void;
     onAnnotationDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
     onError?: (error: Error) => void;

@@ -164,10 +164,25 @@ function testCloseOtherIdDoesNotClearTheOpenPopup() {
     runtime.destroy();
 }
 
+function testLockedAnnotationIsNotDeletable() {
+    const runtime = createWorkPdfRuntime({ workId: 'work-a' });
+    runtime.viewer = viewerStub('v1');
+    runtime.openAnnotationPopup({ annId: 'locked', comment: 'keep', pageIndex: 0, deletable: false });
+    assertEq('locked flag', runtime.readAnnotationPopup().deletable, false);
+    const blocked = runtime.captureAnnotationPopupTicket({ annId: 'locked' });
+    assertEq('locked ticket', blocked && blocked.deletable, false);
+    runtime.openAnnotationPopup({ annId: 'locked', deletable: true });
+    assertEq('same session records deletable', runtime.readAnnotationPopup().deletable, true);
+    const allowed = runtime.captureAnnotationPopupTicket({ annId: 'locked' });
+    assertEq('unlocked ticket', allowed && allowed.deletable, true);
+    runtime.destroy();
+}
+
 testOpenAndCloseDoNotReplaceTheViewer();
 testStaleCompletionDoesNotMatchPopupB();
 testMainAndSecondarySessionsStayApart();
 testCloseOtherIdDoesNotClearTheOpenPopup();
+testLockedAnnotationIsNotDeletable();
 
 console.log(passed + ' passed, ' + failed + ' failed');
 if (failed) process.exit(1);
