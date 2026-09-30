@@ -72,7 +72,9 @@ class WorkPanelReadContractTests(unittest.TestCase):
         self.assertNotIn("prksVueRefreshWorkPanelRead", _ROLES)
         self.assertIn("prksRefreshOwnedWorkPanelRead", _ROLES)
         self.assertIn("prksEffectiveWorkDetailRoles", _UI)
-        self.assertLess(_TAGS.index("await root.prksSync.store.listOperations()"), _TAGS.index("prksVueRefreshWorkPanelRead"))
+        self.assertNotIn("prksVueRefreshWorkPanelRead", _TAGS)
+        self.assertIn("prksRefreshOwnedWorkPanelTags", _TAGS)
+        self.assertLess(_TAGS.index("if (!live(ctx, state)) return;"), _TAGS.index("store.coalesceWorkTag"))
         self.assertIn("prksEffectiveWorkTags(work, state.operations)", _TAGS)
 
     def test_view_shell_keeps_editor_hosts(self):

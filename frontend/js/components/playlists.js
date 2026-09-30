@@ -336,8 +336,12 @@ async function updatePlaylist(playlistId, fields, options) {
  * removing all set the same scalar on the WORK. Both names are kept so their
  * callers do not change.
  */
-async function prksSetWorkPlaylist(workId, playlistIdOrNull, knownObserved) {
+async function prksSetWorkPlaylist(workId, playlistIdOrNull, knownObserved, still) {
     const observed = knownObserved || await prksAcknowledgedWorkPlaylist(workId);
+    /* Recheck the caller's session after the acknowledged-base read, immediately
+     * before the durable write. A failed fence is a silent stale no-op, not an
+     * offline or base-unavailable error. This wrapper owns that check. */
+    if (typeof still === 'function' && !still()) return null;
     if (!observed) {
         /* Unknown is not empty: without the revision this membership was
          * measured against, it would have to guess 0 and could silently
@@ -356,19 +360,20 @@ async function prksSetWorkPlaylist(workId, playlistIdOrNull, knownObserved) {
     return null;
 }
 
-async function addWorkToPlaylist(playlistId, workId) {
-    return prksSetWorkPlaylist(workId, playlistId);
+async function addWorkToPlaylist(playlistId, workId, still) {
+    return prksSetWorkPlaylist(workId, playlistId, null, still);
 }
 
-async function removeWorkFromPlaylist(playlistId, workId) {
+async function removeWorkFromPlaylist(playlistId, workId, still) {
     /* Aimed at the playlist the video is actually in, exactly as the canonical
      * endpoint is: a removal naming some other playlist changes nothing. The
      * base read here is the one the write then uses, rather than a second. */
     const observed = await prksAcknowledgedWorkPlaylist(workId);
+    if (typeof still === 'function' && !still()) return null;
     if (observed && observed.playlist_id && observed.playlist_id !== String(playlistId)) {
         return null;
     }
-    return prksSetWorkPlaylist(workId, '', observed);
+    return prksSetWorkPlaylist(workId, '', observed, still);
 }
 
 /**
@@ -671,6 +676,9 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
             prksRightPanelOwnedBy(ctx, node || panel)
         );
     };
+    function playlistStill() {
+        return ownsPanel(panel);
+    }
     if (!ownsPanel(panel)) return;
     // Reflect the current state immediately: a card mounted AFTER the runtime
     // already left 'online' must never briefly expose live controls.
@@ -827,9 +835,10 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
 
     setBtn.onclick = async () => {
         const pid = String(hidden.value || '').trim();
-        if (!pid) return;
+        if (!pid || !ownsPanel(panel)) return;
         try {
-            const coherenceToken = await addWorkToPlaylist(pid, wid);
+            if (!playlistStill()) return;
+            const coherenceToken = await addWorkToPlaylist(pid, wid, playlistStill);
             if (!ownsPanel(status)) return;
             if (status) status.textContent = 'Playlist set.';
             // Refresh current work so the UI shows the selected playlist title consistently.
@@ -863,7 +872,8 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
             return;
         }
         try {
-            const coherenceToken = await removeWorkFromPlaylist(currentPid, wid);
+            if (!playlistStill()) return;
+            const coherenceToken = await removeWorkFromPlaylist(currentPid, wid, playlistStill);
             if (!ownsPanel(panel)) return;
             input.value = '';
             hidden.value = '';
@@ -899,7 +909,11 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
             errEl.textContent = '';
             errEl.classList.add('hidden');
         }
-        window.__prksPendingPlaylistAttach = { workId: wid };
+        window.__prksPendingPlaylistAttach = {
+            workId: wid,
+            tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+            generation: generation,
+        };
         prksSuppressPlaylistIndexCreateOrigin();
         if (typeof openModal === 'function') openModal('playlist-modal');
     };

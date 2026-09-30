@@ -665,8 +665,13 @@ function prksFolderSaveMessage(error, action) {
  * ends -- a Work is in at most ONE folder, so filing, moving and clearing all
  * set the same scalar. Both names are kept so their callers do not change.
  */
-async function prksFileWorkInFolder(workId, folderIdOrNull) {
+async function prksFileWorkInFolder(workId, folderIdOrNull, still) {
     const observed = await prksAcknowledgedWorkFolder(workId);
+    /* The Work-panel handler's session fence. A failed check is a stale
+     * no-op, not an unprepared base: the panel may have moved on while this
+     * read was in flight. This wrapper owns that check. The durable setter
+     * does not. */
+    if (typeof still === 'function' && !still()) return;
     if (!observed) {
         /* Unknown is not empty: without the revision this filing was measured
          * against, it would have to guess 0 and could silently overwrite
@@ -685,12 +690,12 @@ async function prksFileWorkInFolder(workId, folderIdOrNull) {
     }
 }
 
-async function addWorkToFolder(folderId, workId) {
-    return prksFileWorkInFolder(workId, folderId);
+async function addWorkToFolder(folderId, workId, still) {
+    return prksFileWorkInFolder(workId, folderId, still);
 }
 
-async function patchWorkFolder(workId, folderIdOrNull) {
-    return prksFileWorkInFolder(workId, folderIdOrNull);
+async function patchWorkFolder(workId, folderIdOrNull, still) {
+    return prksFileWorkInFolder(workId, folderIdOrNull, still);
 }
 
 /**

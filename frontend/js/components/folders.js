@@ -1844,6 +1844,15 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     const wid = work && work.id ? String(work.id) : '';
     if (!wid) return;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const generation = ctx && ctx.generation;
+    function folderStill() {
+        if (!ctx || ctx.destroyed) return false;
+        if (typeof prksTabContextOwnsEntityRoute === 'function' &&
+            !prksTabContextOwnsEntityRoute(ctx, generation, 'work', wid, 'work')) return false;
+        const panel = document.getElementById('panel-content');
+        if (panel && panel.dataset.prksOwnerTabId && panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return false;
+        return true;
+    }
     const editBtn = document.getElementById('prks-work-folder-edit-btn');
     const status = document.getElementById('prks-work-folder-status');
     if (editBtn && editBtn.dataset.bound !== '1') {
@@ -1889,8 +1898,9 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     }
 
     async function assignToNewFolderAndRefresh(newFolderId, message) {
-        if (typeof patchWorkFolder !== 'function') return;
-        const coherenceToken = await patchWorkFolder(wid, newFolderId);
+        if (!folderStill() || typeof patchWorkFolder !== 'function') return;
+        const coherenceToken = await patchWorkFolder(wid, newFolderId, folderStill);
+        if (!folderStill()) return;
         folderRows = await fetchFolders();
         if (!Array.isArray(folderRows)) folderRows = [];
         if (status) status.textContent = message || 'Folder set.';
@@ -1972,7 +1982,11 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     }
 
     newBtn.onclick = () => {
-        window.__prksPendingWorkFolderAttach = { workId: wid };
+        window.__prksPendingWorkFolderAttach = {
+            workId: wid,
+            tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+            generation: generation,
+        };
         const titleEl = document.getElementById('folder-title');
         const descEl = document.getElementById('folder-description');
         const parentInputEl = document.getElementById('folder-parent-search');
@@ -1997,10 +2011,12 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
 
     setBtn.onclick = async () => {
         const pid = String(hidden.value || '').trim();
-        if (!pid) return;
+        if (!pid || !folderStill()) return;
         try {
             if (typeof patchWorkFolder !== 'function') return;
-            const coherenceToken = await patchWorkFolder(wid, pid);
+            if (!folderStill()) return;
+            const coherenceToken = await patchWorkFolder(wid, pid, folderStill);
+            if (!folderStill()) return;
             if (status) status.textContent = 'Folder updated.';
             if (typeof fetchWorkDetails === 'function') {
                 const _uw = await fetchWorkDetails(wid);
@@ -2022,8 +2038,9 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
 
     clearBtn.onclick = async () => {
         try {
-            if (typeof patchWorkFolder !== 'function') return;
-            const coherenceToken = await patchWorkFolder(wid, null);
+            if (!folderStill() || typeof patchWorkFolder !== 'function') return;
+            const coherenceToken = await patchWorkFolder(wid, null, folderStill);
+            if (!folderStill()) return;
             input.value = '';
             hidden.value = '';
             if (status) status.textContent = 'Removed from folder.';

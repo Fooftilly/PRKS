@@ -6111,25 +6111,35 @@ function initForms() {
             const pending = window.__prksPendingWorkFolderAttach;
             if (pending && pending.workId && typeof patchWorkFolder === 'function') {
                 const attachWid = String(pending.workId);
+                const opener = pending.tabId && typeof prksGetTabContext === 'function'
+                    ? prksGetTabContext(String(pending.tabId)) : null;
+                const still = function () {
+                    return typeof prksCapturedWorkPanelStill === 'function' &&
+                        prksCapturedWorkPanelStill(pending);
+                };
                 window.__prksPendingWorkFolderAttach = null;
                 closeModals();
+                if (!still()) return;
                 let attachCoherenceToken = null;
                 try {
-                    attachCoherenceToken = await patchWorkFolder(attachWid, data.id);
+                    attachCoherenceToken = await patchWorkFolder(attachWid, data.id, still);
                 } catch (e) {
-                    await prksAlertMessage(
-                        (e && e.message) || 'Folder created but could not assign this file.',
-                        'Error'
-                    );
+                    if (still()) {
+                        await prksAlertMessage(
+                            (e && e.message) || 'Folder created but could not assign this file.',
+                            'Error'
+                        );
+                    }
                 }
+                if (!still()) return;
                 if (typeof fetchWorkDetails === 'function') {
                     const _aw = await fetchWorkDetails(attachWid);
                     if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
                         void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
                     }
-                    if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(ownerCtx, attachWid, _aw)) {
-                        if (ownerCtx && ownerCtx.ui) ownerCtx.ui.workFolderEditing = false;
-                        if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(ownerCtx) : false) {
+                    if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(opener, attachWid, _aw)) {
+                        if (opener && opener.ui) opener.ui.workFolderEditing = false;
+                        if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(opener) : false) {
                             updatePanelContent('details');
                         }
                     }
@@ -6189,21 +6199,28 @@ function initForms() {
                 // membership names the new playlist, so it is ordered behind
                 // the creation automatically.
                 const pending = window.__prksPendingPlaylistAttach;
-                if (pending && pending.workId) {
+                const still = function () {
+                    return typeof prksCapturedWorkPanelStill === 'function' &&
+                        prksCapturedWorkPanelStill(pending);
+                };
+                let attachedWork = false;
+                if (pending && pending.workId && still()) {
                     try {
-                        await addWorkToPlaylist(newId, pending.workId);
+                        await addWorkToPlaylist(newId, pending.workId, still);
+                        attachedWork = !!still();
                     } catch (_e) {}
-                    window.__prksPendingPlaylistAttach = null;
                 }
-                // Refresh select controls if mounted.
-                if (typeof window.__prksRefreshPlaylistSelects === 'function') {
+                if (pending) window.__prksPendingPlaylistAttach = null;
+                // Refresh select controls only when the captured Work panel
+                // still owns the attachment. A stale opener must not repaint
+                // whichever pane is focused now.
+                if (attachedWork && typeof window.__prksRefreshPlaylistSelects === 'function') {
                     await window.__prksRefreshPlaylistSelects(newId);
                 }
-                if (typeof window.__prksRefreshAllPlaylistSelects === 'function') {
+                if (attachedWork && typeof window.__prksRefreshAllPlaylistSelects === 'function') {
                     await window.__prksRefreshAllPlaylistSelects(newId);
                 }
                 // Navigate only when playlist creation came from the playlists index (not from New File flow).
-                const attachedWork = !!(pending && pending.workId);
                 const createTabId = typeof window.prksTakePlaylistIndexCreateTabId === 'function'
                     ? window.prksTakePlaylistIndexCreateTabId()
                     : '';
