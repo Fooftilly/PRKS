@@ -113,7 +113,14 @@ function prksSyncResearchNotesState(notes, entry) {
     notes.saveError = entry.state === 'error';
 }
 
-function prksSyncLiveResearchDraft(workId, entry, generation) {
+function prksLiveResearchDraftStatus(entry, result) {
+    if (!entry || entry.state === 'error') return 'Error saving changes';
+    if (entry.state === 'saving') return 'Saving...';
+    if (entry.state === 'drafting') return 'Drafting...';
+    return prksResearchNotesStatusForResult(result && result.code, !!(result && result.pending));
+}
+
+function prksSyncLiveResearchDraft(workId, entry, generation, result) {
     if (!entry || typeof prksForEachLiveTabContext !== 'function') return;
     prksForEachLiveTabContext(function (ctx) {
         if (entry.ownerTabId && String(ctx.tabId) !== String(entry.ownerTabId)) return;
@@ -126,15 +133,7 @@ function prksSyncLiveResearchDraft(workId, entry, generation) {
         const generationMoved = typeof generation === 'number' && ctx.generation !== generation;
         if (generationMoved && !notes) return;
         const status = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
-        if (status) {
-            status.innerText = entry.state === 'error'
-                ? 'Error saving changes'
-                : entry.state === 'saving'
-                  ? 'Saving...'
-                  : entry.state === 'drafting'
-                    ? 'Drafting...'
-                    : 'Waiting to sync';
-        }
+        if (status) status.innerText = prksLiveResearchDraftStatus(entry, result);
         if (ctx.tabId && typeof window.prksWorkspaceRefreshTabStatus === 'function') {
             window.prksWorkspaceRefreshTabStatus(ctx.tabId);
         }
@@ -1588,7 +1587,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
-                prksSyncLiveResearchDraft(id, transient, saveGeneration);
+                prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: code, pending: pending });
                 prksPruneResearchDrafts();
             }
             if (!localApplied && !transientApplied) return undefined;
@@ -1615,7 +1614,7 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
-                prksSyncLiveResearchDraft(id, transient, saveGeneration);
+                prksSyncLiveResearchDraft(id, transient, saveGeneration, { code: 'failed', pending: false });
             }
             if (!applied && !transientApplied) return;
             if (prksResearchNotesMayPaint(owner, id, saveGeneration)) {

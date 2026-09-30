@@ -61,6 +61,7 @@ type NotesWindow = {
   prksWorkNoteOperations?: (rows: unknown, workId: string, kind: string) => unknown[]
   prksWorkNoteObserved?: (ctx: WorkCtx, kind: string) => { value: string; revision: number } | null
   prksPendingWorkNoteText?: (workId: string, kind: string, fallback: string) => string
+  prksOfflineRuntimeState?: () => string
 }
 
 const notesWindow = window as unknown as NotesWindow
@@ -94,6 +95,23 @@ function holdResearchNotesSave(workId = 'work-a') {
       return started
     },
   }
+}
+
+function installRefreshedNotes(held: ReturnType<typeof holdResearchNotesSave>) {
+  const started = held.refresh()
+  const notes = {
+    pendingSave: true,
+    drafting: false,
+    saveError: false,
+    editGeneration: 0,
+    saveSequence: 1,
+    latestSaveToken: 1,
+    latestSaveEditGeneration: 0,
+    settledSaveToken: 0,
+  }
+  held.ctx.setResource('workNotes', notes)
+  held.status.innerText = 'Saving...'
+  return { started, notes }
 }
 
 beforeAll(() => {
@@ -177,30 +195,43 @@ describe('work research notes session', () => {
   })
 
   it('settles save 1 onto a same-Work refresh that has no newer edit', async () => {
-    const held = holdResearchNotesSave()
-    expect(held.status.innerText).toBe('Saving...')
-    const started = held.refresh()
-    const notes = {
-      pendingSave: true,
-      drafting: false,
-      saveError: false,
-      editGeneration: 0,
-      saveSequence: 1,
-      latestSaveToken: 1,
-      latestSaveEditGeneration: 0,
-      settledSaveToken: 0,
+    const prior = {
+      refresh: notesWindow.prksRefreshPendingWorkNotes,
+      ops: notesWindow.prksWorkNoteOperations,
+      offline: notesWindow.prksOfflineRuntimeState,
     }
-    held.ctx.setResource('workNotes', notes)
-    held.status.innerText = 'Saving...'
-    held.releases[0]({ code: 'saved' })
-    await held.pending
-    expect(held.ctx.generation).not.toBe(started)
-    expect(notes.pendingSave).toBe(false)
-    expect(notes.drafting).toBe(false)
-    expect(notes.saveError).toBe(false)
-    expect(notes.settledSaveToken).toBe(notes.latestSaveToken)
-    expect(held.status.innerText).toBe('Waiting to sync')
-    expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
+    const cases = [
+      { queued: false, offline: false, status: 'All changes saved' },
+      { queued: true, offline: false, status: 'Waiting to sync' },
+      { queued: true, offline: true, status: 'Offline · saved locally' },
+    ]
+    try {
+      for (const item of cases) {
+        notesWindow.prksResetResearchDraftsForTest()
+        notesWindow.prksDestroyAllTabContexts()
+        document.body.innerHTML = ''
+        notesWindow.prksRefreshPendingWorkNotes = async () => (item.queued ? [{}] : [])
+        notesWindow.prksWorkNoteOperations = () => (item.queued ? [{}] : [])
+        notesWindow.prksOfflineRuntimeState = () => (item.offline ? 'offline' : 'online')
+        const held = holdResearchNotesSave()
+        expect(held.status.innerText).toBe('Saving...')
+        const { started, notes } = installRefreshedNotes(held)
+        held.releases[0]({ code: 'saved' })
+        await held.pending
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(held.ctx.generation).not.toBe(started)
+        expect(notes.pendingSave).toBe(false)
+        expect(notes.drafting).toBe(false)
+        expect(notes.saveError).toBe(false)
+        expect(notes.settledSaveToken).toBe(notes.latestSaveToken)
+        expect(held.status.innerText).toBe(item.status)
+        expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
+      }
+    } finally {
+      notesWindow.prksRefreshPendingWorkNotes = prior.refresh
+      notesWindow.prksWorkNoteOperations = prior.ops
+      notesWindow.prksOfflineRuntimeState = prior.offline
+    }
   })
 
   it('does not let save 1 settle a newer same-Work save', async () => {
