@@ -829,6 +829,62 @@ async function deleteWork(w_id, ownerCtx) {
     }
 }
 
+function prksWorkDetailsShellHtml(shell) {
+    const editorRegionId = shell.editorRegionId || 'work-notes-editor-region';
+    let leftPane = '';
+    if (shell.kind === 'pdf') {
+        leftPane = shell.hasFile
+            ? '<div class="work-pdf-pane"><div data-prks-role="pdf-viewer"></div></div>'
+            : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No PDF file attached.</p></div>';
+    } else if (shell.kind === 'video') {
+        leftPane = shell.viewerHtml
+            || '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>';
+    } else {
+        leftPane = '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No file attached.</p></div>';
+    }
+    const header = shell.showHeader
+        ? `
+            <div class="prks-page-header page-header page-header--work">
+                <div class="card-heading-row card-heading-row--wrap">
+                    <h2 class="page-header--work-title">${prksEscapeHtmlLite(shell.title || 'Document')}</h2>
+                    <span data-prks-role="work-header-doc-type-slot">${shell.docTypeHtml || ''}</span>
+                </div>
+                ${shell.relSummaryHtml || ''}
+            </div>
+        `
+        : '';
+    return `
+        <div class="work-detail">
+            ${header}
+            <div class="document-view document-view--work">
+                <div class="work-main-column">
+                    <div class="work-workspace" data-work-id="${prksEscapeAttr(shell.workId)}">
+                        ${leftPane}
+                        <div class="work-split-handle" role="separator" aria-orientation="horizontal" aria-label="Resize between document and research notes" tabindex="0">
+                            <span class="work-split-handle-grip" aria-hidden="true"></span>
+                        </div>
+                        <div data-prks-role="work-research-notes-anchor">
+                        <div class="work-notes-pane">
+                            <div class="work-notes-pane-header">
+                                <h3 class="work-notes-title">Research Notes</h3>
+                                <div class="work-notes-pane-header-actions">
+                                    <button type="button" class="work-notes-toggle-btn" data-prks-role="work-notes-collapse-btn" aria-expanded="true" aria-controls="${editorRegionId}" aria-label="Collapse research notes editor" title="Collapse notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true"><svg class="work-notes-toggle-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 13 12 19 17.5 13"/><polyline points="6.5 6 12 12 17.5 6"/></svg></span></button>
+                                    <div data-prks-role="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
+                                    <div data-prks-role="editor-status" class="work-editor-status"></div>
+                                </div>
+                            </div>
+                            <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" id="${editorRegionId}">
+                                <textarea data-prks-role="research-notes-editor"></textarea>
+                            </div>
+                        </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 async function renderWorkDetails(ctx, work, requestCtx) {
     const generation = requestCtx && requestCtx.generation;
     const routeSignal = requestCtx && requestCtx.signal;
@@ -913,49 +969,16 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         }
     }
 
-    let leftPane = '';
-    if (inferredKind === 'pdf') {
-        leftPane = work.file_path
-            ? `<div class="work-pdf-pane"><div data-prks-role="pdf-viewer"></div></div>`
-            : `<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No PDF file attached.</p></div>`;
-    } else if (inferredKind === 'video') {
-        leftPane =
+    let viewerHtml = '';
+    if (inferredKind === 'video') {
+        viewerHtml =
             videoModule && typeof window.renderVideoViewerPane === 'function'
                 ? window.renderVideoViewerPane(work)
-                : `<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>`;
-    } else {
-        leftPane = `<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No file attached.</p></div>`;
+                : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>';
     }
-
-    let mainContent = `
-        <div class="work-main-column">
-            <div class="work-workspace" data-work-id="${prksEscapeAttr(work.id)}">
-                ${leftPane}
-                <div class="work-split-handle" role="separator" aria-orientation="horizontal" aria-label="Resize between document and research notes" tabindex="0">
-                    <span class="work-split-handle-grip" aria-hidden="true"></span>
-                </div>
-                <div data-prks-role="work-research-notes-anchor">
-                <div class="work-notes-pane">
-                    <div class="work-notes-pane-header">
-                        <h3 class="work-notes-title">Research Notes</h3>
-                        <div class="work-notes-pane-header-actions">
-                            <button type="button" class="work-notes-toggle-btn" data-prks-role="work-notes-collapse-btn" aria-expanded="true" aria-controls="${ctx.domId('work-notes-editor-region')}" aria-label="Collapse research notes editor" title="Collapse notes"><span class="work-notes-toggle-btn__icon" aria-hidden="true"><svg class="work-notes-toggle-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round"><polyline points="6.5 13 12 19 17.5 13"/><polyline points="6.5 6 12 12 17.5 6"/></svg></span></button>
-                            <div data-prks-role="annotation-sync-status" class="work-annotation-sync-status work-annotation-sync-status--hidden" aria-live="polite"></div>
-                            <div data-prks-role="editor-status" class="work-editor-status"></div>
-                        </div>
-                    </div>
-                    <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" id="${ctx.domId('work-notes-editor-region')}">
-                        <textarea data-prks-role="research-notes-editor"></textarea>
-                    </div>
-                </div>
-                </div>
-            </div>
-        </div>
-    `;
 
     if (typeof ctx.setEntity === 'function') ctx.setEntity('work', work);
     const workTitle = String((work && work.title) || '').trim();
-    const headerTitle = workTitle ? prksEscapeHtmlLite(workTitle) : 'Document';
     const pdfViewerActive = inferredKind === 'pdf' && !!work.file_path;
     const rolesForRel =
         typeof prksEffectiveWorkDetailRoles === 'function'
@@ -995,26 +1018,24 @@ async function renderWorkDetails(ctx, work, requestCtx) {
                   ],
               })
             : '';
-    const workHeader = pdfViewerActive
-        ? ''
-        : `
-            <div class="prks-page-header page-header page-header--work">
-                <div class="card-heading-row card-heading-row--wrap">
-                    <h2 class="page-header--work-title">${headerTitle}</h2>
-                    <span data-prks-role="work-header-doc-type-slot">${typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : ''}</span>
-                </div>
-                ${relSummaryHtml}
-            </div>
-        `;
-
-    container.innerHTML = `
-        <div class="work-detail">
-            ${workHeader}
-            <div class="document-view document-view--work">
-                ${mainContent}
-            </div>
-        </div>
-    `;
+    const shell = {
+        workId: String(work.id),
+        generation: typeof generation === 'number' ? generation : null,
+        kind: inferredKind === 'pdf' || inferredKind === 'video' ? inferredKind : 'empty',
+        hasFile: !!work.file_path,
+        showHeader: !pdfViewerActive,
+        title: workTitle || 'Document',
+        docTypeHtml: typeof prksDocTypeBadgeHtml === 'function' ? prksDocTypeBadgeHtml(work.doc_type) : '',
+        relSummaryHtml: relSummaryHtml,
+        viewerHtml: viewerHtml,
+        editorRegionId: ctx.domId('work-notes-editor-region'),
+    };
+    const presented = typeof prksVuePresentWorkMainSurface === 'function' &&
+        prksVuePresentWorkMainSurface(ctx, shell) === true;
+    if (!presented) {
+        if (typeof prksVueDismissWorkMainSurface === 'function') prksVueDismissWorkMainSurface(ctx);
+        container.innerHTML = prksWorkDetailsShellHtml(shell);
+    }
 
     const notesTa = ctx.query('[data-prks-role="research-notes-editor"]');
     if (notesTa) {

@@ -1,0 +1,119 @@
+/**
+ * Mounts the Work tile shell for one TabContext.
+ * Video HTML comes from renderVideoViewerPane. The PDF host is filled by
+ * initPdfViewerForWork. Research Notes mount into the anchor afterwards.
+ */
+import { h, render } from 'vue'
+import WorkMainSurface from './WorkMainSurface.vue'
+
+export type WorkMainSurfaceKind = 'pdf' | 'video' | 'empty'
+
+export interface WorkMainSurfaceModel {
+  workId: string
+  generation?: number | null
+  kind: WorkMainSurfaceKind
+  hasFile: boolean
+  showHeader: boolean
+  title: string
+  docTypeHtml: string
+  relSummaryHtml: string
+  viewerHtml: string
+  editorRegionId: string
+}
+
+export interface WorkMainSurfaceOwner {
+  tabId?: unknown
+  destroyed?: boolean
+  root?: ParentNode | null
+  ui?: object | null
+  generation?: number
+  isCurrent?: (generation: number) => boolean
+  getEntity?: (type: string) => { id?: unknown } | null
+  getResource?: (name: string) => unknown
+  setResource?: (name: string, value: unknown, disposer?: () => void) => unknown
+}
+
+interface MountedSurface {
+  root: HTMLElement
+  workId: string
+  tabId: string
+}
+
+const mountedByTab = new Map<string, MountedSurface>()
+
+function unmountRecord(record: MountedSurface | undefined): void {
+  if (record) render(null, record.root)
+}
+
+export function dismissWorkMainSurface(ctx?: { tabId?: unknown }): void {
+  if (ctx && ctx.tabId != null && ctx.tabId !== '') {
+    const tabId = String(ctx.tabId)
+    const record = mountedByTab.get(tabId)
+    mountedByTab.delete(tabId)
+    unmountRecord(record)
+    return
+  }
+  for (const record of mountedByTab.values()) unmountRecord(record)
+  mountedByTab.clear()
+}
+
+export function presentWorkMainSurface(
+  ctx: WorkMainSurfaceOwner,
+  model: WorkMainSurfaceModel,
+): boolean {
+  if (!ctx || ctx.destroyed || !ctx.ui || !ctx.root) return false
+  if (!(ctx.root instanceof HTMLElement)) return false
+  const workId = String(model && model.workId != null ? model.workId : '')
+  if (!workId) return false
+  if (
+    typeof model.generation === 'number' &&
+    typeof ctx.isCurrent === 'function' &&
+    !ctx.isCurrent(model.generation)
+  ) {
+    return false
+  }
+  const live = ctx.getEntity ? ctx.getEntity('work') : null
+  if (!live || String(live.id || '') !== workId) return false
+  const tabId = String(ctx.tabId || '')
+  const root = ctx.root
+  const previous = mountedByTab.get(tabId)
+  if (previous && previous.root !== root) unmountRecord(previous)
+  if (typeof ctx.getResource === 'function' && typeof ctx.setResource === 'function') {
+    if (ctx.getResource('workMainSurface') !== 'mounted') {
+      ctx.setResource('workMainSurface', 'mounted', () => dismissWorkMainSurface(ctx))
+    }
+  }
+  const kind = model.kind === 'pdf' || model.kind === 'video' ? model.kind : 'empty'
+  render(
+    h(WorkMainSurface, {
+      showHeader: !!model.showHeader,
+      title: String(model.title || 'Document'),
+      docTypeHtml: String(model.docTypeHtml || ''),
+      relSummaryHtml: String(model.relSummaryHtml || ''),
+      workId,
+      kind,
+      hasFile: !!model.hasFile,
+      viewerHtml: String(model.viewerHtml || ''),
+      editorRegionId: String(model.editorRegionId || 'work-notes-editor-region'),
+    }),
+    root,
+  )
+  mountedByTab.set(tabId, { root, workId, tabId })
+  return true
+}
+
+export function registerWorkMainSurfaceBridge(root: Window & typeof globalThis): void {
+  const target = root as Window & {
+    prksVuePresentWorkMainSurface?: (
+      ctx: WorkMainSurfaceOwner,
+      model: WorkMainSurfaceModel,
+    ) => boolean
+    prksVueDismissWorkMainSurface?: (ctx?: { tabId?: unknown }) => void
+  }
+  target.prksVuePresentWorkMainSurface = (ctx, model) => presentWorkMainSurface(ctx, model)
+  target.prksVueDismissWorkMainSurface = (ctx) => dismissWorkMainSurface(ctx)
+}
+
+export function resetWorkMainSurfaceForTests(): void {
+  dismissWorkMainSurface()
+}
