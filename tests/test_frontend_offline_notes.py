@@ -137,7 +137,7 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
         body = src[start : src.index("\nfunction prksEnqueueWorkPrivateNoteSave(", start)]
         self.assertIn("prksSync.subscribe", body)
         self.assertIn("prksPrivateNotesRetryTarget", body)
-        self.assertIn("prksEnqueuePrivateNotesSave(liveEditor)", body)
+        self.assertIn("void prksEnqueuePrivateNotesSave(liveEditor)", body)
         self.assertIn("privateNotesBusyRetry:", body)
 
     def test_folder_private_notes_use_durable_set_folder_field(self):

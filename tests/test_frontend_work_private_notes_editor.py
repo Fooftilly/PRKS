@@ -40,6 +40,7 @@ class WorkPrivateNotesEditorContractTests(unittest.TestCase):
         self.assertIn("workPrivateNoteSession", body)
         self.assertIn("scope_busy", body)
         self.assertIn("prksSchedulePrivateNoteBusyRetry", body)
+        self.assertIn("prksReconcileSavedWorkPrivateNote", body)
         self.assertIn("editor.dirty = true", body)
         self.assertNotIn("prksRequest(", body)
         self.assertNotIn("prksOfflineMarkEntityChanged", body)

@@ -115,6 +115,33 @@ function advanceGeneration(owner: WorkCtx) {
   if (panel) panel.dataset.prksOwnerGeneration = String(owner.generation)
 }
 
+function noteHolds(owner: WorkCtx): Record<string, string> | null {
+  const ui = owner.ui as WorkCtx['ui'] & { workPrivateNoteHolds?: Record<string, string> | null }
+  return ui.workPrivateNoteHolds || null
+}
+
+function beginReminderSave(serverNotes: string, nextCode: (saveCount: number) => { code: string } | 'pending') {
+  installShell()
+  const pair = mountPair()
+  pair.ownerA.setEntity('work', work('work-a', serverNotes))
+  const notes = notesField(pair.ownerA, 'work-a')
+  const saves: SaveCall[] = []
+  let releaseSave: (result: { code: string }) => void = () => {}
+  const pending = new Promise<{ code: string }>((resolve) => {
+    releaseSave = resolve
+  })
+  panelWindow.prksWorkNoteObserved = () => ({ value: serverNotes, revision: 1 })
+  panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
+  panelWindow.prksSync = { subscribe: () => () => {} }
+  panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+    saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+    const next = nextCode(saves.length)
+    return next === 'pending' ? pending : Promise.resolve(next)
+  }
+  panelWindow.initPrksPrivateNotesEditor('work', 'work-a', pair.ownerA)
+  return { ...pair, notes, saves, releaseSave, pending }
+}
+
 function notesField(owner: WorkCtx, workId: string) {
   const panel = ownPanel(owner)
   const notes = document.createElement('textarea')
@@ -195,19 +222,9 @@ describe('work private notes session', () => {
 
   it('retries scope_busy on the editor that started the save', async () => {
     vi.useFakeTimers()
-    installShell()
-    const { ownerA } = mountPair()
-    ownerA.setEntity('work', work('work-a', 'saved'))
-    const notes = notesField(ownerA, 'work-a')
-    const saves: SaveCall[] = []
-    panelWindow.prksWorkNoteObserved = () => ({ value: 'saved', revision: 1 })
-    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
-    panelWindow.prksSync = { subscribe: () => () => {} }
-    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
-      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
-      return Promise.resolve({ code: saves.length === 1 ? 'scope_busy' : 'saved' })
-    }
-    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const { ownerA, notes, saves } = beginReminderSave('saved', (count) => (
+      { code: count === 1 ? 'scope_busy' : 'saved' }
+    ))
     notes.value = 'Remember later'
     notes.dispatchEvent(new Event('input', { bubbles: true }))
     panelWindow.prksFlushPendingPrivateNotes(ownerA)
@@ -226,23 +243,9 @@ describe('work private notes session', () => {
 
   it('retries scope_busy through a same-generation replacement editor', async () => {
     vi.useFakeTimers()
-    installShell()
-    const { ownerA } = mountPair()
-    ownerA.setEntity('work', work('work-a', 'saved'))
-    const notes = notesField(ownerA, 'work-a')
-    const saves: SaveCall[] = []
-    let releaseSave: (result: { code: string }) => void = () => {}
-    const pending = new Promise<{ code: string }>((resolve) => {
-      releaseSave = resolve
-    })
-    panelWindow.prksWorkNoteObserved = () => ({ value: 'saved', revision: 1 })
-    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
-    panelWindow.prksSync = { subscribe: () => () => {} }
-    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
-      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
-      return saves.length === 1 ? pending : Promise.resolve({ code: 'saved' })
-    }
-    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const { ownerA, notes, saves, releaseSave } = beginReminderSave('saved', (count) => (
+      count === 1 ? 'pending' : { code: 'saved' }
+    ))
     notes.value = 'Remember later'
     notes.dispatchEvent(new Event('input', { bubbles: true }))
     panelWindow.prksFlushPendingPrivateNotes(ownerA)
@@ -271,23 +274,7 @@ describe('work private notes session', () => {
 
   it('does not retry scope_busy into a newer generation', async () => {
     vi.useFakeTimers()
-    installShell()
-    const { ownerA } = mountPair()
-    ownerA.setEntity('work', work('work-a', 'saved'))
-    const notes = notesField(ownerA, 'work-a')
-    const saves: SaveCall[] = []
-    let releaseSave: (result: { code: string }) => void = () => {}
-    const pending = new Promise<{ code: string }>((resolve) => {
-      releaseSave = resolve
-    })
-    panelWindow.prksWorkNoteObserved = () => ({ value: 'saved', revision: 1 })
-    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
-    panelWindow.prksSync = { subscribe: () => () => {} }
-    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
-      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
-      return pending
-    }
-    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const { ownerA, notes, saves, releaseSave } = beginReminderSave('saved', () => 'pending')
     notes.value = 'Stay on the old generation'
     notes.dispatchEvent(new Event('input', { bubbles: true }))
     panelWindow.prksFlushPendingPrivateNotes(ownerA)
@@ -428,22 +415,7 @@ describe('work private notes session', () => {
   })
 
   it('keeps an unsaved draft when leaving replaces the session before the save fails', async () => {
-    installShell()
-    const { workspace, ownerA, ownerB } = mountPair()
-    ownerA.setEntity('work', work('work-a', 'server'))
-    const notes = notesField(ownerA, 'work-a')
-    const saves: SaveCall[] = []
-    let releaseSave: (result: { code: string }) => void = () => {}
-    const pending = new Promise<{ code: string }>((resolve) => {
-      releaseSave = resolve
-    })
-    panelWindow.prksWorkNoteObserved = () => ({ value: 'server', revision: 1 })
-    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
-    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
-      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
-      return pending
-    }
-    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const { workspace, ownerA, ownerB, notes, saves, releaseSave, pending } = beginReminderSave('server', () => 'pending')
     notes.value = 'Do not drop'
     notes.dispatchEvent(new Event('input', { bubbles: true }))
     panelWindow.prksFlushPendingPrivateNotes(ownerA)
@@ -478,5 +450,57 @@ describe('work private notes session', () => {
     expect(notesB.value).not.toBe('Do not drop')
     expect(ownerB.ui.workPrivateNoteSession?.draftText).not.toBe('Do not drop')
     expect(ownerA.ui.workPrivateNoteSession?.draftText).toBe('Do not drop')
+  })
+
+  it('does not flush a reminder again after the in-flight save succeeds', async () => {
+    const held = beginReminderSave('server', () => 'pending')
+    held.notes.value = 'Already saved'
+    held.notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(held.ownerA)
+    await flushMicrotasks()
+    advanceGeneration(held.ownerA)
+    held.ownerA.setEntity('work', work('work-b', ''))
+    notesField(held.ownerA, 'work-b')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-b', held.ownerA)
+    expect(noteHolds(held.ownerA)?.['work-a']).toBe('Already saved')
+    held.releaseSave({ code: 'saved' })
+    await held.pending
+    await flushMicrotasks()
+    expect(noteHolds(held.ownerA)?.['work-a']).toBeUndefined()
+    advanceGeneration(held.ownerA)
+    held.ownerA.setEntity('work', work('work-a', 'server'))
+    const returned = notesField(held.ownerA, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', held.ownerA)
+    expect(returned.value).not.toBe('Already saved')
+    expect(held.ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+    panelWindow.prksFlushPendingPrivateNotes(held.ownerA)
+    await flushMicrotasks()
+    expect(held.saves).toHaveLength(1)
+
+    resetWorkPrivateNotesForTests()
+    panelWindow.prksResetPrivateNoteDraftsForTest()
+    panelWindow.prksDestroyAllTabContexts()
+    const carried = beginReminderSave('server', () => 'pending')
+    carried.notes.value = 'Already saved'
+    carried.notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(carried.ownerA)
+    await flushMicrotasks()
+    advanceGeneration(carried.ownerA)
+    carried.ownerA.setEntity('work', work('work-a', 'server'))
+    const field = notesField(carried.ownerA, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', carried.ownerA)
+    expect(field.value).toBe('Already saved')
+    expect(carried.ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+    expect(carried.ownerA.ui.workPrivateNoteSession?.state).toBe('drafting')
+    carried.releaseSave({ code: 'saved' })
+    await carried.pending
+    await flushMicrotasks()
+    expect(carried.ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+    expect(carried.ownerA.ui.workPrivateNoteSession?.state).toBe('committed')
+    expect(carried.ownerA.ui.workPrivateNoteSession?.draftText).toBe('Already saved')
+    expect(carried.ownerA.getResource('privateNotesEditor')?.dirty).toBe(false)
+    panelWindow.prksFlushPendingPrivateNotes(carried.ownerA)
+    await flushMicrotasks()
+    expect(carried.saves).toHaveLength(1)
   })
 })

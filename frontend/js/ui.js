@@ -2703,6 +2703,31 @@ function prksTakeRememberedWorkPrivateNote(ctx, workId) {
     return text;
 }
 
+function prksReconcileSavedWorkPrivateNote(ctx, settledSession, workId, content) {
+    if (!ctx || !ctx.ui) return;
+    const saved = String(content);
+    const key = String(workId);
+    const holds = ctx.ui.workPrivateNoteHolds;
+    if (holds && Object.prototype.hasOwnProperty.call(holds, key) && String(holds[key]) === saved) {
+        delete holds[key];
+    }
+    const current = ctx.ui.workPrivateNoteSession;
+    /* The in-flight session stays untouched until this settlement. A carried
+     * session is a later generation's copy and still looks dirty. */
+    if (!current || current === settledSession) return;
+    if (String(current.workId) !== key || String(current.ownerTabId) !== String(ctx.tabId)) return;
+    if (current.promise || current.editGeneration > 0) return;
+    if (String(current.draftText) !== saved) return;
+    current.dirty = false;
+    current.state = 'committed';
+    current.saveError = false;
+    current.updatedAt = Date.now();
+    const live = typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
+    if (!live || String(live.entityType) !== 'work' || String(live.entityId) !== key) return;
+    const shown = live.textarea && live.textarea.isConnected ? String(live.textarea.value) : null;
+    if (shown == null || shown === saved) live.dirty = false;
+}
+
 function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
     if (!ctx || !ctx.ui || workId == null || String(workId) === '') return null;
     const existing = ctx.ui.workPrivateNoteSession;
@@ -2852,7 +2877,7 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         if (!liveEditor) return;
         if (token !== prksPrivateNoteLatestSaveToken(liveEditor)) return;
         if (!prksPrivateNotesRetryStillDirty(liveEditor)) return;
-        prksEnqueuePrivateNotesSave(liveEditor);
+        void prksEnqueuePrivateNotesSave(liveEditor);
     };
     if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.subscribe === 'function') {
         const stop = prksSync.subscribe(function () {
@@ -2957,6 +2982,9 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             session.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
             session.dirty = hasNewerDraft;
             session.updatedAt = Date.now();
+            if (ok && !hasNewerDraft) {
+                prksReconcileSavedWorkPrivateNote(editor.ctx, session, entityId, content);
+            }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
             const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
             if (liveEditor !== editor) return;
