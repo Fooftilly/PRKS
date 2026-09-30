@@ -16,11 +16,14 @@ import {
 import { usePan } from '@embedpdf/plugin-pan/react';
 import { useAnnotation, useAnnotationCapability } from '@embedpdf/plugin-annotation/react';
 import { useHistoryCapability } from '@embedpdf/plugin-history/react';
+import { useSearchCapability } from '@embedpdf/plugin-search/react';
 import { useSelectionCapability } from '@embedpdf/plugin-selection/react';
 import type { PdfAnnotationObject } from '@embedpdf/models';
 import { ViewerController } from './controller';
 import { buildPluginRegistrations, srcToInitialDocument } from './plugins';
 import { PageView } from './page-view';
+import { clearPdfSearchFlight, commitPdfSearch, type PdfSearchFlightSlot } from './search-commit';
+import { PdfSearchBar } from './search-bar';
 import { Toolbar } from './toolbar';
 import { WheelZoom } from './gestures';
 import type {
@@ -66,6 +69,7 @@ function ApiBinder({
     onPageChange?: PrksPdfViewerOptions['onPageChange'];
     onAnnotationSelect?: PrksPdfViewerOptions['onAnnotationSelect'];
 }) {
+    const searchFlight = useRef<PdfSearchFlightSlot>({ current: null });
     const { registry, activeDocumentId } = useRegistry();
     const { provides: docs } = useDocumentManagerCapability();
     const { provides: zoomCap } = useZoomCapability();
@@ -79,6 +83,7 @@ function ApiBinder({
     const { provides: interaction } = useInteractionManager(docId);
     const { provides: annotation } = useAnnotation(docId);
     const { provides: selectionCap } = useSelectionCapability();
+    const { provides: searchCap } = useSearchCapability();
     const scrollStateRef = useRef(scrollState);
     scrollStateRef.current = scrollState;
     const pendingPageRef = useRef(
@@ -283,6 +288,58 @@ function ApiBinder({
                     const scope = selectionCap?.forDocument(activeDocumentId);
                     return !!scope?.getState()?.selecting;
                 },
+                openSearch: () => {
+                    controller.presentSearch();
+                    try {
+                        searchCap?.forDocument(activeDocumentId)?.startSearch();
+                    } catch {
+                        /* document not ready; the bar can still open */
+                    }
+                    controller.focusSearch();
+                },
+                closeSearch: () => {
+                    clearPdfSearchFlight(searchFlight.current);
+                    controller.nextSearchSeq();
+                    controller.dismissSearch();
+                    try {
+                        searchCap?.forDocument(activeDocumentId)?.stopSearch();
+                    } catch {
+                        /* session already stopped */
+                    }
+                },
+                clearSearchMatches: () => {
+                    clearPdfSearchFlight(searchFlight.current);
+                    controller.nextSearchSeq();
+                    const scope = searchCap?.forDocument(activeDocumentId);
+                    if (!scope) return;
+                    try {
+                        const task = scope.searchAllPages('');
+                        if (task && typeof task.toPromise === 'function') {
+                            task.toPromise().catch(() => {});
+                        }
+                    } catch {
+                        /* document not ready */
+                    }
+                },
+                commitSearch: (query, epoch) => {
+                    commitPdfSearch({
+                        query,
+                        epoch,
+                        scope: searchCap?.forDocument(activeDocumentId),
+                        beginSeq: () => controller.nextSearchSeq(),
+                        currentSeq: () => controller.searchSeqCurrent(),
+                        settle: (result) => controller.emitSearchSettled(result),
+                        flight: searchFlight.current,
+                    });
+                },
+                searchNext: () => {
+                    const index = searchCap?.forDocument(activeDocumentId)?.nextResult();
+                    return typeof index === 'number' ? index : -1;
+                },
+                searchPrevious: () => {
+                    const index = searchCap?.forDocument(activeDocumentId)?.previousResult();
+                    return typeof index === 'number' ? index : -1;
+                },
             },
             () => {},
         );
@@ -309,6 +366,7 @@ function ApiBinder({
         annotationCap,
         historyCap,
         selectionCap,
+        searchCap,
         controller,
         mode,
         onPageChange,
@@ -372,6 +430,14 @@ function ViewerTree({
                         />
                     ) : null}
                     <div className="prks-pdf-stage">
+                        {activeDocumentId ? (
+                            <PdfSearchBar
+                                documentId={activeDocumentId}
+                                controller={controller}
+                                ownerTabId={options.ownerTabId}
+                                ownerGeneration={options.ownerGeneration}
+                            />
+                        ) : null}
                         <DocumentContent documentId={activeDocumentId}>
                             {({ isLoading: docLoading, isError, isLoaded }) => {
                                 if (docLoading) {
@@ -436,6 +502,11 @@ export async function createPrksPdfViewer(
     const base = (options.assetBaseUrl || '/vendor/prks-pdf-viewer/').replace(/\/?$/, '/');
     const wasmUrl = new URL(`${base}pdfium.wasm`, window.location.origin).href;
     host.dataset.wasmUrl = wasmUrl;
+    if (options.ownerTabId) {
+        host.dataset.prksOwnerTabId = String(options.ownerTabId);
+        host.dataset.prksOwnerGeneration =
+            options.ownerGeneration == null ? '' : String(options.ownerGeneration);
+    }
     options.target.appendChild(host);
     try {
         await fetch(wasmUrl);

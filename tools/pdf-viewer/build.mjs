@@ -80,6 +80,7 @@ copyLicense('@embedpdf/engines', 'embedpdf-engines');
 copyLicense('@embedpdf/pdfium', 'embedpdf-pdfium');
 copyLicense('@embedpdf/pdfium', 'pdfium');
 copyLicense('@embedpdf/plugin-annotation', 'embedpdf-plugin-annotation');
+copyLicense('@embedpdf/plugin-search', 'embedpdf-plugin-search');
 copyLicense('react', 'react');
 copyLicense('react-dom', 'react-dom');
 

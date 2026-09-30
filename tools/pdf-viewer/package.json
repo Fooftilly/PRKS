@@ -21,6 +21,7 @@
     "@embedpdf/plugin-pan": "2.15.1",
     "@embedpdf/plugin-render": "2.15.1",
     "@embedpdf/plugin-scroll": "2.15.1",
+    "@embedpdf/plugin-search": "2.15.1",
     "@embedpdf/plugin-selection": "2.15.1",
     "@embedpdf/plugin-viewport": "2.15.1",
     "@embedpdf/plugin-zoom": "2.15.1",

@@ -22,6 +22,12 @@ export interface WorkPdfRuntime {
   hasPendingSync?: () => boolean
   flushLastPage?: () => void
   resize?: () => void
+  readSearch?: () => WorkPdfSearchRead
+  openSearch?: () => boolean
+  closeSearch?: () => boolean
+  setSearchQuery?: (query: string) => boolean
+  searchNext?: () => boolean
+  searchPrevious?: () => boolean
 }
 
 export interface WorkPdfOwner {
@@ -37,6 +43,22 @@ export interface WorkPdfOwner {
 export interface WorkPdfMountCapture {
   generation: number
   workId: string
+}
+
+/** Generation captured with a search intent. Rechecked before the runtime call. */
+export interface WorkPdfSearchCapture {
+  generation: number
+}
+
+export type WorkPdfSearchStatus = 'idle' | 'pending' | 'ready' | 'empty'
+
+export interface WorkPdfSearchRead {
+  open: boolean
+  query: string
+  total: number
+  activeIndex: number
+  status: WorkPdfSearchStatus
+  matchCountLabel: string
 }
 
 export interface WorkPdfOrchestration {
@@ -135,6 +157,90 @@ export function intentFlushWorkPdf(ctx: WorkPdfOwner | null | undefined): boolea
   return true
 }
 
+const EMPTY_SEARCH: WorkPdfSearchRead = {
+  open: false,
+  query: '',
+  total: 0,
+  activeIndex: -1,
+  status: 'idle',
+  matchCountLabel: '',
+}
+
+function searchRuntime(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfSearchCapture | null | undefined,
+): WorkPdfRuntime | null {
+  const runtime = runtimeOf(ctx)
+  if (!runtime || runtime._destroyed) return null
+  if (!ctx || typeof ctx.isCurrent !== 'function') return null
+  if (!captured || typeof captured.generation !== 'number' || !ctx.isCurrent(captured.generation)) return null
+  return runtime
+}
+
+/** Reflects the pdf runtime's search session. Does not keep a copy. */
+export function readWorkPdfSearch(ctx: WorkPdfOwner | null | undefined): WorkPdfSearchRead {
+  const runtime = runtimeOf(ctx)
+  if (!runtime || runtime._destroyed || typeof runtime.readSearch !== 'function') return { ...EMPTY_SEARCH }
+  const read = runtime.readSearch()
+  if (!read || typeof read !== 'object') return { ...EMPTY_SEARCH }
+  const status = read.status
+  const known: WorkPdfSearchStatus[] = ['idle', 'pending', 'ready', 'empty']
+  return {
+    open: !!read.open,
+    query: read.query == null ? '' : String(read.query),
+    total: typeof read.total === 'number' && read.total > 0 ? read.total : 0,
+    activeIndex: typeof read.activeIndex === 'number' ? read.activeIndex : -1,
+    status: known.indexOf(status) >= 0 ? status : 'idle',
+    matchCountLabel: read.matchCountLabel == null ? '' : String(read.matchCountLabel),
+  }
+}
+
+export function intentOpenWorkPdfSearch(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfSearchCapture | null | undefined,
+): boolean {
+  const runtime = searchRuntime(ctx, captured)
+  if (!runtime || typeof runtime.openSearch !== 'function') return false
+  return !!runtime.openSearch()
+}
+
+export function intentCloseWorkPdfSearch(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfSearchCapture | null | undefined,
+): boolean {
+  const runtime = searchRuntime(ctx, captured)
+  if (!runtime || typeof runtime.closeSearch !== 'function') return false
+  return !!runtime.closeSearch()
+}
+
+export function intentSetWorkPdfSearchQuery(
+  ctx: WorkPdfOwner | null | undefined,
+  query: string,
+  captured: WorkPdfSearchCapture | null | undefined,
+): boolean {
+  const runtime = searchRuntime(ctx, captured)
+  if (!runtime || typeof runtime.setSearchQuery !== 'function') return false
+  return !!runtime.setSearchQuery(query)
+}
+
+export function intentWorkPdfSearchNext(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfSearchCapture | null | undefined,
+): boolean {
+  const runtime = searchRuntime(ctx, captured)
+  if (!runtime || typeof runtime.searchNext !== 'function') return false
+  return !!runtime.searchNext()
+}
+
+export function intentWorkPdfSearchPrevious(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfSearchCapture | null | undefined,
+): boolean {
+  const runtime = searchRuntime(ctx, captured)
+  if (!runtime || typeof runtime.searchPrevious !== 'function') return false
+  return !!runtime.searchPrevious()
+}
+
 export function intentResizeWorkPdf(ctx: WorkPdfOwner | null | undefined): boolean {
   const runtime = runtimeOf(ctx)
   if (!runtime || runtime._destroyed || typeof runtime.resize !== 'function') return false
@@ -156,10 +262,22 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
     prksIntentFlushWorkPdf?: typeof intentFlushWorkPdf
     prksIntentResizeWorkPdf?: typeof intentResizeWorkPdf
     prksWorkPdfLeaveNeedsConfirm?: typeof workPdfLeaveNeedsConfirm
+    prksReadWorkPdfSearch?: typeof readWorkPdfSearch
+    prksIntentOpenWorkPdfSearch?: typeof intentOpenWorkPdfSearch
+    prksIntentCloseWorkPdfSearch?: typeof intentCloseWorkPdfSearch
+    prksIntentSetWorkPdfSearchQuery?: typeof intentSetWorkPdfSearchQuery
+    prksIntentWorkPdfSearchNext?: typeof intentWorkPdfSearchNext
+    prksIntentWorkPdfSearchPrevious?: typeof intentWorkPdfSearchPrevious
   }
   target.prksReadWorkPdf = readWorkPdf
   target.prksIntentMountWorkPdf = intentMountWorkPdf
   target.prksIntentFlushWorkPdf = intentFlushWorkPdf
   target.prksIntentResizeWorkPdf = intentResizeWorkPdf
   target.prksWorkPdfLeaveNeedsConfirm = workPdfLeaveNeedsConfirm
+  target.prksReadWorkPdfSearch = readWorkPdfSearch
+  target.prksIntentOpenWorkPdfSearch = intentOpenWorkPdfSearch
+  target.prksIntentCloseWorkPdfSearch = intentCloseWorkPdfSearch
+  target.prksIntentSetWorkPdfSearchQuery = intentSetWorkPdfSearchQuery
+  target.prksIntentWorkPdfSearchNext = intentWorkPdfSearchNext
+  target.prksIntentWorkPdfSearchPrevious = intentWorkPdfSearchPrevious
 }

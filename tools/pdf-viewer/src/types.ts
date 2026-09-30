@@ -16,6 +16,9 @@ export interface PrksPdfViewerOptions {
     initialZoom?: 'fit-width' | 'fit-page';
     /** 1-based page to open after the first layout is ready. */
     initialPage?: number;
+    /** Pane owner stamped on the search surface. Search does not store this. */
+    ownerTabId?: string;
+    ownerGeneration?: number | string;
     assetBaseUrl?: string;
     onReady?: (viewer: PrksPdfViewerHandle) => void;
     onPageChange?: (info: { pageNumber: number; pageCount: number }) => void;
@@ -87,4 +90,29 @@ export interface PrksPdfViewerHandle {
     saveCopy(): Promise<ArrayBuffer>;
     getDocumentId(): string | null;
     isSelecting(): boolean;
+    /**
+     * In-document search on this viewer instance. These do not reload the
+     * document or create another viewer.
+     */
+    openSearch(): void;
+    closeSearch(): void;
+    commitSearch(query: string, epoch: number): void;
+    clearSearchMatches(): void;
+    searchNext(): number;
+    searchPrevious(): number;
+    setSearchDriver(driver: PrksPdfSearchDriver | null): void;
+}
+
+export interface PrksPdfSearchDriver {
+    onQuery: (query: string) => void;
+    onNext: () => void;
+    onPrevious: () => void;
+    onClose: () => void;
+    onSettled: (result: { epoch: number; total: number; activeIndex: number }) => void;
+}
+
+export interface PrksPdfSearchSettled {
+    epoch: number;
+    total: number;
+    activeIndex: number;
 }

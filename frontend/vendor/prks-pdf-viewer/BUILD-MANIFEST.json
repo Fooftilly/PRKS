@@ -16,8 +16,8 @@
     "node_modules/react/jsx-runtime.js"
   ],
   "outputSha256": {
-    "js": "a81fdf82f94880f5613a58823a95a74116cccaec8e01666ccafbf3825051363d",
-    "css": "d81a689a3854fc316d9236d43b9e6883b8faef6ee5d8f24fed60e6545004f4ae",
+    "js": "c3ee8b745df38d8fae038e234b06d5435cf110e91c4fd1a7dee0608be3b79581",
+    "css": "2aa01915857d9d12a3753860e8c3f5ad2c26eab0b5ce6ca7e8be28110dff0253",
     "wasm": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
   },
   "embedpdfPatches": [

@@ -2,10 +2,16 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import runtimeSource from '../../../../frontend/js/pdf-work-runtime.js?raw'
 import {
+  intentCloseWorkPdfSearch,
   intentFlushWorkPdf,
   intentMountWorkPdf,
+  intentOpenWorkPdfSearch,
   intentResizeWorkPdf,
+  intentSetWorkPdfSearchQuery,
+  intentWorkPdfSearchNext,
+  intentWorkPdfSearchPrevious,
   readWorkPdf,
+  readWorkPdfSearch,
   registerWorkPdfAdapterBridge,
   workPdfLeaveNeedsConfirm,
   type WorkPdfOwner,
@@ -29,6 +35,13 @@ type PdfWindow = Window & {
     syncState: { pendingChanges: boolean; inFlight: boolean }
     lastPage: { persistNow: () => void; debounceClear: () => void } | null
     viewer: { resize: () => void } | null
+    search?: { epoch: number }
+    applySearchResult?: (result: {
+      epoch?: number
+      total: number
+      activeIndex: number
+      viewer?: unknown
+    }) => boolean
     destroy: () => void
   }
 }
@@ -249,11 +262,83 @@ describe('work PDF adapter', () => {
       prksIntentFlushWorkPdf: typeof intentFlushWorkPdf
       prksIntentResizeWorkPdf: typeof intentResizeWorkPdf
       prksWorkPdfLeaveNeedsConfirm: typeof workPdfLeaveNeedsConfirm
+      prksReadWorkPdfSearch: typeof readWorkPdfSearch
+      prksIntentOpenWorkPdfSearch: typeof intentOpenWorkPdfSearch
+      prksIntentCloseWorkPdfSearch: typeof intentCloseWorkPdfSearch
+      prksIntentSetWorkPdfSearchQuery: typeof intentSetWorkPdfSearchQuery
+      prksIntentWorkPdfSearchNext: typeof intentWorkPdfSearchNext
+      prksIntentWorkPdfSearchPrevious: typeof intentWorkPdfSearchPrevious
     }
     expect(bridge.prksReadWorkPdf).toBe(readWorkPdf)
     expect(bridge.prksIntentMountWorkPdf).toBe(intentMountWorkPdf)
     expect(bridge.prksIntentFlushWorkPdf).toBe(intentFlushWorkPdf)
     expect(bridge.prksIntentResizeWorkPdf).toBe(intentResizeWorkPdf)
     expect(bridge.prksWorkPdfLeaveNeedsConfirm).toBe(workPdfLeaveNeedsConfirm)
+    expect(bridge.prksReadWorkPdfSearch).toBe(readWorkPdfSearch)
+    expect(bridge.prksIntentOpenWorkPdfSearch).toBe(intentOpenWorkPdfSearch)
+    expect(bridge.prksIntentCloseWorkPdfSearch).toBe(intentCloseWorkPdfSearch)
+    expect(bridge.prksIntentSetWorkPdfSearchQuery).toBe(intentSetWorkPdfSearchQuery)
+    expect(bridge.prksIntentWorkPdfSearchNext).toBe(intentWorkPdfSearchNext)
+    expect(bridge.prksIntentWorkPdfSearchPrevious).toBe(intentWorkPdfSearchPrevious)
+  })
+
+  it('forwards search to the runtime and drops a stale generation', () => {
+    const ctx = mount('search')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' })
+    const viewer = {
+      commits: [] as string[],
+      opens: 0,
+      closes: 0,
+      resize() {},
+      openSearch() { viewer.opens += 1 },
+      closeSearch() { viewer.closes += 1 },
+      commitSearch(query: string) { viewer.commits.push(query) },
+      clearSearchMatches() {},
+      searchNext() { return 1 },
+      searchPrevious() { return 0 },
+    }
+    runtime.viewer = viewer
+    const token = runtime.viewerSetupToken
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    const captured = { generation: ctx.generation }
+    expect(readWorkPdfSearch(ctx).open).toBe(false)
+    expect(intentOpenWorkPdfSearch(ctx, captured)).toBe(true)
+    expect(intentSetWorkPdfSearchQuery(ctx, 'alpha', captured)).toBe(true)
+    expect(intentSetWorkPdfSearchQuery(ctx, 'alpha beta', captured)).toBe(true)
+    expect(viewer.commits).toEqual(['alpha', 'alpha beta'])
+    expect(readWorkPdfSearch(ctx)).toMatchObject({
+      open: true,
+      query: 'alpha beta',
+      status: 'pending',
+    })
+    runtime.applySearchResult?.({
+      epoch: runtime.search?.epoch,
+      total: 0,
+      activeIndex: -1,
+      viewer,
+    })
+    expect(readWorkPdfSearch(ctx).status).toBe('empty')
+    expect(readWorkPdfSearch(ctx).matchCountLabel).toBe('No matches')
+    expect(intentWorkPdfSearchNext(ctx, captured)).toBe(false)
+    runtime.setSearchQuery?.('alpha beta')
+    runtime.applySearchResult?.({
+      epoch: runtime.search?.epoch,
+      total: 2,
+      activeIndex: 0,
+      viewer,
+    })
+    expect(intentWorkPdfSearchNext(ctx, captured)).toBe(true)
+    expect(readWorkPdfSearch(ctx).matchCountLabel).toBe('2 of 2')
+    expect(intentWorkPdfSearchPrevious(ctx, captured)).toBe(true)
+    expect(runtime.viewer).toBe(viewer)
+    expect(runtime.viewerSetupToken).toBe(token)
+    expect(intentCloseWorkPdfSearch(ctx, captured)).toBe(true)
+    expect(viewer.closes).toBe(1)
+    expect(runtime.viewer).toBe(viewer)
+
+    const stale = { generation: ctx.generation }
+    ctx.beginRoute({ name: 'work' })
+    expect(intentSetWorkPdfSearchQuery(ctx, 'later', stale)).toBe(false)
+    expect(intentOpenWorkPdfSearch(ctx, stale)).toBe(false)
   })
 })

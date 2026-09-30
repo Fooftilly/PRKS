@@ -6,6 +6,7 @@ import { RenderPluginPackage } from '@embedpdf/plugin-render/react';
 import { ZoomMode, ZoomPluginPackage } from '@embedpdf/plugin-zoom/react';
 import { InteractionManagerPluginPackage } from '@embedpdf/plugin-interaction-manager/react';
 import { PanPluginPackage } from '@embedpdf/plugin-pan/react';
+import { SearchPluginPackage } from '@embedpdf/plugin-search/react';
 import { SelectionPluginPackage } from '@embedpdf/plugin-selection/react';
 import { HistoryPluginPackage } from '@embedpdf/plugin-history/react';
 import { AnnotationPluginPackage } from '@embedpdf/plugin-annotation/react';
@@ -42,6 +43,9 @@ export function buildPluginRegistrations(
         createPluginRegistration(SelectionPluginPackage, {
             marquee: { enabled: false },
             menuHeight: 40,
+        }),
+        createPluginRegistration(SearchPluginPackage, {
+            showAllResults: true,
         }),
         createPluginRegistration(HistoryPluginPackage),
         createPluginRegistration(AnnotationPluginPackage, {
