@@ -38,9 +38,13 @@ from typing import Any, Mapping, Optional
 
 from backend.fs_durability import replace_file_atomically
 from backend.storage.errors import StorageRootRefused
-from backend.storage.file_lock import is_link_or_reparse_point
+from backend.storage.file_lock import ExclusiveFileLock, is_link_or_reparse_point
 
 MARKER_FILENAME = "prks-root.json"
+# Where a root's single-process lease lives (§12). Defined here, beside the
+# marker, because only that lease's holder may write the marker.
+MAINTENANCE_DIRNAME = ".prks-maintenance"
+ROOT_LOCK_NAME = "root.lock"
 MARKER_FORMAT = 1
 LAYOUT_VERSION = 1
 
@@ -214,14 +218,37 @@ def new_marker_document(*, now: Optional[datetime] = None) -> dict[str, Any]:
     }
 
 
-def write_marker(root: str, document: Mapping[str, Any]) -> bool:
-    """Atomically replace the marker. The caller must hold ``root``'s lease.
+def lease_path(root: str) -> str:
+    """``<root>/.prks-maintenance/root.lock``, the root's single-process lease."""
+    return os.path.join(root, MAINTENANCE_DIRNAME, ROOT_LOCK_NAME)
 
-    The document is validated before anything is written, so this can never
-    publish a marker that ``read_marker`` would refuse. Returns the directory
+
+def _require_lease(root: str, lease: ExclusiveFileLock) -> None:
+    if not isinstance(lease, ExclusiveFileLock) or not lease.held:
+        raise StorageRootRefused(
+            "marker_write_without_lease",
+            "The storage root marker can only be written while holding the root's lease.",
+        )
+    if os.path.normcase(os.path.realpath(lease.path)) != os.path.normcase(
+        os.path.realpath(lease_path(root))
+    ):
+        raise StorageRootRefused(
+            "marker_write_foreign_lease",
+            "The storage root marker can only be written under this root's own lease.",
+        )
+
+
+def write_marker(root: str, document: Mapping[str, Any], *, lease: ExclusiveFileLock) -> bool:
+    """Atomically replace the marker, only while holding ``root``'s own lease (§12).
+
+    ``lease`` must be the held ``root.lock`` of this very root; anything else
+    is refused before a byte is written, so no code path can rewrite a marker
+    it does not own. The document is validated first as well, so this can
+    never publish a marker ``read_marker`` would refuse. Returns the directory
     durability answer; raises ``OSError`` when the bytes could not be made
     durable (nothing replaced).
     """
+    _require_lease(root, lease)
     payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
     parse_marker(payload)
     for attempt in range(_WINDOWS_SHARING_RETRIES):

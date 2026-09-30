@@ -62,7 +62,9 @@ from backend.storage.preflight import (
     run_preflight,
 )
 from backend.storage.root_marker import (
+    MAINTENANCE_DIRNAME,
     MARKER_FILENAME,
+    ROOT_LOCK_NAME,
     RootMarker,
     binding_refusal,
     new_marker_document,
@@ -73,8 +75,6 @@ from backend.storage.root_marker import (
 
 LOGGER = logging.getLogger("prks.storage")
 
-MAINTENANCE_DIRNAME = ".prks-maintenance"
-ROOT_LOCK_NAME = "root.lock"
 # Hidden OS metadata that does not make a directory "non-empty" for V3.
 OS_METADATA_NAMES = frozenset({".DS_Store", "desktop.ini", "Thumbs.db", "lost+found"})
 # V10 (startup): warn below this much free space. Choose/relocate enforce a
@@ -1025,7 +1025,7 @@ def _open_under_lease(
     }
 
     try:
-        durable = write_marker(root_real, document)
+        durable = write_marker(root_real, document, lease=lease)
     except OSError as exc:
         raise StorageRootRefused(
             "marker_write_failed", "The storage root marker prks-root.json could not be written."

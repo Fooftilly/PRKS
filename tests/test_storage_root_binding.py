@@ -1186,5 +1186,37 @@ class TestMountBoundaries(RootTestCase):
         self.open(self.path("lib"))
 
 
+class TestMarkerWritesNeedTheLease(RootTestCase):
+    """§12: only the holder of a root's own root.lock may write its marker."""
+
+    def test_marker_write_requires_this_roots_held_lease(self):
+        root = self.path("lib")
+        other = self.path("other")
+        bound = self.open(root)
+        self.open(other)
+        before = self.marker_doc(root)
+        document = dict(before, future_field=1)
+        foreign = self._bound[-1].lease
+
+        with self.assertRaises(StorageRootRefused) as ctx:
+            root_marker.write_marker(root, document, lease=foreign)
+        self.assertEqual(ctx.exception.reason, "marker_write_foreign_lease")
+        with self.assertRaises(StorageRootRefused) as ctx:
+            root_marker.write_marker(root, document, lease=None)  # type: ignore[arg-type]
+        self.assertEqual(ctx.exception.reason, "marker_write_without_lease")
+        with self.assertRaises(TypeError):
+            root_marker.write_marker(root, document)  # type: ignore[call-arg]
+        self.assertEqual(self.marker_doc(root), before)
+
+        root_marker.write_marker(root, document, lease=bound.lease)
+        self.assertEqual(self.marker_doc(root)["future_field"], 1)
+
+        bound.release()
+        with self.assertRaises(StorageRootRefused) as ctx:
+            root_marker.write_marker(root, before, lease=bound.lease)
+        self.assertEqual(ctx.exception.reason, "marker_write_without_lease")
+        self.assertEqual(self.marker_doc(root)["future_field"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
