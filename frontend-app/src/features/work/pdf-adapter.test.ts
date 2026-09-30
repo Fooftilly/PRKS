@@ -118,6 +118,19 @@ describe('work PDF adapter', () => {
     expect(seen).toEqual(['/api/pdfs/a'])
   })
 
+  it('does not flush a destroyed runtime', () => {
+    const ctx = mount('destroyed-flush')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' })
+    let flushed = 0
+    runtime.flushLastPage = () => {
+      flushed += 1
+    }
+    runtime._destroyed = true
+    ctx.setResource('pdf', runtime, () => {})
+    expect(intentFlushWorkPdf(ctx)).toBe(false)
+    expect(flushed).toBe(0)
+  })
+
   it('uses the existing pending-annotation leave check', () => {
     const ctx = mount('leave')
     const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' })

@@ -98,7 +98,7 @@ export function intentMountWorkPdf(
 
 export function intentFlushWorkPdf(ctx: WorkPdfOwner | null | undefined): boolean {
   const runtime = runtimeOf(ctx)
-  if (!runtime || typeof runtime.flushLastPage !== 'function') return false
+  if (!runtime || runtime._destroyed || typeof runtime.flushLastPage !== 'function') return false
   runtime.flushLastPage()
   return true
 }
