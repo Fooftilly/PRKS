@@ -1,17 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useSearch } from '@embedpdf/plugin-search/react';
-import type { SearchDocumentState } from '@embedpdf/plugin-search';
 import type { ViewerController } from './controller';
-
-function matchLabel(draft: string, state: SearchDocumentState | null): string {
-    if (!draft.trim()) return '';
-    if (state?.loading) return 'Searching';
-    const total = state && typeof state.total === 'number' ? state.total : 0;
-    if (total < 1) return 'No matches';
-    const active = state && state.activeResultIndex >= 0 ? state.activeResultIndex + 1 : 1;
-    return `${active} of ${total}`;
-}
+import { pdfSearchBarView, type PdfSearchBarSettlement } from './search-bar-view';
 
 /**
  * First-party find bar. It overlays the page and does not mount a document.
@@ -33,6 +24,8 @@ export function PdfSearchBar({
     const inputRef = useRef<HTMLInputElement | null>(null);
     const [open, setOpen] = useState(false);
     const [draft, setDraft] = useState('');
+    const [pending, setPending] = useState(false);
+    const [settled, setSettled] = useState<PdfSearchBarSettlement>(null);
 
     useEffect(() => {
         controller.bindSearchChrome({
@@ -40,12 +33,28 @@ export function PdfSearchBar({
             close: () => {
                 setOpen(false);
                 setDraft('');
+                setPending(false);
+                setSettled(null);
             },
             focus: () => {
                 const input = inputRef.current;
                 if (!input) return;
                 input.focus();
                 input.select();
+            },
+            setQuery: (query) => {
+                setDraft(query);
+                if (!query.trim()) {
+                    setPending(false);
+                    setSettled(null);
+                    return;
+                }
+                setPending(true);
+                setSettled(null);
+            },
+            applySettlement: (result) => {
+                setPending(false);
+                setSettled({ total: result.total, activeIndex: result.activeIndex });
             },
         });
     }, [controller]);
@@ -81,6 +90,13 @@ export function PdfSearchBar({
     const onDraft = (value: string) => {
         setDraft(value);
         if (controller.hasSearchDriver()) {
+            if (!value.trim()) {
+                setPending(false);
+                setSettled(null);
+            } else {
+                setPending(true);
+                setSettled(null);
+            }
             controller.emitSearchQuery(value);
             return;
         }
@@ -106,8 +122,13 @@ export function PdfSearchBar({
         }
     };
 
-    const total = state && typeof state.total === 'number' ? state.total : 0;
-    const label = matchLabel(draft, state);
+    const view = pdfSearchBarView({
+        draft,
+        plugin: state,
+        settled,
+        pending,
+        followRuntime: controller.hasSearchDriver(),
+    });
     const owner = ownerTabId ? String(ownerTabId) : '';
     const generation =
         ownerGeneration == null || ownerGeneration === '' ? '' : String(ownerGeneration);
@@ -139,12 +160,12 @@ export function PdfSearchBar({
                 onKeyDown={onKeyDown}
             />
             <span id={countId} className="prks-pdf-search__count" aria-live="polite">
-                {label}
+                {view.label}
             </span>
-            <button type="button" aria-label="Previous match" disabled={total < 1} onClick={previous}>
+            <button type="button" aria-label="Previous match" disabled={view.matchesDisabled} onClick={previous}>
                 Previous
             </button>
-            <button type="button" aria-label="Next match" disabled={total < 1} onClick={next}>
+            <button type="button" aria-label="Next match" disabled={view.matchesDisabled} onClick={next}>
                 Next
             </button>
             <button type="button" aria-label="Close find" onClick={close}>

@@ -22,7 +22,7 @@ import type { PdfAnnotationObject } from '@embedpdf/models';
 import { ViewerController } from './controller';
 import { buildPluginRegistrations, srcToInitialDocument } from './plugins';
 import { PageView } from './page-view';
-import { commitPdfSearch } from './search-commit';
+import { commitPdfSearch, type PdfSearchFlightSlot } from './search-commit';
 import { PdfSearchBar } from './search-bar';
 import { Toolbar } from './toolbar';
 import { WheelZoom } from './gestures';
@@ -69,6 +69,7 @@ function ApiBinder({
     onPageChange?: PrksPdfViewerOptions['onPageChange'];
     onAnnotationSelect?: PrksPdfViewerOptions['onAnnotationSelect'];
 }) {
+    const searchFlight = useRef<PdfSearchFlightSlot>({ current: null });
     const { registry, activeDocumentId } = useRegistry();
     const { provides: docs } = useDocumentManagerCapability();
     const { provides: zoomCap } = useZoomCapability();
@@ -326,6 +327,7 @@ function ApiBinder({
                         beginSeq: () => controller.nextSearchSeq(),
                         currentSeq: () => controller.searchSeqCurrent(),
                         settle: (result) => controller.emitSearchSettled(result),
+                        flight: searchFlight.current,
                     });
                 },
                 searchNext: () => {

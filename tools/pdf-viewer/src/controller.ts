@@ -42,6 +42,9 @@ type SearchChrome = {
     open: () => void;
     close: () => void;
     focus: () => void;
+    /** Display-only. Must not emit another query intent. */
+    setQuery?: (query: string) => void;
+    applySettlement?: (result: PrksPdfSearchSettled) => void;
 };
 
 export class ViewerController {
@@ -61,6 +64,8 @@ export class ViewerController {
         open: () => {},
         close: () => {},
         focus: () => {},
+        setQuery: () => {},
+        applySettlement: () => {},
     };
     /**
      * Synchronous user-mutation gate. Updated immediately by setMutationEnabled
@@ -142,6 +147,13 @@ export class ViewerController {
 
     emitSearchSettled(result: PrksPdfSearchSettled) {
         if (this.searchDriver) this.searchDriver.onSettled(result);
+        if (typeof this.searchChrome.applySettlement === 'function') {
+            this.searchChrome.applySettlement(result);
+        }
+    }
+
+    private showSearchQuery(query: string) {
+        if (typeof this.searchChrome.setQuery === 'function') this.searchChrome.setQuery(query);
     }
 
     nextSearchSeq() {
@@ -229,10 +241,12 @@ export class ViewerController {
             },
             commitSearch: (query, epoch) => {
                 if (this.destroyed || !this.api) return;
+                this.showSearchQuery(query);
                 this.api.commitSearch(query, epoch);
             },
             clearSearchMatches: () => {
                 if (this.destroyed || !this.api) return;
+                this.showSearchQuery('');
                 this.api.clearSearchMatches();
             },
             searchNext: () => (this.api && !this.destroyed ? this.api.searchNext() : -1),

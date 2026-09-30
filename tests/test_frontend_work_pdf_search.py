@@ -12,6 +12,7 @@ BUNDLE = (ROOT / "frontend" / "vue" / "prks-vue.js").read_text(encoding="utf-8")
 VIEWER = (ROOT / "tools" / "pdf-viewer" / "src" / "viewer.tsx").read_text(encoding="utf-8")
 PLUGINS = (ROOT / "tools" / "pdf-viewer" / "src" / "plugins.ts").read_text(encoding="utf-8")
 BAR = (ROOT / "tools" / "pdf-viewer" / "src" / "search-bar.tsx").read_text(encoding="utf-8")
+BAR_VIEW = (ROOT / "tools" / "pdf-viewer" / "src" / "search-bar-view.ts").read_text(encoding="utf-8")
 
 
 class WorkPdfSearchTests(unittest.TestCase):
@@ -55,7 +56,9 @@ class WorkPdfSearchTests(unittest.TestCase):
         self.assertIn("data-prks-role=\"pdf-search\"", BAR)
         self.assertIn("data-prks-owner-tab-id", BAR)
         self.assertIn("Find in document", BAR)
-        self.assertIn("No matches", BAR)
+        self.assertIn("pdfSearchBarView", BAR)
+        self.assertIn("No matches", BAR_VIEW)
+        self.assertIn("setQuery:", BAR)
 
 
 if __name__ == "__main__":

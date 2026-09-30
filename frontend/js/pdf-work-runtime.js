@@ -302,6 +302,13 @@
             surface.dataset.prksOwnerGeneration = String(generation);
         }
         if (typeof surface.addEventListener !== 'function') return function () {};
+        if (typeof runtime._unbindSearch === 'function') {
+            const previous = runtime._unbindSearch;
+            runtime._unbindSearch = null;
+            try {
+                previous();
+            } catch (_e) {}
+        }
         function onKey(event) {
             if (!isPdfFindShortcut(event)) return;
             const target = event.target || surface;

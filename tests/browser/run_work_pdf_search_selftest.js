@@ -367,34 +367,202 @@ function testSearchBeforeViewerAttachesToTheSameInstance() {
     assertEq('still that viewer', runtime.viewer, viewer);
 }
 
+function testRebindDoesNotStackListeners() {
+    prksDestroyAllTabContexts();
+    const ctx = prksMountTabContext('main', hostBox());
+    ctx.beginRoute({ name: 'work' });
+    const runtime = createWorkPdfRuntime({ workId: 'rebind' });
+    const viewer = viewerStub();
+    runtime.viewer = viewer;
+    runtime.viewerSetupToken = 1;
+    ctx.setResource('pdf', runtime, function () { runtime.destroy(); });
+    const first = element('div');
+    const firstPage = element('div');
+    first.appendChild(firstPage);
+    const second = element('div');
+    const secondPage = element('div');
+    second.appendChild(secondPage);
+    bindPdfSurfaceSearch(ctx, runtime, first, ctx.generation);
+    bindPdfSurfaceSearch(ctx, runtime, second, ctx.generation);
+    assertEq('old surface dropped its listener', first.listeners.length, 0);
+    assertEq('new surface has one listener', second.listeners.length, 1);
+    const stale = fireKey(firstPage, findEvent({ ctrlKey: true }));
+    assert('old surface does not open search', !stale.prevented);
+    assertEq('search stays closed from the old surface', runtime.readSearch().open, false);
+    bindPdfSurfaceSearch(ctx, runtime, second, ctx.generation);
+    assertEq('rebind keeps a single listener', second.listeners.length, 1);
+    const opens = viewer.opens;
+    const current = fireKey(secondPage, findEvent({ ctrlKey: true }));
+    assert('rebound surface opens search', current.prevented);
+    assertEq('rebind did not stack find handlers', viewer.opens, opens + 1);
+    prksDestroyAllTabContexts();
+}
+
 function testCommitSearchFailurePaths() {
     const helper = path.join(rootDir, 'tools/pdf-viewer/src/search-commit.ts');
+    const view = path.join(rootDir, 'tools/pdf-viewer/src/search-bar-view.ts');
+    const controllerPath = path.join(rootDir, 'tools/pdf-viewer/src/controller.ts');
+    const runtimePath = path.join(rootDir, 'frontend/js/pdf-work-runtime.js');
     const runner = [
         'import { commitPdfSearch } from ' + JSON.stringify(helper) + ';',
+        'import { pdfSearchBarView } from ' + JSON.stringify(view) + ';',
+        'import { ViewerController } from ' + JSON.stringify(controllerPath) + ';',
+        'import { createRequire } from "node:module";',
+        'const require = createRequire(import.meta.url);',
+        'const pdfRuntime = require(' + JSON.stringify(runtimePath) + ');',
         'const rows = [];',
-        'function run(name, scope, currentSeq, want) {',
+        'function check(name, got, want) {',
+        '  rows.push({ name: name, got: got, want: want });',
+        '}',
+        'function run(name, scope, currentSeq, want, flight) {',
         '  const settled = [];',
         '  let seq = 0;',
-        '  commitPdfSearch({',
-        '    query: "term",',
-        '    epoch: 4,',
-        '    scope: scope,',
-        '    beginSeq: function () { seq += 1; return seq; },',
-        '    currentSeq: function () { return currentSeq(seq); },',
-        '    settle: function (result) { settled.push(result); },',
-        '  });',
-        '  rows.push({ name: name, settled: settled, want: want });',
+        '  let threw = false;',
+        '  try {',
+        '    commitPdfSearch({',
+        '      query: "term",',
+        '      epoch: 4,',
+        '      scope: scope,',
+        '      flight: flight,',
+        '      beginSeq: function () { seq += 1; return seq; },',
+        '      currentSeq: function () { return currentSeq(seq); },',
+        '      settle: function (result) { settled.push(result); },',
+        '    });',
+        '  } catch (err) { threw = true; }',
+        '  check(name + " threw", threw, false);',
+        '  check(name, settled, want);',
         '}',
         'const empty = [{ epoch: 4, total: 0, activeIndex: -1 }];',
         'const throwing = {',
         '  searchAllPages: function () { throw new Error("sync"); },',
         '  getState: function () { return null; },',
         '};',
+        'const promiseThrow = {',
+        '  searchAllPages: function () {',
+        '    return { toPromise: function () { throw new Error("sync promise"); } };',
+        '  },',
+        '  getState: function () { return { loading: true, total: 3, activeResultIndex: 1 }; },',
+        '};',
         'run("missing scope", null, function (seq) { return seq; }, empty);',
         'run("missing scope stale", undefined, function () { return 99; }, []);',
         'run("sync throw", throwing, function (seq) { return seq; }, empty);',
         'run("sync throw stale", throwing, function () { return 99; }, []);',
-        'process.stdout.write(JSON.stringify(rows));',
+        'run("toPromise throw", promiseThrow, function (seq) { return seq; }, empty);',
+        'run("toPromise throw stale", promiseThrow, function () { return 99; }, []);',
+        'const failedView = pdfSearchBarView({',
+        '  draft: "term",',
+        '  plugin: { loading: true, total: 3, activeResultIndex: 1 },',
+        '  settled: { total: 0, activeIndex: -1 },',
+        '  pending: false,',
+        '  followRuntime: true,',
+        '});',
+        'check("bar no matches label", failedView.label, "No matches");',
+        'check("bar no matches disabled", failedView.matchesDisabled, true);',
+        'function readyApi(extra) {',
+        '  return Object.assign({',
+        '    zoomIn: function () {}, zoomOut: function () {}, fitWidth: function () {}, fitPage: function () {},',
+        '    goToPage: function () {}, getCurrentPage: function () { return 1; }, getPageCount: function () { return 1; },',
+        '    setInteractionMode: function () {}, activateMarkupTool: function () {}, clearActiveTool: function () {},',
+        '    undo: function () {}, redo: function () {}, getAnnotations: function () { return []; },',
+        '    jumpToAnnotation: function () {}, updateAnnotation: function () {}, createAnnotation: function () {},',
+        '    deleteAnnotation: function () { return Promise.resolve(); }, selectAnnotation: function () {},',
+        '    saveCopy: function () { return Promise.resolve(new ArrayBuffer(0)); },',
+        '    getDocumentId: function () { return "doc"; }, isSelecting: function () { return false; },',
+        '    openSearch: function () {}, closeSearch: function () {},',
+        '    commitSearch: function () {}, clearSearchMatches: function () {},',
+        '    searchNext: function () { return -1; }, searchPrevious: function () { return -1; },',
+        '  }, extra);',
+        '}',
+        'function mountViewer(onCommit, onClear) {',
+        '  const shown = [];',
+        '  let intents = 0;',
+        '  const controller = new ViewerController();',
+        '  controller.bindSearchChrome({',
+        '    open: function () {}, close: function () {}, focus: function () {},',
+        '    setQuery: function (query) { shown.push(query); },',
+        '    applySettlement: function () {},',
+        '  });',
+        '  controller.setSearchDriver({',
+        '    onQuery: function () { intents += 1; },',
+        '    onNext: function () {}, onPrevious: function () {}, onClose: function () {}, onSettled: function () {},',
+        '  });',
+        '  controller.attach(readyApi({',
+        '    commitSearch: function (query) { onCommit(query); },',
+        '    clearSearchMatches: function () { if (onClear) onClear(); },',
+        '  }), function () {});',
+        '  return { handle: controller.asHandle(), shown: shown, intents: function () { return intents; } };',
+        '}',
+        'const firstCommits = [];',
+        'const first = mountViewer(function (query) { firstCommits.push(query); });',
+        'const runtime = pdfRuntime.createWorkPdfRuntime({ workId: "display" });',
+        'runtime.openSearch();',
+        'runtime.setSearchQuery("before ready");',
+        'runtime.viewer = first.handle;',
+        'runtime.viewerSetupToken = 1;',
+        'runtime.attachSearchViewer(first.handle);',
+        'check("before-ready display", first.shown.slice(), ["before ready"]);',
+        'check("before-ready commit", firstCommits.slice(), ["before ready"]);',
+        'check("before-ready intents", first.intents(), 0);',
+        'runtime.setSearchQuery("   ");',
+        'check("clear display", first.shown[first.shown.length - 1], "");',
+        'check("clear intents", first.intents(), 0);',
+        'const secondCommits = [];',
+        'const second = mountViewer(function (query) { secondCommits.push(query); });',
+        'runtime.openSearch();',
+        'runtime.viewer = first.handle;',
+        'runtime.setSearchQuery("kept");',
+        'const shownBeforeReplace = first.shown.slice();',
+        'runtime.viewer = second.handle;',
+        'runtime.viewerSetupToken = 2;',
+        'runtime.attachSearchViewer(second.handle);',
+        'check("replacement display", second.shown.slice(), ["kept"]);',
+        'check("replacement commit", secondCommits.slice(), ["kept"]);',
+        'check("replacement intents", second.intents(), 0);',
+        'check("old bar stays", first.shown.slice(), shownBeforeReplace);',
+        'async function coalesce() {',
+        '  let calls = 0;',
+        '  let complete = false;',
+        '  const pending = [];',
+        '  const settled = [];',
+        '  let seq = 0;',
+        '  const flight = { current: null };',
+        '  const scope = {',
+        '    searchAllPages: function (query) {',
+        '      calls += 1;',
+        '      if (query.trim() === "term" && calls > 1) {',
+        '        return { toPromise: function () { return Promise.resolve("partial"); } };',
+        '      }',
+        '      let resolve;',
+        '      const promise = new Promise(function (res) { resolve = res; });',
+        '      pending.push({ resolve: resolve, promise: promise });',
+        '      return { toPromise: function () { return promise; } };',
+        '    },',
+        '    getState: function () {',
+        '      return { total: complete ? 4 : 1, activeResultIndex: 0 };',
+        '    },',
+        '  };',
+        '  function commit(epoch, query) {',
+        '    commitPdfSearch({',
+        '      query: query, epoch: epoch, scope: scope, flight: flight,',
+        '      beginSeq: function () { seq += 1; return seq; },',
+        '      currentSeq: function () { return seq; },',
+        '      settle: function (result) { settled.push(result); },',
+        '    });',
+        '  }',
+        '  commit(1, "term");',
+        '  commit(2, "term ");',
+        '  check("trimmed query stays one task", calls, 1);',
+        '  check("partial state not settled", settled.slice(), []);',
+        '  complete = true;',
+        '  pending[0].resolve();',
+        '  await pending[0].promise;',
+        '  await Promise.resolve();',
+        '  check("completed task settles latest epoch", settled.slice(), [{ epoch: 2, total: 4, activeIndex: 0 }]);',
+        '}',
+        'coalesce().then(function () { process.stdout.write(JSON.stringify(rows)); }).catch(function (err) {',
+        '  console.error(err);',
+        '  process.exit(1);',
+        '});',
     ].join('\n');
     const result = spawnSync(
         process.execPath,
@@ -409,15 +577,11 @@ function testCommitSearchFailurePaths() {
     }
     assert(
         'commit search failure runner',
-        result.status === 0 && rows.length === 4,
+        result.status === 0 && rows.length > 0,
         (result.stderr || '') + (result.stdout || '')
     );
     rows.forEach(function (row) {
-        assertEq(
-            'commit ' + row.name,
-            JSON.stringify(row.settled),
-            JSON.stringify(row.want)
-        );
+        assertEq(row.name, JSON.stringify(row.got), JSON.stringify(row.want));
     });
 }
 
@@ -426,6 +590,7 @@ testNextPreviousAndNoResults();
 testRouteReplacementDropsTheSearch();
 testIndependentPanes();
 testSearchBeforeViewerAttachesToTheSameInstance();
+testRebindDoesNotStackListeners();
 testCommitSearchFailurePaths();
 
 console.log((failed ? 'FAILED ' : 'OK ') + passed + ' passed, ' + failed + ' failed');
