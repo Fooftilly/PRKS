@@ -72,6 +72,30 @@ function mount(tabId: string): WorkCtx {
   return notesWindow.prksGetTabContext(tabId)
 }
 
+function holdResearchNotesSave(workId = 'work-a') {
+  const ctx = mount('main')
+  ctx.setEntity('work', { id: workId })
+  ctx.root.innerHTML = '<div data-prks-role="editor-status"></div>'
+  const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
+  const releases: Array<(value: { code: string }) => void> = []
+  notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve) => {
+    releases.push(resolve)
+  })
+  const pending = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, workId)
+  return {
+    ctx,
+    status,
+    pending,
+    releases,
+    refresh(nextId = workId) {
+      const started = ctx.generation
+      ctx.beginRoute({ name: 'work', params: { workId: nextId } })
+      ctx.setEntity('work', { id: nextId })
+      return started
+    },
+  }
+}
+
 beforeAll(() => {
   notesWindow.eval(tabContextSource)
   notesWindow.eval(worksSource)
@@ -140,42 +164,22 @@ describe('work research notes session', () => {
   })
 
   it('does not paint a stale save onto a newer generation of the same Work', async () => {
-    const ctx = mount('main')
-    ctx.setEntity('work', { id: 'work-a' })
-    ctx.root.innerHTML = '<div data-prks-role="editor-status"></div>'
-    const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
-    let release: (value: { code: string }) => void = () => {}
-    notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve) => {
-      release = resolve
-    })
-    const pending = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, 'work-a')
-    expect(status.innerText).toBe('Saving...')
-    const started = ctx.generation
-    ctx.beginRoute({ name: 'work', params: { workId: 'work-a' } })
-    ctx.setEntity('work', { id: 'work-a' })
-    expect(ctx.generation).not.toBe(started)
-    status.innerText = 'Fresh editor'
-    release({ code: 'saved' })
-    await pending
+    const held = holdResearchNotesSave()
+    expect(held.status.innerText).toBe('Saving...')
+    const started = held.refresh()
+    expect(held.ctx.generation).not.toBe(started)
+    held.status.innerText = 'Fresh editor'
+    held.releases[0]({ code: 'saved' })
+    await held.pending
     await nextTick()
-    expect(status.innerText).toBe('Fresh editor')
-    expect(notesWindow.prksResearchNotesMayPaint(ctx, 'work-a', started)).toBe(false)
+    expect(held.status.innerText).toBe('Fresh editor')
+    expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
   })
 
   it('settles save 1 onto a same-Work refresh that has no newer edit', async () => {
-    const ctx = mount('main')
-    ctx.setEntity('work', { id: 'work-a' })
-    ctx.root.innerHTML = '<div data-prks-role="editor-status"></div>'
-    const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
-    let release: (value: { code: string }) => void = () => {}
-    notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve) => {
-      release = resolve
-    })
-    const pending = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, 'work-a')
-    expect(status.innerText).toBe('Saving...')
-    const started = ctx.generation
-    ctx.beginRoute({ name: 'work', params: { workId: 'work-a' } })
-    ctx.setEntity('work', { id: 'work-a' })
+    const held = holdResearchNotesSave()
+    expect(held.status.innerText).toBe('Saving...')
+    const started = held.refresh()
     const notes = {
       pendingSave: true,
       drafting: false,
@@ -186,32 +190,23 @@ describe('work research notes session', () => {
       latestSaveEditGeneration: 0,
       settledSaveToken: 0,
     }
-    ctx.setResource('workNotes', notes)
-    status.innerText = 'Saving...'
-    release({ code: 'saved' })
-    await pending
-    expect(ctx.generation).not.toBe(started)
+    held.ctx.setResource('workNotes', notes)
+    held.status.innerText = 'Saving...'
+    held.releases[0]({ code: 'saved' })
+    await held.pending
+    expect(held.ctx.generation).not.toBe(started)
     expect(notes.pendingSave).toBe(false)
     expect(notes.drafting).toBe(false)
     expect(notes.saveError).toBe(false)
     expect(notes.settledSaveToken).toBe(notes.latestSaveToken)
-    expect(status.innerText).toBe('Waiting to sync')
-    expect(notesWindow.prksResearchNotesMayPaint(ctx, 'work-a', started)).toBe(false)
+    expect(held.status.innerText).toBe('Waiting to sync')
+    expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
   })
 
   it('does not let save 1 settle a newer same-Work save', async () => {
-    const ctx = mount('main')
-    ctx.setEntity('work', { id: 'work-a' })
-    ctx.root.innerHTML = '<div data-prks-role="editor-status"></div>'
-    const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
-    const releases: Array<(value: { code: string }) => void> = []
-    notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve) => {
-      releases.push(resolve)
-    })
-    const first = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, 'work-a')
-    expect(releases).toHaveLength(1)
-    ctx.beginRoute({ name: 'work', params: { workId: 'work-a' } })
-    ctx.setEntity('work', { id: 'work-a' })
+    const held = holdResearchNotesSave()
+    expect(held.releases).toHaveLength(1)
+    held.refresh()
     const notes = {
       editor: { value: () => 'second draft' },
       pendingSave: false,
@@ -223,22 +218,22 @@ describe('work research notes session', () => {
       latestSaveEditGeneration: 0,
       settledSaveToken: 0,
     }
-    ctx.setResource('workNotes', notes)
-    notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'second draft', ctx)
-    const second = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, 'work-a')
-    expect(releases).toHaveLength(2)
-    expect(status.innerText).toBe('Saving...')
+    held.ctx.setResource('workNotes', notes)
+    notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'second draft', held.ctx)
+    const second = notesWindow.prksEnqueueWorkResearchNotesSave(held.ctx, 'work-a')
+    expect(held.releases).toHaveLength(2)
+    expect(held.status.innerText).toBe('Saving...')
     expect(notes.pendingSave).toBe(true)
     const save2Token = notes.latestSaveToken
     const save2Settled = notes.settledSaveToken
-    releases[0]({ code: 'saved' })
-    await first
+    held.releases[0]({ code: 'saved' })
+    await held.pending
     expect(notes.pendingSave).toBe(true)
     expect(notes.latestSaveToken).toBe(save2Token)
     expect(notes.settledSaveToken).toBe(save2Settled)
-    expect(status.innerText).toBe('Saving...')
-    expect(notesWindow.prksResearchNotesTextForWork('work-a', 'server', ctx)).toBe('second draft')
-    releases[1]({ code: 'saved' })
+    expect(held.status.innerText).toBe('Saving...')
+    expect(notesWindow.prksResearchNotesTextForWork('work-a', 'server', held.ctx)).toBe('second draft')
+    held.releases[1]({ code: 'saved' })
     await second
   })
 
