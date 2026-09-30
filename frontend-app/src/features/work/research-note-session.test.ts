@@ -2,6 +2,7 @@ import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import worksSource from '../../../../frontend/js/components/works.js?raw'
+import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import { presentWorkResearchNotes, registerWorkResearchNotesBridge, resetWorkResearchNotesForTests } from './research-note-session'
 
 type NoteEntry = {
@@ -18,7 +19,7 @@ type WorkCtx = {
   ui: { workResearchNoteSession: NoteEntry | null; researchNotesHints: unknown }
   root: HTMLElement
   domId: (name: string) => string
-  setEntity: (type: string, value: { id: string } | null) => void
+  setEntity: (type: string, value: { id: string; text_content?: string; private_notes?: string } | null) => void
   getEntity: (type: string) => { id: string } | null
   setResource: (name: string, value: unknown) => void
   getResource: (name: string) => unknown
@@ -42,7 +43,19 @@ type NotesWindow = {
     workId: string,
     kind: string,
     text: string,
+    observed?: { value: string; revision: number } | null,
   ) => Promise<{ code: string }>
+  prksEnsureWorkNotesBase?: (
+    ctx: WorkCtx,
+    work: { id?: string; text_content?: string; private_notes?: string } | null,
+    options?: { publish?: boolean },
+  ) => Promise<{ research?: { value: string; revision: number } } | null>
+  prksOfflineReadEntity?: (type: string, workId: string) => Promise<{ value: unknown }>
+  prksRememberWorkNotesCanonical?: (ctx: WorkCtx, work: { id?: string }) => unknown
+  prksRefreshPendingWorkNotes?: () => Promise<unknown>
+  prksWorkNoteOperations?: (rows: unknown, workId: string, kind: string) => unknown[]
+  prksWorkNoteObserved?: (ctx: WorkCtx, kind: string) => { value: string; revision: number } | null
+  prksPendingWorkNoteText?: (workId: string, kind: string, fallback: string) => string
 }
 
 const notesWindow = window as unknown as NotesWindow
@@ -142,6 +155,84 @@ describe('work research notes session', () => {
     await nextTick()
     expect(status.innerText).toBe('Fresh editor')
     expect(notesWindow.prksResearchNotesMayPaint(ctx, 'work-a', started)).toBe(false)
+  })
+
+  it('keeps Work B base when a deferred Work A notes-state read completes', async () => {
+    const ctx = mount('main')
+    ctx.setEntity('work', { id: 'work-a', text_content: 'A body', private_notes: 'A private' })
+    ctx.setResource('workNotesCanonical', {
+      id: 'work-a',
+      text_content: 'A body',
+      private_notes: 'A private',
+    })
+    ctx.root.innerHTML = '<div data-prks-role="editor-status">Ready</div>'
+    const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
+    const prior = {
+      ensure: notesWindow.prksEnsureWorkNotesBase,
+      read: notesWindow.prksOfflineReadEntity,
+      save: notesWindow.prksSaveWorkNoteDurably,
+      refresh: notesWindow.prksRefreshPendingWorkNotes,
+      ops: notesWindow.prksWorkNoteOperations,
+      observed: notesWindow.prksWorkNoteObserved,
+      remember: notesWindow.prksRememberWorkNotesCanonical,
+      pendingText: notesWindow.prksPendingWorkNoteText,
+    }
+    const saved: Array<{ workId: string; observed: { value: string; revision: number } | null | undefined }> = []
+    let releaseRead: (value: { value: unknown }) => void = () => {}
+    try {
+      notesWindow.eval(workNotesStateSource)
+      notesWindow.prksOfflineReadEntity = () => new Promise((resolve) => {
+        releaseRead = resolve
+      })
+      notesWindow.prksSaveWorkNoteDurably = async (workId, _kind, _text, observed) => {
+        saved.push({ workId, observed })
+        return { code: 'saved' }
+      }
+      const pending = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, 'work-a')
+      expect(status.innerText).toBe('Saving...')
+      ctx.beginRoute({ name: 'work', params: { workId: 'work-b' } })
+      ctx.setEntity('work', { id: 'work-b', text_content: 'B body', private_notes: 'B private' })
+      const baseB = {
+        research: { value: 'B body', revision: 8 },
+        private: { value: 'B private', revision: 2 },
+      }
+      ctx.setResource('workNotesCanonical', {
+        id: 'work-b',
+        text_content: 'B body',
+        private_notes: 'B private',
+      })
+      ctx.setResource('workNotesObserved', baseB)
+      status.innerText = 'B ready'
+      releaseRead({
+        value: {
+          work_id: 'work-a',
+          research_note_revision: 4,
+          private_note_revision: 1,
+        },
+      })
+      await pending
+      expect(saved).toEqual([{
+        workId: 'work-a',
+        observed: { value: 'A body', revision: 4 },
+      }])
+      expect(ctx.getResource('workNotesObserved')).toEqual(baseB)
+      expect(ctx.getResource('workNotesCanonical')).toEqual({
+        id: 'work-b',
+        text_content: 'B body',
+        private_notes: 'B private',
+      })
+      expect(status.innerText).toBe('B ready')
+      expect(notesWindow.prksResearchNotesMayPaint(ctx, 'work-a')).toBe(false)
+    } finally {
+      notesWindow.prksEnsureWorkNotesBase = prior.ensure
+      notesWindow.prksOfflineReadEntity = prior.read
+      notesWindow.prksSaveWorkNoteDurably = prior.save
+      notesWindow.prksRefreshPendingWorkNotes = prior.refresh
+      notesWindow.prksWorkNoteOperations = prior.ops
+      notesWindow.prksWorkNoteObserved = prior.observed
+      notesWindow.prksRememberWorkNotesCanonical = prior.remember
+      notesWindow.prksPendingWorkNoteText = prior.pendingText
+    }
   })
 
   it('keeps an unsaved buffer across a same-Work refresh', () => {

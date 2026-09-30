@@ -149,7 +149,14 @@
 
     async function ensureBase(ctx, work, options) {
         if (!ctx || !work || typeof work.id !== 'string') return null;
-        const canonical = rememberCanonical(ctx, work) || canonicalFrom(work);
+        /* A save can outlive the Work that started it. publish:false returns
+         * that Work's base without writing the live TabContext; the caller
+         * publishes only if that owner may still paint. */
+        const deferPublish = !!(options && options.publish === false);
+        const canonical = deferPublish
+            ? canonicalFrom(work)
+            : (rememberCanonical(ctx, work) || canonicalFrom(work));
+        if (!canonical) return null;
         /* A pending CREATE_WORK has no server row yet. Hitting notes-state
          * would 404 and trip harness console gates; seed revision 0 locally. */
         let state = null;
@@ -168,7 +175,9 @@
             text_content: canonical.text_content,
             private_notes: canonical.private_notes,
         }, state);
-        if (typeof ctx.setResource === 'function') ctx.setResource('workNotesObserved', base);
+        if (!deferPublish && typeof ctx.setResource === 'function') {
+            ctx.setResource('workNotesObserved', base);
+        }
         return base;
     }
 

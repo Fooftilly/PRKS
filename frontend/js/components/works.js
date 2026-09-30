@@ -1530,17 +1530,22 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     }
 
     const savePromise = (async function () {
-        if (typeof prksEnsureWorkNotesBase === 'function' &&
-            typeof prksWorkNoteObserved === 'function' &&
-            !prksWorkNoteObserved(owner, 'work-research-note')) {
-            await prksEnsureWorkNotesBase(
-                owner,
-                (owner.getResource && owner.getResource('workNotesCanonical')) || _cwSave
-            );
-        }
-        const observed = typeof prksWorkNoteObserved === 'function'
+        let observed = typeof prksWorkNoteObserved === 'function'
             ? prksWorkNoteObserved(owner, 'work-research-note')
             : null;
+        if (!observed && typeof prksEnsureWorkNotesBase === 'function') {
+            const capturedWork = (owner.getResource && owner.getResource('workNotesCanonical')) || _cwSave;
+            const base = await prksEnsureWorkNotesBase(owner, capturedWork, { publish: false });
+            if (base && prksResearchNotesMayPaint(owner, id, saveGeneration)) {
+                if (typeof prksRememberWorkNotesCanonical === 'function') {
+                    prksRememberWorkNotesCanonical(owner, capturedWork);
+                }
+                if (owner && typeof owner.setResource === 'function') {
+                    owner.setResource('workNotesObserved', base);
+                }
+            }
+            observed = base && base.research ? base.research : null;
+        }
         if (typeof prksSaveWorkNoteDurably !== 'function') {
             return { code: 'unavailable' };
         }
