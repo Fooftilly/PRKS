@@ -2,6 +2,8 @@ import type {
     MarkupTool,
     PrksAnnotation,
     PrksAnnotationEvent,
+    PrksPdfSearchDriver,
+    PrksPdfSearchSettled,
     PrksPdfViewerHandle,
     InteractionMode,
 } from './types';
@@ -28,6 +30,18 @@ type ReadyApi = {
     saveCopy: () => Promise<ArrayBuffer>;
     getDocumentId: () => string | null;
     isSelecting: () => boolean;
+    openSearch: () => void;
+    closeSearch: () => void;
+    commitSearch: (query: string, epoch: number) => void;
+    clearSearchMatches: () => void;
+    searchNext: () => number;
+    searchPrevious: () => number;
+};
+
+type SearchChrome = {
+    open: () => void;
+    close: () => void;
+    focus: () => void;
 };
 
 export class ViewerController {
@@ -41,6 +55,13 @@ export class ViewerController {
     private destroyImpl: () => void = () => {};
     /** Nestable depth: create/update/delete may run while user input is locked. */
     private programmaticMutationDepth = 0;
+    private searchDriver: PrksPdfSearchDriver | null = null;
+    private searchSeq = 0;
+    private searchChrome: SearchChrome = {
+        open: () => {},
+        close: () => {},
+        focus: () => {},
+    };
     /**
      * Synchronous user-mutation gate. Updated immediately by setMutationEnabled
      * — do not rely only on React mode rerender for create/update/delete.
@@ -77,6 +98,59 @@ export class ViewerController {
     /** User input enabled, or reconcile wrapped in begin/endProgrammatic. */
     allowsAnnotationMutation() {
         return this.userMutationEnabled || this.programmaticMutationDepth > 0;
+    }
+
+    setSearchDriver(driver: PrksPdfSearchDriver | null) {
+        this.searchDriver = driver;
+    }
+
+    hasSearchDriver() {
+        return !!this.searchDriver;
+    }
+
+    bindSearchChrome(chrome: SearchChrome) {
+        this.searchChrome = chrome;
+    }
+
+    presentSearch() {
+        this.searchChrome.open();
+    }
+
+    dismissSearch() {
+        this.searchChrome.close();
+    }
+
+    focusSearch() {
+        this.searchChrome.focus();
+    }
+
+    emitSearchQuery(query: string) {
+        if (this.searchDriver) this.searchDriver.onQuery(query);
+    }
+
+    emitSearchNext() {
+        if (this.searchDriver) this.searchDriver.onNext();
+    }
+
+    emitSearchPrevious() {
+        if (this.searchDriver) this.searchDriver.onPrevious();
+    }
+
+    emitSearchClose() {
+        if (this.searchDriver) this.searchDriver.onClose();
+    }
+
+    emitSearchSettled(result: PrksPdfSearchSettled) {
+        if (this.searchDriver) this.searchDriver.onSettled(result);
+    }
+
+    nextSearchSeq() {
+        this.searchSeq += 1;
+        return this.searchSeq;
+    }
+
+    searchSeqCurrent() {
+        return this.searchSeq;
     }
 
     attach(api: ReadyApi, destroyImpl: () => void) {
@@ -145,6 +219,27 @@ export class ViewerController {
             saveCopy: () => need().saveCopy(),
             getDocumentId: () => (this.api ? this.api.getDocumentId() : null),
             isSelecting: () => (this.api ? this.api.isSelecting() : false),
+            openSearch: () => {
+                if (this.destroyed || !this.api) return;
+                this.api.openSearch();
+            },
+            closeSearch: () => {
+                if (this.destroyed || !this.api) return;
+                this.api.closeSearch();
+            },
+            commitSearch: (query, epoch) => {
+                if (this.destroyed || !this.api) return;
+                this.api.commitSearch(query, epoch);
+            },
+            clearSearchMatches: () => {
+                if (this.destroyed || !this.api) return;
+                this.api.clearSearchMatches();
+            },
+            searchNext: () => (this.api && !this.destroyed ? this.api.searchNext() : -1),
+            searchPrevious: () => (this.api && !this.destroyed ? this.api.searchPrevious() : -1),
+            setSearchDriver: (driver) => {
+                this.setSearchDriver(driver);
+            },
         };
     }
 }

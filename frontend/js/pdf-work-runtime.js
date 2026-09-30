@@ -208,6 +208,127 @@
         return worker;
     }
 
+    function emptyPdfSearchState() {
+        return {
+            open: false,
+            query: '',
+            total: 0,
+            activeIndex: -1,
+            status: 'idle',
+            epoch: 0,
+        };
+    }
+
+    function pdfSearchMatchLabel(search) {
+        if (!search || !search.open) return '';
+        if (search.status === 'pending') return 'Searching';
+        if (search.status === 'empty') return 'No matches';
+        if (search.status === 'ready' && search.total > 0 && search.activeIndex >= 0) {
+            return String(search.activeIndex + 1) + ' of ' + String(search.total);
+        }
+        return '';
+    }
+
+    /**
+     * Search may still paint only for this generation, this runtime, and this
+     * viewer. Opening or closing search does not change that identity.
+     */
+    function prksPdfSearchStill(ctx, generation, runtime) {
+        if (!runtime || runtime._destroyed) return false;
+        return prksPdfPersistenceStillLive(
+            ctx,
+            generation,
+            runtime,
+            runtime.viewer,
+            runtime.viewerSetupToken
+        );
+    }
+
+    function isPdfFindShortcut(event) {
+        if (!event || event.repeat) return false;
+        const key = event.key;
+        if (key !== 'f' && key !== 'F') return false;
+        if (!(event.ctrlKey || event.metaKey)) return false;
+        if (event.altKey || event.shiftKey) return false;
+        return true;
+    }
+
+    function pdfSearchRole(node) {
+        if (!node || typeof node.getAttribute !== 'function') return '';
+        return String(node.getAttribute('data-prks-role') || '');
+    }
+
+    function isForeignPdfEditable(node) {
+        let current = node;
+        while (current) {
+            const role = pdfSearchRole(current);
+            if (role === 'pdf-search-query' || role === 'pdf-search') return false;
+            const tag = current.tagName ? String(current.tagName).toLowerCase() : '';
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || current.isContentEditable === true) {
+                return true;
+            }
+            current = current.parentNode || null;
+        }
+        return false;
+    }
+
+    function pdfSurfaceOwner(node) {
+        let current = node;
+        while (current) {
+            const data = current.dataset;
+            if (data && data.prksOwnerTabId) {
+                return {
+                    tabId: String(data.prksOwnerTabId),
+                    generation: data.prksOwnerGeneration == null ? '' : String(data.prksOwnerGeneration),
+                };
+            }
+            current = current.parentNode || null;
+        }
+        return null;
+    }
+
+    /**
+     * Ctrl/Cmd+F inside this PDF surface opens this runtime's search.
+     * The listener does not create a viewer. A foreign editable, including an
+     * annotation field, keeps the shortcut.
+     */
+    function bindPdfSurfaceSearch(ctx, runtime, surface, generation) {
+        if (!runtime || runtime._destroyed || typeof runtime.openSearch !== 'function' || !surface) {
+            return function () {};
+        }
+        runtime._searchGeneration = generation;
+        if (surface.dataset) {
+            surface.dataset.prksOwnerTabId = String(ctx && ctx.tabId != null ? ctx.tabId : '');
+            surface.dataset.prksOwnerGeneration = String(generation);
+        }
+        if (typeof surface.addEventListener !== 'function') return function () {};
+        function onKey(event) {
+            if (!isPdfFindShortcut(event)) return;
+            const target = event.target || surface;
+            if (isForeignPdfEditable(target)) return;
+            const owner = pdfSurfaceOwner(target) || pdfSurfaceOwner(surface);
+            const tabId = String(ctx && ctx.tabId != null ? ctx.tabId : '');
+            if (!owner || owner.tabId !== tabId || owner.generation !== String(generation)) return;
+            if (!prksPdfSearchStill(ctx, generation, runtime)) return;
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            if (typeof event.stopPropagation === 'function') event.stopPropagation();
+            runtime.openSearch();
+            if (pdfSearchRole(target) === 'pdf-search-query' && typeof target.select === 'function') {
+                try {
+                    target.select();
+                } catch (_e) {}
+            }
+        }
+        surface.addEventListener('keydown', onKey, true);
+        const unbind = function () {
+            if (typeof surface.removeEventListener === 'function') {
+                surface.removeEventListener('keydown', onKey, true);
+            }
+        };
+        runtime._unbindSearch = unbind;
+        return unbind;
+    }
+
     function createWorkPdfRuntime(options) {
         const opts = options || {};
         const workId = String(opts.workId || '');
@@ -235,6 +356,9 @@
             syncState: opts.syncState || emptySyncState(workId),
             _destroyed: false,
             _flushAnnotationsImpl: typeof opts.flushAnnotations === 'function' ? opts.flushAnnotations : null,
+            search: emptyPdfSearchState(),
+            _searchGeneration: null,
+            _unbindSearch: null,
         };
 
         runtime.hasPendingSync = function () {
@@ -305,8 +429,146 @@
             }
         };
 
+        function callViewerSearch(name, args) {
+            const viewer = runtime.viewer;
+            if (!viewer || runtime._destroyed) return undefined;
+            const fn = viewer[name];
+            if (typeof fn !== 'function') return undefined;
+            return fn.apply(viewer, args || []);
+        }
+
+        runtime.readSearch = function () {
+            const search = runtime.search || emptyPdfSearchState();
+            return {
+                open: !!search.open,
+                query: search.query || '',
+                total: search.total || 0,
+                activeIndex: typeof search.activeIndex === 'number' ? search.activeIndex : -1,
+                status: search.status || 'idle',
+                matchCountLabel: pdfSearchMatchLabel(search),
+            };
+        };
+
+        runtime.openSearch = function () {
+            if (runtime._destroyed) return false;
+            runtime.search.open = true;
+            callViewerSearch('openSearch');
+            return true;
+        };
+
+        runtime.closeSearch = function () {
+            if (runtime._destroyed) return false;
+            runtime.search.epoch += 1;
+            runtime.search.open = false;
+            runtime.search.query = '';
+            runtime.search.total = 0;
+            runtime.search.activeIndex = -1;
+            runtime.search.status = 'idle';
+            callViewerSearch('closeSearch');
+            return true;
+        };
+
+        runtime.setSearchQuery = function (query) {
+            if (runtime._destroyed || !runtime.search.open) return false;
+            const next = query == null ? '' : String(query);
+            runtime.search.epoch += 1;
+            const epoch = runtime.search.epoch;
+            runtime.search.query = next;
+            if (!next.trim()) {
+                runtime.search.total = 0;
+                runtime.search.activeIndex = -1;
+                runtime.search.status = 'idle';
+                callViewerSearch('clearSearchMatches');
+                return true;
+            }
+            runtime.search.total = 0;
+            runtime.search.activeIndex = -1;
+            runtime.search.status = 'pending';
+            callViewerSearch('commitSearch', [next, epoch]);
+            return true;
+        };
+
+        runtime.applySearchResult = function (result) {
+            if (runtime._destroyed || !result || !runtime.search.open) return false;
+            if (result.epoch !== runtime.search.epoch) return false;
+            if (result.viewer != null && result.viewer !== runtime.viewer) return false;
+            const generation = typeof result.ownerGeneration === 'number'
+                ? result.ownerGeneration
+                : runtime._searchGeneration;
+            if (
+                typeof runtime._searchGeneration === 'number' &&
+                typeof generation === 'number' &&
+                generation !== runtime._searchGeneration
+            ) {
+                return false;
+            }
+            if (result.ctx && !prksPdfSearchStill(result.ctx, generation, runtime)) return false;
+            const total = Number(result.total);
+            const count = Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;
+            runtime.search.total = count;
+            if (count < 1) {
+                runtime.search.activeIndex = -1;
+                runtime.search.status = 'empty';
+                return true;
+            }
+            const index = Number(result.activeIndex);
+            const active = Number.isFinite(index) ? Math.floor(index) : 0;
+            runtime.search.activeIndex = Math.min(count - 1, Math.max(0, active));
+            runtime.search.status = 'ready';
+            return true;
+        };
+
+        function stepSearch(direction) {
+            if (runtime._destroyed || !runtime.search.open) return false;
+            if (runtime.search.status !== 'ready' || runtime.search.total < 1) return false;
+            const viewer = runtime.viewer;
+            const method = direction < 0 ? 'searchPrevious' : 'searchNext';
+            if (viewer && typeof viewer[method] === 'function') {
+                const index = viewer[method]();
+                if (runtime._destroyed || runtime.viewer !== viewer) return false;
+                if (Number.isFinite(index) && index >= 0) runtime.search.activeIndex = index;
+                return true;
+            }
+            const total = runtime.search.total;
+            const current = runtime.search.activeIndex >= 0 ? runtime.search.activeIndex : 0;
+            runtime.search.activeIndex = (current + direction + total) % total;
+            return true;
+        }
+
+        runtime.searchNext = function () {
+            return stepSearch(1);
+        };
+
+        runtime.searchPrevious = function () {
+            return stepSearch(-1);
+        };
+
+        /**
+         * The mounted viewer is already `runtime.viewer`. This does not
+         * replace it. A search that opened before the viewer was ready is
+         * applied to that same instance.
+         */
+        runtime.attachSearchViewer = function (viewer) {
+            if (runtime._destroyed || !viewer || runtime.viewer !== viewer) return false;
+            if (!runtime.search.open) return true;
+            if (typeof viewer.openSearch === 'function') viewer.openSearch();
+            if (runtime.search.query.trim() && typeof viewer.commitSearch === 'function') {
+                viewer.commitSearch(runtime.search.query, runtime.search.epoch);
+            }
+            return true;
+        };
+
         runtime.destroy = function () {
             if (runtime._destroyed) return;
+            if (typeof runtime._unbindSearch === 'function') {
+                try {
+                    runtime._unbindSearch();
+                } catch (_e0) {}
+                runtime._unbindSearch = null;
+            }
+            try {
+                runtime.closeSearch();
+            } catch (_e1) {}
             runtime._destroyed = true;
             if (runtime.annotationPersistence && typeof runtime.annotationPersistence.destroy === 'function') {
                 try {
@@ -359,6 +621,8 @@
         prksInstallPdfAnnotationPersistenceIfCurrent: prksInstallPdfAnnotationPersistenceIfCurrent,
         prksHasPendingWorkAnnotationSync: prksHasPendingWorkAnnotationSync,
         prksEmptyPdfAnnotationCache: emptyAnnotationCache,
+        prksPdfSearchStill: prksPdfSearchStill,
+        bindPdfSurfaceSearch: bindPdfSurfaceSearch,
     };
     Object.keys(api).forEach(function (k) {
         root[k] = api[k];

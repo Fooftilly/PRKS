@@ -2003,6 +2003,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 src,
                 mode: desiredMode,
                 annotationAuthor: author,
+                ownerTabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+                ownerGeneration: ctx && typeof ctx.generation === 'number' ? ctx.generation : '',
                 documentTitle: work.title || 'Document',
                 documentTypeLabel: typeMeta && typeMeta.label ? typeMeta.label : '',
                 documentTypeColor: typeMeta && typeMeta.color ? typeMeta.color : undefined,
@@ -2061,6 +2063,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         runtime.viewer = newViewer;
         runtime.viewerFilePath = managedPdfApiPath(newPath) || String(newPath || '').split('?')[0];
         runtime._cowRemountPendingPath = '';
+        const searchGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : runtime._searchGeneration;
+        if (typeof bindPdfSurfaceSearch === 'function') {
+            bindPdfSurfaceSearch(ctx, runtime, staging, searchGeneration);
+        }
+        prksAttachPdfSearch(ctx, runtime, newViewer, searchGeneration);
         if (typeof newViewer.setMutationEnabled === 'function') {
             if (keepLocked) {
                 newViewer.setMutationEnabled(false);
@@ -3317,6 +3324,49 @@ function prksEnsureAnnotationPersistence(ctx, runtime, workId, viewer, setupToke
     void setupAnnotationPersistence(ctx, runtime, workId, viewer, setupToken);
 }
 
+/**
+ * Connects an already-mounted viewer to this runtime's search session.
+ * Does not create or replace the viewer.
+ */
+function prksAttachPdfSearch(ctx, runtime, viewer, generation) {
+    if (!runtime || !viewer || runtime.viewer !== viewer) return;
+    if (typeof viewer.setSearchDriver === 'function' && typeof prksPdfSearchStill === 'function') {
+        const boundViewer = viewer;
+        viewer.setSearchDriver({
+            onQuery: function (query) {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.setSearchQuery(query);
+            },
+            onNext: function () {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.searchNext();
+            },
+            onPrevious: function () {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.searchPrevious();
+            },
+            onClose: function () {
+                if (!prksPdfSearchStill(ctx, generation, runtime) || runtime.viewer !== boundViewer) return;
+                runtime.closeSearch();
+            },
+            onSettled: function (result) {
+                if (!result || runtime.viewer !== boundViewer || typeof runtime.applySearchResult !== 'function') return;
+                runtime.applySearchResult({
+                    epoch: result.epoch,
+                    total: result.total,
+                    activeIndex: result.activeIndex,
+                    viewer: boundViewer,
+                    ownerGeneration: generation,
+                    ctx: ctx,
+                });
+            },
+        });
+    }
+    if (typeof runtime.attachSearchViewer === 'function') {
+        runtime.attachSearchViewer(viewer);
+    }
+}
+
 /** Builds + awaits one viewer instance for a Work PDF; installs annotation persistence only in 'work' mode. */
 async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, mode) {
     const generation = ctx.generation;
@@ -3335,6 +3385,8 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
         src,
         mode: mode,
         annotationAuthor: author,
+        ownerTabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+        ownerGeneration: generation,
         documentTitle: work.title || 'Document',
         documentTypeLabel: typeMeta && typeMeta.label ? typeMeta.label : '',
         documentTypeColor: typeMeta && typeMeta.color ? typeMeta.color : undefined,
@@ -3364,6 +3416,7 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
     runtime.viewerFilePath = prksManagedPdfApiPath(work.file_path) || String(work.file_path || '').split('?')[0];
     runtime.viewerSetupToken = (runtime.viewerSetupToken || 0) + 1;
     const setupToken = runtime.viewerSetupToken;
+    prksAttachPdfSearch(ctx, runtime, viewer, generation);
     runtime.filePath = work.file_path || runtime.filePath || '';
     runtime._cowRemountPendingPath = '';
     // Resolve capability (async) then reconcile mutation lock in place — never
@@ -3430,6 +3483,9 @@ export function initPdfViewerForWork(ctx, work) {
         ctx.setResource('pdf', runtime, function () {
             runtime.destroy();
         });
+        if (typeof bindPdfSurfaceSearch === 'function') {
+            bindPdfSurfaceSearch(ctx, runtime, targetNode, _pdfGen);
+        }
         // Prime the service worker's whole-file PDF cache in the background (AGENTS.md
         // "PDF offline support"). The viewer itself loads progressively via Range
         // requests, which never populate that cache -- this plain GET is what lets a

@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { PagePointerProvider } from '@embedpdf/plugin-interaction-manager/react';
 import { RenderLayer } from '@embedpdf/plugin-render/react';
+import { SearchLayer } from '@embedpdf/plugin-search/react';
 import { SelectionLayer } from '@embedpdf/plugin-selection/react';
 import { AnnotationLayer } from '@embedpdf/plugin-annotation/react';
 import type { PageLayout } from '@embedpdf/plugin-scroll';
@@ -62,6 +63,13 @@ export function PageView({
                             ? (props) => <SelectionMenu {...props} documentId={documentId} />
                             : undefined
                     }
+                />
+                <SearchLayer
+                    documentId={documentId}
+                    pageIndex={layout.pageIndex}
+                    highlightColor="rgba(250, 204, 21, 0.45)"
+                    activeHighlightColor="rgba(234, 88, 12, 0.55)"
+                    style={{ pointerEvents: 'none' }}
                 />
             </PagePointerProvider>
         </div>

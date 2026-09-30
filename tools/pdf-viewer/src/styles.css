@@ -308,6 +308,62 @@
     position: relative;
 }
 
+.prks-pdf-search {
+    position: absolute;
+    z-index: 4;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: calc(100% - 16px);
+    padding: 4px;
+    background: var(--surface, #f8fafc);
+    color: var(--text-primary, #1e293b);
+    border: 1px solid var(--border, #e2e8f0);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.prks-pdf-search[hidden] {
+    display: none;
+}
+
+.prks-pdf-search__query {
+    width: 12rem;
+    max-width: 36vw;
+    min-width: 0;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1.2;
+    padding: 4px 6px;
+    border: 1px solid var(--border, #e2e8f0);
+    background: var(--bg-color, #fff);
+    color: inherit;
+}
+
+.prks-pdf-search__count {
+    flex: 0 0 auto;
+    min-width: 5.5rem;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    text-align: right;
+    color: var(--text-secondary, #475569);
+}
+
+.prks-pdf-search button {
+    font: inherit;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    padding: 4px 6px;
+    background: var(--surface, #f8fafc);
+    color: inherit;
+    border: 1px solid var(--border, #e2e8f0);
+}
+
+.prks-pdf-search button:disabled {
+    opacity: 0.45;
+}
+
 .prks-pdf-stage .ep-viewport,
 .prks-pdf-viewport {
     position: relative;
