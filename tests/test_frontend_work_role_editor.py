@@ -21,6 +21,14 @@ class WorkRoleEditorContractTests(unittest.TestCase):
             self.assertLess(body.index(still), write, name)
         self.assertLess(modal.index("result.code === 'stale'"), modal.index("Open it once"))
         self.assertIn("prksTabContextOwnsEntityRoute", unlink)
+        self.assertIn("prksWorkRoleUnlinkSessionStill(", unlink)
+        self.assertLess(unlink.index("result.code === 'stale'"), unlink.index("code === 'unavailable'"))
+        settle = modal.index("prksAlertDialog")
+        self.assertLess(modal.index("roleModalMaySettle"), settle)
+        self.assertLess(
+            modal.index("roleModalBusyGeneration === openGeneration"),
+            modal.index("prksSetButtonBusy(saveRoleBtn, false)"),
+        )
         self.assertNotIn("listOperations", _UI[_UI.index("function prksRefreshOwnedWorkPanelRead"):_UI.index("function prksWorkRoleIntentStill")])
 
     def test_save_rechecks_the_mounted_owner_before_the_store(self):

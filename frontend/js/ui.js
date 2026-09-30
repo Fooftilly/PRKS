@@ -4154,6 +4154,26 @@ function prksWorkRoleUnlinkMessage(fileLabel, roleType) {
     return 'Remove the link to ' + fileName + ' (' + role + ')?';
 }
 
+/**
+ * Re-read after the unmounted base fetch. A Person page has no role editor,
+ * so that fetch is another await. The confirming pane's route, entity, and
+ * generation are the fence; a Work page fences the captured Work owner.
+ */
+function prksWorkRoleUnlinkSessionStill(ctx, generation, routeName, personId, workId) {
+    if (!ctx || ctx.destroyed) return false;
+    if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    if (routeName === 'person') {
+        const person = ctx.getEntity ? ctx.getEntity('person') : null;
+        if (!person || String(person.id) !== String(personId)) return false;
+        const route = ctx.lastResolvedRoute || ctx.route;
+        if (!route || route.name !== 'person' || !route.params) return false;
+        return String(route.params.personId || '') === String(personId);
+    }
+    const openedOnWorkId = routeName === 'work' ? workId : '';
+    return typeof prksWorkRoleIntentStill === 'function' &&
+        prksWorkRoleIntentStill(ctx, generation, workId, openedOnWorkId);
+}
+
 async function prksRemoveWorkRoleLink(btn) {
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
@@ -4183,7 +4203,13 @@ async function prksRemoveWorkRoleLink(btn) {
     ) return;
     const openedOnWorkId = entityType === 'work' ? workId : '';
     if (!prksWorkRoleIntentStill(ownerCtx, generation, workId, openedOnWorkId)) return;
-    const result = await prksSaveWorkPersonRoleDurably(workId, personId, roleType, null, null);
+    const result = await prksSaveWorkPersonRoleDurably(
+        workId, personId, roleType, null, null, null,
+        function () {
+            return prksWorkRoleUnlinkSessionStill(
+                ownerCtx, generation, routeName, personId, workId);
+        });
+    if (result.code === 'stale') return;
     if (result.code === 'unavailable') {
         await prksAlertMessage(
             'This file\u2019s linked people cannot be changed right now. Open it once while '

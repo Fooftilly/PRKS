@@ -468,6 +468,100 @@ async function staleCreditAndUnlinkDoNotSave() {
     await prksRemoveWorkRoleLink(unlink);
     assert('a stale unlink confirmation does not save', durable === 0, 'calls=' + durable);
     global.prksSaveWorkPersonRoleDurably = real;
+    global.prksConfirmDestructive = async function () { return false; };
+    prksDestroyAllTabContexts();
+}
+
+async function personUnlinkDuringBaseReadDoesNotSave() {
+    writes.length = 0;
+    const messages = [];
+    focus('main');
+    const main = prksMountTabContext('main', document.getElementById('main-host'));
+    main.setEntity('person', { id: 'person-1', works: [{ id: 'work-a', title: 'File A' }] });
+    const route = { name: 'person', params: { personId: 'person-1' } };
+    main.route = route;
+    main.lastResolvedRoute = route;
+    ownPanel(main);
+    const unlink = document.getElementById('unlink-btn');
+    unlink.setAttribute('data-work-id', 'work-a');
+    unlink.setAttribute('data-person-id', 'person-1');
+    unlink.setAttribute('data-role-type', 'Author');
+    global.prksConfirmDestructive = async function () { return true; };
+    global.prksAlertMessage = async function (message) {
+        messages.push(String(message || ''));
+    };
+    let release;
+    readStarted = 0;
+    readGate = new Promise(function (resolve) { release = resolve; });
+    const pending = prksRemoveWorkRoleLink(unlink);
+    await until(function () { return readStarted >= 1; });
+    main.beginRoute({ name: 'person', params: { personId: 'person-2' } });
+    const replaced = { name: 'person', params: { personId: 'person-2' } };
+    main.route = replaced;
+    main.lastResolvedRoute = replaced;
+    main.setEntity('person', { id: 'person-2', works: [] });
+    ownPanel(main);
+    release();
+    readGate = null;
+    await pending;
+    assert('a replaced Person owner does not unlink after the base read',
+        writes.length === 0 && messages.length === 0,
+        'writes=' + writes.length + ' alerts=' + messages.join(' | '));
+    global.prksConfirmDestructive = async function () { return false; };
+    global.prksAlertMessage = async function () {};
+    prksDestroyAllTabContexts();
+}
+
+async function olderRoleModalDoesNotSettleNewerOpening() {
+    writes.length = 0;
+    roleAlerts.length = 0;
+    resetModal();
+    focus('main');
+    const main = prksMountTabContext('main', document.getElementById('main-host'));
+    showWork(main, 'work-a');
+    ownPanel(main);
+    openModal('role-modal');
+    fillRole('person-1', 'work-a');
+    const firstGeneration = document.getElementById('role-modal').dataset.prksOpenGeneration;
+    const realSave = global.prksSync.store.saveWorkPersonRole;
+    let failWrites = 1;
+    global.prksSync.store.saveWorkPersonRole = async function () {
+        if (failWrites > 0) {
+            failWrites -= 1;
+            throw new Error('role save failed');
+        }
+        return realSave.apply(this, arguments);
+    };
+    let releaseFirst;
+    let releaseSecond;
+    readStarted = 0;
+    readGate = new Promise(function (resolve) { releaseFirst = resolve; });
+    const firstSave = saveClick();
+    await until(function () { return readStarted >= 2; });
+    readGate = new Promise(function (resolve) { releaseSecond = resolve; });
+    openModal('role-modal');
+    fillRole('person-1', 'work-a');
+    const secondSave = saveClick();
+    await until(function () { return readStarted >= 4; });
+    releaseFirst();
+    await firstSave;
+    const button = document.getElementById('save-role-btn');
+    const modal = document.getElementById('role-modal');
+    assert('an older role-modal failure leaves the newer opening busy',
+        button.disabled === true && button.getAttribute('aria-busy') === 'true' &&
+        String(button.textContent || '').indexOf('Linking') !== -1,
+        'disabled=' + button.disabled + ' aria=' + button.getAttribute('aria-busy') +
+        ' label=' + button.textContent);
+    assert('an older role-modal failure does not alert into the newer opening',
+        roleAlerts.length === 0, roleAlerts.join(' | '));
+    assert('an older role-modal failure does not close the newer opening',
+        !modal.classList.contains('hidden') &&
+        String(modal.dataset.prksOpenGeneration) !== String(firstGeneration),
+        'generation=' + modal.dataset.prksOpenGeneration);
+    releaseSecond();
+    readGate = null;
+    await secondSave;
+    global.prksSync.store.saveWorkPersonRole = realSave;
     prksDestroyAllTabContexts();
 }
 
@@ -589,6 +683,8 @@ void (async function () {
         await differentTargetChangesDuringBaseRead();
         await focusMoveLeavesSecondaryMode();
         await staleCreditAndUnlinkDoNotSave();
+        await personUnlinkDuringBaseReadDoesNotSave();
+        await olderRoleModalDoesNotSettleNewerOpening();
         await mountedSaveRefusesReplacedOwner();
         ownedReadPublishesEffectiveRoles();
         await tagsModeUpdatesClassicHost();
