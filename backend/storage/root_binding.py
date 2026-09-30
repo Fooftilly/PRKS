@@ -54,6 +54,7 @@ from backend.storage.file_lock import (
     LockUnavailable,
     is_link_or_reparse_point,
 )
+from backend.storage.resolver import SOURCE_CONFIG_FILE
 from backend.storage.preflight import (
     PREFLIGHT_DIRNAME,
     preflight_is_scaffold,
@@ -118,6 +119,10 @@ class BoundRoot:
     @property
     def storage_root_id(self) -> str:
         return self.marker.storage_root_id
+
+    def anchor(self, config: Any) -> Any:
+        """``config`` with its root-relative paths pinned to this lease's resolved root."""
+        return config.anchored_to(self.root_real)
 
     def release(self) -> None:
         """Release the lease (tests and orderly shutdown; the kernel does it on exit)."""
@@ -351,14 +356,54 @@ def _maintenance_is_scaffold(path: str) -> bool:
     return True
 
 
+SQLITE_HEADER = b"SQLite format 3\x00"
+# Maintenance names only PRKS creates (backup_restore): an interrupted restore
+# whose recovery must still be able to run leaves one of these behind.
+RECOVERABLE_MAINTENANCE_FILES = frozenset({"restore-journal.json"})
+RECOVERABLE_MAINTENANCE_DIRS = frozenset({"rollback", "restore-staging", "backup"})
+
+
+def _is_plain_dir(path: str) -> bool:
+    st = _lstat(path)
+    return st is not None and not is_link_or_reparse_point(st) and stat.S_ISDIR(st.st_mode)
+
+
+def _is_plain_file(path: str) -> bool:
+    st = _lstat(path)
+    return st is not None and not is_link_or_reparse_point(st) and stat.S_ISREG(st.st_mode)
+
+
+def _is_sqlite_database(path: str) -> bool:
+    if not _is_plain_file(path):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(SQLITE_HEADER)) == SQLITE_HEADER
+    except OSError:
+        return False
+
+
+def _has_recoverable_maintenance_state(path: str) -> bool:
+    """``.prks-maintenance/`` holding state PRKS itself writes (a restore journal or its trees)."""
+    if not _is_plain_dir(path):
+        return False
+    for name in RECOVERABLE_MAINTENANCE_FILES:
+        if _is_plain_file(os.path.join(path, name)):
+            return True
+    return any(_is_plain_dir(os.path.join(path, name)) for name in RECOVERABLE_MAINTENANCE_DIRS)
+
+
 def classify_unmarked_root(root: str, *, db_filename: str) -> str:
     """V3 for a directory without a marker: ``empty``, ``prks`` or ``foreign``.
 
-    ``prks`` (adopt, §7.1): it holds the library database, a ``pdfs/`` entry,
-    or maintenance state beyond a lock/preflight scaffold (for example an
-    interrupted restore's journal, whose recovery must still be able to run).
-    ``empty``: nothing but OS metadata, a preflight/lock scaffold, or a
-    leftover marker-write temporary. Anything else is ``foreign``.
+    ``prks`` (adopt, §7.1) needs proof by type and content, not by name: the
+    library database as a regular file with a SQLite header, ``pdfs/`` as a
+    plain directory, or recognized recoverable restore state under
+    ``.prks-maintenance/`` (an interrupted restore may have moved the database
+    and ``pdfs/`` away, and its recovery must still be able to run).
+    ``empty``: nothing but OS metadata, a lock/preflight scaffold, or a
+    leftover marker-write temporary. Anything else -- including a same-named
+    entry of the wrong type -- is ``foreign``.
     """
     try:
         names = os.listdir(root)
@@ -369,21 +414,39 @@ def classify_unmarked_root(root: str, *, db_filename: str) -> str:
     looks_like_prks = False
     foreign = False
     for name in names:
+        path = os.path.join(root, name)
         if name in OS_METADATA_NAMES:
             continue
-        if name.startswith(".prks-write-") and name.endswith(".tmp"):
+        if name.startswith(".prks-write-") and name.endswith(".tmp") and _is_plain_file(path):
             continue
         if name == MAINTENANCE_DIRNAME:
-            if not _maintenance_is_scaffold(os.path.join(root, name)):
+            if _maintenance_is_scaffold(path):
+                continue
+            if _has_recoverable_maintenance_state(path):
                 looks_like_prks = True
+            else:
+                foreign = True
             continue
-        if name in (db_filename, "pdfs"):
+        if name == db_filename and _is_sqlite_database(path):
+            looks_like_prks = True
+            continue
+        if name == "pdfs" and _is_plain_dir(path):
             looks_like_prks = True
             continue
         foreign = True
     if looks_like_prks:
         return UNMARKED_PRKS
     return UNMARKED_FOREIGN if foreign else UNMARKED_EMPTY
+
+
+def _missing_selected_root(root: str) -> StorageRootRefused:
+    return StorageRootRefused(
+        "root_missing",
+        f"The storage root {root} selected in the PRKS bootstrap configuration is "
+        "missing or empty and has no prks-root.json. If it lives on a removable "
+        "disk or network share, make sure it is mounted. PRKS does not start a new, "
+        "empty library in its place.",
+    )
 
 
 def _foreign_root_error(root: str) -> StorageRootRefused:
@@ -398,7 +461,9 @@ def _foreign_root_error(root: str) -> StorageRootRefused:
 # --- V13, V7: component checks under the lease ------------------------------------
 
 _INBOX = "inbox"
-_LOG = "log"
+# Components whose existing entries are scanned for links (§7.3). The managed
+# namespaces and the derived thumbnail cache are flat; the inbox may nest.
+_FLAT_SCANNED = frozenset({"pdfs", "people", "thumbs"})
 
 
 def _component_entries(config: Any) -> Iterator[tuple[str, str]]:
@@ -413,16 +478,65 @@ def _component_entries(config: Any) -> Iterator[tuple[str, str]]:
         for path in (index, index + "-wal", index + "-shm", index + "-journal"):
             yield ("index", path)
     yield (_INBOX, config.processing_dir)
-    yield (_LOG, config.log_file)
+    yield ("log", config.log_file)
+
+
+def _link_error(path: str) -> StorageRootRefused:
+    return StorageRootRefused(
+        "root_contains_link",
+        f"{path} is a link. Links inside a storage root are not allowed; the storage "
+        "root itself may be a link, and the inbox and log may be placed elsewhere "
+        "with PRKS_FOR_PROCESSING_DIR and PRKS_LOG_FILE.",
+    )
+
+
+def _device_error(path: str) -> StorageRootRefused:
+    return StorageRootRefused(
+        "root_spans_filesystems",
+        f"{path} is on a different filesystem than the storage root. Every PRKS "
+        "component under the root must be on one filesystem, so renames between "
+        "maintenance and components stay atomic.",
+    )
+
+
+def _check_entry(path: str, root_dev: int) -> Optional[os.stat_result]:
+    st = _lstat(path)
+    if st is None:
+        return None
+    if is_link_or_reparse_point(st):
+        raise _link_error(path)
+    if stat.S_ISDIR(st.st_mode) and st.st_dev != root_dev:
+        raise _device_error(path)
+    return st
+
+
+def _scan_directory(directory: str, root_dev: int, *, recursive: bool) -> None:
+    """Refuse a link (or another filesystem) among the existing entries of ``directory``."""
+    pending = [directory]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise StorageRootRefused(
+                "root_unreadable", f"{current} inside the storage root cannot be read."
+            ) from exc
+        for entry in entries:
+            st = _check_entry(entry.path, root_dev)
+            if st is not None and recursive and stat.S_ISDIR(st.st_mode):
+                pending.append(entry.path)
 
 
 def _check_links_and_devices(config: Any, root: str, root_real: str) -> None:
     """V13 (nothing inside the root is a link) and V7 (one filesystem).
 
-    The processing inbox and the error log are warned about rather than
-    refused: both may legitimately live elsewhere through their overrides, and
-    a symlinked or separately mounted inbox is an existing deployment shape
-    that Phase A must keep starting.
+    Every component path under the root is walked segment by segment, the
+    existing entries of the managed namespaces, the thumbnail cache and the
+    inbox are scanned, and so is ``.prks-maintenance/`` with its direct
+    subdirectories. A component an override places outside the root is not
+    this root's business and is skipped.
     """
     root_dev = os.stat(root_real).st_dev
     checked: set[str] = set()
@@ -431,32 +545,24 @@ def _check_links_and_devices(config: Any, root: str, root_real: str) -> None:
         if rel is None:
             continue
         current = root_real
+        st: Optional[os.stat_result] = None
         for part in rel.split(os.sep):
             current = os.path.join(current, part)
             if current in checked:
+                st = _lstat(current)
                 continue
             checked.add(current)
-            st = _lstat(current)
+            st = _check_entry(current, root_dev)
             if st is None:
                 break
-            if is_link_or_reparse_point(st):
-                if kind in (_INBOX, _LOG):
-                    LOGGER.warning("storage_root_component_is_link component=%s", kind)
-                    break
-                raise StorageRootRefused(
-                    "root_contains_link",
-                    f"{current} is a link. Links inside a storage root are not allowed; "
-                    "the storage root itself may be a link.",
-                )
-            if stat.S_ISDIR(st.st_mode) and st.st_dev != root_dev:
-                if kind in (_INBOX, _LOG):
-                    LOGGER.warning("storage_root_component_other_filesystem component=%s", kind)
-                    break
-                raise StorageRootRefused(
-                    "root_spans_filesystems",
-                    f"{current} is on a different filesystem than the storage root. Every "
-                    "PRKS component under the root must be on one filesystem.",
-                )
+        if st is not None and stat.S_ISDIR(st.st_mode):
+            if kind in _FLAT_SCANNED:
+                _scan_directory(current, root_dev, recursive=False)
+            elif kind == _INBOX:
+                _scan_directory(current, root_dev, recursive=True)
+    maintenance = os.path.join(root_real, MAINTENANCE_DIRNAME)
+    if _check_entry(maintenance, root_dev) is not None:
+        _scan_directory(maintenance, root_dev, recursive=False)
 
 
 # --- V9, V10 warnings ---------------------------------------------------------------
@@ -487,10 +593,45 @@ def detect_filesystem_type(path: str, *, mounts_file: str = "/proc/mounts") -> O
     return best[1] if best else None
 
 
+def check_filesystem_type(path: str) -> None:
+    """V9 (§7.4): refuse a live SQLite-era root on a filesystem known to be unsafe.
+
+    A type known with certainty to be a network or network-backed FUSE mount
+    is refused; SQLite's WAL and locking are not reliable there. Any other
+    FUSE type is uncertain and only warned about. An unknown type (no
+    ``/proc/mounts``, other platforms) is not evidence either way.
+    """
+    fs_type = detect_filesystem_type(path)
+    if fs_type is None:
+        return
+    fs_type = fs_type.lower()
+    if fs_type in NETWORK_FILESYSTEM_TYPES:
+        raise StorageRootRefused(
+            "root_network_filesystem",
+            f"The storage root is on a {fs_type} network filesystem. The live SQLite "
+            "library and its indexes are not safe there; use a local disk.",
+        )
+    if fs_type.startswith("fuse"):
+        LOGGER.warning("storage_root_uncertain_filesystem fs_type=%s", safe_fs_label(fs_type))
+
+
+def safe_fs_label(fs_type: str) -> str:
+    """A filesystem type reduced to a short, log-safe label."""
+    cleaned = "".join(ch for ch in fs_type if ch.isalnum() or ch in "._-")
+    return cleaned[:32] or "unknown"
+
+
+def _nearest_existing(path: str) -> str:
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    return os.path.realpath(probe)
+
+
 def _startup_warnings(root_real: str) -> None:
-    fs_type = detect_filesystem_type(root_real)
-    if fs_type is not None and fs_type.lower() in NETWORK_FILESYSTEM_TYPES:
-        LOGGER.warning("storage_root_network_filesystem fs_type=%s", fs_type.lower())
     try:
         free = shutil.disk_usage(root_real).free
     except OSError:
@@ -597,14 +738,28 @@ def open_storage_root(
         home=home,
     )
 
+    check_filesystem_type(_nearest_existing(root))
+
+    # A root the bootstrap file selects was chosen earlier and must still be
+    # there: an absent or empty directory is far more likely an unmounted disk
+    # than a wish for a new library, so it is never created or minted here
+    # (§7.1). Choosing a genuinely new root is a separate command (Phase D).
+    may_create = getattr(config, "root_source", None) != SOURCE_CONFIG_FILE
+
     # Read-only look first: refuse foreign or non-bindable directories before
     # creating anything in them.
     if os.path.isdir(root):
         marker = read_marker(root)
         if marker is not None:
             _refuse_unless_bindable(marker, expected_storage_root_id)
-        elif classify_unmarked_root(root, db_filename=db_filename) == UNMARKED_FOREIGN:
-            raise _foreign_root_error(root)
+        else:
+            kind = classify_unmarked_root(root, db_filename=db_filename)
+            if kind == UNMARKED_FOREIGN:
+                raise _foreign_root_error(root)
+            if kind == UNMARKED_EMPTY and not may_create:
+                raise _missing_selected_root(root)
+    elif not may_create:
+        raise _missing_selected_root(root)
     else:
         try:
             os.mkdir(root, 0o700)
@@ -684,6 +839,8 @@ def _open_under_lease(
                 "root_foreign",
                 "This storage root has no prks-root.json, so it is not the library expected.",
             )
+        if kind == UNMARKED_EMPTY and getattr(config, "root_source", None) == SOURCE_CONFIG_FILE:
+            raise _missing_selected_root(root)
         document = new_marker_document(now=now)
         created = kind == UNMARKED_EMPTY
         adopted = kind == UNMARKED_PRKS

@@ -8,7 +8,7 @@ process environment and derives every component path from its answer.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Mapping, Optional
 
 from backend.storage import paths, resolver
@@ -66,6 +66,23 @@ class StorageConfig:
             log_override=log_override,
             root_source=resolved.source,
         )
+
+    def anchored_to(self, root_real: str) -> StorageConfig:
+        """This snapshot with every root-relative path re-anchored beneath ``root_real``.
+
+        The root may be a link (§7.3). It is resolved once, when its lease is
+        taken, and every later open must stay beneath that one resolved target:
+        a link retargeted afterwards must not move the database, PDFs or indexes
+        to a root whose lease and marker this process never checked.
+        Components an override places outside the root keep their paths, and
+        ``configured_root`` keeps the configured spelling for diagnostics.
+        """
+        root = self.root
+        changes = {
+            name: _anchored(getattr(self, name), root, root_real)
+            for name in _ROOT_ANCHORED_FIELDS
+        }
+        return replace(self, root=root_real, **changes)
 
     @classmethod
     def for_testing(cls, root: str) -> StorageConfig:
@@ -146,6 +163,30 @@ class StorageConfig:
             processing_fallback_allowed=processing_fallback_allowed,
             root_source=root_source,
         )
+
+
+_ROOT_ANCHORED_FIELDS = (
+    "db_path",
+    "pdfs_dir",
+    "thumbs_dir",
+    "people_dir",
+    "processing_dir",
+    "index_db_path",
+    "research_index_db_path",
+    "log_file",
+)
+
+
+def _anchored(path: str, root: str, root_real: str) -> str:
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
+    except ValueError:  # another drive on Windows
+        return path
+    if rel == os.curdir:
+        return root_real
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
+        return path
+    return os.path.join(root_real, rel)
 
 
 def _root_label(root_source: Optional[str], configured_root: Optional[str]) -> str:

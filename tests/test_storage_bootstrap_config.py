@@ -7,7 +7,6 @@ import sys
 import tempfile
 import textwrap
 import threading
-import time
 import unittest
 from unittest.mock import patch
 
@@ -229,6 +228,7 @@ _CHILD = textwrap.dedent(
     path, target, go = sys.argv[1], sys.argv[2], sys.argv[3]
     store = bc.BootstrapConfigStore(path, lock_timeout=30)
     snapshot = store.read()
+    print("ready", flush=True)
     while not os.path.exists(go):
         time.sleep(0.005)
     try:
@@ -238,6 +238,58 @@ _CHILD = textwrap.dedent(
         print("conflict")
     """
 )
+
+
+class TestSymlinkedConfig(BootstrapTestCase):
+    """A symlinked bootstrap file has one identity: one lock, one file."""
+
+    def setUp(self):
+        super().setUp()
+        self.real = os.path.join(self.tmp, "real", "config.json")
+        os.makedirs(os.path.dirname(self.real))
+        self.alias = os.path.join(self.tmp, "portable", "config.json")
+        os.makedirs(os.path.dirname(self.alias))
+        try:
+            os.symlink(self.real, self.alias)
+        except (OSError, NotImplementedError) as exc:  # pragma: no cover
+            self.skipTest(f"symlinks unavailable: {exc}")
+
+    def test_aliases_share_one_lock_and_one_file(self):
+        via_alias = bc.BootstrapConfigStore(self.alias, lock_timeout=0.2)
+        via_real = bc.BootstrapConfigStore(self.real, lock_timeout=0.2)
+        self.assertEqual(via_alias.path, via_real.path)
+        self.assertEqual(via_alias.lock_path, via_real.lock_path)
+        with via_alias.transaction() as txn:
+            with self.assertRaises(BootstrapConfigLockTimeout):
+                via_real.compare_and_set(expect=bc.expect_absent(), local_root=self.root("x"))
+            txn.write(expect=bc.expect_absent(), local_root=self.root("a"))
+        self.assertTrue(os.path.islink(self.alias))
+        self.assertEqual(bc.read_bootstrap_config(self.real).local_root, self.root("a"))
+        self.assertEqual(bc.read_bootstrap_config(self.alias).local_root, self.root("a"))
+        with self.assertRaises(BootstrapConfigConflict):
+            via_real.compare_and_set(expect=bc.expect_absent(), local_root=self.root("b"))
+
+    def test_processes_using_different_aliases_still_serialize(self):
+        bc.BootstrapConfigStore(self.real).compare_and_set(
+            expect=bc.expect_absent(), local_root=self.root("start")
+        )
+        go = os.path.join(self.tmp, "go")
+        script = _CHILD.format(project=_PROJECT_DIR)
+        procs = [
+            subprocess.Popen(
+                [sys.executable, "-c", script, path, self.root(f"p{i}"), go],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for i, path in enumerate((self.alias, self.real, self.alias, self.real))
+        ]
+        for proc in procs:
+            self.assertEqual(proc.stdout.readline().strip(), "ready")
+        open(go, "w").close()
+        verdicts = [p.communicate(timeout=60)[0].strip() for p in procs]
+        self.assertEqual(sorted(verdicts), ["conflict", "conflict", "conflict", "ok"])
+        self.assertTrue(os.path.islink(self.alias))
 
 
 class TestCrossProcess(BootstrapTestCase):
@@ -254,8 +306,9 @@ class TestCrossProcess(BootstrapTestCase):
             )
             for i in range(4)
         ]
-        # Let every child read its snapshot before any of them may write.
-        time.sleep(1.0)
+        # Every child has read its snapshot before any of them may write.
+        for proc in procs:
+            self.assertEqual(proc.stdout.readline().strip(), "ready")
         open(go, "w").close()
         outputs = [p.communicate(timeout=60) for p in procs]
         verdicts = [out.strip() for out, _err in outputs]

@@ -1650,26 +1650,40 @@ parallel configuration system:
 
 **Choices made inside the design's latitude.**
 
-- **Adoption (§7.1, open question 5).** An unmarked root is adopted when it
-  holds the mode's database file, a `pdfs/` entry, or `.prks-maintenance/`
-  state beyond a lock or preflight scaffold. The last case is an addition: a
-  root interrupted mid-restore may have neither database nor `pdfs/` in place,
-  and refusing it would strand `recover_incomplete_restore()`. An empty or
-  absent root becomes a new root from **any** source, as V3 prescribes; open
-  question 5 (explicit confirmation for a default-sourced first adoption)
-  remains open.
-- **V7 and V13 for the inbox and the log.** A symlinked or separately mounted
-  `for_processing/`, and the error log, are warnings rather than errors. Both
-  already have overrides that place them outside the root, and a linked or
-  mounted inbox is an existing deployment shape. Every other component is an
-  error.
+- **Adoption (§7.1, open question 5) needs proof by type and content.** An
+  unmarked root is adopted only when it holds the mode's database as a regular
+  file with a SQLite header, `pdfs/` as a plain directory, or recognized
+  restore state under `.prks-maintenance/` (`restore-journal.json`,
+  `rollback/`, `restore-staging/`, `backup/`). The last case lets a root
+  interrupted mid-restore, whose database and `pdfs/` may be moved away, still
+  reach `recover_incomplete_restore()`. A same-named entry of the wrong type, or
+  arbitrary maintenance content, is foreign. Open question 5 stays open.
+- **Only a first run creates a root.** An empty or absent root becomes a new
+  root for the CLI, `PRKS_STORAGE` and default sources, as V3 prescribes. A
+  root selected by the **bootstrap file** must already carry a marker or be
+  adoptable: absent or empty, it is far more likely an unmounted disk than a
+  wish for a new library, so it is refused (`root_missing`) without creating
+  anything. Choosing a genuinely new root is Phase D's command.
+- **V7 and V13 have no warning tier inside the root.** Every component
+  directory under the root, `.prks-maintenance/` and its direct
+  subdirectories, and the existing entries of `pdfs/`, `people/`, `thumbs/`
+  and (recursively) an in-root `for_processing/` must be on the root's
+  filesystem and must not be links. A component an override places outside the
+  root is not checked.
+- **Root links are resolved once.** After the lease is taken, the process
+  entry re-anchors every root-relative `StorageConfig` path beneath the leased
+  `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
+  cannot move database, PDF or index I/O to a root whose marker and lease were
+  never checked. `configured_root` keeps the configured spelling.
 - **V11 install directory.** A packaged build refuses any root inside the
   install directory. A source checkout refuses only the checkout itself or a
   root containing it, so existing self-hosted roots inside a checkout keep
   starting. The nested-marker scan is bounded to two levels and 2000 entries.
-- **V9, V10 at startup** are warnings (logged without paths). **V5, V6, V8**
-  run once per device; the result is cached in the marker's
-  `filesystem_probe`, and a different `st_dev` re-probes.
+- **V9** refuses a filesystem type known with certainty to be a network mount
+  (`nfs`, `cifs`, `smb3`, network FUSE such as `fuse.sshfs`, …), before
+  anything is written. Other FUSE types are uncertain and only warned about.
+  **V10** warns. **V5, V6, V8** run once per device; the result is cached in
+  the marker's `filesystem_probe`, and a different `st_dev` re-probes.
 - **Diagnostics.** Each bind records `active_process` (PID, host, start time)
   in the marker for the "already open" message. It is never read as authority.
 - **Inbox for new sources.** A `config_file` or `platform_default` root uses
@@ -1679,10 +1693,13 @@ parallel configuration system:
   or an `active` marker with a relocation role, is refused with the relocation
   ID and peer. A bootstrap `relocation` record with a known phase is parsed and
   never acted on; the marker check refuses whichever end is not bindable.
-- **`put_new` without hard links.** Publication is `link` (POSIX) or `rename`
-  (Windows), both no-overwrite. A filesystem without hard links falls back to
-  an exclusive reservation plus `replace`; the key is freshly minted and not
-  yet known to any reader.
+- **`put_new` publication** is always one atomic no-overwrite step: `link`
+  (POSIX), `rename` (Windows), or, on a filesystem without hard links,
+  `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`. Where none exists
+  it fails closed; the key is never reserved with an empty file.
+- **Bootstrap file identity.** `BootstrapConfigStore` canonicalizes a
+  symlinked config path to its target, so every alias shares one lock and a
+  write replaces the target rather than the link.
 - **Windows.** The lease is `msvcrt.locking` (`LockFile` on one byte, per
   handle). A marker replace that meets a sharing violation from a concurrent
   diagnostic reader is retried briefly.

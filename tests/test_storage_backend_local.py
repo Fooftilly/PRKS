@@ -138,17 +138,58 @@ class TestLocalSpecifics(LocalStorageTestCase):
         self.assertIn("storage_dir_sync_failed op=put_new", "\n".join(logs.output))
         self.assertNotIn(self.key.name, "\n".join(logs.output))
 
-    def test_filesystem_without_hard_links_still_publishes_exclusively(self):
+    def test_filesystem_without_hard_links_uses_no_replace_rename(self):
+        observed = []
+        real_rename = objects.rename_noreplace
+
         def no_links(*_a, **_k):
             raise OSError(1, "EPERM")
 
-        with patch.object(objects.os, "link", no_links):
+        def watched(src, dst):
+            # Nothing -- not even an empty reservation -- is under the key
+            # until the single atomic publication.
+            observed.append(os.path.lexists(dst))
+            return real_rename(src, dst)
+
+        with patch.object(objects.os, "link", no_links), patch.object(objects, "rename_noreplace", watched):
             self.backend.put_new(self.key, _writer(b"x"))
             with self.assertRaises(objects.ObjectExists):
                 self.backend.put_new(self.key, _writer(b"y"))
+        # The second attempt is refused before it writes anything.
+        self.assertEqual(observed, [False])
         with self.backend.open_read(self.key) as handle:
             self.assertEqual(handle.read(), b"x")
         self.assertEqual(os.listdir(os.path.join(self.root, "pdfs")), [self.key.name])
+
+    def test_without_any_exclusive_primitive_put_new_fails_closed(self):
+        def no_links(*_a, **_k):
+            raise OSError(1, "EPERM")
+
+        def unsupported(_src, _dst):
+            raise objects.ExclusivePublishUnsupported("none")
+
+        with patch.object(objects.os, "link", no_links), patch.object(objects, "rename_noreplace", unsupported):
+            with self.assertRaises(objects.ExclusivePublishUnsupported):
+                self.backend.put_new(self.key, _writer(b"x"))
+        self.assertIsNone(self.backend.stat(self.key))
+        self.assertEqual(os.listdir(os.path.join(self.root, "pdfs")), [])
+
+    def test_no_replace_rename_primitive(self):
+        src = os.path.join(self.root, "src")
+        dst = os.path.join(self.root, "dst")
+        for path, body in ((src, b"new"), (dst, b"old")):
+            with open(path, "wb") as handle:
+                handle.write(body)
+        try:
+            with self.assertRaises(FileExistsError):
+                objects.rename_noreplace(src, dst)
+        except objects.ExclusivePublishUnsupported:  # pragma: no cover - platform
+            self.skipTest("no-replace rename unavailable here")
+        with open(dst, "rb") as handle:
+            self.assertEqual(handle.read(), b"old")
+        os.remove(dst)
+        objects.rename_noreplace(src, dst)
+        self.assertFalse(os.path.exists(src))
 
     def test_links_are_refused_everywhere(self):
         pdfs = os.path.join(self.root, "pdfs")

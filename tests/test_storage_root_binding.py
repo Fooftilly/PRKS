@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -148,7 +149,8 @@ class TestNewAndAdoptedRoots(RootTestCase):
     def test_classification_uses_the_modes_database_name(self):
         root = self.path("lib")
         os.mkdir(root)
-        open(os.path.join(root, "prks_data_testing.db"), "w").close()
+        with open(os.path.join(root, "prks_data_testing.db"), "wb") as handle:
+            handle.write(root_binding.SQLITE_HEADER)
         self.assertEqual(
             root_binding.classify_unmarked_root(root, db_filename="prks_data_testing.db"),
             root_binding.UNMARKED_PRKS,
@@ -408,6 +410,8 @@ class TestLinksAndFilesystems(RootTestCase):
     def test_canonical_component_link_is_refused(self):
         root = self.path("lib")
         os.mkdir(root)
+        with open(os.path.join(root, "prks_data.db"), "wb") as handle:
+            handle.write(root_binding.SQLITE_HEADER)
         elsewhere = self.path("pdf-store")
         os.mkdir(elsewhere)
         _symlink_or_skip(self, elsewhere, os.path.join(root, "pdfs"))
@@ -427,16 +431,99 @@ class TestLinksAndFilesystems(RootTestCase):
         self.assertEqual(ctx.exception.reason, "root_contains_link")
         self.assertEqual(os.listdir(elsewhere), [])
 
-    def test_linked_inbox_is_kept_working_with_a_warning(self):
+    def test_linked_inbox_inside_the_root_is_refused(self):
         root = self.path("lib")
         os.makedirs(os.path.join(root, "pdfs"))
         inbox = self.path("inbox")
         os.mkdir(inbox)
         _symlink_or_skip(self, inbox, os.path.join(root, "for_processing"))
-        with self.assertLogs("prks.storage", level="WARNING") as logs:
+        with self.assertRaises(StorageRootRefused) as ctx:
             self.open(root)
-        self.assertTrue(any("storage_root_component_is_link component=inbox" in m for m in logs.output))
-        self.assertFalse(any(self.tmp in m for m in logs.output))
+        self.assertEqual(ctx.exception.reason, "root_contains_link")
+        self.assertFalse(os.path.exists(os.path.join(root, MARKER)))
+
+    def test_existing_object_links_inside_components_are_refused(self):
+        for component, nested in (
+            ("pdfs", ("a.pdf",)),
+            ("people", ("p_hash.webp",)),
+            ("thumbs", ("W-1_p1.webp",)),
+            ("for_processing", ("batch", "queued.pdf")),
+        ):
+            with self.subTest(component=component):
+                root = self.path(f"lib-{component}")
+                os.makedirs(os.path.join(root, "pdfs"))
+                directory = os.path.join(root, component, *nested[:-1])
+                os.makedirs(directory, exist_ok=True)
+                target = os.path.join(root, "pdfs", "b.pdf")
+                with open(target, "wb") as handle:
+                    handle.write(b"%PDF other")
+                _symlink_or_skip(self, target, os.path.join(directory, nested[-1]))
+                with self.assertRaises(StorageRootRefused) as ctx:
+                    self.open(root)
+                self.assertEqual(ctx.exception.reason, "root_contains_link")
+                self.assertFalse(os.path.exists(os.path.join(root, MARKER)))
+
+    def test_link_inside_maintenance_is_refused(self):
+        root = self.path("lib")
+        os.makedirs(os.path.join(root, "pdfs"))
+        os.makedirs(os.path.join(root, MAINT))
+        elsewhere = self.path("rollback-elsewhere")
+        os.mkdir(elsewhere)
+        _symlink_or_skip(self, elsewhere, os.path.join(root, MAINT, "rollback"))
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_contains_link")
+
+    def test_inbox_outside_the_root_is_not_this_roots_business(self):
+        root = self.path("lib")
+        inbox_target = self.path("inbox-real")
+        os.mkdir(inbox_target)
+        link = self.path("inbox-link")
+        _symlink_or_skip(self, inbox_target, link)
+        cfg = replace(StorageConfig.for_testing(root), processing_dir=link)
+        bound = root_binding.open_storage_root(cfg, register=False)
+        self._bound.append(bound)
+        self.assertTrue(bound.created)
+
+    def _other_device_for(self, target):
+        real_lstat = root_binding._lstat
+
+        def fake(path):
+            st = real_lstat(path)
+            if st is not None and path == target:
+                values = list(st)
+                values[2] = st.st_dev + 1
+                return os.stat_result(values)
+            return st
+
+        return patch.object(root_binding, "_lstat", fake)
+
+    def test_maintenance_on_another_filesystem_is_refused(self):
+        root = self.path("lib")
+        os.makedirs(os.path.join(root, "pdfs"))
+        with self._other_device_for(os.path.join(root, MAINT)):
+            with self.assertRaises(StorageRootRefused) as ctx:
+                self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_spans_filesystems")
+        self.assertFalse(os.path.exists(os.path.join(root, MARKER)))
+
+    def test_maintenance_subtree_on_another_filesystem_is_refused(self):
+        root = self.path("lib")
+        os.makedirs(os.path.join(root, "pdfs"))
+        os.makedirs(os.path.join(root, MAINT, "rollback"))
+        with self._other_device_for(os.path.join(root, MAINT, "rollback")):
+            with self.assertRaises(StorageRootRefused) as ctx:
+                self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_spans_filesystems")
+
+    def test_inbox_on_another_filesystem_is_refused(self):
+        root = self.path("lib")
+        os.makedirs(os.path.join(root, "pdfs"))
+        os.makedirs(os.path.join(root, "for_processing"))
+        with self._other_device_for(os.path.join(root, "for_processing")):
+            with self.assertRaises(StorageRootRefused) as ctx:
+                self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_spans_filesystems")
 
     def test_component_on_another_filesystem_is_refused(self):
         root = self.path("lib")
@@ -524,17 +611,33 @@ class TestWarnings(RootTestCase):
         self.assertEqual(root_binding.detect_filesystem_type("/home/u/lib", mounts_file=mounts), "ext4")
         self.assertIsNone(root_binding.detect_filesystem_type("/x", mounts_file=self.path("absent")))
 
-    def test_network_and_low_space_warnings_are_path_free(self):
+    def test_certain_network_filesystem_is_refused_before_any_write(self):
+        for fs_type in ("nfs", "nfs4", "cifs", "smb3", "fuse.sshfs"):
+            with self.subTest(fs_type=fs_type):
+                root = self.path(f"lib-{fs_type}")
+                with patch.object(root_binding, "detect_filesystem_type", return_value=fs_type):
+                    with self.assertRaises(StorageRootRefused) as ctx:
+                        self.open(root)
+                self.assertEqual(ctx.exception.reason, "root_network_filesystem")
+                self.assertFalse(os.path.exists(root))
+        existing = self.path("existing")
+        os.makedirs(os.path.join(existing, "pdfs"))
+        with patch.object(root_binding, "detect_filesystem_type", return_value="cifs"):
+            with self.assertRaises(StorageRootRefused):
+                self.open(existing)
+        self.assertEqual(os.listdir(existing), ["pdfs"])
+
+    def test_uncertain_filesystem_and_low_space_only_warn_and_stay_path_free(self):
         root = self.path("lib")
         usage = shutil.disk_usage(self.tmp)._replace(free=10)
         with (
-            patch.object(root_binding, "detect_filesystem_type", return_value="nfs"),
+            patch.object(root_binding, "detect_filesystem_type", return_value="fuse.unknownfs"),
             patch.object(root_binding.shutil, "disk_usage", return_value=usage),
             self.assertLogs("prks.storage", level="INFO") as logs,
         ):
             self.open(root)
         text = "\n".join(logs.output)
-        self.assertIn("storage_root_network_filesystem fs_type=nfs", text)
+        self.assertIn("storage_root_uncertain_filesystem fs_type=fuse.unknownfs", text)
         self.assertIn("storage_root_low_free_space", text)
         self.assertIn("storage_root_bound", text)
         self.assertNotIn(self.tmp, text)
@@ -706,10 +809,6 @@ class TestLoggingOnRefusal(RootTestCase):
             self.assertNotIn(self.tmp, " ".join(map(str, call.args)))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestProcessEntry(RootTestCase):
     def test_storage_root_option(self):
         from prks_app import build_parser
@@ -760,3 +859,135 @@ class TestProcessEntry(RootTestCase):
         )
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("PRKS cannot select its storage root", proc.stderr)
+
+
+class TestAdoptionNeedsProof(RootTestCase):
+    """§7.1: adoption is decided by type and content, never by name alone."""
+
+    def test_same_named_entries_of_the_wrong_type_are_foreign(self):
+        cases = {
+            "file-named-pdfs": lambda root: open(os.path.join(root, "pdfs"), "w").close(),
+            "dir-named-db": lambda root: os.mkdir(os.path.join(root, "prks_data.db")),
+            "db-without-sqlite-header": lambda root: _write_json(os.path.join(root, "prks_data.db"), {}),
+            "arbitrary-maintenance-content": lambda root: (
+                os.mkdir(os.path.join(root, MAINT)),
+                open(os.path.join(root, MAINT, "notes.txt"), "w").close(),
+            ),
+        }
+        for name, build in cases.items():
+            with self.subTest(case=name):
+                root = self.path(name)
+                os.mkdir(root)
+                build(root)
+                before = sorted(os.listdir(root))
+                with self.assertRaises(StorageRootRefused) as ctx:
+                    self.open(root)
+                self.assertEqual(ctx.exception.reason, "root_foreign")
+                self.assertEqual(sorted(os.listdir(root)), before)
+
+    def test_linked_pdfs_directory_is_not_proof(self):
+        root = self.path("lib")
+        os.mkdir(root)
+        elsewhere = self.path("store")
+        os.mkdir(elsewhere)
+        _symlink_or_skip(self, elsewhere, os.path.join(root, "pdfs"))
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_foreign")
+
+
+class TestConfigFileRootsAreNeverCreated(RootTestCase):
+    """A persisted selection whose disk is gone must not become a new empty library."""
+
+    def _cfg(self, root):
+        return replace(StorageConfig.for_testing(root), root_source="config_file")
+
+    def _open_cfg(self, cfg):
+        bound = root_binding.open_storage_root(cfg, register=False)
+        self._bound.append(bound)
+        return bound
+
+    def test_absent_config_file_root_is_refused_and_not_created(self):
+        root = self.path("nas", "library")
+        os.mkdir(self.path("nas"))  # the unmounted mountpoint
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self._open_cfg(self._cfg(root))
+        self.assertEqual(ctx.exception.reason, "root_missing")
+        self.assertFalse(os.path.exists(root))
+
+    def test_empty_config_file_root_is_refused_without_writing(self):
+        root = self.path("library")
+        os.mkdir(root)
+        open(os.path.join(root, ".DS_Store"), "w").close()
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self._open_cfg(self._cfg(root))
+        self.assertEqual(ctx.exception.reason, "root_missing")
+        self.assertEqual(os.listdir(root), [".DS_Store"])
+
+    def test_marked_or_adoptable_config_file_roots_still_open(self):
+        marked = self.path("marked")
+        first = self.open(marked)
+        first_id = first.storage_root_id
+        first.release()
+        self.assertEqual(self._open_cfg(self._cfg(marked)).storage_root_id, first_id)
+        legacy = self.path("legacy")
+        os.makedirs(os.path.join(legacy, "pdfs"))
+        self.assertTrue(self._open_cfg(self._cfg(legacy)).adopted)
+
+    def test_other_sources_keep_first_run_creation(self):
+        for source in ("cli", "env", "development_default", "platform_default", None):
+            with self.subTest(source=source):
+                root = self.path(f"new-{source}")
+                cfg = replace(StorageConfig.for_testing(root), root_source=source)
+                self.assertTrue(self._open_cfg(cfg).created)
+
+
+class TestRootSnapshot(RootTestCase):
+    """§7.3: a root link is resolved once; runtime paths stay on the leased target."""
+
+    def test_retargeting_the_root_link_does_not_move_runtime_io(self):
+        target_a = self.path("disk-a")
+        target_b = self.path("disk-b")
+        os.mkdir(target_a)
+        os.mkdir(target_b)
+        link = self.path("library")
+        _symlink_or_skip(self, target_a, link)
+        cfg = StorageConfig.for_testing(link)
+        bound = self.open(link)
+        anchored = bound.anchor(cfg)
+        os.remove(link)
+        os.symlink(target_b, link)
+
+        from backend.db_manager import PRKSDatabase
+
+        PRKSDatabase(storage=anchored, schema_path=os.path.join(_PROJECT_DIR, "backend", "db_schema.sql"))
+        os.makedirs(anchored.pdfs_dir, exist_ok=True)
+        with open(os.path.join(anchored.pdfs_dir, "x.pdf"), "wb") as handle:
+            handle.write(b"%PDF")
+        self.assertTrue(os.path.isfile(os.path.join(target_a, "prks_data.db")))
+        self.assertTrue(os.path.isfile(os.path.join(target_a, "pdfs", "x.pdf")))
+        self.assertEqual(os.listdir(target_b), [])
+        self.assertEqual(anchored.configured_root, cfg.configured_root)
+        root_binding.assert_config_matches_bound_root(anchored.root)
+
+    def test_anchoring_rewrites_only_root_relative_components(self):
+        cfg = replace(
+            StorageConfig.for_testing(self.path("lib")),
+            processing_dir="/srv/inbox",
+            log_file="/var/log/prks.log",
+        )
+        anchored = cfg.anchored_to(self.path("real"))
+        self.assertEqual(anchored.root, self.path("real"))
+        for name in ("db_path", "pdfs_dir", "thumbs_dir", "people_dir", "index_db_path", "research_index_db_path"):
+            self.assertTrue(getattr(anchored, name).startswith(self.path("real") + os.sep), name)
+        self.assertEqual(anchored.processing_dir, "/srv/inbox")
+        self.assertEqual(anchored.log_file, "/var/log/prks.log")
+
+    def test_process_entry_anchors_before_recovery(self):
+        with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
+            main = handle.read().split('if __name__ == "__main__":', 1)[1]
+        self.assertLess(main.index("bound_root.anchor(config)"), main.index("recover_incomplete_restore(config)"))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import stat
+import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -87,6 +88,62 @@ class ObjectNotFound(StorageObjectError):
 
 class ObjectIntegrityError(StorageObjectError):
     """The key names something that is not a plain object (a link, a directory)."""
+
+
+class ExclusivePublishUnsupported(StorageObjectError):
+    """The filesystem offers no atomic no-overwrite publication; nothing was written."""
+
+
+_AT_FDCWD = -100
+_LINUX_RENAME_NOREPLACE = 0x1
+_DARWIN_RENAME_EXCL = 0x4
+_NOREPLACE_UNSUPPORTED_ERRNOS = frozenset(
+    code
+    for code in (
+        getattr(errno, "EINVAL", None),
+        getattr(errno, "ENOSYS", None),
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
+    )
+    if code is not None
+)
+
+
+def rename_noreplace(src: str, dst: str) -> None:
+    """Atomically rename ``src`` to ``dst`` only if ``dst`` does not exist.
+
+    Linux ``renameat2(RENAME_NOREPLACE)`` or macOS ``renamex_np(RENAME_EXCL)``.
+    Raises ``FileExistsError`` when ``dst`` exists and
+    ``ExclusivePublishUnsupported`` when neither the platform nor the
+    filesystem provides the primitive.
+    """
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+    except OSError as exc:  # pragma: no cover - no C library handle
+        raise ExclusivePublishUnsupported("no-replace rename unavailable") from exc
+    src_b, dst_b = os.fsencode(src), os.fsencode(dst)
+    if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        func = libc.renameat2
+        func.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        func.restype = ctypes.c_int
+        rc = func(_AT_FDCWD, src_b, _AT_FDCWD, dst_b, _LINUX_RENAME_NOREPLACE)
+    elif sys.platform == "darwin" and hasattr(libc, "renamex_np"):  # pragma: no cover - macOS
+        func = libc.renamex_np
+        func.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        func.restype = ctypes.c_int
+        rc = func(src_b, dst_b, _DARWIN_RENAME_EXCL)
+    else:
+        raise ExclusivePublishUnsupported("no-replace rename unavailable on this platform")
+    if rc == 0:
+        return
+    code = ctypes.get_errno()
+    if code == errno.EEXIST:
+        raise FileExistsError(code, os.strerror(code), dst)
+    if code in _NOREPLACE_UNSUPPORTED_ERRNOS:
+        raise ExclusivePublishUnsupported("filesystem refuses no-replace rename")
+    raise OSError(code, os.strerror(code), dst)
 
 
 def validate_key_name(name: object) -> str:
@@ -332,12 +389,12 @@ class LocalFilesystemStorage:
     def _publish_exclusive(self, tmp: str, final: str) -> None:
         """Give ``tmp``'s bytes the name ``final`` only if ``final`` does not exist.
 
-        POSIX: ``link`` is the atomic no-overwrite rename. Windows: ``rename``
-        refuses an existing target. A filesystem without hard links falls back
-        to an exclusive reservation of ``final`` followed by ``replace``; the
-        name is freshly minted and unknown to any reader until this returns,
-        so the brief empty reservation is not observable through a key a
-        reader could hold.
+        Every path is one atomic, no-overwrite step, so a reader sees no object
+        or the whole object and a crash leaves nothing under the key: POSIX
+        ``link`` (then the temporary is dropped), Windows ``rename`` (which
+        refuses an existing target), or -- on a filesystem without hard links
+        -- the kernel's no-replace rename. Where none exists, publication fails
+        closed rather than reserving the key with an empty file.
         """
         if os.name == "nt":  # pragma: no cover - Windows only
             try:
@@ -353,15 +410,9 @@ class LocalFilesystemStorage:
             if exc.errno not in _NO_HARDLINK_ERRNOS:
                 raise
             try:
-                fd = os.open(final, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                rename_noreplace(tmp, final)
             except FileExistsError as exists:
                 raise ObjectExists("key already exists") from exists
-            os.close(fd)
-            try:
-                os.replace(tmp, final)
-            except BaseException:
-                _remove_quietly(final)
-                raise
             return
         _remove_quietly(tmp)
 

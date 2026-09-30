@@ -81,6 +81,9 @@ if __name__ == "__main__":
         raise SystemExit(2) from None
     # Held until this process exits: the single-process lease (root.lock).
     bound_root = open_storage(config)
+    # Every later open stays beneath the root that was validated and leased,
+    # even if a root symlink is retargeted while the process runs.
+    config = bound_root.anchor(config)
     recover_incomplete_restore(config)
     config = bind_storage(config)
     setup_logging(config)

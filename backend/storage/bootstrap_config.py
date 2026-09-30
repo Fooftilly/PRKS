@@ -288,7 +288,11 @@ class BootstrapConfigStore:
     """The one writer interface for the bootstrap configuration file."""
 
     def __init__(self, path: str, *, lock_timeout: float = DEFAULT_LOCK_TIMEOUT_SECONDS) -> None:
-        self.path = os.path.abspath(path)
+        # One identity per file: a symlinked config (a portable install's
+        # alias, say) is canonicalized to its target, so every alias takes the
+        # same sibling lock and the atomic replace rewrites the target instead
+        # of turning the link into a separate regular file.
+        self.path = os.path.realpath(path)
         self.lock_path = self.path + LOCK_SUFFIX
         self.lock_timeout = lock_timeout
 
