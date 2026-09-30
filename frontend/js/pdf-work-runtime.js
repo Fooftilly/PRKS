@@ -392,32 +392,48 @@
             }
         };
 
+        function pdfAnnotationHintId(item) {
+            const id = item.id || item.uuid || item.annotationId || item._id;
+            if (id == null || id === '') return '';
+            return String(id);
+        }
+
+        function pdfAnnotationHintPage(item) {
+            const page = item.pageIndex ?? item.page ?? item.pageNumber ?? item.page_index;
+            if (page === undefined || page === null) return '?';
+            return Number(page) + 1;
+        }
+
+        function pdfAnnotationHintText(item, idx) {
+            let text = '';
+            if (typeof root.annotationToText === 'function') {
+                try {
+                    text = root.annotationToText(item) || '';
+                } catch (_e) {
+                    text = '';
+                }
+            }
+            if (!text) text = item.contents || item.content || item.comment || 'Annotation ' + (idx + 1);
+            return String(text).replace(/\s+/g, ' ').trim().slice(0, 48);
+        }
+
+        function pdfAnnotationHint(item, idx) {
+            if (!item || typeof item !== 'object') return null;
+            const id = pdfAnnotationHintId(item);
+            if (!id) return null;
+            return {
+                id: id,
+                displayText: pdfAnnotationHintText(item, idx) + ' - p. ' + pdfAnnotationHintPage(item),
+            };
+        }
+
         runtime.getAnnotationHints = function () {
             const c = runtime.annotationCache;
             const items = c && Array.isArray(c.items) ? c.items : [];
             const out = [];
             for (let idx = 0; idx < items.length; idx++) {
-                const item = items[idx];
-                if (!item || typeof item !== 'object') continue;
-                const id = item.id || item.uuid || item.annotationId || item._id;
-                if (id == null || id === '') continue;
-                const sid = String(id);
-                const page = item.pageIndex ?? item.page ?? item.pageNumber ?? item.page_index;
-                const pageDisp = page !== undefined && page !== null ? Number(page) + 1 : '?';
-                let text = '';
-                if (typeof root.annotationToText === 'function') {
-                    try {
-                        text = root.annotationToText(item) || '';
-                    } catch (_e) {
-                        text = '';
-                    }
-                }
-                if (!text) text = item.contents || item.content || item.comment || 'Annotation ' + (idx + 1);
-                const short = String(text).replace(/\s+/g, ' ').trim().slice(0, 48);
-                out.push({
-                    id: sid,
-                    displayText: short + ' - p. ' + pageDisp,
-                });
+                const hint = pdfAnnotationHint(items[idx], idx);
+                if (hint) out.push(hint);
             }
             return out;
         };
@@ -558,38 +574,37 @@
             return true;
         };
 
-        runtime.destroy = function () {
-            if (runtime._destroyed) return;
+        function invokePdfRuntimeHook(owner, method) {
+            if (!owner || typeof owner[method] !== 'function') return;
+            try {
+                owner[method]();
+            } catch (_e) {}
+        }
+
+        function releasePdfSearch() {
             if (typeof runtime._unbindSearch === 'function') {
                 try {
                     runtime._unbindSearch();
-                } catch (_e0) {}
+                } catch (_e) {}
                 runtime._unbindSearch = null;
             }
             try {
                 runtime.closeSearch();
-            } catch (_e1) {}
+            } catch (_e) {}
+        }
+
+        runtime.destroy = function () {
+            if (runtime._destroyed) return;
+            releasePdfSearch();
             runtime._destroyed = true;
-            if (runtime.annotationPersistence && typeof runtime.annotationPersistence.destroy === 'function') {
-                try {
-                    runtime.annotationPersistence.destroy();
-                } catch (_e) {}
-            }
+            invokePdfRuntimeHook(runtime.annotationPersistence, 'destroy');
             runtime.annotationPersistence = null;
             try {
                 runtime.flushLastPage();
             } catch (_e) {}
-            if (runtime.lastPage && typeof runtime.lastPage.detach === 'function') {
-                try {
-                    runtime.lastPage.detach();
-                } catch (_e) {}
-            }
+            invokePdfRuntimeHook(runtime.lastPage, 'detach');
             runtime.lastPage = null;
-            if (runtime.viewer && typeof runtime.viewer.destroy === 'function') {
-                try {
-                    runtime.viewer.destroy();
-                } catch (_e) {}
-            }
+            invokePdfRuntimeHook(runtime.viewer, 'destroy');
             runtime.viewer = null;
         };
 

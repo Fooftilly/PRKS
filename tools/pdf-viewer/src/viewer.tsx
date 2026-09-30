@@ -22,6 +22,7 @@ import type { PdfAnnotationObject } from '@embedpdf/models';
 import { ViewerController } from './controller';
 import { buildPluginRegistrations, srcToInitialDocument } from './plugins';
 import { PageView } from './page-view';
+import { commitPdfSearch } from './search-commit';
 import { PdfSearchBar } from './search-bar';
 import { Toolbar } from './toolbar';
 import { WheelZoom } from './gestures';
@@ -318,36 +319,14 @@ function ApiBinder({
                     }
                 },
                 commitSearch: (query, epoch) => {
-                    const scope = searchCap?.forDocument(activeDocumentId);
-                    const seq = controller.nextSearchSeq();
-                    if (!scope) return;
-                    let task: { toPromise?: () => Promise<unknown> } | null = null;
-                    try {
-                        task = scope.searchAllPages(query);
-                    } catch {
-                        return;
-                    }
-                    const settled =
-                        task && typeof task.toPromise === 'function'
-                            ? task.toPromise()
-                            : Promise.resolve();
-                    settled
-                        .then(() => {
-                            if (seq !== controller.searchSeqCurrent()) return;
-                            const found = scope.getState();
-                            controller.emitSearchSettled({
-                                epoch,
-                                total: found && typeof found.total === 'number' ? found.total : 0,
-                                activeIndex:
-                                    found && typeof found.activeResultIndex === 'number'
-                                        ? found.activeResultIndex
-                                        : -1,
-                            });
-                        })
-                        .catch(() => {
-                            if (seq !== controller.searchSeqCurrent()) return;
-                            controller.emitSearchSettled({ epoch, total: 0, activeIndex: -1 });
-                        });
+                    commitPdfSearch({
+                        query,
+                        epoch,
+                        scope: searchCap?.forDocument(activeDocumentId),
+                        beginSeq: () => controller.nextSearchSeq(),
+                        currentSeq: () => controller.searchSeqCurrent(),
+                        settle: (result) => controller.emitSearchSettled(result),
+                    });
                 },
                 searchNext: () => {
                     const index = searchCap?.forDocument(activeDocumentId)?.nextResult();

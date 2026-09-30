@@ -2790,6 +2790,70 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return ran;
     }
 
+    function acknowledgedPdfAnnotationBase(ackList, state, id) {
+        if (typeof window.prksAcknowledgedPdfAnnotationBase === 'function') {
+            return window.prksAcknowledgedPdfAnnotationBase(ackList, state, id);
+        }
+        return { annotation_id: id, present: false, revision: 0, annotation: null };
+    }
+
+    function rawViewerAnnotation(evt, id) {
+        let raw = evt.annotation;
+        if (!raw || typeof raw !== 'object') {
+            return prksFindViewerAnnotation(liveAnnotationViewer(), id);
+        }
+        if (raw.raw && typeof raw.raw === 'object') return raw.raw;
+        return raw;
+    }
+
+    function durableAnnotationWriteIntent(evt) {
+        const annId = evt.annotationId || (evt.annotation && (
+            evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
+        ));
+        if (!annId && evt.kind !== 'delete') return null;
+        const id = String(annId || '');
+        const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
+        const state = runtime.annotationState || null;
+        const observed = acknowledgedPdfAnnotationBase(ackList, state, id);
+        if (evt.kind === 'delete') {
+            observed.annotation_id = id;
+            return { ackList: ackList, desired: null, observed: observed };
+        }
+        const raw = rawViewerAnnotation(evt, id);
+        if (!raw) return null;
+        return {
+            ackList: ackList,
+            desired: { annotation_id: id, annotation: raw },
+            observed: observed,
+        };
+    }
+
+    function adoptDurableAnnotationCache(ackList) {
+        // Refresh local projection from effective overlay, including the live
+        // viewer — ACK-only materialize may have removed a pending create/update
+        // that this deferred write restored.
+        const ackOnly = Array.isArray(ackList) ? ackList : [];
+        const cacheViewer = liveAnnotationViewer();
+        runtime.annotationCache = {
+            allItems: ackOnly,
+            rawItems: ackOnly,
+            items: ackOnly,
+            docId: cacheViewer && cacheViewer.getDocumentId
+                ? cacheViewer.getDocumentId()
+                : null,
+            workId: String(workId),
+        };
+    }
+
+    async function rollbackFailedDurableAnnotation() {
+        if (!stillLive()) return;
+        syncState.lastError = 'local_save_failed';
+        renderSyncIndicator();
+        try {
+            await restoreEffectiveViewerAnnotations();
+        } catch (_e2) {}
+    }
+
     function onAnnotationEvent(evt) {
         if (worker && worker.destroyed) return;
         if (!stillLive()) return;
@@ -2812,47 +2876,16 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 // past the user-input lock; then commit durably.
                 await prksWaitOutAnnotationMaterialization(runtime);
                 if (!stillLive()) return;
-                const annId = evt.annotationId || (evt.annotation && (
-                    evt.annotation.id || evt.annotation.uuid || evt.annotation.annotationId
-                ));
-                if (!annId && evt.kind !== 'delete') return;
-                const id = String(annId || '');
-                const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
-                const state = runtime.annotationState || null;
-                const observed =
-                    typeof window.prksAcknowledgedPdfAnnotationBase === 'function'
-                        ? window.prksAcknowledgedPdfAnnotationBase(ackList, state, id)
-                        : { annotation_id: id, present: false, revision: 0, annotation: null };
-                let desired = null;
-                if (evt.kind !== 'delete') {
-                    let raw = evt.annotation;
-                    if (!raw || typeof raw !== 'object') {
-                        raw = prksFindViewerAnnotation(liveAnnotationViewer(), id);
-                    } else if (raw.raw && typeof raw.raw === 'object') {
-                        raw = raw.raw;
-                    }
-                    if (!raw) return;
-                    desired = { annotation_id: id, annotation: raw };
-                } else {
-                    observed.annotation_id = id;
-                }
+                const intent = durableAnnotationWriteIntent(evt);
+                if (!intent) return;
                 try {
-                    await window.prksSavePdfAnnotationDurably(String(workId), desired, observed);
+                    await window.prksSavePdfAnnotationDurably(
+                        String(workId),
+                        intent.desired,
+                        intent.observed
+                    );
                     if (!stillLive()) return;
-                    // Refresh local projection from effective overlay, including
-                    // the live viewer — ACK-only materialize may have removed a
-                    // pending create/update that this deferred write restored.
-                    const ackOnly = Array.isArray(ackList) ? ackList : [];
-                    const cacheViewer = liveAnnotationViewer();
-                    runtime.annotationCache = {
-                        allItems: ackOnly,
-                        rawItems: ackOnly,
-                        items: ackOnly,
-                        docId: cacheViewer && cacheViewer.getDocumentId
-                            ? cacheViewer.getDocumentId()
-                            : null,
-                        workId: String(workId),
-                    };
+                    adoptDurableAnnotationCache(intent.ackList);
                     await restoreEffectiveViewerAnnotations();
                     syncState.localMutationSeen = true;
                     syncState.lastError = '';
@@ -2860,12 +2893,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     // Do NOT materialize PDF bytes here. Materialization runs
                     // only after semantic ACK of an acknowledged generation.
                 } catch (_err) {
-                    if (!stillLive()) return;
-                    syncState.lastError = 'local_save_failed';
-                    renderSyncIndicator();
-                    try {
-                        await restoreEffectiveViewerAnnotations();
-                    } catch (_e2) {}
+                    await rollbackFailedDurableAnnotation();
                 }
             });
             return;
@@ -2977,37 +3005,63 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             } else {
                 void maybeCatchUpMaterialization();
             }
+            async function refreshPendingPdfAnnotationsBestEffort() {
+                if (typeof window.prksRefreshPendingPdfAnnotations !== 'function') return;
+                try {
+                    await window.prksRefreshPendingPdfAnnotations();
+                } catch (_e) { /* best-effort */ }
+            }
+
+            function pdfAnnotationAckForWork(event) {
+                const ack = event && event.acknowledged;
+                const op = event && event.op;
+                const isPdfAck = ack && op && (
+                    op.operation === 'CREATE_PDF_ANNOTATION' ||
+                    op.operation === 'SET_PDF_ANNOTATION' ||
+                    op.operation === 'DELETE_PDF_ANNOTATION'
+                ) && String(op.entity_id) === String(workId);
+                return isPdfAck ? ack : null;
+            }
+
+            function applyLivePdfAnnotationAck(ack) {
+                if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes !== 'function') return;
+                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
+            }
+
+            async function unresolvedPdfAnnotationOps() {
+                if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps !== 'function') return false;
+                try {
+                    return await window.prksWorkHasUnresolvedPdfAnnotationOps(String(workId));
+                } catch (_eDirty) {
+                    return true;
+                }
+            }
+
+            function renderEffectiveAnnotationFallback() {
+                const ackItems =
+                    (runtime.annotationCache && runtime.annotationCache.items) || [];
+                const effective =
+                    typeof window.prksEffectiveWorkAnnotations === 'function'
+                        ? window.prksEffectiveWorkAnnotations(ackItems, String(workId))
+                        : ackItems;
+                renderAnnotationFallbackList(
+                    effective,
+                    runtime.annotationCache && runtime.annotationCache.docId,
+                    workId,
+                    ctx
+                );
+            }
+
             if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
                 stopSyncSubscribe = window.prksSync.subscribe(function (event) {
                     if (!stillLive()) return;
                     void (async function () {
-                        if (typeof window.prksRefreshPendingPdfAnnotations === 'function') {
-                            try {
-                                await window.prksRefreshPendingPdfAnnotations();
-                            } catch (_e) { /* best-effort */ }
-                        }
+                        await refreshPendingPdfAnnotationsBestEffort();
                         if (!stillLive()) return;
-                        const ack = event && event.acknowledged;
-                        const op = event && event.op;
-                        const isPdfAck = ack && op && (
-                            op.operation === 'CREATE_PDF_ANNOTATION' ||
-                            op.operation === 'SET_PDF_ANNOTATION' ||
-                            op.operation === 'DELETE_PDF_ANNOTATION'
-                        ) && String(op.entity_id) === String(workId);
-                            if (isPdfAck) {
-                            if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes === 'function') {
-                                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
-                            }
-                            let dirty = false;
-                            if (typeof window.prksWorkHasUnresolvedPdfAnnotationOps === 'function') {
-                                try {
-                                    dirty = await window.prksWorkHasUnresolvedPdfAnnotationOps(
-                                        String(workId)
-                                    );
-                                } catch (_eDirty) {
-                                    dirty = true;
-                                }
-                            }
+                        const ack = pdfAnnotationAckForWork(event);
+                        if (ack) {
+                            applyLivePdfAnnotationAck(ack);
+                            const dirty = await unresolvedPdfAnnotationOps();
                             if (!stillLive()) return;
                             // Every materialization — including the normal
                             // ACK-drained path — goes through a fresh coherent
@@ -3018,18 +3072,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             if (!dirty) {
                                 void maybeCatchUpMaterialization();
                             }
-                            const ackItems =
-                                (runtime.annotationCache && runtime.annotationCache.items) || [];
-                            const effective =
-                                typeof window.prksEffectiveWorkAnnotations === 'function'
-                                    ? window.prksEffectiveWorkAnnotations(ackItems, String(workId))
-                                    : ackItems;
-                            renderAnnotationFallbackList(
-                                effective,
-                                runtime.annotationCache && runtime.annotationCache.docId,
-                                workId,
-                                ctx
-                            );
+                            renderEffectiveAnnotationFallback();
                         } else {
                             // Non-PDF ACK may have cleared a dependency; retry catch-up.
                             void maybeCatchUpMaterialization();

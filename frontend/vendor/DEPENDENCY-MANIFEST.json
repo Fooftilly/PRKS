@@ -98,11 +98,11 @@
       "runtime_files": [
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
-          "sha256": "1bfcf024ec8a8f3350c20a65dfc97f3aeface8159562cd835720304be33c0ac5"
+          "sha256": "46162d0fe6389bcc2ac6d5e673cde776a19ad25aa1f74052a7f1998f447db424"
         },
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.css",
-          "sha256": "64c508a914442d499108c0ccb22bbd858ecfba978bfc066b43b5b52f9fe39054"
+          "sha256": "2aa01915857d9d12a3753860e8c3f5ad2c26eab0b5ce6ca7e8be28110dff0253"
         },
         {
           "path": "/vendor/prks-pdf-viewer/pdfium.wasm",

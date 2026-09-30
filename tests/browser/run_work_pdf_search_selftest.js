@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const { spawnSync } = require('child_process');
 const path = require('path');
 
 const rootDir = path.resolve(__dirname, '../..');
@@ -366,11 +367,66 @@ function testSearchBeforeViewerAttachesToTheSameInstance() {
     assertEq('still that viewer', runtime.viewer, viewer);
 }
 
+function testCommitSearchFailurePaths() {
+    const helper = path.join(rootDir, 'tools/pdf-viewer/src/search-commit.ts');
+    const runner = [
+        'import { commitPdfSearch } from ' + JSON.stringify(helper) + ';',
+        'const rows = [];',
+        'function run(name, scope, currentSeq, want) {',
+        '  const settled = [];',
+        '  let seq = 0;',
+        '  commitPdfSearch({',
+        '    query: "term",',
+        '    epoch: 4,',
+        '    scope: scope,',
+        '    beginSeq: function () { seq += 1; return seq; },',
+        '    currentSeq: function () { return currentSeq(seq); },',
+        '    settle: function (result) { settled.push(result); },',
+        '  });',
+        '  rows.push({ name: name, settled: settled, want: want });',
+        '}',
+        'const empty = [{ epoch: 4, total: 0, activeIndex: -1 }];',
+        'const throwing = {',
+        '  searchAllPages: function () { throw new Error("sync"); },',
+        '  getState: function () { return null; },',
+        '};',
+        'run("missing scope", null, function (seq) { return seq; }, empty);',
+        'run("missing scope stale", undefined, function () { return 99; }, []);',
+        'run("sync throw", throwing, function (seq) { return seq; }, empty);',
+        'run("sync throw stale", throwing, function () { return 99; }, []);',
+        'process.stdout.write(JSON.stringify(rows));',
+    ].join('\n');
+    const result = spawnSync(
+        process.execPath,
+        ['--experimental-strip-types', '--input-type=module', '-e', runner],
+        { cwd: rootDir, encoding: 'utf8' }
+    );
+    let rows = [];
+    try {
+        rows = JSON.parse(result.stdout || '[]');
+    } catch (_e) {
+        rows = [];
+    }
+    assert(
+        'commit search failure runner',
+        result.status === 0 && rows.length === 4,
+        (result.stderr || '') + (result.stdout || '')
+    );
+    rows.forEach(function (row) {
+        assertEq(
+            'commit ' + row.name,
+            JSON.stringify(row.settled),
+            JSON.stringify(row.want)
+        );
+    });
+}
+
 testQueryChangesDoNotReplaceTheViewer();
 testNextPreviousAndNoResults();
 testRouteReplacementDropsTheSearch();
 testIndependentPanes();
 testSearchBeforeViewerAttachesToTheSameInstance();
+testCommitSearchFailurePaths();
 
 console.log((failed ? 'FAILED ' : 'OK ') + passed + ' passed, ' + failed + ' failed');
 if (failed) process.exit(1);
