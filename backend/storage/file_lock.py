@@ -33,6 +33,7 @@ later phase and never happens here.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import os
 import stat
@@ -143,10 +144,11 @@ class ExclusiveFileLock:
         self.release()
 
     def __del__(self) -> None:  # pragma: no cover - interpreter shutdown
-        try:
+        # A handle dropped without release() is still closed; during
+        # interpreter shutdown ``os`` may already be gone, which is harmless
+        # because the kernel releases the lock on exit anyway.
+        with contextlib.suppress(Exception):
             self.release()
-        except Exception:
-            pass
 
 
 def _refuse_non_regular_existing(path: str) -> None:
