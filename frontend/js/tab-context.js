@@ -56,6 +56,7 @@
             workMetaBaseline: null,
             workMetaDraftWorkId: null,
             workMetaEditSession: 0,
+            workPrivateNoteSession: null,
             currentSavedView: null,
             researchNotesHints: null,
         };

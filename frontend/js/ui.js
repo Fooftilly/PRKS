@@ -2612,7 +2612,7 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
     const text = prksPrivateNotesTextForEntity(entityType, entityId, initialText);
     const hintKey = entityType === 'work' ? 'notes-private-file' : 'notes-private-folder';
     const hintBtn = prksHintBtnHtml(hintKey, 'About reminders', 'prks-private-notes-card__hint-btn');
-    return `
+    const card = `
         <div class="doc-meta-card prks-private-notes-card">
             <h3 class="prks-private-notes-card__head"><span class="prks-private-notes-card__head-text">Reminders</span>${hintBtn}</h3>
             <textarea
@@ -2626,6 +2626,8 @@ function renderPrksPrivateNotesCard(entityType, entityId, initialText) {
                 placeholder="e.g. Need this for…">${escapeHtml(text)}</textarea>
             <p class="meta-row prks-private-notes-status" id="prks-private-notes-status-${entityType}-${entityId}" aria-live="polite"></p>
         </div>`;
+    if (entityType !== 'work') return card;
+    return `<div data-prks-role="work-private-notes-anchor">${card}</div>`;
 }
 
 const PRKS_PRIVATE_DRAFT_MAX_COMMITTED = 64;
@@ -2669,20 +2671,126 @@ function prksPrunePrivateNoteDrafts() {
     }
 }
 
-function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
-    const key = prksPrivateNoteKey(entityType, entityId);
+function prksWorkPrivateNoteSessionCurrent(session, ctx, workId) {
+    return !!(
+        session && ctx && ctx.ui &&
+        String(session.workId) === String(workId) &&
+        String(session.ownerTabId) === String(ctx.tabId) &&
+        String(session.ownerGeneration) === String(ctx.generation)
+    );
+}
+
+function prksWorkPrivateNoteUnsaved(session) {
+    return !!(session && !session.retired && (
+        session.dirty || session.promise ||
+        session.state === 'drafting' || session.state === 'saving' || session.state === 'error'
+    ));
+}
+
+function prksRememberUnsavedWorkPrivateNote(ctx, session) {
+    if (!ctx || !ctx.ui || !prksWorkPrivateNoteUnsaved(session)) return;
+    if (String(session.ownerTabId) !== String(ctx.tabId)) return;
+    if (!ctx.ui.workPrivateNoteHolds) ctx.ui.workPrivateNoteHolds = Object.create(null);
+    ctx.ui.workPrivateNoteHolds[String(session.workId)] = String(session.draftText || '');
+}
+
+function prksTakeRememberedWorkPrivateNote(ctx, workId) {
+    const holds = ctx && ctx.ui ? ctx.ui.workPrivateNoteHolds : null;
+    const key = String(workId);
+    if (!holds || !Object.prototype.hasOwnProperty.call(holds, key)) return null;
+    const text = String(holds[key]);
+    delete holds[key];
+    return text;
+}
+
+function prksReconcileSavedWorkPrivateNote(ctx, settledSession, workId, content) {
+    if (!ctx || !ctx.ui) return;
+    const saved = String(content);
+    const key = String(workId);
+    const holds = ctx.ui.workPrivateNoteHolds;
+    if (holds && Object.prototype.hasOwnProperty.call(holds, key) && String(holds[key]) === saved) {
+        delete holds[key];
+    }
+    const current = ctx.ui.workPrivateNoteSession;
+    /* The in-flight session stays untouched until this settlement. A carried
+     * session is a later generation's copy and still looks dirty. */
+    if (!current || current === settledSession) return;
+    if (String(current.workId) !== key || String(current.ownerTabId) !== String(ctx.tabId)) return;
+    if (current.promise || current.editGeneration > 0) return;
+    if (String(current.draftText) !== saved) return;
+    current.dirty = false;
+    current.state = 'committed';
+    current.saveError = false;
+    current.updatedAt = Date.now();
+    const live = typeof ctx.getResource === 'function' ? ctx.getResource('privateNotesEditor') : null;
+    if (!live || String(live.entityType) !== 'work' || String(live.entityId) !== key) return;
+    const shown = live.textarea && live.textarea.isConnected ? String(live.textarea.value) : null;
+    if (shown == null || shown === saved) live.dirty = false;
+}
+
+function prksEnsureWorkPrivateNoteSession(ctx, workId, initialText) {
+    if (!ctx || !ctx.ui || workId == null || String(workId) === '') return null;
+    const existing = ctx.ui.workPrivateNoteSession;
+    if (prksWorkPrivateNoteSessionCurrent(existing, ctx, workId)) return existing;
+    /* Leaving this Work, or advancing generation, replaces the one session slot
+     * before an in-flight write can fail. Keep that pre-enqueue draft on this
+     * TabContext only. A flushed durable note stays shared Work state. */
+    if (existing && String(existing.ownerTabId) === String(ctx.tabId)) {
+        prksRememberUnsavedWorkPrivateNote(ctx, existing);
+    }
+    const remembered = prksTakeRememberedWorkPrivateNote(ctx, workId);
+    const carried = remembered != null;
+    const session = {
+        workId: String(workId),
+        ownerTabId: String(ctx.tabId),
+        ownerGeneration: ctx.generation,
+        draftText: carried ? remembered : String(initialText == null ? '' : initialText),
+        editGeneration: 0,
+        saveSequence: 0,
+        latestSaveToken: 0,
+        latestSaveEditGeneration: 0,
+        settledSaveToken: 0,
+        state: carried ? 'drafting' : 'committed',
+        saveError: false,
+        dirty: carried,
+        retired: false,
+        promise: null,
+        statusText: '',
+        updatedAt: Date.now(),
+    };
+    ctx.ui.workPrivateNoteSession = session;
+    return session;
+}
+
+function prksWorkPrivateNoteText(ctx, entityId, serverText) {
     const server = String(serverText == null ? '' : serverText);
     let acknowledged = server;
-    if (entityType === 'work' && typeof prksPendingWorkNoteText === 'function') {
+    if (typeof prksPendingWorkNoteText === 'function') {
         acknowledged = prksPendingWorkNoteText(entityId, 'work-private-note', server);
     }
-    const entry = prksPrivateNoteDrafts.get(key);
-    if (!entry) return acknowledged;
+    const session = ctx && ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, entityId) || session.retired) return acknowledged;
     /* Drop the draft only when the stored body matches it. A pending overlay
-     * can equal the draft and then clear before that body is updated; pruning
+     * can equal the draft and then clear before that body is updated; retiring
      * on the overlay lets the next Reminders paint show the stale text. */
+    if (session.state === 'committed' && !session.promise && session.draftText === server) {
+        session.retired = true;
+        return acknowledged;
+    }
+    return session.draftText;
+}
+
+function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
+    const server = String(serverText == null ? '' : serverText);
+    if (entityType === 'work') {
+        const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+        return prksWorkPrivateNoteText(ctx, entityId, server);
+    }
+    let acknowledged = server;
+    const entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
+    if (!entry) return acknowledged;
     if (entry.state === 'committed' && !entry.promise && entry.draftText === server) {
-        prksPrivateNoteDrafts.delete(key);
+        prksPrivateNoteDrafts.delete(entry.key);
         return acknowledged;
     }
     return entry.draftText;
@@ -2695,8 +2803,26 @@ function prksPrivateNotesOwnerCurrent(editor) {
 }
 
 function prksPrivateNotesSetStatus(editor, text) {
+    if (editor && editor.entityType === 'work' && editor.ctx && editor.ctx.ui) {
+        const session = editor.ctx.ui.workPrivateNoteSession;
+        if (session && String(session.workId) === String(editor.entityId)) session.statusText = text;
+    }
     if (!editor || !editor.statusEl || !prksRightPanelOwnedBy(editor.ctx, editor.statusEl)) return;
     editor.statusEl.textContent = text;
+}
+
+function prksPrivateNoteLatestSaveToken(editor) {
+    if (!editor) return 0;
+    if (editor.entityType === 'work' && editor.ctx && editor.ctx.ui) {
+        const session = editor.ctx.ui.workPrivateNoteSession;
+        if (session && String(session.workId) === String(editor.entityId) &&
+            String(session.ownerTabId) === String(editor.ctx.tabId) &&
+            String(session.ownerGeneration) === String(editor.generation)) {
+            return session.latestSaveToken;
+        }
+        return 0;
+    }
+    return (prksPrivateNoteDrafts.get(editor.key) || {}).latestSaveToken;
 }
 
 function prksPrivateNotesStatusForResult(code) {
@@ -2717,6 +2843,27 @@ function prksPrivateNotesStatusForResult(code) {
  * settles — otherwise the later text is stranded in the draft map while the
  * server keeps the earlier body.
  */
+function prksPrivateNotesRetryTarget(editor) {
+    if (!editor || !editor.ctx || typeof editor.ctx.getResource !== 'function') return null;
+    const live = editor.ctx.getResource('privateNotesEditor');
+    if (!live || live.ctx !== editor.ctx) return null;
+    if (String(live.entityType) !== String(editor.entityType)) return null;
+    if (String(live.entityId) !== String(editor.entityId)) return null;
+    if (String(live.generation) !== String(editor.generation)) return null;
+    if (!prksPrivateNotesOwnerCurrent(live)) return null;
+    return live;
+}
+
+function prksPrivateNotesRetryStillDirty(live) {
+    if (!live) return false;
+    if (live.dirty) return true;
+    if (String(live.entityType) !== 'work' || !live.ctx || !live.ctx.ui) return false;
+    const session = live.ctx.ui.workPrivateNoteSession;
+    if (!prksWorkPrivateNoteSessionCurrent(session, live.ctx, live.entityId) || !session.dirty) return false;
+    live.dirty = true;
+    return true;
+}
+
 function prksSchedulePrivateNoteBusyRetry(editor, token) {
     if (!editor || !editor.ctx) return;
     const timerKey = 'privateNotesBusyRetry:' + editor.key;
@@ -2726,21 +2873,17 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         editor._prksBusyRetryStop = null;
     }
     const tryAgain = function () {
-        if (token !== (prksPrivateNoteDrafts.get(editor.key) || {}).latestSaveToken) return;
-        const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
-        if (liveEditor !== editor) return;
-        if (!editor.dirty) return;
-        prksEnqueuePrivateNotesSave(editor);
+        const liveEditor = prksPrivateNotesRetryTarget(editor);
+        if (!liveEditor) return;
+        if (token !== prksPrivateNoteLatestSaveToken(liveEditor)) return;
+        if (!prksPrivateNotesRetryStillDirty(liveEditor)) return;
+        void prksEnqueuePrivateNotesSave(liveEditor);
     };
     if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.subscribe === 'function') {
         const stop = prksSync.subscribe(function () {
-            if (token !== (prksPrivateNoteDrafts.get(editor.key) || {}).latestSaveToken) {
-                stop();
-                editor._prksBusyRetryStop = null;
-                return;
-            }
-            const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
-            if (liveEditor !== editor || !editor.dirty) {
+            const liveEditor = prksPrivateNotesRetryTarget(editor);
+            if (!liveEditor || token !== prksPrivateNoteLatestSaveToken(liveEditor) ||
+                !prksPrivateNotesRetryStillDirty(liveEditor)) {
                 stop();
                 editor._prksBusyRetryStop = null;
                 return;
@@ -2761,17 +2904,36 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
 }
 
 function prksEnqueueWorkPrivateNoteSave(editor) {
-    const entry = prksPrivateNoteDraft(editor.entityType, editor.entityId, editor.textarea.value);
-    const content = String(entry.draftText);
+    if (!editor || !editor.ctx || !editor.ctx.ui) return null;
+    const entityId = String(editor.entityId);
+    let session = editor.ctx.ui.workPrivateNoteSession;
+    if (!prksWorkPrivateNoteSessionCurrent(session, editor.ctx, entityId)) {
+        session = prksEnsureWorkPrivateNoteSession(
+            editor.ctx,
+            entityId,
+            editor.textarea ? editor.textarea.value : ''
+        );
+    }
+    if (!session || String(session.workId) !== entityId ||
+        String(session.ownerTabId) !== String(editor.ctx.tabId)) {
+        return null;
+    }
+    if (editor.textarea && editor.textarea.isConnected) {
+        session.draftText = String(editor.textarea.value);
+    }
+    const content = String(session.draftText);
     editor.dirty = false;
-    entry.saveSequence += 1;
-    const token = entry.saveSequence;
-    entry.latestSaveToken = token;
-    entry.latestSaveEditGeneration = entry.editGeneration;
-    entry.state = 'saving';
-    entry.saveError = false;
-    entry.updatedAt = Date.now();
+    session.dirty = false;
+    session.saveSequence += 1;
+    const token = session.saveSequence;
+    session.latestSaveToken = token;
+    session.latestSaveEditGeneration = session.editGeneration;
+    session.state = 'saving';
+    session.saveError = false;
+    session.retired = false;
+    session.updatedAt = Date.now();
     prksPrivateNotesSetStatus(editor, 'Saving…');
+    /* prksSaveWorkNoteDurably wakes sync before this completion settles the UI. */
     const promise = (async function () {
         if (typeof prksEnsureWorkNotesBase === 'function' &&
             typeof prksWorkNoteObserved === 'function' &&
@@ -2786,9 +2948,9 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             ? prksWorkNoteObserved(editor.ctx, 'work-private-note')
             : null;
         if (typeof prksSaveWorkNoteDurably !== 'function') return { code: 'unavailable' };
-        return prksSaveWorkNoteDurably(editor.entityId, 'work-private-note', content, observed);
+        return prksSaveWorkNoteDurably(entityId, 'work-private-note', content, observed);
     })();
-    entry.promise = promise;
+    session.promise = promise;
     void promise
         .then(async function (result) {
             const code = result && result.code;
@@ -2796,15 +2958,16 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             if (ok && typeof prksRefreshPendingWorkNotes === 'function') {
                 await prksRefreshPendingWorkNotes();
             }
-            if (token !== entry.latestSaveToken) return;
-            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
-            entry.settledSaveToken = token;
-            entry.promise = null;
+            if (token !== session.latestSaveToken) return;
+            const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
+            session.settledSaveToken = token;
+            session.promise = null;
             if (code === 'scope_busy' && !hasNewerDraft) {
                 // Park-flush may still be in flight; keep this body and retry.
-                entry.saveError = false;
-                entry.state = 'drafting';
-                entry.updatedAt = Date.now();
+                session.saveError = false;
+                session.state = 'drafting';
+                session.dirty = true;
+                session.updatedAt = Date.now();
                 editor.dirty = true;
                 if (prksPrivateNotesOwnerCurrent(editor)) {
                     const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
@@ -2815,10 +2978,13 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
                 prksSchedulePrivateNoteBusyRetry(editor, token);
                 return;
             }
-            entry.saveError = !ok && !hasNewerDraft;
-            entry.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
-            entry.updatedAt = Date.now();
-            prksPrunePrivateNoteDrafts();
+            session.saveError = !ok && !hasNewerDraft;
+            session.state = hasNewerDraft ? 'drafting' : !ok ? 'error' : 'committed';
+            session.dirty = hasNewerDraft;
+            session.updatedAt = Date.now();
+            if (ok && !hasNewerDraft) {
+                prksReconcileSavedWorkPrivateNote(editor.ctx, session, entityId, content);
+            }
             if (!prksPrivateNotesOwnerCurrent(editor)) return;
             const liveEditor = editor.ctx.getResource ? editor.ctx.getResource('privateNotesEditor') : null;
             if (liveEditor !== editor) return;
@@ -2840,13 +3006,14 @@ function prksEnqueueWorkPrivateNoteSave(editor) {
             editor.ctx.setTimer('privateNotesStatus', timer);
         })
         .catch(function () {
-            if (token !== entry.latestSaveToken) return;
-            const hasNewerDraft = entry.editGeneration > entry.latestSaveEditGeneration;
-            entry.settledSaveToken = token;
-            entry.promise = null;
-            entry.saveError = !hasNewerDraft;
-            entry.state = hasNewerDraft ? 'drafting' : 'error';
-            entry.updatedAt = Date.now();
+            if (token !== session.latestSaveToken) return;
+            const hasNewerDraft = session.editGeneration > session.latestSaveEditGeneration;
+            session.settledSaveToken = token;
+            session.promise = null;
+            session.saveError = !hasNewerDraft;
+            session.state = hasNewerDraft ? 'drafting' : 'error';
+            session.dirty = hasNewerDraft;
+            session.updatedAt = Date.now();
             if (prksPrivateNotesOwnerCurrent(editor)) {
                 prksPrivateNotesSetStatus(editor, hasNewerDraft ? 'Drafting…' : 'Could not save');
             }
@@ -2952,7 +3119,14 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
     });
 }
 
-function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
+function prksPrivateNotesEditorKey(entityType, entityId, ctx) {
+    if (String(entityType) === 'work' && ctx) {
+        return 'work:' + String(ctx.tabId) + ':' + String(ctx.generation) + ':' + String(entityId);
+    }
+    return prksPrivateNoteKey(entityType, entityId);
+}
+
+function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     const idSuffix = `${entityType}-${entityId}`;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
@@ -2961,30 +3135,51 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
     if (!ta || ta.dataset.prksNotesBound === '1') return;
     ta.dataset.prksNotesBound = '1';
     const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
-    const entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
-    if (entry) ta.value = entry.draftText;
-    else if (entityType === 'work' && typeof prksPrivateNotesTextForEntity === 'function') {
+    const editorKey = prksPrivateNotesEditorKey(entityType, entityId, ctx);
+    let session = null;
+    let entry = null;
+    if (String(entityType) === 'work') {
         const live = ctx.getEntity && ctx.getEntity('work');
-        ta.value = prksPrivateNotesTextForEntity(entityType, entityId, live && live.private_notes);
+        const painted = prksWorkPrivateNoteText(ctx, entityId, live && live.private_notes);
+        session = prksEnsureWorkPrivateNoteSession(ctx, entityId, painted);
+        ta.value = session && !session.retired ? session.draftText : painted;
+    } else {
+        entry = prksPrivateNoteDrafts.get(prksPrivateNoteKey(entityType, entityId));
+        if (entry) ta.value = entry.draftText;
     }
     const editor = {
-        key: prksPrivateNoteKey(entityType, entityId),
+        key: editorKey,
         entityType: String(entityType),
         entityId: String(entityId),
         ctx: ctx,
         generation: ctx.generation,
         textarea: ta,
         statusEl: statusEl,
-        timerKey: 'privateNotesDebounce:' + prksPrivateNoteKey(entityType, entityId),
-        dirty: !!(entry && entry.state === 'drafting'),
+        timerKey: 'privateNotesDebounce:' + editorKey,
+        dirty: String(entityType) === 'work'
+            ? !!(session && (session.state === 'drafting' || session.dirty))
+            : !!(entry && entry.state === 'drafting'),
     };
     const schedule = function () {
-        const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
-        draft.draftText = ta.value;
-        draft.editGeneration += 1;
-        draft.state = 'drafting';
-        draft.saveError = false;
-        draft.updatedAt = Date.now();
+        if (String(entityType) === 'work') {
+            const liveSession = prksEnsureWorkPrivateNoteSession(ctx, entityId, ta.value);
+            if (liveSession) {
+                liveSession.draftText = String(ta.value);
+                liveSession.editGeneration += 1;
+                liveSession.state = 'drafting';
+                liveSession.saveError = false;
+                liveSession.retired = false;
+                liveSession.dirty = true;
+                liveSession.updatedAt = Date.now();
+            }
+        } else {
+            const draft = prksPrivateNoteDraft(entityType, entityId, ta.value);
+            draft.draftText = ta.value;
+            draft.editGeneration += 1;
+            draft.state = 'drafting';
+            draft.saveError = false;
+            draft.updatedAt = Date.now();
+        }
         editor.dirty = true;
         prksPrivateNotesSetStatus(editor, 'Drafting…');
         const timer = window.setTimeout(function () {
@@ -3018,7 +3213,7 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
             const liveEditor = ctx.getResource && ctx.getResource('privateNotesEditor');
             if (liveEditor !== editor) return;
             const live = ctx.getEntity && ctx.getEntity('work');
-            const next = prksPrivateNotesTextForEntity(entityType, entityId, live && live.private_notes);
+            const next = prksWorkPrivateNoteText(ctx, entityId, live && live.private_notes);
             if (ta.value === next) return;
             ta.value = next;
         });
@@ -3028,10 +3223,28 @@ function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
     }
 }
 
+function initPrksPrivateNotesEditor(entityType, entityId, ownerCtx) {
+    const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
+    if (String(entityType) === 'work' && typeof window.prksVuePresentWorkPrivateNotes === 'function') {
+        if (window.prksVuePresentWorkPrivateNotes(ctx, entityId)) return;
+    }
+    prksBindPrivateNotesField(entityType, entityId, ctx);
+}
+
+window.prksBindPrivateNotesField = prksBindPrivateNotesField;
+window.prksEnsureWorkPrivateNoteSession = prksEnsureWorkPrivateNoteSession;
 window.prksFlushPendingPrivateNotes = prksFlushPendingPrivateNotes;
 window.prksPrivateNotesTextForEntity = prksPrivateNotesTextForEntity;
 window.prksResetPrivateNoteDraftsForTest = function () {
     prksPrivateNoteDrafts.clear();
+    if (typeof prksForEachLiveTabContext !== 'function') return;
+    prksForEachLiveTabContext(function (ctx) {
+        if (ctx && ctx.ui) {
+            ctx.ui.workPrivateNoteSession = null;
+            ctx.ui.workPrivateNoteHolds = null;
+        }
+    });
 };
 
 function prksWorkDetailsMode(ownerCtx, work) {
@@ -3071,10 +3284,15 @@ function prksWorkRightPanelStackHtml(work, mode = 'view', ownerCtx) {
     );
 }
 
-function prksDismissWorkPanelRead() {
+function prksDismissWorkPanelReadSurface() {
     const panel = document.getElementById('panel-content');
     if (panel && panel.__prksWorkPanelReadRequest) delete panel.__prksWorkPanelReadRequest;
     if (typeof window.prksVueDismissWorkPanelRead === 'function') window.prksVueDismissWorkPanelRead();
+}
+
+function prksDismissWorkPanelRead() {
+    prksDismissWorkPanelReadSurface();
+    if (typeof window.prksVueDismissWorkPrivateNotes === 'function') window.prksVueDismissWorkPrivateNotes();
 }
 
 function prksWorkPanelTagRows(work) {
@@ -3088,7 +3306,8 @@ function prksWorkPanelTagRows(work) {
 
 function prksPublishWorkPanelRead(ctx, work) {
     if (!ctx || !work || prksWorkDetailsMode(ctx, work) !== 'view') {
-        prksDismissWorkPanelRead();
+        /* People and tags still show Reminders. Dismiss the read surface only. */
+        prksDismissWorkPanelReadSurface();
         return;
     }
     const panel = document.getElementById('panel-content');
