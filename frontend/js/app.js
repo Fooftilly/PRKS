@@ -6356,10 +6356,21 @@ function initForms() {
     }
 
     const saveRoleBtn = document.getElementById('save-role-btn');
+    /* One busy owner for the shared Create Link button. A newer opening
+     * takes the token; an older finally must not restore that button. */
+    let roleModalBusyGeneration = null;
     saveRoleBtn.onclick = async () => {
         /* No offline guard: linking an existing Person to an existing Work is
-         * durable-first, so it works with or without the server. */
-        const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+         * durable-first, so it works with or without the server.
+         * The opener is the pane that opened this modal, not the pane focused
+         * when Create Link is clicked. */
+        const captured = typeof prksRoleModalCapturedOrigin === 'function'
+            ? prksRoleModalCapturedOrigin() : null;
+        if (!captured) return;
+        const ownerCtx = captured.ctx;
+        const generation = captured.generation;
+        const openedOnWorkId = captured.openedOnWorkId;
+        const openGeneration = captured.openGeneration;
         const person_id = document.getElementById('role-person-id').value;
         const work_id = document.getElementById('role-work-id').value;
         if (!person_id || !work_id) {
@@ -6389,7 +6400,12 @@ function initForms() {
             }
             return;
         }
+        roleModalBusyGeneration = openGeneration;
         if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, true, { busyLabel: 'Linking…' });
+        const roleModalMaySettle = function () {
+            return typeof prksRoleModalMaySettleUi === 'function' &&
+                prksRoleModalMaySettleUi(ownerCtx, generation, openedOnWorkId, openGeneration);
+        };
         try {
             /* The SAME durable path the Work panel's Link button takes. This
              * modal can target a Work other than the one on screen, which is
@@ -6408,9 +6424,16 @@ function initForms() {
             } : null;
             const workSummary = typeof prksWorkCardSummaryForRoleIntent === 'function'
                 ? prksWorkCardSummaryForRoleIntent(_cwDupCheck, work_id) : null;
+            if (typeof prksWorkRoleIntentStill === 'function' &&
+                !prksWorkRoleIntentStill(ownerCtx, generation, work_id, openedOnWorkId)) return;
             const result = await prksSaveWorkPersonRoleDurably(
                 work_id, person_id, role_type, String(credit_name || '').trim(),
-                personContext, workSummary);
+                personContext, workSummary,
+                function () {
+                    return typeof prksRoleModalOwnerSessionStill === 'function' &&
+                        prksRoleModalOwnerSessionStill(ownerCtx, generation, openedOnWorkId);
+                });
+            if (result.code === 'stale') return;
             if (result.code !== 'saved') {
                 const message = result.code === 'unavailable'
                     ? 'This file\u2019s linked people cannot be changed right now. Open it once '
@@ -6422,14 +6445,14 @@ function initForms() {
                         : result.code === 'dependency-failed'
                           ? 'This person could not be created on PRKS, so they cannot be linked to a file. Discard that creation in Sync Diagnostics and add them again.'
                           : 'Could not create link.';
-                if (typeof prksAlertDialog === 'function') {
+                if (roleModalMaySettle() && typeof prksAlertDialog === 'function') {
                     await prksAlertDialog({ title: 'Could not link', message });
                 }
                 return;
             }
         } catch (e) {
             console.error(e);
-            if (typeof prksAlertDialog === 'function') {
+            if (roleModalMaySettle() && typeof prksAlertDialog === 'function') {
                 await prksAlertDialog({
                     title: 'Could not link',
                     message: 'Could not create link.',
@@ -6437,7 +6460,17 @@ function initForms() {
             }
             return;
         } finally {
-            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveRoleBtn, false);
+            if (roleModalBusyGeneration === openGeneration &&
+                typeof prksSetButtonBusy === 'function') {
+                prksSetButtonBusy(saveRoleBtn, false);
+                if (roleModalBusyGeneration === openGeneration) roleModalBusyGeneration = null;
+            }
+        }
+        /* A completion that outlives its opener must not close a newer modal
+         * or switch the pane that is focused now. */
+        if (typeof prksRoleModalMaySettleUi !== 'function' ||
+            !prksRoleModalMaySettleUi(ownerCtx, generation, openedOnWorkId, openGeneration)) {
+            return;
         }
         closeModals();
         /* Durable save already wrote the pending overlay (and ACK will patch

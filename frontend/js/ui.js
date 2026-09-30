@@ -679,6 +679,7 @@ function openModal(id) {
         modalEl.dataset.prksOpenGeneration === String(openGeneration)
         && !modalEl.classList.contains('hidden');
     if (id === 'role-modal') {
+        prksCaptureRoleModalOrigin(openGeneration);
         deferBaseline = true;
         modalEl.setAttribute('inert', '');
         const finishRole = () => {
@@ -1608,6 +1609,10 @@ async function prksEditRoleCreditOnWork(btn) {
     const initial =
         currentDisplay && canonical && currentDisplay === canonical ? '' : currentDisplay;
 
+    const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ownerCtx && ownerCtx.generation;
+    const openedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    const openedOnWorkId = openedWork && openedWork.id ? String(openedWork.id) : '';
     const next = await prksPromptTextDialog({
         title: 'Name on this file',
         message: hint,
@@ -1615,6 +1620,7 @@ async function prksEditRoleCreditOnWork(btn) {
         okLabel: 'Save',
     });
     if (next === null) return;
+    if (!prksWorkRoleIntentStill(ownerCtx, generation, workId, openedOnWorkId)) return;
 
     /* The credit override is part of the LINK's state, not a separate record,
      * so it travels under the same revision scope as the link itself. */
@@ -1744,6 +1750,9 @@ async function initWorkMetaRoleLinker(workId) {
 
 async function addRoleToWorkFromMetaEditor(workId) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const generation = ownerCtx && ownerCtx.generation;
+    const openedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+    const openedOnWorkId = openedWork && openedWork.id ? String(openedWork.id) : '';
     const personHidden = document.getElementById('meta-role-person-id');
     const personSearch = document.getElementById('meta-role-person-search');
     const roleHidden = document.getElementById('meta-role-type');
@@ -1794,6 +1803,7 @@ async function addRoleToWorkFromMetaEditor(workId) {
          * Work record would carry an abstract that can reach a megabyte into
          * durable storage for a value no card renders. */
         const workSummary = prksWorkCardSummaryForRoleIntent(_cw, resolvedWorkId);
+        if (!prksWorkRoleIntentStill(ownerCtx, generation, resolvedWorkId, openedOnWorkId)) return;
         const result = await prksSaveWorkPersonRoleDurably(
             resolvedWorkId, personId, roleType, String(creditName || '').trim(),
             context, workSummary);
@@ -3117,12 +3127,18 @@ function prksPublishWorkPanelRead(ctx, work) {
     const publishedDisplay = typeof prksFormatPublishedForDisplay === 'function'
         ? prksFormatPublishedForDisplay(publishedRaw)
         : (publishedRaw == null ? '' : String(publishedRaw));
+    const roleOverlay = typeof prksEffectiveWorkDetailRoles === 'function'
+        ? prksEffectiveWorkDetailRoles(effective)
+        : effective;
+    const effectiveForRead = roleOverlay && roleOverlay !== effective
+        ? Object.assign({}, effective, { roles: roleOverlay.roles })
+        : effective;
     const request = {
         ownerTabId: String(ctx.tabId),
         ownerGeneration: ctx.generation,
         workId: String(installed.id),
         work: editor,
-        effectiveWork: effective,
+        effectiveWork: effectiveForRead,
         tags: prksWorkPanelTagRows(installed),
         sourceKind: typeof prksInferWorkSourceKind === 'function' ? prksInferWorkSourceKind(editor) : '',
         publishedDisplay: publishedDisplay == null ? '' : String(publishedDisplay),
@@ -3140,6 +3156,124 @@ function prksPublishWorkPanelRead(ctx, work) {
     }
     panel.__prksWorkPanelReadRequest = request;
 }
+
+/* Pending people stay on the read surface. The role editor does not write chips. */
+function prksRefreshOwnedWorkPanelRead(ctx, work) {
+    if (!ctx || !work || prksWorkDetailsMode(ctx, work) !== 'view') return false;
+    if (!prksRightPanelOwnedBy(ctx)) return false;
+    const effective = typeof prksEffectiveWorkDetailRoles === 'function'
+        ? prksEffectiveWorkDetailRoles(work)
+        : work;
+    const roles = effective && Array.isArray(effective.roles) ? effective.roles : [];
+    if (typeof window.prksVueRefreshWorkPanelRead === 'function') {
+        const painted = window.prksVueRefreshWorkPanelRead({
+            ownerTabId: String(ctx.tabId),
+            ownerGeneration: ctx.generation,
+            workId: String(work.id),
+            people: roles,
+        });
+        if (painted) return true;
+    }
+    prksPublishWorkPanelRead(ctx, work);
+    return true;
+}
+window.prksRefreshOwnedWorkPanelRead = prksRefreshOwnedWorkPanelRead;
+
+/**
+ * A role intent captured on this owner must not run after that Work was replaced
+ * or the shared panel belongs to another pane.
+ * `openedOnWorkId` is the Work this context was showing when the intent started.
+ * A modal may name a different Work; that is allowed only while the opener is unchanged.
+ */
+function prksWorkRoleIntentStill(ctx, generation, workId, openedOnWorkId) {
+    if (!ctx || ctx.destroyed || !workId) return false;
+    if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    const panel = document.getElementById('panel-content');
+    if (panel && panel.dataset.prksOwnerTabId && panel.dataset.prksOwnerTabId !== String(ctx.tabId)) return false;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (openedOnWorkId) {
+        if (!live || String(live.id) !== String(openedOnWorkId)) return false;
+        if (route && route.name === 'work' && route.params &&
+            String(route.params.workId || '') !== String(openedOnWorkId)) return false;
+    }
+    if (live && String(live.id) === String(workId) && route && route.name === 'work' &&
+        route.params && String(route.params.workId || '') !== String(workId)) return false;
+    return true;
+}
+window.prksWorkRoleIntentStill = prksWorkRoleIntentStill;
+
+/**
+ * The role modal's opener, taken when that modal starts opening.
+ * Save consumes this record. It does not read whichever pane is focused later.
+ */
+function prksCaptureRoleModalOrigin(openGeneration) {
+    const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+    const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
+    const route = ctx && (ctx.lastResolvedRoute || ctx.route);
+    let entityId = '';
+    if (route && route.params) {
+        entityId = String(route.params.workId || route.params.personId || '');
+    }
+    if (!entityId && work && work.id != null) entityId = String(work.id);
+    window.__prksRoleModalOrigin = {
+        tabId: ctx && ctx.tabId ? String(ctx.tabId) : '',
+        generation: ctx && typeof ctx.generation === 'number' ? ctx.generation : null,
+        openedWorkId: work && work.id != null ? String(work.id) : '',
+        entityId: entityId,
+        routeName: route && route.name ? String(route.name) : '',
+        openGeneration: openGeneration,
+    };
+}
+
+function prksRoleModalCapturedOrigin() {
+    const modalEl = document.getElementById('role-modal');
+    const origin = window.__prksRoleModalOrigin;
+    if (!modalEl || !origin || origin.openGeneration == null) return null;
+    if (String(modalEl.dataset.prksOpenGeneration || '') !== String(origin.openGeneration)) return null;
+    if (!origin.tabId || typeof prksGetTabContext !== 'function') return null;
+    const ctx = prksGetTabContext(origin.tabId);
+    if (!ctx || ctx.destroyed) return null;
+    return {
+        ctx: ctx,
+        generation: origin.generation,
+        openedOnWorkId: origin.openedWorkId || '',
+        openGeneration: origin.openGeneration,
+    };
+}
+
+/** Opener session after an await. Focus can move; the opened Work and generation cannot. */
+function prksRoleModalOwnerSessionStill(ctx, generation, openedOnWorkId) {
+    if (!ctx || ctx.destroyed) return false;
+    if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    if (!openedOnWorkId) return true;
+    const live = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!live || String(live.id) !== String(openedOnWorkId)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (route && route.name === 'work' && route.params &&
+        String(route.params.workId || '') !== String(openedOnWorkId)) return false;
+    return true;
+}
+
+/**
+ * Post-save UI belongs to the opener only while that pane is still focused on
+ * the same Work and this role-modal opening is still the visible one.
+ */
+function prksRoleModalMaySettleUi(ctx, generation, openedOnWorkId, openGeneration) {
+    if (!prksRoleModalOwnerSessionStill(ctx, generation, openedOnWorkId)) return false;
+    const modalEl = document.getElementById('role-modal');
+    if (!modalEl || modalEl.classList.contains('hidden')) return false;
+    if (String(modalEl.dataset.prksOpenGeneration || '') !== String(openGeneration)) return false;
+    const origin = window.__prksRoleModalOrigin;
+    if (!origin || String(origin.openGeneration) !== String(openGeneration)) return false;
+    if (String(origin.tabId || '') !== String(ctx.tabId)) return false;
+    if (typeof prksTabContextIsFocused === 'function' && !prksTabContextIsFocused(ctx)) return false;
+    return true;
+}
+window.prksCaptureRoleModalOrigin = prksCaptureRoleModalOrigin;
+window.prksRoleModalCapturedOrigin = prksRoleModalCapturedOrigin;
+window.prksRoleModalOwnerSessionStill = prksRoleModalOwnerSessionStill;
+window.prksRoleModalMaySettleUi = prksRoleModalMaySettleUi;
 
 function prksFolderRightPanelStackHtml(folder) {
     const notes = renderPrksPrivateNotesCard('folder', folder.id, folder.private_notes);
@@ -4020,6 +4154,26 @@ function prksWorkRoleUnlinkMessage(fileLabel, roleType) {
     return 'Remove the link to ' + fileName + ' (' + role + ')?';
 }
 
+/**
+ * Re-read after the unmounted base fetch. A Person page has no role editor,
+ * so that fetch is another await. The confirming pane's route, entity, and
+ * generation are the fence; a Work page fences the captured Work owner.
+ */
+function prksWorkRoleUnlinkSessionStill(ctx, generation, routeName, personId, workId) {
+    if (!ctx || ctx.destroyed) return false;
+    if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    if (routeName === 'person') {
+        const person = ctx.getEntity ? ctx.getEntity('person') : null;
+        if (!person || String(person.id) !== String(personId)) return false;
+        const route = ctx.lastResolvedRoute || ctx.route;
+        if (!route || route.name !== 'person' || !route.params) return false;
+        return String(route.params.personId || '') === String(personId);
+    }
+    const openedOnWorkId = routeName === 'work' ? workId : '';
+    return typeof prksWorkRoleIntentStill === 'function' &&
+        prksWorkRoleIntentStill(ctx, generation, workId, openedOnWorkId);
+}
+
 async function prksRemoveWorkRoleLink(btn) {
     if (!btn) return;
     const workId = (btn.getAttribute('data-work-id') || '').trim();
@@ -4047,7 +4201,15 @@ async function prksRemoveWorkRoleLink(btn) {
         typeof prksTabContextOwnsEntityRoute === 'function' &&
         !prksTabContextOwnsEntityRoute(ownerCtx, generation, entityType, entityId, routeName)
     ) return;
-    const result = await prksSaveWorkPersonRoleDurably(workId, personId, roleType, null, null);
+    const openedOnWorkId = entityType === 'work' ? workId : '';
+    if (!prksWorkRoleIntentStill(ownerCtx, generation, workId, openedOnWorkId)) return;
+    const result = await prksSaveWorkPersonRoleDurably(
+        workId, personId, roleType, null, null, null,
+        function () {
+            return prksWorkRoleUnlinkSessionStill(
+                ownerCtx, generation, routeName, personId, workId);
+        });
+    if (result.code === 'stale') return;
     if (result.code === 'unavailable') {
         await prksAlertMessage(
             'This file\u2019s linked people cannot be changed right now. Open it once while '
