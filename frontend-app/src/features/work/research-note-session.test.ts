@@ -79,8 +79,10 @@ function holdResearchNotesSave(workId = 'work-a') {
   ctx.root.innerHTML = '<div data-prks-role="editor-status"></div>'
   const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
   const releases: Array<(value: { code: string }) => void> = []
-  notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve) => {
+  const rejects: Array<(reason?: unknown) => void> = []
+  notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve, reject) => {
     releases.push(resolve)
+    rejects.push(reject)
   })
   const pending = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, workId)
   return {
@@ -88,6 +90,7 @@ function holdResearchNotesSave(workId = 'work-a') {
     status,
     pending,
     releases,
+    rejects,
     refresh(nextId = workId) {
       const started = ctx.generation
       ctx.beginRoute({ name: 'work', params: { workId: nextId } })
@@ -232,6 +235,39 @@ describe('work research notes session', () => {
       notesWindow.prksWorkNoteOperations = prior.ops
       notesWindow.prksOfflineRuntimeState = prior.offline
     }
+  })
+
+  it('keeps a domain save result on a same-Work refresh', async () => {
+    const cases = [
+      { code: 'scope_busy', status: 'Still syncing — wait or resolve the conflict in Diagnostics' },
+      { code: 'unknown_base', status: 'Notes cannot be saved yet — open this file while connected once' },
+      { code: 'too-long', status: 'This note is too large to save' },
+      { code: 'unavailable', status: 'Local changes could not be read from browser storage' },
+    ]
+    for (const item of cases) {
+      notesWindow.prksResetResearchDraftsForTest()
+      notesWindow.prksDestroyAllTabContexts()
+      document.body.innerHTML = ''
+      const held = holdResearchNotesSave()
+      const { started, notes } = installRefreshedNotes(held)
+      held.releases[0]({ code: item.code })
+      await held.pending
+      expect(held.ctx.generation).not.toBe(started)
+      expect(notes.saveError).toBe(true)
+      expect(held.status.innerText).toBe(item.status)
+      expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
+    }
+  })
+
+  it('keeps a rejected save on the generic error after a same-Work refresh', async () => {
+    const held = holdResearchNotesSave()
+    const { started, notes } = installRefreshedNotes(held)
+    held.rejects[0](new Error('storage failed'))
+    await held.pending.catch(() => undefined)
+    expect(held.ctx.generation).not.toBe(started)
+    expect(notes.saveError).toBe(true)
+    expect(held.status.innerText).toBe('Error saving changes')
+    expect(notesWindow.prksResearchNotesMayPaint(held.ctx, 'work-a', started)).toBe(false)
   })
 
   it('does not let save 1 settle a newer same-Work save', async () => {

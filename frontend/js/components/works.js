@@ -114,10 +114,12 @@ function prksSyncResearchNotesState(notes, entry) {
 }
 
 function prksLiveResearchDraftStatus(entry, result) {
-    if (!entry || entry.state === 'error') return 'Error saving changes';
-    if (entry.state === 'saving') return 'Saving...';
-    if (entry.state === 'drafting') return 'Drafting...';
-    return prksResearchNotesStatusForResult(result && result.code, !!(result && result.pending));
+    if (entry && entry.state === 'drafting') return 'Drafting...';
+    if (entry && entry.state === 'saving') return 'Saving...';
+    if (result && result.code) {
+        return prksResearchNotesStatusForResult(result.code, !!result.pending);
+    }
+    return 'Error saving changes';
 }
 
 function prksSyncLiveResearchDraft(workId, entry, generation, result) {
