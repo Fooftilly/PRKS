@@ -263,32 +263,34 @@ async function assertScrollAwayKeepsDraft(viewerRef, root, annotationId) {
         activeDraft === 'typed draft',
         activeDraft,
     );
-    root.style.height = hostHeight || '640px';
-    viewerRef.goToPage(1);
-    await waitFor(
-        () => root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
-        5000,
-        'anchor remounts with the page',
-    );
-    assert(
-        'returning to the page does not dismiss the comment',
-        commentDismisses.length === dismissesBeforeScroll,
-        JSON.stringify(commentDismisses.slice(dismissesBeforeScroll)),
-    );
-    assert('returning to the page keeps the active draft', activeDraft === 'typed draft', activeDraft);
     if (typeof viewerRef.deselectAnnotation === 'function') {
+        assert(
+            'page is still virtualized out before deselect',
+            !root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+        );
         viewerRef.deselectAnnotation();
         await waitFor(
             () => commentDismisses.some((c) => c && c.annotationId === annotationId),
             4000,
-            'comment dismiss',
+            'deselect while scrolled away',
         );
         assert(
-            'deselect dismisses the comment request',
+            'deselect while scrolled away dismisses the comment',
             commentDismisses.some((c) => c && c.annotationId === annotationId),
-            JSON.stringify(commentDismisses.slice(-1)),
+            JSON.stringify(commentDismisses.slice(dismissesBeforeScroll)),
+        );
+        assert(
+            'deselect while scrolled away clears the active draft',
+            activeDraft === '',
+            activeDraft,
+        );
+        assert(
+            'deselect did not require returning to the page',
+            !root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
         );
     }
+    root.style.height = hostHeight || '640px';
+    viewerRef.goToPage(1);
 }
 
 async function createViaToolbar(viewerRef, root, kind, ySelect) {

@@ -98,7 +98,7 @@
       "runtime_files": [
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
-          "sha256": "ecc88fe2b07f5921e3340381ee0840bc855fcfc6c948e440f308ae607bbcad66"
+          "sha256": "4d2ba98114d29cd98c199ec024a09a3317c09892a30ffa3ac7b4398c740dbc3c"
         },
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.css",

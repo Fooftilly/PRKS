@@ -10,6 +10,7 @@ ADAPTER = (ROOT / "frontend-app" / "src" / "features" / "work" / "pdf-adapter.ts
 POPUP = (ROOT / "frontend-app" / "src" / "features" / "work" / "pdf-annotation-popup.ts").read_text(encoding="utf-8")
 FLOATING = (ROOT / "frontend-app" / "src" / "floating" / "bind-floating-position.ts").read_text(encoding="utf-8")
 MENU = (ROOT / "tools" / "pdf-viewer" / "src" / "annotation-menu.tsx").read_text(encoding="utf-8")
+VIEWER = (ROOT / "tools" / "pdf-viewer" / "src" / "viewer.tsx").read_text(encoding="utf-8")
 UI = (ROOT / "frontend" / "js" / "ui.js").read_text(encoding="utf-8")
 MAIN = (ROOT / "frontend-app" / "src" / "main.ts").read_text(encoding="utf-8")
 
@@ -51,6 +52,12 @@ class WorkPdfAnnotationPopupTests(unittest.TestCase):
         cleanup = MENU[MENU.index("return () => {"):MENU.index("}, [commentable, id, pageIndex]")]
         self.assertLess(cleanup.index("getSelectedAnnotations"), cleanup.index("dismissRef.current"))
         self.assertIn("if (!stillSelected)", cleanup)
+        selection = VIEWER[VIEWER.index("let lastSelected"):VIEWER.index("controller.attach")]
+        empty_selection = selection[selection.index("if (!id)"):selection.index("lastSelected = id")]
+        self.assertLess(
+            empty_selection.index("onAnnotationCommentDismiss"),
+            empty_selection.index("lastSelected = ''"),
+        )
         self.assertIn("export function readWorkPdfAnnotationPopup", ADAPTER)
         self.assertIn("export function intentSaveWorkPdfAnnotationComment", ADAPTER)
         self.assertIn("savePdfAnnotationComment", ADAPTER)

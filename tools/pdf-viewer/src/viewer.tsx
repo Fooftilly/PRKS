@@ -62,12 +62,14 @@ function ApiBinder({
     initialPage,
     onPageChange,
     onAnnotationSelect,
+    onAnnotationCommentDismiss,
 }: {
     controller: ViewerController;
     mode: 'work' | 'preview';
     initialPage?: number;
     onPageChange?: PrksPdfViewerOptions['onPageChange'];
     onAnnotationSelect?: PrksPdfViewerOptions['onAnnotationSelect'];
+    onAnnotationCommentDismiss?: PrksPdfViewerOptions['onAnnotationCommentDismiss'];
 }) {
     const searchFlight = useRef<PdfSearchFlightSlot>({ current: null });
     const { registry, activeDocumentId } = useRegistry();
@@ -164,8 +166,15 @@ function ApiBinder({
                       const first = selected[0];
                       const id = first && first.object ? String(first.object.id) : '';
                       if (id === lastSelected) return;
+                      if (!id) {
+                          const previousSelected = lastSelected;
+                          if (previousSelected) {
+                              onAnnotationCommentDismiss?.({ annotationId: previousSelected });
+                          }
+                          lastSelected = '';
+                          return;
+                      }
                       lastSelected = id;
-                      if (!id) return;
                       const pi = first.object.pageIndex;
                       onAnnotationSelect?.({
                           annotationId: id,
@@ -374,6 +383,7 @@ function ApiBinder({
         mode,
         onPageChange,
         onAnnotationSelect,
+        onAnnotationCommentDismiss,
     ]);
 
     return null;
@@ -421,6 +431,7 @@ function ViewerTree({
                         initialPage={options.initialPage}
                         onPageChange={options.onPageChange}
                         onAnnotationSelect={options.onAnnotationSelect}
+                        onAnnotationCommentDismiss={options.onAnnotationCommentDismiss}
                     />
                     {activeDocumentId ? (
                         <Toolbar
