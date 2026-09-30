@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 const props = defineProps<{
   initialText: string
@@ -7,6 +7,7 @@ const props = defineProps<{
 }>()
 
 const field = ref<HTMLTextAreaElement | null>(null)
+const notesEditorId = computed(() => `${props.editorRegionId}-field`)
 
 onMounted(() => {
   if (field.value) field.value.value = props.initialText
@@ -16,7 +17,9 @@ onMounted(() => {
 <template>
   <div class="work-notes-pane">
     <div class="work-notes-pane-header">
-      <h3 class="work-notes-title">Research Notes</h3>
+      <h3 class="work-notes-title">
+        <label :for="notesEditorId">Research Notes</label>
+      </h3>
       <div class="work-notes-pane-header-actions">
         <button
           type="button"
@@ -39,7 +42,12 @@ onMounted(() => {
       </div>
     </div>
     <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" :id="editorRegionId">
-      <textarea ref="field" data-prks-role="research-notes-editor" :value="initialText"></textarea>
+      <textarea
+        ref="field"
+        :id="notesEditorId"
+        data-prks-role="research-notes-editor"
+        :value="initialText"
+      ></textarea>
     </div>
   </div>
 </template>

@@ -94,8 +94,9 @@ function prksResearchNotesTextForWork(workId, serverText, ctx) {
     return entry.text;
 }
 
-function prksResearchNotesMayPaint(owner, workId) {
+function prksResearchNotesMayPaint(owner, workId, generation) {
     if (!owner || owner.destroyed) return false;
+    if (typeof owner.isCurrent === 'function' && !owner.isCurrent(generation)) return false;
     const live = owner.getEntity ? owner.getEntity('work') : null;
     return !!(live && String(live.id) === String(workId || ''));
 }
@@ -112,10 +113,11 @@ function prksSyncResearchNotesState(notes, entry) {
     notes.saveError = entry.state === 'error';
 }
 
-function prksSyncLiveResearchDraft(workId, entry) {
+function prksSyncLiveResearchDraft(workId, entry, generation) {
     if (!entry || typeof prksForEachLiveTabContext !== 'function') return;
     prksForEachLiveTabContext(function (ctx) {
         if (entry.ownerTabId && String(ctx.tabId) !== String(entry.ownerTabId)) return;
+        if (typeof generation === 'number' && ctx.generation !== generation) return;
         const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
         if (!work || String(work.id) !== String(workId)) return;
         const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
@@ -1340,14 +1342,18 @@ function initEasyMDE(ctx, work) {
         ctx.setResource('workNotes', workNotes, function () {
             if (typeof workNotes.stopSync === 'function') workNotes.stopSync();
             workNotes.destroy();
+            if (typeof window.prksVueDismissWorkResearchNotes === 'function') {
+                window.prksVueDismissWorkResearchNotes(ctx);
+            }
         });
     }
+    const notesGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
     if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
         workNotes.stopSync = window.prksSync.subscribe(function (event) {
             if (!event || event.operation !== 'SET_WORK_RESEARCH_NOTE') return;
             if (event.op && event.op.entity_id !== workNotes.workId) return;
             if (workNotes.drafting) return;
-            if (!prksResearchNotesMayPaint(ctx, workNotes.workId)) return;
+            if (!prksResearchNotesMayPaint(ctx, workNotes.workId, notesGeneration)) return;
             const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
             if (!statusEl) return;
             if (event.acknowledged) {
@@ -1382,6 +1388,7 @@ function initEasyMDE(ctx, work) {
     }
 
     const notesChangeHandler = () => {
+        if (!prksResearchNotesMayPaint(ctx, work.id, notesGeneration)) return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
         prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value(), ctx);
@@ -1394,13 +1401,26 @@ function initEasyMDE(ctx, work) {
     easyMDE.__notesChangeHandler = notesChangeHandler;
 }
 
+function prksResearchNotesEditOwner(notes, ctx) {
+    if (ctx) return ctx;
+    let found = null;
+    if (typeof prksForEachLiveTabContext === 'function') {
+        prksForEachLiveTabContext(function (live) {
+            if (found || !live || typeof live.getResource !== 'function') return;
+            if (live.getResource('workNotes') === notes) found = live;
+        });
+    }
+    return found;
+}
+
 function prksWorkNotesMarkEdit(notes, workId, text, ctx) {
     if (!notes) return 0;
     notes.editGeneration = (Number(notes.editGeneration) || 0) + 1;
     notes.drafting = true;
     const id = String(workId || notes.workId || '');
-    if (id) {
-        const entry = prksResearchDraftEntry(ctx, id, text);
+    const owner = prksResearchNotesEditOwner(notes, ctx);
+    if (id && owner) {
+        const entry = prksResearchDraftEntry(owner, id, text);
         entry.text = String(text == null ? '' : text);
         entry.editGeneration = Math.max(entry.editGeneration + 1, notes.editGeneration);
         entry.state = 'drafting';
@@ -1468,6 +1488,7 @@ function prksResearchNotesStatusForResult(code, pending) {
 
 function prksEnqueueWorkResearchNotesSave(ctx, workId) {
     const owner = ctx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
+    const saveGeneration = owner && typeof owner.generation === 'number' ? owner.generation : undefined;
     const _cwSave = owner && owner.getEntity ? owner.getEntity('work') : null;
     const id = workId || (_cwSave && _cwSave.id);
     if (!id) return;
@@ -1550,11 +1571,11 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
-                prksSyncLiveResearchDraft(id, transient);
+                prksSyncLiveResearchDraft(id, transient, saveGeneration);
                 prksPruneResearchDrafts();
             }
             if (!localApplied && !transientApplied) return undefined;
-            if (prksResearchNotesMayPaint(owner, id)) {
+            if (prksResearchNotesMayPaint(owner, id, saveGeneration)) {
                 const liveStatus = owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
                 if (liveStatus) {
                     liveStatus.innerText =
@@ -1577,10 +1598,10 @@ function prksEnqueueWorkResearchNotesSave(ctx, workId) {
                 transient.updatedAt = Date.now();
                 transientApplied = true;
                 prksSyncResearchNotesState(notes, transient);
-                prksSyncLiveResearchDraft(id, transient);
+                prksSyncLiveResearchDraft(id, transient, saveGeneration);
             }
             if (!applied && !transientApplied) return;
-            if (prksResearchNotesMayPaint(owner, id)) {
+            if (prksResearchNotesMayPaint(owner, id, saveGeneration)) {
                 const liveStatus = owner.query ? owner.query('[data-prks-role="editor-status"]') : null;
                 if (liveStatus) {
                     liveStatus.innerText =
@@ -1650,6 +1671,9 @@ function prksDestroyWorkNotesEditor(ctx) {
     owner.clearResource('conceptHintList');
     owner.clearResource('argumentHintList');
     if (owner.ui) owner.ui.researchNotesHints = null;
+    if (typeof window.prksVueDismissWorkResearchNotes === 'function') {
+        window.prksVueDismissWorkResearchNotes(owner);
+    }
 }
 
 window.prksDestroyWorkNotesEditor = prksDestroyWorkNotesEditor;

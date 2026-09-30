@@ -89,11 +89,11 @@ export function registerWorkResearchNotesBridge(root: Window & typeof globalThis
       work: { id?: unknown },
       initialText: string,
     ) => boolean
-    prksVueDismissWorkResearchNotes?: () => void
+    prksVueDismissWorkResearchNotes?: (ctx?: { tabId?: unknown }) => void
   }
   target.prksVuePresentWorkResearchNotes = (ctx, work, initialText) =>
     presentWorkResearchNotes(ctx, work, initialText)
-  target.prksVueDismissWorkResearchNotes = () => dismissWorkResearchNotes()
+  target.prksVueDismissWorkResearchNotes = (ctx) => dismissWorkResearchNotes(ctx)
 }
 
 export function resetWorkResearchNotesForTests(): void {

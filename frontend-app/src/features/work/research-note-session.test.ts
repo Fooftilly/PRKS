@@ -2,7 +2,7 @@ import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import worksSource from '../../../../frontend/js/components/works.js?raw'
-import { presentWorkResearchNotes, resetWorkResearchNotesForTests } from './research-note-session'
+import { presentWorkResearchNotes, registerWorkResearchNotesBridge, resetWorkResearchNotesForTests } from './research-note-session'
 
 type NoteEntry = {
   workId: string
@@ -38,6 +38,7 @@ type NotesWindow = {
   prksDestroyWorkNotesEditor: (ctx: WorkCtx) => void
   prksResetResearchDraftsForTest: () => void
   prksEnqueueWorkResearchNotesSave: (ctx: WorkCtx, workId: string) => Promise<{ code: string }>
+  prksResearchNotesMayPaint: (owner: WorkCtx, workId: string, generation?: number) => boolean
   prksSaveWorkNoteDurably: (
     workId: string,
     kind: string,
@@ -57,6 +58,7 @@ function mount(tabId: string): WorkCtx {
 beforeAll(() => {
   notesWindow.eval(tabContextSource)
   notesWindow.eval(worksSource)
+  registerWorkResearchNotesBridge(window)
 })
 
 afterEach(() => {
@@ -107,6 +109,42 @@ describe('work research notes session', () => {
     expect(notesWindow.prksResearchNotesMayPaint(ctx, 'work-b')).toBe(true)
   })
 
+  it('records a three-argument mark-edit on the TabContext that holds the editor', () => {
+    const main = mount('main')
+    const side = mount('side')
+    main.setEntity('work', { id: 'work-a' })
+    side.setEntity('work', { id: 'work-a' })
+    const notes = { workId: 'work-a', editGeneration: 0, drafting: false }
+    main.setResource('workNotes', notes)
+    notesWindow.prksWorkNotesMarkEdit(notes, 'work-a', 'Unscoped edit')
+    expect(main.ui.workResearchNoteSession?.text).toBe('Unscoped edit')
+    expect(main.ui.workResearchNoteSession?.ownerTabId).toBe(main.tabId)
+    expect(side.ui.workResearchNoteSession).toBeNull()
+  })
+
+  it('does not paint a stale save onto a newer generation of the same Work', async () => {
+    const ctx = mount('main')
+    ctx.setEntity('work', { id: 'work-a' })
+    ctx.root.innerHTML = '<div data-prks-role="editor-status"></div>'
+    const status = ctx.root.querySelector('[data-prks-role="editor-status"]') as HTMLElement
+    let release: (value: { code: string }) => void = () => {}
+    notesWindow.prksSaveWorkNoteDurably = async () => new Promise((resolve) => {
+      release = resolve
+    })
+    const pending = notesWindow.prksEnqueueWorkResearchNotesSave(ctx, 'work-a')
+    expect(status.innerText).toBe('Saving...')
+    const started = ctx.generation
+    ctx.beginRoute({ name: 'work', params: { workId: 'work-a' } })
+    ctx.setEntity('work', { id: 'work-a' })
+    expect(ctx.generation).not.toBe(started)
+    status.innerText = 'Fresh editor'
+    release({ code: 'saved' })
+    await pending
+    await nextTick()
+    expect(status.innerText).toBe('Fresh editor')
+    expect(notesWindow.prksResearchNotesMayPaint(ctx, 'work-a', started)).toBe(false)
+  })
+
   it('keeps an unsaved buffer across a same-Work refresh', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
@@ -134,6 +172,27 @@ describe('work research notes session', () => {
     expect(ctx.ui.researchNotesHints).toBeNull()
   })
 
+  it('dismisses this TabContext Research Notes mount when the editor is destroyed', async () => {
+    const main = mount('main')
+    const side = mount('side')
+    main.setEntity('work', { id: 'work-a' })
+    side.setEntity('work', { id: 'work-a' })
+    for (const ctx of [main, side]) {
+      ctx.root.innerHTML = `
+        <div data-prks-role="work-research-notes-anchor"></div>`
+    }
+    expect(presentWorkResearchNotes(main, { id: 'work-a' }, 'Main note')).toBe(true)
+    expect(presentWorkResearchNotes(side, { id: 'work-a' }, 'Side note')).toBe(true)
+    await nextTick()
+    notesWindow.prksDestroyWorkNotesEditor(main)
+    await nextTick()
+    expect(main.root.querySelector('[data-prks-role="research-notes-editor"]')).toBeNull()
+    expect((side.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement).value).toBe('Side note')
+    expect(presentWorkResearchNotes(main, { id: 'work-a' }, 'Again')).toBe(true)
+    await nextTick()
+    expect((main.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement).value).toBe('Again')
+  })
+
   it('mounts one Research Notes pane and keeps the unsaved text', async () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
@@ -152,7 +211,11 @@ describe('work research notes session', () => {
     await nextTick()
     const fields = ctx.root.querySelectorAll('[data-prks-role="research-notes-editor"]')
     expect(fields).toHaveLength(1)
-    expect((fields[0] as HTMLTextAreaElement).value).toBe('Kept buffer')
+    const field = fields[0] as HTMLTextAreaElement
+    const notesEditorId = `${ctx.domId('work-notes-editor-region')}-field`
+    expect(field.value).toBe('Kept buffer')
+    expect(field.id).toBe(notesEditorId)
+    expect(ctx.root.querySelector(`label[for="${notesEditorId}"]`)?.textContent).toBe('Research Notes')
     expect(ctx.root.querySelector('.work-notes-title')?.textContent).toBe('Research Notes')
     expect(ctx.root.querySelector('[data-prks-role="work-notes-collapse-btn"]')).toBeInstanceOf(HTMLButtonElement)
     expect(ctx.root.querySelector('[data-prks-role="editor-status"]')).toBeInstanceOf(HTMLElement)
@@ -179,6 +242,13 @@ describe('work research notes session', () => {
     const sideField = side.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement
     expect(mainField.value).toBe('Main pane')
     expect(sideField.value).toBe('Side pane')
+    const mainEditorId = `${main.domId('work-notes-editor-region')}-field`
+    const sideEditorId = `${side.domId('work-notes-editor-region')}-field`
+    expect(mainField.id).toBe(mainEditorId)
+    expect(sideField.id).toBe(sideEditorId)
+    expect(mainEditorId).not.toBe(sideEditorId)
+    expect(main.root.querySelector(`label[for="${mainEditorId}"]`)?.textContent).toBe('Research Notes')
+    expect(side.root.querySelector(`label[for="${sideEditorId}"]`)?.textContent).toBe('Research Notes')
     expect(main.root.querySelectorAll('.work-notes-pane')).toHaveLength(1)
     expect(side.root.querySelectorAll('.work-notes-pane')).toHaveLength(1)
   })
