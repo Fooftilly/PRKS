@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import { registerWorkPrivateNotesBridge, resetWorkPrivateNotesForTests } from './private-note-session'
@@ -18,6 +18,7 @@ type NoteSession = {
   state: string
   retired: boolean
   ownerTabId: string
+  ownerGeneration?: number
 }
 
 type WorkCtx = {
@@ -33,7 +34,14 @@ type WorkCtx = {
   }
   setEntity: (type: string, value: WorkRecord) => void
   getEntity: (type: string) => WorkRecord | null
-  getResource: (name: string) => { dirty: boolean; textarea: HTMLTextAreaElement; entityId: string; key: string } | null
+  getResource: (name: string) => {
+    dirty: boolean
+    textarea: HTMLTextAreaElement
+    entityId: string
+    key: string
+    generation: number
+  } | null
+  beginRoute: (route?: unknown) => number
 }
 
 type SaveCall = { entityId: string; kind: string; content: string }
@@ -49,6 +57,8 @@ type PanelWindow = {
   prksResetPrivateNoteDraftsForTest: () => void
   prksPrivateNotesTextForEntity: (entityType: string, entityId: string, serverText: string) => string
   prksVuePresentWorkPrivateNotes: (owner: WorkCtx, workId: string) => boolean
+  prksVueDismissWorkPrivateNotes: () => void
+  prksPublishWorkPanelRead: (owner: WorkCtx, work: WorkRecord) => void
   prksSaveWorkNoteDurably: (
     entityId: string,
     kind: string,
@@ -95,6 +105,16 @@ function ownPanel(owner: WorkCtx) {
   return panel
 }
 
+async function flushMicrotasks() {
+  for (let i = 0; i < 8; i += 1) await Promise.resolve()
+}
+
+function advanceGeneration(owner: WorkCtx) {
+  owner.beginRoute()
+  const panel = document.getElementById('panel-content')
+  if (panel) panel.dataset.prksOwnerGeneration = String(owner.generation)
+}
+
 function notesField(owner: WorkCtx, workId: string) {
   const panel = ownPanel(owner)
   const notes = document.createElement('textarea')
@@ -113,6 +133,7 @@ beforeAll(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   resetWorkPrivateNotesForTests()
   panelWindow.prksResetPrivateNoteDraftsForTest()
   panelWindow.prksDestroyAllTabContexts()
@@ -155,6 +176,8 @@ describe('work private notes session', () => {
 
     const notesB = notesField(ownerB, 'work-a')
     panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerB)
+    expect(notesB.value).toBe('')
+    expect(ownerB.ui.workPrivateNoteSession?.draftText).toBe('')
     notesB.value = 'Remember B'
     notesB.dispatchEvent(new Event('input', { bubbles: true }))
     expect(notesB.value).toBe('Remember B')
@@ -171,6 +194,7 @@ describe('work private notes session', () => {
   })
 
   it('retries scope_busy on the editor that started the save', async () => {
+    vi.useFakeTimers()
     installShell()
     const { ownerA } = mountPair()
     ownerA.setEntity('work', work('work-a', 'saved'))
@@ -187,16 +211,104 @@ describe('work private notes session', () => {
     notes.value = 'Remember later'
     notes.dispatchEvent(new Event('input', { bubbles: true }))
     panelWindow.prksFlushPendingPrivateNotes(ownerA)
-    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    await flushMicrotasks()
     const editor = ownerA.getResource('privateNotesEditor')
     expect(saves).toEqual([{ entityId: 'work-a', kind: 'work-private-note', content: 'Remember later' }])
     expect(editor?.dirty).toBe(true)
     expect(editor?.key).toContain(ownerA.tabId)
-    await new Promise((resolve) => { setTimeout(resolve, 450) })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
     expect(saves).toEqual([
       { entityId: 'work-a', kind: 'work-private-note', content: 'Remember later' },
       { entityId: 'work-a', kind: 'work-private-note', content: 'Remember later' },
     ])
+  })
+
+  it('retries scope_busy through a same-generation replacement editor', async () => {
+    vi.useFakeTimers()
+    installShell()
+    const { ownerA } = mountPair()
+    ownerA.setEntity('work', work('work-a', 'saved'))
+    const notes = notesField(ownerA, 'work-a')
+    const saves: SaveCall[] = []
+    let releaseSave: (result: { code: string }) => void = () => {}
+    const pending = new Promise<{ code: string }>((resolve) => {
+      releaseSave = resolve
+    })
+    panelWindow.prksWorkNoteObserved = () => ({ value: 'saved', revision: 1 })
+    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
+    panelWindow.prksSync = { subscribe: () => () => {} }
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      return saves.length === 1 ? pending : Promise.resolve({ code: 'saved' })
+    }
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    notes.value = 'Remember later'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toEqual([{ entityId: 'work-a', kind: 'work-private-note', content: 'Remember later' }])
+    const started = ownerA.getResource('privateNotesEditor')
+    const replacementNotes = notesField(ownerA, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const replacement = ownerA.getResource('privateNotesEditor')
+    expect(replacement).toBeTruthy()
+    expect(replacement).not.toBe(started)
+    expect(replacement?.generation).toBe(ownerA.generation)
+    expect(replacementNotes.value).toBe('Remember later')
+    releaseSave({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(true)
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(saves).toEqual([
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Remember later' },
+      { entityId: 'work-a', kind: 'work-private-note', content: 'Remember later' },
+    ])
+    expect(ownerA.getResource('privateNotesEditor')).toBe(replacement)
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+  })
+
+  it('does not retry scope_busy into a newer generation', async () => {
+    vi.useFakeTimers()
+    installShell()
+    const { ownerA } = mountPair()
+    ownerA.setEntity('work', work('work-a', 'saved'))
+    const notes = notesField(ownerA, 'work-a')
+    const saves: SaveCall[] = []
+    let releaseSave: (result: { code: string }) => void = () => {}
+    const pending = new Promise<{ code: string }>((resolve) => {
+      releaseSave = resolve
+    })
+    panelWindow.prksWorkNoteObserved = () => ({ value: 'saved', revision: 1 })
+    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
+    panelWindow.prksSync = { subscribe: () => () => {} }
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      return pending
+    }
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    notes.value = 'Stay on the old generation'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    const startedGeneration = ownerA.generation
+    advanceGeneration(ownerA)
+    ownerA.setEntity('work', work('work-a', 'saved'))
+    const rebound = notesField(ownerA, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    const next = ownerA.getResource('privateNotesEditor')
+    expect(next?.generation).toBe(ownerA.generation)
+    expect(next?.generation).not.toBe(startedGeneration)
+    expect(rebound.value).toBe('Stay on the old generation')
+    releaseSave({ code: 'scope_busy' })
+    await flushMicrotasks()
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(saves).toHaveLength(1)
+    expect(rebound.value).toBe('Stay on the old generation')
+    expect(ownerA.ui.workPrivateNoteSession?.draftText).toBe('Stay on the old generation')
+    expect(ownerA.ui.workPrivateNoteSession?.ownerGeneration).toBe(ownerA.generation)
   })
 
   it('does not mark metadata dirty when a reminder commits', async () => {
@@ -235,5 +347,136 @@ describe('work private notes session', () => {
     expect(panelWindow.prksVuePresentWorkPrivateNotes(ownerB, 'work-a')).toBe(false)
     expect(panel.querySelectorAll('#prks-private-notes-work-work-a')).toHaveLength(1)
     expect((panel.querySelector('#prks-private-notes-work-work-a') as HTMLTextAreaElement).value).toBe('Keep A')
+  })
+
+  it('binds a new Reminders editor when the owner generation changes', async () => {
+    installShell()
+    const { ownerA } = mountPair()
+    ownerA.setEntity('work', work('work-a', ''))
+    const panel = ownPanel(ownerA)
+    const anchor = document.createElement('div')
+    anchor.dataset.prksRole = 'work-private-notes-anchor'
+    panel.appendChild(anchor)
+    const saves: SaveCall[] = []
+    panelWindow.prksWorkNoteObserved = () => ({ value: '', revision: 1 })
+    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      return Promise.resolve({ code: 'saved' })
+    }
+    expect(panelWindow.prksVuePresentWorkPrivateNotes(ownerA, 'work-a')).toBe(true)
+    const first = ownerA.getResource('privateNotesEditor')
+    const started = ownerA.generation
+    expect(first?.generation).toBe(started)
+    const surviving = panel.querySelector('[data-prks-role="work-private-notes-anchor"]')
+    advanceGeneration(ownerA)
+    ownerA.setEntity('work', work('work-a', ''))
+    panel.dataset.prksOwnerTabId = ownerA.tabId
+    panel.dataset.prksOwnerGeneration = String(ownerA.generation)
+    expect(panel.querySelector('[data-prks-role="work-private-notes-anchor"]')).toBe(surviving)
+    expect(panelWindow.prksVuePresentWorkPrivateNotes(ownerA, 'work-a')).toBe(true)
+    const second = ownerA.getResource('privateNotesEditor')
+    expect(second).toBeTruthy()
+    expect(second).not.toBe(first)
+    expect(second?.generation).toBe(ownerA.generation)
+    expect(second?.generation).not.toBe(started)
+    const field = panel.querySelector('#prks-private-notes-work-work-a') as HTMLTextAreaElement
+    field.value = 'New generation only'
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toEqual([{ entityId: 'work-a', kind: 'work-private-note', content: 'New generation only' }])
+    expect(ownerA.getResource('privateNotesEditor')).toBe(second)
+  })
+
+  it('unmounts Reminders when the anchor is already detached', () => {
+    installShell()
+    const { ownerA } = mountPair()
+    ownerA.setEntity('work', work('work-a', 'Keep'))
+    const panel = ownPanel(ownerA)
+    const anchor = document.createElement('div')
+    anchor.dataset.prksRole = 'work-private-notes-anchor'
+    panel.appendChild(anchor)
+    expect(panelWindow.prksVuePresentWorkPrivateNotes(ownerA, 'work-a')).toBe(true)
+    expect(anchor.querySelector('textarea')).toBeTruthy()
+    panel.removeChild(anchor)
+    expect(anchor.isConnected).toBe(false)
+    panelWindow.prksVueDismissWorkPrivateNotes()
+    panel.appendChild(anchor)
+    expect(anchor.querySelector('textarea')).toBeNull()
+  })
+
+  it('keeps the Reminders card when people mode publishes the panel', () => {
+    installShell()
+    const { ownerA } = mountPair()
+    const record = work('work-a', 'Keep people')
+    ownerA.setEntity('work', record)
+    ownerA.ui.workDetailsMode = 'people'
+    const panel = ownPanel(ownerA)
+    const anchor = document.createElement('div')
+    anchor.dataset.prksRole = 'work-private-notes-anchor'
+    panel.appendChild(anchor)
+    expect(panelWindow.prksVuePresentWorkPrivateNotes(ownerA, 'work-a')).toBe(true)
+    const field = panel.querySelector('#prks-private-notes-work-work-a') as HTMLTextAreaElement
+    const editor = ownerA.getResource('privateNotesEditor')
+    expect(field).toBeTruthy()
+    expect(editor?.textarea).toBe(field)
+    panelWindow.prksPublishWorkPanelRead(ownerA, record)
+    expect(panel.querySelector('#prks-private-notes-work-work-a')).toBe(field)
+    expect(field.isConnected).toBe(true)
+    expect(ownerA.getResource('privateNotesEditor')?.textarea).toBe(field)
+  })
+
+  it('keeps an unsaved draft when leaving replaces the session before the save fails', async () => {
+    installShell()
+    const { workspace, ownerA, ownerB } = mountPair()
+    ownerA.setEntity('work', work('work-a', 'server'))
+    const notes = notesField(ownerA, 'work-a')
+    const saves: SaveCall[] = []
+    let releaseSave: (result: { code: string }) => void = () => {}
+    const pending = new Promise<{ code: string }>((resolve) => {
+      releaseSave = resolve
+    })
+    panelWindow.prksWorkNoteObserved = () => ({ value: 'server', revision: 1 })
+    panelWindow.prksRefreshPendingWorkNotes = () => Promise.resolve()
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      return pending
+    }
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    notes.value = 'Do not drop'
+    notes.dispatchEvent(new Event('input', { bubbles: true }))
+    panelWindow.prksFlushPendingPrivateNotes(ownerA)
+    await flushMicrotasks()
+    expect(saves).toHaveLength(1)
+    const startedGeneration = ownerA.generation
+
+    advanceGeneration(ownerA)
+    ownerA.setEntity('work', work('work-b', ''))
+    notesField(ownerA, 'work-b')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-b', ownerA)
+    expect(ownerA.ui.workPrivateNoteSession?.workId).toBe('work-b')
+    expect(ownerA.ui.workPrivateNoteSession?.draftText).toBe('')
+
+    releaseSave({ code: 'unavailable' })
+    await pending
+    await flushMicrotasks()
+
+    advanceGeneration(ownerA)
+    ownerA.setEntity('work', work('work-a', 'server'))
+    const returned = notesField(ownerA, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerA)
+    expect(returned.value).toBe('Do not drop')
+    expect(ownerA.ui.workPrivateNoteSession?.draftText).toBe('Do not drop')
+    expect(ownerA.ui.workPrivateNoteSession?.ownerGeneration).toBe(ownerA.generation)
+    expect(ownerA.ui.workPrivateNoteSession?.ownerGeneration).not.toBe(startedGeneration)
+
+    workspace.focusedTabId = 'tab-b'
+    ownerB.setEntity('work', work('work-a', 'server'))
+    const notesB = notesField(ownerB, 'work-a')
+    panelWindow.initPrksPrivateNotesEditor('work', 'work-a', ownerB)
+    expect(notesB.value).not.toBe('Do not drop')
+    expect(ownerB.ui.workPrivateNoteSession?.draftText).not.toBe('Do not drop')
+    expect(ownerA.ui.workPrivateNoteSession?.draftText).toBe('Do not drop')
   })
 })

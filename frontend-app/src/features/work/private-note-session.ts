@@ -29,6 +29,7 @@ interface MountedNotes {
   anchor: HTMLElement
   workId: string
   tabId: string
+  generation: string
 }
 
 let mounted: MountedNotes | null = null
@@ -40,7 +41,7 @@ function panelElement(): HTMLElement | null {
 export function dismissWorkPrivateNotes(): void {
   const anchor = mounted?.anchor
   mounted = null
-  if (anchor && anchor.isConnected) render(null, anchor)
+  if (anchor) render(null, anchor)
 }
 
 export function presentWorkPrivateNotes(ctx: WorkPrivateNoteOwner, workId: string): boolean {
@@ -61,18 +62,21 @@ export function presentWorkPrivateNotes(ctx: WorkPrivateNoteOwner, workId: strin
     : server
   const session = root.prksEnsureWorkPrivateNoteSession?.(ctx, id, painted) || null
   const initialText = session && !session.retired ? String(session.draftText || '') : painted
+  const generation = String(ctx.generation ?? '')
   const sameMount = !!(
     mounted &&
     mounted.anchor === anchor &&
     mounted.workId === id &&
-    mounted.tabId === String(ctx.tabId || '')
+    mounted.tabId === String(ctx.tabId || '') &&
+    mounted.generation === generation
   )
   if (mounted && !sameMount) dismissWorkPrivateNotes()
   /* Vue render appends. The shell card is already in the anchor so the panel
-   * is usable before this module loads; leaving it would duplicate the field. */
+   * is usable before this module loads; leaving it would duplicate the field.
+   * A new owner generation must unmount first: onMounted is what binds the editor. */
   if (!sameMount) anchor.replaceChildren()
   render(h(WorkPrivateNotes, { workId: id, initialText, owner: ctx }), anchor)
-  mounted = { anchor, workId: id, tabId: String(ctx.tabId || '') }
+  mounted = { anchor, workId: id, tabId: String(ctx.tabId || ''), generation }
   return true
 }
 

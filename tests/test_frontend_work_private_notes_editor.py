@@ -21,6 +21,17 @@ class WorkPrivateNotesEditorContractTests(unittest.TestCase):
         self.assertIn('data-prks-role="work-private-notes-anchor"', _UI)
         self.assertIn("prksVuePresentWorkPrivateNotes", _UI)
         self.assertIn("prksVueDismissWorkPrivateNotes", _UI)
+        self.assertIn("mounted.generation === generation", _SESSION)
+        self.assertIn("if (anchor) render(null, anchor)", _SESSION)
+        self.assertNotIn("anchor.isConnected", _SESSION)
+        self.assertIn("function prksPrivateNotesRetryTarget(", _UI)
+        self.assertIn("String(live.generation) !== String(editor.generation)", _UI)
+        publish = _UI[_UI.index("function prksPublishWorkPanelRead("):_UI.index("function prksRefreshOwnedWorkPanelRead(")]
+        early = publish.split("const panel = document.getElementById", 1)[0]
+        self.assertIn("prksDismissWorkPanelReadSurface()", early)
+        self.assertNotIn("prksVueDismissWorkPrivateNotes", early)
+        self.assertNotIn("prksDismissWorkPanelRead()", early)
+        self.assertIn("workPrivateNoteHolds", _UI)
 
     def test_work_save_stays_on_the_owner_session(self):
         start = _UI.index("function prksEnqueueWorkPrivateNoteSave(")
