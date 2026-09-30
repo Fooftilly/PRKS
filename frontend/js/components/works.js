@@ -117,11 +117,14 @@ function prksSyncLiveResearchDraft(workId, entry, generation) {
     if (!entry || typeof prksForEachLiveTabContext !== 'function') return;
     prksForEachLiveTabContext(function (ctx) {
         if (entry.ownerTabId && String(ctx.tabId) !== String(entry.ownerTabId)) return;
-        if (typeof generation === 'number' && ctx.generation !== generation) return;
         const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
         if (!work || String(work.id) !== String(workId)) return;
         const notes = ctx.getResource ? ctx.getResource('workNotes') : null;
+        /* Latest-token settlement still reaches a same-Work refresh. Direct
+         * status paint from the old editor stays generation-fenced. */
         prksSyncResearchNotesState(notes, entry);
+        const generationMoved = typeof generation === 'number' && ctx.generation !== generation;
+        if (generationMoved && !notes) return;
         const status = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (status) {
             status.innerText = entry.state === 'error'
@@ -1311,6 +1314,13 @@ function initEasyMDE(ctx, work) {
         },
     });
 
+    const cmInput = easyMDE.codemirror && typeof easyMDE.codemirror.getInputField === 'function'
+        ? easyMDE.codemirror.getInputField()
+        : null;
+    if (cmInput && typeof cmInput.setAttribute === 'function') {
+        cmInput.setAttribute('aria-label', 'Research Notes');
+    }
+
     const transient = prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, work.id));
     const workNotes = {
         workId: String(work.id),
@@ -1400,6 +1410,8 @@ function initEasyMDE(ctx, work) {
     easyMDE.codemirror.on("change", notesChangeHandler);
     easyMDE.__notesChangeHandler = notesChangeHandler;
 }
+
+window.initEasyMDE = initEasyMDE;
 
 function prksResearchNotesEditOwner(notes, ctx) {
     if (ctx) return ctx;
