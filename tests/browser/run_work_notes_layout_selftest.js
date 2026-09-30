@@ -694,8 +694,21 @@ function runHorizontalSplitterCleanup() {
     assertEq('post-unmount pointer move cannot alter detached height', ws._vars['--work-notes-height'], '320px');
 }
 
+function runNotesAnchorIsNotABox() {
+    const css = fs.readFileSync(path.join(rootDir, 'frontend/css/style.css'), 'utf8');
+    const anchorAt = css.indexOf('[data-prks-role="work-research-notes-anchor"]');
+    assert('notes anchor rule exists', anchorAt !== -1);
+    const block = css.slice(anchorAt, css.indexOf('}', anchorAt));
+    assert('notes anchor is display contents', /display:\s*contents/.test(block));
+    const shellAt = worksSrc.indexOf('data-prks-role="work-research-notes-anchor"');
+    assert('shell wraps the notes pane in the anchor', shellAt !== -1);
+    const shell = worksSrc.slice(shellAt, shellAt + 180);
+    assert('notes pane is inside the anchor', shell.indexOf('class="work-notes-pane"') !== -1);
+}
+
 (async function () {
     try {
+        runNotesAnchorIsNotABox();
         await runSaveGenerationRace();
         await runWarmSaveSettlement();
         await runWarmSaveErrorSettlement();

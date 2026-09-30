@@ -9323,6 +9323,13 @@ textarea[data-prks-autosize="1"] {
     margin: 0;
 }
 
+/* The Research Notes mount is not a box. .work-notes-pane stays the flex
+ * item of .work-workspace, including the side-column width. A real box
+ * here collapses the PDF pane and the viewer update loop overflows. */
+.document-view--work [data-prks-role="work-research-notes-anchor"] {
+    display: contents;
+}
+
 .document-view--work .work-notes-pane {
     flex: 0 0 var(--work-notes-height);
     min-height: 120px;

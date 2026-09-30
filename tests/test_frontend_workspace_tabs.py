@@ -211,6 +211,13 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         pdf_block = css.split(".prks-workspace-canvas--tiled .prks-pdf-viewer {", 1)[1].split("}", 1)[0]
         self.assertIn("min-height: 0", pdf_block)
 
+        # The notes mount must not become a flex item. Side width and stacked
+        # height are declared on .work-notes-pane.
+        anchor_block = css.split(
+            '.document-view--work [data-prks-role="work-research-notes-anchor"] {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("display: contents", anchor_block)
+
         # Collapsed Notes keep a compact save/sync cue — never hide all status.
         collapsed = css[
             css.find(".document-view--work .work-workspace--notes-collapsed .work-editor-status") :
