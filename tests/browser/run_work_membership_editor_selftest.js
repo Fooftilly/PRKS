@@ -196,6 +196,22 @@ async function until(pred, label) {
     }
     throw new Error('timed out waiting for ' + label);
 }
+async function settleAfterOwnerLeaves(geometry, main, side, release, saving) {
+    let victim = main;
+    if (geometry === 'secondary') {
+        focus('side');
+        ownPanel(side);
+        victim = side;
+    } else {
+        main.beginRoute({ name: 'work', params: { workId: 'work-b' } });
+        showWork(main, 'work-b');
+        ownPanel(main);
+    }
+    const snapshot = JSON.stringify(victim.getEntity('work'));
+    release();
+    await saving;
+    return { snapshot: snapshot, victim: victim };
+}
 function resetCounts() {
     folderWrites.length = 0;
     playlistWrites.length = 0;
@@ -287,26 +303,13 @@ async function newFolderDuringRead(geometry) {
     const release = arm('folder');
     const saving = document.getElementById('save-folder-btn').onclick();
     await until(function () { return folderReads >= 1; }, 'new folder base read');
-    let victim;
-    if (geometry === 'secondary') {
-        focus('side');
-        ownPanel(side);
-        victim = side;
-    } else {
-        main.beginRoute({ name: 'work', params: { workId: 'work-b' } });
-        showWork(main, 'work-b');
-        ownPanel(main);
-        victim = main;
-    }
-    const snapshot = JSON.stringify(victim.getEntity('work'));
-    release();
-    await saving;
+    const settled = await settleAfterOwnerLeaves(geometry, main, side, release, saving);
     assert('new folder ' + geometry + ' still creates the folder',
         created.some(function (row) { return row.kind === 'folder'; }), JSON.stringify(created));
     assert('new folder ' + geometry + ' does not write membership for stale Work A',
         folderWrites.length === 0, 'writes=' + folderWrites.length);
     assert('new folder ' + geometry + ' does not mutate or repaint Work B',
-        paints === 0 && refreshes === 0 && JSON.stringify(victim.getEntity('work')) === snapshot,
+        paints === 0 && refreshes === 0 && JSON.stringify(settled.victim.getEntity('work')) === settled.snapshot,
         'paints=' + paints + ' refreshes=' + refreshes);
     prksDestroyAllTabContexts();
 }
@@ -330,26 +333,13 @@ async function newPlaylistDuringRead(geometry) {
     const release = arm('playlist');
     const saving = document.getElementById('save-playlist-btn').onclick();
     await until(function () { return playlistReads >= 1; }, 'new playlist base read');
-    let victim;
-    if (geometry === 'secondary') {
-        focus('side');
-        ownPanel(side);
-        victim = side;
-    } else {
-        main.beginRoute({ name: 'work', params: { workId: 'work-b' } });
-        showWork(main, 'work-b');
-        ownPanel(main);
-        victim = main;
-    }
-    const snapshot = JSON.stringify(victim.getEntity('work'));
-    release();
-    await saving;
+    const settled = await settleAfterOwnerLeaves(geometry, main, side, release, saving);
     assert('new playlist ' + geometry + ' still creates the playlist',
         created.some(function (row) { return row.kind === 'playlist'; }), JSON.stringify(created));
     assert('new playlist ' + geometry + ' does not write membership for stale Work A',
         playlistWrites.length === 0, 'writes=' + playlistWrites.length);
     assert('new playlist ' + geometry + ' does not mutate or repaint Work B',
-        paints === 0 && refreshes === 0 && JSON.stringify(victim.getEntity('work')) === snapshot,
+        paints === 0 && refreshes === 0 && JSON.stringify(settled.victim.getEntity('work')) === settled.snapshot,
         'paints=' + paints + ' refreshes=' + refreshes);
     prksDestroyAllTabContexts();
 }
@@ -408,7 +398,7 @@ async function tagBridgeAndOwner() {
     prksDestroyAllTabContexts();
 }
 
-(async function main() {
+async function main() {
     try {
         await deferredFolder('set');
         await deferredFolder('clear');
@@ -425,4 +415,9 @@ async function tagBridgeAndOwner() {
     }
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
-})();
+}
+
+main().catch(function (error) {
+    console.log('FAIL  runtime exception ' + (error && error.stack || error));
+    process.exit(1);
+});
