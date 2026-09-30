@@ -149,23 +149,34 @@ class ExclusiveFileLock:
             pass
 
 
-def _open_lock_file(path: str) -> int:
+def _refuse_non_regular_existing(path: str) -> None:
+    """Refuse an existing lock path that is a link or not a regular file."""
     try:
         existing = os.lstat(path)
     except FileNotFoundError:
-        existing = None
+        return
     except OSError as exc:
         raise LockUnavailable("lock_file_unreadable") from exc
-    if existing is not None:
-        if is_link_or_reparse_point(existing):
-            raise LockUnavailable("lock_file_is_link")
-        if not stat.S_ISREG(existing.st_mode):
-            raise LockUnavailable("lock_file_not_regular")
-    flags = os.O_RDWR | os.O_CREAT
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
+    if is_link_or_reparse_point(existing):
+        raise LockUnavailable("lock_file_is_link")
+    if not stat.S_ISREG(existing.st_mode):
+        raise LockUnavailable("lock_file_not_regular")
+
+
+_OPEN_FLAGS = (
+    os.O_RDWR
+    | os.O_CREAT
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_BINARY", 0)
+    | getattr(os, "O_NOINHERIT", 0)
+)
+
+
+def _open_lock_file(path: str) -> int:
+    _refuse_non_regular_existing(path)
     try:
-        fd = os.open(path, flags, 0o600)
+        fd = os.open(path, _OPEN_FLAGS, 0o600)
     except OSError as exc:
         if exc.errno == getattr(errno, "ELOOP", None):
             raise LockUnavailable("lock_file_is_link") from exc

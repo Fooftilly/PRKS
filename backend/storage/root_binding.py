@@ -197,47 +197,34 @@ def _relative_components(path: str, root: str) -> Optional[str]:
 # --- V2, V11, V12: path-level checks (no writes) ----------------------------------
 
 
-def _check_placement(
-    root: str,
-    *,
-    testing: bool,
-    config_file_path: Optional[str],
-    distribution: str,
-    home: Optional[str],
-) -> str:
-    """V2/V11/V12 before anything is written. Returns the resolved root path."""
-    if not os.path.isabs(root):
-        raise InvalidStorageRoot("root_not_absolute", "The storage root must be an absolute path.")
-    try:
-        root_real = os.path.realpath(root)
-    except OSError as exc:
-        raise InvalidStorageRoot("root_unresolvable", f"The storage root {root} cannot be resolved.") from exc
-
-    # V12: testing never touches /data or <repo>/data; production never binds
-    # the testing tree.
+def _check_testing_boundary(root: str, root_real: str, *, testing: bool) -> None:
+    """V12: testing never touches /data or <repo>/data; production never binds the testing tree."""
     if testing:
         try:
             paths.assert_safe_testing_path(root, testing=True, what="storage root")
         except RuntimeError as exc:
             raise InvalidStorageRoot("testing_unsafe_root", str(exc)) from exc
-    else:
-        testing_tree = os.path.realpath(os.path.join(paths.repo_root(), "data_testing"))
-        if _is_within(root_real, testing_tree):
-            raise InvalidStorageRoot(
-                "production_testing_root",
-                "A non-testing PRKS run refuses the repository data_testing/ tree. "
-                "Use --testing, or select a different storage root.",
-            )
+        return
+    testing_tree = os.path.realpath(os.path.join(paths.repo_root(), "data_testing"))
+    if _is_within(root_real, testing_tree):
+        raise InvalidStorageRoot(
+            "production_testing_root",
+            "A non-testing PRKS run refuses the repository data_testing/ tree. "
+            "Use --testing, or select a different storage root.",
+        )
 
-    # V11: never the filesystem root or the home directory itself.
+
+def _check_not_special(root_real: str, *, home: Optional[str]) -> None:
+    """V11: never the filesystem root or the home directory itself."""
     if os.path.dirname(root_real) == root_real:
         raise InvalidStorageRoot("root_is_filesystem_root", "The storage root cannot be a filesystem root.")
     home_dir = home if home is not None else os.path.expanduser("~")
     if home_dir and _same_path(root_real, os.path.realpath(home_dir)):
         raise InvalidStorageRoot("root_is_home", "The storage root cannot be your home directory itself.")
 
-    # V11: never inside another root's maintenance area, never nested in or
-    # around another PRKS root.
+
+def _check_not_nested(root: str, root_real: str) -> None:
+    """V11: never inside another root's maintenance area, never nested in or around another root."""
     parent = os.path.dirname(root_real)
     while True:
         if os.path.basename(parent) == MAINTENANCE_DIRNAME:
@@ -261,17 +248,22 @@ def _check_placement(
             f"The storage root {root} contains another PRKS storage root ({nested}).",
         )
 
-    # V11: the bootstrap file lives outside every root (the root may still sit
-    # inside the configuration *directory*, §6).
+
+def _check_not_over_config_or_install(
+    root_real: str, *, config_file_path: Optional[str], distribution: str
+) -> None:
+    """V11: the bootstrap file and the install directory stay outside the root.
+
+    The root may still sit inside the configuration *directory* (§6). A source
+    checkout keeps its declared development defaults (and, for existing
+    self-hosted setups, other locations inside the checkout); a packaged build
+    refuses all of them.
+    """
     if config_file_path and _is_within(os.path.realpath(config_file_path), root_real):
         raise InvalidStorageRoot(
             "root_contains_config",
             "The storage root cannot contain the PRKS bootstrap configuration file.",
         )
-
-    # V11: the install directory. A source checkout keeps its declared
-    # development defaults (and, for existing self-hosted setups, other
-    # locations inside the checkout); a packaged build refuses all of them.
     install = os.path.realpath(paths.repo_root())
     if _is_within(install, root_real):
         raise InvalidStorageRoot(
@@ -284,7 +276,9 @@ def _check_placement(
             "The storage root cannot be inside the PRKS installation directory.",
         )
 
-    # V2: an existing root is a directory; a new one needs an existing parent.
+
+def _check_exists_or_creatable(root: str) -> None:
+    """V2: an existing root is a directory; a new one needs an existing parent."""
     if os.path.lexists(root):
         if not os.path.isdir(root):
             raise InvalidStorageRoot("root_not_directory", f"The storage root {root} is not a directory.")
@@ -294,6 +288,30 @@ def _check_placement(
             f"The parent directory of the storage root {root} does not exist. "
             "PRKS does not create missing parents; check that the disk or mount is available.",
         )
+
+
+def _check_placement(
+    root: str,
+    *,
+    testing: bool,
+    config_file_path: Optional[str],
+    distribution: str,
+    home: Optional[str],
+) -> str:
+    """V2/V11/V12 before anything is written. Returns the resolved root path."""
+    if not os.path.isabs(root):
+        raise InvalidStorageRoot("root_not_absolute", "The storage root must be an absolute path.")
+    try:
+        root_real = os.path.realpath(root)
+    except OSError as exc:
+        raise InvalidStorageRoot("root_unresolvable", f"The storage root {root} cannot be resolved.") from exc
+    _check_testing_boundary(root, root_real, testing=testing)
+    _check_not_special(root_real, home=home)
+    _check_not_nested(root, root_real)
+    _check_not_over_config_or_install(
+        root_real, config_file_path=config_file_path, distribution=distribution
+    )
+    _check_exists_or_creatable(root)
     return root_real
 
 
@@ -744,41 +762,13 @@ def open_storage_root(
 
     check_filesystem_type(_nearest_existing(root_real))
 
-    # A root the bootstrap file selects was chosen earlier and must still be
-    # there: an absent or empty directory is far more likely an unmounted disk
-    # than a wish for a new library, so it is never created or minted here
-    # (§7.1). Choosing a genuinely new root is a separate command (Phase D).
-    may_create = getattr(config, "root_source", None) != SOURCE_CONFIG_FILE
-
-    # Read-only look first: refuse foreign or non-bindable directories before
-    # creating anything in them.
-    if os.path.isdir(root_real):
-        marker = read_marker(root_real)
-        if marker is not None:
-            _refuse_unless_bindable(marker, expected_storage_root_id)
-        else:
-            kind = classify_unmarked_root(root_real, db_filename=db_filename)
-            if kind == UNMARKED_FOREIGN:
-                raise _foreign_root_error(root)
-            if kind == UNMARKED_EMPTY and not may_create:
-                raise _missing_selected_root(root)
-    elif not may_create:
-        raise _missing_selected_root(root)
-    else:
-        # Absent: V2 already proved the spelling is no link, so the resolved
-        # snapshot is where the new directory goes.
-        try:
-            os.mkdir(root_real, 0o700)
-        except FileExistsError:
-            pass
-        except OSError as exc:
-            raise InvalidStorageRoot(
-                "root_not_creatable", f"The storage root {root} could not be created."
-            ) from exc
-        if not fsync_directory(os.path.dirname(root_real)):
-            LOGGER.warning("storage_root_parent_sync_failed")
-        if not os.path.isdir(root_real) or os.path.islink(root_real):
-            raise InvalidStorageRoot("root_not_creatable", f"The storage root {root} could not be created.")
+    _look_before_leasing(
+        config,
+        root=root,
+        root_real=root_real,
+        db_filename=db_filename,
+        expected_storage_root_id=expected_storage_root_id,
+    )
 
     lease = acquire_root_lease(root_real)
     try:
@@ -795,12 +785,7 @@ def open_storage_root(
         lease.release()
         raise
     if register:
-        global _ACTIVE
-        with _ACTIVE_GUARD:
-            previous = _ACTIVE
-            _ACTIVE = bound
-        if previous is not None and previous is not bound:
-            previous.lease.release()
+        _register(bound)
     LOGGER.info(
         "storage_root_bound source=%s created=%s adopted=%s",
         getattr(config, "root_source", None) or "direct",
@@ -808,6 +793,66 @@ def open_storage_root(
         "true" if bound.adopted else "false",
     )
     return bound
+
+
+def _look_before_leasing(
+    config: Any,
+    *,
+    root: str,
+    root_real: str,
+    db_filename: str,
+    expected_storage_root_id: Optional[str],
+) -> None:
+    """Read-only look (and first-run creation) before the lease is taken.
+
+    Foreign or non-bindable directories are refused before anything is created
+    in them. A root the bootstrap file selects was chosen earlier and must
+    still be there: an absent or empty directory is far more likely an
+    unmounted disk than a wish for a new library, so it is never created or
+    minted here (§7.1). Choosing a genuinely new root is a separate command
+    (Phase D).
+    """
+    may_create = getattr(config, "root_source", None) != SOURCE_CONFIG_FILE
+    if os.path.isdir(root_real):
+        marker = read_marker(root_real)
+        if marker is not None:
+            _refuse_unless_bindable(marker, expected_storage_root_id)
+            return
+        kind = classify_unmarked_root(root_real, db_filename=db_filename)
+        if kind == UNMARKED_FOREIGN:
+            raise _foreign_root_error(root)
+        if kind == UNMARKED_EMPTY and not may_create:
+            raise _missing_selected_root(root)
+        return
+    if not may_create:
+        raise _missing_selected_root(root)
+    _create_new_root(root, root_real)
+
+
+def _create_new_root(root: str, root_real: str) -> None:
+    """Create an absent root (owner-only). V2 already proved the spelling is no link."""
+    try:
+        os.mkdir(root_real, 0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise InvalidStorageRoot(
+            "root_not_creatable", f"The storage root {root} could not be created."
+        ) from exc
+    if not fsync_directory(os.path.dirname(root_real)):
+        LOGGER.warning("storage_root_parent_sync_failed")
+    if not os.path.isdir(root_real) or os.path.islink(root_real):
+        raise InvalidStorageRoot("root_not_creatable", f"The storage root {root} could not be created.")
+
+
+def _register(bound: BoundRoot) -> None:
+    """Make ``bound`` this process's root, releasing any earlier registration."""
+    global _ACTIVE
+    with _ACTIVE_GUARD:
+        previous = _ACTIVE
+        _ACTIVE = bound
+    if previous is not None and previous is not bound:
+        previous.lease.release()
 
 
 def _refuse_unless_bindable(marker: RootMarker, expected: Optional[str]) -> None:
