@@ -3,203 +3,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const { installMiniDocument } = require('./mini_document');
 
 const rootDir = path.resolve(__dirname, '../..');
 
 /* The unit gate runs this file with Node and does not install frontend-app
  * dependencies. A small document is enough for the Work-panel membership path. */
-function Element() {}
-function HTMLElement() {}
-function Node() {}
-HTMLElement.prototype = Object.create(Element.prototype);
-Element.prototype = Object.create(Node.prototype);
-
-const byId = new Map();
-
-function makeClassList(set) {
-    return {
-        add: function () {
-            for (let i = 0; i < arguments.length; i += 1) {
-                String(arguments[i] || '').split(/\s+/).forEach(function (name) {
-                    if (name) set.add(name);
-                });
-            }
-        },
-        remove: function () {
-            for (let i = 0; i < arguments.length; i += 1) set.delete(arguments[i]);
-        },
-        contains: function (name) { return set.has(name); },
-        toggle: function (name, force) {
-            const on = force === undefined ? !set.has(name) : !!force;
-            if (on) set.add(name);
-            else set.delete(name);
-            return on;
-        },
-    };
-}
-
-function makeEl(tag) {
-    const classes = new Set();
-    const attrs = Object.create(null);
-    const el = Object.create(HTMLElement.prototype);
-    el._tag = tag;
-    el._children = [];
-    el._html = null;
-    el._text = '';
-    el.parentNode = null;
-    el.nodeType = 1;
-    el.id = '';
-    el.value = '';
-    el.title = '';
-    el.disabled = false;
-    el.hidden = false;
-    el.textContent = '';
-    el.dataset = {};
-    el.style = {};
-    el.onclick = null;
-    el.classList = makeClassList(classes);
-    el.setAttribute = function (name, value) {
-        attrs[name] = String(value);
-        if (name === 'id') {
-            if (el.id) byId.delete(el.id);
-            el.id = String(value);
-            byId.set(el.id, el);
-        } else if (name === 'class') {
-            classes.clear();
-            el.classList.add(value);
-        } else if (name === 'value') {
-            el.value = String(value);
-        }
-    };
-    el.getAttribute = function (name) {
-        return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null;
-    };
-    el.removeAttribute = function (name) {
-        delete attrs[name];
-        if (name === 'id' && el.id) {
-            byId.delete(el.id);
-            el.id = '';
-        }
-    };
-    el.addEventListener = function () {};
-    el.removeEventListener = function () {};
-    el.focus = function () {};
-    el.after = function (node) {
-        const parent = el.parentNode;
-        if (!parent) return;
-        const at = parent._children.indexOf(el);
-        if (at === -1) parent._children.push(node);
-        else parent._children.splice(at + 1, 0, node);
-        node.parentNode = parent;
-    };
-    el.appendChild = function (child) {
-        el._children.push(child);
-        child.parentNode = el;
-        return child;
-    };
-    el.contains = function (other) {
-        let node = other;
-        while (node) {
-            if (node === el) return true;
-            node = node.parentNode;
-        }
-        return false;
-    };
-    el.querySelector = function (sel) {
-        const found = [];
-        collect(el, sel, found, false);
-        return found[0] || null;
-    };
-    el.querySelectorAll = function (sel) {
-        const found = [];
-        collect(el, sel, found, true);
-        return found;
-    };
-    Object.defineProperty(el, 'innerHTML', {
-        get: function () { return el._html != null ? el._html : el._text; },
-        set: function (value) {
-            el._html = String(value);
-            el._text = '';
-            el._children = [];
-            parseInto(el, el._html);
-        },
-    });
-    Object.defineProperty(el, 'className', {
-        get: function () { return Array.from(classes).join(' '); },
-        set: function (value) {
-            classes.clear();
-            el.classList.add(value);
-            attrs.class = el.className;
-        },
-    });
-    return el;
-}
-
-function matches(el, sel) {
-    if (!sel) return false;
-    if (sel.indexOf(',') !== -1) {
-        return sel.split(',').some(function (part) { return matches(el, part.trim()); });
-    }
-    if (sel.charAt(0) === '.') return el.classList.contains(sel.slice(1));
-    if (sel.charAt(0) === '#') return el.id === sel.slice(1);
-    const attr = sel.match(/^\[([^\]]+)\]$/);
-    if (attr) return el.getAttribute(attr[1]) != null || el.dataset[attr[1]] != null;
-    return el._tag === sel.toLowerCase();
-}
-
-function collect(el, sel, found, all) {
-    const kids = el._children || [];
-    for (let i = 0; i < kids.length; i += 1) {
-        const child = kids[i];
-        if (matches(child, sel)) {
-            found.push(child);
-            if (!all) return;
-        }
-        collect(child, sel, found, all);
-        if (!all && found.length) return;
-    }
-}
-
-function applyAttrs(el, raw) {
-    const re = /([:@\w-]+)(?:\s*=\s*"([^"]*)"|\s*=\s*'([^']*)')?/g;
-    let match;
-    while ((match = re.exec(raw))) {
-        const name = match[1];
-        if (name.charAt(0) === '/') continue;
-        const value = match[2] != null ? match[2] : (match[3] != null ? match[3] : '');
-        el.setAttribute(name, value);
-    }
-}
-
-function parseInto(parent, html) {
-    const re = /<(\/?)([a-zA-Z][\w:-]*)([^>]*?)(\/?)>/g;
-    const stack = [parent];
-    let last = 0;
-    let match;
-    while ((match = re.exec(html))) {
-        const text = html.slice(last, match.index);
-        if (text && !/<[^>]+>/.test(text)) {
-            stack[stack.length - 1]._text += text;
-        }
-        last = re.lastIndex;
-        const closing = match[1] === '/';
-        const tag = match[2].toLowerCase();
-        const selfClose = match[4] === '/' || /^(input|br|img|hr|meta|link)$/.test(tag);
-        if (closing) {
-            if (stack.length > 1 && stack[stack.length - 1]._tag === tag) stack.pop();
-            continue;
-        }
-        const el = makeEl(tag);
-        applyAttrs(el, match[3] || '');
-        const top = stack[stack.length - 1];
-        top._children.push(el);
-        el.parentNode = top;
-        if (!selfClose) stack.push(el);
-    }
-}
-
-const body = makeEl('body');
-parseInto(body, [
+installMiniDocument([
     '<div id="modal-backdrop" class="hidden"></div>',
     '<div id="folder-modal" class="modal hidden">',
     '<input id="folder-title" />',
@@ -222,40 +32,6 @@ parseInto(body, [
     '<div id="main-host"></div><div id="side-host"></div>',
 ].join(''));
 
-const documentElement = makeEl('html');
-documentElement.appendChild(body);
-const storage = new Map();
-
-global.window = global;
-global.document = {
-    body: body,
-    documentElement: documentElement,
-    activeElement: null,
-    nodeType: 9,
-    getElementById: function (id) { return byId.get(String(id)) || null; },
-    createElement: function (tag) { return makeEl(String(tag || 'div').toLowerCase()); },
-    querySelector: function (sel) { return body.querySelector(sel); },
-    querySelectorAll: function (sel) { return body.querySelectorAll(sel); },
-    addEventListener: function () {},
-    removeEventListener: function () {},
-    contains: function (node) { return body.contains(node) || node === body; },
-};
-global.HTMLElement = HTMLElement;
-global.Node = Node;
-global.Element = Element;
-global.localStorage = {
-    getItem: function (key) { return storage.has(String(key)) ? storage.get(String(key)) : null; },
-    setItem: function (key, value) { storage.set(String(key), String(value)); },
-    removeItem: function (key) { storage.delete(String(key)); },
-};
-global.getComputedStyle = function () {
-    return { getPropertyValue: function () { return ''; } };
-};
-global.location = { hash: '', href: 'http://127.0.0.1:8765/', origin: 'http://127.0.0.1:8765', pathname: '/' };
-global.requestAnimationFrame = function (fn) {
-    return setTimeout(function () { fn(Date.now()); }, 0);
-};
-global.cancelAnimationFrame = function (id) { clearTimeout(id); };
 global.prksOfflineRuntimeSubscribe = function () { return function () {}; };
 global.prksOfflineRuntimeState = function () { return 'online'; };
 
@@ -600,8 +376,7 @@ async function tagBridgeAndOwner() {
     global.prksVueRefreshWorkPanelRead = function () { return false; };
     panel().innerHTML = '<div id="work-tags-list">VUE-OWNED</div>';
     const listeners = syncListeners.slice(before);
-    listeners.forEach(function (fn) { fn({}); });
-    await new Promise(function (resolve) { setTimeout(resolve, 0); });
+    await Promise.all(listeners.map(function (fn) { return Promise.resolve(fn({})); }));
     const owned = document.getElementById('work-tags-list');
     assert('a false Vue refresh does not overwrite a Vue-owned tag target',
         owned && String(owned.innerHTML).indexOf('VUE-OWNED') !== -1 &&

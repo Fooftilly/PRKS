@@ -119,7 +119,7 @@ class PlaylistsVueContracts(unittest.TestCase):
 
     def test_new_playlist_navigates_the_originating_owner(self):
         app = (FRONTEND / "app.js").read_text()
-        save = app[app.index("const attachedWork") : app.index("} catch (e)", app.index("const attachedWork"))]
+        save = app[app.index("let attachedWork") : app.index("} catch (e)", app.index("let attachedWork"))]
         self.assertIn("prksTakePlaylistIndexCreateTabId", save)
         self.assertIn("prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId })", save)
         self.assertNotIn("location.hash", save)
