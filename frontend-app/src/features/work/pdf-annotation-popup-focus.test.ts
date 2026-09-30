@@ -29,6 +29,40 @@ describe('annotation popup focus', () => {
     viewer.remove()
   })
 
+  it('does not focus a viewer in an unfocused workspace tile', () => {
+    const tile = document.createElement('div')
+    tile.className = 'prks-tile'
+    tile.setAttribute('data-prks-tab-id', 'tab-1')
+    const viewer = document.createElement('div')
+    tile.appendChild(viewer)
+    const other = document.createElement('button')
+    document.body.append(tile, other)
+    other.focus()
+    const win = window as Window & {
+      prksWorkspaceSnapshot?: () => { focusedTabId: string }
+    }
+    win.prksWorkspaceSnapshot = () => ({ focusedTabId: 'tab-2' })
+    const opener = document.createElement('button')
+    focusAfterAnnotationPopupClose(opener, viewer)
+    expect(document.activeElement).toBe(other)
+    expect(viewer.hasAttribute('tabindex')).toBe(false)
+
+    win.prksWorkspaceSnapshot = () => ({ focusedTabId: 'tab-1' })
+    focusAfterAnnotationPopupClose(opener, viewer)
+    expect(document.activeElement).toBe(viewer)
+
+    const paneOpener = document.createElement('button')
+    tile.appendChild(paneOpener)
+    win.prksWorkspaceSnapshot = () => ({ focusedTabId: 'tab-2' })
+    other.focus()
+    focusAfterAnnotationPopupClose(paneOpener, viewer)
+    expect(document.activeElement).toBe(other)
+
+    delete win.prksWorkspaceSnapshot
+    tile.remove()
+    other.remove()
+  })
+
   it('yields Escape while a confirmation or modal is open', () => {
     expect(annotationPopupEscapeYields()).toBe(false)
     const confirm = document.createElement('div')
