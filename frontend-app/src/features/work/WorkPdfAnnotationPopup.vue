@@ -69,6 +69,9 @@ function restoreOpener() {
 function onDocumentKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape' || event.isComposing || !props.state.open) return
   if (annotationPopupEscapeYields()) return
+  const host = floatingRef.value
+  const target = event.target
+  if (!host || !(target instanceof Node) || !host.contains(target)) return
   event.preventDefault()
   event.stopPropagation()
   props.onClose(ticket())
