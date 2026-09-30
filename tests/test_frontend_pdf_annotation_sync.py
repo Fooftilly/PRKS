@@ -172,9 +172,20 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         )
         # ACK-drained path must also use coherent catch-up — never assign
         # pendingMaterializationRevision from an incremental ACK alone.
-        ack_sub_at = works_pdf.index("const isPdfAck = ack && op && (")
-        ack_sub = works_pdf[ack_sub_at:ack_sub_at + 2200]
+        # The PDF-op predicate lives in pdfAnnotationAckForWork; the sync
+        # subscriber that consumes that ACK is what may catch up.
+        ack_fn_at = works_pdf.index("function pdfAnnotationAckForWork")
+        ack_fn_end = works_pdf.index("function applyLivePdfAnnotationAck", ack_fn_at)
+        ack_fn = works_pdf[ack_fn_at:ack_fn_end]
+        self.assertIn("const isPdfAck = ack && op && (", ack_fn)
+        self.assertIn("CREATE_PDF_ANNOTATION", ack_fn)
+        self.assertIn("SET_PDF_ANNOTATION", ack_fn)
+        self.assertIn("DELETE_PDF_ANNOTATION", ack_fn)
+        ack_sub_at = works_pdf.index("const ack = pdfAnnotationAckForWork(event);", ack_fn_at)
+        ack_sub_end = works_pdf.index("renderSyncIndicator();", ack_sub_at)
+        ack_sub = works_pdf[ack_sub_at:ack_sub_end]
         self.assertIn("maybeCatchUpMaterialization", ack_sub)
+        self.assertEqual(ack_sub.count("maybeCatchUpMaterialization"), 2)
         self.assertNotIn("pendingMaterializationRevision = setRev", ack_sub)
         self.assertNotIn("requestFlush('materialize')", ack_sub)
         # Incremental ACK must not relabel snapshot gen without continuity + changed.
