@@ -1673,7 +1673,12 @@ parallel configuration system:
   layer's device: there only directories are held to the device rule, with a
   warning. A directory that cannot be read is refused, because the invariant
   cannot be proven for it. Components an override places outside the root are
-  not part of the walk.
+  not part of the walk. Device numbers alone cannot see a bind mount from the
+  same filesystem, across which `rename()` still fails with `EXDEV`, so the
+  mount table is consulted too (`/proc/self/mountinfo` on Linux, `mount(8)`
+  on macOS; on Windows a folder mount is a reparse point): any mount point
+  strictly inside the root, directory or file, is refused. The root itself may
+  be a mount point.
 - **Root links are resolved once.** After the lease is taken, the process
   entry re-anchors every root-relative `StorageConfig` path beneath the leased
   `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards

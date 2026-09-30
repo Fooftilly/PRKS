@@ -508,6 +508,67 @@ def _device_error(path: str) -> StorageRootRefused:
     )
 
 
+MOUNTINFO_FILE = "/proc/self/mountinfo"
+
+
+def parse_mountinfo(text: str) -> list[str]:
+    """Mount points from Linux ``/proc/self/mountinfo`` (field 5, octal-unescaped)."""
+    points = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 5:
+            points.append(_unescape_mount_field(fields[4]))
+    return points
+
+
+def _mount_points(*, mountinfo_file: str = MOUNTINFO_FILE) -> Optional[list[str]]:
+    """Every mount point this process can see, or None when the platform cannot list them.
+
+    Linux reads ``/proc/self/mountinfo``, which includes bind mounts of single
+    files; macOS parses ``mount(8)``. Windows has no separate list: a volume
+    mounted on a folder is a reparse point, which the tree walk refuses.
+    """
+    if sys.platform == "win32":  # pragma: no cover - Windows only
+        return None
+    if sys.platform == "darwin":  # pragma: no cover - macOS only
+        import subprocess
+
+        try:
+            output = subprocess.run(
+                ["/sbin/mount"], capture_output=True, text=True, timeout=10, check=True
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return [point for point, _type in parse_bsd_mount_output(output)]
+    try:
+        with open(mountinfo_file, encoding="utf-8", errors="replace") as handle:
+            return parse_mountinfo(handle.read())
+    except OSError:
+        return None
+
+
+def _check_no_mount_points(root_real: str) -> None:
+    """V7: no mount boundary strictly inside the root, whatever its device.
+
+    A bind mount of a directory or file from the same filesystem keeps the
+    root's ``st_dev``, yet ``rename()`` across the two mounts still fails with
+    ``EXDEV``, which would break restore and relocation. So device numbers are
+    not enough: the mount table itself is consulted. The root may itself be a
+    mount point. When no table is available the walk's device check remains.
+    """
+    points = _mount_points()
+    if points is None:
+        return
+    for point in points:
+        if not _same_path(point, root_real) and _is_within(point, root_real):
+            raise StorageRootRefused(
+                "root_contains_mount_point",
+                f"{point} is a mount point inside the storage root. Nothing inside "
+                "the root may be mounted, even from the same filesystem, because "
+                "renames across mounts are not atomic.",
+            )
+
+
 def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
     """V13 and V7 for everything beneath the root (§7.3): no links, no mount points.
 
@@ -943,6 +1004,7 @@ def _open_under_lease(
     fs_type = (detect_filesystem_type(root_real) or "").lower()
     if fs_type in OVERLAY_FILESYSTEM_TYPES:
         LOGGER.warning("storage_root_overlay_file_devices_unchecked")
+    _check_no_mount_points(root_real)
     _check_tree(root_real, file_devices=fs_type not in OVERLAY_FILESYSTEM_TYPES)
 
     maintenance = os.path.join(root_real, MAINTENANCE_DIRNAME)

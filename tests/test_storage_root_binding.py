@@ -1135,5 +1135,56 @@ class TestFilesystemDetectionAcrossPlatforms(RootTestCase):
         self.assertIn("storage_root_filesystem_unclassified", "\n".join(logs.output))
 
 
+class TestMountBoundaries(RootTestCase):
+    """V7 by mount table: same-device bind mounts are mount points too."""
+
+    def _mountinfo(self, *points):
+        lines = ["22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw"]
+        for i, point in enumerate(points):
+            escaped = point.replace(" ", "\\040")
+            lines.append(f"{30 + i} 22 8:1 /elsewhere {escaped} rw,relatime shared:1 - ext4 /dev/sda1 rw")
+        path = self.path(f"mountinfo-{len(points)}")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        return path
+
+    def test_mountinfo_parsing_unescapes_mount_points(self):
+        text = "36 35 98:0 /mnt1 /mnt/with\\040space rw - ext3 /dev/root rw\n"
+        self.assertEqual(root_binding.parse_mountinfo(text), ["/mnt/with space"])
+
+    def _open_with(self, root, mountinfo):
+        real = root_binding._mount_points
+
+        def fake(*, mountinfo_file=root_binding.MOUNTINFO_FILE):
+            return real(mountinfo_file=mountinfo)
+
+        with patch.object(root_binding, "_mount_points", fake), patch.object(root_binding.sys, "platform", "linux"):
+            return self.open(root)
+
+    def test_same_device_bind_mounts_inside_the_root_are_refused(self):
+        for rel in ("pdfs", "prks_data.db", os.path.join("people", "deep dir")):
+            with self.subTest(mount=rel):
+                root = self.path("lib")
+                os.makedirs(os.path.join(root, "pdfs"), exist_ok=True)
+                mountinfo = self._mountinfo(os.path.join(os.path.realpath(root), rel))
+                with self.assertRaises(StorageRootRefused) as ctx:
+                    self._open_with(root, mountinfo)
+                self.assertEqual(ctx.exception.reason, "root_contains_mount_point")
+                self.assertFalse(os.path.exists(os.path.join(root, MARKER)))
+                shutil.rmtree(root)
+
+    def test_root_itself_and_unrelated_mounts_are_fine(self):
+        root = self.path("lib")
+        os.makedirs(root)
+        mountinfo = self._mountinfo(os.path.realpath(root), self.path("lib-sibling"), "/srv/other")
+        self.assertTrue(self._open_with(root, mountinfo).created)
+
+    def test_real_mount_table_accepts_a_plain_temporary_root(self):
+        if not os.path.exists(root_binding.MOUNTINFO_FILE):  # pragma: no cover - non-Linux
+            self.skipTest("no mountinfo")
+        self.assertIsNotNone(root_binding._mount_points())
+        self.open(self.path("lib"))
+
+
 if __name__ == "__main__":
     unittest.main()
