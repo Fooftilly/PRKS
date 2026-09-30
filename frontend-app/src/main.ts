@@ -13,6 +13,7 @@ import { registerWorkMetadataEditorBridge } from './features/work/metadata-sessi
 import { registerWorkPrivateNotesBridge } from './features/work/private-note-session'
 import { registerWorkResearchNotesBridge } from './features/work/research-note-session'
 import { registerWorkMainSurfaceBridge } from './features/work/main-surface'
+import { registerWorkPdfAdapterBridge } from './features/work/pdf-adapter'
 
 const target = document.getElementById(PRKS_VUE_ROOT_ID)
 if (target) {
@@ -33,3 +34,4 @@ registerWorkMetadataEditorBridge(window)
 registerWorkPrivateNotesBridge(window)
 registerWorkResearchNotesBridge(window)
 registerWorkMainSurfaceBridge(window)
+registerWorkPdfAdapterBridge(window)
