@@ -34,8 +34,9 @@ const previous = ref<PopupDraftIdentity | null>(null)
 const floatingRef = ref<HTMLElement | null>(null)
 const textRef = ref<HTMLTextAreaElement | null>(null)
 let stopPosition = (): void => {}
-let placeFrame = 0
-let placeAttempts = 0
+let anchorObserver: MutationObserver | null = null
+let observedRoot: Element | null = null
+let boundAnchor: Element | null = null
 let opener: HTMLElement | null = null
 let focusRestored = false
 
@@ -93,35 +94,57 @@ watch(
   { immediate: true },
 )
 
-function place() {
+function releasePosition() {
   stopPosition()
   stopPosition = () => {}
-  if (placeFrame) {
-    cancelAnimationFrame(placeFrame)
-    placeFrame = 0
-  }
-  if (!props.state.open || !floatingRef.value) return
-  const reference = props.anchor()
-  if (!reference) {
-    if (placeAttempts < 30) {
-      placeAttempts += 1
-      placeFrame = requestAnimationFrame(() => {
-        placeFrame = 0
-        place()
-      })
-    }
+  boundAnchor = null
+}
+
+function disconnectAnchorWatch() {
+  if (anchorObserver) anchorObserver.disconnect()
+  anchorObserver = null
+  observedRoot = null
+}
+
+function bindAnchor(reference: Element) {
+  if (!floatingRef.value || reference === boundAnchor) return
+  stopPosition()
+  boundAnchor = reference
+  stopPosition = bindFloatingPosition(reference, floatingRef.value, props.boundary())
+}
+
+/**
+ * The list can open the popup before the virtualized page mounts the anchor.
+ * Watch the pane until that node exists, and re-bind if a later mount
+ * replaces it. The watch ends when the popup closes or this surface unmounts.
+ */
+function syncAnchor() {
+  if (!props.state.open || !floatingRef.value) {
+    releasePosition()
+    disconnectAnchorWatch()
     return
   }
-  placeAttempts = 0
-  stopPosition = bindFloatingPosition(reference, floatingRef.value, props.boundary())
+  const reference = props.anchor()
+  if (reference) bindAnchor(reference)
+  else releasePosition()
+  const root = props.boundary()
+  if (!(root instanceof Element)) return
+  if (root === observedRoot && anchorObserver) return
+  disconnectAnchorWatch()
+  anchorObserver = new MutationObserver(() => {
+    syncAnchor()
+  })
+  anchorObserver.observe(root, { childList: true, subtree: true })
+  observedRoot = root
 }
 
 watch(
   () => [props.state.open, props.state.annId, props.state.epoch, floatingRef.value] as const,
   () => {
-    placeAttempts = 0
-    place()
+    boundAnchor = null
+    syncAnchor()
   },
+  { flush: 'post' },
 )
 
 watch(
@@ -134,9 +157,9 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  if (placeFrame) cancelAnimationFrame(placeFrame)
   document.removeEventListener('keydown', onDocumentKeydown)
-  stopPosition()
+  releasePosition()
+  disconnectAnchorWatch()
   if (previous.value) restoreOpener()
 })
 </script>

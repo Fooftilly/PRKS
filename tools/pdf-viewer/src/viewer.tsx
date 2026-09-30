@@ -184,7 +184,7 @@ function ApiBinder({
                 goToPage: (pageNumber) => {
                     (scroll || scrollCap?.forDocument(activeDocumentId))?.scrollToPage({
                         pageNumber,
-                        behavior: 'auto',
+                        behavior: 'instant',
                     });
                 },
                 getCurrentPage: () =>

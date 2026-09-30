@@ -31,8 +31,10 @@ export function AnnotationMenu({
     const { provides: annotation } = useAnnotation(documentId);
     const requestRef = useRef(onCommentRequest);
     const dismissRef = useRef(onCommentDismiss);
+    const annotationRef = useRef(annotation);
     requestRef.current = onCommentRequest;
     dismissRef.current = onCommentDismiss;
+    annotationRef.current = annotation;
 
     const annotationContext = context.type === 'annotation' ? context : null;
     const obj = annotationContext ? annotationContext.annotation.object : null;
@@ -50,9 +52,17 @@ export function AnnotationMenu({
 
     useEffect(() => {
         if (!commentable || !id) return;
+        const dismissedId = id;
         requestRef.current?.({ annotationId: id, pageIndex, deletable: !!actions?.deletable });
         return () => {
-            dismissRef.current?.({ annotationId: id });
+            // Page virtualization unmounts this menu while the annotation stays
+            // selected. That is not a deselect, so the comment draft stays.
+            const selected = annotationRef.current?.getSelectedAnnotations() || [];
+            const stillSelected = selected.some((item) => {
+                const objectId = item && item.object ? String(item.object.id) : '';
+                return objectId === dismissedId;
+            });
+            if (!stillSelected) dismissRef.current?.({ annotationId: dismissedId });
         };
     }, [commentable, id, pageIndex]);
 

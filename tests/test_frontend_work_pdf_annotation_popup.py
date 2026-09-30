@@ -36,6 +36,9 @@ class WorkPdfAnnotationPopupTests(unittest.TestCase):
         self.assertNotIn("savePdfAnnotation", RUNTIME)
         self.assertNotIn("createPrksPdfViewer", RUNTIME)
         self.assertIn("prksOpenAnnotationPopupSession", PDF)
+        session = PDF[PDF.index("function prksOpenAnnotationPopupSession"):PDF.index("window.closePdfAnnotationEditor")]
+        self.assertLess(session.index("viewer.goToPage"), session.index("const opened = pdf.openAnnotationPopup"))
+        self.assertIn("!(opts && opts.reason === 'viewer')", session)
         self.assertIn("annotationPopupStill", PDF)
         self.assertIn("ticket.annId", PDF)
         self.assertIn("ticket.deletable !== true", PDF)
@@ -45,6 +48,9 @@ class WorkPdfAnnotationPopupTests(unittest.TestCase):
         self.assertIn("data-prks-role=\"pdf-annotation-anchor\"", MENU)
         self.assertIn("deletable:", MENU)
         self.assertNotIn("Edit comment", MENU)
+        cleanup = MENU[MENU.index("return () => {"):MENU.index("}, [commentable, id, pageIndex]")]
+        self.assertLess(cleanup.index("getSelectedAnnotations"), cleanup.index("dismissRef.current"))
+        self.assertIn("if (!stillSelected)", cleanup)
         self.assertIn("export function readWorkPdfAnnotationPopup", ADAPTER)
         self.assertIn("export function intentSaveWorkPdfAnnotationComment", ADAPTER)
         self.assertIn("savePdfAnnotationComment", ADAPTER)

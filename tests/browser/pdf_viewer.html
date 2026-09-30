@@ -217,6 +217,80 @@ async function waitNewest(viewerRef, before, label) {
     return newestAnnotation(viewerRef, before);
 }
 
+// Virtualized page unmount is not deselection. The comment draft stays until
+// the annotation is actually deselected.
+async function assertScrollAwayKeepsDraft(viewerRef, root, annotationId) {
+    const commentsBefore = commentReqs.length;
+    viewerRef.selectAnnotation(annotationId);
+    await waitFor(
+        () => root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+        4000,
+        'annotation anchor',
+    );
+    const anchor = root.querySelector('[data-prks-role="pdf-annotation-anchor"]');
+    assert('annotation anchor after select', !!anchor);
+    assert(
+        'anchor id matches selection',
+        !!(anchor && anchor.getAttribute('data-prks-annotation-id') === annotationId),
+        anchor && anchor.getAttribute('data-prks-annotation-id'),
+    );
+    assert(
+        'select requests the comment popup',
+        commentReqs.some((c) => c && c.annotationId === annotationId),
+        JSON.stringify(commentReqs.slice(commentsBefore)),
+    );
+    assert(
+        'commentable selection has no Edit comment button',
+        ![...root.querySelectorAll('button')].some((b) => (b.textContent || '').trim() === 'Edit comment'),
+    );
+    activeDraft = 'typed draft';
+    const dismissesBeforeScroll = commentDismisses.length;
+    const hostHeight = root.style.height;
+    root.style.height = '160px';
+    viewerRef.goToPage(viewerRef.getPageCount());
+    await waitFor(
+        () => !root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+        5000,
+        'scrolled page unmounted the anchor',
+    );
+    assert(
+        'scrolling the page out does not dismiss the comment',
+        commentDismisses.length === dismissesBeforeScroll,
+        JSON.stringify(commentDismisses.slice(dismissesBeforeScroll)),
+    );
+    assert(
+        'scrolling the page out keeps the active draft',
+        activeDraft === 'typed draft',
+        activeDraft,
+    );
+    root.style.height = hostHeight || '640px';
+    viewerRef.goToPage(1);
+    await waitFor(
+        () => root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+        5000,
+        'anchor remounts with the page',
+    );
+    assert(
+        'returning to the page does not dismiss the comment',
+        commentDismisses.length === dismissesBeforeScroll,
+        JSON.stringify(commentDismisses.slice(dismissesBeforeScroll)),
+    );
+    assert('returning to the page keeps the active draft', activeDraft === 'typed draft', activeDraft);
+    if (typeof viewerRef.deselectAnnotation === 'function') {
+        viewerRef.deselectAnnotation();
+        await waitFor(
+            () => commentDismisses.some((c) => c && c.annotationId === annotationId),
+            4000,
+            'comment dismiss',
+        );
+        assert(
+            'deselect dismisses the comment request',
+            commentDismisses.some((c) => c && c.annotationId === annotationId),
+            JSON.stringify(commentDismisses.slice(-1)),
+        );
+    }
+}
+
 async function createViaToolbar(viewerRef, root, kind, ySelect) {
     const before = annotationIds(viewerRef);
     const label = kind === 'highlight' ? 'Highlight' : 'Underline';
@@ -259,6 +333,8 @@ const pointerMode = new URLSearchParams(location.search).has('pointer');
 const events = [];
 const commentReqs = [];
 const commentDismisses = [];
+// Stand-in for the Vue popup draft. Dismiss is what clears it.
+let activeDraft = '';
 let viewer = null;
 
 try {
@@ -289,8 +365,14 @@ try {
         documentTitle: 'Retorika',
         documentTypeLabel: 'Book',
         onAnnotationChange: (evt) => events.push(evt),
-        onAnnotationCommentRequest: (info) => commentReqs.push(info),
-        onAnnotationCommentDismiss: (info) => commentDismisses.push(info),
+        onAnnotationCommentRequest: (info) => {
+            commentReqs.push(info);
+            if (!activeDraft) activeDraft = 'typed draft';
+        },
+        onAnnotationCommentDismiss: (info) => {
+            commentDismisses.push(info);
+            activeDraft = '';
+        },
     });
     viewer.onAnnotationEvent((evt) => events.push(evt));
     const wasmAttr = host.querySelector('.prks-pdf-viewer')?.getAttribute('data-wasm-url') || '';
@@ -353,9 +435,13 @@ try {
     assert('page input', !!pageInput);
     if (pageInput) {
         pageInput.focus();
+        // The page field commits React draft state, not the DOM value. Yield so
+        // focus and input flush before Enter; a same-turn keydown reads the old page.
+        await sleep(0);
         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
         setter.call(pageInput, '1');
         pageInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(0);
         pageInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         pageInput.blur();
         await waitFor(() => viewer.getCurrentPage() === 1, 8000, 'page input 1');
@@ -554,6 +640,43 @@ try {
         'createAnnotation API',
     );
     assert('createAnnotation API', viewer.getAnnotations().some((a) => a && a.id === apiId), apiId);
+
+    const hostFar = document.getElementById('host-large');
+    const farViewer = await createPrksPdfViewer({
+        target: hostFar,
+        src: LARGE,
+        mode: 'work',
+        assetBaseUrl: ASSET_BASE,
+        onAnnotationCommentRequest: (info) => {
+            commentReqs.push(info);
+            if (!activeDraft) activeDraft = 'typed draft';
+        },
+        onAnnotationCommentDismiss: (info) => {
+            commentDismisses.push(info);
+            activeDraft = '';
+        },
+    });
+    await waitFor(() => farViewer.getPageCount() >= 10, 25000, 'long document pages');
+    const farId = crypto.randomUUID();
+    farViewer.createAnnotation(0, {
+        id: farId,
+        type: 9,
+        pageIndex: 0,
+        rect: { origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } },
+        segmentRects: [{ origin: { x: 72, y: 700 }, size: { width: 160, height: 14 } }],
+        opacity: 1,
+        strokeColor: '#FFCD45',
+        color: '#FFCD45',
+        created: new Date(),
+    });
+    await waitFor(
+        () => farViewer.getAnnotations().some((a) => a && a.id === farId),
+        8000,
+        'long document annotation',
+    );
+    await assertScrollAwayKeepsDraft(farViewer, hostFar, farId);
+    farViewer.destroy();
+    hostFar.innerHTML = '';
 
     const annA = await createViaToolbar(viewer, host, 'highlight', 70);
     const annB = await createViaPopup(viewer, host, 'highlight', 95);

@@ -489,6 +489,25 @@ function prksOpenAnnotationPopupSession(owner, annId, item, opts) {
     const pageDisp = resolvedPage != null ? Number(resolvedPage) + 1 : '?';
     const type =
         (typeof annotationTypeLabel === 'function' ? annotationTypeLabel(source) : '') || 'Annotation';
+    // List opens must land on the annotation's page before the session starts.
+    // The scroller virtualizes pages, so selecting an offscreen id does not
+    // mount its anchor. Viewer-originated requests are already on that page.
+    if (!(opts && opts.reason === 'viewer') && viewer) {
+        if (
+            Number.isFinite(Number(resolvedPage)) &&
+            Number(resolvedPage) >= 0 &&
+            typeof viewer.goToPage === 'function'
+        ) {
+            try {
+                viewer.goToPage(Number(resolvedPage) + 1);
+            } catch (_eNav) {}
+        }
+        if (typeof viewer.selectAnnotation === 'function') {
+            try {
+                viewer.selectAnnotation(id);
+            } catch (_eSel) {}
+        }
+    }
     const opened = pdf.openAnnotationPopup({
         annId: id,
         pageIndex: resolvedPage,
@@ -500,11 +519,6 @@ function prksOpenAnnotationPopupSession(owner, annId, item, opts) {
         deletable: opts && typeof opts.deletable === 'boolean' ? opts.deletable : undefined,
     });
     if (!opened) return false;
-    if (!(opts && opts.reason === 'viewer') && viewer && typeof viewer.selectAnnotation === 'function') {
-        try {
-            viewer.selectAnnotation(id);
-        } catch (_eSel) {}
-    }
     prksSyncAnnotationPopup(owner);
     return true;
 }
@@ -1047,8 +1061,16 @@ ${commentHtml}
             const rowItem = cache && Array.isArray(cache.items) ? cache.items[idx] : null;
             const annId = rowItem && (rowItem.id || rowItem.uuid || rowItem.annotationId || rowItem._id);
             if (!annId) return;
-            const read = pdf && typeof pdf.readAnnotationPopup === 'function' ? pdf.readAnnotationPopup() : null;
-            if (read && read.open && String(read.annId) === String(annId) && read.deletable !== true) return;
+            // Capture the viewer before confirm/materialization. A remount during
+            // that wait must not delete this id on the replacement viewer.
+            const ticket =
+                pdf && typeof pdf.captureAnnotationPopupTicket === 'function'
+                    ? pdf.captureAnnotationPopupTicket({
+                          directId: annId,
+                          generation: owner && typeof owner.generation === 'number' ? owner.generation : null,
+                      })
+                    : null;
+            if (!ticket || ticket.deletable !== true) return;
             // Confirm immediately. Waiting out materialization before the dialog
             // delayed Cancel/OK for the whole critical section and stranded the
             // opener under load (sidebar may also repaint while waiting).
@@ -1060,6 +1082,10 @@ ${commentHtml}
             if (owner && owner.destroyed) return;
             await prksWaitOutAnnotationMaterialization(pdf);
             if (owner && owner.destroyed) return;
+            if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
+            if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
+                return;
+            }
             // Re-check after the gate — do not close the editor as if delete ran.
             if (!prksPdfUserMutationStillAllowed(pdf)) {
                 prksRefusePdfUserMutation(pdf);
@@ -1067,8 +1093,8 @@ ${commentHtml}
             }
             if (pdf.annotationMutationDurable !== true &&
                 typeof prksOfflineGuardMutation === 'function' && prksOfflineGuardMutation()) return;
-            const viewer = prksPdfViewer(owner);
-            if (viewer && typeof viewer.deleteAnnotation === 'function') {
+            const viewer = ticket.viewer;
+            if (viewer && pdf.viewer === viewer && typeof viewer.deleteAnnotation === 'function') {
                 try {
                     // User path: plain delete after materialization lock.
                     await viewer.deleteAnnotation(String(annId));
