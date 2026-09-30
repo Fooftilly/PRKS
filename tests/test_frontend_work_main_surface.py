@@ -39,6 +39,17 @@ class WorkMainSurfaceContractTests(unittest.TestCase):
         self.assertIn('data-prks-role="work-research-notes-anchor"', _VIEW)
         self.assertIn("viewerHtml", _VIEW)
 
+    def test_a_rejected_vue_surface_does_not_paint_the_legacy_shell(self):
+        body = _WORKS[_WORKS.index("async function renderWorkDetails"):_WORKS.index("function prksPaintEasyMDEToolbarIcons")]
+        gate = body.index("typeof prksVuePresentWorkMainSurface !== 'function'")
+        reject = body.index("prksVuePresentWorkMainSurface(ctx, shell) !== true", gate)
+        fallback = body[gate:reject]
+        self.assertLess(fallback.index("if (!isCurrent()) return;"), fallback.index("getEntity('work')"))
+        self.assertLess(fallback.index("getEntity('work')"), fallback.index("container.innerHTML = prksWorkDetailsShellHtml(shell)"))
+        self.assertNotIn("prksVueDismissWorkMainSurface", body[gate:reject + 80])
+        self.assertIn('role="slider"', _VIEW)
+        self.assertNotIn('role="separator"', _VIEW)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1030,11 +1030,16 @@ async function renderWorkDetails(ctx, work, requestCtx) {
         viewerHtml: viewerHtml,
         editorRegionId: ctx.domId('work-notes-editor-region'),
     };
-    const presented = typeof prksVuePresentWorkMainSurface === 'function' &&
-        prksVuePresentWorkMainSurface(ctx, shell) === true;
-    if (!presented) {
-        if (typeof prksVueDismissWorkMainSurface === 'function') prksVueDismissWorkMainSurface(ctx);
+    /* The legacy shell exists only when the Vue bridge was never registered.
+     * A bridge that rejects this generation or Work must not dismiss the
+     * current tile or write this shell into the replaced root. */
+    if (typeof prksVuePresentWorkMainSurface !== 'function') {
+        if (!isCurrent()) return;
+        const liveWork = typeof ctx.getEntity === 'function' ? ctx.getEntity('work') : null;
+        if (!liveWork || String(liveWork.id) !== String(work.id)) return;
         container.innerHTML = prksWorkDetailsShellHtml(shell);
+    } else if (prksVuePresentWorkMainSurface(ctx, shell) !== true) {
+        return;
     }
 
     const notesTa = ctx.query('[data-prks-role="research-notes-editor"]');
