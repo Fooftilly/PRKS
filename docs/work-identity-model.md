@@ -1111,6 +1111,11 @@ not a #60 concern.
 
 ## 9. Asset lifecycle and storage
 
+Where Asset bytes physically live (the data root, storage keys, the storage
+backend interface, relocation) is specified by
+[storage-architecture.md](storage-architecture.md) (#311). This section owns
+the Asset side of that seam.
+
 ### 9.1 Asset record
 
 | Field | Meaning |
