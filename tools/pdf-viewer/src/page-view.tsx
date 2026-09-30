@@ -13,11 +13,15 @@ export function PageView({
     layout,
     workMode,
     onCommentRequest,
+    onCommentDismiss,
+    onDeleteRequest,
 }: {
     documentId: string;
     layout: PageLayout;
     workMode: boolean;
     onCommentRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    onCommentDismiss?: (info: { annotationId: string }) => void;
+    onDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
 }) {
     const box: CSSProperties = {
         width: layout.width,
@@ -50,6 +54,8 @@ export function PageView({
                                       {...props}
                                       documentId={documentId}
                                       onCommentRequest={onCommentRequest}
+                                      onCommentDismiss={onCommentDismiss}
+                                      onDeleteRequest={onDeleteRequest}
                                   />
                               )
                             : undefined

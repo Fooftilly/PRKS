@@ -219,6 +219,20 @@
         };
     }
 
+    function emptyAnnotationPopup() {
+        return {
+            open: false,
+            annId: '',
+            pageIndex: null,
+            comment: '',
+            meta: '',
+            epoch: 0,
+            generation: null,
+            custom: null,
+            docId: null,
+        };
+    }
+
     function pdfSearchMatchLabel(search) {
         if (!search || !search.open) return '';
         if (search.status === 'pending') return 'Searching';
@@ -360,6 +374,7 @@
             lastPage: opts.lastPage || null,
             annotationCache: opts.annotationCache || emptyAnnotationCache(workId),
             annotationEditorState: opts.annotationEditorState || null,
+            annotationPopup: emptyAnnotationPopup(),
             syncState: opts.syncState || emptySyncState(workId),
             _destroyed: false,
             _flushAnnotationsImpl: typeof opts.flushAnnotations === 'function' ? opts.flushAnnotations : null,
@@ -581,6 +596,154 @@
             return true;
         };
 
+        function publishAnnotationEditorState() {
+            const popup = runtime.annotationPopup;
+            if (!popup || !popup.open || !popup.annId) {
+                runtime.annotationEditorState = null;
+                return;
+            }
+            runtime.annotationEditorState = {
+                annId: String(popup.annId),
+                pageIndex: popup.pageIndex,
+                docId: popup.docId,
+                custom: popup.custom && typeof popup.custom === 'object' ? popup.custom : {},
+                epoch: popup.epoch,
+                open: true,
+            };
+        }
+
+        function annotationPopupViewerMatches(ticket) {
+            if (!ticket || !ticket.annId) return false;
+            if (runtime._destroyed) return false;
+            if (ticket.viewer != null && ticket.viewer !== runtime.viewer) return false;
+            if (typeof ticket.viewerToken === 'number' && ticket.viewerToken !== runtime.viewerSetupToken) {
+                return false;
+            }
+            return true;
+        }
+
+        /**
+         * Comment popup session for this runtime. Opening and closing do not
+         * replace the viewer or change viewerSetupToken.
+         */
+        runtime.readAnnotationPopup = function () {
+            const popup = runtime.annotationPopup || emptyAnnotationPopup();
+            const page = Number(popup.pageIndex);
+            const pageIndex = Number.isFinite(page) ? page : null;
+            return {
+                open: !!popup.open,
+                annId: popup.open && popup.annId ? String(popup.annId) : '',
+                pageIndex: popup.open ? pageIndex : null,
+                comment: popup.open ? String(popup.comment || '') : '',
+                meta: popup.open ? String(popup.meta || '') : '',
+                epoch: typeof popup.epoch === 'number' ? popup.epoch : 0,
+            };
+        };
+
+        runtime.openAnnotationPopup = function (info) {
+            if (runtime._destroyed || !info) return false;
+            const annId = info.annId == null ? '' : String(info.annId);
+            if (!annId) return false;
+            const popup = runtime.annotationPopup;
+            const same = !!(popup.open && popup.annId === annId);
+            if (!same) {
+                popup.epoch += 1;
+                popup.open = true;
+                popup.annId = annId;
+                popup.comment = info.comment == null ? '' : String(info.comment);
+                popup.custom = null;
+            }
+            if (info.pageIndex != null && Number.isFinite(Number(info.pageIndex))) {
+                popup.pageIndex = Number(info.pageIndex);
+            }
+            if (info.meta != null) popup.meta = String(info.meta);
+            if (info.custom && typeof info.custom === 'object') popup.custom = info.custom;
+            if (info.docId != null) popup.docId = info.docId;
+            if (typeof info.generation === 'number') popup.generation = info.generation;
+            publishAnnotationEditorState();
+            return true;
+        };
+
+        runtime.closeAnnotationPopup = function (annId) {
+            if (runtime._destroyed) return false;
+            const popup = runtime.annotationPopup;
+            if (!popup.open) return false;
+            if (annId != null && annId !== '' && String(annId) !== popup.annId) return false;
+            popup.epoch += 1;
+            popup.open = false;
+            popup.annId = '';
+            popup.comment = '';
+            popup.meta = '';
+            popup.pageIndex = null;
+            popup.custom = null;
+            popup.docId = null;
+            publishAnnotationEditorState();
+            return true;
+        };
+
+        runtime.captureAnnotationPopupTicket = function (captured) {
+            if (runtime._destroyed) return null;
+            const popup = runtime.annotationPopup;
+            const directId = captured && captured.directId != null ? String(captured.directId) : '';
+            if (directId) {
+                return {
+                    annId: directId,
+                    epoch: null,
+                    direct: true,
+                    pageIndex: captured.pageIndex != null && Number.isFinite(Number(captured.pageIndex))
+                        ? Number(captured.pageIndex)
+                        : null,
+                    generation: typeof captured.generation === 'number' ? captured.generation : null,
+                    viewer: runtime.viewer,
+                    viewerToken: runtime.viewerSetupToken,
+                    custom: null,
+                };
+            }
+            if (!popup.open || !popup.annId) return null;
+            if (captured && captured.annId != null && String(captured.annId) !== popup.annId) return null;
+            if (captured && captured.epoch != null && Number(captured.epoch) !== popup.epoch) return null;
+            if (
+                captured &&
+                typeof captured.generation === 'number' &&
+                typeof popup.generation === 'number' &&
+                captured.generation !== popup.generation
+            ) {
+                return null;
+            }
+            return {
+                annId: popup.annId,
+                epoch: popup.epoch,
+                direct: false,
+                pageIndex: popup.pageIndex,
+                generation: popup.generation,
+                viewer: runtime.viewer,
+                viewerToken: runtime.viewerSetupToken,
+                custom: popup.custom && typeof popup.custom === 'object' ? popup.custom : {},
+            };
+        };
+
+        /** Viewer identity still matches the ticket. Independent of which popup is open. */
+        runtime.annotationPopupWriteStill = function (ticket) {
+            return annotationPopupViewerMatches(ticket);
+        };
+
+        /** The open popup is still the ticket's annotation and epoch. */
+        runtime.annotationPopupStill = function (ticket) {
+            if (!annotationPopupViewerMatches(ticket)) return false;
+            if (ticket.direct || ticket.epoch == null) return false;
+            const popup = runtime.annotationPopup;
+            if (!popup.open) return false;
+            if (String(popup.annId) !== String(ticket.annId)) return false;
+            if (popup.epoch !== ticket.epoch) return false;
+            return true;
+        };
+
+        runtime.noteAnnotationPopupComment = function (ticket, comment) {
+            if (!runtime.annotationPopupStill(ticket)) return false;
+            runtime.annotationPopup.comment = comment == null ? '' : String(comment);
+            return true;
+        };
+
         function invokePdfRuntimeHook(owner, method) {
             if (!owner || typeof owner[method] !== 'function') return;
             try {
@@ -603,6 +766,9 @@
         runtime.destroy = function () {
             if (runtime._destroyed) return;
             releasePdfSearch();
+            try {
+                runtime.closeAnnotationPopup();
+            } catch (_ePopup) {}
             runtime._destroyed = true;
             invokePdfRuntimeHook(runtime.annotationPersistence, 'destroy');
             runtime.annotationPersistence = null;

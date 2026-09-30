@@ -2,15 +2,19 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import runtimeSource from '../../../../frontend/js/pdf-work-runtime.js?raw'
 import {
+  intentCloseWorkPdfAnnotationPopup,
   intentCloseWorkPdfSearch,
+  intentDeleteWorkPdfAnnotationPopup,
   intentFlushWorkPdf,
   intentMountWorkPdf,
   intentOpenWorkPdfSearch,
   intentResizeWorkPdf,
+  intentSaveWorkPdfAnnotationComment,
   intentSetWorkPdfSearchQuery,
   intentWorkPdfSearchNext,
   intentWorkPdfSearchPrevious,
   readWorkPdf,
+  readWorkPdfAnnotationPopup,
   readWorkPdfSearch,
   registerWorkPdfAdapterBridge,
   workPdfLeaveNeedsConfirm,
@@ -31,6 +35,15 @@ type PdfWindow = Window & {
   }
   prksDestroyAllTabContexts: () => void
   prksHasPendingWorkAnnotationSync: (ctx?: WorkPdfOwner) => boolean
+  savePdfAnnotationComment?: (
+    owner: WorkPdfOwner,
+    text: string,
+    captured: { generation: number; annId: string; epoch: number },
+  ) => void
+  closePdfAnnotationEditor?: (
+    owner: WorkPdfOwner,
+    options: { annId: string; generation?: number; reason?: string },
+  ) => void
   createWorkPdfRuntime: (options: { workId: string }) => WorkPdfRuntime & {
     syncState: { pendingChanges: boolean; inFlight: boolean }
     lastPage: { persistNow: () => void; debounceClear: () => void } | null
@@ -41,6 +54,12 @@ type PdfWindow = Window & {
       total: number
       activeIndex: number
       viewer?: unknown
+    }) => boolean
+    openAnnotationPopup?: (info: {
+      annId: string
+      comment?: string
+      pageIndex?: number
+      generation?: number
     }) => boolean
     destroy: () => void
   }
@@ -268,6 +287,10 @@ describe('work PDF adapter', () => {
       prksIntentSetWorkPdfSearchQuery: typeof intentSetWorkPdfSearchQuery
       prksIntentWorkPdfSearchNext: typeof intentWorkPdfSearchNext
       prksIntentWorkPdfSearchPrevious: typeof intentWorkPdfSearchPrevious
+      prksReadWorkPdfAnnotationPopup: typeof readWorkPdfAnnotationPopup
+      prksIntentSaveWorkPdfAnnotationComment: typeof intentSaveWorkPdfAnnotationComment
+      prksIntentCloseWorkPdfAnnotationPopup: typeof intentCloseWorkPdfAnnotationPopup
+      prksIntentDeleteWorkPdfAnnotationPopup: typeof intentDeleteWorkPdfAnnotationPopup
     }
     expect(bridge.prksReadWorkPdf).toBe(readWorkPdf)
     expect(bridge.prksIntentMountWorkPdf).toBe(intentMountWorkPdf)
@@ -280,6 +303,10 @@ describe('work PDF adapter', () => {
     expect(bridge.prksIntentSetWorkPdfSearchQuery).toBe(intentSetWorkPdfSearchQuery)
     expect(bridge.prksIntentWorkPdfSearchNext).toBe(intentWorkPdfSearchNext)
     expect(bridge.prksIntentWorkPdfSearchPrevious).toBe(intentWorkPdfSearchPrevious)
+    expect(bridge.prksReadWorkPdfAnnotationPopup).toBe(readWorkPdfAnnotationPopup)
+    expect(bridge.prksIntentSaveWorkPdfAnnotationComment).toBe(intentSaveWorkPdfAnnotationComment)
+    expect(bridge.prksIntentCloseWorkPdfAnnotationPopup).toBe(intentCloseWorkPdfAnnotationPopup)
+    expect(bridge.prksIntentDeleteWorkPdfAnnotationPopup).toBe(intentDeleteWorkPdfAnnotationPopup)
   })
 
   it('forwards search to the runtime and drops a stale generation', () => {
@@ -340,5 +367,55 @@ describe('work PDF adapter', () => {
     ctx.beginRoute({ name: 'work' })
     expect(intentSetWorkPdfSearchQuery(ctx, 'later', stale)).toBe(false)
     expect(intentOpenWorkPdfSearch(ctx, stale)).toBe(false)
+  })
+
+  it('does not let a stale annotation popup intent update the next annotation', () => {
+    const ctx = mount('popup')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' })
+    const viewer = { id: 'viewer', updates: [] as string[], resize() {} }
+    runtime.viewer = viewer
+    runtime.viewerSetupToken = 3
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    const opened = runtime.openAnnotationPopup?.({
+      annId: 'A',
+      comment: 'from A',
+      pageIndex: 0,
+      generation: ctx.generation,
+    })
+    expect(opened).toBe(true)
+    const ticketA = {
+      generation: ctx.generation,
+      annId: 'A',
+      epoch: runtime.readAnnotationPopup?.().epoch ?? -1,
+    }
+    expect(readWorkPdfAnnotationPopup(ctx)).toMatchObject({
+      open: true,
+      annId: 'A',
+      comment: 'from A',
+      epoch: ticketA.epoch,
+    })
+    const saves: string[] = []
+    const closes: string[] = []
+    pdfWindow.savePdfAnnotationComment = (_owner, text) => {
+      saves.push(text)
+    }
+    pdfWindow.closePdfAnnotationEditor = (_owner, options) => {
+      closes.push(options.annId)
+    }
+    expect(intentSaveWorkPdfAnnotationComment(ctx, 'typed A', ticketA)).toBe(true)
+    runtime.openAnnotationPopup?.({
+      annId: 'B',
+      comment: 'from B',
+      pageIndex: 1,
+      generation: ctx.generation,
+    })
+    expect(intentSaveWorkPdfAnnotationComment(ctx, 'typed A late', ticketA)).toBe(false)
+    expect(intentCloseWorkPdfAnnotationPopup(ctx, ticketA)).toBe(false)
+    expect(saves).toEqual(['typed A'])
+    expect(closes).toEqual([])
+    expect(readWorkPdfAnnotationPopup(ctx).annId).toBe('B')
+    expect(readWorkPdfAnnotationPopup(ctx).comment).toBe('from B')
+    expect(runtime.viewer).toBe(viewer)
+    expect(runtime.viewerSetupToken).toBe(3)
   })
 })

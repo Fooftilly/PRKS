@@ -367,7 +367,10 @@ class TestPdfRuntimeShape(unittest.TestCase):
         self.assertIn("createWorkPdfRuntime", src)
         self.assertIn("ctx.setResource('pdf', runtime", src)
         self.assertIn("runtime.viewer = viewer", src)
-        self.assertIn("openPdfAnnotationEditorById(ctx, info.annotationId)", src)
+        self.assertIn(
+            "openPdfAnnotationEditorById(ctx, info.annotationId, { reason: 'viewer' })",
+            src,
+        )
         self.assertIn("runtime.annotationPersistence", src)
         self.assertIn("prksPdfPersistenceStillLive", src)
         self.assertIn("prksInstallPdfAnnotationPersistenceIfCurrent", src)

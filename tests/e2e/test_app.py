@@ -5647,15 +5647,12 @@ class WorkspaceTilingTests(_BrowserE2E):
                 const ctx = window.prksGetTabContext(snap.mainTabId);
                 const panel = document.getElementById('panel-content');
                 const marker = document.getElementById('annotation-fallback-list');
-                const editor = document.getElementById('pdf-annotation-editor');
                 window.__prksPersonSavePanelMarker = marker;
-                window.__prksPersonSaveEditorMarker = editor;
                 return {
                     focusedTabId: snap.focusedTabId,
                     panelOwnerTabId: panel && panel.dataset.prksOwnerTabId,
                     rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
                     annotationMarker: !!marker,
-                    editorMarker: !!editor,
                 };
             }"""
         )
@@ -5663,7 +5660,6 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(before["panelOwnerTabId"], ids["mainTabId"])
         self.assertEqual(before["rightPanelTab"], "annotations")
         self.assertTrue(before["annotationMarker"])
-        self.assertTrue(before["editorMarker"])
 
         # Give any background ACK / panel refresh a window to misbehave.
         page.wait_for_timeout(400)
@@ -5673,7 +5669,6 @@ class WorkspaceTilingTests(_BrowserE2E):
                 const ctx = window.prksGetTabContext(snap.mainTabId);
                 const panel = document.getElementById('panel-content');
                 const marker = document.getElementById('annotation-fallback-list');
-                const editor = document.getElementById('pdf-annotation-editor');
                 const annBtn = document.querySelector('#right-panel .tab-btn[data-target="annotations"]');
                 return {
                     focusedTabId: snap.focusedTabId,
@@ -5681,7 +5676,6 @@ class WorkspaceTilingTests(_BrowserE2E):
                     rightPanelTab: ctx && ctx.ui && ctx.ui.rightPanelTab,
                     annotationsActive: !!(annBtn && annBtn.classList.contains('active')),
                     sameAnnotationMarker: marker === window.__prksPersonSavePanelMarker,
-                    sameEditorMarker: editor === window.__prksPersonSaveEditorMarker,
                     hasPersonPanel: !!(panel && panel.querySelector('.person-sidebar-summary, .person-panel-edit')),
                 };
             }"""
@@ -5691,7 +5685,6 @@ class WorkspaceTilingTests(_BrowserE2E):
         self.assertEqual(after["rightPanelTab"], "annotations")
         self.assertTrue(after["annotationsActive"])
         self.assertTrue(after["sameAnnotationMarker"])
-        self.assertTrue(after["sameEditorMarker"])
         self.assertFalse(after["hasPersonPanel"])
 
     def test_delayed_role_link_refresh_cannot_claim_other_focused_work_panel(self):
@@ -6144,22 +6137,24 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg=ids["secondaryTabId"],
         )
         _open_annotations_tab(page)
-        page.wait_for_selector("#pdf-annotation-editor", state="attached")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         before = page.evaluate(
             """(ids) => {
                 const a = window.prksGetTabContext(ids.a);
                 const b = window.prksGetTabContext(ids.b);
-                a.getResource('pdf').annotationEditorState = { annId: 'A-delayed' };
-                b.getResource('pdf').annotationEditorState = { annId: 'B-current' };
-                const wrap = document.getElementById('pdf-annotation-editor');
-                const text = document.getElementById('pdf-annotation-editor-text');
-                wrap.classList.remove('hidden');
-                text.value = 'B CURRENT EDITOR';
-                setTimeout(() => window.closePdfAnnotationEditor(a), 50);
+                const pdfA = a.getResource('pdf');
+                const pdfB = b.getResource('pdf');
+                pdfA.mode = 'work';
+                pdfB.mode = 'work';
+                pdfA.openAnnotationPopup({ annId: 'A-delayed', comment: 'A', pageIndex: 0, generation: a.generation });
+                pdfB.openAnnotationPopup({ annId: 'B-current', comment: 'B CURRENT', pageIndex: 1, generation: b.generation });
+                const readB = pdfB.readAnnotationPopup();
+                setTimeout(() => window.closePdfAnnotationEditor(a, { annId: 'A-delayed' }), 50);
                 return {
                     owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
-                    text: text.value,
-                    hidden: wrap.classList.contains('hidden')
+                    bId: readB.annId,
+                    bComment: readB.comment,
+                    bEpoch: readB.epoch
                 };
             }""",
             arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
@@ -6169,23 +6164,25 @@ class WorkspaceTilingTests(_BrowserE2E):
             """(ids) => {
                 const a = window.prksGetTabContext(ids.a);
                 const b = window.prksGetTabContext(ids.b);
-                const wrap = document.getElementById('pdf-annotation-editor');
-                const text = document.getElementById('pdf-annotation-editor-text');
+                const readA = a.getResource('pdf').readAnnotationPopup();
+                const readB = b.getResource('pdf').readAnnotationPopup();
                 return {
                     owner: document.getElementById('panel-content').dataset.prksOwnerTabId,
-                    text: text.value,
-                    hidden: wrap.classList.contains('hidden'),
-                    aCleared: a.getResource('pdf').annotationEditorState === null,
-                    bId: b.getResource('pdf').annotationEditorState.annId
+                    aOpen: readA.open,
+                    bId: readB.annId,
+                    bComment: readB.comment,
+                    bEpoch: readB.epoch
                 };
             }""",
             arg={"a": ids["mainTabId"], "b": ids["secondaryTabId"]},
         )
         self.assertEqual(after["owner"], before["owner"])
-        self.assertEqual(after["text"], before["text"])
-        self.assertEqual(after["hidden"], before["hidden"])
-        self.assertTrue(after["aCleared"])
+        self.assertEqual(after["bId"], before["bId"])
+        self.assertEqual(after["bComment"], before["bComment"])
+        self.assertEqual(after["bEpoch"], before["bEpoch"])
+        self.assertFalse(after["aOpen"])
         self.assertEqual(after["bId"], "B-current")
+        self.assertEqual(after["bComment"], "B CURRENT")
 
     def test_secondary_retry_retries_failed_owner_route_only(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)

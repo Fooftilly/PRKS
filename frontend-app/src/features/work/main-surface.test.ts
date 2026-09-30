@@ -134,6 +134,7 @@ describe('work main surface', () => {
       showHeader: false,
     }))).toBe(true)
     expect(ctx.root.querySelector('[data-prks-role="pdf-viewer"]')).toBeInstanceOf(HTMLElement)
+    expect(ctx.root.querySelector('[data-prks-role="pdf-annotation-popup-host"]')).toBeInstanceOf(HTMLElement)
     expect(ctx.root.querySelector('iframe')).toBeNull()
     expect(ctx.root.querySelector('.page-header--work')).toBeNull()
     expect(ctx.root.querySelector('.work-pdf-empty')).toBeNull()

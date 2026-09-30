@@ -25,6 +25,8 @@ export interface PrksPdfViewerOptions {
     onAnnotationChange?: (event: PrksAnnotationEvent) => void;
     onAnnotationSelect?: (info: { annotationId: string; pageIndex: number }) => void;
     onAnnotationCommentRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    onAnnotationCommentDismiss?: (info: { annotationId: string }) => void;
+    onAnnotationDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
     onError?: (error: Error) => void;
 }
 
@@ -86,6 +88,7 @@ export interface PrksPdfViewerHandle {
     createAnnotation(pageIndex: number, annotation: Record<string, unknown>): void;
     deleteAnnotation(annotationId: string): Promise<void>;
     selectAnnotation(annotationId: string): void;
+    deselectAnnotation(): void;
     onAnnotationEvent(callback: (event: PrksAnnotationEvent) => void): () => void;
     saveCopy(): Promise<ArrayBuffer>;
     getDocumentId(): string | null;

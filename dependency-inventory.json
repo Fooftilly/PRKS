@@ -266,6 +266,20 @@
       "notes": "#233 selective Vue browser lifecycle (#261 Folder Library: useDebounceFn, useEventListener). Not for PRKS route/workspace/durable/preview ownership."
     },
     {
+      "name": "@floating-ui/dom",
+      "scope": "build",
+      "authoritative_source": "frontend-app/package.json -> dependencies.@floating-ui/dom",
+      "manifest": "frontend-app/package.json",
+      "lockfile": "frontend-app/package-lock.json",
+      "generated_assets": [
+        "frontend/vue/prks-vue.js"
+      ],
+      "version_metadata": null,
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true,
+      "notes": "P3 annotation popup position and collision only. Does not own annotation state, selection, lifecycle, persistence, or the viewer."
+    },
+    {
       "name": "@atlaskit/pragmatic-drag-and-drop",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> dependencies.@atlaskit/pragmatic-drag-and-drop",

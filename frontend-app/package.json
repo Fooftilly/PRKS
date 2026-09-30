@@ -20,6 +20,7 @@
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "4.0.0",
     "@atlaskit/pragmatic-drag-and-drop-auto-scroll": "3.2.1",
+    "@floating-ui/dom": "1.8.0",
     "@tanstack/vue-query": "5.104.0",
     "@vueuse/core": "13.9.0",
     "vue": "3.5.43"

@@ -248,29 +248,6 @@ async function createViaPopup(viewerRef, root, kind, ySelect) {
     return waitNewest(viewerRef, before, 'popup ' + kind);
 }
 
-function clickMenuButton(root, className, label) {
-    const menu = root.querySelector(className);
-    if (!menu) return false;
-    const btn = [...menu.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === label);
-    if (!btn) return false;
-    btn.dispatchEvent(new PointerEvent('pointerdown', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 3,
-        pointerType: 'mouse',
-        buttons: 1,
-    }));
-    btn.dispatchEvent(new PointerEvent('pointerup', {
-        bubbles: true,
-        cancelable: true,
-        pointerId: 3,
-        pointerType: 'mouse',
-        buttons: 0,
-    }));
-    btn.click();
-    return true;
-}
-
 function leftoverZoomScale(root) {
     return [...root.querySelectorAll('*')].some((el) => {
         const inline = el.style && el.style.transform;
@@ -281,6 +258,7 @@ function leftoverZoomScale(root) {
 const pointerMode = new URLSearchParams(location.search).has('pointer');
 const events = [];
 const commentReqs = [];
+const commentDismisses = [];
 let viewer = null;
 
 try {
@@ -312,6 +290,7 @@ try {
         documentTypeLabel: 'Book',
         onAnnotationChange: (evt) => events.push(evt),
         onAnnotationCommentRequest: (info) => commentReqs.push(info),
+        onAnnotationCommentDismiss: (info) => commentDismisses.push(info),
     });
     viewer.onAnnotationEvent((evt) => events.push(evt));
     const wasmAttr = host.querySelector('.prks-pdf-viewer')?.getAttribute('data-wasm-url') || '';
@@ -594,29 +573,41 @@ try {
         const commentsBefore = commentReqs.length;
         viewer.selectAnnotation(createdId);
         await waitFor(
-            () => host.querySelector('.prks-pdf-annotation-menu'),
+            () => host.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
             4000,
-            'annotation menu',
+            'annotation anchor',
         );
-        const menu = host.querySelector('.prks-pdf-annotation-menu');
-        assert('annotation menu after select', !!menu);
+        const anchor = host.querySelector('[data-prks-role="pdf-annotation-anchor"]');
+        assert('annotation anchor after select', !!anchor);
         assert(
-            'select does not open comment editor',
-            commentReqs.length === commentsBefore,
-            String(commentReqs.length),
+            'anchor id matches selection',
+            !!(anchor && anchor.getAttribute('data-prks-annotation-id') === createdId),
+            anchor && anchor.getAttribute('data-prks-annotation-id'),
         );
         assert(
-            'edit comment action',
-            clickMenuButton(host, '.prks-pdf-annotation-menu', 'Edit comment'),
-        );
-        await sleep(50);
-        assert(
-            'edit comment requests editor',
+            'select requests the comment popup',
             commentReqs.some((c) => c && c.annotationId === createdId),
-            JSON.stringify(commentReqs.slice(-1)),
+            JSON.stringify(commentReqs.slice(commentsBefore)),
         );
+        assert(
+            'commentable selection has no Edit comment button',
+            ![...host.querySelectorAll('button')].some((b) => (b.textContent || '').trim() === 'Edit comment'),
+        );
+        if (typeof viewer.deselectAnnotation === 'function') {
+            viewer.deselectAnnotation();
+            await waitFor(
+                () => commentDismisses.some((c) => c && c.annotationId === createdId),
+                4000,
+                'comment dismiss',
+            );
+            assert(
+                'deselect dismisses the comment request',
+                commentDismisses.some((c) => c && c.annotationId === createdId),
+                JSON.stringify(commentDismisses.slice(-1)),
+            );
+        }
         const deletesBefore = events.filter((e) => e && e.committed && e.kind === 'delete').length;
-        assert('delete action', clickMenuButton(host, '.prks-pdf-annotation-menu', 'Delete'));
+        await viewer.deleteAnnotation(createdId);
         await waitFor(
             () => events.filter((e) => e && e.committed && e.kind === 'delete').length > deletesBefore,
             8000,

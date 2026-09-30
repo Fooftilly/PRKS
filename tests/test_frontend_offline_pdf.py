@@ -177,7 +177,10 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_WORKS_PDF)
         self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)
         self.assertIn("annotationMutationAllowed === false", src)
-        for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
+        for fn_name in (
+            "window.deletePdfAnnotationFromEditor = async function (ctx, captured) {",
+            "window.savePdfAnnotationComment = async function (ctx, text, captured) {",
+        ):
             at = src.index(fn_name)
             snippet = src[at : at + 2500]
             self.assertIn(

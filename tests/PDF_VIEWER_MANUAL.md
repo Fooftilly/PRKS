@@ -33,9 +33,9 @@ Each item is a command. Check it off when the behavior matches.
 
 ## Annotations
 
-- [ ] Click a highlight. A small menu appears. The right-side comment editor does not open by itself. `[manual:annotation-click-menu]`
-- [ ] Edit comment opens the PRKS editor. Save comment persists. `[manual:annotation-comment]`
-- [ ] Delete from the on-PDF menu removes the markup. Undo brings it back if History still has the command. `[manual:annotation-delete]`
+- [ ] Click a highlight. An anchored comment popup opens on that markup. The right-side annotation list stays a list. `[manual:annotation-click-menu]`
+- [ ] Save comment in the popup persists. Cancel or a different selection closes it without recreating the viewer. `[manual:annotation-comment]`
+- [ ] Delete annotation in the popup removes the markup. Undo brings it back if History still has the command. `[manual:annotation-delete]`
 - [ ] Reload. Deleted markup stays gone. Remaining comments and `[[pdf:id]]` links still resolve. `[manual:annotation-persistence]`
 - [ ] Sidebar shows label, page, Jump, Edit/Add comment, Copy link. Jump scrolls to the markup. `[manual:annotation-sidebar]`
 - [ ] Existing non-PRKS annotations (links, widgets) render when the engine supports them. They do not get Delete. `[manual:embedded-annotations]`

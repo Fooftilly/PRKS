@@ -616,7 +616,7 @@ function requestModalClose(reason) {
 
 function prksAutosizeTextarea(el) {
     if (!el || el.tagName !== 'TEXTAREA') return;
-    if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+    if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || (el.getAttribute && el.getAttribute('data-prks-role') === 'pdf-annotation-popup-text')) return;
     const cs = window.getComputedStyle(el);
     const minH = parseFloat(cs.minHeight || '0');
     el.style.height = 'auto';
@@ -632,7 +632,7 @@ function prksBindAutosizeTextareas(root = document) {
     const textareas = scope.querySelectorAll(PRKS_AUTOSIZE_TEXTAREA_SELECTOR);
     textareas.forEach((el) => {
         if (!el || el.tagName !== 'TEXTAREA') return;
-        if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || el.id === 'pdf-annotation-editor-text') return;
+        if ((el.getAttribute && el.getAttribute('data-prks-role') === 'research-notes-editor') || el.id === 'research-notes-editor' || (el.getAttribute && el.getAttribute('data-prks-role') === 'pdf-annotation-popup-text')) return;
         if (el.dataset.prksAutosizeBound !== '1') {
             el.dataset.prksAutosizeBound = '1';
             el.addEventListener('input', () => prksAutosizeTextarea(el));
@@ -5588,23 +5588,6 @@ function renderWorkAnnotationsTab(work) {
                 </div>
             </header>
             <div id="annotation-fallback-list" class="annotation-fallback-list" role="list" aria-live="polite"></div>
-            <section id="pdf-annotation-editor" class="pdf-annotation-editor hidden" aria-live="polite">
-                <div class="pdf-annotation-editor__header">
-                    <h4 class="pdf-annotation-editor__title">Annotation comment</h4>
-                    <div class="pdf-annotation-editor__meta" id="pdf-annotation-editor-meta"></div>
-                </div>
-                <div class="form-pane pdf-annotation-editor__form">
-                    <input type="hidden" id="pdf-annotation-editor-ann-id" value="">
-                    <input type="hidden" id="pdf-annotation-editor-page-index" value="">
-                    <label for="pdf-annotation-editor-text">Comment</label>
-                    <textarea id="pdf-annotation-editor-text" class="textarea-md" placeholder="Add a note/comment for this annotation…"></textarea>
-                    <div class="pdf-annotation-editor__actions">
-                        <button type="button" class="prks-btn prks-btn--secondary" onclick="window.closePdfAnnotationEditor && window.closePdfAnnotationEditor()">Cancel</button>
-                        <button type="button" class="prks-btn prks-btn--secondary" onclick="window.deletePdfAnnotationFromEditor && window.deletePdfAnnotationFromEditor()">Delete annotation</button>
-                        <button type="button" class="prks-btn prks-btn--primary" onclick="window.savePdfAnnotationComment && window.savePdfAnnotationComment()">Save comment</button>
-                    </div>
-                </div>
-            </section>
         </div>
     `;
 }

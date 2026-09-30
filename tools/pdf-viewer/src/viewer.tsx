@@ -276,6 +276,9 @@ function ApiBinder({
                     if (pi == null || !Number.isFinite(pi)) return;
                     annotation?.selectAnnotation(pi, annotationId);
                 },
+                deselectAnnotation: () => {
+                    annotation?.deselectAnnotation();
+                },
                 saveCopy: async () => {
                     await annotation?.commit()?.toPromise();
                     const pdfDoc = docs.getDocument(activeDocumentId);
@@ -469,6 +472,12 @@ function ViewerTree({
                                                                 workMode={mode === 'work'}
                                                                 onCommentRequest={
                                                                     options.onAnnotationCommentRequest
+                                                                }
+                                                                onCommentDismiss={
+                                                                    options.onAnnotationCommentDismiss
+                                                                }
+                                                                onDeleteRequest={
+                                                                    options.onAnnotationDeleteRequest
                                                                 }
                                                             />
                                                         )}

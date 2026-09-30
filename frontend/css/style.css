@@ -6499,44 +6499,55 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     border-bottom: 1px solid var(--border);
 }
 
-.pdf-annotation-editor {
-    flex: 0 0 auto;
-    margin-top: 8px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
+.document-view--work [data-prks-role="pdf-annotation-popup-host"] {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    z-index: var(--z-dropdown);
 }
 
-.pdf-annotation-editor__header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-sm);
+.pdf-annotation-popup {
+    position: absolute;
+    z-index: var(--z-dropdown);
+    box-sizing: border-box;
+    width: min(20rem, calc(100vw - 16px));
+    padding: var(--space-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    pointer-events: auto;
+}
+
+.pdf-annotation-popup__meta {
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
     margin-bottom: 6px;
 }
 
-.pdf-annotation-editor__title {
+.pdf-annotation-popup__label {
+    display: block;
     font-size: var(--text-sm);
     font-weight: 700;
-    margin: 0;
 }
 
-.pdf-annotation-editor__meta {
-    font-size: var(--text-2xs);
-    color: var(--text-tertiary);
-    white-space: nowrap;
+.pdf-annotation-popup__text {
+    display: block;
+    width: 100%;
+    min-height: 4.5rem;
+    margin-top: 4px;
+    box-sizing: border-box;
 }
 
-.pdf-annotation-editor__form {
-    padding-right: 0;
-}
-
-.pdf-annotation-editor__actions {
+.pdf-annotation-popup__actions {
     display: flex;
     gap: var(--space-sm);
     margin-top: 6px;
 }
 
-.pdf-annotation-editor__actions > button {
+.pdf-annotation-popup__actions > button {
     flex: 1;
     margin-top: 0;
 }
@@ -9180,6 +9191,7 @@ textarea[data-prks-autosize="1"] {
 }
 
 .document-view--work .work-pdf-pane {
+    position: relative;
     flex: 1 1 auto;
     min-height: 120px;
     min-width: 0;

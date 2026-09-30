@@ -28,6 +28,8 @@ export interface WorkPdfRuntime {
   setSearchQuery?: (query: string) => boolean
   searchNext?: () => boolean
   searchPrevious?: () => boolean
+  readAnnotationPopup?: () => WorkPdfAnnotationPopupRead
+  annotationPopupStill?: (ticket: WorkPdfAnnotationPopupCapture) => boolean
 }
 
 export interface WorkPdfOwner {
@@ -59,6 +61,24 @@ export interface WorkPdfSearchRead {
   activeIndex: number
   status: WorkPdfSearchStatus
   matchCountLabel: string
+}
+
+/** Generation, annotation, and epoch captured with a popup intent. */
+export interface WorkPdfAnnotationPopupCapture {
+  generation: number
+  annId: string
+  epoch: number
+  directId?: string
+  pageIndex?: number | null
+}
+
+export interface WorkPdfAnnotationPopupRead {
+  open: boolean
+  annId: string
+  pageIndex: number | null
+  comment: string
+  meta: string
+  epoch: number
 }
 
 export interface WorkPdfOrchestration {
@@ -241,6 +261,96 @@ export function intentWorkPdfSearchPrevious(
   return !!runtime.searchPrevious()
 }
 
+const EMPTY_ANNOTATION_POPUP: WorkPdfAnnotationPopupRead = {
+  open: false,
+  annId: '',
+  pageIndex: null,
+  comment: '',
+  meta: '',
+  epoch: 0,
+}
+
+/** Reflects the pdf runtime's comment popup. Does not keep a copy. */
+export function readWorkPdfAnnotationPopup(
+  ctx: WorkPdfOwner | null | undefined,
+): WorkPdfAnnotationPopupRead {
+  const runtime = runtimeOf(ctx)
+  if (!runtime || runtime._destroyed || typeof runtime.readAnnotationPopup !== 'function') {
+    return { ...EMPTY_ANNOTATION_POPUP }
+  }
+  const read = runtime.readAnnotationPopup()
+  if (!read || typeof read !== 'object') return { ...EMPTY_ANNOTATION_POPUP }
+  const page = read.pageIndex
+  return {
+    open: !!read.open,
+    annId: read.open && read.annId != null ? String(read.annId) : '',
+    pageIndex: read.open && typeof page === 'number' && Number.isFinite(page) ? page : null,
+    comment: read.open && read.comment != null ? String(read.comment) : '',
+    meta: read.open && read.meta != null ? String(read.meta) : '',
+    epoch: typeof read.epoch === 'number' ? read.epoch : 0,
+  }
+}
+
+function popupRuntime(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfAnnotationPopupCapture | null | undefined,
+): WorkPdfRuntime | null {
+  const runtime = runtimeOf(ctx)
+  if (!runtime || runtime._destroyed) return null
+  if (!ctx || typeof ctx.isCurrent !== 'function') return null
+  if (!captured || typeof captured.generation !== 'number' || !ctx.isCurrent(captured.generation)) return null
+  if (!captured.annId || typeof captured.epoch !== 'number') return null
+  if (typeof runtime.annotationPopupStill !== 'function' || !runtime.annotationPopupStill(captured)) return null
+  return runtime
+}
+
+type AnnotationPopupWindow = PdfWindow & {
+  savePdfAnnotationComment?: (
+    ctx: WorkPdfOwner,
+    text: string,
+    captured: WorkPdfAnnotationPopupCapture,
+  ) => void
+  closePdfAnnotationEditor?: (
+    ctx: WorkPdfOwner,
+    options: { annId: string; generation: number; reason: string },
+  ) => void
+  deletePdfAnnotationFromEditor?: (ctx: WorkPdfOwner, captured: WorkPdfAnnotationPopupCapture) => void
+}
+
+export function intentSaveWorkPdfAnnotationComment(
+  ctx: WorkPdfOwner | null | undefined,
+  text: string,
+  captured: WorkPdfAnnotationPopupCapture | null | undefined,
+): boolean {
+  if (!ctx || !popupRuntime(ctx, captured) || !captured) return false
+  const save = (globalThis as AnnotationPopupWindow).savePdfAnnotationComment
+  if (typeof save !== 'function') return false
+  void save(ctx, text == null ? '' : String(text), captured)
+  return true
+}
+
+export function intentCloseWorkPdfAnnotationPopup(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfAnnotationPopupCapture | null | undefined,
+): boolean {
+  if (!ctx || !popupRuntime(ctx, captured) || !captured) return false
+  const close = (globalThis as AnnotationPopupWindow).closePdfAnnotationEditor
+  if (typeof close !== 'function') return false
+  close(ctx, { annId: captured.annId, generation: captured.generation, reason: 'intent' })
+  return true
+}
+
+export function intentDeleteWorkPdfAnnotationPopup(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfAnnotationPopupCapture | null | undefined,
+): boolean {
+  if (!ctx || !popupRuntime(ctx, captured) || !captured) return false
+  const remove = (globalThis as AnnotationPopupWindow).deletePdfAnnotationFromEditor
+  if (typeof remove !== 'function') return false
+  void remove(ctx, captured)
+  return true
+}
+
 export function intentResizeWorkPdf(ctx: WorkPdfOwner | null | undefined): boolean {
   const runtime = runtimeOf(ctx)
   if (!runtime || runtime._destroyed || typeof runtime.resize !== 'function') return false
@@ -268,6 +378,10 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
     prksIntentSetWorkPdfSearchQuery?: typeof intentSetWorkPdfSearchQuery
     prksIntentWorkPdfSearchNext?: typeof intentWorkPdfSearchNext
     prksIntentWorkPdfSearchPrevious?: typeof intentWorkPdfSearchPrevious
+    prksReadWorkPdfAnnotationPopup?: typeof readWorkPdfAnnotationPopup
+    prksIntentSaveWorkPdfAnnotationComment?: typeof intentSaveWorkPdfAnnotationComment
+    prksIntentCloseWorkPdfAnnotationPopup?: typeof intentCloseWorkPdfAnnotationPopup
+    prksIntentDeleteWorkPdfAnnotationPopup?: typeof intentDeleteWorkPdfAnnotationPopup
   }
   target.prksReadWorkPdf = readWorkPdf
   target.prksIntentMountWorkPdf = intentMountWorkPdf
@@ -280,4 +394,8 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
   target.prksIntentSetWorkPdfSearchQuery = intentSetWorkPdfSearchQuery
   target.prksIntentWorkPdfSearchNext = intentWorkPdfSearchNext
   target.prksIntentWorkPdfSearchPrevious = intentWorkPdfSearchPrevious
+  target.prksReadWorkPdfAnnotationPopup = readWorkPdfAnnotationPopup
+  target.prksIntentSaveWorkPdfAnnotationComment = intentSaveWorkPdfAnnotationComment
+  target.prksIntentCloseWorkPdfAnnotationPopup = intentCloseWorkPdfAnnotationPopup
+  target.prksIntentDeleteWorkPdfAnnotationPopup = intentDeleteWorkPdfAnnotationPopup
 }
