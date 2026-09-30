@@ -1,5 +1,7 @@
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue'
+
+const props = defineProps<{
   showHeader: boolean
   title: string
   docTypeHtml: string
@@ -10,6 +12,8 @@ defineProps<{
   viewerHtml: string
   editorRegionId: string
 }>()
+
+const notesEditorId = computed(() => `${props.editorRegionId}-field`)
 </script>
 
 <template>
@@ -36,9 +40,12 @@ defineProps<{
           </div>
           <div
             class="work-split-handle"
-            role="separator"
+            role="slider"
             aria-orientation="horizontal"
             aria-label="Resize between document and research notes"
+            aria-valuemin="160"
+            aria-valuemax="900"
+            aria-valuenow="320"
             tabindex="0"
           >
             <span class="work-split-handle-grip" aria-hidden="true"></span>
@@ -46,7 +53,9 @@ defineProps<{
           <div data-prks-role="work-research-notes-anchor">
             <div class="work-notes-pane">
               <div class="work-notes-pane-header">
-                <h3 class="work-notes-title">Research Notes</h3>
+                <h3 class="work-notes-title">
+                  <label :for="notesEditorId">Research Notes</label>
+                </h3>
                 <div class="work-notes-pane-header-actions">
                   <button
                     type="button"
@@ -69,7 +78,11 @@ defineProps<{
                 </div>
               </div>
               <div class="work-notes-editor-wrap" data-prks-role="work-notes-editor-region" :id="editorRegionId">
-                <textarea data-prks-role="research-notes-editor"></textarea>
+                <textarea
+                  :id="notesEditorId"
+                  data-prks-role="research-notes-editor"
+                  aria-label="Research Notes"
+                ></textarea>
               </div>
             </div>
           </div>

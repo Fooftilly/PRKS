@@ -84,6 +84,14 @@ export function presentWorkMainSurface(
     }
   }
   const kind = model.kind === 'pdf' || model.kind === 'video' ? model.kind : 'empty'
+  // The route paints "Loading view..." into this root before the tile exists.
+  // Vue's first mount appends; it does not remove that placeholder. A warm
+  // resume then parks the leftover with the PDF host.
+  if (root.querySelector(':scope > .prks-route-loading')) {
+    render(null, root)
+    root.replaceChildren()
+    root.removeAttribute('aria-busy')
+  }
   render(
     h(WorkMainSurface, {
       showHeader: !!model.showHeader,

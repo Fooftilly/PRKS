@@ -94,6 +94,32 @@ describe('work main surface', () => {
     expect(ctx.root.querySelector('.work-split-handle')).toBeInstanceOf(HTMLElement)
   })
 
+  it('replaces the route loading placeholder and keeps the PDF host on the next paint', () => {
+    const ctx = mount('main')
+    ctx.setEntity('work', { id: 'work-a' })
+    ctx.root.innerHTML = [
+      '<div class="prks-page-header page-header"><h2 class="prks-page-title">File</h2></div>',
+      '<div class="prks-route-loading" role="status"><p class="meta-row">Loading view...</p></div>',
+    ].join('')
+    ctx.root.setAttribute('aria-busy', 'true')
+    expect(presentWorkMainSurface(ctx, surface(ctx, {
+      kind: 'pdf',
+      hasFile: true,
+      showHeader: false,
+    }))).toBe(true)
+    expect(ctx.root.querySelector('.prks-route-loading')).toBeNull()
+    expect(ctx.root.getAttribute('aria-busy')).toBeNull()
+    const host = ctx.root.querySelector('[data-prks-role="pdf-viewer"]')
+    expect(host).toBeInstanceOf(HTMLElement)
+    expect(presentWorkMainSurface(ctx, surface(ctx, {
+      kind: 'pdf',
+      hasFile: true,
+      showHeader: false,
+    }))).toBe(true)
+    expect(ctx.root.querySelector('[data-prks-role="pdf-viewer"]')).toBe(host)
+    expect(ctx.root.querySelectorAll('.prks-route-loading')).toHaveLength(0)
+  })
+
   it('exposes an empty PDF host and omits the page header', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
@@ -179,6 +205,13 @@ describe('work main surface', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
     expect(presentWorkMainSurface(ctx, surface(ctx, { kind: 'empty' }))).toBe(true)
+    const handle = ctx.root.querySelector('.work-split-handle')
+    expect(handle?.getAttribute('role')).toBe('slider')
+    expect(handle?.getAttribute('tabindex')).toBe('0')
+    const shellField = ctx.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement
+    const notesEditorId = `${ctx.domId('work-notes-editor-region')}-field`
+    expect(shellField.id).toBe(notesEditorId)
+    expect(ctx.root.querySelector(`label[for="${notesEditorId}"]`)?.textContent).toBe('Research Notes')
     expect(presentWorkResearchNotes(ctx, { id: 'work-a' }, 'Kept buffer')).toBe(true)
     await nextTick()
     const field = ctx.root.querySelector('[data-prks-role="research-notes-editor"]') as HTMLTextAreaElement
