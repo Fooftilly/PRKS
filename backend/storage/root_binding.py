@@ -730,7 +730,11 @@ def open_storage_root(
     if not _same_path(os.path.dirname(os.path.abspath(config.db_path)), os.path.abspath(root)):
         raise InvalidStorageRoot("database_outside_root", "The database must live directly in the storage root.")
 
-    _check_placement(
+    # The root may be a link (§7.3). It is resolved exactly once, here, and
+    # every later step -- the read-only look, the lease, the marker, the
+    # probes -- uses this snapshot, so a link retargeted mid-bind cannot split
+    # validation across two directories.
+    root_real = _check_placement(
         root,
         testing=testing,
         config_file_path=config_file_path,
@@ -738,7 +742,7 @@ def open_storage_root(
         home=home,
     )
 
-    check_filesystem_type(_nearest_existing(root))
+    check_filesystem_type(_nearest_existing(root_real))
 
     # A root the bootstrap file selects was chosen earlier and must still be
     # there: an absent or empty directory is far more likely an unmounted disk
@@ -748,12 +752,12 @@ def open_storage_root(
 
     # Read-only look first: refuse foreign or non-bindable directories before
     # creating anything in them.
-    if os.path.isdir(root):
-        marker = read_marker(root)
+    if os.path.isdir(root_real):
+        marker = read_marker(root_real)
         if marker is not None:
             _refuse_unless_bindable(marker, expected_storage_root_id)
         else:
-            kind = classify_unmarked_root(root, db_filename=db_filename)
+            kind = classify_unmarked_root(root_real, db_filename=db_filename)
             if kind == UNMARKED_FOREIGN:
                 raise _foreign_root_error(root)
             if kind == UNMARKED_EMPTY and not may_create:
@@ -761,18 +765,21 @@ def open_storage_root(
     elif not may_create:
         raise _missing_selected_root(root)
     else:
+        # Absent: V2 already proved the spelling is no link, so the resolved
+        # snapshot is where the new directory goes.
         try:
-            os.mkdir(root, 0o700)
+            os.mkdir(root_real, 0o700)
         except FileExistsError:
             pass
         except OSError as exc:
             raise InvalidStorageRoot(
                 "root_not_creatable", f"The storage root {root} could not be created."
             ) from exc
-        if not fsync_directory(os.path.dirname(os.path.abspath(root))):
+        if not fsync_directory(os.path.dirname(root_real)):
             LOGGER.warning("storage_root_parent_sync_failed")
+        if not os.path.isdir(root_real) or os.path.islink(root_real):
+            raise InvalidStorageRoot("root_not_creatable", f"The storage root {root} could not be created.")
 
-    root_real = os.path.realpath(root)
     lease = acquire_root_lease(root_real)
     try:
         bound = _open_under_lease(

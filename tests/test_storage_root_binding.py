@@ -970,6 +970,27 @@ class TestRootSnapshot(RootTestCase):
         self.assertEqual(anchored.configured_root, cfg.configured_root)
         root_binding.assert_config_matches_bound_root(anchored.root)
 
+    def test_retargeting_between_validation_and_lease_stays_on_the_validated_target(self):
+        target_a = self.path("disk-a")
+        target_b = self.path("disk-b")
+        os.mkdir(target_a)
+        os.mkdir(target_b)
+        link = self.path("library")
+        _symlink_or_skip(self, target_a, link)
+        real_acquire = root_binding.acquire_root_lease
+
+        def retarget_then_acquire(root_real):
+            os.remove(link)
+            os.symlink(target_b, link)
+            return real_acquire(root_real)
+
+        with patch.object(root_binding, "acquire_root_lease", retarget_then_acquire):
+            bound = self.open(link)
+        self.assertEqual(bound.root_real, target_a)
+        self.assertTrue(os.path.isfile(os.path.join(target_a, MARKER)))
+        self.assertTrue(os.path.isfile(os.path.join(target_a, MAINT, "root.lock")))
+        self.assertEqual(os.listdir(target_b), [])
+
     def test_anchoring_rewrites_only_root_relative_components(self):
         cfg = replace(
             StorageConfig.for_testing(self.path("lib")),
