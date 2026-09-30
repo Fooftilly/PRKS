@@ -16,6 +16,8 @@ type PdfWindow = Window & {
   eval: (code: string) => void
   prksMountTabContext: (tabId: string, host: HTMLElement) => WorkPdfOwner & {
     tabId: string
+    generation: number
+    setEntity: (type: string, value: { id: string } | null) => void
     setResource: (name: string, value: unknown, disposer?: () => void) => unknown
     getResource: (name: string) => unknown
     beginRoute: (route: { name: string }) => number
@@ -105,17 +107,78 @@ describe('work PDF adapter', () => {
       return originalSet(name, value, disposer)
     }
     const seen: string[] = []
+    ctx.setEntity('work', { id: 'work-a' })
+    const captured = { generation: ctx.generation, workId: 'work-a' }
     expect(intentMountWorkPdf(ctx, { id: 'work-a', file_path: '/api/pdfs/a' }, {
       initPdfViewerForWork: (_owner, work) => {
         seen.push(String(work.file_path))
       },
-    })).toBe(true)
+    }, captured)).toBe(true)
     expect(seen).toEqual(['/api/pdfs/a'])
     expect(resourceWrites).toBe(0)
+    expect(intentMountWorkPdf(ctx, { file_path: '/api/pdfs/a' }, {
+      initPdfViewerForWork: () => { seen.push('no-id') },
+    }, captured)).toBe(false)
     expect(intentMountWorkPdf(ctx, { id: 'work-a' }, {
       initPdfViewerForWork: () => { seen.push('no-file') },
-    })).toBe(false)
+    }, captured)).toBe(false)
     expect(seen).toEqual(['/api/pdfs/a'])
+  })
+
+  it('does not mount a stale Work after the same context advances', () => {
+    const ctx = mount('stale-owner')
+    ctx.setEntity('work', { id: 'work-a' })
+    const capturedA = { generation: ctx.generation, workId: 'work-a' }
+    ctx.beginRoute({ name: 'work' })
+    ctx.setEntity('work', { id: 'work-b' })
+    const calls: string[] = []
+    const orchestration = {
+      initPdfViewerForWork: (_owner: WorkPdfOwner, work: { id?: unknown }) => {
+        calls.push(String(work.id))
+      },
+    }
+    expect(intentMountWorkPdf(
+      ctx,
+      { id: 'work-a', file_path: '/api/pdfs/a' },
+      orchestration,
+      capturedA,
+    )).toBe(false)
+    expect(calls).toEqual([])
+    expect(intentMountWorkPdf(
+      ctx,
+      { id: 'work-b', file_path: '/api/pdfs/b' },
+      orchestration,
+      { generation: ctx.generation, workId: 'work-b' },
+    )).toBe(true)
+    expect(calls).toEqual(['work-b'])
+  })
+
+  it('rejects an older generation of the same Work', () => {
+    const ctx = mount('same-work-generation')
+    ctx.setEntity('work', { id: 'work-a' })
+    const oldGeneration = ctx.generation
+    ctx.beginRoute({ name: 'work' })
+    ctx.setEntity('work', { id: 'work-a' })
+    let calls = 0
+    const orchestration = {
+      initPdfViewerForWork: () => {
+        calls += 1
+      },
+    }
+    expect(intentMountWorkPdf(
+      ctx,
+      { id: 'work-a', file_path: '/api/pdfs/a' },
+      orchestration,
+      { generation: oldGeneration, workId: 'work-a' },
+    )).toBe(false)
+    expect(calls).toBe(0)
+    expect(intentMountWorkPdf(
+      ctx,
+      { id: 'work-a', file_path: '/api/pdfs/a' },
+      orchestration,
+      { generation: ctx.generation, workId: 'work-a' },
+    )).toBe(true)
+    expect(calls).toBe(1)
   })
 
   it('does not flush a destroyed runtime', () => {

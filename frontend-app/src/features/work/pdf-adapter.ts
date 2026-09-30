@@ -26,8 +26,16 @@ export interface WorkPdfRuntime {
 export interface WorkPdfOwner {
   destroyed?: boolean
   root?: ParentNode | null
+  isCurrent?: (generation: number) => boolean
+  getEntity?: (type: string) => { id?: unknown } | null
   getResource?: (name: string) => unknown
   query?: (selector: string) => Element | null
+}
+
+/** Owner identity captured when a mount is requested, checked again before forward. */
+export interface WorkPdfMountCapture {
+  generation: number
+  workId: string
 }
 
 export interface WorkPdfOrchestration {
@@ -84,14 +92,37 @@ export function readWorkPdf(ctx: WorkPdfOwner | null | undefined): WorkPdfRead {
   }
 }
 
-/** Forwards to the existing orchestration. Does not install the pdf resource. */
+function requiredWorkId(value: unknown): string {
+  if (value == null || value === '') return ''
+  return String(value)
+}
+
+function liveWorkId(ctx: WorkPdfOwner): string {
+  if (typeof ctx.getEntity !== 'function') return ''
+  const live = ctx.getEntity('work')
+  if (!live || typeof live !== 'object') return ''
+  return requiredWorkId(live.id)
+}
+
+/**
+ * Forwards to the existing orchestration. Does not install the pdf resource.
+ * The captured generation and Work id are rechecked immediately before that call.
+ */
 export function intentMountWorkPdf(
   ctx: WorkPdfOwner | null | undefined,
   work: WorkPdfWorkRef | null | undefined,
   orchestration: WorkPdfOrchestration | null | undefined,
+  captured: WorkPdfMountCapture | null | undefined,
 ): boolean {
-  if (!ctx || ctx.destroyed || !work || !work.file_path) return false
+  if (!ctx || ctx.destroyed || !work || work.file_path == null || work.file_path === '') return false
   if (!orchestration || typeof orchestration.initPdfViewerForWork !== 'function') return false
+  if (!captured || typeof captured.generation !== 'number') return false
+  const requestedId = requiredWorkId(work.id)
+  const expectedWorkId = requiredWorkId(captured.workId)
+  if (!requestedId || !expectedWorkId || requestedId !== expectedWorkId) return false
+  if (typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(captured.generation)) return false
+  const liveId = liveWorkId(ctx)
+  if (!liveId || liveId !== expectedWorkId || requestedId !== liveId) return false
   orchestration.initPdfViewerForWork(ctx, work)
   return true
 }
