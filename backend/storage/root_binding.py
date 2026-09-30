@@ -34,10 +34,11 @@ import os
 import shutil
 import socket
 import stat
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 from backend.fs_durability import fsync_directory
 from backend.storage import distribution as _distribution
@@ -79,8 +80,12 @@ OS_METADATA_NAMES = frozenset({".DS_Store", "desktop.ini", "Thumbs.db", "lost+fo
 # V10 (startup): warn below this much free space. Choose/relocate enforce a
 # computed requirement in a later phase.
 LOW_FREE_SPACE_WARNING_BYTES = 1024 * 1024 * 1024
-# V9 (startup, warn only): filesystem types known to be network mounts, where
-# SQLite locking and WAL are unsafe for a live library (§7.4).
+# V9: filesystem types known with certainty to be network mounts, where SQLite
+# locking and WAL are unsafe for a live library (§7.4). Linux names come from
+# /proc/mounts, macOS names from mount(8), and ``windows-remote`` is a UNC path
+# or a drive Windows reports as DRIVE_REMOTE.
+WINDOWS_REMOTE = "windows-remote"
+WINDOWS_LOCAL = "windows-local"
 NETWORK_FILESYSTEM_TYPES = frozenset(
     {
         "nfs",
@@ -89,13 +94,19 @@ NETWORK_FILESYSTEM_TYPES = frozenset(
         "smbfs",
         "smb3",
         "afs",
+        "afpfs",
         "ncpfs",
         "davfs",
+        "webdav",
         "fuse.sshfs",
         "fuse.rclone",
         "fuse.s3fs",
+        WINDOWS_REMOTE,
     }
 )
+# overlayfs may report the lower layer's device for unmodified *files*, so on
+# an overlay root only directories are held to V7's one-device rule.
+OVERLAY_FILESYSTEM_TYPES = frozenset({"overlay", "overlayfs"})
 # V11: how many directory entries the bounded scan for nested markers reads.
 _NESTED_MARKER_SCAN_LIMIT = 2000
 
@@ -476,33 +487,13 @@ def _foreign_root_error(root: str) -> StorageRootRefused:
     )
 
 
-# --- V13, V7: component checks under the lease ------------------------------------
-
-_INBOX = "inbox"
-# Components whose existing entries are scanned for links (§7.3). The managed
-# namespaces and the derived thumbnail cache are flat; the inbox may nest.
-_FLAT_SCANNED = frozenset({"pdfs", "people", "thumbs"})
-
-
-def _component_entries(config: Any) -> Iterator[tuple[str, str]]:
-    """``(kind, path)`` for every StorageConfig component that may live under the root."""
-    db = config.db_path
-    for path in (db, db + "-wal", db + "-shm", db + "-journal"):
-        yield ("database", path)
-    yield ("pdfs", config.pdfs_dir)
-    yield ("people", config.people_dir)
-    yield ("thumbs", config.thumbs_dir)
-    for index in (config.index_db_path, config.research_index_db_path):
-        for path in (index, index + "-wal", index + "-shm", index + "-journal"):
-            yield ("index", path)
-    yield (_INBOX, config.processing_dir)
-    yield ("log", config.log_file)
+# --- V13, V7: the whole root, under the lease ------------------------------------
 
 
 def _link_error(path: str) -> StorageRootRefused:
     return StorageRootRefused(
         "root_contains_link",
-        f"{path} is a link. Links inside a storage root are not allowed; the storage "
+        f"{path} is a link. Nothing inside a storage root may be a link; the storage "
         "root itself may be a link, and the inbox and log may be placed elsewhere "
         "with PRKS_FOR_PROCESSING_DIR and PRKS_LOG_FILE.",
     )
@@ -511,76 +502,50 @@ def _link_error(path: str) -> StorageRootRefused:
 def _device_error(path: str) -> StorageRootRefused:
     return StorageRootRefused(
         "root_spans_filesystems",
-        f"{path} is on a different filesystem than the storage root. Every PRKS "
-        "component under the root must be on one filesystem, so renames between "
-        "maintenance and components stay atomic.",
+        f"{path} is on a different filesystem than the storage root. Nothing inside "
+        "the root may be a mount point, so renames between maintenance and "
+        "components stay atomic.",
     )
 
 
-def _check_entry(path: str, root_dev: int) -> Optional[os.stat_result]:
-    st = _lstat(path)
-    if st is None:
-        return None
-    if is_link_or_reparse_point(st):
-        raise _link_error(path)
-    if stat.S_ISDIR(st.st_mode) and st.st_dev != root_dev:
-        raise _device_error(path)
-    return st
+def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
+    """V13 and V7 for everything beneath the root (§7.3): no links, no mount points.
 
-
-def _scan_directory(directory: str, root_dev: int, *, recursive: bool) -> None:
-    """Refuse a link (or another filesystem) among the existing entries of ``directory``."""
-    pending = [directory]
+    A complete, no-follow walk of the resolved root, excluding the root path
+    itself: every entry is ``lstat``-ed, a link or Windows reparse point is
+    refused, and so is any entry -- directory or file (a file bind mount) --
+    whose device differs from the root's. ``file_devices=False`` relaxes the
+    device rule for regular files only, for overlayfs (see
+    ``OVERLAY_FILESYSTEM_TYPES``). OS metadata at the top level (a volume's
+    ``lost+found``) is not PRKS's to walk. A directory that cannot be read is
+    refused: the invariant cannot be proven for it.
+    """
+    root_dev = os.stat(root_real).st_dev
+    pending = [root_real]
     while pending:
         current = pending.pop()
         try:
-            entries = list(os.scandir(current))
+            names = os.listdir(current)
         except FileNotFoundError:
             continue
         except OSError as exc:
             raise StorageRootRefused(
                 "root_unreadable", f"{current} inside the storage root cannot be read."
             ) from exc
-        for entry in entries:
-            st = _check_entry(entry.path, root_dev)
-            if st is not None and recursive and stat.S_ISDIR(st.st_mode):
-                pending.append(entry.path)
-
-
-def _check_links_and_devices(config: Any, root: str, root_real: str) -> None:
-    """V13 (nothing inside the root is a link) and V7 (one filesystem).
-
-    Every component path under the root is walked segment by segment, the
-    existing entries of the managed namespaces, the thumbnail cache and the
-    inbox are scanned, and so is ``.prks-maintenance/`` with its direct
-    subdirectories. A component an override places outside the root is not
-    this root's business and is skipped.
-    """
-    root_dev = os.stat(root_real).st_dev
-    checked: set[str] = set()
-    for kind, path in _component_entries(config):
-        rel = _relative_components(path, root)
-        if rel is None:
-            continue
-        current = root_real
-        st: Optional[os.stat_result] = None
-        for part in rel.split(os.sep):
-            current = os.path.join(current, part)
-            if current in checked:
-                st = _lstat(current)
+        for name in names:
+            if current == root_real and name in OS_METADATA_NAMES:
                 continue
-            checked.add(current)
-            st = _check_entry(current, root_dev)
+            path = os.path.join(current, name)
+            st = _lstat(path)
             if st is None:
-                break
-        if st is not None and stat.S_ISDIR(st.st_mode):
-            if kind in _FLAT_SCANNED:
-                _scan_directory(current, root_dev, recursive=False)
-            elif kind == _INBOX:
-                _scan_directory(current, root_dev, recursive=True)
-    maintenance = os.path.join(root_real, MAINTENANCE_DIRNAME)
-    if _check_entry(maintenance, root_dev) is not None:
-        _scan_directory(maintenance, root_dev, recursive=False)
+                continue
+            if is_link_or_reparse_point(st):
+                raise _link_error(path)
+            is_dir = stat.S_ISDIR(st.st_mode)
+            if st.st_dev != root_dev and (is_dir or file_devices):
+                raise _device_error(path)
+            if is_dir:
+                pending.append(path)
 
 
 # --- V9, V10 warnings ---------------------------------------------------------------
@@ -592,23 +557,99 @@ def _unescape_mount_field(value: str) -> str:
     )
 
 
-def detect_filesystem_type(path: str, *, mounts_file: str = "/proc/mounts") -> Optional[str]:
-    """Filesystem type of ``path`` from ``/proc/mounts`` (Linux); None when unknown."""
+def _longest_mount_match(path: str, mounts: list[tuple[str, str]]) -> Optional[str]:
+    best: Optional[tuple[int, str]] = None
+    for mountpoint, fs_type in mounts:
+        if _is_within(path, mountpoint) and (best is None or len(mountpoint) >= best[0]):
+            best = (len(mountpoint), fs_type)
+    return best[1] if best else None
+
+
+def _proc_mounts_type(path: str, mounts_file: str) -> Optional[str]:
     try:
         with open(mounts_file, encoding="utf-8", errors="replace") as handle:
             lines = handle.readlines()
     except OSError:
         return None
-    best: Optional[tuple[int, str]] = None
+    mounts = []
     for line in lines:
         fields = line.split()
-        if len(fields) < 3:
+        if len(fields) >= 3:
+            mounts.append((_unescape_mount_field(fields[1]), fields[2]))
+    return _longest_mount_match(path, mounts)
+
+
+def parse_bsd_mount_output(text: str) -> list[tuple[str, str]]:
+    """``(mountpoint, type)`` from BSD/macOS ``mount`` output: ``src on /mnt (type, …)``."""
+    mounts = []
+    for line in text.splitlines():
+        head, sep, tail = line.rpartition(" (")
+        if not sep or " on " not in head:
             continue
-        mountpoint = _unescape_mount_field(fields[1])
-        if _is_within(path, mountpoint):
-            if best is None or len(mountpoint) >= best[0]:
-                best = (len(mountpoint), fields[2])
-    return best[1] if best else None
+        mountpoint = head.split(" on ", 1)[1]
+        fs_type = tail.split(",", 1)[0].rstrip(")").strip()
+        if mountpoint and fs_type:
+            mounts.append((mountpoint, fs_type))
+    return mounts
+
+
+def _darwin_filesystem_type(path: str, *, mount_output: Optional[str] = None) -> Optional[str]:
+    if mount_output is None:
+        import subprocess
+
+        try:
+            mount_output = subprocess.run(
+                ["/sbin/mount"], capture_output=True, text=True, timeout=10, check=True
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return _longest_mount_match(path, parse_bsd_mount_output(mount_output))
+
+
+_WINDOWS_DRIVE_REMOTE = 4
+
+
+def windows_unc_or_drive(path: str) -> tuple[bool, Optional[str]]:
+    """``(is_unc, drive)`` for a Windows path, handling ``\\\\?\\`` prefixes."""
+    import ntpath
+
+    if path.startswith("\\\\?\\UNC\\"):
+        return True, None
+    if path.startswith("\\\\?\\"):
+        path = path[4:]
+    drive = ntpath.splitdrive(path)[0]
+    if drive.startswith("\\\\"):
+        return True, None
+    return False, drive or None
+
+
+def _windows_filesystem_type(path: str, *, drive_type=None) -> Optional[str]:
+    is_unc, drive = windows_unc_or_drive(path)
+    if is_unc:
+        return WINDOWS_REMOTE
+    if drive is None:
+        return None
+    if drive_type is None:
+        if sys.platform != "win32":  # pragma: no cover - guarded by the caller
+            return None
+        import ctypes
+
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW
+    kind = drive_type(drive + "\\")
+    return WINDOWS_REMOTE if kind == _WINDOWS_DRIVE_REMOTE else WINDOWS_LOCAL
+
+
+def detect_filesystem_type(path: str, *, mounts_file: str = "/proc/mounts") -> Optional[str]:
+    """Filesystem type of ``path``, or None when this platform cannot classify it.
+
+    Linux reads ``/proc/mounts``, macOS parses ``mount(8)``, Windows treats a
+    UNC path or a ``DRIVE_REMOTE`` drive as ``windows-remote``.
+    """
+    if sys.platform == "win32":  # pragma: no cover - Windows only
+        return _windows_filesystem_type(path)
+    if sys.platform == "darwin":  # pragma: no cover - macOS only
+        return _darwin_filesystem_type(path)
+    return _proc_mounts_type(path, mounts_file)
 
 
 def check_filesystem_type(path: str) -> None:
@@ -616,11 +657,13 @@ def check_filesystem_type(path: str) -> None:
 
     A type known with certainty to be a network or network-backed FUSE mount
     is refused; SQLite's WAL and locking are not reliable there. Any other
-    FUSE type is uncertain and only warned about. An unknown type (no
-    ``/proc/mounts``, other platforms) is not evidence either way.
+    FUSE type is uncertain and only warned about, and so is a filesystem this
+    platform cannot classify at all.
     """
     fs_type = detect_filesystem_type(path)
     if fs_type is None:
+        # Not evidence of a local disk: say so rather than assume it.
+        LOGGER.warning("storage_root_filesystem_unclassified")
         return
     fs_type = fs_type.lower()
     if fs_type in NETWORK_FILESYSTEM_TYPES:
@@ -897,7 +940,10 @@ def _open_under_lease(
         created = kind == UNMARKED_EMPTY
         adopted = kind == UNMARKED_PRKS
 
-    _check_links_and_devices(config, root, root_real)
+    fs_type = (detect_filesystem_type(root_real) or "").lower()
+    if fs_type in OVERLAY_FILESYSTEM_TYPES:
+        LOGGER.warning("storage_root_overlay_file_devices_unchecked")
+    _check_tree(root_real, file_devices=fs_type not in OVERLAY_FILESYSTEM_TYPES)
 
     maintenance = os.path.join(root_real, MAINTENANCE_DIRNAME)
     device = os.stat(root_real).st_dev

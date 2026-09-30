@@ -1010,5 +1010,130 @@ class TestRootSnapshot(RootTestCase):
         self.assertLess(main.index("bound_root.anchor(config)"), main.index("recover_incomplete_restore(config)"))
 
 
+class TestWholeRootInvariants(RootTestCase):
+    """V13/V7 hold for everything under the root, not only known components."""
+
+    def _marked(self):
+        root = self.path("lib")
+        self.open(root).release()
+        self._bound.clear()
+        return root
+
+    def _refused(self, root, reason):
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self.open(root)
+        self.assertEqual(ctx.exception.reason, reason)
+
+    def test_unrelated_top_level_link_is_refused(self):
+        root = self._marked()
+        _symlink_or_skip(self, self.tmp, os.path.join(root, "shortcut"))
+        self._refused(root, "root_contains_link")
+
+    def test_nested_links_anywhere_are_refused(self):
+        for parts in (("pdfs", "sub", "x.pdf"), ("people", "sub", "p.webp"),
+                      ("thumbs", "sub", "t.webp"), (MAINT, "backup", "old"), ("notes", "deep", "l")):
+            with self.subTest(parts=parts):
+                root = self._marked()
+                directory = os.path.join(root, *parts[:-1])
+                os.makedirs(directory, exist_ok=True)
+                _symlink_or_skip(self, self.tmp, os.path.join(directory, parts[-1]))
+                self._refused(root, "root_contains_link")
+                shutil.rmtree(root)
+
+    def test_os_metadata_at_the_top_is_not_walked(self):
+        root = self._marked()
+        lost = os.path.join(root, "lost+found")
+        os.mkdir(lost)
+        _symlink_or_skip(self, self.tmp, os.path.join(lost, "orphan"))
+        self.open(root)
+
+    def _file_on_other_device(self, target):
+        real_lstat = root_binding._lstat
+
+        def fake(path):
+            st = real_lstat(path)
+            if st is not None and path == target:
+                values = list(st)
+                values[2] = st.st_dev + 1
+                return os.stat_result(values)
+            return st
+
+        return patch.object(root_binding, "_lstat", fake)
+
+    def test_bind_mounted_files_are_refused(self):
+        root = self._marked()
+        with open(os.path.join(root, "prks_data.db"), "wb") as handle:
+            handle.write(root_binding.SQLITE_HEADER)
+        os.makedirs(os.path.join(root, "pdfs"), exist_ok=True)
+        with open(os.path.join(root, "pdfs", "a.pdf"), "wb") as handle:
+            handle.write(b"%PDF")
+        for target in (os.path.join(root, "prks_data.db"), os.path.join(root, "pdfs", "a.pdf")):
+            with self.subTest(target=os.path.basename(target)):
+                with self._file_on_other_device(target):
+                    self._refused(root, "root_spans_filesystems")
+
+    def test_overlay_root_relaxes_only_the_file_device_rule(self):
+        root = self._marked()
+        os.makedirs(os.path.join(root, "pdfs", "sub"), exist_ok=True)
+        with open(os.path.join(root, "pdfs", "a.pdf"), "wb") as handle:
+            handle.write(b"%PDF")
+        with patch.object(root_binding, "detect_filesystem_type", return_value="overlay"):
+            with self._file_on_other_device(os.path.join(root, "pdfs", "a.pdf")):
+                with self.assertLogs("prks.storage", level="WARNING") as logs:
+                    self.open(root).release()
+            self.assertIn("storage_root_overlay_file_devices_unchecked", "\n".join(logs.output))
+            with self._file_on_other_device(os.path.join(root, "pdfs", "sub")):
+                with self.assertLogs("prks.storage", level="WARNING"):
+                    self._refused(root, "root_spans_filesystems")
+
+
+class TestFilesystemDetectionAcrossPlatforms(RootTestCase):
+    """V9 classifies roots on macOS and Windows too, and never silently assumes local."""
+
+    MACOS_MOUNT = (
+        "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n"
+        "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled, nobrowse)\n"
+        "//user@nas/Library on /Volumes/Library (smbfs, nodev, nosuid, mounted by user)\n"
+        "nas:/export on /Volumes/NFS Share (nfs, asynchronous)\n"
+    )
+
+    def test_bsd_mount_output(self):
+        mounts = dict(root_binding.parse_bsd_mount_output(self.MACOS_MOUNT))
+        self.assertEqual(mounts["/Volumes/Library"], "smbfs")
+        self.assertEqual(mounts["/Volumes/NFS Share"], "nfs")
+        detect = root_binding._darwin_filesystem_type
+        self.assertEqual(detect("/Volumes/Library/PRKS", mount_output=self.MACOS_MOUNT), "smbfs")
+        self.assertEqual(detect("/Volumes/NFS Share/lib", mount_output=self.MACOS_MOUNT), "nfs")
+        self.assertEqual(detect("/System/Volumes/Data/Users/u/lib", mount_output=self.MACOS_MOUNT), "apfs")
+        for fs_type in ("smbfs", "nfs", "afpfs", "webdav"):
+            self.assertIn(fs_type, root_binding.NETWORK_FILESYSTEM_TYPES)
+
+    def test_windows_unc_and_remote_drives(self):
+        remote = {"Z:\\": 4}
+        drive_type = lambda root: remote.get(root, 3)  # noqa: E731 - DRIVE_FIXED otherwise
+        detect = root_binding._windows_filesystem_type
+        self.assertEqual(detect("\\\\nas\\share\\PRKS", drive_type=drive_type), root_binding.WINDOWS_REMOTE)
+        self.assertEqual(detect("\\\\?\\UNC\\nas\\share", drive_type=drive_type), root_binding.WINDOWS_REMOTE)
+        self.assertEqual(detect("Z:\\PRKS", drive_type=drive_type), root_binding.WINDOWS_REMOTE)
+        self.assertEqual(detect("C:\\Users\\u\\PRKS", drive_type=drive_type), root_binding.WINDOWS_LOCAL)
+        self.assertEqual(detect("\\\\?\\C:\\PRKS", drive_type=drive_type), root_binding.WINDOWS_LOCAL)
+        self.assertIn(root_binding.WINDOWS_REMOTE, root_binding.NETWORK_FILESYSTEM_TYPES)
+
+    def test_remote_classification_refuses_the_root(self):
+        root = self.path("lib")
+        with patch.object(root_binding, "detect_filesystem_type", return_value=root_binding.WINDOWS_REMOTE):
+            with self.assertRaises(StorageRootRefused) as ctx:
+                self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_network_filesystem")
+        self.assertFalse(os.path.exists(root))
+
+    def test_unclassifiable_filesystem_is_warned_about_not_assumed_local(self):
+        root = self.path("lib")
+        with patch.object(root_binding, "detect_filesystem_type", return_value=None):
+            with self.assertLogs("prks.storage", level="WARNING") as logs:
+                self.open(root)
+        self.assertIn("storage_root_filesystem_unclassified", "\n".join(logs.output))
+
+
 if __name__ == "__main__":
     unittest.main()

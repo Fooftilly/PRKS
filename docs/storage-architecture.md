@@ -1664,12 +1664,16 @@ parallel configuration system:
   adoptable: absent or empty, it is far more likely an unmounted disk than a
   wish for a new library, so it is refused (`root_missing`) without creating
   anything. Choosing a genuinely new root is Phase D's command.
-- **V7 and V13 have no warning tier inside the root.** Every component
-  directory under the root, `.prks-maintenance/` and its direct
-  subdirectories, and the existing entries of `pdfs/`, `people/`, `thumbs/`
-  and (recursively) an in-root `for_processing/` must be on the root's
-  filesystem and must not be links. A component an override places outside the
-  root is not checked.
+- **V7 and V13 cover the whole root.** Under the lease, startup walks the
+  resolved root completely without following links (excluding the root path
+  itself and top-level OS metadata such as `lost+found`). Any link or Windows
+  reparse point is refused, and so is any entry -- directory or regular file,
+  so a file bind mount is caught -- on a device other than the root's. The one
+  relaxation is an overlayfs root, where unmodified files may report the lower
+  layer's device: there only directories are held to the device rule, with a
+  warning. A directory that cannot be read is refused, because the invariant
+  cannot be proven for it. Components an override places outside the root are
+  not part of the walk.
 - **Root links are resolved once.** After the lease is taken, the process
   entry re-anchors every root-relative `StorageConfig` path beneath the leased
   `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
@@ -1679,9 +1683,12 @@ parallel configuration system:
   install directory. A source checkout refuses only the checkout itself or a
   root containing it, so existing self-hosted roots inside a checkout keep
   starting. The nested-marker scan is bounded to two levels and 2000 entries.
-- **V9** refuses a filesystem type known with certainty to be a network mount
-  (`nfs`, `cifs`, `smb3`, network FUSE such as `fuse.sshfs`, …), before
-  anything is written. Other FUSE types are uncertain and only warned about.
+- **V9** refuses a filesystem type known with certainty to be a network mount,
+  before anything is written: Linux types from `/proc/mounts` (`nfs`, `cifs`,
+  `smb3`, network FUSE such as `fuse.sshfs`, …), macOS types from `mount(8)`
+  (`smbfs`, `nfs`, `afpfs`, `webdav`), and on Windows a UNC path or a drive
+  reported as `DRIVE_REMOTE`. Other FUSE types are uncertain and a filesystem
+  the platform cannot classify is never assumed local; both are warned about.
   **V10** warns. **V5, V6, V8** run once per device; the result is cached in
   the marker's `filesystem_probe`, and a different `st_dev` re-probes.
 - **Diagnostics.** Each bind records `active_process` (PID, host, start time)
