@@ -117,6 +117,9 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/api_contract/` typed HTTP request/response DTOs + OpenAPI fragment (#180); domain still receives plain values
 - `backend/storage/config.py` frozen storage snapshot and env parser
 - `backend/storage/paths.py` storage-path derivation and testing-mode containment
+- `backend/storage/resolver.py` the one storage-root resolver (`--storage-root` > `PRKS_STORAGE` > bootstrap config > default); `bootstrap_config.py` its guarded compare-and-set writer
+- `backend/storage/root_binding.py` startup root validation, `prks-root.json` marker (`root_marker.py`) and the single-process `root.lock` lease (`file_lock.py`)
+- `backend/storage/objects.py` `StorageBackend` / `LocalFilesystemStorage` (not yet routed; Phase B). Design: `docs/storage-architecture.md`
 - `backend/db_manager.py` SQLite
 - `backend/pdf_annotations.py` canonical PDF annotation metadata
 - `backend/db_migrations.py` ordered schema migrations
