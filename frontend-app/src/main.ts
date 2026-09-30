@@ -11,6 +11,7 @@ import { registerProgressBridge } from './features/progress/session'
 import { registerWorkPanelReadBridge } from './features/work/panel-session'
 import { registerWorkMetadataEditorBridge } from './features/work/metadata-session'
 import { registerWorkPrivateNotesBridge } from './features/work/private-note-session'
+import { registerWorkResearchNotesBridge } from './features/work/research-note-session'
 
 const target = document.getElementById(PRKS_VUE_ROOT_ID)
 if (target) {
@@ -29,3 +30,4 @@ registerPersonGroupsBridge(window)
 registerWorkPanelReadBridge(window)
 registerWorkMetadataEditorBridge(window)
 registerWorkPrivateNotesBridge(window)
+registerWorkResearchNotesBridge(window)

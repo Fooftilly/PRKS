@@ -349,6 +349,7 @@ async function runSaveGenerationRace() {
     const ctxS = prksEnsureTabContext('notes-save');
     ctxS.mounted = true;
     ctxS.tabId = 'notes-save';
+    ctxS.setEntity('work', { id: 'W-save' });
     const statusEl = { innerText: '' };
     ctxS.query = function () {
         return statusEl;
@@ -441,9 +442,9 @@ async function runSaveGenerationRace() {
     assertEq('same-generation idle pending', dup.latestSaveToken > dup.settledSaveToken, false);
     assertEq('same-generation idle drafting', dup.drafting, false);
     assertEq('same-generation success status', statusEl.innerText, 'All changes saved');
-    assertEq('committed transient draft overlays stale overlapping GET', sandbox.prksResearchNotesTextForWork('W-save', 'OLD'), 'same');
-    assertEq('matching server response observes committed transient text', sandbox.prksResearchNotesTextForWork('W-save', 'same'), 'same');
-    assertEq('observed committed draft no longer masks later server text', sandbox.prksResearchNotesTextForWork('W-save', 'SERVER-NEXT'), 'SERVER-NEXT');
+    assertEq('committed transient draft overlays stale overlapping GET', sandbox.prksResearchNotesTextForWork('W-save', 'OLD', ctxS), 'same');
+    assertEq('matching server response observes committed transient text', sandbox.prksResearchNotesTextForWork('W-save', 'same', ctxS), 'same');
+    assertEq('observed committed draft no longer masks later server text', sandbox.prksResearchNotesTextForWork('W-save', 'SERVER-NEXT', ctxS), 'SERVER-NEXT');
 
     sandbox.prksResetResearchDraftsForTest();
     let newestText = 'older';
@@ -461,10 +462,10 @@ async function runSaveGenerationRace() {
     };
     ctxS.setEntity('work', { id: 'W-newer-draft' });
     ctxS.setResource('workNotes', newerDraft);
-    sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText);
+    sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText, ctxS);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxS, 'W-newer-draft');
     newestText = 'newest';
-    sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText);
+    sandbox.prksWorkNotesMarkEdit(newerDraft, 'W-newer-draft', newestText, ctxS);
     pending[5]({ code: 'failed' });
     await tick();
     assertEq('failed older save keeps newer unsent edit drafting', newerDraft.drafting, true);
@@ -515,7 +516,7 @@ async function runWarmSaveSettlement() {
     };
     ctxWarm.setResource('workNotes', notes);
 
-    sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-a', 'warm note');
+    sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-a', 'warm note', ctxWarm);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxWarm, 'W-warm-a');
     assertEq('warm-save issued while mounted', pending.length, 1);
     assertEq('warm-save status shows Saving while mounted', statusEl.innerText, 'Saving...');
@@ -577,7 +578,7 @@ async function runWarmSaveErrorSettlement() {
     };
     ctxWarmErr.setResource('workNotes', notes);
 
-    sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-err', 'warm error note');
+    sandbox.prksWorkNotesMarkEdit(notes, 'W-warm-err', 'warm error note', ctxWarmErr);
     sandbox.prksEnqueueWorkResearchNotesSave(ctxWarmErr, 'W-warm-err');
     assertEq('warm-error save issued', pending.length, 1);
 
@@ -693,8 +694,21 @@ function runHorizontalSplitterCleanup() {
     assertEq('post-unmount pointer move cannot alter detached height', ws._vars['--work-notes-height'], '320px');
 }
 
+function runNotesAnchorIsNotABox() {
+    const css = fs.readFileSync(path.join(rootDir, 'frontend/css/style.css'), 'utf8');
+    const anchorAt = css.indexOf('[data-prks-role="work-research-notes-anchor"]');
+    assert('notes anchor rule exists', anchorAt !== -1);
+    const block = css.slice(anchorAt, css.indexOf('}', anchorAt));
+    assert('notes anchor is display contents', /display:\s*contents/.test(block));
+    const shellAt = worksSrc.indexOf('data-prks-role="work-research-notes-anchor"');
+    assert('shell wraps the notes pane in the anchor', shellAt !== -1);
+    const shell = worksSrc.slice(shellAt, shellAt + 180);
+    assert('notes pane is inside the anchor', shell.indexOf('class="work-notes-pane"') !== -1);
+}
+
 (async function () {
     try {
+        runNotesAnchorIsNotABox();
         await runSaveGenerationRace();
         await runWarmSaveSettlement();
         await runWarmSaveErrorSettlement();

@@ -57,6 +57,7 @@
             workMetaDraftWorkId: null,
             workMetaEditSession: 0,
             workPrivateNoteSession: null,
+            workResearchNoteSession: null,
             currentSavedView: null,
             researchNotesHints: null,
         };
@@ -81,6 +82,8 @@
          * save captured as session 1 match the next time Edit metadata opens. */
         ui.currentSavedView = null;
         ui.researchNotesHints = null;
+        /* workResearchNoteSession stays. Same-Work refresh must keep an
+         * unsaved EasyMDE buffer; a different Work looks up its own key. */
     }
 
     function safeCall(fn, kind) {
