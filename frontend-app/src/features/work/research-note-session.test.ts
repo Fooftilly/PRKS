@@ -32,13 +32,12 @@ type NotesWindow = {
   prksMountTabContext: (tabId: string, host: HTMLElement) => void
   prksGetTabContext: (tabId: string) => WorkCtx
   prksDestroyAllTabContexts: () => void
-  prksWorkNotesMarkEdit: (notes: { editGeneration?: number; drafting?: boolean; workId?: string }, workId: string, text: string, ctx: WorkCtx) => number
+  prksWorkNotesMarkEdit: (notes: { editGeneration?: number; drafting?: boolean; workId?: string }, workId: string, text: string, ctx?: WorkCtx) => number
   prksResearchNotesTextForWork: (workId: string, serverText: string, ctx: WorkCtx) => string
-  prksResearchNotesMayPaint: (owner: WorkCtx, workId: string) => boolean
+  prksResearchNotesMayPaint: (owner: WorkCtx, workId: string, generation?: number) => boolean
   prksDestroyWorkNotesEditor: (ctx: WorkCtx) => void
   prksResetResearchDraftsForTest: () => void
   prksEnqueueWorkResearchNotesSave: (ctx: WorkCtx, workId: string) => Promise<{ code: string }>
-  prksResearchNotesMayPaint: (owner: WorkCtx, workId: string, generation?: number) => boolean
   prksSaveWorkNoteDurably: (
     workId: string,
     kind: string,
