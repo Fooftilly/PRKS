@@ -30,6 +30,9 @@ export interface WorkPdfRuntime {
   searchPrevious?: () => boolean
   readAnnotationPopup?: () => WorkPdfAnnotationPopupRead
   annotationPopupStill?: (ticket: WorkPdfAnnotationPopupCapture) => boolean
+  readAnnotationDrawer?: () => WorkPdfAnnotationDrawerRead
+  annotationDrawerStill?: (ticket: WorkPdfAnnotationDrawerCapture) => boolean
+  closeAnnotationDrawer?: () => boolean
 }
 
 export interface WorkPdfOwner {
@@ -80,6 +83,34 @@ export interface WorkPdfAnnotationPopupRead {
   meta: string
   epoch: number
   deletable: boolean
+}
+
+export interface WorkPdfAnnotationDrawerItem {
+  id: string
+  index: number
+  text: string
+  comment: string
+  pageLabel: string
+  pageIndex: number | null
+  wikiLink: string
+  metadataLabels: string[]
+}
+
+export interface WorkPdfAnnotationDrawerRead {
+  open: boolean
+  epoch: number
+  viewerToken: number
+  selectedId: string
+  status: string
+  published: boolean
+  items: WorkPdfAnnotationDrawerItem[]
+}
+
+/** Generation, epoch, and viewer token captured with a drawer intent. */
+export interface WorkPdfAnnotationDrawerCapture {
+  generation: number
+  epoch: number
+  viewerToken: number
 }
 
 export interface WorkPdfOrchestration {
@@ -354,6 +385,138 @@ export function intentDeleteWorkPdfAnnotationPopup(
   return true
 }
 
+const EMPTY_ANNOTATION_DRAWER: WorkPdfAnnotationDrawerRead = {
+  open: false,
+  epoch: 0,
+  viewerToken: 0,
+  selectedId: '',
+  status: '',
+  published: false,
+  items: [],
+}
+
+function drawerItem(value: unknown): WorkPdfAnnotationDrawerItem | null {
+  if (!value || typeof value !== 'object') return null
+  const row = value as WorkPdfAnnotationDrawerItem
+  if (row.id == null || row.id === '') return null
+  const labels = Array.isArray(row.metadataLabels)
+    ? row.metadataLabels.filter((label) => typeof label === 'string' && label.trim()).map((label) => label.trim())
+    : []
+  const page = row.pageIndex
+  return {
+    id: String(row.id),
+    index: typeof row.index === 'number' ? row.index : 0,
+    text: row.text != null ? String(row.text) : '',
+    comment: row.comment != null ? String(row.comment) : '',
+    pageLabel: row.pageLabel != null ? String(row.pageLabel) : '',
+    pageIndex: typeof page === 'number' && Number.isFinite(page) ? page : null,
+    wikiLink: row.wikiLink != null ? String(row.wikiLink) : '',
+    metadataLabels: labels,
+  }
+}
+
+/** Reflects the pdf runtime's annotation drawer. Does not keep a copy. */
+export function readWorkPdfAnnotationDrawer(
+  ctx: WorkPdfOwner | null | undefined,
+): WorkPdfAnnotationDrawerRead {
+  const runtime = runtimeOf(ctx)
+  if (!runtime || runtime._destroyed || typeof runtime.readAnnotationDrawer !== 'function') {
+    return { ...EMPTY_ANNOTATION_DRAWER, items: [] }
+  }
+  const read = runtime.readAnnotationDrawer()
+  if (!read || typeof read !== 'object') return { ...EMPTY_ANNOTATION_DRAWER, items: [] }
+  const items = Array.isArray(read.items)
+    ? read.items.map(drawerItem).filter((row): row is WorkPdfAnnotationDrawerItem => row != null)
+    : []
+  return {
+    open: !!read.open,
+    epoch: typeof read.epoch === 'number' ? read.epoch : 0,
+    viewerToken: typeof read.viewerToken === 'number' ? read.viewerToken : 0,
+    selectedId: read.open && read.selectedId != null ? String(read.selectedId) : '',
+    status: read.open && read.status != null ? String(read.status) : '',
+    published: !!(read.open && read.published),
+    items: read.open ? items : [],
+  }
+}
+
+function drawerRuntime(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): WorkPdfRuntime | null {
+  const runtime = runtimeOf(ctx)
+  if (!runtime || runtime._destroyed || !ctx || !captured) return null
+  if (typeof ctx.isCurrent !== 'function' || typeof captured.generation !== 'number') return null
+  if (!ctx.isCurrent(captured.generation)) return null
+  if (typeof captured.epoch !== 'number' || typeof captured.viewerToken !== 'number') return null
+  if (typeof runtime.annotationDrawerStill !== 'function' || !runtime.annotationDrawerStill(captured)) return null
+  return runtime
+}
+
+type AnnotationDrawerWindow = PdfWindow & {
+  jumpToPdfAnnotationFromDrawer?: (ctx: WorkPdfOwner, annId: string) => void
+  openPdfAnnotationEditorFromDrawer?: (ctx: WorkPdfOwner, annId: string) => void
+  deletePdfAnnotationFromList?: (ctx: WorkPdfOwner, annId: string) => void
+  copyPdfAnnotationWikiLink?: (ctx: WorkPdfOwner, annId: string) => Promise<boolean> | boolean
+  prksCloseAnnotationDrawer?: (ctx: WorkPdfOwner) => boolean
+}
+
+export function intentCloseWorkPdfAnnotationDrawer(
+  ctx: WorkPdfOwner | null | undefined,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): boolean {
+  if (!drawerRuntime(ctx, captured) || !ctx) return false
+  const close = (globalThis as AnnotationDrawerWindow).prksCloseAnnotationDrawer
+  if (typeof close !== 'function') return false
+  return close(ctx) === true
+}
+
+export function intentJumpWorkPdfAnnotation(
+  ctx: WorkPdfOwner | null | undefined,
+  annId: string,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): boolean {
+  if (!drawerRuntime(ctx, captured) || !ctx || !annId) return false
+  const jump = (globalThis as AnnotationDrawerWindow).jumpToPdfAnnotationFromDrawer
+  if (typeof jump !== 'function') return false
+  void jump(ctx, annId)
+  return true
+}
+
+export function intentEditWorkPdfAnnotationComment(
+  ctx: WorkPdfOwner | null | undefined,
+  annId: string,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): boolean {
+  if (!drawerRuntime(ctx, captured) || !ctx || !annId) return false
+  const edit = (globalThis as AnnotationDrawerWindow).openPdfAnnotationEditorFromDrawer
+  if (typeof edit !== 'function') return false
+  edit(ctx, annId)
+  return true
+}
+
+export function intentDeleteWorkPdfAnnotation(
+  ctx: WorkPdfOwner | null | undefined,
+  annId: string,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): boolean {
+  if (!drawerRuntime(ctx, captured) || !ctx || !annId) return false
+  const remove = (globalThis as AnnotationDrawerWindow).deletePdfAnnotationFromList
+  if (typeof remove !== 'function') return false
+  void remove(ctx, annId)
+  return true
+}
+
+export function intentCopyWorkPdfAnnotationLink(
+  ctx: WorkPdfOwner | null | undefined,
+  annId: string,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): Promise<boolean> {
+  if (!drawerRuntime(ctx, captured) || !ctx || !annId) return Promise.resolve(false)
+  const copy = (globalThis as AnnotationDrawerWindow).copyPdfAnnotationWikiLink
+  if (typeof copy !== 'function') return Promise.resolve(false)
+  return Promise.resolve(copy(ctx, annId)).then((ok) => ok === true, () => false)
+}
+
 export function intentResizeWorkPdf(ctx: WorkPdfOwner | null | undefined): boolean {
   const runtime = runtimeOf(ctx)
   if (!runtime || runtime._destroyed || typeof runtime.resize !== 'function') return false
@@ -385,6 +548,12 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
     prksIntentSaveWorkPdfAnnotationComment?: typeof intentSaveWorkPdfAnnotationComment
     prksIntentCloseWorkPdfAnnotationPopup?: typeof intentCloseWorkPdfAnnotationPopup
     prksIntentDeleteWorkPdfAnnotationPopup?: typeof intentDeleteWorkPdfAnnotationPopup
+    prksReadWorkPdfAnnotationDrawer?: typeof readWorkPdfAnnotationDrawer
+    prksIntentCloseWorkPdfAnnotationDrawer?: typeof intentCloseWorkPdfAnnotationDrawer
+    prksIntentJumpWorkPdfAnnotation?: typeof intentJumpWorkPdfAnnotation
+    prksIntentEditWorkPdfAnnotationComment?: typeof intentEditWorkPdfAnnotationComment
+    prksIntentDeleteWorkPdfAnnotation?: typeof intentDeleteWorkPdfAnnotation
+    prksIntentCopyWorkPdfAnnotationLink?: typeof intentCopyWorkPdfAnnotationLink
   }
   target.prksReadWorkPdf = readWorkPdf
   target.prksIntentMountWorkPdf = intentMountWorkPdf
@@ -401,4 +570,10 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
   target.prksIntentSaveWorkPdfAnnotationComment = intentSaveWorkPdfAnnotationComment
   target.prksIntentCloseWorkPdfAnnotationPopup = intentCloseWorkPdfAnnotationPopup
   target.prksIntentDeleteWorkPdfAnnotationPopup = intentDeleteWorkPdfAnnotationPopup
+  target.prksReadWorkPdfAnnotationDrawer = readWorkPdfAnnotationDrawer
+  target.prksIntentCloseWorkPdfAnnotationDrawer = intentCloseWorkPdfAnnotationDrawer
+  target.prksIntentJumpWorkPdfAnnotation = intentJumpWorkPdfAnnotation
+  target.prksIntentEditWorkPdfAnnotationComment = intentEditWorkPdfAnnotationComment
+  target.prksIntentDeleteWorkPdfAnnotation = intentDeleteWorkPdfAnnotation
+  target.prksIntentCopyWorkPdfAnnotationLink = intentCopyWorkPdfAnnotationLink
 }

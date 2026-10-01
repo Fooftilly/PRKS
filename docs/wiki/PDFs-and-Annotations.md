@@ -39,6 +39,8 @@ The index is disposable and is rebuilt after backup restore. **Settings → Rebu
 
 The Work page mounts the PRKS PDF viewer for managed PDF Works. Viewer lifecycle is scoped to the Work's TabContext, which matters when several Works are open or visible in split panes.
 
+The annotation list opens from the PDF toolbar as an overlay on that pane. It lists annotations, jumps to one, edits its comment, deletes it, and copies a `[[pdf:id]]` link. The overlay does not change the PDF's width, zoom, or reading position. Work Details remains the metadata panel.
+
 Relevant implementation areas include `frontend/js/pdf-*.js`, `frontend/js/components/works-pdf.js`, the backend `pdf_*.py` modules, and the vendored PRKS PDF viewer package.
 
 ## Backup behavior

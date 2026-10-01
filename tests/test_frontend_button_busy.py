@@ -198,8 +198,8 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
 
         list_delete = _extract(
             pdf,
-            "if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {",
-            "if (e.target && e.target.closest && e.target.closest('.annotation-row__copy-link')) {",
+            "window.deletePdfAnnotationFromList = async function (ctx, annId) {",
+            "\n};",
         )
         self.assertIn("await prksConfirmDeletePdfAnnotation()", list_delete)
 
@@ -216,14 +216,12 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         self.assertIn("window.confirm(", guard)
 
     def test_copy_link_uses_shared_flash_helper(self):
-        pdf = _read(_PDF)
-        copy_link = _extract(
-            pdf,
-            "if (e.target && e.target.closest && e.target.closest('.annotation-row__copy-link')) {",
-            "if (e.target.closest('.annotation-row__jump')",
+        drawer = _read(
+            os.path.join(_ROOT, "frontend-app", "src", "features", "work", "WorkPdfAnnotationDrawer.vue")
         )
-        self.assertIn("prksFlashButtonLabel", copy_link)
-        self.assertIn("errorLabel: 'Copy failed'", copy_link)
+        self.assertIn("prksFlashButtonLabel", drawer)
+        self.assertIn("errorLabel: 'Copy failed'", drawer)
+        self.assertIn("successLabel: 'Copied'", drawer)
 
 
 if __name__ == "__main__":

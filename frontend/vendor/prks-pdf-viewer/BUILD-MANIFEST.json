@@ -16,7 +16,7 @@
     "node_modules/react/jsx-runtime.js"
   ],
   "outputSha256": {
-    "js": "386877e1abc8e78ad1067284a2f7ebe71af43abc2f5e72dd7f258c8d50fb92ca",
+    "js": "00ca2b598d69b7196dbe8c1689b51d4e363224802275a402870ec2a6b3de0b9e",
     "css": "2aa01915857d9d12a3753860e8c3f5ad2c26eab0b5ce6ca7e8be28110dff0253",
     "wasm": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
   },

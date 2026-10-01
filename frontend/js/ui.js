@@ -209,11 +209,12 @@ function prksHideModalConfirm() {
         opener.classList &&
         opener.classList.contains('annotation-row__delete')
     ) {
-        // Sidebar may have been repainted (e.g. materialization restore) while
-        // the dialog was open — focus an equivalent Delete control if present.
-        const replacement = document.querySelector(
-            '#annotation-fallback-list .annotation-row__delete'
-        );
+        // The list may have been repainted while the dialog was open.
+        // Focus an equivalent Delete control in that same PDF pane.
+        const pane = typeof opener.closest === 'function' ? opener.closest('.work-pdf-pane') : null;
+        const replacement = pane
+            ? pane.querySelector('.annotation-row__delete')
+            : document.querySelector('[data-prks-role="pdf-annotation-drawer"] .annotation-row__delete');
         if (replacement && typeof replacement.focus === 'function') {
             replacement.focus();
         }
@@ -3601,6 +3602,14 @@ function updatePanelContent(tabId) {
         } else if (tabId === 'annotations') {
             prksDismissWorkPanelRead();
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
+            const openDrawer = panel.querySelector('[data-prks-role="open-pdf-annotation-drawer"]');
+            if (openDrawer) {
+                openDrawer.addEventListener('click', () => {
+                    if (typeof window.prksOpenAnnotationDrawer === 'function') {
+                        window.prksOpenAnnotationDrawer(focusedCtx);
+                    }
+                });
+            }
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
                 window.applyCachedAnnotationListToPanel();
             }
@@ -5587,7 +5596,9 @@ function renderWorkAnnotationsTab(work) {
                     ${prksAnnotationsTabHintButton('ann-pdf', 'About PDF annotations')}
                 </div>
             </header>
-            <div id="annotation-fallback-list" class="annotation-fallback-list" role="list" aria-live="polite"></div>
+            <p class="annotations-tab__empty">Annotations are listed on the PDF.</p>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-role="open-pdf-annotation-drawer">Show on PDF</button>
+            <div id="annotation-fallback-list" class="annotation-fallback-list" hidden></div>
         </div>
     `;
 }

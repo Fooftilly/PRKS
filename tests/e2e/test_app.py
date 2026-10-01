@@ -2633,29 +2633,56 @@ def _open_annotations_tab(page):
     _open_details_drawer_if_tiled(page)
     page.locator(".tab-btn[data-target='annotations']").click()
     page.wait_for_selector("#annotation-fallback-list")
+    _open_focused_pdf_annotation_drawer(page)
+
+
+def _open_focused_pdf_annotation_drawer(page):
+    """Open the focused pane's overlay list when that PDF toolbar is up.
+
+    The right-panel Annotations tab no longer paints rows. Persistence tests
+    read `.annotation-row` from this drawer. A work without a viewer toolbar
+    leaves the tab shell alone.
+    """
+    tab_id = page.evaluate(
+        """() => {
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            return ctx && ctx.tabId != null ? String(ctx.tabId) : '';
+        }"""
+    )
+    if not tab_id:
+        return
+    button = page.locator(
+        '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-viewer"] [aria-label="Annotations"]'
+        % tab_id
+    )
+    if button.count() == 0:
+        return
+    if button.first.get_attribute("aria-pressed") != "true":
+        button.first.click()
+    page.wait_for_selector(
+        '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-annotation-drawer"]' % tab_id
+    )
 
 
 def _wait_annotation_list_rendered(page, expected_rows):
-    """Wait until the focused PDF context has painted the shared annotation list.
+    """Wait until the focused pane's overlay has published the annotation list.
 
-    `#annotation-fallback-list` is part of the right panel's annotations-tab
-    markup, so waiting for the element only proves the tab is up -- the list
-    still holds whatever was painted into it last. Only
-    `renderAnnotationFallbackList` fills it, and that returns early unless the
-    owning context is the focused one (`prksIsFocusedPdfCtx`), so a mutation
-    made while another tab held focus is not reflected until a render runs for
-    the refocused tab. The status line is emitted on both the empty and the
-    populated path, which makes it the signal that a render actually ran rather
-    than that the markup merely exists.
+    Opening the drawer paints an empty session before
+    `renderAnnotationFallbackList` replaces the cache. `data-prks-list-published`
+    is set only after that publication, on both the empty and populated paths.
 
     Same missing-wait pattern as #10 / #64: assert after the settle signal, not
     after markup existence alone.
     """
     page.wait_for_function(
         """(expected) => {
-            const list = document.getElementById('annotation-fallback-list');
-            if (!list || !list.querySelector('.annotation-list-status')) return false;
-            return list.querySelectorAll('.annotation-row').length === expected;
+            const ctx = window.prksGetFocusedTabContext && window.prksGetFocusedTabContext();
+            const root = ctx && ctx.root;
+            if (!root || typeof root.querySelector !== 'function') return false;
+            const drawer = root.querySelector('[data-prks-role="pdf-annotation-drawer"]');
+            if (!drawer || drawer.getAttribute('data-prks-list-published') !== 'true') return false;
+            if (!drawer.querySelector('.annotation-list-status')) return false;
+            return drawer.querySelectorAll('.annotation-row').length === expected;
         }""",
         arg=expected_rows,
     )
@@ -2940,11 +2967,8 @@ class PdfPersistenceTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         _open_annotations_tab(page)
-        # The delete was confirmed while Work B held focus, so the shared list
-        # could not be repainted then; only this refocused render corrects it.
-        # Rows only ever render into that one shared list in the right panel --
-        # which sits in <aside id="right-panel">, outside <main> and so outside
-        # the warm-parking host -- so the page-wide count is the same claim.
+        # The overlay belongs to Work A's pane. Work B's drawer stays closed,
+        # so the page-wide row count is the same claim as the focused drawer.
         _wait_annotation_list_rendered(page, 0)
         self.assertEqual(page.locator(".annotation-row").count(), 0)
 

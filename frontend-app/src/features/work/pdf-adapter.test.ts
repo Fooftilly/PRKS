@@ -5,6 +5,7 @@ import {
   intentCloseWorkPdfAnnotationPopup,
   intentCloseWorkPdfSearch,
   intentDeleteWorkPdfAnnotationPopup,
+  intentJumpWorkPdfAnnotation,
   intentFlushWorkPdf,
   intentMountWorkPdf,
   intentOpenWorkPdfSearch,
@@ -14,6 +15,7 @@ import {
   intentWorkPdfSearchNext,
   intentWorkPdfSearchPrevious,
   readWorkPdf,
+  readWorkPdfAnnotationDrawer,
   readWorkPdfAnnotationPopup,
   readWorkPdfSearch,
   registerWorkPdfAdapterBridge,
@@ -417,5 +419,45 @@ describe('work PDF adapter', () => {
     expect(readWorkPdfAnnotationPopup(ctx).comment).toBe('from B')
     expect(runtime.viewer).toBe(viewer)
     expect(runtime.viewerSetupToken).toBe(3)
+  })
+
+  it('does not jump from a stale annotation drawer', () => {
+    const ctx = mount('drawer')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' }) as unknown as WorkPdfRuntime & {
+      annotationCache: { items: Array<{ id: string }>; listPublished?: boolean }
+      openAnnotationDrawer: () => boolean
+      closeAnnotationDrawer: () => boolean
+      viewer: { id: string }
+      viewerSetupToken: number
+      destroy: () => void
+    }
+    const viewer = { id: 'v1' }
+    runtime.viewer = viewer
+    runtime.viewerSetupToken = 2
+    runtime.annotationCache = { items: [{ id: 'ann-a' }], listPublished: true }
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    const read = readWorkPdfAnnotationDrawer(ctx)
+    expect(read.published).toBe(true)
+    expect(read.items[0]?.wikiLink).toBe('[[pdf:ann-a]]')
+    const jumps: string[] = []
+    ;(window as unknown as {
+      jumpToPdfAnnotationFromDrawer?: (owner: WorkPdfOwner, annId: string) => void
+    }).jumpToPdfAnnotationFromDrawer = (_owner, annId) => {
+      jumps.push(annId)
+    }
+    const ticket = {
+      generation: ctx.generation,
+      epoch: read.epoch,
+      viewerToken: read.viewerToken,
+    }
+    expect(intentJumpWorkPdfAnnotation(ctx, 'ann-a', ticket)).toBe(true)
+    expect(runtime.closeAnnotationDrawer()).toBe(true)
+    expect(intentJumpWorkPdfAnnotation(ctx, 'ann-a', ticket)).toBe(false)
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    expect(intentJumpWorkPdfAnnotation(ctx, 'ann-a', ticket)).toBe(false)
+    expect(jumps).toEqual(['ann-a'])
+    expect(runtime.viewer).toBe(viewer)
+    expect(runtime.viewerSetupToken).toBe(2)
   })
 })

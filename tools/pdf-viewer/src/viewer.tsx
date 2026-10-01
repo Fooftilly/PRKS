@@ -438,6 +438,8 @@ function ViewerTree({
                             documentTypeLabel={options.documentTypeLabel}
                             documentTypeColor={options.documentTypeColor}
                             documentTypeBorder={options.documentTypeBorder}
+                            controller={controller}
+                            onAnnotationDrawerToggle={options.onAnnotationDrawerToggle}
                         />
                     ) : null}
                     <div className="prks-pdf-stage">

@@ -37,7 +37,8 @@ class WorkPdfAnnotationPopupTests(unittest.TestCase):
         self.assertNotIn("savePdfAnnotation", RUNTIME)
         self.assertNotIn("createPrksPdfViewer", RUNTIME)
         self.assertIn("prksOpenAnnotationPopupSession", PDF)
-        session = PDF[PDF.index("function prksOpenAnnotationPopupSession"):PDF.index("window.closePdfAnnotationEditor")]
+        session_at = PDF.index("function prksOpenAnnotationPopupSession")
+        session = PDF[session_at:PDF.index("window.closePdfAnnotationEditor = function", session_at)]
         self.assertLess(session.index("viewer.goToPage"), session.index("const opened = pdf.openAnnotationPopup"))
         self.assertIn("!(opts && opts.reason === 'viewer')", session)
         self.assertIn("annotationPopupStill", PDF)
