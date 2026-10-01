@@ -72,6 +72,11 @@ function onDocumentKeydown(event: KeyboardEvent) {
   props.onClose(ticket())
 }
 
+function deleteFocusAlreadyRestored(): boolean {
+  const active = document.activeElement
+  return active instanceof HTMLElement && active.classList.contains('annotation-row__delete')
+}
+
 async function deleteAnnotation(event: MouseEvent, annId: string) {
   const button = event.currentTarget
   const busy = (window as Window & {
@@ -81,14 +86,23 @@ async function deleteAnnotation(event: MouseEvent, annId: string) {
       options?: { busyLabel?: string },
     ) => void
   }).prksSetButtonBusy
+  // The confirm dialog records document.activeElement synchronously. Disabling
+  // this focused button first would move focus away and capture the wrong opener.
+  const pending = props.onDelete(annId, ticket())
   if (button instanceof HTMLButtonElement && typeof busy === 'function') {
     busy(button, true, { busyLabel: 'Deleting…' })
   }
   try {
-    await props.onDelete(annId, ticket())
+    await pending
   } finally {
     if (button instanceof HTMLButtonElement && typeof busy === 'function') {
       busy(button, false)
+    }
+    // Cancel restores the opener while this button is still disabled, and a
+    // disabled control cannot take focus. Focus it once it is idle again,
+    // unless a repaint already focused the owner-scoped replacement.
+    if (button instanceof HTMLButtonElement && button.isConnected && !deleteFocusAlreadyRestored()) {
+      focusAfterAnnotationPopupClose(button, null)
     }
   }
 }

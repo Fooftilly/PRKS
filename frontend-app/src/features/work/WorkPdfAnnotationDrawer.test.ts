@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import WorkPdfAnnotationDrawer from './WorkPdfAnnotationDrawer.vue'
 
@@ -142,6 +142,7 @@ describe('annotation drawer', () => {
         target.textContent = 'Delete'
       }
     }
+    let capturedWhileFocused = false
     const wrapper = mount(WorkPdfAnnotationDrawer, {
       props: {
         state,
@@ -149,15 +150,22 @@ describe('annotation drawer', () => {
         onClose: () => {},
         onJump: () => {},
         onEdit: () => {},
-        onDelete: () => pending,
+        onDelete: () => {
+          capturedWhileFocused = document.activeElement === deleteButton
+          expect(deleteButton.disabled).toBe(false)
+          return pending
+        },
         onCopy: async () => true,
       },
       attachTo: document.body,
     })
     mounted.push(wrapper)
     const button = wrapper.get('.annotation-row__delete')
+    const deleteButton = button.element as HTMLButtonElement
+    deleteButton.focus()
     const click = button.trigger('click')
     await flushPromises()
+    expect(capturedWhileFocused).toBe(true)
     expect(calls).toEqual([true])
     expect(button.attributes('aria-busy')).toBe('true')
     expect(button.text()).toBe('Deleting…')
@@ -174,23 +182,49 @@ describe('annotation delete confirm focus', () => {
   const confirmApi = window as Window & {
     __prksHideModalConfirm?: () => void
     __prksRememberModalConfirmOpener?: (active: Element | null) => void
+    prksConfirmDeletePdfAnnotation?: () => Promise<boolean>
+    prksBindModalConfirmOnce?: () => void
   }
+  const originalFocus = HTMLButtonElement.prototype.focus
 
-  afterEach(() => {
-    document.body.innerHTML = ''
-    delete confirmApi.__prksHideModalConfirm
-    delete confirmApi.__prksRememberModalConfirmOpener
-    delete (window as Window & { prksWorkspaceSnapshot?: unknown }).prksWorkspaceSnapshot
-  })
-
-  it('restores Delete on the drawer owner captured when confirm opened', () => {
+  beforeAll(() => {
     const start = uiSource.indexOf('let prksModalConfirmResolve = null;')
-    const end = uiSource.indexOf('function prksFinishModalConfirm', start)
+    const end = uiSource.indexOf('function prksBindModalUnsavedConfirmOnce', start)
     window.eval(
       uiSource.slice(start, end) +
         '\nwindow.__prksHideModalConfirm = prksHideModalConfirm;\n' +
-        'window.__prksRememberModalConfirmOpener = prksRememberModalConfirmOpener;\n',
+        'window.__prksRememberModalConfirmOpener = prksRememberModalConfirmOpener;\n' +
+        'window.prksConfirmDeletePdfAnnotation = prksConfirmDeletePdfAnnotation;\n' +
+        'window.prksSetButtonBusy = prksSetButtonBusy;\n' +
+        'window.prksBindModalConfirmOnce = prksBindModalConfirmOnce;\n',
     )
+  })
+
+  afterEach(() => {
+    HTMLButtonElement.prototype.focus = originalFocus
+    document.body.innerHTML = ''
+    delete (window as Window & { prksWorkspaceSnapshot?: unknown }).prksWorkspaceSnapshot
+  })
+
+  function installConfirm() {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div id="prks-modal-confirm" class="prks-modal-confirm hidden" aria-hidden="true">' +
+        '<h3 id="prks-modal-confirm-title"></h3>' +
+        '<p id="prks-modal-confirm-desc"></p>' +
+        '<div class="prks-modal-confirm__actions">' +
+        '<button type="button" id="prks-modal-confirm-cancel">Cancel</button>' +
+        '<button type="button" id="prks-modal-confirm-ok">OK</button>' +
+        '</div></div>',
+    )
+    confirmApi.prksBindModalConfirmOnce?.()
+    HTMLButtonElement.prototype.focus = function focus(this: HTMLButtonElement) {
+      if (this.disabled) return
+      originalFocus.call(this)
+    }
+  }
+
+  it('restores Delete on the drawer owner captured when confirm opened', () => {
     function drawer(tabId: string) {
       const tile = document.createElement('div')
       tile.className = 'prks-tile'
@@ -225,5 +259,78 @@ describe('annotation delete confirm focus', () => {
     confirmApi.__prksHideModalConfirm?.()
     expect(document.activeElement).toBe(fresh)
     expect(document.activeElement).not.toBe(main.button)
+  })
+
+  it('keeps the annotation and restores Delete focus after cancel', async () => {
+    installConfirm()
+    const wrapper = mount(WorkPdfAnnotationDrawer, {
+      props: {
+        state,
+        tabId: 'tab-a',
+        onClose: () => {},
+        onJump: () => {},
+        onEdit: () => {},
+        onDelete: () => confirmApi.prksConfirmDeletePdfAnnotation?.() ?? Promise.resolve(false),
+        onCopy: async () => true,
+      },
+      attachTo: document.body,
+    })
+    const button = wrapper.get('.annotation-row__delete')
+    const deleteButton = button.element as HTMLButtonElement
+    deleteButton.focus()
+    deleteButton.click()
+    await flushPromises()
+    const dialog = document.getElementById('prks-modal-confirm')
+    expect(dialog?.classList.contains('hidden')).toBe(false)
+    expect(deleteButton.disabled).toBe(true)
+    document.getElementById('prks-modal-confirm-cancel')?.click()
+    await flushPromises()
+    expect(dialog?.classList.contains('hidden')).toBe(true)
+    expect(wrapper.find('.annotation-row').exists()).toBe(true)
+    expect(deleteButton.disabled).toBe(false)
+    expect(deleteButton.getAttribute('aria-busy')).toBeNull()
+    expect(document.activeElement).toBe(deleteButton)
+    wrapper.unmount()
+  })
+
+  it('restores the owner drawer replacement when cancel follows a repaint', async () => {
+    installConfirm()
+    const wrapper = mount(WorkPdfAnnotationDrawer, {
+      props: {
+        state,
+        tabId: 'tab-a',
+        onClose: () => {},
+        onJump: () => {},
+        onEdit: () => {},
+        onDelete: () => confirmApi.prksConfirmDeletePdfAnnotation?.() ?? Promise.resolve(false),
+        onCopy: async () => true,
+      },
+      attachTo: document.body,
+    })
+    const button = wrapper.get('.annotation-row__delete')
+    const deleteButton = button.element as HTMLButtonElement
+    deleteButton.focus()
+    deleteButton.click()
+    await flushPromises()
+    const other = document.createElement('aside')
+    other.setAttribute('data-prks-role', 'pdf-annotation-drawer')
+    other.setAttribute('data-prks-owner-tab-id', 'other')
+    const otherDelete = document.createElement('button')
+    otherDelete.type = 'button'
+    otherDelete.className = 'annotation-row__delete'
+    other.appendChild(otherDelete)
+    document.body.appendChild(other)
+    const drawer = wrapper.get('[data-prks-role="pdf-annotation-drawer"]').element
+    deleteButton.remove()
+    const fresh = document.createElement('button')
+    fresh.type = 'button'
+    fresh.className = 'annotation-row__delete'
+    drawer.appendChild(fresh)
+    document.getElementById('prks-modal-confirm-cancel')?.click()
+    await flushPromises()
+    expect(wrapper.find('.annotation-row').exists()).toBe(true)
+    expect(document.activeElement).toBe(fresh)
+    expect(document.activeElement).not.toBe(otherDelete)
+    wrapper.unmount()
   })
 })
