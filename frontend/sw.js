@@ -20,11 +20,7 @@
     // committed Vue bundle, frontend/js/workspace-model.js, or
     // frontend/js/work-route-projection.js) retires old
     // shell/static caches.
-<<<<<<< HEAD
     const DEPENDENCY_REVISION = 'd41f18b6925d';
-=======
-    const DEPENDENCY_REVISION = '6158d11e9f8f';
->>>>>>> 61f90ee (Paint the Saved Views index on the Vue route surface.)
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
