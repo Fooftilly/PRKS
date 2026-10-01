@@ -123,12 +123,17 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("prksCurrentCanonicalHash", src)
         index = _read(_SV_INDEX)
         self.assertIn("saved-views-page", index)
-        self.assertIn("No Saved Views yet.", index)
+        self.assertIn("SAVED_VIEWS_EMPTY", index)
+        projection = _read(_SV_PROJECTION)
+        self.assertIn("No Saved Views yet.", projection)
         self.assertIn("removeFromIndex", _read(_SV_INTENTS))
-        self.assertIn("prksSearchSummaryText", _read(_SV_PROJECTION))
+        self.assertIn("prksSearchSummaryText", projection)
         agents = _read(_AGENTS)
         self.assertIn("prksDeleteSavedViewFromIndex", agents)
-        self.assertNotIn("renderSavedViewsIndex", agents)
+        self.assertIn(
+            "`renderSavedViewsIndex`, `bindIndexActions`, `openEditById`, and `confirmDelete` are removed.",
+            agents,
+        )
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)
