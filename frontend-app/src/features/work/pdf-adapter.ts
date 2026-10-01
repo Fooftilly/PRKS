@@ -33,6 +33,8 @@ export interface WorkPdfRuntime {
   readAnnotationDrawer?: () => WorkPdfAnnotationDrawerRead
   annotationDrawerStill?: (ticket: WorkPdfAnnotationDrawerCapture) => boolean
   closeAnnotationDrawer?: () => boolean
+  setAnnotationDrawerPinned?: (pinned: boolean) => boolean
+  setAnnotationDrawerWidth?: (width: number, options?: { persist?: boolean }) => boolean
 }
 
 export interface WorkPdfOwner {
@@ -96,6 +98,8 @@ export interface WorkPdfAnnotationDrawerItem {
   metadataLabels: string[]
 }
 
+export type WorkPdfAnnotationDrawerPlacement = 'closed' | 'overlay' | 'pinned' | 'sheet'
+
 export interface WorkPdfAnnotationDrawerRead {
   open: boolean
   epoch: number
@@ -104,6 +108,15 @@ export interface WorkPdfAnnotationDrawerRead {
   status: string
   published: boolean
   items: WorkPdfAnnotationDrawerItem[]
+  pinned: boolean
+  width: number
+  layoutWidth: number
+  minWidth: number
+  maxWidth: number
+  interactionMax: number
+  defaultWidth: number
+  placement: WorkPdfAnnotationDrawerPlacement
+  pinEnabled: boolean
 }
 
 /** Generation, epoch, and viewer token captured with a drawer intent. */
@@ -393,6 +406,21 @@ const EMPTY_ANNOTATION_DRAWER: WorkPdfAnnotationDrawerRead = {
   status: '',
   published: false,
   items: [],
+  pinned: false,
+  width: 352,
+  layoutWidth: 352,
+  minWidth: 240,
+  maxWidth: 480,
+  interactionMax: 480,
+  defaultWidth: 352,
+  placement: 'closed',
+  pinEnabled: false,
+}
+
+function drawerPlacement(value: unknown, open: boolean): WorkPdfAnnotationDrawerPlacement {
+  if (!open) return 'closed'
+  if (value === 'pinned' || value === 'sheet' || value === 'overlay') return value
+  return 'overlay'
 }
 
 function drawerItem(value: unknown): WorkPdfAnnotationDrawerItem | null {
@@ -428,14 +456,34 @@ export function readWorkPdfAnnotationDrawer(
   const items = Array.isArray(read.items)
     ? read.items.map(drawerItem).filter((row): row is WorkPdfAnnotationDrawerItem => row != null)
     : []
+  const open = !!read.open
   return {
-    open: !!read.open,
+    open,
     epoch: typeof read.epoch === 'number' ? read.epoch : 0,
     viewerToken: typeof read.viewerToken === 'number' ? read.viewerToken : 0,
-    selectedId: read.open && read.selectedId != null ? String(read.selectedId) : '',
-    status: read.open && read.status != null ? String(read.status) : '',
-    published: !!(read.open && read.published),
-    items: read.open ? items : [],
+    selectedId: open && read.selectedId != null ? String(read.selectedId) : '',
+    status: open && read.status != null ? String(read.status) : '',
+    published: !!(open && read.published),
+    items: open ? items : [],
+    pinned: !!read.pinned,
+    width: typeof read.width === 'number' && Number.isFinite(read.width) ? read.width : 352,
+    layoutWidth:
+      typeof read.layoutWidth === 'number' && Number.isFinite(read.layoutWidth)
+        ? read.layoutWidth
+        : typeof read.width === 'number' && Number.isFinite(read.width)
+          ? read.width
+          : 352,
+    minWidth: typeof read.minWidth === 'number' ? read.minWidth : 240,
+    maxWidth: typeof read.maxWidth === 'number' ? read.maxWidth : 480,
+    interactionMax:
+      typeof read.interactionMax === 'number' && Number.isFinite(read.interactionMax)
+        ? read.interactionMax
+        : typeof read.maxWidth === 'number'
+          ? read.maxWidth
+          : 480,
+    defaultWidth: typeof read.defaultWidth === 'number' ? read.defaultWidth : 352,
+    placement: drawerPlacement(read.placement, open),
+    pinEnabled: !!read.pinEnabled,
   }
 }
 
@@ -461,6 +509,9 @@ type AnnotationDrawerWindow = PdfWindow & {
   ) => Promise<boolean> | boolean
   copyPdfAnnotationWikiLink?: (ctx: WorkPdfOwner, annId: string) => Promise<boolean> | boolean
   prksCloseAnnotationDrawer?: (ctx: WorkPdfOwner) => boolean
+  prksLayoutAnnotationDrawer?: (ctx: WorkPdfOwner) => boolean
+  prksPreviewAnnotationDrawerWidth?: (ctx: WorkPdfOwner, width: number) => boolean
+  prksRestoreAnnotationDrawerWidth?: (ctx: WorkPdfOwner) => boolean
 }
 
 export function intentCloseWorkPdfAnnotationDrawer(
@@ -519,6 +570,48 @@ export function intentCopyWorkPdfAnnotationLink(
   return Promise.resolve(copy(ctx, annId)).then((ok) => ok === true, () => false)
 }
 
+function layoutAnnotationDrawer(ctx: WorkPdfOwner): void {
+  const layout = (globalThis as AnnotationDrawerWindow).prksLayoutAnnotationDrawer
+  if (typeof layout === 'function') layout(ctx)
+}
+
+export function intentSetWorkPdfAnnotationDrawerPinned(
+  ctx: WorkPdfOwner | null | undefined,
+  pinned: boolean,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+): boolean {
+  const runtime = drawerRuntime(ctx, captured)
+  if (!runtime || !ctx || typeof runtime.setAnnotationDrawerPinned !== 'function') return false
+  if (runtime.setAnnotationDrawerPinned(pinned) !== true) return false
+  layoutAnnotationDrawer(ctx)
+  return true
+}
+
+export function intentResizeWorkPdfAnnotationDrawer(
+  ctx: WorkPdfOwner | null | undefined,
+  width: number,
+  captured: WorkPdfAnnotationDrawerCapture | null | undefined,
+  options?: { persist?: boolean; preview?: boolean; cancel?: boolean },
+): boolean {
+  const runtime = drawerRuntime(ctx, captured)
+  if (!runtime || !ctx || typeof runtime.setAnnotationDrawerWidth !== 'function') return false
+  if (!Number.isFinite(width)) return false
+  const bridge = globalThis as AnnotationDrawerWindow
+  if (options && options.cancel) {
+    const restore = bridge.prksRestoreAnnotationDrawerWidth
+    if (typeof restore !== 'function') return false
+    return restore(ctx) === true
+  }
+  if (options && options.preview) {
+    const preview = bridge.prksPreviewAnnotationDrawerWidth
+    if (typeof preview !== 'function') return false
+    return preview(ctx, width) === true
+  }
+  if (runtime.setAnnotationDrawerWidth(width, options) !== true) return false
+  layoutAnnotationDrawer(ctx)
+  return true
+}
+
 export function intentResizeWorkPdf(ctx: WorkPdfOwner | null | undefined): boolean {
   const runtime = runtimeOf(ctx)
   if (!runtime || runtime._destroyed || typeof runtime.resize !== 'function') return false
@@ -556,6 +649,8 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
     prksIntentEditWorkPdfAnnotationComment?: typeof intentEditWorkPdfAnnotationComment
     prksIntentDeleteWorkPdfAnnotation?: typeof intentDeleteWorkPdfAnnotation
     prksIntentCopyWorkPdfAnnotationLink?: typeof intentCopyWorkPdfAnnotationLink
+    prksIntentSetWorkPdfAnnotationDrawerPinned?: typeof intentSetWorkPdfAnnotationDrawerPinned
+    prksIntentResizeWorkPdfAnnotationDrawer?: typeof intentResizeWorkPdfAnnotationDrawer
   }
   target.prksReadWorkPdf = readWorkPdf
   target.prksIntentMountWorkPdf = intentMountWorkPdf
@@ -578,4 +673,6 @@ export function registerWorkPdfAdapterBridge(root: Window & typeof globalThis): 
   target.prksIntentEditWorkPdfAnnotationComment = intentEditWorkPdfAnnotationComment
   target.prksIntentDeleteWorkPdfAnnotation = intentDeleteWorkPdfAnnotation
   target.prksIntentCopyWorkPdfAnnotationLink = intentCopyWorkPdfAnnotationLink
+  target.prksIntentSetWorkPdfAnnotationDrawerPinned = intentSetWorkPdfAnnotationDrawerPinned
+  target.prksIntentResizeWorkPdfAnnotationDrawer = intentResizeWorkPdfAnnotationDrawer
 }

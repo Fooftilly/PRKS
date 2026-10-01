@@ -16,6 +16,15 @@ export interface AnnotationDrawerView {
   published: boolean
   items: WorkPdfAnnotationDrawerItem[]
   generation: number | null
+  pinned?: boolean
+  width?: number
+  layoutWidth?: number
+  minWidth?: number
+  maxWidth?: number
+  interactionMax?: number
+  defaultWidth?: number
+  placement?: 'closed' | 'overlay' | 'pinned' | 'sheet'
+  pinEnabled?: boolean
 }
 
 const props = defineProps<{
@@ -32,10 +41,17 @@ const props = defineProps<{
     annId: string,
     ticket: { generation: number; epoch: number; viewerToken: number },
   ) => Promise<boolean>
+  onPin?: (pinned: boolean, ticket: { generation: number; epoch: number; viewerToken: number }) => void
+  onResize?: (
+    width: number,
+    ticket: { generation: number; epoch: number; viewerToken: number },
+    options: { persist: boolean; preview?: boolean; cancel?: boolean },
+  ) => void
 }>()
 
 const panelRef = ref<HTMLElement | null>(null)
 const closeRef = ref<HTMLButtonElement | null>(null)
+const resizeRef = ref<HTMLElement | null>(null)
 const wasOpen = ref(false)
 let opener: HTMLElement | null = null
 let focusRestored = false
@@ -46,6 +62,94 @@ function ticket() {
     epoch: props.state.epoch,
     viewerToken: props.state.viewerToken,
   }
+}
+
+function displayedWidth() {
+  const layout = props.state.layoutWidth
+  if (typeof layout === 'number' && Number.isFinite(layout)) return layout
+  return props.state.width || props.state.defaultWidth || 352
+}
+
+function interactionMax() {
+  const max = props.state.interactionMax
+  if (typeof max === 'number' && Number.isFinite(max)) return max
+  return props.state.maxWidth || 480
+}
+
+function actuallyPinned() {
+  return props.state.placement === 'pinned'
+}
+
+function pinDrawer() {
+  const pinnedNow = actuallyPinned()
+  if (!pinnedNow && !props.state.pinEnabled) return
+  const captured = ticket()
+  props.onPin?.(!pinnedNow, captured)
+}
+
+interface DrawerWidthTicket {
+  generation: number
+  epoch: number
+  viewerToken: number
+}
+
+type DrawerWidthBinding = {
+  release: () => void
+  refresh: () => void
+}
+
+let drawerWidthBinding: DrawerWidthBinding | null = null
+
+function clearDrawerWidth() {
+  if (!drawerWidthBinding) return
+  const release = drawerWidthBinding.release
+  drawerWidthBinding = null
+  release()
+}
+
+function refreshDrawerWidth() {
+  drawerWidthBinding?.refresh()
+}
+
+function bindDrawerWidth(el: unknown) {
+  clearDrawerWidth()
+  if (!(el instanceof HTMLElement)) return
+  const bind = (
+    window as Window & {
+      prksBindDrawerWidthSeparator?: (
+        element: HTMLElement,
+        cfg: {
+          getWidth: () => number
+          getMin: () => number
+          getMax: () => number
+          getDefault: () => number
+          capture: () => DrawerWidthTicket
+          onPreview: (width: number, captured: DrawerWidthTicket) => void
+          onCommit: (width: number, captured: DrawerWidthTicket) => void
+          onCancel: (width: number, captured: DrawerWidthTicket) => void
+        },
+      ) => DrawerWidthBinding
+    }
+  ).prksBindDrawerWidthSeparator
+  if (typeof bind !== 'function') return
+  const binding = bind(el, {
+    getWidth: () => displayedWidth(),
+    getMin: () => props.state.minWidth || 240,
+    getMax: () => interactionMax(),
+    getDefault: () => props.state.defaultWidth || 352,
+    capture: () => ticket(),
+    onPreview: (width, captured) => {
+      props.onResize?.(width, captured, { persist: false, preview: true })
+    },
+    onCommit: (width, captured) => {
+      props.onResize?.(width, captured, { persist: true })
+    },
+    onCancel: (width, captured) => {
+      props.onResize?.(width, captured, { persist: false, cancel: true })
+    },
+  })
+  if (!binding || typeof binding.release !== 'function' || typeof binding.refresh !== 'function') return
+  drawerWidthBinding = binding
 }
 
 function viewerHost(): HTMLElement | null {
@@ -143,7 +247,24 @@ watch(
   { immediate: true },
 )
 
+watch(resizeRef, (el) => {
+  bindDrawerWidth(el)
+}, { flush: 'post' })
+
+watch(
+  () => [
+    props.state.layoutWidth,
+    props.state.interactionMax,
+    props.state.minWidth,
+    props.state.maxWidth,
+  ],
+  () => {
+    refreshDrawerWidth()
+  },
+)
+
 onBeforeUnmount(() => {
+  clearDrawerWidth()
   document.removeEventListener('keydown', onDocumentKeydown)
   if (wasOpen.value) restoreOpener()
 })
@@ -154,17 +275,33 @@ onBeforeUnmount(() => {
     v-if="state.open"
     ref="panelRef"
     class="pdf-annotation-drawer"
-    role="dialog"
+    :role="state.placement === 'pinned' ? 'complementary' : 'dialog'"
     aria-label="PDF annotations"
     data-prks-role="pdf-annotation-drawer"
     data-no-interaction=""
     :data-prks-owner-tab-id="tabId"
     :data-prks-drawer-epoch="state.epoch"
+    :data-prks-drawer-placement="state.placement || 'overlay'"
     :data-prks-list-published="state.published ? 'true' : 'false'"
     @pointerdown.stop
   >
+    <div
+      v-if="state.placement !== 'sheet'"
+      ref="resizeRef"
+      class="pdf-annotation-drawer__resize"
+    />
     <header class="pdf-annotation-drawer__header">
       <h3 class="pdf-annotation-drawer__title">Annotations</h3>
+      <button
+        type="button"
+        class="prks-btn prks-btn--secondary prks-btn--sm"
+        :aria-pressed="actuallyPinned() ? 'true' : 'false'"
+        :disabled="!actuallyPinned() && !state.pinEnabled"
+        :title="actuallyPinned() ? 'Unpin annotations' : (state.pinEnabled ? 'Pin annotations' : 'Pin needs a wider pane')"
+        @click="pinDrawer()"
+      >
+        {{ actuallyPinned() ? 'Unpin' : 'Pin' }}
+      </button>
       <button
         ref="closeRef"
         type="button"

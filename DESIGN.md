@@ -678,7 +678,7 @@ Do not add a third in-pane title row. Right-panel Details may still show the Tit
 
 **PDF viewer in tiles:** Inside a tiled Work pane, the viewer must honor the pane’s height (`min-height: 0` on `.prks-pdf-viewer`). A large vendor min-height must not force Secondary panes to clip or waste chrome.
 
-**Annotation drawer (overlay):** The PDF toolbar Annotations control opens a list over the PDF pane. The overlay is absolutely positioned inside `.work-pdf-pane` and does not change the viewer’s width, zoom, or reading position, and does not recreate the viewer. Work Details stays the metadata panel. While that tiled panel is open, the toolbar control stays at the start of Secondary PDF toolbars so it remains in the part of the pane the panel does not cover. Pin and resize are not part of this overlay.
+**Annotation drawer:** The PDF toolbar Annotations control opens the list on the PDF pane. Work Details stays the metadata panel. While that tiled panel is open, the toolbar control stays at the start of Secondary PDF toolbars so it remains in the part of the pane the panel does not cover. Overlay is absolutely positioned inside `.work-pdf-pane` and does not change the viewer’s width, zoom, or reading position, and does not recreate the viewer. Pin, on a wide pane, places the list in the pane’s row so the viewer box actually narrows; Fit Width and Fit Page recompute from that box, and an explicit zoom percentage stays. The list width is resizable and remembered on this device. A narrow pane stays overlay. A phone-width window, or Force mobile layout, uses a full-pane sheet. Pin and unpin do not recreate the viewer.
 
 ### Research Notes presentation
 

@@ -10,6 +10,8 @@ import {
   intentDeleteWorkPdfAnnotation,
   intentEditWorkPdfAnnotationComment,
   intentJumpWorkPdfAnnotation,
+  intentResizeWorkPdfAnnotationDrawer,
+  intentSetWorkPdfAnnotationDrawerPinned,
   readWorkPdfAnnotationDrawer,
   type WorkPdfAnnotationDrawerCapture,
 } from './pdf-adapter'
@@ -43,6 +45,15 @@ function emptyView(): AnnotationDrawerView {
     published: false,
     items: [],
     generation: null,
+    pinned: false,
+    width: 352,
+    layoutWidth: 352,
+    minWidth: 240,
+    maxWidth: 480,
+    interactionMax: 480,
+    defaultWidth: 352,
+    placement: 'closed',
+    pinEnabled: false,
   }
 }
 
@@ -92,6 +103,15 @@ function applyRead(state: AnnotationDrawerView, ctx: AnnotationDrawerOwner): voi
   state.published = read.published
   state.items = read.items.map((item) => ({ ...item, metadataLabels: item.metadataLabels.slice() }))
   state.generation = typeof ctx.generation === 'number' ? ctx.generation : null
+  state.pinned = read.pinned
+  state.width = read.width
+  state.layoutWidth = read.layoutWidth
+  state.minWidth = read.minWidth
+  state.maxWidth = read.maxWidth
+  state.interactionMax = read.interactionMax
+  state.defaultWidth = read.defaultWidth
+  state.placement = read.placement
+  state.pinEnabled = read.pinEnabled
 }
 
 export function syncWorkPdfAnnotationDrawer(ctx: AnnotationDrawerOwner | null | undefined): boolean {
@@ -140,6 +160,14 @@ export function syncWorkPdfAnnotationDrawer(ctx: AnnotationDrawerOwner | null | 
           const owner = owners.get(tabId)
           if (!owner) return Promise.resolve(false)
           return intentCopyWorkPdfAnnotationLink(owner, annId, ticket())
+        },
+        onPin: (pinned: boolean, captured: WorkPdfAnnotationDrawerCapture) => {
+          const owner = owners.get(tabId)
+          if (owner) intentSetWorkPdfAnnotationDrawerPinned(owner, pinned, captured)
+        },
+        onResize: (width: number, captured: WorkPdfAnnotationDrawerCapture, options) => {
+          const owner = owners.get(tabId)
+          if (owner) intentResizeWorkPdfAnnotationDrawer(owner, width, captured, options)
         },
       }),
       host,

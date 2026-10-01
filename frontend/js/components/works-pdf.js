@@ -513,6 +513,87 @@ function prksSyncAnnotationDrawer(ctx) {
     }
 }
 
+function prksAnnotationDrawerStorage() {
+    try {
+        if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
+    } catch (_e) {}
+    return null;
+}
+
+function prksAnnotationDrawerMetrics(pane) {
+    let paneWidth = 0;
+    if (pane && typeof pane.getBoundingClientRect === 'function') {
+        const rect = pane.getBoundingClientRect();
+        paneWidth = rect && Number(rect.width) > 0 ? Number(rect.width) : 0;
+    }
+    let mobile = false;
+    try {
+        const root = typeof document !== 'undefined' ? document.documentElement : null;
+        if (root && root.classList && root.classList.contains('prks-force-mobile')) mobile = true;
+        else if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches) {
+            mobile = true;
+        }
+    } catch (_e) {}
+    return { paneWidth: paneWidth, mobile: mobile };
+}
+
+/**
+ * Pinned layout changes the viewer box and asks that viewer to resize.
+ * Fit Width and Fit Page then recompute from the new viewport. An explicit
+ * percentage is left alone. Pin, unpin, and width changes do not create a
+ * viewer or change viewerSetupToken.
+ */
+function prksLayoutAnnotationDrawer(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.readAnnotationDrawer !== 'function') return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    if (pane && typeof pdf.noteAnnotationDrawerFrame === 'function') {
+        pdf.noteAnnotationDrawerFrame(prksAnnotationDrawerMetrics(pane));
+    }
+    const effect = typeof pdf.annotationDrawerLayoutEffect === 'function'
+        ? pdf.annotationDrawerLayoutEffect()
+        : { read: pdf.readAnnotationDrawer(), resized: false };
+    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+        window.prksApplyPdfAnnotationDrawerChrome(pane, effect.read);
+    }
+    if (effect.resized) {
+        const viewer = pdf.viewer;
+        const token = pdf.viewerSetupToken;
+        const zoomLayout = viewer && typeof viewer.getZoomLayout === 'function' ? viewer.getZoomLayout() : null;
+        const zoomAction = typeof window.prksPdfAnnotationDrawerZoomAction === 'function'
+            ? window.prksPdfAnnotationDrawerZoomAction(zoomLayout)
+            : 'follow-container';
+        // preserve: keep the explicit percentage. recompute / follow-container:
+        // the smaller or larger viewer box is the recompute. EmbedPDF refits
+        // Fit Width and Fit Page from that box and does not change a number.
+        if (zoomAction === 'preserve' || zoomAction === 'recompute' || zoomAction === 'follow-container') {
+            if (typeof pdf.resize === 'function') pdf.resize();
+        }
+        if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    }
+    prksSyncAnnotationDrawer(owner);
+    return true;
+}
+window.prksLayoutAnnotationDrawer = prksLayoutAnnotationDrawer;
+
+function prksWatchAnnotationDrawerPane(ctx, runtime, generation) {
+    if (!runtime || runtime._drawerPaneObserver) return;
+    const pane = ctx && typeof ctx.query === 'function' ? ctx.query('.work-pdf-pane') : null;
+    if (!pane || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(function () {
+        if (!runtime || runtime._destroyed) return;
+        if (typeof ctx.isCurrent === 'function' && !ctx.isCurrent(generation)) return;
+        prksLayoutAnnotationDrawer(ctx);
+    });
+    try {
+        observer.observe(pane);
+    } catch (_e) {
+        return;
+    }
+    runtime._drawerPaneObserver = observer;
+}
+
 function prksOpenAnnotationDrawer(ctx) {
     const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);
@@ -521,7 +602,7 @@ function prksOpenAnnotationDrawer(ctx) {
     const token = pdf.viewerSetupToken;
     pdf.openAnnotationDrawer();
     if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
-    prksSyncAnnotationDrawer(owner);
+    prksLayoutAnnotationDrawer(owner);
     return true;
 }
 window.prksOpenAnnotationDrawer = prksOpenAnnotationDrawer;
@@ -535,7 +616,7 @@ function prksCloseAnnotationDrawer(ctx) {
     const closed = pdf.closeAnnotationDrawer();
     if (!closed) return false;
     if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
-    prksSyncAnnotationDrawer(owner);
+    prksLayoutAnnotationDrawer(owner);
     return true;
 }
 window.prksCloseAnnotationDrawer = prksCloseAnnotationDrawer;
@@ -548,10 +629,73 @@ function prksToggleAnnotationDrawer(ctx) {
     const token = pdf.viewerSetupToken;
     const toggled = pdf.toggleAnnotationDrawer();
     if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
-    prksSyncAnnotationDrawer(owner);
+    prksLayoutAnnotationDrawer(owner);
     return !!toggled;
 }
+
+function prksSetAnnotationDrawerPinned(ctx, pinned) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.setAnnotationDrawerPinned !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    if (pdf.setAnnotationDrawerPinned(pinned) !== true) return false;
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return pdf.viewer === viewer && pdf.viewerSetupToken === token;
+}
+window.prksSetAnnotationDrawerPinned = prksSetAnnotationDrawerPinned;
+
+function prksSetAnnotationDrawerWidth(ctx, width, opts) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.setAnnotationDrawerWidth !== 'function') return false;
+    const viewer = pdf.viewer;
+    const token = pdf.viewerSetupToken;
+    if (pdf.setAnnotationDrawerWidth(width, opts) !== true) return false;
+    if (pdf.viewer !== viewer || pdf.viewerSetupToken !== token) return false;
+    prksLayoutAnnotationDrawer(owner);
+    return pdf.viewer === viewer && pdf.viewerSetupToken === token;
+}
+window.prksSetAnnotationDrawerWidth = prksSetAnnotationDrawerWidth;
 window.prksToggleAnnotationDrawer = prksToggleAnnotationDrawer;
+
+/**
+ * Drag preview. Sets the painted width and, when pinned, resizes the viewer.
+ * Does not write the runtime preference and does not republish the list.
+ * The gesture commits that preference once, on pointerup.
+ */
+function prksPreviewAnnotationDrawerWidth(ctx, width) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || !Number.isFinite(Number(width))) return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    const painted = typeof pdf.annotationDrawerLayoutWidth === 'function'
+        ? pdf.annotationDrawerLayoutWidth(width)
+        : width;
+    if (pane && pane.style && typeof pane.style.setProperty === 'function') {
+        pane.style.setProperty('--pdf-annotation-drawer-width', Math.round(painted) + 'px');
+    }
+    const read = typeof pdf.readAnnotationDrawer === 'function' ? pdf.readAnnotationDrawer() : null;
+    if (read && read.placement === 'pinned' && typeof pdf.resize === 'function') pdf.resize();
+    return true;
+}
+window.prksPreviewAnnotationDrawerWidth = prksPreviewAnnotationDrawerWidth;
+
+/** Cancelled drag. Restores the runtime's painted width without persisting. */
+function prksRestoreAnnotationDrawerWidth(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.readAnnotationDrawer !== 'function') return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    const read = pdf.readAnnotationDrawer();
+    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+        window.prksApplyPdfAnnotationDrawerChrome(pane, read);
+    }
+    if (read && read.placement === 'pinned' && typeof pdf.resize === 'function') pdf.resize();
+    return true;
+}
+window.prksRestoreAnnotationDrawerWidth = prksRestoreAnnotationDrawerWidth;
 
 function prksDrawerAnnotationItem(pdf, annId) {
     const items = pdf && pdf.annotationCache && Array.isArray(pdf.annotationCache.items)
@@ -3648,7 +3792,10 @@ export function initPdfViewerForWork(ctx, work) {
         targetNode.innerHTML = '';
         const runtime =
             typeof createWorkPdfRuntime === 'function'
-                ? createWorkPdfRuntime({ workId: String(work.id) })
+                ? createWorkPdfRuntime({
+                      workId: String(work.id),
+                      drawerStorage: prksAnnotationDrawerStorage(),
+                  })
                 : {
                       viewer: null,
                       workId: String(work.id),
@@ -3666,7 +3813,11 @@ export function initPdfViewerForWork(ctx, work) {
         runtime.work = work;
         runtime.filePath = work.file_path || '';
         ctx.setResource('pdf', runtime, function () {
+            const pane = typeof ctx.query === 'function' ? ctx.query('.work-pdf-pane') : null;
             runtime.destroy();
+            if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+                window.prksApplyPdfAnnotationDrawerChrome(pane, { placement: 'closed' });
+            }
             if (typeof window.prksVueDismissWorkPdfAnnotationPopup === 'function') {
                 window.prksVueDismissWorkPdfAnnotationPopup(ctx);
             }
@@ -3677,6 +3828,8 @@ export function initPdfViewerForWork(ctx, work) {
         if (typeof bindPdfSurfaceSearch === 'function') {
             bindPdfSurfaceSearch(ctx, runtime, targetNode, _pdfGen);
         }
+        prksWatchAnnotationDrawerPane(ctx, runtime, _pdfGen);
+        prksLayoutAnnotationDrawer(ctx);
         // Prime the service worker's whole-file PDF cache in the background (AGENTS.md
         // "PDF offline support"). The viewer itself loads progressively via Range
         // requests, which never populate that cache -- this plain GET is what lets a
