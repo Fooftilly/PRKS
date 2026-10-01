@@ -6512,7 +6512,8 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
     inset: 0;
     overflow: visible;
     pointer-events: none;
-    z-index: 3;
+    /* Above the PDF toolbar (--z-toolbar: 100) and below the comment popup. */
+    z-index: var(--z-overlay);
 }
 
 .pdf-annotation-drawer {

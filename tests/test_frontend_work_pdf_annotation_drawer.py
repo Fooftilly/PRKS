@@ -124,6 +124,11 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         )
         self.assertIsNotNone(drawer)
         self.assertIn("width: min(var(--pdf-annotation-drawer-width, 22rem), 100%);", drawer.group(1))
+        drawer_host = css[
+            css.index('.document-view--work [data-prks-role="pdf-annotation-drawer-host"]') :
+            css.index(".pdf-annotation-drawer {")
+        ]
+        self.assertIn("z-index: var(--z-overlay);", drawer_host)
         host_at = css.index('.document-view--work [data-prks-role="pdf-annotation-popup-host"]')
         popup_at = css.index(".pdf-annotation-popup {", host_at)
         host = css[host_at:popup_at]
