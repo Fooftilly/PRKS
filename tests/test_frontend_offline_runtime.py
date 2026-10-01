@@ -1455,8 +1455,12 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         with self.subTest(module="features/progress/legacy-work-card.ts"):
             self.assertIn("offlineCached", progress)
             self.assertIn("suppressThumbnail", progress)
-        for name, fn in (("components/search.js", "function renderRecent("),
-                         ("components/types.js", "function renderWorksByDocType(")):
+        recent = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "legacy-work-card.ts"))
+        with self.subTest(module="features/recent/legacy-work-card.ts"):
+            self.assertIn("offlineCached", recent)
+            self.assertIn("suppressThumbnail", recent)
+        for name, fn in (("components/types.js", "function renderWorksByDocType("),):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
                 body = _fn_body(src, fn)

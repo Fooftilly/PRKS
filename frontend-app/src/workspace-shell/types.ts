@@ -97,7 +97,7 @@ declare global {
     ) => void
     prksSyncDenseWorkspaceShell?: (visualTiled: boolean) => void
     prksRouteSupportsTile?: (route: string) => boolean
-    prksIcon?: (name: string, options?: { size?: string; className?: string }) => string
+    prksIcon?: (name: string, options?: { size?: string | number; className?: string }) => string
     __prksWorkspaceShellOwned?: boolean
   }
 }

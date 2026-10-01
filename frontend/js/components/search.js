@@ -4,39 +4,6 @@ function searchEscapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function renderRecent(works, container, options = {}) {
-    const offlineCached = !!(options && options.offlineCached);
-    const browseClass =
-        typeof prksWorkBrowseCollectionClass === 'function'
-            ? prksWorkBrowseCollectionClass()
-            : 'card-grid';
-    const modeToggle =
-        typeof prksWorkBrowseModeToggleHtml === 'function'
-            ? prksWorkBrowseModeToggleHtml('prks-work-browse-mode-recent')
-            : '';
-    let html =
-        `<div class="prks-page-header page-header page-header--split">` +
-        `<div class="page-header__title-row">` +
-        `<h2 class="prks-page-title">${typeof prksPageHeaderIconHtml === 'function' ? prksPageHeaderIconHtml('clock') : ''} Recently Opened</h2>` +
-        `${modeToggle}</div></div>` +
-        `<div class="${browseClass}">`;
-    if (works && works.length > 0) {
-        works.forEach(w => {
-            let dateStr = w.last_opened_at ? new Date(w.last_opened_at).toLocaleString() : 'Unknown';
-            const subtitle = `Last opened: ${dateStr}`;
-            html += typeof prksWorkCardHtml === 'function'
-                ? prksWorkCardHtml(w, offlineCached ? { subtitle, suppressThumbnail: true } : { subtitle })
-                : '';
-        });
-    } else {
-        html += '<p class="prks-inline-message">No recently opened documents found.</p>';
-    }
-    html += `</div>`;
-    container.innerHTML = html;
-    if (typeof prksBindWorkBrowseMode === 'function') prksBindWorkBrowseMode(container);
-    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(container);
-}
-
 function prksRunSearchFromForm() {
     const anyIn = document.getElementById('search-any-input');
     if (anyIn) {

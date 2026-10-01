@@ -466,7 +466,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         surface happens to read the queue, which is worse than being wrong
         consistently."""
         app = (FRONTEND / 'app.js').read_text()
-        for call in ('renderFolderDetails(ctx, folder, contentDiv',
+        for call in ('preserveWorkspace: sameFolderWorkspace',
                      'renderPlaylistDetail(ctx, pl, contentDiv',
                      'renderPersonDetails(ctx, person, contentDiv'):
             with self.subTest(call=call):
@@ -486,6 +486,16 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
             'features/progress': '\n'.join(
                 path.read_text()
                 for path in sorted((ROOT / 'frontend-app' / 'src' / 'features' / 'progress').iterdir())
+                if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name
+            ),
+            'features/folder-detail': '\n'.join(
+                path.read_text()
+                for path in sorted((ROOT / 'frontend-app' / 'src' / 'features' / 'folder-detail').rglob('*'))
+                if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name
+            ),
+            'features/recent': '\n'.join(
+                path.read_text()
+                for path in sorted((ROOT / 'frontend-app' / 'src' / 'features' / 'recent').rglob('*'))
                 if path.suffix in {'.ts', '.vue'} and '.test.' not in path.name
             ),
         }
