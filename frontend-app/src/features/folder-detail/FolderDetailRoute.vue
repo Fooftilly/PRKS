@@ -93,6 +93,15 @@ function paintCollection(): void {
   window.prksRefreshIcons?.(rootEl.value)
 }
 
+function rebindHierarchyNav(): void {
+  const root = rootEl.value
+  const current = folder.value
+  if (!root || !current || !ready.value) return
+  // v-html replaced the band. Remount listeners only. Tree refresh stays on
+  // the route generation inside commitSurface.
+  window.prksMountFolderHierarchyNav?.(intents?.owner() ?? null, current.source, root)
+}
+
 function commitSurface(): void {
   const root = rootEl.value
   const current = folder.value
@@ -127,11 +136,17 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () =>
-    `${props.projection.generation}:${folder.value?.id || ''}:${props.projection.preserveWorkspace ? '1' : '0'}:${props.projection.availability}`,
-  () => {
+  () => ({
+    key: `${props.projection.generation}:${folder.value?.id || ''}:${props.projection.preserveWorkspace ? '1' : '0'}:${props.projection.availability}`,
+    nav: navHtml.value,
+  }),
+  (current, previous) => {
     paintMode()
-    commitSurface()
+    if (current.key !== previous.key) {
+      commitSurface()
+      return
+    }
+    if (current.nav !== previous.nav) rebindHierarchyNav()
   },
   { flush: 'post' },
 )

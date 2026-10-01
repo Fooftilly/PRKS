@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { recentWorkCardHtml } from './legacy-work-card'
 import { recentOpenedSubtitle, type RecentProjection } from './projection'
 
@@ -36,16 +36,41 @@ function paintMode(): void {
   window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
+function releaseOwnedThumbResources(root: ParentNode | null): void {
+  if (!root) return
+  // Scoped only. Another pane may own the preview or its own lazy thumbs.
+  if (typeof window.prksReleaseWorkThumbPreview === 'function') {
+    window.prksReleaseWorkThumbPreview(root)
+  }
+  if (typeof window.prksReleaseLazyWorkThumbs === 'function') {
+    window.prksReleaseLazyWorkThumbs(root)
+  }
+}
+
 function paintCollection(): void {
+  const root = rootEl.value
+  // Release while the previous cards are still inside this Recent root.
+  // beginRoute removes the subtree before app.js can release on contentDiv.
+  releaseOwnedThumbResources(root || collectionEl.value)
   const el = collectionEl.value
   if (!el) return
   el.innerHTML = collectionHtml.value
-  window.prksRefreshIcons?.(rootEl.value)
+  const offlineCached = props.projection.offlineCached
+  if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
+    window.prksInitLazyWorkThumbs(el)
+  }
+  window.prksRefreshIcons?.(root)
 }
 
 onMounted(() => {
   paintMode()
   paintCollection()
+})
+
+onBeforeUnmount(() => {
+  // beginRoute dismisses this tree before app.js calls prksReleaseWorkThumbPreview
+  // and prksReleaseLazyWorkThumbs(contentDiv). Both only see thumbs still under this root.
+  releaseOwnedThumbResources(rootEl.value || collectionEl.value)
 })
 
 watch(

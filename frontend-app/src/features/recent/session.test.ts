@@ -12,6 +12,10 @@ afterEach(() => {
   delete window.prksWorkCardHtml
   delete window.prksWorkBrowseModeToggleHtml
   delete window.prksPageHeaderIconHtml
+  delete window.prksReleaseWorkThumbPreview
+  delete window.prksReleaseLazyWorkThumbs
+  delete window.prksInitLazyWorkThumbs
+  delete (window as Window & { __prksWorkThumbPreviewSource?: unknown }).__prksWorkThumbPreviewSource
   delete (window as Window & { prksSyncSidebarActive?: unknown }).prksSyncSidebarActive
 })
 
@@ -145,5 +149,75 @@ describe('Recent route bridge', () => {
     window.prksVueDismissRecent?.(main)
     expect(mainHost.querySelector('[data-prks-recent-view]')).toBeNull()
     expect(secondaryHost.querySelector('[data-work-id="side"]')).not.toBeNull()
+  })
+
+  it('releases preview and lazy thumbs while they are still under the Recent root', async () => {
+    window.prksWorkCardHtml = (work, options) => {
+      const thumb = options?.suppressThumbnail
+        ? ''
+        : `<img data-prks-thumb-lazy data-for="${String(work.id)}">`
+      return `<div data-work-id="${String(work.id)}">${thumb}</div>`
+    }
+    const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
+    const releaseLog: Array<{ id: string | null; connected: boolean; underRecent: boolean }> = []
+    window.prksReleaseWorkThumbPreview = (root) => {
+      const src = preview.__prksWorkThumbPreviewSource
+      if (!src || !root || typeof root.contains !== 'function' || !root.contains(src)) return
+      preview.__prksWorkThumbPreviewSource = null
+    }
+    window.prksReleaseLazyWorkThumbs = (root) => {
+      const img = root?.querySelector?.('img[data-prks-thumb-lazy]') ?? null
+      if (!img || !root || typeof root.contains !== 'function' || !root.contains(img)) return
+      releaseLog.push({
+        id: img.getAttribute('data-for'),
+        connected: img.isConnected,
+        underRecent: !!img.closest('[data-prks-recent-view]'),
+      })
+    }
+    const inits: string[] = []
+    window.prksInitLazyWorkThumbs = (root) => {
+      inits.push(root?.querySelector?.('[data-work-id]')?.getAttribute('data-work-id') || '')
+    }
+    const pane = owner()
+    const el = host()
+    presentRecent({
+      owner: pane,
+      host: el,
+      rows: [{ id: 'a' }],
+      offlineCached: false,
+      generation: 1,
+    })
+    const first = el.querySelector('img[data-prks-thumb-lazy]')
+    expect(first?.getAttribute('data-for')).toBe('a')
+    expect(inits).toEqual(['a'])
+    preview.__prksWorkThumbPreviewSource = first
+    presentRecent({
+      owner: pane,
+      host: el,
+      rows: [{ id: 'b' }],
+      offlineCached: false,
+      generation: 1,
+    })
+    await nextTick()
+    expect(releaseLog).toContainEqual({ id: 'a', connected: true, underRecent: true })
+    expect(preview.__prksWorkThumbPreviewSource).toBeNull()
+    expect(el.querySelector('[data-work-id="b"]')).not.toBeNull()
+    expect(el.querySelector('[data-work-id="a"]')).toBeNull()
+    expect(inits).toEqual(['a', 'b'])
+    const live = el.querySelector('img[data-prks-thumb-lazy]')
+    preview.__prksWorkThumbPreviewSource = live
+    dismissRecent(pane)
+    expect(releaseLog).toContainEqual({ id: 'b', connected: true, underRecent: true })
+    expect(preview.__prksWorkThumbPreviewSource).toBeNull()
+    expect(el.querySelector('[data-prks-recent-view]')).toBeNull()
+    presentRecent({
+      owner: pane,
+      host: el,
+      rows: [{ id: 'c' }],
+      offlineCached: true,
+      generation: 2,
+    })
+    expect(inits).toEqual(['a', 'b'])
+    expect(el.querySelector('[data-work-id="c"]')?.querySelector('img')).toBeNull()
   })
 })

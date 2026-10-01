@@ -251,6 +251,7 @@ interface Window {
     container: HTMLElement,
     options?: { preserveFolderWorkspace?: boolean },
   ) => void
+  prksMountFolderHierarchyNav?: (ctx: unknown, folder: unknown, container: ParentNode | null) => void
   prksDeleteFolderFromDetail?: (folderId: string, still?: () => boolean) => Promise<void>
   prksOpenNewFolderFromDetail?: (folder: Record<string, unknown>) => void
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void

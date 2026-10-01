@@ -21,6 +21,7 @@ afterEach(() => {
   delete window.prksOpenNewFolderFromDetail
   delete window.prksFolderDetailSummaryHtml
   delete window.prksFolderDetailNavHtml
+  delete window.prksMountFolderHierarchyNav
   delete window.prksFolderDetailSubfoldersHtml
   delete window.prksReleaseWorkThumbPreview
   delete window.prksReleaseLazyWorkThumbs
@@ -210,6 +211,54 @@ describe('Folder detail route bridge', () => {
     expect(opened).toEqual(['Empty'])
     expect(deleted).toEqual(['f1'])
     expect(el.textContent).toContain('No description provided.')
+  })
+
+  it('rebinds hierarchy nav when its projection changes inside the same generation', async () => {
+    let nav = '<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">one</nav>'
+    window.prksFolderDetailNavHtml = () => nav
+    const commits: string[] = []
+    const mounts: string[] = []
+    window.prksCommitFolderDetailSurface = () => {
+      commits.push('commit')
+    }
+    window.prksMountFolderHierarchyNav = (_ctx, _folder, container) => {
+      mounts.push(container?.querySelector?.('[data-prks-role="folder-hierarchy-nav"]')?.textContent || '')
+    }
+    window.prksWorkCardHtml = () => ''
+    const pane = owner()
+    const el = host()
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f1', title: 'First', works: [], children: [] },
+      generation: 4,
+    })
+    expect(commits).toEqual(['commit'])
+    expect(mounts).toEqual([])
+    expect(el.querySelector('[data-prks-role="folder-hierarchy-nav"]')?.textContent).toBe('one')
+    nav = '<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">two</nav>'
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f1', title: 'First', works: [], children: [] },
+      preserveWorkspace: false,
+      generation: 4,
+    })
+    await nextTick()
+    expect(el.querySelector('[data-prks-role="folder-hierarchy-nav"]')?.textContent).toBe('two')
+    expect(mounts).toEqual(['two'])
+    expect(commits).toEqual(['commit'])
+    nav = '<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">three</nav>'
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f1', title: 'Renamed', works: [], children: [] },
+      generation: 5,
+    })
+    await nextTick()
+    expect(commits).toEqual(['commit', 'commit'])
+    expect(mounts).toEqual(['two'])
+    expect(el.querySelector('[data-prks-role="folder-hierarchy-nav"]')?.textContent).toBe('three')
   })
 
   it('paints not-found without the hierarchy shell', () => {
