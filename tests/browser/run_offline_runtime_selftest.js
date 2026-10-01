@@ -338,9 +338,10 @@ async function run() {
             await store.getList('works-browse:index'), null);
     }
     /* A list read that starts during the current sweep still publishes once
-     * that sweep's delete has committed. Showing Recent after an open hits
-     * this: the open blocks recent:index, the page fetches, and the write
-     * used to be dropped for the whole blocked window. */
+     * that sweep's delete has committed, but the server value returns first.
+     * Showing Recent after an open hits this: the open blocks recent:index,
+     * the page fetches, and the write used to be dropped for the whole
+     * blocked window. Paint must not wait on the delete. */
     {
         const store = makeFakeStore();
         let releaseDelete = null;
@@ -363,13 +364,14 @@ async function run() {
             navigator: null,
         });
         runtime.markDomainChanged('recent', { entityKinds: [], listKeys: ['recent:index'] });
-        const reading = runtime.readThroughList('recent:index', '/api/recent', { domain: 'recent' });
-        await Promise.resolve();
-        await Promise.resolve();
+        const result = await runtime.readThroughList('recent:index', '/api/recent', { domain: 'recent' });
+        assertEq('an in-sweep Recent read returns server data before the delete', result.source, 'server');
         assert('the Recent sweep is still holding the list delete', typeof releaseDelete === 'function');
+        assertEq('Recent is not cached while the sweep still holds the delete',
+            await store.getList('recent:index'), null);
         releaseDelete();
-        const result = await reading;
-        assertEq('an in-sweep Recent read still returns server data', result.source, 'server');
+        await runtime._domainCleanup('recent');
+        for (let i = 0; i < 6; i++) await Promise.resolve();
         const cached = await store.getList('recent:index');
         assertEq('Recent publishes after the sweep deletes the old list',
             cached && cached.value, [{ id: 'W-1', last_opened_at: '2026-01-01' }]);
