@@ -502,6 +502,21 @@ describe('work PDF adapter', () => {
     expect(readWorkPdfAnnotationDrawer(ctx).placement).toBe('pinned')
     expect(readWorkPdfAnnotationDrawer(ctx).width).toBe(400)
     expect(readWorkPdfAnnotationDrawer(ctx).selectedId).toBe('')
+    const previews: number[] = []
+    ;(window as unknown as {
+      prksPreviewAnnotationDrawerWidth?: (owner: WorkPdfOwner, width: number) => boolean
+    }).prksPreviewAnnotationDrawerWidth = (_owner, width) => {
+      previews.push(width)
+      return true
+    }
+    ;(window as unknown as {
+      prksRestoreAnnotationDrawerWidth?: (owner: WorkPdfOwner) => boolean
+    }).prksRestoreAnnotationDrawerWidth = () => true
+    expect(intentResizeWorkPdfAnnotationDrawer(ctx, 420, ticket, { preview: true })).toBe(true)
+    expect(intentResizeWorkPdfAnnotationDrawer(ctx, 352, ticket, { cancel: true })).toBe(true)
+    expect(previews).toEqual([420])
+    expect(readWorkPdfAnnotationDrawer(ctx).width).toBe(400)
+    expect(layouts).toEqual(['layout', 'layout'])
     runtime.closeAnnotationDrawer()
     expect(intentSetWorkPdfAnnotationDrawerPinned(ctx, false, ticket)).toBe(false)
     expect(intentResizeWorkPdfAnnotationDrawer(ctx, 300, ticket)).toBe(false)
@@ -512,6 +527,8 @@ describe('work PDF adapter', () => {
     expect(runtime.viewer).toBe(viewer)
     expect(runtime.viewerSetupToken).toBe(2)
     delete (window as unknown as { prksLayoutAnnotationDrawer?: unknown }).prksLayoutAnnotationDrawer
+    delete (window as unknown as { prksPreviewAnnotationDrawerWidth?: unknown }).prksPreviewAnnotationDrawerWidth
+    delete (window as unknown as { prksRestoreAnnotationDrawerWidth?: unknown }).prksRestoreAnnotationDrawerWidth
   })
 
   it('returns the in-flight drawer delete', async () => {

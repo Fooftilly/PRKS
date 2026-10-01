@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import uiSource from '../../../../frontend/js/ui.js?raw'
+import splitSource from '../../../../frontend/js/workspace-split.js?raw'
 import WorkPdfAnnotationDrawer from './WorkPdfAnnotationDrawer.vue'
 
 const state = {
@@ -29,9 +30,14 @@ const state = {
 describe('annotation drawer', () => {
   const mounted: Array<{ unmount: () => void }> = []
 
+  beforeAll(() => {
+    window.eval(splitSource)
+  })
+
   afterEach(() => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     delete (window as Window & { prksFlashButtonLabel?: unknown }).prksFlashButtonLabel
+    document.body.classList.remove('prks-resizing-split')
   })
 
   it('paints a published row and forwards the open generation', async () => {
@@ -121,6 +127,174 @@ describe('annotation drawer', () => {
     })
     expect(wrapper.find('[role="separator"]').exists()).toBe(false)
     expect(wrapper.get('[data-prks-role="pdf-annotation-drawer"]').attributes('role')).toBe('dialog')
+  })
+
+  it('names the pin button for the placement that is showing', async () => {
+    const wrapper = mount(WorkPdfAnnotationDrawer, {
+      props: {
+        state: { ...state, pinned: true, pinEnabled: true, placement: 'overlay', width: 352 },
+        tabId: 'tab-a',
+        onClose: () => {},
+        onJump: () => {},
+        onEdit: () => {},
+        onDelete: () => {},
+        onCopy: async () => true,
+      },
+      attachTo: document.body,
+    })
+    mounted.push(wrapper)
+    const pin = () => wrapper.findAll('button').find((button) => button.text() === 'Pin' || button.text() === 'Unpin')
+    expect(pin()?.text()).toBe('Pin')
+    expect(pin()?.attributes('aria-pressed')).toBe('false')
+    await wrapper.setProps({
+      state: { ...state, pinned: true, pinEnabled: false, placement: 'sheet', width: 352 },
+    })
+    expect(pin()?.text()).toBe('Pin')
+    expect(pin()?.attributes('aria-pressed')).toBe('false')
+    expect(pin()?.attributes('disabled')).toBeDefined()
+    await wrapper.setProps({
+      state: { ...state, pinned: true, pinEnabled: true, placement: 'pinned', width: 352 },
+    })
+    expect(pin()?.text()).toBe('Unpin')
+    expect(pin()?.attributes('aria-pressed')).toBe('true')
+  })
+
+  it('reuses the gesture ticket, coalesces moves, and restores on cancel', async () => {
+    const frames: Array<FrameRequestCallback> = []
+    const originalFrame = window.requestAnimationFrame
+    const originalCancel = window.cancelAnimationFrame
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    }
+    window.cancelAnimationFrame = (id: number) => {
+      frames[id - 1] = () => {}
+    }
+    try {
+      const calls: Array<{
+        width: number
+        ticket: { generation: number; epoch: number; viewerToken: number }
+        persist: boolean
+        preview?: boolean
+        cancel?: boolean
+      }> = []
+      const wrapper = mount(WorkPdfAnnotationDrawer, {
+        props: {
+          state: { ...state, pinned: true, pinEnabled: true, placement: 'pinned', width: 352 },
+          tabId: 'tab-a',
+          onClose: () => {},
+          onJump: () => {},
+          onEdit: () => {},
+          onDelete: () => {},
+          onCopy: async () => true,
+          onResize: (width, ticket, options) => {
+            calls.push({ width, ticket, persist: options.persist, preview: options.preview, cancel: options.cancel })
+          },
+        },
+        attachTo: document.body,
+      })
+      mounted.push(wrapper)
+      await nextTick()
+      const handle = wrapper.get('.pdf-annotation-drawer__resize').element
+      handle.dispatchEvent(new PointerEvent('pointerdown', {
+        clientX: 400,
+        pointerId: 7,
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      }))
+      document.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: 380,
+        pointerId: 7,
+        bubbles: true,
+        cancelable: true,
+      }))
+      document.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: 360,
+        pointerId: 7,
+        bubbles: true,
+        cancelable: true,
+      }))
+      expect(calls).toEqual([])
+      expect(frames).toHaveLength(1)
+      frames[0]?.(0)
+      expect(calls).toEqual([
+        { width: 392, ticket: calls[0]?.ticket, persist: false, preview: true, cancel: undefined },
+      ])
+      const captured = calls[0]?.ticket
+      document.dispatchEvent(new PointerEvent('pointercancel', {
+        pointerId: 7,
+        bubbles: true,
+        cancelable: true,
+      }))
+      expect(calls).toEqual([
+        { width: 392, ticket: captured, persist: false, preview: true, cancel: undefined },
+        { width: 352, ticket: captured, persist: false, preview: undefined, cancel: true },
+      ])
+      expect(calls[1]?.ticket).toBe(captured)
+    } finally {
+      window.requestAnimationFrame = originalFrame
+      window.cancelAnimationFrame = originalCancel
+    }
+  })
+
+  it('commits the latest coalesced width once on pointerup', async () => {
+    const frames: Array<FrameRequestCallback> = []
+    const originalFrame = window.requestAnimationFrame
+    const originalCancel = window.cancelAnimationFrame
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    }
+    window.cancelAnimationFrame = () => {}
+    try {
+      const calls: Array<{ width: number; ticket: object; persist: boolean; preview?: boolean }> = []
+      const wrapper = mount(WorkPdfAnnotationDrawer, {
+        props: {
+          state: { ...state, pinned: true, pinEnabled: true, placement: 'pinned', width: 352 },
+          tabId: 'tab-a',
+          onClose: () => {},
+          onJump: () => {},
+          onEdit: () => {},
+          onDelete: () => {},
+          onCopy: async () => true,
+          onResize: (width, ticket, options) => {
+            calls.push({ width, ticket, persist: options.persist, preview: options.preview })
+          },
+        },
+        attachTo: document.body,
+      })
+      mounted.push(wrapper)
+      await nextTick()
+      const handle = wrapper.get('.pdf-annotation-drawer__resize').element
+      handle.dispatchEvent(new PointerEvent('pointerdown', {
+        clientX: 200,
+        pointerId: 3,
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      }))
+      document.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: 184,
+        pointerId: 3,
+        bubbles: true,
+        cancelable: true,
+      }))
+      frames[0]?.(0)
+      document.dispatchEvent(new PointerEvent('pointerup', {
+        pointerId: 3,
+        bubbles: true,
+        cancelable: true,
+      }))
+      expect(calls.map((call) => ({ width: call.width, persist: call.persist, preview: call.preview }))).toEqual([
+        { width: 368, persist: false, preview: true },
+        { width: 368, persist: true, preview: undefined },
+      ])
+      expect(calls[1]?.ticket).toBe(calls[0]?.ticket)
+    } finally {
+      window.requestAnimationFrame = originalFrame
+      window.cancelAnimationFrame = originalCancel
+    }
   })
 
   it('closes a keyboard-opened drawer on Escape and restores the opener', async () => {

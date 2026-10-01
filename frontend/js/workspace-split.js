@@ -5,9 +5,10 @@
  * (`mainSplitRatio` for the root Main/Secondary divider, `secondaryTree`
  * split-node `ratio` for nested Secondary dividers). This is the one
  * separator implementation: pointer drag, keyboard resize, ARIA, and
- * min-size clamping, shared by the root divider and every nested Secondary
- * split divider. Tile-local consumers (PDF viewer, EasyMDE, etc.) merely
- * react to their own container resizing; they must not duplicate this logic.
+ * min-size clamping, shared by the root divider, every nested Secondary
+ * split divider, and the PDF annotation drawer width handle. Tile-local
+ * consumers render the element and forward intents; they must not duplicate
+ * pointer, keyboard, or ARIA separator logic.
  *
  * Layout-only: dragging never mounts/unmounts a TabContext, never renders a
  * route, and never triggers a leave guard.
@@ -627,6 +628,185 @@
         applyNestedRatioToDom(container, el, axis, getNestedRatio(splitId));
     }
 
+    /* ==================== PDF annotation drawer width ==================== */
+
+    const PRKS_DRAWER_WIDTH_STEP = 16;
+    const PRKS_DRAWER_WIDTH_STEP_SHIFT = 48;
+
+    function drawerWidthNumber(value, fallback) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+    }
+
+    function paintDrawerWidthAria(el, cfg, width) {
+        if (!el) return;
+        const min = drawerWidthNumber(cfg.getMin && cfg.getMin(), 240);
+        const max = drawerWidthNumber(cfg.getMax && cfg.getMax(), 480);
+        const now = Math.round(drawerWidthNumber(width, min));
+        el.setAttribute('role', 'separator');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-orientation', 'vertical');
+        el.setAttribute('aria-label', 'Annotation list width');
+        el.setAttribute('aria-valuemin', String(Math.round(min)));
+        el.setAttribute('aria-valuemax', String(Math.round(max)));
+        el.setAttribute('aria-valuenow', String(now));
+        el.setAttribute('aria-valuetext', now + ' pixels');
+    }
+
+    /**
+     * Binds the shared separator lifecycle to a drawer-width handle the caller
+     * rendered. Pointer geometry is the drawer's leading edge: dragging left
+     * widens. The ticket from `cfg.capture` is taken once when the gesture
+     * starts and passed unchanged through every preview, commit, and cancel.
+     * Pointer moves coalesce to one preview per animation frame. pointerup
+     * commits. pointercancel restores the width from gesture start and does
+     * not commit. Width clamping stays with the caller.
+     */
+    function prksBindDrawerWidthSeparator(el, cfg) {
+        if (!el || !cfg) return function () {};
+        let drag = null;
+
+        function cancelFrame(state) {
+            if (!state || !state.frame) return;
+            if (typeof root.cancelAnimationFrame === 'function') root.cancelAnimationFrame(state.frame);
+            state.frame = 0;
+        }
+
+        function endDrag(kind) {
+            const state = drag;
+            if (!state || state.settled) return;
+            state.settled = true;
+            drag = null;
+            cancelFrame(state);
+            if (el.classList) el.classList.remove('is-dragging');
+            endDragCursor('left-right');
+            const d = doc();
+            if (d) {
+                d.removeEventListener('pointermove', state.onMove, true);
+                d.removeEventListener('pointerup', state.onUp, true);
+                d.removeEventListener('pointercancel', state.onCancel, true);
+            }
+            if (el.removeEventListener) el.removeEventListener('lostpointercapture', state.onLost);
+            try {
+                if (typeof el.releasePointerCapture === 'function') el.releasePointerCapture(state.pointerId);
+            } catch (_err) {}
+            if (activeDragCleanup === state.cleanup) activeDragCleanup = null;
+            if (kind === 'commit') {
+                if (typeof cfg.onCommit === 'function') cfg.onCommit(state.latest, state.captured);
+                paintDrawerWidthAria(el, cfg, state.latest);
+            } else if (typeof cfg.onCancel === 'function') {
+                cfg.onCancel(state.startWidth, state.captured);
+                paintDrawerWidthAria(el, cfg, state.startWidth);
+            }
+        }
+
+        function onPointerDown(e) {
+            if (e.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
+            e.preventDefault();
+            terminateActiveDrag();
+            const startWidth = drawerWidthNumber(cfg.getWidth && cfg.getWidth(), 352);
+            const captured = typeof cfg.capture === 'function' ? cfg.capture() : null;
+            const state = {
+                settled: false,
+                pointerId: e.pointerId,
+                startWidth: startWidth,
+                latest: startWidth,
+                captured: captured,
+                frame: 0,
+                onMove: null,
+                onUp: null,
+                onCancel: null,
+                onLost: null,
+                cleanup: null,
+            };
+            state.cleanup = function () {
+                endDrag('cancel');
+            };
+            state.onMove = function (ev) {
+                if (state.settled || ev.pointerId !== state.pointerId) return;
+                ev.preventDefault();
+                state.latest = state.startWidth + (state.startX - ev.clientX);
+                if (state.frame) return;
+                const schedule = typeof root.requestAnimationFrame === 'function'
+                    ? root.requestAnimationFrame.bind(root)
+                    : function (fn) { fn(); return 0; };
+                state.frame = schedule(function () {
+                    state.frame = 0;
+                    if (state.settled) return;
+                    if (typeof cfg.onPreview === 'function') cfg.onPreview(state.latest, state.captured);
+                    paintDrawerWidthAria(el, cfg, state.latest);
+                });
+            };
+            state.onUp = function (ev) {
+                if (ev && ev.pointerId != null && ev.pointerId !== state.pointerId) return;
+                endDrag('commit');
+            };
+            state.onCancel = function (ev) {
+                if (ev && ev.pointerId != null && ev.pointerId !== state.pointerId) return;
+                endDrag('cancel');
+            };
+            state.onLost = function () {
+                endDrag('cancel');
+            };
+            state.startX = e.clientX;
+            drag = state;
+            if (el.classList) el.classList.add('is-dragging');
+            beginDragCursor('left-right');
+            try {
+                if (typeof el.setPointerCapture === 'function') el.setPointerCapture(e.pointerId);
+            } catch (_err) {}
+            activeDragCleanup = state.cleanup;
+            if (el.addEventListener) el.addEventListener('lostpointercapture', state.onLost);
+            const d = doc();
+            if (d) {
+                d.addEventListener('pointermove', state.onMove, true);
+                d.addEventListener('pointerup', state.onUp, true);
+                d.addEventListener('pointercancel', state.onCancel, true);
+            }
+        }
+
+        function onKeyDown(e) {
+            const key = e.key;
+            if (
+                key !== 'ArrowLeft' &&
+                key !== 'ArrowRight' &&
+                key !== 'Home' &&
+                key !== 'End' &&
+                key !== 'Enter'
+            ) {
+                return;
+            }
+            const min = drawerWidthNumber(cfg.getMin && cfg.getMin(), 240);
+            const max = drawerWidthNumber(cfg.getMax && cfg.getMax(), 480);
+            const fallback = drawerWidthNumber(cfg.getDefault && cfg.getDefault(), 352);
+            const current = drawerWidthNumber(cfg.getWidth && cfg.getWidth(), fallback);
+            let next = null;
+            if (key === 'ArrowLeft' || key === 'ArrowRight') {
+                const step = e.shiftKey ? PRKS_DRAWER_WIDTH_STEP_SHIFT : PRKS_DRAWER_WIDTH_STEP;
+                next = current + (key === 'ArrowLeft' ? step : -step);
+            } else if (key === 'Home') next = min;
+            else if (key === 'End') next = max;
+            else next = fallback;
+            e.preventDefault();
+            e.stopPropagation();
+            const captured = typeof cfg.capture === 'function' ? cfg.capture() : null;
+            if (typeof cfg.onCommit === 'function') cfg.onCommit(next, captured);
+            paintDrawerWidthAria(el, cfg, next);
+        }
+
+        el.addEventListener('pointerdown', onPointerDown);
+        el.addEventListener('keydown', onKeyDown);
+        el.setAttribute('data-prks-drawer-width-bound', '1');
+        paintDrawerWidthAria(el, cfg, cfg.getWidth && cfg.getWidth());
+
+        return function releaseDrawerWidthSeparator() {
+            endDrag('cancel');
+            el.removeEventListener('pointerdown', onPointerDown);
+            el.removeEventListener('keydown', onKeyDown);
+            el.removeAttribute('data-prks-drawer-width-bound');
+        };
+    }
+
     const api = {
         prksWorkspaceSyncSplitSeparator: prksWorkspaceSyncSplitSeparator,
         prksWorkspaceReleaseRootSeparator: prksWorkspaceReleaseRootSeparator,
@@ -636,6 +816,7 @@
         prksWorkspaceReclampNestedSplit: prksWorkspaceReclampNestedSplit,
         prksSplitComputeBounds: prksSplitComputeBounds,
         prksSplitClampRatio: prksSplitClampRatio,
+        prksBindDrawerWidthSeparator: prksBindDrawerWidthSeparator,
     };
 
     Object.keys(api).forEach(function (k) {

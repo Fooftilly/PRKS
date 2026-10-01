@@ -275,22 +275,42 @@
     }
 
     /**
-     * Closed and overlay do not take viewer width. Pinned does, and only on a
-     * wide pane. A phone or forced-mobile shell uses a full-pane sheet.
+     * Closed and overlay do not take viewer width. Pinned does, and only when
+     * the pane can hold at least the minimum drawer plus the minimum viewer.
+     * A wider remembered width is capped for that pane so the viewer stays at
+     * its minimum. A phone or forced-mobile shell uses a full-pane sheet.
      * Unknown pane width favors overlay until a real measurement arrives.
      */
+    function annotationDrawerCanPin(drawer) {
+        if (!drawer || drawer.mobile) return false;
+        const pane = Number(drawer.paneWidth);
+        return Number.isFinite(pane) && pane >= PRKS_PDF_DRAWER_PIN_MIN_PANE;
+    }
+
     function annotationDrawerPlacement(drawer) {
         if (!drawer || !drawer.open) return 'closed';
         if (drawer.mobile) return 'sheet';
-        const pane = Number(drawer.paneWidth);
-        if (!Number.isFinite(pane) || pane < PRKS_PDF_DRAWER_PIN_MIN_PANE) return 'overlay';
+        if (!annotationDrawerCanPin(drawer)) return 'overlay';
         return drawer.pinned ? 'pinned' : 'overlay';
     }
 
     function annotationDrawerPinEnabled(drawer) {
-        if (!drawer || drawer.mobile) return false;
-        const pane = Number(drawer.paneWidth);
-        return Number.isFinite(pane) && pane >= PRKS_PDF_DRAWER_PIN_MIN_PANE;
+        return annotationDrawerCanPin(drawer);
+    }
+
+    /**
+     * Preference width, clamped to the global limits. While pinned, also
+     * capped so this pane keeps PRKS_PDF_DRAWER_MIN_VIEWER for the PDF.
+     * The stored preference is not rewritten by that pane cap.
+     */
+    function annotationDrawerLayoutWidth(drawer, requested) {
+        const preferred = clampAnnotationDrawerWidth(
+            requested != null ? requested : drawer && drawer.width
+        );
+        if (!drawer || annotationDrawerPlacement(drawer) !== 'pinned') return preferred;
+        const room = Math.floor(Number(drawer.paneWidth) - PRKS_PDF_DRAWER_MIN_VIEWER);
+        if (room < PRKS_PDF_DRAWER_MIN_WIDTH) return preferred;
+        return Math.min(preferred, room);
     }
 
     /**
@@ -314,7 +334,7 @@
             pane.dataset.prksAnnotationDrawer = placement;
         }
         if (pane.style && typeof pane.style.setProperty === 'function') {
-            const width = read && Number(read.width);
+            const width = read && Number(read.layoutWidth != null ? read.layoutWidth : read.width);
             const px = (Number.isFinite(width) ? Math.round(width) : PRKS_PDF_DRAWER_DEFAULT_WIDTH) + 'px';
             if (placement === 'overlay' || placement === 'pinned') {
                 pane.style.setProperty('--pdf-annotation-drawer-width', px);
@@ -936,6 +956,8 @@
                 items: drawer.open ? projectAnnotationDrawerItems(runtime) : [],
                 pinned: drawer.pinned === true,
                 width: drawer.width,
+                layoutWidth: annotationDrawerLayoutWidth(drawer),
+                paneWidth: Number(drawer.paneWidth) || 0,
                 minWidth: PRKS_PDF_DRAWER_MIN_WIDTH,
                 maxWidth: PRKS_PDF_DRAWER_MAX_WIDTH,
                 defaultWidth: PRKS_PDF_DRAWER_DEFAULT_WIDTH,
@@ -975,14 +997,23 @@
             return true;
         };
 
+        /** Painted width for a requested preference, including the pane cap. */
+        runtime.annotationDrawerLayoutWidth = function (requested) {
+            if (runtime._destroyed) return PRKS_PDF_DRAWER_DEFAULT_WIDTH;
+            return annotationDrawerLayoutWidth(runtime.annotationDrawer, requested);
+        };
+
         /**
          * True only when the viewer box must change: entering or leaving
-         * pinned layout, or changing width while pinned. Overlay width,
-         * sheet, and open/close of an overlay do not.
+         * pinned layout, changing the painted width while pinned, or changing
+         * the measured pane while it stays pinned. Overlay width, sheet, and
+         * open/close of an overlay do not.
          */
         runtime.annotationDrawerLayoutEffect = function () {
             const read = runtime.readAnnotationDrawer();
-            const signature = read.placement === 'pinned' ? 'pinned:' + String(read.width) : read.placement;
+            const signature = read.placement === 'pinned'
+                ? 'pinned:' + String(read.layoutWidth) + ':' + String(read.paneWidth)
+                : read.placement;
             const previous = runtime._drawerLayoutSignature || 'closed';
             runtime._drawerLayoutSignature = signature;
             const wasPinned = previous.indexOf('pinned:') === 0;

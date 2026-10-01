@@ -42,13 +42,24 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
     def test_initial_mount_uses_desired_mode(self):
         src = _read(_WORKS_PDF)
         init_start = src.index("export function initPdfViewerForWork")
-        init_body = src[init_start : init_start + 3000]
+        init_end = len(src)
+        for marker in (
+            "\nexport function ",
+            "\nexport async function ",
+            "\nfunction ",
+            "\nasync function ",
+        ):
+            at = src.find(marker, init_start + 1)
+            if at != -1 and at < init_end:
+                init_end = at
+        init_body = src[init_start:init_end]
         # Always start EmbedPDF in preview; capability + durable bridge enable
         # mutations only after hydrate (never mutation-capable during startup).
         self.assertIn(
             "prksMountPdfViewer(ctx, work, runtime, targetNode, lastPage.initialPage, 'preview')",
             init_body,
         )
+        self.assertNotIn("init_start + 3000", init_body)
         self.assertIn("annotationDurableBridgeReady = false", src)
 
     def test_annotation_persistence_only_installed_in_work_mode(self):

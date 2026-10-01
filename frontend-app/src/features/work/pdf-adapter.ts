@@ -110,6 +110,7 @@ export interface WorkPdfAnnotationDrawerRead {
   items: WorkPdfAnnotationDrawerItem[]
   pinned: boolean
   width: number
+  layoutWidth: number
   minWidth: number
   maxWidth: number
   defaultWidth: number
@@ -406,6 +407,7 @@ const EMPTY_ANNOTATION_DRAWER: WorkPdfAnnotationDrawerRead = {
   items: [],
   pinned: false,
   width: 352,
+  layoutWidth: 352,
   minWidth: 240,
   maxWidth: 480,
   defaultWidth: 352,
@@ -463,6 +465,12 @@ export function readWorkPdfAnnotationDrawer(
     items: open ? items : [],
     pinned: !!read.pinned,
     width: typeof read.width === 'number' && Number.isFinite(read.width) ? read.width : 352,
+    layoutWidth:
+      typeof read.layoutWidth === 'number' && Number.isFinite(read.layoutWidth)
+        ? read.layoutWidth
+        : typeof read.width === 'number' && Number.isFinite(read.width)
+          ? read.width
+          : 352,
     minWidth: typeof read.minWidth === 'number' ? read.minWidth : 240,
     maxWidth: typeof read.maxWidth === 'number' ? read.maxWidth : 480,
     defaultWidth: typeof read.defaultWidth === 'number' ? read.defaultWidth : 352,
@@ -494,6 +502,8 @@ type AnnotationDrawerWindow = PdfWindow & {
   copyPdfAnnotationWikiLink?: (ctx: WorkPdfOwner, annId: string) => Promise<boolean> | boolean
   prksCloseAnnotationDrawer?: (ctx: WorkPdfOwner) => boolean
   prksLayoutAnnotationDrawer?: (ctx: WorkPdfOwner) => boolean
+  prksPreviewAnnotationDrawerWidth?: (ctx: WorkPdfOwner, width: number) => boolean
+  prksRestoreAnnotationDrawerWidth?: (ctx: WorkPdfOwner) => boolean
 }
 
 export function intentCloseWorkPdfAnnotationDrawer(
@@ -573,11 +583,22 @@ export function intentResizeWorkPdfAnnotationDrawer(
   ctx: WorkPdfOwner | null | undefined,
   width: number,
   captured: WorkPdfAnnotationDrawerCapture | null | undefined,
-  options?: { persist?: boolean },
+  options?: { persist?: boolean; preview?: boolean; cancel?: boolean },
 ): boolean {
   const runtime = drawerRuntime(ctx, captured)
   if (!runtime || !ctx || typeof runtime.setAnnotationDrawerWidth !== 'function') return false
   if (!Number.isFinite(width)) return false
+  const bridge = globalThis as AnnotationDrawerWindow
+  if (options && options.cancel) {
+    const restore = bridge.prksRestoreAnnotationDrawerWidth
+    if (typeof restore !== 'function') return false
+    return restore(ctx) === true
+  }
+  if (options && options.preview) {
+    const preview = bridge.prksPreviewAnnotationDrawerWidth
+    if (typeof preview !== 'function') return false
+    return preview(ctx, width) === true
+  }
   if (runtime.setAnnotationDrawerWidth(width, options) !== true) return false
   layoutAnnotationDrawer(ctx)
   return true

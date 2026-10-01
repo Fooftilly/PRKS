@@ -209,7 +209,7 @@ function memoryStorage() {
 }
 
 function wideFrame() {
-    return { paneWidth: PRKS_PDF_DRAWER_PIN_MIN_PANE + 80, mobile: false };
+    return { paneWidth: 1200, mobile: false };
 }
 
 function hostBox() {
@@ -340,6 +340,20 @@ function testNarrowAndMobileDoNotPinTheViewer() {
     assertEq('same viewer', runtime.viewer, viewer);
     assertEq('token held', runtime.viewerSetupToken, 2);
     assertEq('no resize calls', viewer.resizes, 0);
+    runtime.setAnnotationDrawerWidth(480, { persist: true });
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 700, mobile: false });
+    const capped = runtime.annotationDrawerLayoutEffect();
+    assertEq('wide preference still pins', capped.read.placement, 'pinned');
+    assertEq('preference stays 480', capped.read.width, 480);
+    assertEq('painted width leaves the viewer its minimum', capped.read.layoutWidth, 380);
+    const cappedPane = paneStub();
+    prksApplyPdfAnnotationDrawerChrome(cappedPane, capped.read);
+    assertEq('capped width variable', cappedPane.style.getPropertyValue('--pdf-annotation-drawer-width'), '380px');
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 1100, mobile: false });
+    const grew = runtime.annotationDrawerLayoutEffect();
+    assert('same drawer width still resizes when the pane grows', grew.resized === true);
+    assertEq('preference held while the pane grows', grew.read.width, 480);
+    assertEq('wider pane paints the full preference', grew.read.layoutWidth, 480);
     runtime.destroy();
 }
 

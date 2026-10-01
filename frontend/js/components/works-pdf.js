@@ -660,6 +660,43 @@ function prksSetAnnotationDrawerWidth(ctx, width, opts) {
 window.prksSetAnnotationDrawerWidth = prksSetAnnotationDrawerWidth;
 window.prksToggleAnnotationDrawer = prksToggleAnnotationDrawer;
 
+/**
+ * Drag preview. Sets the painted width and, when pinned, resizes the viewer.
+ * Does not write the runtime preference and does not republish the list.
+ * The gesture commits that preference once, on pointerup.
+ */
+function prksPreviewAnnotationDrawerWidth(ctx, width) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || !Number.isFinite(Number(width))) return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    const painted = typeof pdf.annotationDrawerLayoutWidth === 'function'
+        ? pdf.annotationDrawerLayoutWidth(width)
+        : width;
+    if (pane && pane.style && typeof pane.style.setProperty === 'function') {
+        pane.style.setProperty('--pdf-annotation-drawer-width', Math.round(painted) + 'px');
+    }
+    const read = typeof pdf.readAnnotationDrawer === 'function' ? pdf.readAnnotationDrawer() : null;
+    if (read && read.placement === 'pinned' && typeof pdf.resize === 'function') pdf.resize();
+    return true;
+}
+window.prksPreviewAnnotationDrawerWidth = prksPreviewAnnotationDrawerWidth;
+
+/** Cancelled drag. Restores the runtime's painted width without persisting. */
+function prksRestoreAnnotationDrawerWidth(ctx) {
+    const owner = prksPdfOwnerOrFocused(ctx);
+    const pdf = prksPdfRuntime(owner);
+    if (!pdf || pdf._destroyed || typeof pdf.readAnnotationDrawer !== 'function') return false;
+    const pane = owner && typeof owner.query === 'function' ? owner.query('.work-pdf-pane') : null;
+    const read = pdf.readAnnotationDrawer();
+    if (pane && typeof window.prksApplyPdfAnnotationDrawerChrome === 'function') {
+        window.prksApplyPdfAnnotationDrawerChrome(pane, read);
+    }
+    if (read && read.placement === 'pinned' && typeof pdf.resize === 'function') pdf.resize();
+    return true;
+}
+window.prksRestoreAnnotationDrawerWidth = prksRestoreAnnotationDrawerWidth;
+
 function prksDrawerAnnotationItem(pdf, annId) {
     const items = pdf && pdf.annotationCache && Array.isArray(pdf.annotationCache.items)
         ? pdf.annotationCache.items

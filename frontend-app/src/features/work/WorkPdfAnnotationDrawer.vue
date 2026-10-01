@@ -18,6 +18,7 @@ export interface AnnotationDrawerView {
   generation: number | null
   pinned?: boolean
   width?: number
+  layoutWidth?: number
   minWidth?: number
   maxWidth?: number
   defaultWidth?: number
@@ -43,7 +44,7 @@ const props = defineProps<{
   onResize?: (
     width: number,
     ticket: { generation: number; epoch: number; viewerToken: number },
-    options: { persist: boolean },
+    options: { persist: boolean; preview?: boolean; cancel?: boolean },
   ) => void
 }>()
 
@@ -62,70 +63,77 @@ function ticket() {
   }
 }
 
-function widthBounds() {
-  const min = props.state.minWidth || 240
-  const max = props.state.maxWidth || 480
-  return { min, max, fallback: props.state.defaultWidth || 352 }
+function displayedWidth() {
+  const layout = props.state.layoutWidth
+  if (typeof layout === 'number' && Number.isFinite(layout)) return layout
+  return props.state.width || props.state.defaultWidth || 352
 }
 
-function clampWidth(width: number) {
-  const bounds = widthBounds()
-  return Math.min(bounds.max, Math.max(bounds.min, Math.round(width)))
+function actuallyPinned() {
+  return props.state.placement === 'pinned'
 }
 
 function pinDrawer() {
-  if (!props.state.pinEnabled && !props.state.pinned) return
-  props.onPin?.(!props.state.pinned, ticket())
+  const pinnedNow = actuallyPinned()
+  if (!pinnedNow && !props.state.pinEnabled) return
+  const captured = ticket()
+  props.onPin?.(!pinnedNow, captured)
 }
 
-let drag: { pointer: number; startX: number; startWidth: number; latest: number } | null = null
-
-function onResizePointerDown(event: PointerEvent) {
-  if (props.state.placement === 'sheet') return
-  const handle = event.currentTarget
-  if (!(handle instanceof HTMLElement)) return
-  const startWidth = props.state.width || widthBounds().fallback
-  drag = {
-    pointer: event.pointerId,
-    startX: event.clientX,
-    startWidth,
-    latest: startWidth,
-  }
-  handle.setPointerCapture(event.pointerId)
-  event.preventDefault()
+interface DrawerWidthTicket {
+  generation: number
+  epoch: number
+  viewerToken: number
 }
 
-function onResizePointerMove(event: PointerEvent) {
-  if (!drag || event.pointerId !== drag.pointer) return
-  // The handle is on the drawer's leading edge. Dragging left widens it.
-  const next = clampWidth(drag.startWidth + (drag.startX - event.clientX))
-  drag.latest = next
-  props.onResize?.(next, ticket(), { persist: false })
+type ReleaseDrawerWidth = () => void
+
+let releaseDrawerWidth: ReleaseDrawerWidth | null = null
+
+function clearDrawerWidth() {
+  if (!releaseDrawerWidth) return
+  const release = releaseDrawerWidth
+  releaseDrawerWidth = null
+  release()
 }
 
-function onResizePointerUp(event: PointerEvent) {
-  if (!drag || event.pointerId !== drag.pointer) return
-  const handle = resizeRef.value
-  const latest = drag.latest
-  if (handle && handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
-  drag = null
-  props.onResize?.(latest, ticket(), { persist: true })
-}
-
-function onResizeKeydown(event: KeyboardEvent) {
-  if (props.state.placement === 'sheet') return
-  const bounds = widthBounds()
-  const current = props.state.width || bounds.fallback
-  const step = event.shiftKey ? 48 : 16
-  let next: number | null = null
-  if (event.key === 'ArrowLeft') next = current + step
-  else if (event.key === 'ArrowRight') next = current - step
-  else if (event.key === 'Home') next = bounds.min
-  else if (event.key === 'End') next = bounds.max
-  else if (event.key === 'Enter') next = bounds.fallback
-  if (next == null) return
-  event.preventDefault()
-  props.onResize?.(clampWidth(next), ticket(), { persist: true })
+function bindDrawerWidth(el: unknown) {
+  clearDrawerWidth()
+  if (!(el instanceof HTMLElement)) return
+  const bind = (
+    window as Window & {
+      prksBindDrawerWidthSeparator?: (
+        element: HTMLElement,
+        cfg: {
+          getWidth: () => number
+          getMin: () => number
+          getMax: () => number
+          getDefault: () => number
+          capture: () => DrawerWidthTicket
+          onPreview: (width: number, captured: DrawerWidthTicket) => void
+          onCommit: (width: number, captured: DrawerWidthTicket) => void
+          onCancel: (width: number, captured: DrawerWidthTicket) => void
+        },
+      ) => ReleaseDrawerWidth
+    }
+  ).prksBindDrawerWidthSeparator
+  if (typeof bind !== 'function') return
+  releaseDrawerWidth = bind(el, {
+    getWidth: () => displayedWidth(),
+    getMin: () => props.state.minWidth || 240,
+    getMax: () => props.state.maxWidth || 480,
+    getDefault: () => props.state.defaultWidth || 352,
+    capture: () => ticket(),
+    onPreview: (width, captured) => {
+      props.onResize?.(width, captured, { persist: false, preview: true })
+    },
+    onCommit: (width, captured) => {
+      props.onResize?.(width, captured, { persist: true })
+    },
+    onCancel: (width, captured) => {
+      props.onResize?.(width, captured, { persist: false, cancel: true })
+    },
+  })
 }
 
 function viewerHost(): HTMLElement | null {
@@ -223,7 +231,12 @@ watch(
   { immediate: true },
 )
 
+watch(resizeRef, (el) => {
+  bindDrawerWidth(el)
+}, { flush: 'post' })
+
 onBeforeUnmount(() => {
+  clearDrawerWidth()
   document.removeEventListener('keydown', onDocumentKeydown)
   if (wasOpen.value) restoreOpener()
 })
@@ -243,36 +256,23 @@ onBeforeUnmount(() => {
     :data-prks-drawer-placement="state.placement || 'overlay'"
     :data-prks-list-published="state.published ? 'true' : 'false'"
     @pointerdown.stop
-    @pointermove="onResizePointerMove"
-    @pointerup="onResizePointerUp"
-    @pointercancel="onResizePointerUp"
   >
     <div
       v-if="state.placement !== 'sheet'"
       ref="resizeRef"
       class="pdf-annotation-drawer__resize"
-      role="separator"
-      aria-orientation="vertical"
-      tabindex="0"
-      aria-label="Annotation list width"
-      :aria-valuemin="state.minWidth || 240"
-      :aria-valuemax="state.maxWidth || 480"
-      :aria-valuenow="state.width || state.defaultWidth || 352"
-      :aria-valuetext="`${state.width || state.defaultWidth || 352} pixels`"
-      @pointerdown="onResizePointerDown"
-      @keydown="onResizeKeydown"
     />
     <header class="pdf-annotation-drawer__header">
       <h3 class="pdf-annotation-drawer__title">Annotations</h3>
       <button
         type="button"
         class="prks-btn prks-btn--secondary prks-btn--sm"
-        :aria-pressed="state.pinned ? 'true' : 'false'"
-        :disabled="!state.pinEnabled && !state.pinned"
-        :title="state.pinned ? 'Unpin annotations' : (state.pinEnabled ? 'Pin annotations' : 'Pin needs a wider pane')"
+        :aria-pressed="actuallyPinned() ? 'true' : 'false'"
+        :disabled="!actuallyPinned() && !state.pinEnabled"
+        :title="actuallyPinned() ? 'Unpin annotations' : (state.pinEnabled ? 'Pin annotations' : 'Pin needs a wider pane')"
         @click="pinDrawer()"
       >
-        {{ state.pinned ? 'Unpin' : 'Pin' }}
+        {{ actuallyPinned() ? 'Unpin' : 'Pin' }}
       </button>
       <button
         ref="closeRef"

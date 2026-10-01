@@ -47,6 +47,7 @@ function emptyView(): AnnotationDrawerView {
     generation: null,
     pinned: false,
     width: 352,
+    layoutWidth: 352,
     minWidth: 240,
     maxWidth: 480,
     defaultWidth: 352,
@@ -103,6 +104,7 @@ function applyRead(state: AnnotationDrawerView, ctx: AnnotationDrawerOwner): voi
   state.generation = typeof ctx.generation === 'number' ? ctx.generation : null
   state.pinned = read.pinned
   state.width = read.width
+  state.layoutWidth = read.layoutWidth
   state.minWidth = read.minWidth
   state.maxWidth = read.maxWidth
   state.defaultWidth = read.defaultWidth
@@ -157,13 +159,13 @@ export function syncWorkPdfAnnotationDrawer(ctx: AnnotationDrawerOwner | null | 
           if (!owner) return Promise.resolve(false)
           return intentCopyWorkPdfAnnotationLink(owner, annId, ticket())
         },
-        onPin: (pinned: boolean) => {
+        onPin: (pinned: boolean, captured: WorkPdfAnnotationDrawerCapture) => {
           const owner = owners.get(tabId)
-          if (owner) intentSetWorkPdfAnnotationDrawerPinned(owner, pinned, ticket())
+          if (owner) intentSetWorkPdfAnnotationDrawerPinned(owner, pinned, captured)
         },
-        onResize: (width: number, _ticket, options) => {
+        onResize: (width: number, captured: WorkPdfAnnotationDrawerCapture, options) => {
           const owner = owners.get(tabId)
-          if (owner) intentResizeWorkPdfAnnotationDrawer(owner, width, ticket(), options)
+          if (owner) intentResizeWorkPdfAnnotationDrawer(owner, width, captured, options)
         },
       }),
       host,

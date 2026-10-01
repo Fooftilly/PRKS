@@ -103,6 +103,21 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         self.assertIn("intentResizeWorkPdfAnnotationDrawer", ADAPTER)
         self.assertIn("setAnnotationDrawerPinned", ADAPTER)
         self.assertNotIn(".savePdfAnnotation(", ADAPTER)
+        self.assertIn("options.preview", ADAPTER)
+        self.assertIn("options.cancel", ADAPTER)
+        self.assertIn("prksPreviewAnnotationDrawerWidth", PDF)
+        preview = PDF[PDF.index("function prksPreviewAnnotationDrawerWidth"):PDF.index("function prksRestoreAnnotationDrawerWidth")]
+        self.assertNotIn("prksSyncAnnotationDrawer", preview)
+        self.assertNotIn("prksLayoutAnnotationDrawer", preview)
+        self.assertNotIn("setAnnotationDrawerWidth", preview)
+        self.assertIn("function prksBindDrawerWidthSeparator", (ROOT / "frontend" / "js" / "workspace-split.js").read_text(encoding="utf-8"))
+        self.assertIn("prksBindDrawerWidthSeparator", VIEW)
+        self.assertNotIn("setPointerCapture", VIEW)
+        self.assertNotIn('role="separator"', VIEW)
+        self.assertNotIn("aria-valuenow", VIEW)
+        self.assertIn("intentResizeWorkPdfAnnotationDrawer(owner, width, captured, options)", DRAWER)
+        self.assertIn("intentSetWorkPdfAnnotationDrawerPinned(owner, pinned, captured)", DRAWER)
+        self.assertNotIn("intentResizeWorkPdfAnnotationDrawer(owner, width, ticket()", DRAWER)
 
     def test_popup_host_stays_usable_when_drawer_fills_the_pane(self):
         css = (ROOT / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
@@ -132,19 +147,23 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         host_at = css.index('.document-view--work [data-prks-role="pdf-annotation-popup-host"]')
         popup_at = css.index(".pdf-annotation-popup {", host_at)
         host = css[host_at:popup_at]
-        query = "@container prks-pdf-pane (min-width: calc(22rem + 160px))"
+        query = "@container prks-pdf-pane (min-width: 160px)"
         base, marker, gated = host.partition(query)
         self.assertTrue(marker)
         self.assertIn("inset: 0;", base)
         self.assertIn("overflow: visible;", base)
         self.assertNotIn("right:", base)
         self.assertNotIn("overflow: hidden", base)
+        self.assertNotIn("min-width: calc(22rem + 160px)", host)
         self.assertNotIn("right: min(22rem, 100%)", host)
         self.assertIn(
             '.work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"]',
             gated,
         )
-        self.assertIn("right: var(--pdf-annotation-drawer-width, 22rem);", gated)
+        self.assertIn(
+            "right: min(var(--pdf-annotation-drawer-width, 22rem), calc(100% - 160px));",
+            gated,
+        )
         self.assertIn("overflow: hidden;", gated)
         self.assertIn("if (width < 160) return pane", popup)
 
