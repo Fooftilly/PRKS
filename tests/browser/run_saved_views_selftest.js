@@ -199,44 +199,15 @@ Promise.resolve(root.createSavedView({
         assert('no results table', src.indexOf('saved_view_works') < 0);
         assert('uses fetchSearch mapping', src.indexOf('prksSearchOptionsFromDefinition') >= 0);
         assert('no eval', src.indexOf('eval(') < 0);
-        assert('index edit captures routeGen', src.indexOf('routeGen') >= 0);
-        assert('index edit captures canonicalHash', src.indexOf('canonicalHash') >= 0);
+        assert('index painters removed',
+            src.indexOf('function renderSavedViewsIndex') < 0 &&
+            src.indexOf('function bindIndexActions') < 0 &&
+            src.indexOf('function openEditById') < 0 &&
+            src.indexOf('function confirmDelete') < 0 &&
+            src.indexOf('prksOpenSavedViewIndexEdit') < 0);
+        assert('index delete stays in saved-views.js', src.indexOf('function prksDeleteSavedViewFromIndex') >= 0);
 
-        const beforeStale = modalCalls.length;
-        root.__prksRouteGen = 1;
-        root.location.hash = '#/views';
-        let resolveView;
-        const pending = new Promise(function (resolve) {
-            resolveView = resolve;
-        });
-        root.fetchSavedView = function () {
-            return pending;
-        };
-        const editPromise = root.prksOpenSavedViewIndexEdit('SV-STALE');
-        root.__prksRouteGen = 2;
-        root.location.hash = '#/folders';
-        resolveView({
-            id: 'SV-STALE',
-            name: 'Stale View',
-            search: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' },
-        });
-        return editPromise.then(function () {
-            assertEq('stale index edit does not open modal', modalCalls.length, beforeStale);
-
-            root.__prksRouteGen = 3;
-            root.location.hash = '#/views';
-            root.fetchSavedView = function () {
-                return Promise.resolve({
-                    id: 'SV-OK',
-                    name: 'Current View',
-                    search: { mode: 'all', q: 'y', tag: '', author: '', publisher: '' },
-                });
-            };
-            return root.prksOpenSavedViewIndexEdit('SV-OK');
-        }).then(function () {
-            assertEq('current index edit opens modal', modalCalls[modalCalls.length - 1], 'saved-view-modal');
-            assertEq('current index edit fills name', inputs.name.value, 'Current View');
-
+        return Promise.resolve().then(function () {
             /* Save View from the Search surface uses that owner's hash, not the URL. */
             root.location.hash = '#/folders';
             root.prksOpenSavedViewModalFromCurrentSearch('#/search?q=owned&author=Benjamin');
@@ -303,6 +274,51 @@ Promise.resolve(root.createSavedView({
                     assert('detail painters removed', typeof root.renderSavedViewDetail === 'undefined' &&
                         typeof root.renderSavedViewNotFound === 'undefined' &&
                         typeof root.prksSearchResultCardsHtml === 'undefined');
+                    assert('index edit export removed', typeof root.prksOpenSavedViewIndexEdit === 'undefined');
+                    assert('index painter export removed', typeof root.renderSavedViewsIndex === 'undefined');
+
+                    /* Index delete refreshes this tab's current hash. It does not change route. */
+                    root.prksConfirmDestructive = function () { return Promise.resolve(true); };
+                    root.prksCurrentCanonicalHash = function () { return '#/views'; };
+                    navCalls.length = 0;
+                    return root.prksDeleteSavedViewFromIndex('SV-I1', function () { return false; }, 'tab-index');
+                })
+                .then(function () {
+                    assertEq('stale index after confirm does not delete', deletes.join(','), 'SV-B,SV-C');
+                    assertEq('stale index after confirm does not refresh', navCalls.length, 0);
+                    let calls = 0;
+                    return root.prksDeleteSavedViewFromIndex('SV-I2', function () {
+                        calls += 1;
+                        return calls === 1;
+                    }, 'tab-index');
+                })
+                .then(function () {
+                    assertEq('index delete started before stale still deletes', deletes.join(','), 'SV-B,SV-C,SV-I2');
+                    assertEq('index owner gone after delete does not refresh', navCalls.length, 0);
+                    root.location.hash = '#/folders';
+                    return root.prksDeleteSavedViewFromIndex('SV-I3', function () { return true; }, 'tab-index');
+                })
+                .then(function () {
+                    assertEq('current index delete', deletes[deletes.length - 1], 'SV-I3');
+                    assertEq('index refresh uses the canonical hash', navCalls[0] && navCalls[0].hash, '#/views');
+                    assertEq('index refresh replaces', navCalls[0] && navCalls[0].replace, true);
+                    assertEq('index refresh targets the owner tab', navCalls[0] && navCalls[0].tabId, 'tab-index');
+                    assertEq('index refresh is one navigation', navCalls.length, 1);
+                    delete root.prksCurrentCanonicalHash;
+                    root.location.hash = '#/views';
+                    navCalls.length = 0;
+                    return root.prksDeleteSavedViewFromIndex('SV-I4', function () { return true; }, 'tab-index');
+                })
+                .then(function () {
+                    assertEq('index refresh falls back to the current hash', navCalls[0] && navCalls[0].hash, '#/views');
+                    root.prksConfirmDestructive = function () { return Promise.resolve(false); };
+                    navCalls.length = 0;
+                    const before = deletes.length;
+                    return root.prksDeleteSavedViewFromIndex('SV-I5', function () { return true; }, 'tab-index')
+                        .then(function () {
+                            assertEq('cancelled index delete does not delete', deletes.length, before);
+                            assertEq('cancelled index delete does not refresh', navCalls.length, 0);
+                        });
                 });
         }).then(function () {
             console.log(passed + ' passed, ' + failed + ' failed');

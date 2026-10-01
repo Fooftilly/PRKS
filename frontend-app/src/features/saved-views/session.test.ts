@@ -3,10 +3,11 @@ import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readRouteSurface } from '../../route-surface/lifecycle'
 import { presentSearch } from '../search/session'
-import { buildSavedViewDetailProjection } from './projection'
+import { buildSavedViewDetailProjection, buildSavedViewIndexProjection } from './projection'
 import {
   dismissSavedViews,
   presentSavedViewDetail,
+  presentSavedViewsIndex,
   registerSavedViewsBridge,
   resetSavedViewsSessionForTests,
 } from './session'
@@ -15,8 +16,16 @@ afterEach(() => {
   resetSavedViewsSessionForTests()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
+  delete window.prksVuePresentSavedViewsIndex
   delete window.prksVuePresentSavedViewDetail
   delete window.prksVueDismissSavedViews
+  delete window.prksSearchSummaryText
+  delete window.prksDeleteSavedViewFromIndex
+  delete window.fetchSavedView
+  delete window.prksOpenCommandPalette
+  delete window.prksPageHeaderIconHtml
+  delete window.prksIcon
+  delete window.prksRefreshIcons
   delete window.prksWorkCardHtml
   delete window.prksAbstractExcerpt
   delete window.prksReleaseLazyWorkThumbs
@@ -50,6 +59,25 @@ function cards(): void {
     `<div class="work-card" data-work-id="${String(work.id)}" data-sub="${options.subtitle || ''}"></div>`
 }
 
+describe('saved views index projection', () => {
+  it('keeps named views, skips blank ids, and asks the codec for the summary', () => {
+    window.prksSearchSummaryText = (definition) => {
+      const search = definition as { q?: string }
+      return search.q ? `q:${search.q}` : 'Any file'
+    }
+    const projection = buildSavedViewIndexProjection({
+      views: [VIEW, { id: '  ', name: 'blank' }, null, { name: 'missing id' }],
+      generation: 4,
+    })
+    expect(projection.generation).toBe(4)
+    expect(projection.rows).toEqual([
+      { id: 'SV 1', name: 'Critical theory', summary: 'q:x', href: '#/views/SV%201' },
+    ])
+    delete window.prksSearchSummaryText
+    expect(buildSavedViewIndexProjection({ views: [VIEW], generation: 1 }).rows[0]?.summary).toBe('')
+  })
+})
+
 describe('saved view detail projection', () => {
   it('is not-found without a record and never carries rows then', () => {
     const missing = buildSavedViewDetailProjection({ availability: 'ready', view: null, viewId: 'SV-9', rows: [{ id: 'w' }], generation: 1 })
@@ -65,6 +93,83 @@ describe('saved view detail projection', () => {
     })
     expect(ready.view?.search.q).toBe('x')
     expect(ready.searchHash).toBe('#/search')
+  })
+})
+
+describe('Saved Views index route bridge', () => {
+  it('paints rows, routes Edit and Delete through index intents, and ignores a stale owner', async () => {
+    window.prksSearchSummaryText = () => 'Any file'
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    const open = vi.fn()
+    const del = vi.fn(async () => {})
+    window.fetchSavedView = async () => VIEW
+    window.prksOpenSavedViewModal = open
+    window.prksDeleteSavedViewFromIndex = del
+    const pane = owner('main')
+    pane.state.generation = 3
+    pane.state.routeName = 'saved-views'
+    const el = host()
+    presentSavedViewsIndex({ owner: pane, host: el, views: [VIEW], generation: 3 })
+    expect(el.querySelector('.prks-page-title')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Saved Views')
+    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('Any file')
+    expect(el.querySelector('a.saved-views-page__list-main')?.getAttribute('href')).toBe('#/views/SV%201')
+    expect(el.querySelector('a.prks-btn')?.textContent).toBe('Open')
+    const actions = el.querySelectorAll('.saved-views-page__row-actions button')
+    ;(actions[0] as HTMLButtonElement).click()
+    ;(actions[1] as HTMLButtonElement).click()
+    await nextTick()
+    expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search })
+    expect(del).toHaveBeenCalledWith('SV 1', expect.any(Function), 'main')
+    pane.state.generation = 4
+    ;(actions[0] as HTMLButtonElement).click()
+    ;(actions[1] as HTMLButtonElement).click()
+    await nextTick()
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(readRouteSurface(pane)).toMatchObject({ name: 'saved-views', canonicalHash: '#/views' })
+  })
+
+  it('paints the empty index, keeps owners apart, and drops a stale generation', async () => {
+    const palette = vi.fn()
+    window.prksOpenCommandPalette = palette
+    const main = owner('main')
+    const other = owner('other')
+    main.state.generation = 2
+    other.state.generation = 1
+    main.state.routeName = 'saved-views'
+    other.state.routeName = 'saved-views'
+    const mainHost = host()
+    const otherHost = host()
+    presentSavedViewsIndex({ owner: main, host: mainHost, views: [], generation: 2 })
+    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
+    expect(mainHost.querySelector('.saved-views-page__empty')?.textContent).toBe('No Saved Views yet.')
+    expect(mainHost.textContent).toContain('Run a search and choose “Save View” to keep it here.')
+    expect(mainHost.querySelector('.saved-views-page__list-item')).toBeNull()
+    ;(mainHost.querySelector('#prks-saved-views-empty-search') as HTMLButtonElement).click()
+    expect(palette).toHaveBeenCalledTimes(1)
+    expect(otherHost.querySelector('.saved-views-page__list-item')).not.toBeNull()
+    presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 1 })
+    await nextTick()
+    expect(mainHost.querySelector('.saved-views-page__list-item')).toBeNull()
+    dismissSavedViews(main)
+    expect(mainHost.innerHTML).toBe('')
+    expect(otherHost.querySelector('.saved-views-page__list-item')).not.toBeNull()
+  })
+
+  it('registers the index bridge and paints an early host', () => {
+    window.prksSearchSummaryText = () => 'tag:T'
+    const el = host()
+    el.setAttribute('data-prks-vue-route-host', 'true')
+    ;(el as HTMLElement & { __prksVueRouteRequest?: object }).__prksVueRouteRequest = {
+      feature: 'saved-views',
+      owner: owner('main'),
+      views: [VIEW],
+      generation: 1,
+    }
+    registerSavedViewsBridge(window)
+    expect(window.prksVuePresentSavedViewsIndex).toBeTypeOf('function')
+    expect(el.querySelector('.saved-views-page__summary')?.textContent).toBe('tag:T')
   })
 })
 

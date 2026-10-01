@@ -13,7 +13,9 @@ _SV = os.path.join(_FRONTEND, "js", "saved-views.js")
 _SEARCH = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "SearchRoute.vue")
 _SEARCH_INTENTS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "intents.ts")
 _SV_DETAIL = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewDetailRoute.vue")
+_SV_INDEX = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewsIndexRoute.vue")
 _SV_INTENTS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "intents.ts")
+_SV_PROJECTION = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "projection.ts")
 _TAB_CONTEXT = os.path.join(_FRONTEND, "js", "tab-context.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
@@ -97,6 +99,36 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("confirmLabel: 'Delete Saved View'", src)
         policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
         self.assertNotIn("frontend/js/components/search.js", policy)
+
+    def test_saved_views_index_is_a_vue_surface(self):
+        """The index is the Vue list. The replaced painter and its edit/delete
+        helpers are gone. Delete refreshes in place."""
+        app = _read(_APP)
+        self.assertIn("function prksPresentVueSavedViewsIndex(", app)
+        case_at = app.index("case 'saved-views': {")
+        case_body = app[case_at: case_at + 1200]
+        self.assertIn("fetchSavedViews(", case_body)
+        self.assertIn("prksPresentVueSavedViewsIndex(", case_body)
+        self.assertNotIn("renderSavedViewsIndex", app)
+        src = _read(_SV)
+        for name in (
+            "function renderSavedViewsIndex",
+            "function bindIndexActions",
+            "function openEditById",
+            "function confirmDelete",
+            "prksOpenSavedViewIndexEdit",
+        ):
+            self.assertNotIn(name, src)
+        self.assertIn("function prksDeleteSavedViewFromIndex", src)
+        self.assertIn("prksCurrentCanonicalHash", src)
+        index = _read(_SV_INDEX)
+        self.assertIn("saved-views-page", index)
+        self.assertIn("No Saved Views yet.", index)
+        self.assertIn("removeFromIndex", _read(_SV_INTENTS))
+        self.assertIn("prksSearchSummaryText", _read(_SV_PROJECTION))
+        agents = _read(_AGENTS)
+        self.assertIn("prksDeleteSavedViewFromIndex", agents)
+        self.assertNotIn("renderSavedViewsIndex", agents)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)
