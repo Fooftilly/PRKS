@@ -63,10 +63,10 @@ function ticket() {
   }
 }
 
-function preferenceWidth() {
-  const width = props.state.width
-  if (typeof width === 'number' && Number.isFinite(width)) return width
-  return props.state.defaultWidth || 352
+function displayedWidth() {
+  const layout = props.state.layoutWidth
+  if (typeof layout === 'number' && Number.isFinite(layout)) return layout
+  return props.state.width || props.state.defaultWidth || 352
 }
 
 function actuallyPinned() {
@@ -119,7 +119,7 @@ function bindDrawerWidth(el: unknown) {
   ).prksBindDrawerWidthSeparator
   if (typeof bind !== 'function') return
   releaseDrawerWidth = bind(el, {
-    getWidth: () => preferenceWidth(),
+    getWidth: () => displayedWidth(),
     getMin: () => props.state.minWidth || 240,
     getMax: () => props.state.maxWidth || 480,
     getDefault: () => props.state.defaultWidth || 352,

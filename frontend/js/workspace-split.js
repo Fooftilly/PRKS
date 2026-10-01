@@ -638,17 +638,33 @@
         return Number.isFinite(n) ? n : fallback;
     }
 
+    /**
+     * Gesture min/max from the caller. This is the handle's own limit, not a
+     * workspace split ratio and not the pane's viewer cap.
+     */
+    function clampDrawerWidth(cfg, width) {
+        let min = Math.round(drawerWidthNumber(cfg.getMin && cfg.getMin(), 240));
+        let max = Math.round(drawerWidthNumber(cfg.getMax && cfg.getMax(), 480));
+        if (min > max) {
+            const swap = min;
+            min = max;
+            max = swap;
+        }
+        const n = Math.round(drawerWidthNumber(width, min));
+        return Math.min(max, Math.max(min, n));
+    }
+
     function paintDrawerWidthAria(el, cfg, width) {
         if (!el) return;
-        const min = drawerWidthNumber(cfg.getMin && cfg.getMin(), 240);
-        const max = drawerWidthNumber(cfg.getMax && cfg.getMax(), 480);
-        const now = Math.round(drawerWidthNumber(width, min));
+        const min = Math.round(drawerWidthNumber(cfg.getMin && cfg.getMin(), 240));
+        const max = Math.round(drawerWidthNumber(cfg.getMax && cfg.getMax(), 480));
+        const now = clampDrawerWidth(cfg, width);
         el.setAttribute('role', 'separator');
         el.setAttribute('tabindex', '0');
         el.setAttribute('aria-orientation', 'vertical');
         el.setAttribute('aria-label', 'Annotation list width');
-        el.setAttribute('aria-valuemin', String(Math.round(min)));
-        el.setAttribute('aria-valuemax', String(Math.round(max)));
+        el.setAttribute('aria-valuemin', String(min));
+        el.setAttribute('aria-valuemax', String(max));
         el.setAttribute('aria-valuenow', String(now));
         el.setAttribute('aria-valuetext', now + ' pixels');
     }
@@ -659,8 +675,10 @@
      * widens. The ticket from `cfg.capture` is taken once when the gesture
      * starts and passed unchanged through every preview, commit, and cancel.
      * Pointer moves coalesce to one preview per animation frame. pointerup
-     * commits. pointercancel restores the width from gesture start and does
-     * not commit. Width clamping stays with the caller.
+     * commits only when the clamped width changed. A click with no movement
+     * does not commit. pointercancel restores the width from gesture start
+     * and does not commit. Preview, commit, and ARIA all use the clamped
+     * min/max. The remembered preference and any pane cap stay with the caller.
      */
     function prksBindDrawerWidthSeparator(el, cfg) {
         if (!el || !cfg) return function () {};
@@ -692,8 +710,12 @@
             } catch (_err) {}
             if (activeDragCleanup === state.cleanup) activeDragCleanup = null;
             if (kind === 'commit') {
-                if (typeof cfg.onCommit === 'function') cfg.onCommit(state.latest, state.captured);
-                paintDrawerWidthAria(el, cfg, state.latest);
+                const width = clampDrawerWidth(cfg, state.latest);
+                const start = clampDrawerWidth(cfg, state.startWidth);
+                if (width !== start && typeof cfg.onCommit === 'function') {
+                    cfg.onCommit(width, state.captured);
+                }
+                paintDrawerWidthAria(el, cfg, width !== start ? width : start);
             } else if (typeof cfg.onCancel === 'function') {
                 cfg.onCancel(state.startWidth, state.captured);
                 paintDrawerWidthAria(el, cfg, state.startWidth);
@@ -725,7 +747,7 @@
             state.onMove = function (ev) {
                 if (state.settled || ev.pointerId !== state.pointerId) return;
                 ev.preventDefault();
-                state.latest = state.startWidth + (state.startX - ev.clientX);
+                state.latest = clampDrawerWidth(cfg, state.startWidth + (state.startX - ev.clientX));
                 if (state.frame) return;
                 const schedule = typeof root.requestAnimationFrame === 'function'
                     ? root.requestAnimationFrame.bind(root)
@@ -787,6 +809,7 @@
             } else if (key === 'Home') next = min;
             else if (key === 'End') next = max;
             else next = fallback;
+            next = clampDrawerWidth(cfg, next);
             e.preventDefault();
             e.stopPropagation();
             const captured = typeof cfg.capture === 'function' ? cfg.capture() : null;
