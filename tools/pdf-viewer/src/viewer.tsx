@@ -62,12 +62,14 @@ function ApiBinder({
     initialPage,
     onPageChange,
     onAnnotationSelect,
+    onAnnotationCommentDismiss,
 }: {
     controller: ViewerController;
     mode: 'work' | 'preview';
     initialPage?: number;
     onPageChange?: PrksPdfViewerOptions['onPageChange'];
     onAnnotationSelect?: PrksPdfViewerOptions['onAnnotationSelect'];
+    onAnnotationCommentDismiss?: PrksPdfViewerOptions['onAnnotationCommentDismiss'];
 }) {
     const searchFlight = useRef<PdfSearchFlightSlot>({ current: null });
     const { registry, activeDocumentId } = useRegistry();
@@ -164,6 +166,10 @@ function ApiBinder({
                       const first = selected[0];
                       const id = first && first.object ? String(first.object.id) : '';
                       if (id === lastSelected) return;
+                      const previousSelected = lastSelected;
+                      if (previousSelected) {
+                          onAnnotationCommentDismiss?.({ annotationId: previousSelected });
+                      }
                       lastSelected = id;
                       if (!id) return;
                       const pi = first.object.pageIndex;
@@ -184,7 +190,7 @@ function ApiBinder({
                 goToPage: (pageNumber) => {
                     (scroll || scrollCap?.forDocument(activeDocumentId))?.scrollToPage({
                         pageNumber,
-                        behavior: 'auto',
+                        behavior: 'instant',
                     });
                 },
                 getCurrentPage: () =>
@@ -275,6 +281,9 @@ function ApiBinder({
                     const pi = obj?.pageIndex;
                     if (pi == null || !Number.isFinite(pi)) return;
                     annotation?.selectAnnotation(pi, annotationId);
+                },
+                deselectAnnotation: () => {
+                    annotation?.deselectAnnotation();
                 },
                 saveCopy: async () => {
                     await annotation?.commit()?.toPromise();
@@ -371,6 +380,7 @@ function ApiBinder({
         mode,
         onPageChange,
         onAnnotationSelect,
+        onAnnotationCommentDismiss,
     ]);
 
     return null;
@@ -418,6 +428,7 @@ function ViewerTree({
                         initialPage={options.initialPage}
                         onPageChange={options.onPageChange}
                         onAnnotationSelect={options.onAnnotationSelect}
+                        onAnnotationCommentDismiss={options.onAnnotationCommentDismiss}
                     />
                     {activeDocumentId ? (
                         <Toolbar
@@ -469,6 +480,12 @@ function ViewerTree({
                                                                 workMode={mode === 'work'}
                                                                 onCommentRequest={
                                                                     options.onAnnotationCommentRequest
+                                                                }
+                                                                onCommentDismiss={
+                                                                    options.onAnnotationCommentDismiss
+                                                                }
+                                                                onDeleteRequest={
+                                                                    options.onAnnotationDeleteRequest
                                                                 }
                                                             />
                                                         )}

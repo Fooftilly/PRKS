@@ -27,6 +27,7 @@ type ReadyApi = {
     createAnnotation: (pageIndex: number, annotation: Record<string, unknown>) => void;
     deleteAnnotation: (id: string) => Promise<void>;
     selectAnnotation: (id: string) => void;
+    deselectAnnotation: () => void;
     saveCopy: () => Promise<ArrayBuffer>;
     getDocumentId: () => string | null;
     isSelecting: () => boolean;
@@ -224,6 +225,7 @@ export class ViewerController {
             createAnnotation: (pageIndex, annotation) => need().createAnnotation(pageIndex, annotation),
             deleteAnnotation: (id) => need().deleteAnnotation(id),
             selectAnnotation: (id) => need().selectAnnotation(id),
+            deselectAnnotation: () => need().deselectAnnotation(),
             onAnnotationEvent: (callback) => {
                 this.annotationListeners.add(callback);
                 return () => this.annotationListeners.delete(callback);

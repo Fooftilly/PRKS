@@ -191,7 +191,7 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         pdf = _read(_PDF)
         editor_delete = _extract(
             pdf,
-            "window.deletePdfAnnotationFromEditor = async function () {",
+            "window.deletePdfAnnotationFromEditor = async function (ctx, captured) {",
             "\n};",
         )
         self.assertIn("await prksConfirmDeletePdfAnnotation()", editor_delete)

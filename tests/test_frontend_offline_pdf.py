@@ -177,7 +177,10 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         src = _read(_WORKS_PDF)
         self.assertIn("function prksPdfUserMutationStillAllowed(pdf)", src)
         self.assertIn("annotationMutationAllowed === false", src)
-        for fn_name in ("window.deletePdfAnnotationFromEditor = async function () {", "window.savePdfAnnotationComment = async function () {"):
+        for fn_name in (
+            "window.deletePdfAnnotationFromEditor = async function (ctx, captured) {",
+            "window.savePdfAnnotationComment = async function (ctx, text, captured) {",
+        ):
             at = src.index(fn_name)
             snippet = src[at : at + 2500]
             self.assertIn(
@@ -253,14 +256,22 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
         self.assertLess(save_wait, save_check)
         self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
-        # Sidebar row Delete: confirm first, then wait before capability refuse.
-        row_at = works.index(".annotation-row__delete")
-        row_body = works[row_at:row_at + 2400]
+        # Sidebar row Delete captures the viewer before confirm, then waits,
+        # then deletes only through that same viewer.
+        row_at = works.index("if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {")
+        row_body = works[row_at:works.index("annotation-row__copy-link", row_at)]
+        row_ticket = row_body.index("captureAnnotationPopupTicket")
         row_confirm = row_body.index("prksConfirmDeletePdfAnnotation")
         row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")
+        row_still = row_body.index("annotationPopupWriteStill", row_wait)
         row_check = row_body.index("prksPdfUserMutationStillAllowed", row_wait)
+        self.assertLess(row_ticket, row_confirm)
         self.assertLess(row_confirm, row_wait)
-        self.assertLess(row_wait, row_check)
+        self.assertLess(row_wait, row_still)
+        self.assertLess(row_still, row_check)
+        self.assertIn("const viewer = ticket.viewer", row_body)
+        self.assertIn("pdf.viewer === viewer", row_body)
+        self.assertNotIn("prksPdfViewer(owner)", row_body)
 
     def test_set_mutation_enabled_clears_active_tool_before_preview(self):
         """setMutationEnabled(false) must synchronously return the annotation
