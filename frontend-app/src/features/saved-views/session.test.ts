@@ -117,14 +117,16 @@ describe('Saved Views index route bridge', () => {
     expect(el.querySelector('a.prks-btn')?.textContent).toBe('Open')
     const actions = el.querySelectorAll('.saved-views-page__row-actions button')
     ;(actions[0] as HTMLButtonElement).click()
-    ;(actions[1] as HTMLButtonElement).click()
-    await nextTick()
+    await flushPromises()
     expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search })
+    ;(actions[1] as HTMLButtonElement).click()
+    await flushPromises()
     expect(del).toHaveBeenCalledWith('SV 1', expect.any(Function), 'main')
     pane.state.generation = 4
     ;(actions[0] as HTMLButtonElement).click()
+    await flushPromises()
     ;(actions[1] as HTMLButtonElement).click()
-    await nextTick()
+    await flushPromises()
     expect(open).toHaveBeenCalledTimes(1)
     expect(del).toHaveBeenCalledTimes(1)
     expect(readRouteSurface(pane)).toMatchObject({ name: 'saved-views', canonicalHash: '#/views' })
@@ -210,6 +212,78 @@ describe('Saved Views index route bridge', () => {
     expect(clicked().getAttribute('aria-busy')).toBeNull()
     expect(clicked().textContent?.trim()).toBe('Delete')
     expect(otherButton().disabled).toBe(false)
+  })
+
+  it('starts one fetch for two delayed Edit clicks, and Edit and Delete cannot overlap', async () => {
+    window.prksSearchSummaryText = () => 'Any file'
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    let releaseFetch: (value: typeof VIEW) => void = () => {}
+    const fetchView = vi.fn(
+      () =>
+        new Promise<typeof VIEW>((resolve) => {
+          releaseFetch = resolve
+        }),
+    )
+    const open = vi.fn()
+    window.fetchSavedView = fetchView
+    window.prksOpenSavedViewModal = open
+    let releaseDelete: (value?: void) => void = () => {}
+    const del = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDelete = resolve
+        }),
+    )
+    window.prksDeleteSavedViewFromIndex = del
+    const main = owner('main')
+    const other = owner('other')
+    main.state.generation = 3
+    other.state.generation = 1
+    main.state.routeName = 'saved-views'
+    other.state.routeName = 'saved-views'
+    const mainHost = host()
+    const otherHost = host()
+    presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 3 })
+    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
+    const editButton = (root: HTMLElement) =>
+      root.querySelector('[data-sv-index-edit="SV 1"]') as HTMLButtonElement
+    const deleteButton = (root: HTMLElement) =>
+      root.querySelector('[data-sv-index-delete="SV 1"]') as HTMLButtonElement
+
+    editButton(mainHost).click()
+    await nextTick()
+    expect(editButton(mainHost).disabled).toBe(true)
+    expect(editButton(mainHost).getAttribute('aria-busy')).toBe('true')
+    expect(editButton(mainHost).textContent).toBe('Opening…')
+    editButton(mainHost).click()
+    expect(fetchView).toHaveBeenCalledTimes(1)
+    expect(deleteButton(mainHost).disabled).toBe(true)
+    deleteButton(mainHost).click()
+    expect(del).not.toHaveBeenCalled()
+    expect(editButton(otherHost).disabled).toBe(false)
+    expect(deleteButton(otherHost).disabled).toBe(false)
+
+    releaseFetch(VIEW)
+    await flushPromises()
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(editButton(mainHost).disabled).toBe(false)
+    expect(editButton(mainHost).textContent?.trim()).toBe('Edit')
+    expect(deleteButton(mainHost).disabled).toBe(false)
+
+    deleteButton(mainHost).click()
+    await nextTick()
+    expect(deleteButton(mainHost).disabled).toBe(true)
+    expect(deleteButton(mainHost).textContent).toBe('Deleting…')
+    expect(editButton(mainHost).disabled).toBe(true)
+    editButton(mainHost).click()
+    expect(fetchView).toHaveBeenCalledTimes(1)
+    expect(editButton(otherHost).disabled).toBe(false)
+    releaseDelete()
+    await flushPromises()
+    expect(editButton(mainHost).disabled).toBe(false)
+    expect(deleteButton(mainHost).disabled).toBe(false)
+    expect(del).toHaveBeenCalledTimes(1)
   })
 
   it('paints the empty index, keeps owners apart, and drops a stale generation', async () => {

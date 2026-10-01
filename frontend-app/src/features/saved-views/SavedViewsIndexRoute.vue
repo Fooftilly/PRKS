@@ -20,8 +20,18 @@ function deleteKey(viewId: string): string {
   return `delete:${viewId}`
 }
 
+function editKey(viewId: string): string {
+  return `edit:${viewId}`
+}
+
 function edit(viewId: string): void {
-  void props.intents.editById(viewId)
+  void withBusy(editKey(viewId), async () => {
+    try {
+      await props.intents.editById(viewId)
+    } catch {
+      /* Busy clears in finally. A failed fetch does not reopen the modal. */
+    }
+  })
 }
 
 function remove(viewId: string): void {
@@ -59,7 +69,17 @@ onMounted(() => {
           </a>
           <div class="saved-views-page__row-actions">
             <a class="prks-btn prks-btn--secondary prks-btn--sm" :href="row.href">Open</a>
-            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" @click="edit(row.id)">Edit</button>
+            <PrksButton
+              variant="secondary"
+              size="sm"
+              :data-sv-index-edit="row.id"
+              :busy="actionBusy(editKey(row.id))"
+              :disabled="actionBlocked(editKey(row.id))"
+              busy-label="Opening…"
+              @click="edit(row.id)"
+            >
+              Edit
+            </PrksButton>
             <PrksButton
               variant="danger"
               size="sm"
