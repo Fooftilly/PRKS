@@ -3,6 +3,8 @@ import { registerConceptsBridge } from './features/concepts/session'
 import { registerFolderDetailBridge } from './features/folder-detail/session'
 import { registerFolderLibraryBridge } from './features/folder-library/session'
 import { registerRecentBridge } from './features/recent/session'
+import { registerSavedViewsBridge } from './features/saved-views/session'
+import { registerSearchBridge } from './features/search/session'
 import { registerArgumentsBridge } from './features/arguments/session'
 import { registerPeopleBridge } from './features/people/session'
 import { registerPersonGroupsBridge } from './features/person-groups/session'
@@ -30,6 +32,8 @@ registerConceptsBridge(window)
 registerFolderLibraryBridge(window)
 registerFolderDetailBridge(window)
 registerRecentBridge(window)
+registerSearchBridge(window)
+registerSavedViewsBridge(window)
 registerPositionsBridge(window)
 registerArgumentsBridge(window)
 registerPlaylistsBridge(window)

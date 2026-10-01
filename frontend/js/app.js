@@ -2887,6 +2887,73 @@ function prksPresentVueRecent(ctx, contentDiv, detail) {
 }
 
 /**
+ * The one read behind Search and Saved View detail. Membership is the
+ * server's (`fetchSearch`), and the response is never cached. A pending local
+ * edit is not on the server yet, so the rows are overlaid with
+ * `prksEffectiveWorksSync` after the pending maps are hydrated. The response
+ * itself is not rewritten. Callers check `stale()` after this resolves.
+ */
+async function prksEffectiveSearchResults(query, tag, options, signal, stale) {
+    const results = await fetchSearch(query, tag, Object.assign({}, options, { signal: signal }));
+    if (stale()) return [];
+    await prksHydratePendingWorkMetadata();
+    if (stale()) return [];
+    return typeof prksEffectiveWorksSync === 'function' ? prksEffectiveWorksSync(results) : results;
+}
+
+/**
+ * Mount the Vue Search surface in this pane.
+ * `detail.rows` must come from `prksEffectiveSearchResults`.
+ */
+function prksPresentVueSearch(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'search',
+        owner: ctx,
+        request: detail.request,
+        canonicalHash: detail.canonicalHash,
+        rows: detail.rows,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentSearch === 'function') {
+        window.prksVuePresentSearch(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
+ * Mount the Vue Saved View detail surface in this pane.
+ * `detail.rows` must come from `prksEffectiveSearchResults`.
+ */
+function prksPresentVueSavedViewDetail(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'saved-view-detail',
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        view: detail.view,
+        viewId: detail.viewId,
+        searchHash: detail.searchHash,
+        rows: detail.rows,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentSavedViewDetail === 'function') {
+        window.prksVuePresentSavedViewDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
  * Mount the Vue Folder detail surface in this pane.
  * `detail.folder` must already be the effective folder from the coordinator.
  * Same-owner Folder→Folder refresh reuses the host so the hierarchy shell stays.
@@ -4247,28 +4314,28 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const viewId = route.params.viewId;
                 const view = typeof fetchSavedView === 'function' ? await fetchSavedView(viewId, { signal: routeSignal }) : null;
                 if (stale()) return;
-                ctx.ui.currentSavedView = view || null;
+                ctx.setEntity('savedView', view || null);
                 if (!view) {
-                    if (typeof renderSavedViewNotFound === 'function') {
-                        renderSavedViewNotFound(contentDiv);
-                    } else {
-                        contentDiv.innerHTML =
-                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Saved View not found.</h2></div><p class="meta-row"><a href="#/views">Back to Saved Views</a></p>';
-                    }
+                    prksPresentVueSavedViewDetail(ctx, contentDiv, {
+                        availability: 'not-found',
+                        viewId: viewId,
+                        generation: generation,
+                    });
                     titleOpts = { notFound: true, notFoundTitle: 'Saved View not found' };
                     break;
                 }
-                const mapped =
-                    typeof prksSearchOptionsFromDefinition === 'function'
-                        ? prksSearchOptionsFromDefinition(view.search || {})
-                        : { q: '', tag: null, options: {} };
-                const results = await fetchSearch(mapped.q, mapped.tag, Object.assign({}, mapped.options, { signal: routeSignal }));
+                const mapped = prksSearchOptionsFromDefinition(view.search || {});
+                const rows = await prksEffectiveSearchResults(
+                    mapped.q, mapped.tag, mapped.options, routeSignal, stale);
                 if (stale()) return;
-                await prksHydratePendingWorkMetadata();
-                if (stale()) return;
-                if (typeof renderSavedViewDetail === 'function') {
-                    renderSavedViewDetail(view, results, contentDiv);
-                }
+                prksPresentVueSavedViewDetail(ctx, contentDiv, {
+                    availability: 'ready',
+                    view: view,
+                    viewId: view.id,
+                    searchHash: prksSearchHashFromDefinition(view.search || {}),
+                    rows: rows,
+                    generation: generation,
+                });
                 titleOpts = { entityTitle: view.name || 'Saved View' };
                 break;
             }
@@ -4339,21 +4406,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 const author = route.params.author || '';
                 const publisher = route.params.publisher || '';
                 const any = route.params.any || '';
-                const results = await fetchSearch(query, tag, { author, publisher, any, signal: routeSignal });
-                if (stale()) return;
-                // Server results carry acknowledged values; the cards render
-                // the effective ones (see prksSearchResultCardsHtml), which
-                // needs the pending map read first.
-                await prksHydratePendingWorkMetadata();
+                const rows = await prksEffectiveSearchResults(
+                    query, tag, { author, publisher, any }, routeSignal, stale);
                 if (stale()) return;
                 publishSidebar({
                     query,
                     tag,
                     author,
                     publisher,
-                    resultCount: Array.isArray(results) ? results.length : 0,
+                    resultCount: Array.isArray(rows) ? rows.length : 0,
                 });
-                renderSearch(results, query, contentDiv, { tag, author, publisher, any });
+                prksPresentVueSearch(ctx, contentDiv, {
+                    request: { q: query, tag, author, publisher, any },
+                    canonicalHash: route.canonicalHash,
+                    rows: rows,
+                    generation: generation,
+                });
                 break;
             }
             case 'tags': {

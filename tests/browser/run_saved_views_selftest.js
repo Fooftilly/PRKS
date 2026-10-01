@@ -72,7 +72,7 @@ const sandbox = {
     exports: {},
     prksParseRoute: null,
     prksNavigate: function (hash, opts) {
-        navCalls.push({ hash: hash, replace: !!(opts && opts.replace) });
+        navCalls.push({ hash: hash, replace: !!(opts && opts.replace), tabId: opts && opts.tabId });
         sandbox.location.hash = hash;
     },
     openModal: function (id) {
@@ -237,6 +237,69 @@ Promise.resolve(root.createSavedView({
             assertEq('current index edit opens modal', modalCalls[modalCalls.length - 1], 'saved-view-modal');
             assertEq('current index edit fills name', inputs.name.value, 'Current View');
 
+            /* Save View from the Search surface uses that owner's hash, not the URL. */
+            root.location.hash = '#/folders';
+            root.prksOpenSavedViewModalFromCurrentSearch('#/search?q=owned&author=Benjamin');
+            assertEq('save view uses owner hash q', inputs.q.value, 'owned');
+            assertEq('save view uses owner hash author', inputs.author.value, 'Benjamin');
+
+            /* Edit this Saved View reads the Main TabContext entity. */
+            const beforeEdit = modalCalls.length;
+            root.prksGetMainTabContext = function () { return { getEntity: function () { return null; } }; };
+            root.prksOpenSavedViewModalForCurrentView();
+            assertEq('edit current view without entity is a no-op', modalCalls.length, beforeEdit);
+            root.prksGetMainTabContext = function () {
+                return {
+                    getEntity: function (type) {
+                        return type === 'savedView'
+                            ? { id: 'SV-MAIN', name: 'Main View', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' } }
+                            : null;
+                    },
+                };
+            };
+            root.prksOpenSavedViewModalForCurrentView();
+            assertEq('edit current view opens modal', modalCalls.length, beforeEdit + 1);
+            assertEq('edit current view fills name', inputs.name.value, 'Main View');
+            assertEq('edit current view fills tag', inputs.tag.value, 'T');
+
+            /* Detail delete: confirm, still fence, delete, still fence, navigate owner. */
+            const deletes = [];
+            root.prksConfirmDestructive = function () { return Promise.resolve(true); };
+            root.deleteSavedView = function (id) { deletes.push(id); return Promise.resolve(); };
+            navCalls.length = 0;
+            root.prksNavigate = function (hash, opts) {
+                navCalls.push({ hash: hash, replace: !!(opts && opts.replace), tabId: opts && opts.tabId });
+            };
+            return root.prksDeleteSavedViewFromDetail('SV-A', function () { return false; }, 'tab-1')
+                .then(function () {
+                    assertEq('stale owner after confirm does not delete', deletes.length, 0);
+                    assertEq('stale owner after confirm does not navigate', navCalls.length, 0);
+                    let calls = 0;
+                    return root.prksDeleteSavedViewFromDetail('SV-B', function () {
+                        calls += 1;
+                        return calls === 1;
+                    }, 'tab-1');
+                })
+                .then(function () {
+                    assertEq('delete started before stale still deletes', deletes.join(','), 'SV-B');
+                    assertEq('owner gone after delete does not navigate', navCalls.length, 0);
+                    return root.prksDeleteSavedViewFromDetail('SV-C', function () { return true; }, 'tab-1');
+                })
+                .then(function () {
+                    assertEq('current owner delete', deletes.join(','), 'SV-B,SV-C');
+                    assertEq('current owner navigates to index', navCalls[0] && navCalls[0].hash, '#/views');
+                    assertEq('current owner navigate replaces', navCalls[0] && navCalls[0].replace, true);
+                    assertEq('current owner navigate targets tab', navCalls[0] && navCalls[0].tabId, 'tab-1');
+                    root.prksConfirmDestructive = function () { return Promise.resolve(false); };
+                    return root.prksDeleteSavedViewFromDetail('SV-D', function () { return true; }, 'tab-1');
+                })
+                .then(function () {
+                    assertEq('cancel does not delete', deletes.join(','), 'SV-B,SV-C');
+                    assert('detail painters removed', typeof root.renderSavedViewDetail === 'undefined' &&
+                        typeof root.renderSavedViewNotFound === 'undefined' &&
+                        typeof root.prksSearchResultCardsHtml === 'undefined');
+                });
+        }).then(function () {
             console.log(passed + ' passed, ' + failed + ' failed');
             if (failed) process.exit(1);
         });

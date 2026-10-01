@@ -1386,7 +1386,6 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
             "components/works.js": _read(os.path.join(_FRONTEND, "js", "components", "works.js")),
             "features/progress": progress_vue,
             "components/types.js": _read(os.path.join(_FRONTEND, "js", "components", "types.js")),
-            "components/search.js": _read(os.path.join(_FRONTEND, "js", "components", "search.js")),
         }
         for name, src in named.items():
             with self.subTest(module=name):

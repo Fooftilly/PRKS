@@ -19,6 +19,28 @@ interface RecentPresentRequest {
   shell?: boolean
 }
 
+interface SearchPresentRequest {
+  owner: object
+  host: HTMLElement
+  request: unknown
+  canonicalHash?: string
+  rows: unknown
+  generation?: number
+  shell?: boolean
+}
+
+interface SavedViewDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'not-found'
+  view?: unknown
+  viewId?: string
+  searchHash?: string
+  rows?: unknown
+  generation?: number
+  shell?: boolean
+}
+
 interface FolderDetailPresentRequest {
   owner: object
   host: HTMLElement
@@ -239,6 +261,19 @@ interface Window {
   prksVueDismissProgress?: (owner: object) => void
   prksVuePresentRecent?: (input: RecentPresentRequest) => void
   prksVueDismissRecent?: (owner: object) => void
+  prksVuePresentSearch?: (input: SearchPresentRequest) => void
+  prksVueDismissSearch?: (owner: object) => void
+  prksVuePresentSavedViewDetail?: (input: SavedViewDetailPresentRequest) => void
+  prksVueDismissSavedViews?: (owner: object) => void
+  prksSearchHashFromDefinition?: (definition: Record<string, string>) => string
+  prksOpenSavedViewModalFromCurrentSearch?: (hash?: string) => void
+  prksOpenSavedViewModal?: (options: {
+    viewId?: string
+    name?: string
+    definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
+  }) => void
+  prksDeleteSavedViewFromDetail?: (viewId: string, still?: () => boolean, tabId?: string) => Promise<void>
+  prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
   prksVuePresentFolderDetail?: (input: FolderDetailPresentRequest) => void
   prksVueDismissFolderDetail?: (owner: object) => void
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
