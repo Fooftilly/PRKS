@@ -122,7 +122,7 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   Each group reads its own fields from the DOM and reports only its own
   conflicts.
 - **Server-backed Search and Saved View results are overlaid too**
-  (`prksEffectiveWorksSync()` inside `prksSearchResultCardsHtml()`). They are
+  (`prksEffectiveWorksSync()` inside `prksEffectiveSearchResults()`). They are
   fetched fresh, so without it a card shows the acknowledged Status seconds
   after the user changed it everywhere else. It covers every synchronized
   field, not Status alone.

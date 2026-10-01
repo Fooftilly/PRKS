@@ -561,7 +561,7 @@ disagree with any other surface about pending state if it wanted to.
 | Recently opened / Recently added cards | `recent:index`, `recently-added:index` | `prksEffectiveBrowseRows()` |
 | Recently Added local search | `recently-added:index` | the same overlaid rows the cards use |
 | Folder / Person / Playlist detail cards | embedded Work summaries | `prksEffectiveWorkSummaries()` |
-| Search and Saved View result cards | a fresh server response | `prksEffectiveWorksSync()` in `prksSearchResultCardsHtml()` |
+| Search and Saved View result cards | a fresh server response | `prksEffectiveWorksSync()` in `prksEffectiveSearchResults()` |
 | Types, Concepts, Arguments, Graph, command palette | do not render a Status badge | — |
 
 ### Where Status is written

@@ -299,21 +299,27 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
     def test_search_result_cards_render_the_effective_work(self):
         """Search and Saved View results are fetched fresh from the server, so
         they still carry the acknowledged value while a local edit is pending.
-        One overlay for every synchronized field, in the shared renderer, so
-        this is not a Status-specific patch and the next field needs none."""
-        saved = (FRONTEND / 'saved-views.js').read_text()
-        at = saved.index('function prksSearchResultCardsHtml(')
-        body = saved[at: saved.index('const modalState', at)]
-        self.assertIn('prksEffectiveWorksSync', body)
-        for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'payload.field'):
-            self.assertNotIn(forbidden, saved, forbidden)
-        # The routes that call it must hydrate the map before rendering.
-        # Offline refuse blocks sit above the online path; keep the window
-        # wide enough to reach hydrate after those early returns.
+        One overlay for every synchronized field, in the one read both routes
+        share, so this is not a Status-specific patch and the next field needs
+        none. Vue receives the effective rows and never reads the queue."""
         app = (FRONTEND / 'app.js').read_text()
+        at = app.index('async function prksEffectiveSearchResults(')
+        body = app[at: app.index('\n}\n', at)]
+        fetch_at = body.index('fetchSearch(')
+        hydrate_at = body.index('prksHydratePendingWorkMetadata()')
+        overlay_at = body.index('prksEffectiveWorksSync(results)')
+        self.assertLess(fetch_at, hydrate_at)
+        self.assertLess(hydrate_at, overlay_at)
         for marker in ("case 'search': {", "case 'saved-view-detail': {"):
             at = app.index(marker)   # missing marker is a failure, not a skip
-            self.assertIn('prksHydratePendingWorkMetadata', app[at: at + 2400], marker)
+            self.assertIn('prksEffectiveSearchResults(', app[at: at + 2400], marker)
+        surfaces = [FRONTEND / 'saved-views.js']
+        for feature in ('search', 'saved-views'):
+            surfaces.extend(sorted((ROOT / 'frontend-app' / 'src' / 'features' / feature).glob('*.[tv][su]*')))
+        for path in surfaces:
+            src = path.read_text()
+            for forbidden in ('SET_WORK_METADATA_FIELD', 'listOperations', 'payload.field', 'prksEffectiveWorksSync('):
+                self.assertNotIn(forbidden, src, '%s: %s' % (path.name, forbidden))
 
     def test_credit_is_composed_after_the_overlay_not_before(self):
         """`author_text` is only one of three possible sources of a credit: a

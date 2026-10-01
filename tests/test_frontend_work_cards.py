@@ -116,7 +116,8 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertIn("releaseOwnedThumbResources", recent[recent_unmount : recent_unmount + 500])
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
-        sv = _read(os.path.join(_FRONTEND, "js", "saved-views.js"))
+        sv = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewDetailRoute.vue"))
         self.assertIn("prks-work-browse-mode-saved-view", sv)
         self.assertIn("prksWorkBrowseModeToggleHtml", sv)
         self.assertIn("prksBindWorkBrowseMode", sv)

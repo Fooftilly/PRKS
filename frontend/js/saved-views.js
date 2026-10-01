@@ -1,6 +1,13 @@
 /**
  * Saved Views: named search definitions over the current search engine.
- * Results are never stored. Opening a view re-runs fetchSearch().
+ * Results are never stored. Opening a view re-runs fetchSearch() through the
+ * coordinator's prksEffectiveSearchResults, the same read Search uses.
+ *
+ * This file owns the canonical search query codec (definition <-> route
+ * params <-> hash <-> fetchSearch options) until the typed route model in
+ * #303 B1, the shared Saved View modal, and the Saved Views index painter
+ * until that index moves to Vue. Search and Saved View detail are painted by
+ * frontend-app/src/features/search and features/saved-views.
  */
 (function (root) {
     'use strict';
@@ -132,44 +139,6 @@
         if (d.author) parts.push('Author: ' + d.author);
         if (d.publisher) parts.push('Publisher: ' + d.publisher);
         return parts.join(' · ');
-    }
-
-    function prksSearchResultCardsHtml(results, emptyMsg) {
-        /* Search and Saved View results come from the SERVER, so while a local
-         * edit is pending they still carry the acknowledged value -- a card
-         * here would show "Planned" seconds after the user set it to
-         * "Completed" everywhere else. One overlay for every synchronized
-         * field, applied where the cards are built, so this file never learns
-         * to read the durable queue and the fix is not Status-specific. The
-         * results array itself is never mutated. */
-        const rows = typeof root.prksEffectiveWorksSync === 'function'
-            ? root.prksEffectiveWorksSync(results) : results;
-        const browseClass =
-            typeof root.prksWorkBrowseCollectionClass === 'function'
-                ? root.prksWorkBrowseCollectionClass()
-                : 'card-grid';
-        let html = '<div class="' + browseClass + '">';
-        if (rows && rows.length > 0) {
-            rows.forEach(function (w) {
-                /* The server's own excerpt rule -- code points, not UTF-16
-                 * units -- so a pending Abstract is cut exactly where the
-                 * acknowledged one will be and the card does not shift at
-                 * acknowledgement. */
-                const subtitle = w.abstract
-                    ? (typeof root.prksAbstractExcerpt === 'function'
-                        ? root.prksAbstractExcerpt(w.abstract)
-                        : String(w.abstract).substring(0, 100)) + '…'
-                    : '';
-                html +=
-                    typeof root.prksWorkCardHtml === 'function'
-                        ? root.prksWorkCardHtml(w, { subtitle: subtitle })
-                        : '';
-            });
-        } else {
-            html += '<p class="prks-inline-message">' + esc(emptyMsg || 'No results found matching your query.') + '</p>';
-        }
-        html += '</div>';
-        return html;
     }
 
     const modalState = {
@@ -338,8 +307,14 @@
         else focusName();
     }
 
-    function prksOpenSavedViewModalFromCurrentSearch() {
-        const hash = root.location ? root.location.hash : '';
+    /**
+     * The Search surface passes its owner's canonical hash. The command
+     * palette omits it; Search is Main-only, so the URL is that owner.
+     */
+    function prksOpenSavedViewModalFromCurrentSearch(searchHash) {
+        const hash = typeof searchHash === 'string' && searchHash
+            ? searchHash
+            : (root.location ? root.location.hash : '');
         const route = typeof root.prksParseRoute === 'function' ? root.prksParseRoute(hash) : null;
         const parsed = prksSearchDefinitionFromRoute(route);
         if (!parsed || !parsed.ok) {
@@ -354,8 +329,10 @@
         openModalWith({ definition: parsed.definition });
     }
 
+    /** Saved View detail is Main-only. Its record is that TabContext's entity. */
     function prksOpenSavedViewModalForCurrentView() {
-        const view = root.__prksCurrentSavedView;
+        const ctx = typeof root.prksGetMainTabContext === 'function' ? root.prksGetMainTabContext() : null;
+        const view = ctx && typeof ctx.getEntity === 'function' ? ctx.getEntity('savedView') : null;
         if (!view || !view.id) return;
         openModalWith({
             viewId: view.id,
@@ -451,7 +428,7 @@
                 e.preventDefault();
                 e.stopPropagation();
                 const id = btn.getAttribute('data-sv-delete');
-                void confirmDelete(id, false);
+                void confirmDelete(id);
             });
         });
     }
@@ -492,90 +469,39 @@
         });
     }
 
-    async function confirmDelete(id, fromDetail) {
+    async function confirmAndDelete(id, still) {
         const ok =
             typeof root.prksConfirmDestructive === 'function'
                 ? await root.prksConfirmDestructive({
                       title: 'Delete Saved View?',
                       message: 'Deleting this Saved View will not delete any files.',
-                      confirmLabel: 'Delete',
+                      confirmLabel: 'Delete Saved View',
                   })
                 : true;
-        if (!ok) return;
+        if (!ok) return false;
+        if (typeof still === 'function' && !still()) return false;
         try {
             await root.deleteSavedView(id);
         } catch (_e) {
-            return;
+            return false;
         }
-        if (fromDetail && typeof root.prksNavigate === 'function') {
-            root.prksNavigate('#/views', { replace: true });
-        } else {
-            navigateRefresh();
-        }
+        return true;
     }
 
-    function renderSavedViewNotFound(container) {
-        container.innerHTML = `
-            <div class="prks-page-header page-header">
-                <h2 class="prks-page-title">Saved View not found.</h2>
-            </div>
-            <p class="meta-row"><a class="prks-btn prks-btn--secondary" href="#/views">Back to Saved Views</a></p>
-        `;
+    async function confirmDelete(id) {
+        if (await confirmAndDelete(id)) navigateRefresh();
     }
 
-    function renderSavedViewDetail(view, results, container) {
-        const name = esc(view.name || 'Saved View');
-        const idAttr = esc(view.id);
-        const searchHash = prksSearchHashFromDefinition(view.search || {});
-        const modeToggle =
-            typeof root.prksWorkBrowseModeToggleHtml === 'function'
-                ? root.prksWorkBrowseModeToggleHtml('prks-work-browse-mode-saved-view')
-                : '';
-        const cards =
-            typeof root.prksSearchResultCardsHtml === 'function'
-                ? root.prksSearchResultCardsHtml(results, 'No results found matching your query.')
-                : prksSearchResultCardsHtml(results, 'No results found matching your query.');
-        container.innerHTML = `
-            <div class="saved-view-detail">
-                <div class="prks-page-header page-header">
-                    <div class="page-header__title-row">
-                        <div>
-                            <p class="saved-view-detail__kicker">Saved View</p>
-                            <h2 class="prks-page-title">${name}</h2>
-                        </div>
-                        <div class="page-header__actions">
-                            ${modeToggle}
-                            <a class="prks-btn prks-btn--secondary" href="${esc(searchHash)}">Open as Search</a>
-                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-view-edit">Edit</button>
-                            <button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-view-delete" data-sv-delete="${idAttr}">Delete</button>
-                        </div>
-                    </div>
-                </div>
-                ${cards}
-            </div>
-        `;
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
-        if (typeof root.prksBindWorkBrowseMode === 'function') {
-            root.prksBindWorkBrowseMode(container);
-        }
-        if (typeof root.prksInitLazyWorkThumbs === 'function') {
-            root.prksInitLazyWorkThumbs(container);
-        }
-        const editBtn = container.querySelector('#prks-saved-view-edit');
-        if (editBtn) {
-            editBtn.addEventListener('click', function () {
-                openModalWith({
-                    viewId: view.id,
-                    name: view.name || '',
-                    definition: view.search || {},
-                });
-            });
-        }
-        const delBtn = container.querySelector('#prks-saved-view-delete');
-        if (delBtn) {
-            delBtn.addEventListener('click', function () {
-                void confirmDelete(view.id, true);
-            });
+    /**
+     * Saved View detail delete. `still` is the owning surface's fence: a
+     * replaced owner does not delete after confirm, and a delete that already
+     * started does not navigate a pane that moved on.
+     */
+    async function prksDeleteSavedViewFromDetail(id, still, tabId) {
+        if (!(await confirmAndDelete(id, still))) return;
+        if (typeof still === 'function' && !still()) return;
+        if (typeof root.prksNavigate === 'function') {
+            root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
         }
     }
 
@@ -588,14 +514,12 @@
         prksSearchHashFromDefinition: prksSearchHashFromDefinition,
         prksSearchOptionsFromDefinition: prksSearchOptionsFromDefinition,
         prksSearchSummaryText: prksSearchSummaryText,
-        prksSearchResultCardsHtml: prksSearchResultCardsHtml,
         prksOpenSavedViewModalFromCurrentSearch: prksOpenSavedViewModalFromCurrentSearch,
         prksOpenSavedViewModalForCurrentView: prksOpenSavedViewModalForCurrentView,
         prksOpenSavedViewIndexEdit: openEditById,
         prksOpenSavedViewModal: openModalWith,
         renderSavedViewsIndex: renderSavedViewsIndex,
-        renderSavedViewDetail: renderSavedViewDetail,
-        renderSavedViewNotFound: renderSavedViewNotFound,
+        prksDeleteSavedViewFromDetail: prksDeleteSavedViewFromDetail,
         prksInitSavedViews: init,
     };
     Object.keys(api).forEach(function (k) {

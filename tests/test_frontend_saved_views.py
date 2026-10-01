@@ -10,7 +10,11 @@ _INDEX = os.path.join(_FRONTEND, "index.html")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _SV = os.path.join(_FRONTEND, "js", "saved-views.js")
-_SEARCH = os.path.join(_FRONTEND, "js", "components", "search.js")
+_SEARCH = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "SearchRoute.vue")
+_SEARCH_INTENTS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "intents.ts")
+_SV_DETAIL = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewDetailRoute.vue")
+_SV_INTENTS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "intents.ts")
+_TAB_CONTEXT = os.path.join(_FRONTEND, "js", "tab-context.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
@@ -52,6 +56,47 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("prksSearchHashFromDefinition", src)
         self.assertNotIn("saved_view_works", src)
         self.assertNotIn(":id/results", src)
+
+    def test_search_and_saved_view_detail_share_one_result_read(self):
+        """Search and Saved View detail run one coordinator read and one Vue
+        result collection. The replaced painters are gone."""
+        html = _read(_INDEX)
+        self.assertNotIn("/js/components/search.js", html)
+        self.assertFalse(os.path.exists(os.path.join(_FRONTEND, "js", "components", "search.js")))
+        app = _read(_APP)
+        self.assertIn("async function prksEffectiveSearchResults(", app)
+        for marker in ("case 'search': {", "case 'saved-view-detail': {"):
+            at = app.index(marker)
+            body = app[at: at + 2400]
+            self.assertIn("prksEffectiveSearchResults(", body, marker)
+            self.assertNotIn("await fetchSearch(", body, marker)
+        self.assertIn("ctx.setEntity('savedView'", app)
+        self.assertNotIn("currentSavedView", app)
+        self.assertNotIn("currentSavedView", _read(_TAB_CONTEXT))
+        for name in ("renderSearch(", "renderSavedViewDetail", "renderSavedViewNotFound"):
+            self.assertNotIn(name, app)
+        src = _read(_SV)
+        for name in ("function renderSavedViewDetail", "function renderSavedViewNotFound",
+                     "prksSearchResultCardsHtml", "__prksCurrentSavedView"):
+            self.assertNotIn(name, src)
+        self.assertIn("function prksDeleteSavedViewFromDetail", src)
+        detail = _read(_SV_DETAIL)
+        search = _read(_SEARCH)
+        for vue in (detail, search):
+            self.assertIn("SearchResultsCollection", vue)
+        self.assertIn("prksDeleteSavedViewFromDetail", _read(_SV_INTENTS))
+        self.assertIn("prksSearchHashFromDefinition", _read(_SEARCH_INTENTS))
+        detail = _read(_SV_DETAIL)
+        self.assertIn("Delete Saved View", detail)
+        self.assertIn('variant="danger"', detail)
+        self.assertIn("Deleting…", detail)
+        self.assertIn("work-html-slot", detail)
+        self.assertNotIn('style="display: contents"', detail)
+        self.assertNotIn('style="display: contents"', search)
+        self.assertIn("work-html-slot", search)
+        self.assertIn("confirmLabel: 'Delete Saved View'", src)
+        policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
+        self.assertNotIn("frontend/js/components/search.js", policy)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)
