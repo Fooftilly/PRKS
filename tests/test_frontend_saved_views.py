@@ -120,7 +120,8 @@ class FrontendSavedViewsTests(unittest.TestCase):
         ):
             self.assertNotIn(name, src)
         self.assertIn("function prksDeleteSavedViewFromIndex", src)
-        self.assertIn("prksCurrentCanonicalHash", src)
+        self.assertNotIn("prksCurrentCanonicalHash", src)
+        self.assertIn("prksNavigate('#/views'", src)
         index = _read(_SV_INDEX)
         self.assertIn("saved-views-page", index)
         self.assertIn("SAVED_VIEWS_EMPTY", index)

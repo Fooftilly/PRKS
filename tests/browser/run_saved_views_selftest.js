@@ -277,9 +277,9 @@ Promise.resolve(root.createSavedView({
                     assert('index edit export removed', typeof root.prksOpenSavedViewIndexEdit === 'undefined');
                     assert('index painter export removed', typeof root.renderSavedViewsIndex === 'undefined');
 
-                    /* Index delete refreshes this tab's current hash. It does not change route. */
+                    /* Index delete refreshes the owning tab to #/views. A focused URL elsewhere stays there. */
                     root.prksConfirmDestructive = function () { return Promise.resolve(true); };
-                    root.prksCurrentCanonicalHash = function () { return '#/views'; };
+                    assert('index refresh does not read the focused hash', src.indexOf('prksCurrentCanonicalHash') < 0);
                     navCalls.length = 0;
                     return root.prksDeleteSavedViewFromIndex('SV-I1', function () { return false; }, 'tab-index');
                 })
@@ -300,17 +300,11 @@ Promise.resolve(root.createSavedView({
                 })
                 .then(function () {
                     assertEq('current index delete', deletes[deletes.length - 1], 'SV-I3');
-                    assertEq('index refresh uses the canonical hash', navCalls[0] && navCalls[0].hash, '#/views');
+                    assertEq('focused folders URL still refreshes the owner to the index', navCalls[0] && navCalls[0].hash, '#/views');
                     assertEq('index refresh replaces', navCalls[0] && navCalls[0].replace, true);
                     assertEq('index refresh targets the owner tab', navCalls[0] && navCalls[0].tabId, 'tab-index');
                     assertEq('index refresh is one navigation', navCalls.length, 1);
-                    delete root.prksCurrentCanonicalHash;
-                    root.location.hash = '#/views';
-                    navCalls.length = 0;
-                    return root.prksDeleteSavedViewFromIndex('SV-I4', function () { return true; }, 'tab-index');
-                })
-                .then(function () {
-                    assertEq('index refresh falls back to the current hash', navCalls[0] && navCalls[0].hash, '#/views');
+                    assertEq('focused hash stays on folders', root.location.hash, '#/folders');
                     root.prksConfirmDestructive = function () { return Promise.resolve(false); };
                     navCalls.length = 0;
                     const before = deletes.length;

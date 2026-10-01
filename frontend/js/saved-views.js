@@ -376,17 +376,14 @@
 
     /**
      * Index delete. Confirms, rechecks `still`, deletes, rechecks `still`,
-     * then replaces this tab's current hash so the index refetches. It does
-     * not send the owner to another route.
+     * then navigates this tab to `#/views` so the index refetches. The
+     * refresh is the index hash on `tabId`. The focused location stays put.
      */
     async function prksDeleteSavedViewFromIndex(id, still, tabId) {
         if (!(await confirmAndDelete(id, still))) return;
         if (typeof still === 'function' && !still()) return;
         if (typeof root.prksNavigate !== 'function') return;
-        const hash = typeof root.prksCurrentCanonicalHash === 'function'
-            ? root.prksCurrentCanonicalHash()
-            : (root.location ? root.location.hash : '#/views');
-        root.prksNavigate(hash || '#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
+        root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
     }
 
     /**
