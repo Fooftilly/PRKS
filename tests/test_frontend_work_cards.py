@@ -93,10 +93,12 @@ class FrontendWorkCardTests(unittest.TestCase):
         # Preserve path releases the preview on the main element before the card rewrite.
         detail = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
-        release = detail.find("prksReleaseWorkThumbPreview?.(main)")
+        release = detail.find("releaseOwnedPreview(main)")
         rewrite = detail.find("el.innerHTML = collectionHtml.value")
         self.assertGreater(release, 0)
         self.assertGreater(rewrite, release)
+        self.assertIn("prksReleaseWorkThumbPreview", detail)
+        self.assertIn("onBeforeUnmount", detail)
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
         sv = _read(os.path.join(_FRONTEND, "js", "saved-views.js"))

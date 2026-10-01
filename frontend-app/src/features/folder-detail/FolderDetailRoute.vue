@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { folderDetailIntentsKey } from './intents'
 import { folderDetailWorksHtml } from './legacy-work-card'
 import type { FolderDetailProjection } from './projection'
@@ -66,13 +66,22 @@ function paintMode(): void {
   window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
+function releaseOwnedPreview(root: ParentNode | null): void {
+  if (root) window.prksReleaseWorkThumbPreview?.(root)
+}
+
 function paintCollection(): void {
   const main = mainEl.value
-  if (main) window.prksReleaseWorkThumbPreview?.(main)
+  // Folder→Folder keeps this shell and rewrites the cards. Release while the
+  // previous thumbs are still inside main; scoped release leaves another pane alone.
+  releaseOwnedPreview(main)
   const el = collectionEl.value
   if (!el) return
   el.innerHTML = collectionHtml.value
-  if (!props.projection.offlineCached) window.prksInitLazyWorkThumbs?.(el)
+  const offlineCached = props.projection.offlineCached
+  if (!offlineCached && typeof window.prksInitLazyWorkThumbs === 'function') {
+    window.prksInitLazyWorkThumbs(el)
+  }
   window.prksBindWorkBrowseMode?.(rootEl.value)
   window.prksRefreshIcons?.(rootEl.value)
 }
@@ -102,6 +111,12 @@ onMounted(() => {
   paintMode()
   paintCollection()
   commitSurface()
+})
+
+onBeforeUnmount(() => {
+  // beginRoute dismisses this tree before app.js calls prksReleaseWorkThumbPreview.
+  // The body-mounted preview only clears while its thumb is still under this root.
+  releaseOwnedPreview(rootEl.value || mainEl.value)
 })
 
 watch(
