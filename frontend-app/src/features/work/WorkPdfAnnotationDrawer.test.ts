@@ -520,6 +520,144 @@ describe('annotation drawer', () => {
     }
   })
 
+  it('refreshes separator ARIA when the pane grows without rebinding', async () => {
+    const win = window as Window & {
+      prksBindDrawerWidthSeparator?: (
+        element: HTMLElement,
+        cfg: object,
+      ) => { release: () => void; refresh: () => void }
+      createWorkPdfRuntime?: (options: { workId: string }) => {
+        openAnnotationDrawer: () => boolean
+        setAnnotationDrawerPinned: (pinned: boolean) => boolean
+        setAnnotationDrawerWidth: (width: number, options?: { persist?: boolean }) => boolean
+        noteAnnotationDrawerFrame: (frame: { paneWidth: number; mobile: boolean }) => void
+        readAnnotationDrawer: () => {
+          pinned: boolean
+          pinEnabled: boolean
+          placement: 'closed' | 'overlay' | 'pinned' | 'sheet'
+          width: number
+          layoutWidth: number
+          minWidth: number
+          maxWidth: number
+          interactionMax: number
+          defaultWidth: number
+        }
+        destroy: () => void
+      }
+    }
+    const originalBind = win.prksBindDrawerWidthSeparator
+    const create = win.createWorkPdfRuntime
+    expect(typeof originalBind).toBe('function')
+    expect(typeof create).toBe('function')
+    if (typeof originalBind !== 'function' || typeof create !== 'function') return
+    let binds = 0
+    win.prksBindDrawerWidthSeparator = (element, cfg) => {
+      binds += 1
+      return originalBind(element, cfg)
+    }
+    const runtime = create({ workId: 'work-a' })
+    runtime.openAnnotationDrawer()
+    runtime.setAnnotationDrawerPinned(true)
+    runtime.setAnnotationDrawerWidth(480, { persist: true })
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 700, mobile: false })
+    const read = runtime.readAnnotationDrawer()
+    expect(read.layoutWidth).toBe(380)
+    expect(read.interactionMax).toBe(380)
+    const cancels: number[] = []
+    try {
+      const wrapper = mount(WorkPdfAnnotationDrawer, {
+        props: {
+          state: {
+            ...state,
+            pinned: true,
+            pinEnabled: true,
+            placement: 'pinned',
+            width: read.width,
+            layoutWidth: read.layoutWidth,
+            minWidth: read.minWidth,
+            maxWidth: read.maxWidth,
+            interactionMax: read.interactionMax,
+            defaultWidth: read.defaultWidth,
+          },
+          tabId: 'tab-a',
+          onClose: () => {},
+          onJump: () => {},
+          onEdit: () => {},
+          onDelete: () => {},
+          onCopy: async () => true,
+          onResize: (_width, _ticket, options) => {
+            if (options.cancel) cancels.push(1)
+          },
+        },
+        attachTo: document.body,
+      })
+      mounted.push(wrapper)
+      await nextTick()
+      const handle = wrapper.get('.pdf-annotation-drawer__resize').element
+      expect(binds).toBe(1)
+      expect(handle.getAttribute('aria-valuenow')).toBe('380')
+      expect(handle.getAttribute('aria-valuemax')).toBe('380')
+      runtime.noteAnnotationDrawerFrame({ paneWidth: 1100, mobile: false })
+      const grew = runtime.readAnnotationDrawer()
+      expect(grew.layoutWidth).toBe(480)
+      expect(grew.interactionMax).toBe(480)
+      await wrapper.setProps({
+        state: {
+          ...state,
+          pinned: true,
+          pinEnabled: true,
+          placement: 'pinned',
+          width: grew.width,
+          layoutWidth: grew.layoutWidth,
+          minWidth: grew.minWidth,
+          maxWidth: grew.maxWidth,
+          interactionMax: grew.interactionMax,
+          defaultWidth: grew.defaultWidth,
+        },
+      })
+      await nextTick()
+      expect(wrapper.get('.pdf-annotation-drawer__resize').element).toBe(handle)
+      expect(binds).toBe(1)
+      expect(handle.getAttribute('aria-valuenow')).toBe('480')
+      expect(handle.getAttribute('aria-valuemax')).toBe('480')
+      handle.dispatchEvent(new PointerEvent('pointerdown', {
+        clientX: 240,
+        pointerId: 31,
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      }))
+      expect(handle.classList.contains('is-dragging')).toBe(true)
+      await wrapper.setProps({
+        state: {
+          ...state,
+          pinned: true,
+          pinEnabled: true,
+          placement: 'pinned',
+          width: grew.width,
+          layoutWidth: grew.layoutWidth,
+          minWidth: 256,
+          maxWidth: grew.maxWidth,
+          interactionMax: grew.interactionMax,
+          defaultWidth: grew.defaultWidth,
+        },
+      })
+      await nextTick()
+      expect(binds).toBe(1)
+      expect(handle.classList.contains('is-dragging')).toBe(true)
+      expect(cancels).toEqual([])
+      expect(handle.getAttribute('aria-valuemin')).toBe('256')
+      document.dispatchEvent(new PointerEvent('pointerup', {
+        pointerId: 31,
+        bubbles: true,
+        cancelable: true,
+      }))
+    } finally {
+      runtime.destroy()
+      win.prksBindDrawerWidthSeparator = originalBind
+    }
+  })
+
   it('clamps separator values before commit and ARIA', async () => {
     const frames: Array<FrameRequestCallback> = []
     const originalFrame = window.requestAnimationFrame

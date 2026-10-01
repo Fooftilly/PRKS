@@ -93,15 +93,22 @@ interface DrawerWidthTicket {
   viewerToken: number
 }
 
-type ReleaseDrawerWidth = () => void
+type DrawerWidthBinding = {
+  release: () => void
+  refresh: () => void
+}
 
-let releaseDrawerWidth: ReleaseDrawerWidth | null = null
+let drawerWidthBinding: DrawerWidthBinding | null = null
 
 function clearDrawerWidth() {
-  if (!releaseDrawerWidth) return
-  const release = releaseDrawerWidth
-  releaseDrawerWidth = null
+  if (!drawerWidthBinding) return
+  const release = drawerWidthBinding.release
+  drawerWidthBinding = null
   release()
+}
+
+function refreshDrawerWidth() {
+  drawerWidthBinding?.refresh()
 }
 
 function bindDrawerWidth(el: unknown) {
@@ -121,11 +128,11 @@ function bindDrawerWidth(el: unknown) {
           onCommit: (width: number, captured: DrawerWidthTicket) => void
           onCancel: (width: number, captured: DrawerWidthTicket) => void
         },
-      ) => ReleaseDrawerWidth
+      ) => DrawerWidthBinding
     }
   ).prksBindDrawerWidthSeparator
   if (typeof bind !== 'function') return
-  releaseDrawerWidth = bind(el, {
+  const binding = bind(el, {
     getWidth: () => displayedWidth(),
     getMin: () => props.state.minWidth || 240,
     getMax: () => interactionMax(),
@@ -141,6 +148,8 @@ function bindDrawerWidth(el: unknown) {
       props.onResize?.(width, captured, { persist: false, cancel: true })
     },
   })
+  if (!binding || typeof binding.release !== 'function' || typeof binding.refresh !== 'function') return
+  drawerWidthBinding = binding
 }
 
 function viewerHost(): HTMLElement | null {
@@ -241,6 +250,18 @@ watch(
 watch(resizeRef, (el) => {
   bindDrawerWidth(el)
 }, { flush: 'post' })
+
+watch(
+  () => [
+    props.state.layoutWidth,
+    props.state.interactionMax,
+    props.state.minWidth,
+    props.state.maxWidth,
+  ],
+  () => {
+    refreshDrawerWidth()
+  },
+)
 
 onBeforeUnmount(() => {
   clearDrawerWidth()

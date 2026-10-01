@@ -680,10 +680,15 @@
      * stay painted. pointercancel does the same. Keyboard input that clamps
      * back to the displayed width does not commit. Preview, commit, and ARIA
      * all use the clamped min/max. The remembered preference stays with the
-     * caller.
+     * caller. `refresh` repaints separator ARIA from the current getters and
+     * does not end or restart a drag.
      */
     function prksBindDrawerWidthSeparator(el, cfg) {
-        if (!el || !cfg) return function () {};
+        const idle = {
+            release: function () {},
+            refresh: function () {},
+        };
+        if (!el || !cfg) return idle;
         let drag = null;
 
         function cancelFrame(state) {
@@ -833,11 +838,17 @@
         el.setAttribute('data-prks-drawer-width-bound', '1');
         paintDrawerWidthAria(el, cfg, cfg.getWidth && cfg.getWidth());
 
-        return function releaseDrawerWidthSeparator() {
-            endDrag('cancel');
-            el.removeEventListener('pointerdown', onPointerDown);
-            el.removeEventListener('keydown', onKeyDown);
-            el.removeAttribute('data-prks-drawer-width-bound');
+        return {
+            /* Repaint from the current getters. Does not end or restart a drag. */
+            refresh: function refreshDrawerWidthSeparator() {
+                paintDrawerWidthAria(el, cfg, cfg.getWidth && cfg.getWidth());
+            },
+            release: function releaseDrawerWidthSeparator() {
+                endDrag('cancel');
+                el.removeEventListener('pointerdown', onPointerDown);
+                el.removeEventListener('keydown', onKeyDown);
+                el.removeAttribute('data-prks-drawer-width-bound');
+            },
         };
     }
 
