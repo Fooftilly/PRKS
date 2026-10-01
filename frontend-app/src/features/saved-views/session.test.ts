@@ -130,6 +130,88 @@ describe('Saved Views index route bridge', () => {
     expect(readRouteSurface(pane)).toMatchObject({ name: 'saved-views', canonicalHash: '#/views' })
   })
 
+  it('keeps an index delete busy until resolve, reject, or cancel, and ignores a second click', async () => {
+    window.prksSearchSummaryText = () => 'Any file'
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    let release: (value?: void) => void = () => {}
+    let rejectDelete: (error: Error) => void = () => {}
+    const del = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          release = resolve
+          rejectDelete = reject
+        }),
+    )
+    window.prksDeleteSavedViewFromIndex = del
+    const main = owner('main')
+    const other = owner('other')
+    main.state.generation = 3
+    other.state.generation = 1
+    main.state.routeName = 'saved-views'
+    other.state.routeName = 'saved-views'
+    const mainHost = host()
+    const otherHost = host()
+    const views = [VIEW, { ...VIEW, id: 'SV 2', name: 'Later' }]
+    presentSavedViewsIndex({ owner: main, host: mainHost, views, generation: 3 })
+    presentSavedViewsIndex({ owner: other, host: otherHost, views, generation: 1 })
+    const button = (root: HTMLElement, id: string) =>
+      root.querySelector(`[data-sv-index-delete="${id}"]`) as HTMLButtonElement
+    const clicked = () => button(mainHost, 'SV 1')
+    const sibling = () => button(mainHost, 'SV 2')
+    const otherButton = () => button(otherHost, 'SV 1')
+
+    expect(clicked().classList.contains('prks-btn--danger')).toBe(true)
+    expect(clicked().classList.contains('prks-btn--sm')).toBe(true)
+    expect(clicked().textContent?.trim()).toBe('Delete')
+    expect(mainHost.innerHTML).not.toContain('style="display: contents"')
+    expect(mainHost.querySelectorAll('.work-html-slot').length).toBeGreaterThan(0)
+
+    clicked().click()
+    await nextTick()
+    expect(clicked().disabled).toBe(true)
+    expect(clicked().getAttribute('aria-busy')).toBe('true')
+    expect(clicked().textContent).toBe('Deleting…')
+    clicked().click()
+    sibling().click()
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(del).toHaveBeenCalledWith('SV 1', expect.any(Function), 'main')
+    expect(sibling().disabled).toBe(true)
+    expect(sibling().getAttribute('aria-busy')).toBeNull()
+    expect(sibling().textContent?.trim()).toBe('Delete')
+    expect(otherButton().disabled).toBe(false)
+    expect(otherButton().getAttribute('aria-busy')).toBeNull()
+    expect(otherButton().textContent?.trim()).toBe('Delete')
+
+    release()
+    await flushPromises()
+    expect(clicked().disabled).toBe(false)
+    expect(clicked().getAttribute('aria-busy')).toBeNull()
+    expect(clicked().textContent?.trim()).toBe('Delete')
+    expect(sibling().disabled).toBe(false)
+
+    clicked().click()
+    await nextTick()
+    expect(del).toHaveBeenCalledTimes(2)
+    expect(clicked().getAttribute('aria-busy')).toBe('true')
+    rejectDelete(new Error('delete failed'))
+    await flushPromises()
+    expect(clicked().disabled).toBe(false)
+    expect(clicked().getAttribute('aria-busy')).toBeNull()
+    expect(clicked().textContent?.trim()).toBe('Delete')
+
+    clicked().click()
+    await nextTick()
+    expect(del).toHaveBeenCalledTimes(3)
+    expect(clicked().textContent).toBe('Deleting…')
+    release()
+    await flushPromises()
+    expect(clicked().disabled).toBe(false)
+    expect(clicked().getAttribute('aria-busy')).toBeNull()
+    expect(clicked().textContent?.trim()).toBe('Delete')
+    expect(otherButton().disabled).toBe(false)
+  })
+
   it('paints the empty index, keeps owners apart, and drops a stale generation', async () => {
     const palette = vi.fn()
     window.prksOpenCommandPalette = palette
