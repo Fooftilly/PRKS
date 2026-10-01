@@ -6304,7 +6304,7 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
    While it is open, keep Annotations at the start of Secondary toolbars.
    That control then sits in the pane strip the panel does not cover.
    Pane width, zoom, and reading position stay unchanged. */
-body.prks-right-panel-open #app-container.app-container--tiled .prks-workspace-canvas--tiled > :nth-child(3) .prks-pdf-toolbar__group:has(> button[aria-label="Annotations"]) {
+body.prks-right-panel-open #app-container.app-container--tiled [data-prks-secondary-root="1"] .prks-pdf-toolbar__group:has(> button[aria-label="Annotations"]) {
     order: -1;
 }
 

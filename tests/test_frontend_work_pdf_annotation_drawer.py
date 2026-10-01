@@ -123,9 +123,11 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
     def test_open_details_panel_keeps_secondary_annotations_clear(self):
         css = (ROOT / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
         rule = css[
-            css.index("body.prks-right-panel-open #app-container.app-container--tiled .prks-workspace-canvas--tiled > :nth-child(3)") :
+            css.index('body.prks-right-panel-open #app-container.app-container--tiled [data-prks-secondary-root="1"]') :
             css.index("/* Discoverable Close")
         ]
+        self.assertIn('[data-prks-secondary-root="1"]', rule)
+        self.assertNotIn(":nth-child(", rule)
         self.assertIn('.prks-pdf-toolbar__group:has(> button[aria-label="Annotations"])', rule)
         self.assertIn("order: -1;", rule)
         self.assertNotIn("width:", rule)
