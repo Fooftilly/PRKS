@@ -86,6 +86,17 @@ class FrontendSavedViewsTests(unittest.TestCase):
             self.assertIn("SearchResultsCollection", vue)
         self.assertIn("prksDeleteSavedViewFromDetail", _read(_SV_INTENTS))
         self.assertIn("prksSearchHashFromDefinition", _read(_SEARCH_INTENTS))
+        detail = _read(_SV_DETAIL)
+        self.assertIn("Delete Saved View", detail)
+        self.assertIn('variant="danger"', detail)
+        self.assertIn("Deleting…", detail)
+        self.assertIn("work-html-slot", detail)
+        self.assertNotIn('style="display: contents"', detail)
+        self.assertNotIn('style="display: contents"', search)
+        self.assertIn("work-html-slot", search)
+        self.assertIn("confirmLabel: 'Delete Saved View'", src)
+        policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
+        self.assertNotIn("frontend/js/components/search.js", policy)
 
     def test_docs(self):
         wiki = _read(_WIKI_USER)

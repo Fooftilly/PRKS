@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import { usePendingAction } from '../../route-surface/pending-action'
 import SearchResultsCollection from '../search/SearchResultsCollection.vue'
 import type { SavedViewIntents } from './intents'
 import type { SavedViewDetailProjection } from './projection'
@@ -9,6 +11,7 @@ const props = defineProps<{
   intents: SavedViewIntents
 }>()
 
+const { actionBusy, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
 const view = computed(() => props.projection.view)
@@ -18,7 +21,15 @@ function edit(): void {
 }
 
 function remove(): void {
-  if (view.value) void props.intents.remove(view.value.id)
+  const current = view.value
+  if (!current) return
+  void withBusy('delete', async () => {
+    try {
+      await props.intents.remove(current.id)
+    } catch {
+      /* Busy clears in finally. The delete wrapper keeps its own error. */
+    }
+  })
 }
 
 function paintMode(): void {
@@ -42,18 +53,19 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
           <h2 class="prks-page-title">{{ view.name }}</h2>
         </div>
         <div class="page-header__actions">
-          <div ref="modeHost" data-prks-saved-view-mode-host style="display: contents"></div>
+          <div ref="modeHost" class="work-html-slot" data-prks-saved-view-mode-host></div>
           <a class="prks-btn prks-btn--secondary" :href="projection.searchHash">Open as Search</a>
           <button id="prks-saved-view-edit" type="button" class="prks-btn prks-btn--secondary" @click="edit">Edit</button>
-          <button
+          <PrksButton
             id="prks-saved-view-delete"
-            type="button"
-            class="prks-btn prks-btn--secondary"
+            variant="danger"
             :data-sv-delete="view.id"
+            :busy="actionBusy('delete')"
+            busy-label="Deleting…"
             @click="remove"
           >
-            Delete
-          </button>
+            Delete Saved View
+          </PrksButton>
         </div>
       </div>
     </div>

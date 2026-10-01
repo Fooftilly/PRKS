@@ -592,7 +592,6 @@ AFFECTED_RULES = (
         "paths": (
             "frontend/js/components/types.js",
             "frontend/js/components/recent.js",
-            "frontend/js/components/search.js",
             "frontend/js/components/work-cards.js",
             "frontend/js/saved-views.js",
         ),

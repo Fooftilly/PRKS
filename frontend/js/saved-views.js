@@ -475,7 +475,7 @@
                 ? await root.prksConfirmDestructive({
                       title: 'Delete Saved View?',
                       message: 'Deleting this Saved View will not delete any files.',
-                      confirmLabel: 'Delete',
+                      confirmLabel: 'Delete Saved View',
                   })
                 : true;
         if (!ok) return false;

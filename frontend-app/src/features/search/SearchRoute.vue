@@ -60,7 +60,7 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
       <div class="page-header__title-row">
         <h2 class="prks-page-title">{{ projection.title }}</h2>
         <div class="page-header__actions">
-          <div ref="modeHost" data-prks-search-mode-host style="display: contents"></div>
+          <div ref="modeHost" class="work-html-slot" data-prks-search-mode-host></div>
           <button
             v-if="projection.canOfferSave"
             id="prks-save-view-btn"
@@ -72,13 +72,13 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
           </button>
         </div>
       </div>
-      <div style="display: contents" v-html="scopeHtml"></div>
+      <div class="work-html-slot" v-html="scopeHtml"></div>
       <div v-if="showForm" class="search-advanced" role="search">
         <div v-if="request.any" class="search-advanced__row">
           <label class="search-advanced__label" for="search-any-input">All</label>
           <div class="tag-add-shell">
             <div class="tag-add-shell__field">
-              <span style="display: contents" v-html="searchIcon"></span>
+              <span class="work-html-slot" v-html="searchIcon"></span>
               <input
                 id="search-any-input"
                 v-model="q"
@@ -98,7 +98,7 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
             <label class="search-advanced__label" for="search-q-input">Keywords</label>
             <div class="tag-add-shell">
               <div class="tag-add-shell__field">
-                <span style="display: contents" v-html="searchIcon"></span>
+                <span class="work-html-slot" v-html="searchIcon"></span>
                 <input
                   id="search-q-input"
                   v-model="q"
@@ -117,7 +117,7 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
             <label class="search-advanced__label" for="search-author-input">Author</label>
             <div class="tag-add-shell">
               <div class="tag-add-shell__field">
-                <span style="display: contents" v-html="searchIcon"></span>
+                <span class="work-html-slot" v-html="searchIcon"></span>
                 <input
                   id="search-author-input"
                   v-model="author"
@@ -136,7 +136,7 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
             <label class="search-advanced__label" for="search-publisher-input">Publisher</label>
             <div class="tag-add-shell">
               <div class="tag-add-shell__field">
-                <span style="display: contents" v-html="searchIcon"></span>
+                <span class="work-html-slot" v-html="searchIcon"></span>
                 <input
                   id="search-publisher-input"
                   v-model="publisher"

@@ -1,3 +1,4 @@
+import { flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readRouteSurface } from '../../route-surface/lifecycle'
@@ -119,6 +120,60 @@ describe('Saved View detail route bridge', () => {
     ;(el.querySelector('#prks-saved-view-delete') as HTMLButtonElement).click()
     expect(open).toHaveBeenCalledTimes(1)
     expect(del).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps detail delete busy until confirm, cancel, or failure, and ignores a second click', async () => {
+    cards()
+    let release: (value?: void) => void = () => {}
+    let rejectDelete: (error: Error) => void = () => {}
+    const del = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          release = resolve
+          rejectDelete = reject
+        }),
+    )
+    window.prksDeleteSavedViewFromDetail = del
+    const main = owner('main')
+    const other = owner('other')
+    main.state.generation = 2
+    other.state.generation = 1
+    main.state.entityId = 'SV 1'
+    other.state.entityId = 'SV 1'
+    const mainHost = host()
+    const otherHost = host()
+    presentSavedViewDetail({ owner: main, host: mainHost, availability: 'ready', view: VIEW, rows: [], generation: 2 })
+    presentSavedViewDetail({ owner: other, host: otherHost, availability: 'ready', view: VIEW, rows: [], generation: 1 })
+    const button = () => mainHost.querySelector('#prks-saved-view-delete') as HTMLButtonElement
+    const otherButton = () => otherHost.querySelector('#prks-saved-view-delete') as HTMLButtonElement
+    expect(button().classList.contains('prks-btn--danger')).toBe(true)
+    expect(button().textContent?.trim()).toBe('Delete Saved View')
+
+    button().click()
+    await nextTick()
+    expect(button().disabled).toBe(true)
+    expect(button().getAttribute('aria-busy')).toBe('true')
+    expect(button().textContent).toBe('Deleting…')
+    button().click()
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(otherButton().disabled).toBe(false)
+    expect(otherButton().getAttribute('aria-busy')).toBeNull()
+
+    release()
+    await flushPromises()
+    expect(button().disabled).toBe(false)
+    expect(button().getAttribute('aria-busy')).toBeNull()
+    expect(button().textContent?.trim()).toBe('Delete Saved View')
+
+    button().click()
+    await nextTick()
+    expect(del).toHaveBeenCalledTimes(2)
+    expect(button().getAttribute('aria-busy')).toBe('true')
+    rejectDelete(new Error('delete failed'))
+    await flushPromises()
+    expect(button().disabled).toBe(false)
+    expect(button().getAttribute('aria-busy')).toBeNull()
+    expect(button().textContent?.trim()).toBe('Delete Saved View')
   })
 
   it('paints not-found, ignores a stale generation, and keeps owners apart', async () => {

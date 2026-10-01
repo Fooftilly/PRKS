@@ -264,7 +264,11 @@ Promise.resolve(root.createSavedView({
 
             /* Detail delete: confirm, still fence, delete, still fence, navigate owner. */
             const deletes = [];
-            root.prksConfirmDestructive = function () { return Promise.resolve(true); };
+            let confirmOpts = null;
+            root.prksConfirmDestructive = function (opts) {
+                confirmOpts = opts;
+                return Promise.resolve(true);
+            };
             root.deleteSavedView = function (id) { deletes.push(id); return Promise.resolve(); };
             navCalls.length = 0;
             root.prksNavigate = function (hash, opts) {
@@ -290,6 +294,7 @@ Promise.resolve(root.createSavedView({
                     assertEq('current owner navigates to index', navCalls[0] && navCalls[0].hash, '#/views');
                     assertEq('current owner navigate replaces', navCalls[0] && navCalls[0].replace, true);
                     assertEq('current owner navigate targets tab', navCalls[0] && navCalls[0].tabId, 'tab-1');
+                    assertEq('confirm names Delete Saved View', confirmOpts && confirmOpts.confirmLabel, 'Delete Saved View');
                     root.prksConfirmDestructive = function () { return Promise.resolve(false); };
                     return root.prksDeleteSavedViewFromDetail('SV-D', function () { return true; }, 'tab-1');
                 })
