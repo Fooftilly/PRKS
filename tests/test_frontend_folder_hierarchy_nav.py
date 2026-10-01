@@ -36,7 +36,9 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         folders = _read(_FOLDERS)
         self.assertIn("prksFolderNavTriggerHtml", folders)
         self.assertIn("prksMountFolderHierarchyNav", folders)
-        self.assertIn("prks-folder-detail__header", folders)
+        detail = _read(os.path.join(
+            _ROOT, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
+        self.assertIn("prks-folder-detail__header", detail)
         self.assertIn("data-prks-role=\"folder-hierarchy-nav\"", folders)
         self.assertIn("tabId: ctx && ctx.tabId", folders)
         # Desktop IA: persistent hierarchy tree | contents; compact band is fallback.

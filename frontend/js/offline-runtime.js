@@ -2878,6 +2878,21 @@
             return next;
         }
 
+        /**
+         * Publish a list snapshot without delaying the caller.
+         * A same-generation sweep still in progress must finish its delete
+         * first, or the write is refused and Recent stays empty. An older
+         * generation does not wait and cannot write over the newer sweep.
+         * Paint never waits on this.
+         */
+        async function publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken) {
+            const pending = domain ? domainInvalidation.get(domain) : null;
+            if (pending && pending.generation === domainToken && pending.promise) {
+                await pending.promise;
+            }
+            await cacheListForDomain(listKey, raw, domain, domainToken);
+        }
+
         /** Same policy as readThroughEntity but for a named list snapshot. */
         async function readThroughList(listKey, path, opts) {
             const options2 = opts && typeof opts === 'object' ? opts : {};
@@ -2914,7 +2929,9 @@
             // Validate before publishing: a malformed 200 must never replace a
             // good cached list snapshot.
             assertAcceptableShape(options2.validate, raw);
-            void cacheListForDomain(listKey, raw, domain, domainToken);
+            // Return before the sweep. The publish waits for a same-generation
+            // delete, then stores the list. A skipped write stays skipped.
+            void publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }
 

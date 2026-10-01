@@ -5125,8 +5125,15 @@ async function prksReloadEntityTagsUI(entityType, entityId, ownerCtx, coherenceT
             return;
         }
         if (typeof ctx.setEntity === 'function') ctx.setEntity('folder', _tf);
-        if (ctx.root && ctx.mounted && typeof renderFolderDetails === 'function') {
-            renderFolderDetails(ctx, _tf, ctx.root);
+        if (ctx.root && ctx.mounted && typeof prksPresentVueFolderDetail === 'function') {
+            prksPresentVueFolderDetail(ctx, ctx.root, {
+                feature: 'folder-detail',
+                availability: 'ready',
+                folder: _tf,
+                folderId: _tf && _tf.id,
+                preserveWorkspace: false,
+                generation: ctx.generation,
+            });
         }
         if (!prksOwnerTabIsFocused(ctx)) return;
         const panel = prksPrepareRightPanelReplace(ctx);

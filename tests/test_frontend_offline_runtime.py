@@ -1178,10 +1178,13 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         self.assertIn("role === 'Author' || role === 'Editor'", role_body)
 
     def test_cached_folder_detail_suppresses_thumbnails(self):
-        folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
-        self.assertIn("suppressThumbnail: true", folders)
+        cards = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "legacy-work-card.ts"))
+        detail = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
+        self.assertIn("suppressThumbnail: true", cards)
         # Lazy hydration must be skipped too, not just the src.
-        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", folders)
+        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", detail)
 
     def test_recently_added_reads_through_its_own_offline_snapshot(self):
         """Recently added is cached now, so it is no longer connectivity-gated:
@@ -1455,8 +1458,12 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         with self.subTest(module="features/progress/legacy-work-card.ts"):
             self.assertIn("offlineCached", progress)
             self.assertIn("suppressThumbnail", progress)
-        for name, fn in (("components/search.js", "function renderRecent("),
-                         ("components/types.js", "function renderWorksByDocType(")):
+        recent = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "legacy-work-card.ts"))
+        with self.subTest(module="features/recent/legacy-work-card.ts"):
+            self.assertIn("offlineCached", recent)
+            self.assertIn("suppressThumbnail", recent)
+        for name, fn in (("components/types.js", "function renderWorksByDocType("),):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
                 body = _fn_body(src, fn)

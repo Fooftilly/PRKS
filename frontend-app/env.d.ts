@@ -10,6 +10,27 @@ interface ProgressPresentRequest {
   shell?: boolean
 }
 
+interface RecentPresentRequest {
+  owner: object
+  host: HTMLElement
+  rows: unknown
+  offlineCached?: boolean
+  generation?: number
+  shell?: boolean
+}
+
+interface FolderDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  availability?: 'ready' | 'unavailable' | 'not-found'
+  folder?: unknown
+  folderId?: string
+  offlineCached?: boolean
+  preserveWorkspace?: boolean
+  generation?: number
+  shell?: boolean
+}
+
 interface ConceptsIndexPresentRequest {
   owner: object
   host: HTMLElement
@@ -216,6 +237,23 @@ interface Window {
   ) => boolean
   prksVuePresentProgress?: (input: ProgressPresentRequest) => void
   prksVueDismissProgress?: (owner: object) => void
+  prksVuePresentRecent?: (input: RecentPresentRequest) => void
+  prksVueDismissRecent?: (owner: object) => void
+  prksVuePresentFolderDetail?: (input: FolderDetailPresentRequest) => void
+  prksVueDismissFolderDetail?: (owner: object) => void
+  prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
+  prksFolderDetailSummaryHtml?: (folder: unknown) => string
+  prksFolderDetailNavHtml?: (ctx: unknown, folder: unknown) => string
+  prksFolderDetailSubfoldersHtml?: (children: readonly unknown[]) => string
+  prksCommitFolderDetailSurface?: (
+    ctx: unknown,
+    folder: unknown,
+    container: HTMLElement,
+    options?: { preserveFolderWorkspace?: boolean },
+  ) => void
+  prksMountFolderHierarchyNav?: (ctx: unknown, folder: unknown, container: ParentNode | null) => void
+  prksDeleteFolderFromDetail?: (folderId: string, still?: () => boolean) => Promise<void>
+  prksOpenNewFolderFromDetail?: (folder: Record<string, unknown>) => void
   prksVuePresentConceptsIndex?: (input: ConceptsIndexPresentRequest) => void
   prksVuePresentConceptDetail?: (input: ConceptDetailPresentRequest) => void
   prksVueDismissConcepts?: (owner: object) => void
@@ -447,7 +485,7 @@ interface Window {
   prksPageHeaderIconHtml?: (name: string) => string
   prksIcon?: (
     name: string,
-    options?: { size?: string; className?: string },
+    options?: { size?: string | number; className?: string },
   ) => string
   prksPaintScopeHost?: (
     rootEl: ParentNode | HTMLElement | null,

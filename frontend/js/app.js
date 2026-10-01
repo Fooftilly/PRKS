@@ -2863,6 +2863,64 @@ function prksPresentVueProgress(ctx, contentDiv, detail) {
 }
 
 /**
+ * Mount the Vue Recent surface in this pane.
+ * `detail.rows` must already be the effective Recent projection.
+ */
+function prksPresentVueRecent(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'recent',
+        owner: ctx,
+        rows: detail.rows,
+        offlineCached: !!detail.offlineCached,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentRecent === 'function') {
+        window.prksVuePresentRecent(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
+ * Mount the Vue Folder detail surface in this pane.
+ * `detail.folder` must already be the effective folder from the coordinator.
+ * Same-owner Folder→Folder refresh reuses the host so the hierarchy shell stays.
+ */
+function prksPresentVueFolderDetail(ctx, contentDiv, detail) {
+    let host =
+        contentDiv && typeof contentDiv.querySelector === 'function'
+            ? contentDiv.querySelector(':scope > [data-prks-vue-route-host]')
+            : null;
+    if (!host) {
+        contentDiv.innerHTML = '';
+        host = document.createElement('div');
+        host.setAttribute('data-prks-vue-route-host', 'true');
+        contentDiv.appendChild(host);
+    }
+    const request = {
+        feature: 'folder-detail',
+        owner: ctx,
+        availability: detail.availability || 'ready',
+        folder: detail.folder,
+        folderId: detail.folderId,
+        offlineCached: !!detail.offlineCached,
+        preserveWorkspace: !!detail.preserveWorkspace,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentFolderDetail === 'function') {
+        window.prksVuePresentFolderDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
  * Mount the Vue Concepts index or detail surface in this pane.
  * `detail` must already be the authoritative effective Concept projection.
  * Same-owner Concepts refresh reuses the existing host so local index state
@@ -3478,6 +3536,16 @@ async function prksRenderTabRoute(ctx, hash, options) {
     if (samePersonGroupsWorkspace) {
         ctx.__prksRetainPersonGroupsSurface = true;
     }
+    /* Folder→Folder keeps the Vue hierarchy shell. Detect before beginRoute so
+     * the retain-aware cleanup sees the flag. The live shell, not lastResolvedRoute,
+     * is the signal: beginRoute clears that record. */
+    const sameFolderWorkspace = !!(
+        route.name === 'folder-detail' &&
+        contentDiv.querySelector('[data-prks-role="folder-detail"]')
+    );
+    if (sameFolderWorkspace) {
+        ctx.__prksRetainFolderDetailSurface = true;
+    }
     const generation = ctx.beginRoute(route);
     if (sameConceptsWorkspace) {
         ctx.__prksRetainConceptsSurface = false;
@@ -3499,6 +3567,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
     }
     if (samePersonGroupsWorkspace) {
         ctx.__prksRetainPersonGroupsSurface = false;
+    }
+    if (sameFolderWorkspace) {
+        ctx.__prksRetainFolderDetailSurface = false;
     }
     /* beginRoute cleared the edit flags. Put a same-group editor back before
      * the awaited reads, so a save already in flight still owns this session. */
@@ -3540,18 +3611,6 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof prksSyncSidebarActive === 'function') prksSyncSidebarActive(route);
     }
 
-    /* Folder→Folder in the same mounted TabContext is an in-place workspace
-     * selection change: keep the existing Folder shell (tree + prior contents)
-     * visible while the destination resolves. Do not paint the generic
-     * Loading view... screen that blanks the center pane.
-     *
-     * Detect via the live shell, not only prevRoute.name: beginRoute clears
-     * lastResolvedRoute, so a rapid A→B→C would otherwise treat B→C as a fresh
-     * entry and wipe the workspace mid-flight. */
-    const sameFolderWorkspace = !!(
-        route.name === 'folder-detail' &&
-        contentDiv.querySelector('[data-prks-role="folder-detail"]')
-    );
     // Drop lazy-thumb observations for this pane before the route paint replaces
     // its DOM — otherwise never-intersected cards stay retained by the singleton
     // IntersectionObserver after the subtree is detached.
@@ -3601,6 +3660,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
         }
         if (typeof window.prksVueDismissPersonGroups === 'function') {
             window.prksVueDismissPersonGroups(ctx);
+        }
+        if (typeof window.prksVueDismissFolderDetail === 'function') {
+            window.prksVueDismissFolderDetail(ctx);
+        }
+        if (typeof window.prksVueDismissRecent === 'function') {
+            window.prksVueDismissRecent(ctx);
         }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
@@ -3818,7 +3883,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 if (resolvedFolder.unavailable) {
                     ctx.setEntity('folder', null);
-                    prksOfflineRenderUnavailable(contentDiv, 'Folder not available offline');
+                    prksPresentVueFolderDetail(ctx, contentDiv, {
+                        feature: 'folder-detail',
+                        availability: 'unavailable',
+                        folder: null,
+                        folderId: folderId,
+                        generation: generation,
+                    });
+                    prksOfflinePrependBanner(contentDiv, null);
                     titleOpts = { notFound: true, notFoundTitle: 'Folder not available offline' };
                     break;
                 }
@@ -3838,9 +3910,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 await prksHydratePendingWorkMetadata();
                 if (stale()) return;
                 ctx.setEntity('folder', folder);
-                renderFolderDetails(ctx, folder, contentDiv, {
+                prksPresentVueFolderDetail(ctx, contentDiv, {
+                    feature: 'folder-detail',
+                    availability: folder ? 'ready' : 'not-found',
+                    folder: folder,
+                    folderId: folderId,
                     offlineCached: offlineFolder.source === 'cache',
-                    preserveFolderWorkspace: sameFolderWorkspace,
+                    preserveWorkspace: sameFolderWorkspace,
+                    generation: generation,
                 });
                 // In-place commit keeps the shell: drop prior route banners before
                 // destination provenance (or none) is applied.
@@ -4125,7 +4202,11 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     break;
                 }
                 publishSidebar({ workCount: works.length });
-                renderRecent(works, contentDiv, { offlineCached: offlineRecent.source === 'cache' });
+                prksPresentVueRecent(ctx, contentDiv, {
+                    rows: works,
+                    offlineCached: offlineRecent.source === 'cache',
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineRecent);
                 break;
             }
@@ -5347,6 +5428,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         }
         if (samePersonGroupsWorkspace && typeof window.prksVueDismissPersonGroups === 'function') {
             window.prksVueDismissPersonGroups(ctx);
+        }
+        if (sameFolderWorkspace && typeof window.prksVueDismissFolderDetail === 'function') {
+            window.prksVueDismissFolderDetail(ctx);
         }
         if (typeof prksRenderRouteError === 'function') {
             prksRenderRouteError(contentDiv, ctx, route.canonicalHash || route.hash, generation);

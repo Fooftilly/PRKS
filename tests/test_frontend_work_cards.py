@@ -90,15 +90,30 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertGreater(at, 0)
         window = app[max(0, at - 280) : at]
         self.assertNotIn("!sameFolderWorkspace && typeof window.prksReleaseWorkThumbPreview", window)
-        # Preserve path must also release against existingMain before the rewrite.
-        folders = _read(_FOLDERS)
-        self.assertIn("prksReleaseWorkThumbPreview(existingMain)", folders)
-        rewrite = folders.find("existingMain.innerHTML = prksFolderDetailMainInnerHtml")
-        self.assertGreater(rewrite, 0)
-        self.assertLess(
-            folders.find("prksReleaseWorkThumbPreview(existingMain)"),
-            rewrite,
-        )
+        # Preserve path releases the preview on the main element before the card rewrite.
+        detail = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
+        release = detail.find("releaseOwnedThumbResources(main)")
+        rewrite = detail.find("el.innerHTML = collectionHtml.value")
+        self.assertGreater(release, 0)
+        self.assertGreater(rewrite, release)
+        self.assertIn("prksReleaseWorkThumbPreview", detail)
+        self.assertIn("prksReleaseLazyWorkThumbs", detail)
+        unmount = detail.find("onBeforeUnmount(() => {")
+        self.assertGreater(unmount, 0)
+        self.assertIn("releaseOwnedThumbResources", detail[unmount : unmount + 500])
+        recent = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "recent", "RecentRoute.vue"))
+        recent_release = recent.find("releaseOwnedThumbResources(root || collectionEl.value)")
+        recent_rewrite = recent.find("el.innerHTML = collectionHtml.value")
+        self.assertGreater(recent_release, 0)
+        self.assertGreater(recent_rewrite, recent_release)
+        self.assertIn("prksReleaseWorkThumbPreview", recent)
+        self.assertIn("prksReleaseLazyWorkThumbs", recent)
+        self.assertIn("if (!offlineCached && typeof window.prksInitLazyWorkThumbs", recent)
+        recent_unmount = recent.find("onBeforeUnmount(() => {")
+        self.assertGreater(recent_unmount, 0)
+        self.assertIn("releaseOwnedThumbResources", recent[recent_unmount : recent_unmount + 500])
 
     def test_saved_view_detail_exposes_browse_mode_toggle(self):
         sv = _read(os.path.join(_FRONTEND, "js", "saved-views.js"))
@@ -110,8 +125,11 @@ class FrontendWorkCardTests(unittest.TestCase):
         src = _read(_FOLDERS)
         self.assertIn("prksWorkBrowseCollectionClass", src)
         self.assertIn("prksWorkBrowseModeToggleHtml", src)
-        self.assertIn("prks-work-browse-mode-folder-files", src)
         self.assertIn("prks-work-browse-mode-recently-added", src)
+        detail = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
+        self.assertIn("prks-work-browse-mode-folder-files", detail)
+        self.assertIn("prksWorkBrowseCollectionClass", detail)
 
     def test_title_clamp_present(self):
         css = _read(_CSS)
