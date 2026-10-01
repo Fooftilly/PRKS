@@ -610,6 +610,7 @@ window.copyPdfAnnotationWikiLink = async function (ctx, annId) {
     }
 };
 
+// User path: plain delete after materialization lock. Not reconcile's programmatic delete.
 window.deletePdfAnnotationFromList = async function (ctx, annId) {
     const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);
