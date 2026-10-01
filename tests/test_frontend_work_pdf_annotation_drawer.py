@@ -1,4 +1,5 @@
 """Viewer-owned annotation drawer stays on the pdf runtime."""
+import json
 import re
 import unittest
 from pathlib import Path
@@ -118,6 +119,131 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         self.assertIn("right: 22rem;", gated)
         self.assertIn("overflow: hidden;", gated)
         self.assertIn("if (width < 160) return pane", popup)
+
+    def test_show_on_pdf_opens_the_panel_owner(self):
+        start = UI.index("function prksOpenAnnotationDrawerForPanel(button) {")
+        end = UI.index("function updatePanelContent(tabId) {", start)
+        source = UI[start:end]
+        click = UI[UI.index('data-prks-role="open-pdf-annotation-drawer"'):UI.index("applyCachedAnnotationListToPanel")]
+        self.assertIn("prksOpenAnnotationDrawerForPanel(openDrawer)", click)
+        self.assertNotIn("prksOpenAnnotationDrawer(focusedCtx)", click)
+        script = r"""
+const vm = require('vm');
+const source = %s;
+const opened = [];
+const panel = {
+  dataset: { prksOwnerTabId: 'side', prksOwnerGeneration: '4' },
+  contains(node) { return node === button; },
+};
+const button = { id: 'show' };
+const owners = {
+  side: { tabId: 'side', generation: 4, mounted: true, destroyed: false, isCurrent() { return true; } },
+};
+const context = {
+  document: { getElementById(id) { return id === 'panel-content' ? panel : null; } },
+  prksGetTabContext(id) { return owners[id] || null; },
+  window: { prksOpenAnnotationDrawer(ctx) { opened.push(ctx); } },
+  opened,
+  button,
+  panel,
+  owners,
+};
+vm.createContext(context);
+vm.runInContext(source + '; this.open = prksOpenAnnotationDrawerForPanel;', context);
+context.open(button);
+if (opened.length !== 1 || opened[0] !== owners.side) {
+  throw new Error('expected the panel owner, got ' + opened.length);
+}
+opened.length = 0;
+owners.side.destroyed = true;
+context.open(button);
+if (opened.length !== 0) throw new Error('destroyed owner opened');
+owners.side.destroyed = false;
+panel.dataset.prksOwnerGeneration = '9';
+context.open(button);
+if (opened.length !== 0) throw new Error('stale panel generation opened');
+panel.dataset.prksOwnerGeneration = '4';
+context.open({ id: 'outside' });
+if (opened.length !== 0) throw new Error('control outside the panel opened');
+panel.dataset.prksOwnerTabId = '';
+context.open(button);
+if (opened.length !== 0) throw new Error('missing owner opened');
+console.log('panel-owner-ok');
+""" % json.dumps(source)
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            self.fail(result.stdout + "\n" + result.stderr)
+        self.assertIn("panel-owner-ok", result.stdout)
+
+    def test_valid_snapshots_publish_an_empty_list(self):
+        apply = PDF[
+            PDF.index("function applyAnnotationSnapshotToRuntime")
+            : PDF.index("async function hydrateAnnotationBaseFromServer")
+        ]
+        self.assertNotIn("saved.length > 0", apply)
+        self.assertIn("renderAnnotationFallbackList(saved, docId || 'DB', workId, ctx);", apply)
+        keep = PDF[
+            PDF.index("let nextList = ackList.filter")
+            : PDF.index("await window.prksSync.store.resolveConflict")
+        ]
+        self.assertLess(
+            keep.index("await window.prksReconcileViewerAnnotations"),
+            keep.index("renderAnnotationFallbackList(nextList, publishedDocId, workId, ctx);"),
+        )
+
+    def test_popup_session_republishes_the_drawer(self):
+        sync = PDF[
+            PDF.index("function prksSyncAnnotationPopup")
+            : PDF.index("function prksAnnotationDrawerMetadataLabels")
+        ]
+        self.assertIn("prksVueSyncWorkPdfAnnotationPopup", sync)
+        self.assertIn("prksSyncAnnotationDrawer(ctx);", sync)
+        script = r"""
+const vm = require('vm');
+const source = %s;
+const calls = [];
+const context = {
+  window: { prksVueSyncWorkPdfAnnotationPopup(ctx) { calls.push(['popup', ctx]); } },
+  prksSyncAnnotationDrawer(ctx) { calls.push(['drawer', ctx]); },
+  calls,
+};
+vm.createContext(context);
+vm.runInContext(source + '; this.sync = prksSyncAnnotationPopup;', context);
+const owner = { tabId: 'side' };
+context.sync(owner);
+if (calls.length !== 2 || calls[0][0] !== 'popup' || calls[1][0] !== 'drawer' || calls[1][1] !== owner) {
+  throw new Error('popup sync did not republish the drawer: ' + JSON.stringify(calls));
+}
+console.log('popup-republish-ok');
+""" % json.dumps(sync)
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            self.fail(result.stdout + "\n" + result.stderr)
+        self.assertIn("popup-republish-ok", result.stdout)
+
+    def test_confirm_delete_focus_stays_on_the_drawer_owner(self):
+        hide = UI[UI.index("function prksHideModalConfirm"):UI.index("function prksFinishModalConfirm")]
+        self.assertNotIn(
+            'document.querySelector(\'[data-prks-role="pdf-annotation-drawer"] .annotation-row__delete\')',
+            hide,
+        )
+        self.assertIn("prksReplacementAnnotationDelete(opener, ownerTabId)", hide)
+        dialog = UI[UI.index("function prksConfirmDialog"):UI.index("function prksAlertDialog")]
+        self.assertIn("prksRememberModalConfirmOpener(document.activeElement);", dialog)
 
 
 if __name__ == "__main__":

@@ -451,6 +451,7 @@ function prksSyncAnnotationPopup(ctx) {
     if (typeof window.prksVueSyncWorkPdfAnnotationPopup === 'function') {
         window.prksVueSyncWorkPdfAnnotationPopup(ctx);
     }
+    prksSyncAnnotationDrawer(ctx);
 }
 
 /**
@@ -1499,11 +1500,12 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             return String(itemId) !== annId;
                         });
                         if (ack.present && ack.annotation) nextList = nextList.concat([ack.annotation]);
+                        const publishedDocId = runtime.annotationCache && runtime.annotationCache.docId;
                         runtime.annotationCache = {
                             allItems: nextList,
                             rawItems: nextList,
                             items: nextList,
-                            docId: runtime.annotationCache && runtime.annotationCache.docId,
+                            docId: publishedDocId,
                             workId: String(workId),
                         };
                         if (runtime.annotationState && typeof runtime.annotationState === 'object') {
@@ -1540,6 +1542,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                                 knownAbsent: prksKnownAbsentAnnotationSeed(runtime),
                             });
                         }
+                        renderAnnotationFallbackList(nextList, publishedDocId, workId, ctx);
                     }
                     await window.prksSync.store.resolveConflict(op.op_id, apply);
                     if (window.prksSync && typeof window.prksSync.changed === 'function') {
@@ -1650,9 +1653,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             runtime.materializedPdfAnnotationRevision =
                 snapBody.materialized_pdf_annotation_revision;
         }
-        if (saved.length > 0) {
-            renderAnnotationFallbackList(saved, docId || 'DB', workId, ctx);
-        }
+        renderAnnotationFallbackList(saved, docId || 'DB', workId, ctx);
         return true;
     }
 

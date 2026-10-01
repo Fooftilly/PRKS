@@ -89,6 +89,11 @@ function testOpenAndCloseDoNotTouchTheViewer() {
     assertEq('row id', read.items[0] && read.items[0].id, 'ann-a');
     assertEq('wiki', read.items[0] && read.items[0].wikiLink, '[[pdf:ann-a|Highlight]]');
     assertEq('metadata', read.items[0] && read.items[0].metadataLabels[0], 'Topic');
+    assertEq('no selection', read.selectedId, '');
+    assert('edit opens', runtime.openAnnotationPopup({ annId: 'ann-a' }));
+    assertEq('edit selects', runtime.readAnnotationDrawer().selectedId, 'ann-a');
+    assert('edit closes', runtime.closeAnnotationPopup('ann-a'));
+    assertEq('selection cleared', runtime.readAnnotationDrawer().selectedId, '');
     assert('reopen keeps epoch', runtime.openAnnotationDrawer());
     assertEq('epoch held', runtime.readAnnotationDrawer().epoch, 1);
     assertEq('same viewer', runtime.viewer, viewer);

@@ -133,7 +133,8 @@ export function syncWorkPdfAnnotationDrawer(ctx: AnnotationDrawerOwner | null | 
         },
         onDelete: (annId: string) => {
           const owner = owners.get(tabId)
-          if (owner) intentDeleteWorkPdfAnnotation(owner, annId, ticket())
+          if (!owner) return Promise.resolve(false)
+          return intentDeleteWorkPdfAnnotation(owner, annId, ticket())
         },
         onCopy: (annId: string) => {
           const owner = owners.get(tabId)

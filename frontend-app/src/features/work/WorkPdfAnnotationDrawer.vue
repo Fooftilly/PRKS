@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   annotationPopupEscapeYields,
   focusAfterAnnotationPopupClose,
@@ -24,7 +24,10 @@ const props = defineProps<{
   onClose: (ticket: { generation: number; epoch: number; viewerToken: number }) => void
   onJump: (annId: string, ticket: { generation: number; epoch: number; viewerToken: number }) => void
   onEdit: (annId: string, ticket: { generation: number; epoch: number; viewerToken: number }) => void
-  onDelete: (annId: string, ticket: { generation: number; epoch: number; viewerToken: number }) => void
+  onDelete: (
+    annId: string,
+    ticket: { generation: number; epoch: number; viewerToken: number },
+  ) => Promise<boolean> | boolean | void
   onCopy: (
     annId: string,
     ticket: { generation: number; epoch: number; viewerToken: number },
@@ -32,6 +35,7 @@ const props = defineProps<{
 }>()
 
 const panelRef = ref<HTMLElement | null>(null)
+const closeRef = ref<HTMLButtonElement | null>(null)
 const wasOpen = ref(false)
 let opener: HTMLElement | null = null
 let focusRestored = false
@@ -68,6 +72,27 @@ function onDocumentKeydown(event: KeyboardEvent) {
   props.onClose(ticket())
 }
 
+async function deleteAnnotation(event: MouseEvent, annId: string) {
+  const button = event.currentTarget
+  const busy = (window as Window & {
+    prksSetButtonBusy?: (
+      button: HTMLButtonElement,
+      busy: boolean,
+      options?: { busyLabel?: string },
+    ) => void
+  }).prksSetButtonBusy
+  if (button instanceof HTMLButtonElement && typeof busy === 'function') {
+    busy(button, true, { busyLabel: 'Deleting…' })
+  }
+  try {
+    await props.onDelete(annId, ticket())
+  } finally {
+    if (button instanceof HTMLButtonElement && typeof busy === 'function') {
+      busy(button, false)
+    }
+  }
+}
+
 async function copyLink(event: MouseEvent, annId: string) {
   const button = event.currentTarget
   const ok = await props.onCopy(annId, ticket())
@@ -91,6 +116,10 @@ watch(
       focusRestored = false
       opener = rememberAnnotationPopupOpener()
       document.addEventListener('keydown', onDocumentKeydown)
+      void nextTick(() => {
+        if (!props.state.open) return
+        closeRef.value?.focus()
+      })
     } else if (!open && wasOpen.value) {
       document.removeEventListener('keydown', onDocumentKeydown)
       restoreOpener()
@@ -122,7 +151,12 @@ onBeforeUnmount(() => {
   >
     <header class="pdf-annotation-drawer__header">
       <h3 class="pdf-annotation-drawer__title">Annotations</h3>
-      <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" @click="onClose(ticket())">
+      <button
+        ref="closeRef"
+        type="button"
+        class="prks-btn prks-btn--secondary prks-btn--sm"
+        @click="onClose(ticket())"
+      >
         Close
       </button>
     </header>
@@ -151,7 +185,7 @@ onBeforeUnmount(() => {
           <button type="button" class="annotation-row__edit-comment" @click="onEdit(item.id, ticket())">
             Edit/Add comment
           </button>
-          <button type="button" class="annotation-row__delete" @click="onDelete(item.id, ticket())">
+          <button type="button" class="annotation-row__delete" @click="deleteAnnotation($event, item.id)">
             Delete
           </button>
         </div>

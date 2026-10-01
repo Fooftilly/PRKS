@@ -455,7 +455,10 @@ function drawerRuntime(
 type AnnotationDrawerWindow = PdfWindow & {
   jumpToPdfAnnotationFromDrawer?: (ctx: WorkPdfOwner, annId: string) => void
   openPdfAnnotationEditorFromDrawer?: (ctx: WorkPdfOwner, annId: string) => void
-  deletePdfAnnotationFromList?: (ctx: WorkPdfOwner, annId: string) => void
+  deletePdfAnnotationFromList?: (
+    ctx: WorkPdfOwner,
+    annId: string,
+  ) => Promise<boolean> | boolean
   copyPdfAnnotationWikiLink?: (ctx: WorkPdfOwner, annId: string) => Promise<boolean> | boolean
   prksCloseAnnotationDrawer?: (ctx: WorkPdfOwner) => boolean
 }
@@ -498,12 +501,11 @@ export function intentDeleteWorkPdfAnnotation(
   ctx: WorkPdfOwner | null | undefined,
   annId: string,
   captured: WorkPdfAnnotationDrawerCapture | null | undefined,
-): boolean {
-  if (!drawerRuntime(ctx, captured) || !ctx || !annId) return false
+): Promise<boolean> {
+  if (!drawerRuntime(ctx, captured) || !ctx || !annId) return Promise.resolve(false)
   const remove = (globalThis as AnnotationDrawerWindow).deletePdfAnnotationFromList
-  if (typeof remove !== 'function') return false
-  void remove(ctx, annId)
-  return true
+  if (typeof remove !== 'function') return Promise.resolve(false)
+  return Promise.resolve(remove(ctx, annId)).then((ok) => ok === true, () => false)
 }
 
 export function intentCopyWorkPdfAnnotationLink(
