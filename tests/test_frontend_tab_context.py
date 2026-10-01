@@ -276,12 +276,14 @@ class TestEntityMigrationIntegration(unittest.TestCase):
         )
 
     def test_folders_uses_ctx_set_entity(self):
-        f_path = os.path.join(FRONTEND_JS, "components", "folders.js")
-        with open(f_path, encoding="utf-8") as fh:
+        app_path = os.path.join(FRONTEND_JS, "app.js")
+        with open(app_path, encoding="utf-8") as fh:
             src = fh.read()
+        start = src.index("case 'folder-detail':")
+        body = src[start:src.index("case 'people':", start)]
         self.assertIn(
-            "ctx.setEntity('folder'", src,
-            "folders.js must use ctx.setEntity for folder"
+            "ctx.setEntity('folder'", body,
+            "folder detail must use ctx.setEntity for folder ownership"
         )
 
     def test_people_uses_ctx_set_entity(self):

@@ -337,6 +337,43 @@ async function run() {
         assertEq('stale browse GET does not repopulate',
             await store.getList('works-browse:index'), null);
     }
+    /* A list read that starts during the current sweep still publishes once
+     * that sweep's delete has committed. Showing Recent after an open hits
+     * this: the open blocks recent:index, the page fetches, and the write
+     * used to be dropped for the whole blocked window. */
+    {
+        const store = makeFakeStore();
+        let releaseDelete = null;
+        const slowStore = Object.assign({}, store, {
+            deleteList: function (key) {
+                return new Promise(function (resolve) {
+                    releaseDelete = function () {
+                        resolve(store.deleteList(key));
+                    };
+                });
+            },
+        });
+        const runtime = mod.createPrksOfflineRuntime({
+            store: slowStore,
+            prksRequest: async () => okJsonResponse([{ id: 'W-1', last_opened_at: '2026-01-01' }]),
+            setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout,
+            window: null,
+            caches: null,
+            navigator: null,
+        });
+        runtime.markDomainChanged('recent', { entityKinds: [], listKeys: ['recent:index'] });
+        const reading = runtime.readThroughList('recent:index', '/api/recent', { domain: 'recent' });
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('the Recent sweep is still holding the list delete', typeof releaseDelete === 'function');
+        releaseDelete();
+        const result = await reading;
+        assertEq('an in-sweep Recent read still returns server data', result.source, 'server');
+        const cached = await store.getList('recent:index');
+        assertEq('Recent publishes after the sweep deletes the old list',
+            cached && cached.value, [{ id: 'W-1', last_opened_at: '2026-01-01' }]);
+    }
     /* A pre-mutation Folder read -- list AND entity -- can still resolve and
      * repaint, but must never become eligible cache data. */
     {

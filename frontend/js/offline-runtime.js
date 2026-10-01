@@ -2914,7 +2914,17 @@
             // Validate before publishing: a malformed 200 must never replace a
             // good cached list snapshot.
             assertAcceptableShape(options2.validate, raw);
-            void cacheListForDomain(listKey, raw, domain, domainToken);
+            // A read that started in this generation while its sweep is still
+            // deleting the list must wait for that delete. Publishing during
+            // the block is refused, and nothing retries, so Recent (and any
+            // other list) would otherwise stay missing after the sweep.
+            // A read that started in an older generation does not wait and
+            // still cannot publish over the newer one.
+            const pending = domain ? domainInvalidation.get(domain) : null;
+            if (pending && pending.generation === domainToken && pending.promise) {
+                await pending.promise;
+            }
+            await cacheListForDomain(listKey, raw, domain, domainToken);
             return { value: raw, source: 'server', cachedAt: now() };
         }
 
