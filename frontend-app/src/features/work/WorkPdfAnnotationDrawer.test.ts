@@ -88,6 +88,41 @@ describe('annotation drawer', () => {
     expect(flashes).toEqual(['Copied'])
   })
 
+  it('pins and resizes through the open generation', async () => {
+    const pins: boolean[] = []
+    const widths: Array<{ width: number; persist: boolean; epoch: number }> = []
+    const wrapper = mount(WorkPdfAnnotationDrawer, {
+      props: {
+        state: { ...state, pinned: false, pinEnabled: true, placement: 'overlay', width: 352 },
+        tabId: 'tab-a',
+        onClose: () => {},
+        onJump: () => {},
+        onEdit: () => {},
+        onDelete: () => {},
+        onCopy: async () => true,
+        onPin: (pinned, ticket) => {
+          pins.push(pinned)
+          expect(ticket).toMatchObject({ epoch: 1, viewerToken: 4, generation: 3 })
+        },
+        onResize: (width, ticket, options) => {
+          widths.push({ width, persist: options.persist, epoch: ticket.epoch })
+        },
+      },
+      attachTo: document.body,
+    })
+    mounted.push(wrapper)
+    await wrapper.get('button[aria-pressed]').trigger('click')
+    expect(pins).toEqual([true])
+    const handle = wrapper.get('[role="separator"]')
+    await handle.trigger('keydown', { key: 'ArrowLeft' })
+    expect(widths).toEqual([{ width: 368, persist: true, epoch: 1 }])
+    await wrapper.setProps({
+      state: { ...state, placement: 'sheet', pinEnabled: false, pinned: false },
+    })
+    expect(wrapper.find('[role="separator"]').exists()).toBe(false)
+    expect(wrapper.get('[data-prks-role="pdf-annotation-drawer"]').attributes('role')).toBe('dialog')
+  })
+
   it('closes a keyboard-opened drawer on Escape and restores the opener', async () => {
     const opener = document.createElement('button')
     opener.type = 'button'
@@ -113,7 +148,9 @@ describe('annotation drawer', () => {
     mounted.push(wrapper)
     await wrapper.setProps({ state: { ...view, open: true } })
     await nextTick()
-    const close = wrapper.get('button').element
+    const close = wrapper.findAll('button').find((button) => button.text() === 'Close')?.element
+    expect(close).toBeInstanceOf(HTMLButtonElement)
+    if (!(close instanceof HTMLButtonElement)) return
     expect(document.activeElement).toBe(close)
     close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(closes).toEqual([1])

@@ -8,6 +8,8 @@ import {
   intentDeleteWorkPdfAnnotationPopup,
   intentDeleteWorkPdfAnnotation,
   intentJumpWorkPdfAnnotation,
+  intentResizeWorkPdfAnnotationDrawer,
+  intentSetWorkPdfAnnotationDrawerPinned,
   intentFlushWorkPdf,
   intentMountWorkPdf,
   intentOpenWorkPdfSearch,
@@ -465,6 +467,51 @@ describe('work PDF adapter', () => {
     expect(jumps).toEqual(['ann-a'])
     expect(runtime.viewer).toBe(viewer)
     expect(runtime.viewerSetupToken).toBe(2)
+  })
+
+  it('does not pin or resize a stale annotation drawer', () => {
+    const ctx = mount('drawer-pin')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' }) as unknown as WorkPdfRuntime & {
+      openAnnotationDrawer: () => boolean
+      closeAnnotationDrawer: () => boolean
+      noteAnnotationDrawerFrame: (frame: { paneWidth: number; mobile: boolean }) => void
+      viewer: { id: string }
+      viewerSetupToken: number
+      destroy: () => void
+    }
+    const viewer = { id: 'v1' }
+    runtime.viewer = viewer
+    runtime.viewerSetupToken = 2
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 900, mobile: false })
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    const read = readWorkPdfAnnotationDrawer(ctx)
+    const ticket = {
+      generation: ctx.generation,
+      epoch: read.epoch,
+      viewerToken: read.viewerToken,
+    }
+    const layouts: string[] = []
+    ;(window as unknown as { prksLayoutAnnotationDrawer?: (owner: WorkPdfOwner) => boolean }).prksLayoutAnnotationDrawer =
+      () => {
+        layouts.push('layout')
+        return true
+      }
+    expect(intentSetWorkPdfAnnotationDrawerPinned(ctx, true, ticket)).toBe(true)
+    expect(intentResizeWorkPdfAnnotationDrawer(ctx, 400, ticket, { persist: false })).toBe(true)
+    expect(readWorkPdfAnnotationDrawer(ctx).placement).toBe('pinned')
+    expect(readWorkPdfAnnotationDrawer(ctx).width).toBe(400)
+    expect(readWorkPdfAnnotationDrawer(ctx).selectedId).toBe('')
+    runtime.closeAnnotationDrawer()
+    expect(intentSetWorkPdfAnnotationDrawerPinned(ctx, false, ticket)).toBe(false)
+    expect(intentResizeWorkPdfAnnotationDrawer(ctx, 300, ticket)).toBe(false)
+    runtime.openAnnotationDrawer()
+    expect(readWorkPdfAnnotationDrawer(ctx).pinned).toBe(true)
+    expect(readWorkPdfAnnotationDrawer(ctx).width).toBe(400)
+    expect(layouts).toEqual(['layout', 'layout'])
+    expect(runtime.viewer).toBe(viewer)
+    expect(runtime.viewerSetupToken).toBe(2)
+    delete (window as unknown as { prksLayoutAnnotationDrawer?: unknown }).prksLayoutAnnotationDrawer
   })
 
   it('returns the in-flight drawer delete', async () => {

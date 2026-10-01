@@ -16,6 +16,13 @@ export interface AnnotationDrawerView {
   published: boolean
   items: WorkPdfAnnotationDrawerItem[]
   generation: number | null
+  pinned?: boolean
+  width?: number
+  minWidth?: number
+  maxWidth?: number
+  defaultWidth?: number
+  placement?: 'closed' | 'overlay' | 'pinned' | 'sheet'
+  pinEnabled?: boolean
 }
 
 const props = defineProps<{
@@ -32,10 +39,17 @@ const props = defineProps<{
     annId: string,
     ticket: { generation: number; epoch: number; viewerToken: number },
   ) => Promise<boolean>
+  onPin?: (pinned: boolean, ticket: { generation: number; epoch: number; viewerToken: number }) => void
+  onResize?: (
+    width: number,
+    ticket: { generation: number; epoch: number; viewerToken: number },
+    options: { persist: boolean },
+  ) => void
 }>()
 
 const panelRef = ref<HTMLElement | null>(null)
 const closeRef = ref<HTMLButtonElement | null>(null)
+const resizeRef = ref<HTMLElement | null>(null)
 const wasOpen = ref(false)
 let opener: HTMLElement | null = null
 let focusRestored = false
@@ -46,6 +60,72 @@ function ticket() {
     epoch: props.state.epoch,
     viewerToken: props.state.viewerToken,
   }
+}
+
+function widthBounds() {
+  const min = props.state.minWidth || 240
+  const max = props.state.maxWidth || 480
+  return { min, max, fallback: props.state.defaultWidth || 352 }
+}
+
+function clampWidth(width: number) {
+  const bounds = widthBounds()
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(width)))
+}
+
+function pinDrawer() {
+  if (!props.state.pinEnabled && !props.state.pinned) return
+  props.onPin?.(!props.state.pinned, ticket())
+}
+
+let drag: { pointer: number; startX: number; startWidth: number; latest: number } | null = null
+
+function onResizePointerDown(event: PointerEvent) {
+  if (props.state.placement === 'sheet') return
+  const handle = event.currentTarget
+  if (!(handle instanceof HTMLElement)) return
+  const startWidth = props.state.width || widthBounds().fallback
+  drag = {
+    pointer: event.pointerId,
+    startX: event.clientX,
+    startWidth,
+    latest: startWidth,
+  }
+  handle.setPointerCapture(event.pointerId)
+  event.preventDefault()
+}
+
+function onResizePointerMove(event: PointerEvent) {
+  if (!drag || event.pointerId !== drag.pointer) return
+  // The handle is on the drawer's leading edge. Dragging left widens it.
+  const next = clampWidth(drag.startWidth + (drag.startX - event.clientX))
+  drag.latest = next
+  props.onResize?.(next, ticket(), { persist: false })
+}
+
+function onResizePointerUp(event: PointerEvent) {
+  if (!drag || event.pointerId !== drag.pointer) return
+  const handle = resizeRef.value
+  const latest = drag.latest
+  if (handle && handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
+  drag = null
+  props.onResize?.(latest, ticket(), { persist: true })
+}
+
+function onResizeKeydown(event: KeyboardEvent) {
+  if (props.state.placement === 'sheet') return
+  const bounds = widthBounds()
+  const current = props.state.width || bounds.fallback
+  const step = event.shiftKey ? 48 : 16
+  let next: number | null = null
+  if (event.key === 'ArrowLeft') next = current + step
+  else if (event.key === 'ArrowRight') next = current - step
+  else if (event.key === 'Home') next = bounds.min
+  else if (event.key === 'End') next = bounds.max
+  else if (event.key === 'Enter') next = bounds.fallback
+  if (next == null) return
+  event.preventDefault()
+  props.onResize?.(clampWidth(next), ticket(), { persist: true })
 }
 
 function viewerHost(): HTMLElement | null {
@@ -154,17 +234,46 @@ onBeforeUnmount(() => {
     v-if="state.open"
     ref="panelRef"
     class="pdf-annotation-drawer"
-    role="dialog"
+    :role="state.placement === 'pinned' ? 'complementary' : 'dialog'"
     aria-label="PDF annotations"
     data-prks-role="pdf-annotation-drawer"
     data-no-interaction=""
     :data-prks-owner-tab-id="tabId"
     :data-prks-drawer-epoch="state.epoch"
+    :data-prks-drawer-placement="state.placement || 'overlay'"
     :data-prks-list-published="state.published ? 'true' : 'false'"
     @pointerdown.stop
+    @pointermove="onResizePointerMove"
+    @pointerup="onResizePointerUp"
+    @pointercancel="onResizePointerUp"
   >
+    <div
+      v-if="state.placement !== 'sheet'"
+      ref="resizeRef"
+      class="pdf-annotation-drawer__resize"
+      role="separator"
+      aria-orientation="vertical"
+      tabindex="0"
+      aria-label="Annotation list width"
+      :aria-valuemin="state.minWidth || 240"
+      :aria-valuemax="state.maxWidth || 480"
+      :aria-valuenow="state.width || state.defaultWidth || 352"
+      :aria-valuetext="`${state.width || state.defaultWidth || 352} pixels`"
+      @pointerdown="onResizePointerDown"
+      @keydown="onResizeKeydown"
+    />
     <header class="pdf-annotation-drawer__header">
       <h3 class="pdf-annotation-drawer__title">Annotations</h3>
+      <button
+        type="button"
+        class="prks-btn prks-btn--secondary prks-btn--sm"
+        :aria-pressed="state.pinned ? 'true' : 'false'"
+        :disabled="!state.pinEnabled && !state.pinned"
+        :title="state.pinned ? 'Unpin annotations' : (state.pinEnabled ? 'Pin annotations' : 'Pin needs a wider pane')"
+        @click="pinDrawer()"
+      >
+        {{ state.pinned ? 'Unpin' : 'Pin' }}
+      </button>
       <button
         ref="closeRef"
         type="button"

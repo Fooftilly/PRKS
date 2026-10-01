@@ -7,8 +7,18 @@ const rootDir = path.resolve(__dirname, '../..');
 const tabContext = require(path.join(rootDir, 'frontend/js/tab-context.js'));
 const pdfRuntime = require(path.join(rootDir, 'frontend/js/pdf-work-runtime.js'));
 
-const { prksMountTabContext, prksDestroyAllTabContexts } = tabContext;
-const { createWorkPdfRuntime } = pdfRuntime;
+const {
+    prksMountTabContext,
+    prksDestroyAllTabContexts,
+    prksWarmParkTabContext,
+    prksResumeWarmTabContext,
+} = tabContext;
+const {
+    createWorkPdfRuntime,
+    prksPdfAnnotationDrawerZoomAction,
+    prksApplyPdfAnnotationDrawerChrome,
+    PRKS_PDF_DRAWER_PIN_MIN_PANE,
+} = pdfRuntime;
 
 let passed = 0;
 let failed = 0;
@@ -186,9 +196,212 @@ function testMainAndSecondarySessionsStayApart() {
     prksDestroyAllTabContexts();
 }
 
+function memoryStorage() {
+    const data = {};
+    return {
+        getItem: function (key) {
+            return Object.prototype.hasOwnProperty.call(data, key) ? data[key] : null;
+        },
+        setItem: function (key, value) {
+            data[key] = String(value);
+        },
+    };
+}
+
+function wideFrame() {
+    return { paneWidth: PRKS_PDF_DRAWER_PIN_MIN_PANE + 80, mobile: false };
+}
+
+function hostBox() {
+    const kids = [];
+    return {
+        children: kids,
+        appendChild: function (child) {
+            if (child.parentNode && typeof child.parentNode.removeChild === 'function') {
+                try { child.parentNode.removeChild(child); } catch (_e) {}
+            }
+            kids.push(child);
+            child.parentNode = this;
+            return child;
+        },
+        removeChild: function (child) {
+            const index = kids.indexOf(child);
+            if (index >= 0) kids.splice(index, 1);
+            child.parentNode = null;
+            return child;
+        },
+    };
+}
+
+function paneStub() {
+    const style = {
+        props: {},
+        setProperty: function (key, value) { this.props[key] = value; },
+        getPropertyValue: function (key) { return this.props[key] || ''; },
+        removeProperty: function (key) { delete this.props[key]; },
+    };
+    return { dataset: {}, style: style };
+}
+
+function testPinResizePreservesViewerIdentity() {
+    const storage = memoryStorage();
+    const runtime = createWorkPdfRuntime({ workId: 'work-a', drawerStorage: storage });
+    const viewer = viewerStub('v1');
+    viewer.fitWidthCalls = 0;
+    viewer.fitPageCalls = 0;
+    viewer.fitWidth = function () { this.fitWidthCalls += 1; };
+    viewer.fitPage = function () { this.fitPageCalls += 1; };
+    viewer.getZoomLayout = function () { return { kind: 'percent', percent: 125 }; };
+    runtime.viewer = viewer;
+    runtime.viewerSetupToken = 7;
+    runtime.pageSession.pageNumber = 4;
+    runtime.annotationCache = { items: [{ id: 'ann-a' }], listPublished: true };
+    runtime.syncState = { pendingChanges: true, inFlight: false, lastError: '' };
+    runtime.annotationMutationDurable = true;
+    runtime.openAnnotationDrawer();
+    runtime.openAnnotationPopup({ annId: 'ann-a' });
+    runtime.noteAnnotationDrawerFrame(wideFrame());
+    const before = runtime.readAnnotationDrawer();
+    assertEq('wide overlay before pin', before.placement, 'overlay');
+    assertEq('pin available', before.pinEnabled, true);
+    assertEq('selected before pin', before.selectedId, 'ann-a');
+    assert('pin', runtime.setAnnotationDrawerPinned(true));
+    const pinned = runtime.annotationDrawerLayoutEffect();
+    assertEq('pin places the drawer in layout', pinned.read.placement, 'pinned');
+    assert('pin resizes the viewer box', pinned.resized === true);
+    runtime.resize();
+    const pane = paneStub();
+    assert('chrome marks the pane pinned', prksApplyPdfAnnotationDrawerChrome(pane, pinned.read) === true);
+    assertEq('pane placement', pane.dataset.prksAnnotationDrawer, 'pinned');
+    assertEq('remembered width variable', pane.style.getPropertyValue('--pdf-annotation-drawer-width'), '352px');
+    assert('resize width', runtime.setAnnotationDrawerWidth(410, { persist: false }));
+    const resized = runtime.annotationDrawerLayoutEffect();
+    assert('width change resizes while pinned', resized.resized === true);
+    assertEq('clamped width', resized.read.width, 410);
+    runtime.resize();
+    assert('commit width', runtime.setAnnotationDrawerWidth(10, { persist: true }));
+    assertEq('width floor', runtime.readAnnotationDrawer().width, 240);
+    assert('unpin', runtime.setAnnotationDrawerPinned(false));
+    const unpinned = runtime.annotationDrawerLayoutEffect();
+    assertEq('unpin returns to overlay', unpinned.read.placement, 'overlay');
+    assert('unpin resizes back', unpinned.resized === true);
+    runtime.resize();
+    assert('pin again', runtime.setAnnotationDrawerPinned(true));
+    assert('second pin resizes', runtime.annotationDrawerLayoutEffect().resized === true);
+    runtime.resize();
+    assertEq('same viewer', runtime.viewer, viewer);
+    assertEq('token held', runtime.viewerSetupToken, 7);
+    assertEq('page held', runtime.pageSession.pageNumber, 4);
+    assertEq('selection held', runtime.readAnnotationDrawer().selectedId, 'ann-a');
+    assertEq('annotation kept', runtime.annotationCache.items[0].id, 'ann-a');
+    assertEq('durable flag held', runtime.annotationMutationDurable, true);
+    assertEq('pending sync held', runtime.syncState.pendingChanges, true);
+    assertEq('no fit width', viewer.fitWidthCalls, 0);
+    assertEq('no fit page', viewer.fitPageCalls, 0);
+    assertEq('no zoom in', viewer.zoomCalls, 0);
+    assertEq('no page jump', viewer.pageCalls.length, 0);
+    assertEq('viewer not destroyed', viewer.destroyed, false);
+    assert('viewer resized with the box', viewer.resizes > 0);
+    assertEq('percent is preserved', prksPdfAnnotationDrawerZoomAction(viewer.getZoomLayout()), 'preserve');
+    assertEq('fit width recomputes from the box', prksPdfAnnotationDrawerZoomAction({ kind: 'fit-width' }), 'recompute');
+    assertEq('fit page recomputes from the box', prksPdfAnnotationDrawerZoomAction({ kind: 'fit-page' }), 'recompute');
+    const remembered = createWorkPdfRuntime({ workId: 'work-a', drawerStorage: storage });
+    assertEq('next runtime remembers pin', remembered.readAnnotationDrawer().pinned, true);
+    assertEq('next runtime remembers width', remembered.readAnnotationDrawer().width, 240);
+    remembered.destroy();
+    runtime.destroy();
+}
+
+function testNarrowAndMobileDoNotPinTheViewer() {
+    const runtime = createWorkPdfRuntime({ workId: 'work-a' });
+    const viewer = viewerStub('v1');
+    runtime.viewer = viewer;
+    runtime.viewerSetupToken = 2;
+    runtime.openAnnotationDrawer();
+    runtime.setAnnotationDrawerPinned(true);
+    runtime.noteAnnotationDrawerFrame({ paneWidth: PRKS_PDF_DRAWER_PIN_MIN_PANE - 1, mobile: false });
+    const narrow = runtime.annotationDrawerLayoutEffect();
+    assertEq('narrow stays overlay', narrow.read.placement, 'overlay');
+    assertEq('narrow pin disabled', narrow.read.pinEnabled, false);
+    assert('narrow does not resize', narrow.resized === false);
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 1200, mobile: true });
+    const sheet = runtime.annotationDrawerLayoutEffect();
+    assertEq('mobile is a sheet', sheet.read.placement, 'sheet');
+    assert('sheet does not resize from overlay', sheet.resized === false);
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 1200, mobile: false });
+    runtime.annotationDrawerLayoutEffect();
+    runtime.noteAnnotationDrawerFrame({ paneWidth: 1200, mobile: true });
+    const leavingPin = runtime.annotationDrawerLayoutEffect();
+    assertEq('mobile leaves pin', leavingPin.read.placement, 'sheet');
+    assert('leaving pin resizes the viewer', leavingPin.resized === true);
+    const pane = paneStub();
+    prksApplyPdfAnnotationDrawerChrome(pane, sheet.read);
+    assertEq('sheet attribute', pane.dataset.prksAnnotationDrawer, 'sheet');
+    assertEq('same viewer', runtime.viewer, viewer);
+    assertEq('token held', runtime.viewerSetupToken, 2);
+    assertEq('no resize calls', viewer.resizes, 0);
+    runtime.destroy();
+}
+
+function testPanesStayIsolatedAcrossParkAndRouteReplacement() {
+    prksDestroyAllTabContexts();
+    const storage = memoryStorage();
+    const mainHost = hostBox();
+    const sideHost = hostBox();
+    const main = prksMountTabContext('main', mainHost);
+    const side = prksMountTabContext('side', sideHost);
+    main.beginRoute({ name: 'work' });
+    side.beginRoute({ name: 'work' });
+    const mainPdf = createWorkPdfRuntime({ workId: 'work-a', drawerStorage: storage });
+    const sidePdf = createWorkPdfRuntime({ workId: 'work-b', drawerStorage: storage });
+    const mainViewer = viewerStub('main');
+    const sideViewer = viewerStub('side');
+    mainPdf.viewer = mainViewer;
+    sidePdf.viewer = sideViewer;
+    mainPdf.viewerSetupToken = 3;
+    sidePdf.viewerSetupToken = 5;
+    main.setResource('pdf', mainPdf, function () { mainPdf.destroy(); });
+    side.setResource('pdf', sidePdf, function () { sidePdf.destroy(); });
+    mainPdf.openAnnotationDrawer();
+    sidePdf.openAnnotationDrawer();
+    mainPdf.noteAnnotationDrawerFrame(wideFrame());
+    sidePdf.noteAnnotationDrawerFrame(wideFrame());
+    mainPdf.setAnnotationDrawerPinned(true);
+    mainPdf.setAnnotationDrawerWidth(400, { persist: true });
+    assert('main pin resizes', mainPdf.annotationDrawerLayoutEffect().resized === true);
+    assertEq('side stays overlay', sidePdf.readAnnotationDrawer().placement, 'overlay');
+    assertEq('side width stays default', sidePdf.readAnnotationDrawer().width, 352);
+    assertEq('side viewer', sidePdf.viewer, sideViewer);
+    assertEq('side token', sidePdf.viewerSetupToken, 5);
+    const parking = hostBox();
+    assert('warm park', prksWarmParkTabContext('main', parking) === true);
+    assertEq('park keeps the viewer', mainPdf.viewer, mainViewer);
+    assertEq('park keeps pin', mainPdf.readAnnotationDrawer().placement, 'pinned');
+    assert('viewer alive while parked', mainViewer.destroyed === false);
+    const resizesBeforeResume = mainViewer.resizes;
+    const visible = hostBox();
+    const resumed = prksResumeWarmTabContext('main', visible);
+    assert('resume returns main', resumed === main);
+    assertEq('resume keeps the viewer', mainPdf.viewer, mainViewer);
+    assertEq('resume keeps the token', mainPdf.viewerSetupToken, 3);
+    assert('resume resizes without a new viewer', mainViewer.resizes === resizesBeforeResume + 1);
+    assertEq('side untouched by resume', sidePdf.viewer, sideViewer);
+    main.beginRoute({ name: 'work', hash: '#/works/other' });
+    assert('route replacement destroys main', mainPdf._destroyed);
+    assertEq('route replacement closes main', mainPdf.readAnnotationDrawer().open, false);
+    assertEq('side survives', sidePdf.readAnnotationDrawer().open, true);
+    assertEq('side viewer survives', sidePdf.viewer, sideViewer);
+    assertEq('side token survives', sidePdf.viewerSetupToken, 5);
+    sidePdf.destroy();
+    prksDestroyAllTabContexts();
+}
+
 testOpenAndCloseDoNotTouchTheViewer();
 testStaleEpochAndReplacedViewer();
 testMainAndSecondarySessionsStayApart();
+testPinResizePreservesViewerIdentity();
+testNarrowAndMobileDoNotPinTheViewer();
+testPanesStayIsolatedAcrossParkAndRouteReplacement();
 
 console.log(passed + ' passed, ' + failed + ' failed');
 if (failed) process.exit(1);

@@ -234,10 +234,106 @@
         };
     }
 
-    function emptyAnnotationDrawer() {
+    var PRKS_PDF_DRAWER_DEFAULT_WIDTH = 352;
+    var PRKS_PDF_DRAWER_MIN_WIDTH = 240;
+    var PRKS_PDF_DRAWER_MAX_WIDTH = 480;
+    var PRKS_PDF_DRAWER_MIN_VIEWER = 320;
+    var PRKS_PDF_DRAWER_PIN_MIN_PANE = PRKS_PDF_DRAWER_MIN_WIDTH + PRKS_PDF_DRAWER_MIN_VIEWER;
+    var PRKS_PDF_DRAWER_STORAGE_KEY = 'prks.pdf.annotationDrawer';
+
+    function clampAnnotationDrawerWidth(width) {
+        const n = Number(width);
+        if (!Number.isFinite(n)) return PRKS_PDF_DRAWER_DEFAULT_WIDTH;
+        return Math.min(PRKS_PDF_DRAWER_MAX_WIDTH, Math.max(PRKS_PDF_DRAWER_MIN_WIDTH, Math.round(n)));
+    }
+
+    function readAnnotationDrawerPreference(storage) {
+        const pref = { pinned: false, width: PRKS_PDF_DRAWER_DEFAULT_WIDTH };
+        if (!storage || typeof storage.getItem !== 'function') return pref;
+        try {
+            const raw = storage.getItem(PRKS_PDF_DRAWER_STORAGE_KEY);
+            if (!raw) return pref;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return pref;
+            pref.pinned = parsed.pinned === true;
+            pref.width = clampAnnotationDrawerWidth(parsed.width);
+        } catch (_e) {}
+        return pref;
+    }
+
+    function writeAnnotationDrawerPreference(storage, drawer) {
+        if (!storage || typeof storage.setItem !== 'function' || !drawer) return;
+        try {
+            storage.setItem(
+                PRKS_PDF_DRAWER_STORAGE_KEY,
+                JSON.stringify({
+                    pinned: drawer.pinned === true,
+                    width: drawer.width,
+                })
+            );
+        } catch (_e) {}
+    }
+
+    /**
+     * Closed and overlay do not take viewer width. Pinned does, and only on a
+     * wide pane. A phone or forced-mobile shell uses a full-pane sheet.
+     * Unknown pane width favors overlay until a real measurement arrives.
+     */
+    function annotationDrawerPlacement(drawer) {
+        if (!drawer || !drawer.open) return 'closed';
+        if (drawer.mobile) return 'sheet';
+        const pane = Number(drawer.paneWidth);
+        if (!Number.isFinite(pane) || pane < PRKS_PDF_DRAWER_PIN_MIN_PANE) return 'overlay';
+        return drawer.pinned ? 'pinned' : 'overlay';
+    }
+
+    function annotationDrawerPinEnabled(drawer) {
+        if (!drawer || drawer.mobile) return false;
+        const pane = Number(drawer.paneWidth);
+        return Number.isFinite(pane) && pane >= PRKS_PDF_DRAWER_PIN_MIN_PANE;
+    }
+
+    /**
+     * Fit Width and Fit Page recompute when the viewer box changes.
+     * An explicit percentage is preserved. The caller must not turn either
+     * result into a new viewer or a numeric zoom assignment.
+     */
+    function prksPdfAnnotationDrawerZoomAction(layout) {
+        if (!layout || layout.kind == null || layout.kind === '') return 'follow-container';
+        if (layout.kind === 'percent') return 'preserve';
+        if (layout.kind === 'fit-width' || layout.kind === 'fit-page') return 'recompute';
+        return 'follow-container';
+    }
+
+    function prksApplyPdfAnnotationDrawerChrome(pane, read) {
+        if (!pane || !pane.dataset) return false;
+        const placement = read && read.placement ? String(read.placement) : 'closed';
+        if (placement === 'closed') {
+            delete pane.dataset.prksAnnotationDrawer;
+        } else {
+            pane.dataset.prksAnnotationDrawer = placement;
+        }
+        if (pane.style && typeof pane.style.setProperty === 'function') {
+            const width = read && Number(read.width);
+            const px = (Number.isFinite(width) ? Math.round(width) : PRKS_PDF_DRAWER_DEFAULT_WIDTH) + 'px';
+            if (placement === 'overlay' || placement === 'pinned') {
+                pane.style.setProperty('--pdf-annotation-drawer-width', px);
+            } else if (typeof pane.style.removeProperty === 'function') {
+                pane.style.removeProperty('--pdf-annotation-drawer-width');
+            }
+        }
+        return placement === 'pinned';
+    }
+
+    function emptyAnnotationDrawer(pref) {
+        const source = pref || { pinned: false, width: PRKS_PDF_DRAWER_DEFAULT_WIDTH };
         return {
             open: false,
             epoch: 0,
+            pinned: source.pinned === true,
+            width: clampAnnotationDrawerWidth(source.width),
+            paneWidth: 0,
+            mobile: false,
         };
     }
 
@@ -416,6 +512,7 @@
     function createWorkPdfRuntime(options) {
         const opts = options || {};
         const workId = String(opts.workId || '');
+        const drawerPref = readAnnotationDrawerPreference(opts.drawerStorage);
         const runtime = {
             viewer: opts.viewer || null,
             // Bumped every time `runtime.viewer` is (re)published. Lets an
@@ -438,7 +535,10 @@
             annotationCache: opts.annotationCache || emptyAnnotationCache(workId),
             annotationEditorState: opts.annotationEditorState || null,
             annotationPopup: emptyAnnotationPopup(),
-            annotationDrawer: emptyAnnotationDrawer(),
+            annotationDrawer: emptyAnnotationDrawer(drawerPref),
+            _drawerLayoutSignature: 'closed',
+            _drawerStorage: opts.drawerStorage || null,
+            _drawerPaneObserver: null,
             syncState: opts.syncState || emptySyncState(workId),
             _destroyed: false,
             _flushAnnotationsImpl: typeof opts.flushAnnotations === 'function' ? opts.flushAnnotations : null,
@@ -817,14 +917,15 @@
         };
 
         /**
-         * Overlay annotation list for this runtime. Opening and closing do
-         * not replace the viewer, change viewerSetupToken, or touch zoom,
-         * page, or size.
+         * Annotation list for this runtime. Opening, closing, pinning, and
+         * resizing do not replace the viewer or change viewerSetupToken.
+         * Overlay and sheet do not take viewer width. Pinned does.
          */
         runtime.readAnnotationDrawer = function () {
             const drawer = runtime.annotationDrawer || emptyAnnotationDrawer();
             const popup = runtime.annotationPopup;
             const selectedId = popup && popup.open && popup.annId ? String(popup.annId) : '';
+            const placement = annotationDrawerPlacement(drawer);
             return {
                 open: !!drawer.open,
                 epoch: typeof drawer.epoch === 'number' ? drawer.epoch : 0,
@@ -833,6 +934,62 @@
                 status: drawer.open ? annotationDrawerStatus(runtime) : '',
                 published: drawer.open ? annotationDrawerPublished(runtime) : false,
                 items: drawer.open ? projectAnnotationDrawerItems(runtime) : [],
+                pinned: drawer.pinned === true,
+                width: drawer.width,
+                minWidth: PRKS_PDF_DRAWER_MIN_WIDTH,
+                maxWidth: PRKS_PDF_DRAWER_MAX_WIDTH,
+                defaultWidth: PRKS_PDF_DRAWER_DEFAULT_WIDTH,
+                placement: placement,
+                pinEnabled: annotationDrawerPinEnabled(drawer),
+            };
+        };
+
+        /** Last measured pane. A zero width leaves the previous measurement. */
+        runtime.noteAnnotationDrawerFrame = function (frame) {
+            if (runtime._destroyed) return runtime.readAnnotationDrawer();
+            const drawer = runtime.annotationDrawer;
+            const width = frame && Number(frame.paneWidth);
+            if (Number.isFinite(width) && width > 0) drawer.paneWidth = width;
+            if (frame && frame.mobile != null) drawer.mobile = !!frame.mobile;
+            return runtime.readAnnotationDrawer();
+        };
+
+        runtime.setAnnotationDrawerPinned = function (pinned) {
+            if (runtime._destroyed) return false;
+            const drawer = runtime.annotationDrawer;
+            const next = !!pinned;
+            if (drawer.pinned !== next) {
+                drawer.pinned = next;
+                writeAnnotationDrawerPreference(runtime._drawerStorage, drawer);
+            }
+            return true;
+        };
+
+        runtime.setAnnotationDrawerWidth = function (width, opts) {
+            if (runtime._destroyed) return false;
+            const drawer = runtime.annotationDrawer;
+            drawer.width = clampAnnotationDrawerWidth(width);
+            if (!opts || opts.persist !== false) {
+                writeAnnotationDrawerPreference(runtime._drawerStorage, drawer);
+            }
+            return true;
+        };
+
+        /**
+         * True only when the viewer box must change: entering or leaving
+         * pinned layout, or changing width while pinned. Overlay width,
+         * sheet, and open/close of an overlay do not.
+         */
+        runtime.annotationDrawerLayoutEffect = function () {
+            const read = runtime.readAnnotationDrawer();
+            const signature = read.placement === 'pinned' ? 'pinned:' + String(read.width) : read.placement;
+            const previous = runtime._drawerLayoutSignature || 'closed';
+            runtime._drawerLayoutSignature = signature;
+            const wasPinned = previous.indexOf('pinned:') === 0;
+            const nowPinned = signature.indexOf('pinned:') === 0;
+            return {
+                read: read,
+                resized: signature !== previous && (wasPinned || nowPinned),
             };
         };
 
@@ -894,6 +1051,12 @@
 
         runtime.destroy = function () {
             if (runtime._destroyed) return;
+            if (runtime._drawerPaneObserver && typeof runtime._drawerPaneObserver.disconnect === 'function') {
+                try {
+                    runtime._drawerPaneObserver.disconnect();
+                } catch (_eDrawerPane) {}
+                runtime._drawerPaneObserver = null;
+            }
             releasePdfSearch();
             try {
                 runtime.closeAnnotationPopup();
@@ -943,6 +1106,12 @@
         prksEmptyPdfAnnotationCache: emptyAnnotationCache,
         prksPdfSearchStill: prksPdfSearchStill,
         bindPdfSurfaceSearch: bindPdfSurfaceSearch,
+        prksPdfAnnotationDrawerZoomAction: prksPdfAnnotationDrawerZoomAction,
+        prksApplyPdfAnnotationDrawerChrome: prksApplyPdfAnnotationDrawerChrome,
+        PRKS_PDF_DRAWER_DEFAULT_WIDTH: PRKS_PDF_DRAWER_DEFAULT_WIDTH,
+        PRKS_PDF_DRAWER_MIN_WIDTH: PRKS_PDF_DRAWER_MIN_WIDTH,
+        PRKS_PDF_DRAWER_MAX_WIDTH: PRKS_PDF_DRAWER_MAX_WIDTH,
+        PRKS_PDF_DRAWER_PIN_MIN_PANE: PRKS_PDF_DRAWER_PIN_MIN_PANE,
     };
     Object.keys(api).forEach(function (k) {
         root[k] = api[k];
