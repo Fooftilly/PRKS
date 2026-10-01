@@ -192,6 +192,18 @@ function prksRestoreModalConfirmCancel() {
     prksModalConfirmAlertOnly = false;
 }
 
+function prksFocusStaysOnFocusedTile(node) {
+    if (!node || typeof node.closest !== 'function') return true;
+    const tile = node.closest('.prks-tile[data-prks-tab-id]');
+    if (!tile) return true;
+    const tileId = tile.getAttribute('data-prks-tab-id');
+    if (!tileId) return true;
+    const snap = typeof window.prksWorkspaceSnapshot === 'function' ? window.prksWorkspaceSnapshot() : null;
+    const focused = snap && snap.focusedTabId;
+    if (!focused) return true;
+    return String(tileId) === String(focused);
+}
+
 function prksHideModalConfirm() {
     const root = document.getElementById('prks-modal-confirm');
     if (root) {
@@ -202,7 +214,12 @@ function prksHideModalConfirm() {
     prksModalConfirmResolve = null;
     const opener = prksModalConfirmOpener;
     prksModalConfirmOpener = null;
-    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
+    if (
+        opener &&
+        typeof opener.focus === 'function' &&
+        document.contains(opener) &&
+        prksFocusStaysOnFocusedTile(opener)
+    ) {
         opener.focus();
     } else if (
         opener &&
@@ -210,12 +227,17 @@ function prksHideModalConfirm() {
         opener.classList.contains('annotation-row__delete')
     ) {
         // The list may have been repainted while the dialog was open.
-        // Focus an equivalent Delete control in that same PDF pane.
+        // Focus an equivalent Delete control in that same PDF pane, and
+        // only while that pane is still the focused tile.
         const pane = typeof opener.closest === 'function' ? opener.closest('.work-pdf-pane') : null;
         const replacement = pane
             ? pane.querySelector('.annotation-row__delete')
             : document.querySelector('[data-prks-role="pdf-annotation-drawer"] .annotation-row__delete');
-        if (replacement && typeof replacement.focus === 'function') {
+        if (
+            replacement &&
+            typeof replacement.focus === 'function' &&
+            prksFocusStaysOnFocusedTile(replacement)
+        ) {
             replacement.focus();
         }
     }

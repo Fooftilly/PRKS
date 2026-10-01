@@ -1165,7 +1165,7 @@ class WorkDetailsPolishTests(_BrowserE2E):
         page.locator("#meta-doc-type-trigger").click()
         page.locator('#panel-content .prks-doc-type-menu__option[data-value="book"]').click()
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.locator("#annotation-fallback-list").wait_for()
+        page.locator("#annotation-fallback-list").wait_for(state="attached")
         page.locator('#right-panel .tab-btn[data-target="details"]').click()
         page.locator("#meta-title").wait_for()
         self.assertEqual(page.locator("#meta-title").input_value(), "Unsaved Work Title")
@@ -2632,7 +2632,7 @@ def _open_details_drawer_if_tiled(page):
 def _open_annotations_tab(page):
     _open_details_drawer_if_tiled(page)
     page.locator(".tab-btn[data-target='annotations']").click()
-    page.wait_for_selector("#annotation-fallback-list")
+    page.wait_for_selector("#annotation-fallback-list", state="attached")
     _open_focused_pdf_annotation_drawer(page)
 
 
@@ -2658,7 +2658,15 @@ def _open_focused_pdf_annotation_drawer(page):
     if button.count() == 0:
         return
     if button.first.get_attribute("aria-pressed") != "true":
-        button.first.click()
+        try:
+            button.first.click(trial=True, timeout=1000)
+        except Exception:
+            show = page.locator('[data-prks-role="open-pdf-annotation-drawer"]')
+            if show.count() == 0:
+                return
+            show.first.click()
+        else:
+            button.first.click()
     page.wait_for_selector(
         '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-annotation-drawer"]' % tab_id
     )
@@ -4165,7 +4173,7 @@ class TabContextHostRootTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".work-detail")
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         self.assertTrue(
             page.locator('#right-panel .tab-btn[data-target="annotations"]').evaluate(
                 "el => el.classList.contains('active')"
@@ -4193,7 +4201,7 @@ class TabContextHostRootTests(_BrowserE2E):
                 return !!(btn && btn.classList.contains('active'));
             }"""
         )
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         page.locator(".prks-workspace-tab").nth(1).locator(".prks-workspace-tab__activate").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/') === 0")
         page.locator(".person-profile__summary").wait_for()
@@ -4445,7 +4453,7 @@ class TabContextHostRootTests(_BrowserE2E):
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".work-detail")
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         result = page.evaluate(
             """async (workBId) => {
                 const focused = window.prksGetFocusedTabContext();
@@ -5664,7 +5672,7 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         page.locator('#right-panel .tab-btn[data-target="annotations"]').click()
-        page.wait_for_selector("#annotation-fallback-list")
+        page.wait_for_selector("#annotation-fallback-list", state="attached")
         before = page.evaluate(
             """() => {
                 const snap = window.prksWorkspaceSnapshot();

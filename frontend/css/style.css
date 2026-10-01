@@ -6579,6 +6579,11 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     z-index: var(--z-dropdown);
 }
 
+.document-view--work .work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"] {
+    right: min(22rem, 100%);
+    overflow: hidden;
+}
+
 .pdf-annotation-popup {
     position: absolute;
     z-index: var(--z-dropdown);

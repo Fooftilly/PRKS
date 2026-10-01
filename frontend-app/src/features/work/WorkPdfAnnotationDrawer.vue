@@ -147,9 +147,7 @@ onBeforeUnmount(() => {
             class="annotation-row__copy-link"
             title="Copy link to this PDF annotation for your notes"
             @click="copyLink($event, item.id)"
-          >
-            Copy link
-          </button>
+          >Copy link</button>
           <button type="button" class="annotation-row__edit-comment" @click="onEdit(item.id, ticket())">
             Edit/Add comment
           </button>
