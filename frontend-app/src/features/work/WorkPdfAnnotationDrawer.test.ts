@@ -312,6 +312,11 @@ describe('annotation delete confirm focus', () => {
     deleteButton.focus()
     deleteButton.click()
     await flushPromises()
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+    const cancel = document.getElementById('prks-modal-confirm-cancel')
+    expect(document.activeElement).toBe(cancel)
     const other = document.createElement('aside')
     other.setAttribute('data-prks-role', 'pdf-annotation-drawer')
     other.setAttribute('data-prks-owner-tab-id', 'other')
@@ -326,7 +331,7 @@ describe('annotation delete confirm focus', () => {
     fresh.type = 'button'
     fresh.className = 'annotation-row__delete'
     drawer.appendChild(fresh)
-    document.getElementById('prks-modal-confirm-cancel')?.click()
+    cancel?.click()
     await flushPromises()
     expect(wrapper.find('.annotation-row').exists()).toBe(true)
     expect(document.activeElement).toBe(fresh)

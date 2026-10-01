@@ -2637,11 +2637,11 @@ def _open_annotations_tab(page):
 
 
 def _open_focused_pdf_annotation_drawer(page):
-    """Open the focused pane's overlay list when that PDF toolbar is up.
+    """Open the focused pane's overlay from its PDF toolbar.
 
     The right-panel Annotations tab no longer paints rows. Persistence tests
     read `.annotation-row` from this drawer. A work without a viewer toolbar
-    leaves the tab shell alone.
+    leaves the tab shell alone. Show on PDF is a separate entry point.
     """
     tab_id = page.evaluate(
         """() => {
@@ -2658,15 +2658,7 @@ def _open_focused_pdf_annotation_drawer(page):
     if button.count() == 0:
         return
     if button.first.get_attribute("aria-pressed") != "true":
-        try:
-            button.first.click(trial=True, timeout=1000)
-        except Exception:
-            show = page.locator('[data-prks-role="open-pdf-annotation-drawer"]')
-            if show.count() == 0:
-                return
-            show.first.click()
-        else:
-            button.first.click()
+        button.first.click()
     page.wait_for_selector(
         '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-annotation-drawer"]' % tab_id
     )
