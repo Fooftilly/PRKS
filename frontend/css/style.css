@@ -6579,9 +6579,14 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     z-index: var(--z-dropdown);
 }
 
-.document-view--work .work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"] {
-    right: min(22rem, 100%);
-    overflow: hidden;
+/* Keep the host full-width unless leftover pane width is at least the
+   collisionBoundary floor. Below that the drawer is width: 100% or nearly
+   so, and right equal to the drawer edge would collapse this host to zero. */
+@container prks-pdf-pane (min-width: calc(22rem + 160px)) {
+    .document-view--work .work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"] {
+        right: 22rem;
+        overflow: hidden;
+    }
 }
 
 .pdf-annotation-popup {

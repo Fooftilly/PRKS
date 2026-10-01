@@ -1,4 +1,5 @@
 """Viewer-owned annotation drawer stays on the pdf runtime."""
+import re
 import unittest
 from pathlib import Path
 import subprocess
@@ -78,6 +79,45 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         self.assertIn("registerWorkPdfAnnotationDrawerBridge", MAIN)
         self.assertIn('aria-label="Annotations"', TOOLBAR)
         self.assertIn("setAnnotationDrawerOpen", CONTROLLER)
+
+    def test_popup_host_stays_usable_when_drawer_fills_the_pane(self):
+        css = (ROOT / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
+        popup = (
+            ROOT / "frontend-app" / "src" / "features" / "work" / "WorkPdfAnnotationPopup.vue"
+        ).read_text(encoding="utf-8")
+        pane = re.search(
+            r"(?m)^\.document-view--work \.work-pdf-pane \{$(.*?)^\}",
+            css,
+            re.S | re.M,
+        )
+        self.assertIsNotNone(pane)
+        self.assertIn("container-type: inline-size;", pane.group(1))
+        self.assertIn("container-name: prks-pdf-pane;", pane.group(1))
+        drawer = re.search(
+            r"(?m)^\.pdf-annotation-drawer \{$(.*?)^\}",
+            css,
+            re.S | re.M,
+        )
+        self.assertIsNotNone(drawer)
+        self.assertIn("width: min(22rem, 100%);", drawer.group(1))
+        host_at = css.index('.document-view--work [data-prks-role="pdf-annotation-popup-host"]')
+        popup_at = css.index(".pdf-annotation-popup {", host_at)
+        host = css[host_at:popup_at]
+        query = "@container prks-pdf-pane (min-width: calc(22rem + 160px))"
+        base, marker, gated = host.partition(query)
+        self.assertTrue(marker)
+        self.assertIn("inset: 0;", base)
+        self.assertIn("overflow: visible;", base)
+        self.assertNotIn("right:", base)
+        self.assertNotIn("overflow: hidden", base)
+        self.assertNotIn("right: min(22rem, 100%)", host)
+        self.assertIn(
+            '.work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"]',
+            gated,
+        )
+        self.assertIn("right: 22rem;", gated)
+        self.assertIn("overflow: hidden;", gated)
+        self.assertIn("if (width < 160) return pane", popup)
 
 
 if __name__ == "__main__":
