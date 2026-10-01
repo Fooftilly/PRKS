@@ -299,6 +299,17 @@
     }
 
     /**
+     * Pixels the pinned drawer may take while leaving the viewer its minimum.
+     * Null when the drawer is not pinned or the pane cannot hold that pair.
+     */
+    function annotationDrawerPaneRoom(drawer) {
+        if (!drawer || annotationDrawerPlacement(drawer) !== 'pinned') return null;
+        const room = Math.floor(Number(drawer.paneWidth) - PRKS_PDF_DRAWER_MIN_VIEWER);
+        if (!(room >= PRKS_PDF_DRAWER_MIN_WIDTH)) return null;
+        return room;
+    }
+
+    /**
      * Preference width, clamped to the global limits. While pinned, also
      * capped so this pane keeps PRKS_PDF_DRAWER_MIN_VIEWER for the PDF.
      * The stored preference is not rewritten by that pane cap.
@@ -307,10 +318,20 @@
         const preferred = clampAnnotationDrawerWidth(
             requested != null ? requested : drawer && drawer.width
         );
-        if (!drawer || annotationDrawerPlacement(drawer) !== 'pinned') return preferred;
-        const room = Math.floor(Number(drawer.paneWidth) - PRKS_PDF_DRAWER_MIN_VIEWER);
-        if (room < PRKS_PDF_DRAWER_MIN_WIDTH) return preferred;
+        const room = annotationDrawerPaneRoom(drawer);
+        if (room == null) return preferred;
         return Math.min(preferred, room);
+    }
+
+    /**
+     * Widest width the handle can reach on this pane. Pinned mode cannot
+     * offer more than the room beside the minimum viewer. Overlay and sheet
+     * keep the global maximum because they do not take viewer width.
+     */
+    function annotationDrawerInteractionMax(drawer) {
+        const room = annotationDrawerPaneRoom(drawer);
+        if (room == null) return PRKS_PDF_DRAWER_MAX_WIDTH;
+        return Math.min(PRKS_PDF_DRAWER_MAX_WIDTH, room);
     }
 
     /**
@@ -960,6 +981,7 @@
                 paneWidth: Number(drawer.paneWidth) || 0,
                 minWidth: PRKS_PDF_DRAWER_MIN_WIDTH,
                 maxWidth: PRKS_PDF_DRAWER_MAX_WIDTH,
+                interactionMax: annotationDrawerInteractionMax(drawer),
                 defaultWidth: PRKS_PDF_DRAWER_DEFAULT_WIDTH,
                 placement: placement,
                 pinEnabled: annotationDrawerPinEnabled(drawer),

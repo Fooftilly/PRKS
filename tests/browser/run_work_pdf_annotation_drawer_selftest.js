@@ -346,6 +346,7 @@ function testNarrowAndMobileDoNotPinTheViewer() {
     assertEq('wide preference still pins', capped.read.placement, 'pinned');
     assertEq('preference stays 480', capped.read.width, 480);
     assertEq('painted width leaves the viewer its minimum', capped.read.layoutWidth, 380);
+    assertEq('interaction max is the pane cap', capped.read.interactionMax, 380);
     const cappedPane = paneStub();
     prksApplyPdfAnnotationDrawerChrome(cappedPane, capped.read);
     assertEq('capped width variable', cappedPane.style.getPropertyValue('--pdf-annotation-drawer-width'), '380px');
@@ -354,6 +355,7 @@ function testNarrowAndMobileDoNotPinTheViewer() {
     assert('same drawer width still resizes when the pane grows', grew.resized === true);
     assertEq('preference held while the pane grows', grew.read.width, 480);
     assertEq('wider pane paints the full preference', grew.read.layoutWidth, 480);
+    assertEq('wider pane restores the global interaction max', grew.read.interactionMax, 480);
     runtime.destroy();
 }
 

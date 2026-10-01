@@ -314,6 +314,7 @@ describe('annotation drawer', () => {
           layoutWidth: number
           minWidth: number
           maxWidth: number
+          interactionMax: number
           defaultWidth: number
         }
         annotationDrawerLayoutWidth: (requested: number) => number
@@ -342,8 +343,10 @@ describe('annotation drawer', () => {
       expect(read.placement).toBe('pinned')
       expect(read.width).toBe(480)
       expect(read.layoutWidth).toBe(380)
+      expect(read.interactionMax).toBe(380)
       const commits: number[] = []
       const previews: number[] = []
+      const cancels: Array<{ width: number; ticket: object }> = []
       const wrapper = mount(WorkPdfAnnotationDrawer, {
         props: {
           state: {
@@ -355,6 +358,7 @@ describe('annotation drawer', () => {
             layoutWidth: read.layoutWidth,
             minWidth: read.minWidth,
             maxWidth: read.maxWidth,
+            interactionMax: read.interactionMax,
             defaultWidth: read.defaultWidth,
           },
           tabId: 'tab-a',
@@ -363,7 +367,8 @@ describe('annotation drawer', () => {
           onEdit: () => {},
           onDelete: () => {},
           onCopy: async () => true,
-          onResize: (width, _ticket, options) => {
+          onResize: (width, ticket, options) => {
+            if (options.cancel) cancels.push({ width, ticket })
             if (options.preview) previews.push(width)
             if (options.persist) {
               commits.push(width)
@@ -374,32 +379,65 @@ describe('annotation drawer', () => {
         attachTo: document.body,
       })
       mounted.push(wrapper)
-      return { runtime, commits, previews, wrapper }
+      return { runtime, commits, previews, cancels, wrapper }
     }
 
     try {
-      const still = cappedRuntime()
+      const widened = cappedRuntime()
       await nextTick()
-      const stillHandle = still.wrapper.get('.pdf-annotation-drawer__resize').element
+      const wideHandle = widened.wrapper.get('[role="separator"]')
+      expect(wideHandle.attributes('aria-valuemax')).toBe('380')
+      expect(wideHandle.attributes('aria-valuenow')).toBe('380')
+      await wideHandle.trigger('keydown', { key: 'ArrowLeft' })
+      expect(widened.commits).toEqual([])
+      expect(widened.runtime.readAnnotationDrawer().width).toBe(480)
+      const stillHandle = widened.wrapper.get('.pdf-annotation-drawer__resize').element
       stillHandle.dispatchEvent(new PointerEvent('pointerdown', {
+        clientX: 400,
+        pointerId: 15,
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      }))
+      document.dispatchEvent(new PointerEvent('pointerup', {
+        pointerId: 15,
+        bubbles: true,
+        cancelable: true,
+      }))
+      expect(widened.commits).toEqual([])
+      expect(widened.cancels.map((cancel) => cancel.width)).toEqual([380])
+      expect(widened.runtime.readAnnotationDrawer().width).toBe(480)
+      widened.runtime.noteAnnotationDrawerFrame({ paneWidth: 1100, mobile: false })
+      expect(widened.runtime.readAnnotationDrawer().width).toBe(480)
+      expect(widened.runtime.readAnnotationDrawer().layoutWidth).toBe(480)
+      widened.runtime.destroy()
+
+      const blocked = cappedRuntime()
+      await nextTick()
+      const blockedHandle = blocked.wrapper.get('.pdf-annotation-drawer__resize').element
+      blockedHandle.dispatchEvent(new PointerEvent('pointerdown', {
         clientX: 400,
         pointerId: 11,
         button: 0,
         bubbles: true,
         cancelable: true,
       }))
+      document.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: 360,
+        pointerId: 11,
+        bubbles: true,
+        cancelable: true,
+      }))
+      frames.at(-1)?.(0)
       document.dispatchEvent(new PointerEvent('pointerup', {
         pointerId: 11,
         bubbles: true,
         cancelable: true,
       }))
-      expect(still.commits).toEqual([])
-      expect(still.runtime.readAnnotationDrawer().width).toBe(480)
-      expect(still.runtime.readAnnotationDrawer().layoutWidth).toBe(380)
-      still.runtime.noteAnnotationDrawerFrame({ paneWidth: 1100, mobile: false })
-      expect(still.runtime.readAnnotationDrawer().width).toBe(480)
-      expect(still.runtime.readAnnotationDrawer().layoutWidth).toBe(480)
-      still.runtime.destroy()
+      expect(blocked.commits).toEqual([])
+      expect(blocked.previews.every((width) => width <= 380)).toBe(true)
+      expect(blocked.runtime.readAnnotationDrawer().width).toBe(480)
+      blocked.runtime.destroy()
 
       const dragged = cappedRuntime()
       await nextTick()
@@ -441,6 +479,41 @@ describe('annotation drawer', () => {
       expect(keyed.runtime.readAnnotationDrawer().layoutWidth).toBe(364)
       expect(keyHandle.attributes('aria-valuenow')).toBe('364')
       keyed.runtime.destroy()
+
+      const returned = cappedRuntime()
+      await nextTick()
+      const returnHandle = returned.wrapper.get('.pdf-annotation-drawer__resize').element
+      returnHandle.dispatchEvent(new PointerEvent('pointerdown', {
+        clientX: 300,
+        pointerId: 14,
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      }))
+      document.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: 316,
+        pointerId: 14,
+        bubbles: true,
+        cancelable: true,
+      }))
+      frames.at(-1)?.(0)
+      expect(returned.previews).toEqual([364])
+      document.dispatchEvent(new PointerEvent('pointermove', {
+        clientX: 300,
+        pointerId: 14,
+        bubbles: true,
+        cancelable: true,
+      }))
+      document.dispatchEvent(new PointerEvent('pointerup', {
+        pointerId: 14,
+        bubbles: true,
+        cancelable: true,
+      }))
+      expect(returned.commits).toEqual([])
+      expect(returned.cancels.map((cancel) => cancel.width)).toEqual([380])
+      expect(returned.runtime.readAnnotationDrawer().width).toBe(480)
+      expect(returned.runtime.readAnnotationDrawer().layoutWidth).toBe(380)
+      returned.runtime.destroy()
     } finally {
       window.requestAnimationFrame = originalFrame
       window.cancelAnimationFrame = originalCancel
@@ -457,7 +530,7 @@ describe('annotation drawer', () => {
     }
     window.cancelAnimationFrame = () => {}
     try {
-      const widths: Array<{ width: number; preview?: boolean; persist?: boolean }> = []
+      const widths: Array<{ width: number; preview?: boolean; persist?: boolean; cancel?: boolean }> = []
       const wrapper = mount(WorkPdfAnnotationDrawer, {
         props: {
           state: {
@@ -477,7 +550,12 @@ describe('annotation drawer', () => {
           onDelete: () => {},
           onCopy: async () => true,
           onResize: (width, _ticket, options) => {
-            widths.push({ width, preview: options.preview, persist: options.persist })
+            widths.push({
+              width,
+              preview: options.preview,
+              persist: options.persist,
+              cancel: options.cancel,
+            })
           },
         },
         attachTo: document.body,
@@ -486,7 +564,7 @@ describe('annotation drawer', () => {
       await nextTick()
       const handle = wrapper.get('[role="separator"]')
       await handle.trigger('keydown', { key: 'ArrowLeft' })
-      expect(widths).toEqual([{ width: 480, preview: undefined, persist: true }])
+      expect(widths).toEqual([])
       expect(handle.attributes('aria-valuenow')).toBe('480')
       handle.element.dispatchEvent(new PointerEvent('pointerdown', {
         clientX: 200,
@@ -503,8 +581,7 @@ describe('annotation drawer', () => {
       }))
       frames.at(-1)?.(0)
       expect(widths).toEqual([
-        { width: 480, preview: undefined, persist: true },
-        { width: 480, preview: true, persist: false },
+        { width: 480, preview: true, persist: false, cancel: undefined },
       ])
       expect(handle.attributes('aria-valuenow')).toBe('480')
       document.dispatchEvent(new PointerEvent('pointerup', {
@@ -512,7 +589,10 @@ describe('annotation drawer', () => {
         bubbles: true,
         cancelable: true,
       }))
-      expect(widths).toHaveLength(2)
+      expect(widths).toEqual([
+        { width: 480, preview: true, persist: false, cancel: undefined },
+        { width: 480, preview: undefined, persist: false, cancel: true },
+      ])
 
       await wrapper.setProps({
         state: {
@@ -542,14 +622,14 @@ describe('annotation drawer', () => {
         cancelable: true,
       }))
       frames.at(-1)?.(0)
-      expect(widths.at(-1)).toEqual({ width: 240, preview: true, persist: false })
+      expect(widths.at(-1)).toEqual({ width: 240, preview: true, persist: false, cancel: undefined })
       expect(narrow.attributes('aria-valuenow')).toBe('240')
       document.dispatchEvent(new PointerEvent('pointerup', {
         pointerId: 22,
         bubbles: true,
         cancelable: true,
       }))
-      expect(widths.at(-1)).toEqual({ width: 240, preview: undefined, persist: true })
+      expect(widths.at(-1)).toEqual({ width: 240, preview: undefined, persist: true, cancel: undefined })
       expect(narrow.attributes('aria-valuenow')).toBe('240')
     } finally {
       window.requestAnimationFrame = originalFrame

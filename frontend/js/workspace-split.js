@@ -639,8 +639,8 @@
     }
 
     /**
-     * Gesture min/max from the caller. This is the handle's own limit, not a
-     * workspace split ratio and not the pane's viewer cap.
+     * Gesture min/max supplied by the caller. The caller owns the effective
+     * maximum, including a pane cap. This is not a workspace split ratio.
      */
     function clampDrawerWidth(cfg, width) {
         let min = Math.round(drawerWidthNumber(cfg.getMin && cfg.getMin(), 240));
@@ -675,10 +675,12 @@
      * widens. The ticket from `cfg.capture` is taken once when the gesture
      * starts and passed unchanged through every preview, commit, and cancel.
      * Pointer moves coalesce to one preview per animation frame. pointerup
-     * commits only when the clamped width changed. A click with no movement
-     * does not commit. pointercancel restores the width from gesture start
-     * and does not commit. Preview, commit, and ARIA all use the clamped
-     * min/max. The remembered preference and any pane cap stay with the caller.
+     * commits only when the clamped width changed. Ending at the start width,
+     * including a click with no movement, runs cancel so a preview cannot
+     * stay painted. pointercancel does the same. Keyboard input that clamps
+     * back to the displayed width does not commit. Preview, commit, and ARIA
+     * all use the clamped min/max. The remembered preference stays with the
+     * caller.
      */
     function prksBindDrawerWidthSeparator(el, cfg) {
         if (!el || !cfg) return function () {};
@@ -712,10 +714,15 @@
             if (kind === 'commit') {
                 const width = clampDrawerWidth(cfg, state.latest);
                 const start = clampDrawerWidth(cfg, state.startWidth);
-                if (width !== start && typeof cfg.onCommit === 'function') {
-                    cfg.onCommit(width, state.captured);
+                if (width !== start) {
+                    if (typeof cfg.onCommit === 'function') cfg.onCommit(width, state.captured);
+                    paintDrawerWidthAria(el, cfg, width);
+                } else if (typeof cfg.onCancel === 'function') {
+                    cfg.onCancel(start, state.captured);
+                    paintDrawerWidthAria(el, cfg, start);
+                } else {
+                    paintDrawerWidthAria(el, cfg, start);
                 }
-                paintDrawerWidthAria(el, cfg, width !== start ? width : start);
             } else if (typeof cfg.onCancel === 'function') {
                 cfg.onCancel(state.startWidth, state.captured);
                 paintDrawerWidthAria(el, cfg, state.startWidth);
@@ -801,7 +808,7 @@
             const min = drawerWidthNumber(cfg.getMin && cfg.getMin(), 240);
             const max = drawerWidthNumber(cfg.getMax && cfg.getMax(), 480);
             const fallback = drawerWidthNumber(cfg.getDefault && cfg.getDefault(), 352);
-            const current = drawerWidthNumber(cfg.getWidth && cfg.getWidth(), fallback);
+            const current = clampDrawerWidth(cfg, drawerWidthNumber(cfg.getWidth && cfg.getWidth(), fallback));
             let next = null;
             if (key === 'ArrowLeft' || key === 'ArrowRight') {
                 const step = e.shiftKey ? PRKS_DRAWER_WIDTH_STEP_SHIFT : PRKS_DRAWER_WIDTH_STEP;
@@ -812,6 +819,10 @@
             next = clampDrawerWidth(cfg, next);
             e.preventDefault();
             e.stopPropagation();
+            if (next === current) {
+                paintDrawerWidthAria(el, cfg, current);
+                return;
+            }
             const captured = typeof cfg.capture === 'function' ? cfg.capture() : null;
             if (typeof cfg.onCommit === 'function') cfg.onCommit(next, captured);
             paintDrawerWidthAria(el, cfg, next);

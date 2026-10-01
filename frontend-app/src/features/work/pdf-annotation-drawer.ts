@@ -50,6 +50,7 @@ function emptyView(): AnnotationDrawerView {
     layoutWidth: 352,
     minWidth: 240,
     maxWidth: 480,
+    interactionMax: 480,
     defaultWidth: 352,
     placement: 'closed',
     pinEnabled: false,
@@ -107,6 +108,7 @@ function applyRead(state: AnnotationDrawerView, ctx: AnnotationDrawerOwner): voi
   state.layoutWidth = read.layoutWidth
   state.minWidth = read.minWidth
   state.maxWidth = read.maxWidth
+  state.interactionMax = read.interactionMax
   state.defaultWidth = read.defaultWidth
   state.placement = read.placement
   state.pinEnabled = read.pinEnabled

@@ -21,6 +21,7 @@ export interface AnnotationDrawerView {
   layoutWidth?: number
   minWidth?: number
   maxWidth?: number
+  interactionMax?: number
   defaultWidth?: number
   placement?: 'closed' | 'overlay' | 'pinned' | 'sheet'
   pinEnabled?: boolean
@@ -67,6 +68,12 @@ function displayedWidth() {
   const layout = props.state.layoutWidth
   if (typeof layout === 'number' && Number.isFinite(layout)) return layout
   return props.state.width || props.state.defaultWidth || 352
+}
+
+function interactionMax() {
+  const max = props.state.interactionMax
+  if (typeof max === 'number' && Number.isFinite(max)) return max
+  return props.state.maxWidth || 480
 }
 
 function actuallyPinned() {
@@ -121,7 +128,7 @@ function bindDrawerWidth(el: unknown) {
   releaseDrawerWidth = bind(el, {
     getWidth: () => displayedWidth(),
     getMin: () => props.state.minWidth || 240,
-    getMax: () => props.state.maxWidth || 480,
+    getMax: () => interactionMax(),
     getDefault: () => props.state.defaultWidth || 352,
     capture: () => ticket(),
     onPreview: (width, captured) => {

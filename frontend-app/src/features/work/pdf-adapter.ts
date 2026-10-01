@@ -113,6 +113,7 @@ export interface WorkPdfAnnotationDrawerRead {
   layoutWidth: number
   minWidth: number
   maxWidth: number
+  interactionMax: number
   defaultWidth: number
   placement: WorkPdfAnnotationDrawerPlacement
   pinEnabled: boolean
@@ -410,6 +411,7 @@ const EMPTY_ANNOTATION_DRAWER: WorkPdfAnnotationDrawerRead = {
   layoutWidth: 352,
   minWidth: 240,
   maxWidth: 480,
+  interactionMax: 480,
   defaultWidth: 352,
   placement: 'closed',
   pinEnabled: false,
@@ -473,6 +475,12 @@ export function readWorkPdfAnnotationDrawer(
           : 352,
     minWidth: typeof read.minWidth === 'number' ? read.minWidth : 240,
     maxWidth: typeof read.maxWidth === 'number' ? read.maxWidth : 480,
+    interactionMax:
+      typeof read.interactionMax === 'number' && Number.isFinite(read.interactionMax)
+        ? read.interactionMax
+        : typeof read.maxWidth === 'number'
+          ? read.maxWidth
+          : 480,
     defaultWidth: typeof read.defaultWidth === 'number' ? read.defaultWidth : 352,
     placement: drawerPlacement(read.placement, open),
     pinEnabled: !!read.pinEnabled,
