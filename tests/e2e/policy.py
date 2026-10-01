@@ -321,6 +321,7 @@ FEATURES = {
             "tests.e2e.test_browse_offline",
             "tests.e2e.test_work_browsing",
             "tests.e2e.test_progress_route_surface",
+            "tests.e2e.test_search_saved_views_route_surface",
         ),
     },
     "offline": {
@@ -593,6 +594,7 @@ AFFECTED_RULES = (
             "frontend/js/components/recent.js",
             "frontend/js/components/search.js",
             "frontend/js/components/work-cards.js",
+            "frontend/js/saved-views.js",
         ),
         "features": ("browse",),
     },
@@ -610,6 +612,21 @@ AFFECTED_RULES = (
         ),
         "features": ("browse",),
         "note": "Vue Progress route (#248) → browse. Stories stay catalog-only. Shared Vue infrastructure stays unmapped.",
+    },
+    {
+        "name": "search-saved-views-vue",
+        "paths": (
+            "frontend-app/src/features/search/**",
+            "frontend-app/src/features/saved-views/**",
+        ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue Search + Saved View detail (#302 R2) → browse. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "concepts-vue",
