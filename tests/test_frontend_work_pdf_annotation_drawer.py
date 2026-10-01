@@ -120,6 +120,17 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         self.assertIn("overflow: hidden;", gated)
         self.assertIn("if (width < 160) return pane", popup)
 
+    def test_open_details_panel_keeps_secondary_annotations_clear(self):
+        css = (ROOT / "frontend" / "css" / "style.css").read_text(encoding="utf-8")
+        rule = css[
+            css.index("body.prks-right-panel-open #app-container.app-container--tiled .prks-workspace-canvas--tiled > :nth-child(3)") :
+            css.index("/* Discoverable Close")
+        ]
+        self.assertIn('.prks-pdf-toolbar__group:has(> button[aria-label="Annotations"])', rule)
+        self.assertIn("order: -1;", rule)
+        self.assertNotIn("width:", rule)
+        self.assertNotIn(".work-pdf-pane", rule)
+
     def test_show_on_pdf_opens_the_panel_owner(self):
         start = UI.index("function prksOpenAnnotationDrawerForPanel(button) {")
         end = UI.index("function updatePanelContent(tabId) {", start)
