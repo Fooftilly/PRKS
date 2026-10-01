@@ -66,15 +66,22 @@ function paintMode(): void {
   window.prksBindWorkBrowseMode?.(rootEl.value)
 }
 
-function releaseOwnedPreview(root: ParentNode | null): void {
-  if (root) window.prksReleaseWorkThumbPreview?.(root)
+function releaseOwnedThumbResources(root: ParentNode | null): void {
+  if (!root) return
+  // Scoped only. Another pane may own the preview or its own lazy thumbs.
+  if (typeof window.prksReleaseWorkThumbPreview === 'function') {
+    window.prksReleaseWorkThumbPreview(root)
+  }
+  if (typeof window.prksReleaseLazyWorkThumbs === 'function') {
+    window.prksReleaseLazyWorkThumbs(root)
+  }
 }
 
 function paintCollection(): void {
   const main = mainEl.value
   // Folder→Folder keeps this shell and rewrites the cards. Release while the
   // previous thumbs are still inside main; scoped release leaves another pane alone.
-  releaseOwnedPreview(main)
+  releaseOwnedThumbResources(main)
   const el = collectionEl.value
   if (!el) return
   el.innerHTML = collectionHtml.value
@@ -114,9 +121,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  // beginRoute dismisses this tree before app.js calls prksReleaseWorkThumbPreview.
-  // The body-mounted preview only clears while its thumb is still under this root.
-  releaseOwnedPreview(rootEl.value || mainEl.value)
+  // beginRoute dismisses this tree before app.js calls prksReleaseWorkThumbPreview
+  // and prksReleaseLazyWorkThumbs(contentDiv). Both only see thumbs still under this root.
+  releaseOwnedThumbResources(rootEl.value || mainEl.value)
 })
 
 watch(

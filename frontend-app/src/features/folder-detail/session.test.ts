@@ -23,6 +23,7 @@ afterEach(() => {
   delete window.prksFolderDetailNavHtml
   delete window.prksFolderDetailSubfoldersHtml
   delete window.prksReleaseWorkThumbPreview
+  delete window.prksReleaseLazyWorkThumbs
   delete (window as Window & { __prksWorkThumbPreviewSource?: unknown }).__prksWorkThumbPreviewSource
   delete (window as Window & { prksSyncSidebarActive?: unknown }).prksSyncSidebarActive
 })
@@ -153,14 +154,18 @@ describe('Folder detail route bridge', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('releases a live quick preview before leave unmount detaches its thumb', () => {
+  it('releases preview and lazy thumbs before leave unmount detaches them', () => {
     window.prksWorkCardHtml = () =>
-      '<div class="project-card--work-card" data-work-id="w1"><img class="work-card__thumb" data-prks-thumb-preview-kind="pdf"></div>'
+      '<div class="project-card--work-card" data-work-id="w1"><img class="work-card__thumb" data-prks-thumb-preview-kind="pdf" data-prks-thumb-lazy></div>'
     const preview = window as Window & { __prksWorkThumbPreviewSource?: Element | null }
     window.prksReleaseWorkThumbPreview = (root) => {
       const src = preview.__prksWorkThumbPreviewSource
       if (!src || !root || typeof root.contains !== 'function' || !root.contains(src)) return
       preview.__prksWorkThumbPreviewSource = null
+    }
+    const lazyRoots: ParentNode[] = []
+    window.prksReleaseLazyWorkThumbs = (root) => {
+      if (root?.querySelector?.('img[data-prks-thumb-lazy]')) lazyRoots.push(root)
     }
     const pane = owner()
     const el = host()
@@ -175,7 +180,9 @@ describe('Folder detail route bridge', () => {
     preview.__prksWorkThumbPreviewSource = thumb
     pane.runCleanup()
     expect(preview.__prksWorkThumbPreviewSource).toBeNull()
+    expect(lazyRoots.length).toBeGreaterThan(0)
     expect(el.querySelector('[data-prks-role="folder-detail"]')).toBeNull()
+    expect(el.querySelector('img[data-prks-thumb-lazy]')).toBeNull()
   })
 
   it('sends delete and new-folder through the canonical wrappers', async () => {
