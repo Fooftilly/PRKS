@@ -6300,6 +6300,14 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     transform: translateX(0);
 }
 
+/* Tiles use isolation:isolate, so this overlay stays above the PDF toolbar.
+   While it is open, keep Annotations at the start of Secondary toolbars.
+   That control then sits in the pane strip the panel does not cover.
+   Pane width, zoom, and reading position stay unchanged. */
+body.prks-right-panel-open #app-container.app-container--tiled [data-prks-secondary-root="1"] .prks-pdf-toolbar__group:has(> button[aria-label="Annotations"]) {
+    order: -1;
+}
+
 /* Discoverable Close for the dismissible overlay panel (tiled desktop / mobile drawer).
    Escape and the Details ribbon toggle still work; this is an extra, more visible path.
    Hidden in the normal permanently-docked single-pane desktop layout, where the panel
@@ -6499,12 +6507,94 @@ body.prks-right-panel-open #app-container.app-container--tiled #right-panel {
     border-bottom: 1px solid var(--border);
 }
 
+.document-view--work [data-prks-role="pdf-annotation-drawer-host"] {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.pdf-annotation-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    box-sizing: border-box;
+    width: min(22rem, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    border-left: 1px solid var(--border);
+    pointer-events: auto;
+    overflow: hidden;
+}
+
+.pdf-annotation-drawer__header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-shrink: 0;
+}
+
+.pdf-annotation-drawer__title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+}
+
+.pdf-annotation-drawer__list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.pdf-annotation-drawer .annotation-list-status {
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    color: var(--text-tertiary);
+    margin: 0;
+}
+
+.annotation-row__metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.annotation-row__metadata span {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+}
+
+.annotation-row[data-selected="true"] {
+    border-color: var(--accent);
+}
+
 .document-view--work [data-prks-role="pdf-annotation-popup-host"] {
     position: absolute;
     inset: 0;
     overflow: visible;
     pointer-events: none;
     z-index: var(--z-dropdown);
+}
+
+/* Keep the host full-width unless leftover pane width is at least the
+   collisionBoundary floor. Below that the drawer is width: 100% or nearly
+   so, and right equal to the drawer edge would collapse this host to zero. */
+@container prks-pdf-pane (min-width: calc(22rem + 160px)) {
+    .document-view--work .work-pdf-pane:has([data-prks-role="pdf-annotation-drawer"]) [data-prks-role="pdf-annotation-popup-host"] {
+        right: 22rem;
+        overflow: hidden;
+    }
 }
 
 .pdf-annotation-popup {

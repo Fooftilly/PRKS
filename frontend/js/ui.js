@@ -175,6 +175,7 @@ function prksDiscardConfirmedClose() {
 let prksModalConfirmResolve = null;
 let prksModalConfirmAlertOnly = false;
 let prksModalConfirmOpener = null;
+let prksModalConfirmDrawerOwnerTabId = '';
 
 function prksIsModalConfirmOpen() {
     const root = document.getElementById('prks-modal-confirm');
@@ -192,6 +193,47 @@ function prksRestoreModalConfirmCancel() {
     prksModalConfirmAlertOnly = false;
 }
 
+function prksFocusStaysOnFocusedTile(node) {
+    if (!node || typeof node.closest !== 'function') return true;
+    const tile = node.closest('.prks-tile[data-prks-tab-id]');
+    if (!tile) return true;
+    const tileId = tile.getAttribute('data-prks-tab-id');
+    if (!tileId) return true;
+    const snap = typeof window.prksWorkspaceSnapshot === 'function' ? window.prksWorkspaceSnapshot() : null;
+    const focused = snap && snap.focusedTabId;
+    if (!focused) return true;
+    return String(tileId) === String(focused);
+}
+
+function prksRememberModalConfirmOpener(active) {
+    prksModalConfirmOpener = active && active !== document.body ? active : null;
+    prksModalConfirmDrawerOwnerTabId = '';
+    const opener = prksModalConfirmOpener;
+    if (!opener || typeof opener.closest !== 'function') return;
+    const drawer = opener.closest('[data-prks-role="pdf-annotation-drawer"]');
+    const ownerTabId = drawer && drawer.getAttribute('data-prks-owner-tab-id');
+    if (ownerTabId) prksModalConfirmDrawerOwnerTabId = String(ownerTabId);
+}
+
+function prksReplacementAnnotationDelete(opener, ownerTabId) {
+    const pane = opener && opener.isConnected && typeof opener.closest === 'function'
+        ? opener.closest('.work-pdf-pane')
+        : null;
+    if (pane && pane.isConnected) {
+        const inPane = pane.querySelector('.annotation-row__delete');
+        if (inPane) return inPane;
+    }
+    if (!ownerTabId || typeof document.querySelectorAll !== 'function') return null;
+    const drawers = document.querySelectorAll('[data-prks-role="pdf-annotation-drawer"]');
+    for (let i = 0; i < drawers.length; i += 1) {
+        const drawer = drawers[i];
+        if (!drawer || drawer.getAttribute('data-prks-owner-tab-id') !== String(ownerTabId)) continue;
+        const button = drawer.querySelector('.annotation-row__delete');
+        if (button) return button;
+    }
+    return null;
+}
+
 function prksHideModalConfirm() {
     const root = document.getElementById('prks-modal-confirm');
     if (root) {
@@ -201,23 +243,34 @@ function prksHideModalConfirm() {
     prksRestoreModalConfirmCancel();
     prksModalConfirmResolve = null;
     const opener = prksModalConfirmOpener;
+    const ownerTabId = prksModalConfirmDrawerOwnerTabId;
     prksModalConfirmOpener = null;
-    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
-        opener.focus();
+    prksModalConfirmDrawerOwnerTabId = '';
+    let target = null;
+    if (
+        opener &&
+        typeof opener.focus === 'function' &&
+        document.contains(opener) &&
+        prksFocusStaysOnFocusedTile(opener)
+    ) {
+        target = opener;
     } else if (
         opener &&
         opener.classList &&
         opener.classList.contains('annotation-row__delete')
     ) {
-        // Sidebar may have been repainted (e.g. materialization restore) while
-        // the dialog was open — focus an equivalent Delete control if present.
-        const replacement = document.querySelector(
-            '#annotation-fallback-list .annotation-row__delete'
-        );
-        if (replacement && typeof replacement.focus === 'function') {
-            replacement.focus();
+        // The list may have been repainted while the dialog was open.
+        // Focus the replacement Delete in that drawer's owning tab.
+        const replacement = prksReplacementAnnotationDelete(opener, ownerTabId);
+        if (
+            replacement &&
+            typeof replacement.focus === 'function' &&
+            prksFocusStaysOnFocusedTile(replacement)
+        ) {
+            target = replacement;
         }
     }
+    if (target) target.focus();
 }
 
 function prksFinishModalConfirm(confirmed) {
@@ -283,8 +336,7 @@ function prksConfirmDialog(options = {}) {
         }
 
         prksModalConfirmResolve = resolve;
-        const active = document.activeElement;
-        prksModalConfirmOpener = active && active !== document.body ? active : null;
+        prksRememberModalConfirmOpener(document.activeElement);
         root.classList.remove('hidden');
         root.setAttribute('aria-hidden', 'false');
         const focusEl =
@@ -3543,6 +3595,29 @@ function prksFolderRightPanelStackHtml(folder) {
     );
 }
 
+function prksOpenAnnotationDrawerForPanel(button) {
+    const panel = document.getElementById('panel-content');
+    if (!panel || typeof prksGetTabContext !== 'function') return;
+    if (button && typeof panel.contains === 'function' && !panel.contains(button)) return;
+    const ownerTabId = panel.dataset.prksOwnerTabId || '';
+    if (!ownerTabId) return;
+    const owner = prksGetTabContext(ownerTabId);
+    if (!owner || owner.destroyed || !owner.mounted) return;
+    if (String(panel.dataset.prksOwnerTabId || '') !== String(owner.tabId)) return;
+    const ownerGeneration = panel.dataset.prksOwnerGeneration || '';
+    if (ownerGeneration && String(owner.generation) !== String(ownerGeneration)) return;
+    if (
+        typeof owner.isCurrent === 'function' &&
+        typeof owner.generation === 'number' &&
+        !owner.isCurrent(owner.generation)
+    ) {
+        return;
+    }
+    if (typeof window.prksOpenAnnotationDrawer === 'function') {
+        window.prksOpenAnnotationDrawer(owner);
+    }
+}
+
 function updatePanelContent(tabId) {
     const panel = document.getElementById('panel-content');
     if (!panel) return;
@@ -3601,6 +3676,12 @@ function updatePanelContent(tabId) {
         } else if (tabId === 'annotations') {
             prksDismissWorkPanelRead();
             panel.innerHTML = renderWorkAnnotationsTab(_cw);
+            const openDrawer = panel.querySelector('[data-prks-role="open-pdf-annotation-drawer"]');
+            if (openDrawer) {
+                openDrawer.addEventListener('click', () => {
+                    prksOpenAnnotationDrawerForPanel(openDrawer);
+                });
+            }
             if (typeof window.applyCachedAnnotationListToPanel === 'function') {
                 window.applyCachedAnnotationListToPanel();
             }
@@ -5587,7 +5668,9 @@ function renderWorkAnnotationsTab(work) {
                     ${prksAnnotationsTabHintButton('ann-pdf', 'About PDF annotations')}
                 </div>
             </header>
-            <div id="annotation-fallback-list" class="annotation-fallback-list" role="list" aria-live="polite"></div>
+            <p class="annotations-tab__empty">Annotations are listed on the PDF.</p>
+            <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-role="open-pdf-annotation-drawer">Show on PDF</button>
+            <div id="annotation-fallback-list" class="annotation-fallback-list" hidden></div>
         </div>
     `;
 }

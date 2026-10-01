@@ -678,6 +678,8 @@ Do not add a third in-pane title row. Right-panel Details may still show the Tit
 
 **PDF viewer in tiles:** Inside a tiled Work pane, the viewer must honor the pane’s height (`min-height: 0` on `.prks-pdf-viewer`). A large vendor min-height must not force Secondary panes to clip or waste chrome.
 
+**Annotation drawer (overlay):** The PDF toolbar Annotations control opens a list over the PDF pane. The overlay is absolutely positioned inside `.work-pdf-pane` and does not change the viewer’s width, zoom, or reading position, and does not recreate the viewer. Work Details stays the metadata panel. While that tiled panel is open, the toolbar control stays at the start of Secondary PDF toolbars so it remains in the part of the pane the panel does not cover. Pin and resize are not part of this overlay.
+
 ### Research Notes presentation
 
 Research Notes remain TabContext-owned (drafts, sync, EasyMDE). Presentation only:

@@ -15,6 +15,7 @@ import { registerWorkResearchNotesBridge } from './features/work/research-note-s
 import { registerWorkMainSurfaceBridge } from './features/work/main-surface'
 import { registerWorkPdfAdapterBridge } from './features/work/pdf-adapter'
 import { registerWorkPdfAnnotationPopupBridge } from './features/work/pdf-annotation-popup'
+import { registerWorkPdfAnnotationDrawerBridge } from './features/work/pdf-annotation-drawer'
 
 const target = document.getElementById(PRKS_VUE_ROOT_ID)
 if (target) {
@@ -37,3 +38,4 @@ registerWorkResearchNotesBridge(window)
 registerWorkMainSurfaceBridge(window)
 registerWorkPdfAdapterBridge(window)
 registerWorkPdfAnnotationPopupBridge(window)
+registerWorkPdfAnnotationDrawerBridge(window)

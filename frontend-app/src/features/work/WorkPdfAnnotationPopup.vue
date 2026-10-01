@@ -37,6 +37,7 @@ let stopPosition = (): void => {}
 let anchorObserver: MutationObserver | null = null
 let observedRoot: Element | null = null
 let boundAnchor: Element | null = null
+let drawerClipped = false
 let opener: HTMLElement | null = null
 let focusRestored = false
 
@@ -101,6 +102,7 @@ function releasePosition() {
   stopPosition()
   stopPosition = () => {}
   boundAnchor = null
+  drawerClipped = false
 }
 
 function disconnectAnchorWatch() {
@@ -109,11 +111,32 @@ function disconnectAnchorWatch() {
   observedRoot = null
 }
 
+function collisionBoundary() {
+  const pane = props.boundary()
+  if (!(pane instanceof HTMLElement)) return pane
+  const drawer = pane.querySelector('[data-prks-role="pdf-annotation-drawer"]')
+  if (!(drawer instanceof HTMLElement)) return pane
+  const paneRect = pane.getBoundingClientRect()
+  const drawerRect = drawer.getBoundingClientRect()
+  const width = drawerRect.left - paneRect.left
+  if (width < 160) return pane
+  return {
+    x: paneRect.left,
+    y: paneRect.top,
+    width,
+    height: paneRect.height,
+  }
+}
+
 function bindAnchor(reference: Element) {
-  if (!floatingRef.value || reference === boundAnchor) return
+  if (!floatingRef.value) return
+  const pane = props.boundary()
+  const clipped = pane instanceof HTMLElement && collisionBoundary() !== pane
+  if (reference === boundAnchor && clipped === drawerClipped) return
   stopPosition()
   boundAnchor = reference
-  stopPosition = bindFloatingPosition(reference, floatingRef.value, props.boundary())
+  drawerClipped = clipped
+  stopPosition = bindFloatingPosition(reference, floatingRef.value, collisionBoundary)
 }
 
 /**

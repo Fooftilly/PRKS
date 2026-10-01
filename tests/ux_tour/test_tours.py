@@ -716,7 +716,7 @@ class WorkPdfTourTest(_UXTour):
 
             tour.step("Open Annotations tab")
             _open_annotations_tab(page)
-            page.wait_for_selector("[id^='annotation-']")
+            page.wait_for_selector("#annotation-fallback-list", state="attached")
             tour.checkpoint(page, "annotation-selected")
             page.locator('#right-panel .tab-btn[data-target="details"]').click()
             page.locator("#panel-content .card-title", has_text="Saved UX Tour Title").wait_for()

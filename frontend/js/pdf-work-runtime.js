@@ -234,6 +234,68 @@
         };
     }
 
+    function emptyAnnotationDrawer() {
+        return {
+            open: false,
+            epoch: 0,
+        };
+    }
+
+    function annotationDrawerItemId(item) {
+        if (!item || typeof item !== 'object') return '';
+        const id = item.id || item.uuid || item.annotationId || item._id;
+        if (id == null || id === '') return '';
+        return String(id);
+    }
+
+    function projectAnnotationDrawerItems(runtime) {
+        const cache = runtime.annotationCache;
+        const items = cache && Array.isArray(cache.items) ? cache.items : [];
+        const project = typeof root.prksProjectPdfAnnotationDrawerItem === 'function'
+            ? root.prksProjectPdfAnnotationDrawerItem
+            : null;
+        const out = [];
+        for (let index = 0; index < items.length; index++) {
+            const item = items[index];
+            const id = annotationDrawerItemId(item);
+            if (!id) continue;
+            if (project) {
+                let row = null;
+                try {
+                    row = project(item, index);
+                } catch (_e) {
+                    row = null;
+                }
+                if (row && row.id) {
+                    out.push(row);
+                    continue;
+                }
+            }
+            out.push({
+                id: id,
+                index: index,
+                text: id,
+                comment: '',
+                pageLabel: '',
+                pageIndex: null,
+                wikiLink: '[[pdf:' + id + ']]',
+                metadataLabels: [],
+            });
+        }
+        return out;
+    }
+
+    function annotationDrawerStatus(runtime) {
+        const cache = runtime.annotationCache;
+        const count = cache && Array.isArray(cache.items) ? cache.items.length : 0;
+        return count + (count === 1 ? ' annotation' : ' annotations');
+    }
+
+    function annotationDrawerPublished(runtime) {
+        const cache = runtime.annotationCache;
+        return !!(cache && cache.listPublished);
+    }
+
     function pdfSearchMatchLabel(search) {
         if (!search || !search.open) return '';
         if (search.status === 'pending') return 'Searching';
@@ -376,6 +438,7 @@
             annotationCache: opts.annotationCache || emptyAnnotationCache(workId),
             annotationEditorState: opts.annotationEditorState || null,
             annotationPopup: emptyAnnotationPopup(),
+            annotationDrawer: emptyAnnotationDrawer(),
             syncState: opts.syncState || emptySyncState(workId),
             _destroyed: false,
             _flushAnnotationsImpl: typeof opts.flushAnnotations === 'function' ? opts.flushAnnotations : null,
@@ -753,6 +816,63 @@
             return true;
         };
 
+        /**
+         * Overlay annotation list for this runtime. Opening and closing do
+         * not replace the viewer, change viewerSetupToken, or touch zoom,
+         * page, or size.
+         */
+        runtime.readAnnotationDrawer = function () {
+            const drawer = runtime.annotationDrawer || emptyAnnotationDrawer();
+            const popup = runtime.annotationPopup;
+            const selectedId = popup && popup.open && popup.annId ? String(popup.annId) : '';
+            return {
+                open: !!drawer.open,
+                epoch: typeof drawer.epoch === 'number' ? drawer.epoch : 0,
+                viewerToken: runtime.viewerSetupToken,
+                selectedId: drawer.open ? selectedId : '',
+                status: drawer.open ? annotationDrawerStatus(runtime) : '',
+                published: drawer.open ? annotationDrawerPublished(runtime) : false,
+                items: drawer.open ? projectAnnotationDrawerItems(runtime) : [],
+            };
+        };
+
+        runtime.openAnnotationDrawer = function () {
+            if (runtime._destroyed) return false;
+            const drawer = runtime.annotationDrawer;
+            if (!drawer.open) {
+                drawer.epoch += 1;
+                drawer.open = true;
+            }
+            return true;
+        };
+
+        runtime.closeAnnotationDrawer = function () {
+            if (runtime._destroyed) return false;
+            const drawer = runtime.annotationDrawer;
+            if (!drawer.open) return false;
+            drawer.epoch += 1;
+            drawer.open = false;
+            return true;
+        };
+
+        runtime.toggleAnnotationDrawer = function () {
+            if (runtime._destroyed) return false;
+            if (runtime.annotationDrawer.open) return runtime.closeAnnotationDrawer();
+            return runtime.openAnnotationDrawer();
+        };
+
+        runtime.annotationDrawerStill = function (ticket) {
+            if (!ticket || runtime._destroyed) return false;
+            if (ticket.viewer != null && ticket.viewer !== runtime.viewer) return false;
+            if (typeof ticket.viewerToken === 'number' && ticket.viewerToken !== runtime.viewerSetupToken) {
+                return false;
+            }
+            const drawer = runtime.annotationDrawer;
+            if (!drawer || !drawer.open) return false;
+            if (typeof ticket.epoch === 'number' && ticket.epoch !== drawer.epoch) return false;
+            return true;
+        };
+
         function invokePdfRuntimeHook(owner, method) {
             if (!owner || typeof owner[method] !== 'function') return;
             try {
@@ -778,6 +898,9 @@
             try {
                 runtime.closeAnnotationPopup();
             } catch (_ePopup) {}
+            try {
+                runtime.closeAnnotationDrawer();
+            } catch (_eDrawer) {}
             runtime._destroyed = true;
             invokePdfRuntimeHook(runtime.annotationPersistence, 'destroy');
             runtime.annotationPersistence = null;

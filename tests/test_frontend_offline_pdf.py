@@ -192,9 +192,8 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
 
     def test_sidebar_row_delete_is_guarded(self):
         src = _read(_WORKS_PDF)
-        at = src.index(".annotation-row__delete")
-        handler_at = src.index("annotation-row__delete", at + 1)
-        snippet = src[handler_at : handler_at + 2500]
+        at = src.index("window.deletePdfAnnotationFromList = async function")
+        snippet = src[at : at + 2500]
         self.assertIn("prksPdfUserMutationStillAllowed", snippet)
         self.assertIn("prksOfflineGuardMutation", snippet)
 
@@ -256,10 +255,10 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         save_check = save_body.index("prksPdfUserMutationStillAllowed", save_wait)
         self.assertLess(save_wait, save_check)
         self.assertNotIn("prksViewerProgrammaticUpdate", save_body)
-        # Sidebar row Delete captures the viewer before confirm, then waits,
+        # Drawer Delete captures the viewer before confirm, then waits,
         # then deletes only through that same viewer.
-        row_at = works.index("if (e.target && e.target.closest && e.target.closest('.annotation-row__delete')) {")
-        row_body = works[row_at:works.index("annotation-row__copy-link", row_at)]
+        row_at = works.index("window.deletePdfAnnotationFromList = async function")
+        row_body = works[row_at:works.index("function prksAnnotationPopupGenerationCurrent", row_at)]
         row_ticket = row_body.index("captureAnnotationPopupTicket")
         row_confirm = row_body.index("prksConfirmDeletePdfAnnotation")
         row_wait = row_body.index("await prksWaitOutAnnotationMaterialization")

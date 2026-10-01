@@ -31,6 +31,8 @@ export interface PrksPdfViewerOptions {
     }) => void;
     onAnnotationCommentDismiss?: (info: { annotationId: string }) => void;
     onAnnotationDeleteRequest?: (info: { annotationId: string; pageIndex: number }) => void;
+    /** Toolbar control. Does not own the drawer session. */
+    onAnnotationDrawerToggle?: () => void;
     onError?: (error: Error) => void;
 }
 
@@ -108,6 +110,8 @@ export interface PrksPdfViewerHandle {
     searchNext(): number;
     searchPrevious(): number;
     setSearchDriver(driver: PrksPdfSearchDriver | null): void;
+    /** Pressed state for the toolbar control. Does not reload the document. */
+    setAnnotationDrawerOpen(open: boolean): void;
 }
 
 export interface PrksPdfSearchDriver {

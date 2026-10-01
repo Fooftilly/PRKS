@@ -68,6 +68,8 @@ export class ViewerController {
         setQuery: () => {},
         applySettlement: () => {},
     };
+    private drawerOpen = false;
+    private drawerChrome: { setOpen: (open: boolean) => void } = { setOpen: () => {} };
     /**
      * Synchronous user-mutation gate. Updated immediately by setMutationEnabled
      * — do not rely only on React mode rerender for create/update/delete.
@@ -116,6 +118,16 @@ export class ViewerController {
 
     bindSearchChrome(chrome: SearchChrome) {
         this.searchChrome = chrome;
+    }
+
+    bindAnnotationDrawerChrome(chrome: { setOpen: (open: boolean) => void }) {
+        this.drawerChrome = chrome;
+        chrome.setOpen(this.drawerOpen);
+    }
+
+    setAnnotationDrawerOpen(open: boolean) {
+        this.drawerOpen = !!open;
+        this.drawerChrome.setOpen(this.drawerOpen);
     }
 
     presentSearch() {
@@ -255,6 +267,10 @@ export class ViewerController {
             searchPrevious: () => (this.api && !this.destroyed ? this.api.searchPrevious() : -1),
             setSearchDriver: (driver) => {
                 this.setSearchDriver(driver);
+            },
+            setAnnotationDrawerOpen: (open: boolean) => {
+                if (this.destroyed) return;
+                this.setAnnotationDrawerOpen(open);
             },
         };
     }

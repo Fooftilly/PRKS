@@ -1,3 +1,4 @@
+import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import runtimeSource from '../../../../frontend/js/pdf-work-runtime.js?raw'
@@ -5,6 +6,8 @@ import {
   intentCloseWorkPdfAnnotationPopup,
   intentCloseWorkPdfSearch,
   intentDeleteWorkPdfAnnotationPopup,
+  intentDeleteWorkPdfAnnotation,
+  intentJumpWorkPdfAnnotation,
   intentFlushWorkPdf,
   intentMountWorkPdf,
   intentOpenWorkPdfSearch,
@@ -14,6 +17,7 @@ import {
   intentWorkPdfSearchNext,
   intentWorkPdfSearchPrevious,
   readWorkPdf,
+  readWorkPdfAnnotationDrawer,
   readWorkPdfAnnotationPopup,
   readWorkPdfSearch,
   registerWorkPdfAdapterBridge,
@@ -21,6 +25,10 @@ import {
   type WorkPdfOwner,
   type WorkPdfRuntime,
 } from './pdf-adapter'
+import {
+  resetWorkPdfAnnotationDrawerForTests,
+  syncWorkPdfAnnotationDrawer,
+} from './pdf-annotation-drawer'
 
 type PdfWindow = Window & {
   eval: (code: string) => void
@@ -417,5 +425,111 @@ describe('work PDF adapter', () => {
     expect(readWorkPdfAnnotationPopup(ctx).comment).toBe('from B')
     expect(runtime.viewer).toBe(viewer)
     expect(runtime.viewerSetupToken).toBe(3)
+  })
+
+  it('does not jump from a stale annotation drawer', () => {
+    const ctx = mount('drawer')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' }) as unknown as WorkPdfRuntime & {
+      annotationCache: { items: Array<{ id: string }>; listPublished?: boolean }
+      openAnnotationDrawer: () => boolean
+      closeAnnotationDrawer: () => boolean
+      viewer: { id: string }
+      viewerSetupToken: number
+      destroy: () => void
+    }
+    const viewer = { id: 'v1' }
+    runtime.viewer = viewer
+    runtime.viewerSetupToken = 2
+    runtime.annotationCache = { items: [{ id: 'ann-a' }], listPublished: true }
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    const read = readWorkPdfAnnotationDrawer(ctx)
+    expect(read.published).toBe(true)
+    expect(read.items[0]?.wikiLink).toBe('[[pdf:ann-a]]')
+    const jumps: string[] = []
+    ;(window as unknown as {
+      jumpToPdfAnnotationFromDrawer?: (owner: WorkPdfOwner, annId: string) => void
+    }).jumpToPdfAnnotationFromDrawer = (_owner, annId) => {
+      jumps.push(annId)
+    }
+    const ticket = {
+      generation: ctx.generation,
+      epoch: read.epoch,
+      viewerToken: read.viewerToken,
+    }
+    expect(intentJumpWorkPdfAnnotation(ctx, 'ann-a', ticket)).toBe(true)
+    expect(runtime.closeAnnotationDrawer()).toBe(true)
+    expect(intentJumpWorkPdfAnnotation(ctx, 'ann-a', ticket)).toBe(false)
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    expect(intentJumpWorkPdfAnnotation(ctx, 'ann-a', ticket)).toBe(false)
+    expect(jumps).toEqual(['ann-a'])
+    expect(runtime.viewer).toBe(viewer)
+    expect(runtime.viewerSetupToken).toBe(2)
+  })
+
+  it('returns the in-flight drawer delete', async () => {
+    const ctx = mount('drawer-delete')
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' }) as unknown as WorkPdfRuntime & {
+      openAnnotationDrawer: () => boolean
+      viewerSetupToken: number
+      destroy: () => void
+    }
+    runtime.viewerSetupToken = 2
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    const read = readWorkPdfAnnotationDrawer(ctx)
+    let finish: (ok: boolean) => void = () => {}
+    const pending = new Promise<boolean>((resolve) => {
+      finish = resolve
+    })
+    ;(window as unknown as {
+      deletePdfAnnotationFromList?: (owner: WorkPdfOwner, annId: string) => Promise<boolean>
+    }).deletePdfAnnotationFromList = () => pending
+    const result = intentDeleteWorkPdfAnnotation(ctx, 'ann-a', {
+      generation: ctx.generation,
+      epoch: read.epoch,
+      viewerToken: read.viewerToken,
+    })
+    expect(result).toBeInstanceOf(Promise)
+    let settled = false
+    const done = result.then((ok) => {
+      settled = true
+      return ok
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    finish(true)
+    await expect(done).resolves.toBe(true)
+    delete (window as unknown as { deletePdfAnnotationFromList?: unknown }).deletePdfAnnotationFromList
+  })
+
+  it('updates data-selected when edit opens and closes', async () => {
+    const ctx = mount('drawer-selection')
+    const pane = document.createElement('div')
+    pane.className = 'work-pdf-pane'
+    if (ctx.root instanceof HTMLElement) ctx.root.appendChild(pane)
+    const runtime = pdfWindow.createWorkPdfRuntime({ workId: 'work-a' }) as unknown as WorkPdfRuntime & {
+      annotationCache: { items: Array<{ id: string }>; listPublished?: boolean }
+      openAnnotationDrawer: () => boolean
+      openAnnotationPopup?: (info: { annId: string }) => boolean
+      closeAnnotationPopup?: (annId: string) => boolean
+      destroy: () => void
+    }
+    runtime.annotationCache = { items: [{ id: 'ann-a' }], listPublished: true }
+    ctx.setResource('pdf', runtime, () => runtime.destroy())
+    expect(runtime.openAnnotationDrawer()).toBe(true)
+    const row = () => document.querySelector('[data-ann-id="ann-a"]')
+    syncWorkPdfAnnotationDrawer(ctx)
+    await nextTick()
+    expect(row()?.getAttribute('data-selected')).toBe('false')
+    expect(runtime.openAnnotationPopup?.({ annId: 'ann-a' })).toBe(true)
+    syncWorkPdfAnnotationDrawer(ctx)
+    await nextTick()
+    expect(row()?.getAttribute('data-selected')).toBe('true')
+    expect(runtime.closeAnnotationPopup?.('ann-a')).toBe(true)
+    syncWorkPdfAnnotationDrawer(ctx)
+    await nextTick()
+    expect(row()?.getAttribute('data-selected')).toBe('false')
+    resetWorkPdfAnnotationDrawerForTests()
   })
 })
