@@ -73,8 +73,8 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
         </div>
       </div>
       <div style="display: contents" v-html="scopeHtml"></div>
-      <div v-if="showForm && request.any" class="search-advanced" role="search">
-        <div class="search-advanced__row">
+      <div v-if="showForm" class="search-advanced" role="search">
+        <div v-if="request.any" class="search-advanced__row">
           <label class="search-advanced__label" for="search-any-input">All</label>
           <div class="tag-add-shell">
             <div class="tag-add-shell__field">
@@ -93,68 +93,65 @@ watch(() => props.projection.generation, paintMode, { flush: 'post' })
             </div>
           </div>
         </div>
-        <button id="search-run-btn" type="button" class="prks-btn prks-btn--secondary search-advanced__submit" @click="run">
-          Search
-        </button>
-      </div>
-      <div v-else-if="showForm" class="search-advanced" role="search">
-        <div class="search-advanced__row">
-          <label class="search-advanced__label" for="search-q-input">Keywords</label>
-          <div class="tag-add-shell">
-            <div class="tag-add-shell__field">
-              <span style="display: contents" v-html="searchIcon"></span>
-              <input
-                id="search-q-input"
-                v-model="q"
-                type="search"
-                class="tag-add-shell__input"
-                placeholder="Title, notes, abstract, numbers…"
-                maxlength="500"
-                autocomplete="off"
-                aria-label="Search keywords"
-                @keydown.enter="run"
-              />
+        <template v-else>
+          <div class="search-advanced__row">
+            <label class="search-advanced__label" for="search-q-input">Keywords</label>
+            <div class="tag-add-shell">
+              <div class="tag-add-shell__field">
+                <span style="display: contents" v-html="searchIcon"></span>
+                <input
+                  id="search-q-input"
+                  v-model="q"
+                  type="search"
+                  class="tag-add-shell__input"
+                  placeholder="Title, notes, abstract, numbers…"
+                  maxlength="500"
+                  autocomplete="off"
+                  aria-label="Search keywords"
+                  @keydown.enter="run"
+                />
+              </div>
             </div>
           </div>
-        </div>
-        <div class="search-advanced__row">
-          <label class="search-advanced__label" for="search-author-input">Author</label>
-          <div class="tag-add-shell">
-            <div class="tag-add-shell__field">
-              <span style="display: contents" v-html="searchIcon"></span>
-              <input
-                id="search-author-input"
-                v-model="author"
-                type="search"
-                class="tag-add-shell__input"
-                placeholder="Name in metadata or linked person…"
-                maxlength="200"
-                autocomplete="off"
-                aria-label="Search by author"
-                @keydown.enter="run"
-              />
+          <div class="search-advanced__row">
+            <label class="search-advanced__label" for="search-author-input">Author</label>
+            <div class="tag-add-shell">
+              <div class="tag-add-shell__field">
+                <span style="display: contents" v-html="searchIcon"></span>
+                <input
+                  id="search-author-input"
+                  v-model="author"
+                  type="search"
+                  class="tag-add-shell__input"
+                  placeholder="Name in metadata or linked person…"
+                  maxlength="200"
+                  autocomplete="off"
+                  aria-label="Search by author"
+                  @keydown.enter="run"
+                />
+              </div>
             </div>
           </div>
-        </div>
-        <div class="search-advanced__row">
-          <label class="search-advanced__label" for="search-publisher-input">Publisher</label>
-          <div class="tag-add-shell">
-            <div class="tag-add-shell__field">
-              <span style="display: contents" v-html="searchIcon"></span>
-              <input
-                id="search-publisher-input"
-                v-model="publisher"
-                type="search"
-                class="tag-add-shell__input"
-                placeholder="Publisher field; alternate names from Publishers page…"
-                maxlength="200"
-                autocomplete="off"
-                aria-label="Search by publisher"
-                @keydown.enter="run"
-              />
+          <div class="search-advanced__row">
+            <label class="search-advanced__label" for="search-publisher-input">Publisher</label>
+            <div class="tag-add-shell">
+              <div class="tag-add-shell__field">
+                <span style="display: contents" v-html="searchIcon"></span>
+                <input
+                  id="search-publisher-input"
+                  v-model="publisher"
+                  type="search"
+                  class="tag-add-shell__input"
+                  placeholder="Publisher field; alternate names from Publishers page…"
+                  maxlength="200"
+                  autocomplete="off"
+                  aria-label="Search by publisher"
+                  @keydown.enter="run"
+                />
+              </div>
             </div>
           </div>
-        </div>
+        </template>
         <button id="search-run-btn" type="button" class="prks-btn prks-btn--secondary search-advanced__submit" @click="run">
           Search
         </button>
