@@ -53,11 +53,17 @@ class WorkPdfAnnotationPopupTests(unittest.TestCase):
         self.assertLess(cleanup.index("getSelectedAnnotations"), cleanup.index("dismissRef.current"))
         self.assertIn("if (!stillSelected)", cleanup)
         selection = VIEWER[VIEWER.index("let lastSelected"):VIEWER.index("controller.attach")]
-        empty_selection = selection[selection.index("if (!id)"):selection.index("lastSelected = id")]
         self.assertLess(
-            empty_selection.index("onAnnotationCommentDismiss"),
-            empty_selection.index("lastSelected = ''"),
+            selection.index("onAnnotationCommentDismiss"),
+            selection.index("lastSelected = id"),
         )
+        self.assertIn("const previousSelected = lastSelected", selection)
+        close_popup = RUNTIME[
+            RUNTIME.index("runtime.closeAnnotationPopup") : RUNTIME.index(
+                "runtime.captureAnnotationPopupTicket"
+            )
+        ]
+        self.assertIn("String(annId) !== popup.annId", close_popup)
         self.assertIn("export function readWorkPdfAnnotationPopup", ADAPTER)
         self.assertIn("export function intentSaveWorkPdfAnnotationComment", ADAPTER)
         self.assertIn("savePdfAnnotationComment", ADAPTER)

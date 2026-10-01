@@ -137,7 +137,12 @@ function syncAnchor() {
   anchorObserver = new MutationObserver(() => {
     syncAnchor()
   })
-  anchorObserver.observe(root, { childList: true, subtree: true })
+  anchorObserver.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-prks-annotation-id'],
+  })
   observedRoot = root
 }
 

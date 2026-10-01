@@ -166,15 +166,12 @@ function ApiBinder({
                       const first = selected[0];
                       const id = first && first.object ? String(first.object.id) : '';
                       if (id === lastSelected) return;
-                      if (!id) {
-                          const previousSelected = lastSelected;
-                          if (previousSelected) {
-                              onAnnotationCommentDismiss?.({ annotationId: previousSelected });
-                          }
-                          lastSelected = '';
-                          return;
+                      const previousSelected = lastSelected;
+                      if (previousSelected) {
+                          onAnnotationCommentDismiss?.({ annotationId: previousSelected });
                       }
                       lastSelected = id;
+                      if (!id) return;
                       const pi = first.object.pageIndex;
                       onAnnotationSelect?.({
                           annotationId: id,

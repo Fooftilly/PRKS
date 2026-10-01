@@ -49,6 +49,38 @@ describe('annotation popup anchor', () => {
     expect(popup.style.top).not.toBe('')
     wrapper.unmount()
   })
+
+  it('binds when the same anchor node changes annotation id in place', async () => {
+    const pane = document.createElement('div')
+    document.body.appendChild(pane)
+    panes.push(pane)
+    const anchor = document.createElement('div')
+    anchor.setAttribute('data-prks-role', 'pdf-annotation-anchor')
+    anchor.setAttribute('data-prks-annotation-id', 'other')
+    pane.appendChild(anchor)
+    const wrapper = mount(WorkPdfAnnotationPopup, {
+      props: {
+        state,
+        tabId: 'tab-a',
+        anchor: () => pane.querySelector<HTMLElement>('[data-prks-annotation-id="A"]'),
+        boundary: () => pane,
+        onSave: () => {},
+        onClose: () => {},
+        onDelete: () => {},
+      },
+    })
+    await flushPromises()
+    const popup = wrapper.get('[data-prks-role="pdf-annotation-popup"]').element as HTMLElement
+    expect(popup.style.left).toBe('')
+
+    anchor.setAttribute('data-prks-annotation-id', 'A')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pane.querySelectorAll('[data-prks-role="pdf-annotation-anchor"]')).toHaveLength(1)
+    expect(popup.style.left).not.toBe('')
+    expect(popup.style.top).not.toBe('')
+    wrapper.unmount()
+  })
 })
 
 describe('annotation popup escape', () => {

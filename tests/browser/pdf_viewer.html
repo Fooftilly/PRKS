@@ -293,6 +293,72 @@ async function assertScrollAwayKeepsDraft(viewerRef, root, annotationId) {
     viewerRef.goToPage(1);
 }
 
+// A's menu is gone while its page is virtualized. Selecting a different
+// non-commentable annotation must still dismiss A and drop the draft.
+async function assertSelectOtherDismissesScrolledDraft(viewerRef, root, annotationId, otherId) {
+    viewerRef.selectAnnotation(annotationId);
+    await waitFor(
+        () => root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+        4000,
+        'annotation anchor before other selection',
+    );
+    activeDraft = 'typed draft';
+    const dismissesBefore = commentDismisses.length;
+    const commentsBefore = commentReqs.length;
+    const selectedBefore = selectedIds.length;
+    const hostHeight = root.style.height;
+    root.style.height = '160px';
+    viewerRef.goToPage(viewerRef.getPageCount());
+    await waitFor(
+        () => !root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+        5000,
+        'scrolled page unmounted the anchor before other selection',
+    );
+    assert(
+        'other selection starts with the draft still open',
+        commentDismisses.length === dismissesBefore && activeDraft === 'typed draft',
+        activeDraft,
+    );
+    viewerRef.selectAnnotation(otherId);
+    await waitFor(
+        () => commentDismisses.some((c) => c && c.annotationId === annotationId)
+            && selectedIds[selectedIds.length - 1] === otherId,
+        4000,
+        'select other annotation while scrolled away',
+    );
+    assert(
+        'selecting another annotation dismisses the scrolled-away comment',
+        commentDismisses.slice(dismissesBefore).some((c) => c && c.annotationId === annotationId),
+        JSON.stringify(commentDismisses.slice(dismissesBefore)),
+    );
+    assert(
+        'selecting another annotation drops the scrolled-away draft',
+        activeDraft === '',
+        activeDraft,
+    );
+    assert(
+        'non-commentable selection does not request a comment',
+        !commentReqs.slice(commentsBefore).some((c) => c && c.annotationId === otherId),
+        JSON.stringify(commentReqs.slice(commentsBefore)),
+    );
+    await sleep(120);
+    assert(
+        'the other annotation stays selected',
+        selectedIds[selectedIds.length - 1] === otherId
+            && !commentDismisses.slice(dismissesBefore).some((c) => c && c.annotationId === otherId),
+        JSON.stringify({
+            selected: selectedIds.slice(selectedBefore),
+            dismisses: commentDismisses.slice(dismissesBefore),
+        }),
+    );
+    assert(
+        'other selection did not require returning to the first page',
+        !root.querySelector('[data-prks-role="pdf-annotation-anchor"]'),
+    );
+    root.style.height = hostHeight || '640px';
+    viewerRef.goToPage(1);
+}
+
 async function createViaToolbar(viewerRef, root, kind, ySelect) {
     const before = annotationIds(viewerRef);
     const label = kind === 'highlight' ? 'Highlight' : 'Underline';
@@ -335,6 +401,7 @@ const pointerMode = new URLSearchParams(location.search).has('pointer');
 const events = [];
 const commentReqs = [];
 const commentDismisses = [];
+const selectedIds = [];
 // Stand-in for the Vue popup draft. Dismiss is what clears it.
 let activeDraft = '';
 let viewer = null;
@@ -657,9 +724,14 @@ try {
             commentDismisses.push(info);
             activeDraft = '';
         },
+        onAnnotationSelect: (info) => {
+            if (info && info.annotationId) selectedIds.push(info.annotationId);
+        },
     });
     await waitFor(() => farViewer.getPageCount() >= 10, 25000, 'long document pages');
     const farId = crypto.randomUUID();
+    const otherId = crypto.randomUUID();
+    const otherPage = farViewer.getPageCount() - 1;
     farViewer.createAnnotation(0, {
         id: farId,
         type: 9,
@@ -671,12 +743,26 @@ try {
         color: '#FFCD45',
         created: new Date(),
     });
+    farViewer.createAnnotation(otherPage, {
+        id: otherId,
+        type: 5,
+        pageIndex: otherPage,
+        rect: { origin: { x: 72, y: 400 }, size: { width: 80, height: 40 } },
+        color: '#2563eb',
+        strokeColor: '#2563eb',
+        opacity: 1,
+        strokeWidth: 1,
+        flags: [],
+        created: new Date(),
+    });
     await waitFor(
-        () => farViewer.getAnnotations().some((a) => a && a.id === farId),
+        () => farViewer.getAnnotations().some((a) => a && a.id === farId)
+            && farViewer.getAnnotations().some((a) => a && a.id === otherId),
         8000,
         'long document annotation',
     );
     await assertScrollAwayKeepsDraft(farViewer, hostFar, farId);
+    await assertSelectOtherDismissesScrolledDraft(farViewer, hostFar, farId, otherId);
     farViewer.destroy();
     hostFar.innerHTML = '';
 
