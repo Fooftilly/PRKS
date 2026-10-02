@@ -212,21 +212,16 @@ async function prksProcessingCreateTag(name) {
 async function prksProcessingQuickCreateFolder(title) {
     const trimmed = String(title || '').trim();
     if (!trimmed) {
-        if (typeof prksAlertMessage === 'function') {
-            await prksAlertMessage('Enter folder title in search field first.', 'Validation');
-        }
-        return { ok: false };
+        return { ok: false, message: 'Enter folder title in search field first.' };
     }
     let newFolderId;
     try {
         newFolderId = await createFolder(trimmed, 'Quick-created from processing inbox');
     } catch (e) {
-        if (typeof prksOfflineWasGuardRefusal !== 'function' || !prksOfflineWasGuardRefusal(e)) {
-            if (typeof prksAlertMessage === 'function') {
-                await prksAlertMessage((e && e.message) || 'Could not create folder.', 'Could not save');
-            }
+        if (typeof prksOfflineWasGuardRefusal === 'function' && prksOfflineWasGuardRefusal(e)) {
+            return { ok: false };
         }
-        return { ok: false };
+        return { ok: false, message: (e && e.message) || 'Could not create folder.' };
     }
     const errorOwner = {};
     let folders = [];
@@ -255,29 +250,32 @@ async function prksProcessingQuickCreateFolder(title) {
 }
 
 async function prksProcessingQuickCreatePerson(name) {
-    if (typeof prksQuickCreatePersonForSearchField !== 'function') return null;
+    if (typeof prksQuickCreatePersonForSearchField !== 'function') {
+        return { ok: false, message: 'Could not create person.' };
+    }
     const painted = Array.isArray(window.__prksProcessingPeople) ? window.__prksProcessingPeople.slice() : [];
     const search = document.createElement('input');
     const hidden = document.createElement('input');
-    await prksQuickCreatePersonForSearchField(
+    const result = await prksQuickCreatePersonForSearchField(
         name,
         search,
         hidden,
         'Quick-created from processing inbox',
-        { stillApplies: function () { return true; } }
+        { stillApplies: function () { return true; }, localError: true }
     );
-    if (!hidden.value) {
+    if (!result || result.ok === false || !result.id) {
         window.__prksProcessingPeople = painted;
-        return null;
+        if (result && result.message) return { ok: false, message: result.message };
+        return { ok: false };
     }
-    const id = String(hidden.value);
-    const createdName = String(search.value || name || '');
+    const id = String(result.id);
+    const createdName = String(result.name || search.value || name || '');
     const people = painted.slice();
     if (!people.some(function (person) { return person && String(person.id) === id; })) {
         people.push({ id: id, name: createdName });
     }
     window.__prksProcessingPeople = people;
-    return { id: id, name: createdName, people: people };
+    return { ok: true, id: id, name: createdName, people: people };
 }
 
 window.prksProcessingRoleTypes = prksProcessingRoleTypes;

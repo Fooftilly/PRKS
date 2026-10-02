@@ -1706,8 +1706,10 @@ function prksSplitTypedPersonName(raw) {
 }
 
 async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hiddenInputRef, aboutText, options) {
+    const localError = !!(options && options.localError);
     const trimmed = String(typedName || '').trim();
     if (!trimmed) {
+        if (localError) return { ok: false, message: 'Type a name in the Person field first.' };
         await prksAlertMessage('Type a name in the Person field first.', 'Validation');
         return;
     }
@@ -1726,6 +1728,7 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         });
     } catch (e) {
         console.error(e);
+        if (localError) return { ok: false, message: 'Could not create person.' };
         await prksAlertMessage('Could not create person.', 'Error');
         return;
     }
@@ -1742,7 +1745,9 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
     // The form it was typed into may be gone (closed, or reopened fresh): the
     // Person exists, but it must not be written into someone else's fields.
     const stillApplies = options && options.stillApplies;
-    if (typeof stillApplies === 'function' && !stillApplies()) return;
+    if (typeof stillApplies === 'function' && !stillApplies()) {
+        return localError ? { ok: false } : undefined;
+    }
     const personSearch =
         typeof searchInputRef === 'string' ? document.getElementById(searchInputRef) : searchInputRef;
     const personHidden =
@@ -1760,6 +1765,10 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
         if (trimmed && canonical && trimmed.toLowerCase() !== canonical.toLowerCase()) {
             prksSetRoleCreditPickerValue(prefix, trimmed);
         }
+    }
+    if (localError) {
+        const appliedName = personSearch && personSearch.value ? String(personSearch.value) : trimmed;
+        return { ok: true, id: String(created.entity_id || ''), name: appliedName };
     }
 }
 

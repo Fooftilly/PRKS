@@ -20,8 +20,10 @@ afterEach(() => {
   delete window.prksReloadProcessingFiles
   delete window.prksProcessingQuickCreatePerson
   delete window.prksProcessingQuickCreateFolder
+  delete window.prksProcessingCreateTag
   delete window.prksProcessingSave
   delete window.prksProcessingImport
+  delete window.prksAlertMessage
   delete window.__prksProcessingPeople
 })
 
@@ -289,6 +291,137 @@ describe('Processing Files route bridge', () => {
     )
     const after = [...el.querySelectorAll('button')].find((node) => node.textContent?.includes('Import to library'))
     expect(after?.getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('holds Creating… on the folder button, ignores a second click, then restores and shows the local error', async () => {
+    const alert = vi.fn()
+    window.prksAlertMessage = alert
+    let calls = 0
+    let release: (value: { ok: false; message: string }) => void = () => {}
+    window.prksProcessingQuickCreateFolder = () => {
+      calls += 1
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [{ id: 'lib', title: 'Library' }],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('[aria-label="Search folder"]')
+    input!.value = 'Notes'
+    input!.dispatchEvent(new Event('input'))
+    const button = () => el.querySelector<HTMLButtonElement>('[aria-label="Create new folder"]')
+    button()?.click()
+    button()?.click()
+    await flush()
+    expect(calls).toBe(1)
+    expect(button()?.getAttribute('aria-busy')).toBe('true')
+    expect(button()?.disabled).toBe(true)
+    expect(button()?.textContent).toContain('Creating…')
+    release({ ok: false, message: 'Could not create folder.' })
+    await flush()
+    expect(button()?.getAttribute('aria-busy')).toBeNull()
+    expect(button()?.disabled).toBe(false)
+    expect(button()?.textContent).not.toContain('Creating…')
+    expect(el.querySelector('.prks-processing-card__message')?.textContent).toContain('Could not create folder.')
+    expect(alert).not.toHaveBeenCalled()
+    input!.value = ''
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const titles = [...(input!.closest('.tag-add-shell')?.querySelectorAll('.result-item') || [])]
+      .map((node) => node.textContent?.trim())
+    expect(titles).toContain('Library')
+  })
+
+  it('shows a tag create failure on the card and ignores a second submit while it is pending', async () => {
+    const alert = vi.fn()
+    window.prksAlertMessage = alert
+    let calls = 0
+    let release: (value: never) => void = () => {}
+    window.prksProcessingCreateTag = () => {
+      calls += 1
+      return new Promise((_resolve, reject) => {
+        release = reject
+      })
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('[aria-label="Add tag for processing file"]')
+    input!.value = 'Topic'
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const row = [...el.querySelectorAll('.result-item--create')].find((node) => node.textContent?.includes('Create tag'))
+    row?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    row?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await flush()
+    expect(calls).toBe(1)
+    release(new Error('Could not create tag.') as never)
+    await flush()
+    expect(el.querySelector('.prks-processing-card__message')?.textContent).toContain('Could not create tag.')
+    expect(el.querySelector('.work-tags-list')?.textContent).toContain('No tags selected')
+    expect(alert).not.toHaveBeenCalled()
+  })
+
+  it('shows a person quick-create failure on the card and ignores a second submit while it is pending', async () => {
+    const alert = vi.fn()
+    window.prksAlertMessage = alert
+    let calls = 0
+    let release: (value: { ok: false; message: string }) => void = () => {}
+    window.prksProcessingQuickCreatePerson = () => {
+      calls += 1
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [{ id: 'ada', first_name: 'Ada', last_name: 'Lovelace' }],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('[aria-label="Search person"]')
+    input!.value = 'New Person'
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const row = el.querySelector('.result-item--create')
+    row?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    row?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await flush()
+    expect(calls).toBe(1)
+    release({ ok: false, message: 'Could not create person.' })
+    await flush()
+    expect(el.querySelector('.prks-processing-card__message')?.textContent).toContain('Could not create person.')
+    expect(alert).not.toHaveBeenCalled()
+    input!.value = ''
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const names = [...el.querySelectorAll('.result-item--person-pick .result-item__primary')].map((node) => node.textContent)
+    expect(names).toEqual(['Ada Lovelace'])
   })
 
   it('registers the early presenter', () => {

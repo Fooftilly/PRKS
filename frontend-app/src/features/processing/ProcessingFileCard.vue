@@ -48,6 +48,9 @@ const draft = reactive<ProcessingFileDraft>(cloneDraft(props.file.draft))
 const message = ref('')
 const saving = ref(false)
 const importing = ref(false)
+const creatingFolder = ref(false)
+const creatingTag = ref(false)
+const creatingPerson = ref(false)
 const personQuery = ref('')
 const personId = ref('')
 const personOpen = ref(false)
@@ -263,13 +266,29 @@ function choosePerson(person: ProcessingPerson): void {
 }
 
 async function createPerson(): Promise<void> {
+  if (creatingPerson.value) return
   const typed = personQuery.value.trim()
+  creatingPerson.value = true
   hideResults(personResults.value, personOpen)
-  const created = await props.intents.quickCreatePerson(typed)
-  if (!created) return
-  emit('people', processingPeopleAfterCreate(props.people, { id: created.id, name: created.name }))
-  personId.value = created.id
-  personQuery.value = created.name
+  try {
+    const created = await props.intents.quickCreatePerson(typed)
+    if (!rootEl.value?.isConnected) return
+    if (!created || !created.ok) {
+      if (created?.message) message.value = created.message
+      return
+    }
+    emit('people', processingPeopleAfterCreate(props.people, { id: created.id, name: created.name }))
+    personId.value = created.id
+    personQuery.value = created.name
+    message.value = ''
+  } catch (err) {
+    if (!rootEl.value?.isConnected) return
+    message.value = err instanceof Error && err.message.trim()
+      ? err.message.trim()
+      : 'Could not create person.'
+  } finally {
+    if (rootEl.value?.isConnected) creatingPerson.value = false
+  }
 }
 
 function chooseFolder(folder: ProcessingFolder): void {
@@ -279,16 +298,32 @@ function chooseFolder(folder: ProcessingFolder): void {
 }
 
 async function createFolder(): Promise<void> {
-  const created = await props.intents.quickCreateFolder(folderQuery.value)
-  if (!created) return
-  emit('folders', processingFoldersAfterCreate(
-    props.folders,
-    created.foldersFailed ? null : created.folders,
-    { id: created.id, title: created.title },
-  ))
-  draft.target_folder_id = created.id
-  folderQuery.value = created.title
-  hideResults(folderResults.value, folderOpen)
+  if (creatingFolder.value) return
+  creatingFolder.value = true
+  try {
+    const created = await props.intents.quickCreateFolder(folderQuery.value)
+    if (!rootEl.value?.isConnected) return
+    if (!created || !created.ok) {
+      if (created?.message) message.value = created.message
+      return
+    }
+    emit('folders', processingFoldersAfterCreate(
+      props.folders,
+      created.foldersFailed ? null : created.folders,
+      { id: created.id, title: created.title },
+    ))
+    draft.target_folder_id = created.id
+    folderQuery.value = created.title
+    hideResults(folderResults.value, folderOpen)
+    message.value = ''
+  } catch (err) {
+    if (!rootEl.value?.isConnected) return
+    message.value = err instanceof Error && err.message.trim()
+      ? err.message.trim()
+      : 'Could not create folder.'
+  } finally {
+    if (rootEl.value?.isConnected) creatingFolder.value = false
+  }
 }
 
 async function refreshTags(): Promise<void> {
@@ -308,15 +343,31 @@ function chooseTag(tag: ProcessingTagOption): void {
 }
 
 async function createTag(): Promise<void> {
+  if (creatingTag.value) return
   const name = tagQuery.value.trim()
   if (!name) return
-  const created = await props.intents.createTag(name)
-  if (!created) return
-  if (!draft.tags.some((row) => row.id === created.id)) {
-    draft.tags.push({ id: created.id, name: created.name })
+  creatingTag.value = true
+  try {
+    const created = await props.intents.createTag(name)
+    if (!rootEl.value?.isConnected) return
+    if (!created || !created.ok) {
+      if (created?.message) message.value = created.message
+      return
+    }
+    if (!draft.tags.some((row) => row.id === created.id)) {
+      draft.tags.push({ id: created.id, name: created.name })
+    }
+    tagQuery.value = ''
+    hideResults(tagResults.value, tagOpen)
+    message.value = ''
+  } catch (err) {
+    if (!rootEl.value?.isConnected) return
+    message.value = err instanceof Error && err.message.trim()
+      ? err.message.trim()
+      : 'Could not create tag.'
+  } finally {
+    if (rootEl.value?.isConnected) creatingTag.value = false
   }
-  tagQuery.value = ''
-  hideResults(tagResults.value, tagOpen)
 }
 
 function preview(): void {
@@ -563,7 +614,16 @@ onBeforeUnmount(() => {
               >{{ folder.title }}</div>
             </div>
           </div>
-          <PrksButton variant="secondary" size="sm" title="Create new folder" aria-label="Create new folder" @click="createFolder">
+          <PrksButton
+            variant="secondary"
+            size="sm"
+            title="Create new folder"
+            aria-label="Create new folder"
+            :busy="creatingFolder"
+            :disabled="creatingFolder"
+            busy-label="Creating…"
+            @click="createFolder"
+          >
             <span class="ribbon-btn__icon" v-html="plusIcon"></span>
           </PrksButton>
         </div>

@@ -427,11 +427,14 @@ interface Window {
     title?: string
     folders?: unknown
     foldersFailed?: boolean
+    message?: string
   }>
   prksProcessingQuickCreatePerson?: (name: string) => Promise<{
-    id: string
-    name: string
-    people: unknown
+    ok?: boolean
+    id?: string
+    name?: string
+    people?: unknown
+    message?: string
   } | null>
   prksSegmentedControlHtml?: (
     hiddenId: string,

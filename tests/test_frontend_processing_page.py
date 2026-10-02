@@ -118,6 +118,39 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertNotIn("created.people.length", card)
         self.assertIn("processingFoldersAfterCreate", card)
 
+    def test_quick_create_failures_stay_on_the_card(self):
+        processing = _read(_PROCESSING)
+        folder = processing.split("async function prksProcessingQuickCreateFolder(", 1)[1].split(
+            "async function prksProcessingQuickCreatePerson(", 1
+        )[0]
+        self.assertNotIn("prksAlertMessage", folder)
+        self.assertIn("Enter folder title in search field first.", folder)
+        self.assertIn("Could not create folder.", folder)
+        person = processing.split("async function prksProcessingQuickCreatePerson(", 1)[1].split(
+            "window.prksProcessingRoleTypes", 1
+        )[0]
+        self.assertIn("localError: true", person)
+        self.assertIn("result.message", person)
+        ui = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "ui.js"))
+        helper = ui.split("async function prksQuickCreatePersonForSearchField(", 1)[1].split(
+            "async function prksQuickCreatePersonForRoleLink(", 1
+        )[0]
+        self.assertIn("options.localError", helper)
+        self.assertIn("return { ok: false, message: 'Type a name in the Person field first.' }", helper)
+        self.assertIn("return { ok: false, message: 'Could not create person.' }", helper)
+        self.assertIn("await prksAlertMessage('Type a name in the Person field first.', 'Validation');", helper)
+        self.assertIn("await prksAlertMessage('Could not create person.', 'Error');", helper)
+        intents = _read(os.path.join(_VUE, "intents.ts"))
+        create_tag = intents.split("async createTag(name)", 1)[1].split("async quickCreateFolder(", 1)[0]
+        self.assertNotIn("prksAlertMessage", create_tag)
+        self.assertIn("Could not create tag.", create_tag)
+        card = _read(os.path.join(_VUE, "ProcessingFileCard.vue"))
+        self.assertIn("creatingFolder", card)
+        self.assertIn(':busy="creatingFolder"', card)
+        self.assertIn(':disabled="creatingFolder"', card)
+        self.assertIn('busy-label="Creating…"', card)
+        self.assertIn("if (creatingFolder.value) return", card)
+
 
 if __name__ == "__main__":
     unittest.main()

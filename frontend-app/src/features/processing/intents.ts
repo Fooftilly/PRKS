@@ -33,12 +33,14 @@ export interface ProcessingPreviewFile {
 }
 
 export interface ProcessingPersonCreated {
+  ok: true
   id: string
   name: string
   people: ProcessingPerson[]
 }
 
 export interface ProcessingFolderCreated {
+  ok: true
   id: string
   title: string
   /** Null when the folder read failed. The painted list stays the catalogue. */
@@ -46,14 +48,26 @@ export interface ProcessingFolderCreated {
   foldersFailed?: boolean
 }
 
+export interface ProcessingTagCreated {
+  ok: true
+  id: string
+  name: string
+}
+
+/** Recoverable quick-create failure. No message means stay quiet (offline refusal). */
+export interface ProcessingQuickFailure {
+  ok: false
+  message?: string
+}
+
 export interface ProcessingIntents {
   reload(resume: ProcessingResume | null): Promise<ProcessingActionOutcome>
   save(fileId: string, draft: ProcessingFileDraft): Promise<ProcessingActionOutcome>
   importFile(fileId: string, draft: ProcessingFileDraft, resume: ProcessingResume | null): Promise<ProcessingActionOutcome>
   searchTags(): Promise<ProcessingTagOption[] | null>
-  createTag(name: string): Promise<{ id: string; name: string } | null>
-  quickCreateFolder(title: string): Promise<ProcessingFolderCreated | null>
-  quickCreatePerson(name: string): Promise<ProcessingPersonCreated | null>
+  createTag(name: string): Promise<ProcessingTagCreated | ProcessingQuickFailure | null>
+  quickCreateFolder(title: string): Promise<ProcessingFolderCreated | ProcessingQuickFailure | null>
+  quickCreatePerson(name: string): Promise<ProcessingPersonCreated | ProcessingQuickFailure | null>
   attachResources(host: HTMLElement): void
   releaseResources(): void
   setPreview(file: ProcessingPreviewFile): ProcessingPreviewPlacement
@@ -162,29 +176,35 @@ export function browserProcessingIntents(
     async createTag(name) {
       if (!ownsProcessing(owner, generation)) return null
       const create = window.prksProcessingCreateTag
-      if (typeof create !== 'function') return null
+      if (typeof create !== 'function') return { ok: false, message: 'Could not create tag.' }
       try {
         const created = await create(name)
         if (!ownsProcessing(owner, generation)) return null
-        if (!created || !created.id) return null
-        return { id: String(created.id), name: String(created.name || name) }
+        if (!created || !created.id) return { ok: false, message: 'Could not create tag.' }
+        return { ok: true, id: String(created.id), name: String(created.name || name) }
       } catch (err) {
         if (!ownsProcessing(owner, generation)) return null
-        const alertFn = window.prksAlertMessage
-        if (typeof alertFn === 'function') {
-          await alertFn(actionMessage(err, 'Could not create tag.'), 'Error')
-        }
-        return null
+        return { ok: false, message: actionMessage(err, 'Could not create tag.') }
       }
     },
     async quickCreateFolder(title) {
       if (!ownsProcessing(owner, generation)) return null
       const create = window.prksProcessingQuickCreateFolder
-      if (typeof create !== 'function') return null
-      const created = await create(title)
+      if (typeof create !== 'function') return { ok: false, message: 'Could not create folder.' }
+      let created
+      try {
+        created = await create(title)
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return null
+        return { ok: false, message: actionMessage(err, 'Could not create folder.') }
+      }
       if (!ownsProcessing(owner, generation)) return null
-      if (!created || !created.ok || !created.id) return null
+      if (!created || created.ok === false || !created.id) {
+        const message = created && typeof created.message === 'string' ? created.message.trim() : ''
+        return message ? { ok: false, message } : { ok: false }
+      }
       return {
+        ok: true,
         id: String(created.id),
         title: String(created.title || title),
         folders: created.foldersFailed ? null : normalizeProcessingFolders(created.folders),
@@ -194,11 +214,21 @@ export function browserProcessingIntents(
     async quickCreatePerson(name) {
       if (!ownsProcessing(owner, generation)) return null
       const create = window.prksProcessingQuickCreatePerson
-      if (typeof create !== 'function') return null
-      const created = await create(name)
+      if (typeof create !== 'function') return { ok: false, message: 'Could not create person.' }
+      let created
+      try {
+        created = await create(name)
+      } catch (err) {
+        if (!ownsProcessing(owner, generation)) return null
+        return { ok: false, message: actionMessage(err, 'Could not create person.') }
+      }
       if (!ownsProcessing(owner, generation)) return null
-      if (!created || !created.id) return null
+      if (!created || created.ok === false || !created.id) {
+        const message = created && typeof created.message === 'string' ? created.message.trim() : ''
+        return message ? { ok: false, message } : { ok: false }
+      }
       return {
+        ok: true,
         id: String(created.id),
         name: String(created.name || name),
         people: normalizeProcessingPeople(created.people),
