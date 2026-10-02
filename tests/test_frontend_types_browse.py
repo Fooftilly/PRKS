@@ -7,6 +7,12 @@ import unittest
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_types_browse_selftest.js")
 _APP = os.path.join(_PROJECT_DIR, "frontend", "js", "app.js")
+_TYPES_INDEX = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "types", "TypesIndexRoute.vue",
+)
+_TYPES_DETAIL = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "types", "TypeDetailRoute.vue",
+)
 
 
 def _read(path: str) -> str:
@@ -45,6 +51,16 @@ class FrontendTypesBrowseTests(unittest.TestCase):
         self.assertNotIn("renderWorksByDocType", detail_body)
         self.assertIn("publishSidebar", types_body)
         self.assertIn("publishSidebar", detail_body)
+
+    def test_types_vue_sources_use_work_html_slot(self):
+        """Injected HTML slots use the shared class. Static display:contents
+        must not return on the Types Vue sources."""
+        for path in (_TYPES_INDEX, _TYPES_DETAIL):
+            vue = _read(path)
+            self.assertIn("work-html-slot", vue, path)
+            self.assertNotIn('style="display: contents"', vue, path)
+        index = _read(_TYPES_INDEX)
+        self.assertIn("types-page__badge-host work-html-slot", index)
 
 
 if __name__ == "__main__":

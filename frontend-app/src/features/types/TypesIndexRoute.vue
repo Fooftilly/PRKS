@@ -66,7 +66,7 @@ watch(rows, () => {
         data-prks-middleclick-nav="1"
       >
         <div class="types-page__list-main">
-          <span class="types-page__badge-host" style="display: contents" :data-prks-type-badge="row.value"></span>
+          <span class="types-page__badge-host work-html-slot" :data-prks-type-badge="row.value"></span>
           <p class="meta-row types-page__list-stats">{{ typeFileCountLabel(row.count) }}</p>
         </div>
         <span class="types-page__list-arrow" aria-hidden="true" v-html="chevron"></span>

@@ -96,7 +96,7 @@ watch(collectionHtml, () => {
       <div class="page-header__title-row">
         <h2 class="prks-page-title">Files</h2>
         <div class="types-page__detail-type" v-html="badgeHtml"></div>
-        <div ref="modeHost" data-prks-types-mode-host style="display: contents"></div>
+        <div ref="modeHost" class="work-html-slot" data-prks-types-mode-host></div>
       </div>
     </div>
     <div ref="collectionEl" :class="collectionClass"></div>
