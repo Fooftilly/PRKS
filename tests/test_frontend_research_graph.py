@@ -35,6 +35,12 @@ _WIKI_RESEARCH = os.path.join(_PROJECT_DIR, "docs", "wiki", "Research-Network.md
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
 _SCHEMA = os.path.join(_PROJECT_DIR, "backend", "db_migrations.py")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_research_graph_selftest.js")
+_GRAPH_VUE = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "research-graph", "ResearchGraphRoute.vue"
+)
+_GRAPH_SESSION = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "research-graph", "session.ts"
+)
 
 
 def _read(path: str) -> str:
@@ -250,6 +256,35 @@ class FrontendResearchGraphTests(unittest.TestCase):
         )[0]
         self.assertNotIn("if (isResearchGraphHash(h)) return true;", actionable)
         self.assertIn("isResearchGraphHash(h)", actionable)
+
+    def test_vue_graph_resource_lifetime(self):
+        app = _read(_APP)
+        graph = _read(_GRAPH)
+        vue = _read(_GRAPH_VUE)
+        session = _read(_GRAPH_SESSION)
+        agents = _read(_AGENTS)
+        self.assertIn("function prksPresentVueResearchGraph", app)
+        self.assertIn("prksVuePresentResearchGraph", app)
+        self.assertIn("ctx.clearResource('researchGraph')", app)
+        self.assertIn("data-prks-research-graph", vue)
+        self.assertIn('data-prks-role="graph-canvas"', vue)
+        self.assertIn("prksReleaseResearchGraph", vue)
+        self.assertNotIn("fetch(", vue)
+        self.assertNotIn("fetch(", session)
+        self.assertNotIn("vue-router", session)
+        self.assertNotIn("pinia", session)
+        self.assertIn("presentRouteSurface", session)
+        self.assertIn("renderResearchGraph", session)
+        self.assertIn("retainLiveGraph", graph)
+        self.assertIn("releaseLiveGraph", graph)
+        self.assertIn("disconnectResizeObserver", graph)
+        self.assertIn("cancelAnimationFrame", graph)
+        self.assertIn("function prksReleaseResearchGraph", graph)
+        self.assertIn("data-prks-research-graph", graph)
+        self.assertNotIn("__prksResearchGraphLiveCount = 1", graph)
+        self.assertNotIn("__prksResearchGraphLiveCount = 0", graph)
+        self.assertIn("shellHtml", agents)
+        self.assertIn("#303 B2", agents)
 
     def test_node_selftest(self):
         node = shutil.which("node")
