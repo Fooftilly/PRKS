@@ -578,8 +578,9 @@ def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
     whose device differs from the root's. ``file_devices=False`` relaxes the
     device rule for regular files only, for overlayfs (see
     ``OVERLAY_FILESYSTEM_TYPES``). OS metadata at the top level (a volume's
-    ``lost+found``) is not PRKS's to walk. A directory that cannot be read is
-    refused: the invariant cannot be proven for it.
+    ``lost+found``) is not PRKS's to walk. A directory that cannot be listed,
+    or an entry that cannot be ``lstat``-ed, is refused: the invariant cannot
+    be proven for it.
     """
     root_dev = os.stat(root_real).st_dev
     pending = [root_real]
@@ -597,7 +598,12 @@ def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
             if current == root_real and name in OS_METADATA_NAMES:
                 continue
             path = os.path.join(current, name)
-            st = _lstat(path)
+            try:
+                st = _lstat(path)
+            except OSError as exc:
+                raise StorageRootRefused(
+                    "root_unreadable", f"{path} inside the storage root cannot be read."
+                ) from exc
             if st is None:
                 continue
             if is_link_or_reparse_point(st):

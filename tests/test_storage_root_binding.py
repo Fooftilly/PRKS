@@ -1047,6 +1047,26 @@ class TestWholeRootInvariants(RootTestCase):
         _symlink_or_skip(self, self.tmp, os.path.join(lost, "orphan"))
         self.open(root)
 
+    def test_entry_that_cannot_be_inspected_is_refused(self):
+        root = self._marked()
+        os.makedirs(os.path.join(root, "pdfs"), exist_ok=True)
+        target = os.path.join(root, "pdfs", "a.pdf")
+        with open(target, "wb") as handle:
+            handle.write(b"%PDF")
+        real_lstat = root_binding._lstat
+
+        def fake(path):
+            if path == target:
+                raise PermissionError(13, "Permission denied", path)
+            return real_lstat(path)
+
+        with patch.object(root_binding, "_lstat", fake):
+            with self.assertRaises(StorageRootRefused) as ctx:
+                self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_unreadable")
+        self.assertIn(target, str(ctx.exception))
+        self.assertIsInstance(ctx.exception.__cause__, PermissionError)
+
     def _file_on_other_device(self, target):
         real_lstat = root_binding._lstat
 
