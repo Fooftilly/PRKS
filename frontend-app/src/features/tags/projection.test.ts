@@ -64,5 +64,27 @@ describe('Tags projection', () => {
       resume: { aliasTagId: 'missing' },
     })
     expect(closed.openAliasTagId).toBeNull()
+    expect(closed.openMergeSourceId).toBeNull()
+  })
+
+  it('reopens the merge dialog that is still current, including its target', () => {
+    const open = buildTagsProjection({
+      tags: [
+        { id: 't1', name: 'Alpha', work_count: 1, folder_count: 0 },
+        { id: 't2', name: 'Beta', work_count: 1, folder_count: 0 },
+      ],
+      generation: 5,
+      resume: { mergeSourceId: 't2', mergeTargetId: 't1' },
+    })
+    expect(open.openMergeSourceId).toBe('t2')
+    expect(open.openMergeTargetId).toBe('t1')
+    expect(open.openAliasTagId).toBeNull()
+    const gone = buildTagsProjection({
+      tags: [{ id: 't2', name: 'Beta', work_count: 1, folder_count: 0 }],
+      generation: 5,
+      resume: { mergeSourceId: 't1', aliasTagId: 't2' },
+    })
+    expect(gone.openMergeSourceId).toBeNull()
+    expect(gone.openAliasTagId).toBe('t2')
   })
 })

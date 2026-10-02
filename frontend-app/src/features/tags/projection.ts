@@ -48,6 +48,9 @@ export interface TagCloudRow {
 
 export interface TagsResume {
   readonly aliasTagId?: string | null
+  /** The merge dialog still open when a write finishes. */
+  readonly mergeSourceId?: string | null
+  readonly mergeTargetId?: string | null
 }
 
 export interface TagsProjection {
@@ -55,6 +58,9 @@ export interface TagsProjection {
   readonly generation: number
   /** Set when a reload must reopen this tag's alias dialog. Absent otherwise. */
   readonly openAliasTagId: string | null
+  /** Set when a reload must reopen this tag's merge dialog. Absent otherwise. */
+  readonly openMergeSourceId: string | null
+  readonly openMergeTargetId: string | null
 }
 
 export function safeTagCssColor(raw: unknown, fallback: string = TAG_COLOR_FALLBACK): string {
@@ -159,14 +165,22 @@ export function buildTagsProjection(input: {
   resume?: TagsResume | null
 }): TagsProjection {
   const rows = acceptTagRows(input.tags)
-  const requested = input.resume?.aliasTagId
-  const openAliasTagId =
-    typeof requested === 'string' && requested && rows.some((row) => row.id === requested)
-      ? requested
+  const hasRow = (id: string | null | undefined): id is string =>
+    typeof id === 'string' && id !== '' && rows.some((row) => row.id === id)
+  const requestedMerge = input.resume?.mergeSourceId
+  const openMergeSourceId = hasRow(requestedMerge) ? requestedMerge : null
+  const requestedTarget = input.resume?.mergeTargetId
+  const openMergeTargetId =
+    openMergeSourceId && hasRow(requestedTarget) && requestedTarget !== openMergeSourceId
+      ? requestedTarget
       : null
+  const requestedAlias = input.resume?.aliasTagId
+  const openAliasTagId = !openMergeSourceId && hasRow(requestedAlias) ? requestedAlias : null
   return {
     rows,
     generation: input.generation,
     openAliasTagId,
+    openMergeSourceId,
+    openMergeTargetId,
   }
 }

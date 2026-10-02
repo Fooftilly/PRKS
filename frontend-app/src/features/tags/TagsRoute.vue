@@ -4,27 +4,30 @@ import PrksButton from '../../components/PrksButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerTagsAliasCloser, registerTagsMergeCloser } from './closers'
 import type { TagsIntents } from './intents'
-import type { TagsAliasDialog, TagsRefreshSink } from './session'
+import type { TagsDialogKind, TagsDialogState, TagsRefreshSink } from './session'
 import { filterMergeCandidates, type TagCloudRow, type TagsProjection } from './projection'
 
 const props = defineProps<{
   projection: TagsProjection
   intents: TagsIntents
-  aliasDialog?: TagsAliasDialog
+  dialogState?: TagsDialogState
   refreshSink?: TagsRefreshSink
 }>()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
 const aliasTagId = ref<string | null>(props.projection.openAliasTagId)
+const dialogKind = ref<TagsDialogKind>(
+  props.projection.openMergeSourceId ? 'merge' : props.projection.openAliasTagId ? 'alias' : null,
+)
 const aliasDraft = ref('')
 const aliasTrigger = ref<HTMLElement | null>(null)
 const aliasAddError = ref('')
 const aliasRemoveError = ref('')
 const aliasDeleteError = ref('')
 const refreshError = ref('')
-const mergeSourceId = ref<string | null>(null)
-const mergeTargetId = ref<string | null>(null)
+const mergeSourceId = ref<string | null>(props.projection.openMergeSourceId)
+const mergeTargetId = ref<string | null>(props.projection.openMergeTargetId)
 const mergeFilter = ref('')
 const mergeError = ref('')
 const mergeTrigger = ref<HTMLElement | null>(null)
@@ -65,12 +68,22 @@ function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null)
   }
 }
 
+function publishDialog(): void {
+  const state = props.dialogState
+  if (!state) return
+  state.kind = dialogKind.value
+  state.aliasTagId = aliasTagId.value
+  state.mergeSourceId = mergeSourceId.value
+  state.mergeTargetId = mergeTargetId.value
+}
+
 function closeAlias(): void {
   const trigger = aliasTrigger.value
   const tagId = aliasTagId.value
   aliasTagId.value = null
   aliasDraft.value = ''
   aliasTrigger.value = null
+  if (dialogKind.value === 'alias') dialogKind.value = mergeSourceId.value ? 'merge' : null
   void nextTick(() => restoreFocus(trigger, tagId ? aliasEditButton(tagId) : null))
 }
 
@@ -81,6 +94,7 @@ function closeMerge(): void {
   mergeFilter.value = ''
   mergeError.value = ''
   mergeTrigger.value = null
+  if (dialogKind.value === 'merge') dialogKind.value = aliasTagId.value ? 'alias' : null
   void nextTick(() => restoreFocus(trigger, null))
 }
 
@@ -113,6 +127,7 @@ function chipStyle(row: TagCloudRow): Record<string, string> {
 function openAlias(row: TagCloudRow, event: MouseEvent): void {
   aliasTrigger.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   aliasDraft.value = ''
+  dialogKind.value = 'alias'
   aliasTagId.value = row.id
 }
 
@@ -120,6 +135,7 @@ function openMerge(row: TagCloudRow, event: MouseEvent): void {
   mergeTrigger.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   mergeTargetId.value = null
   mergeFilter.value = ''
+  dialogKind.value = 'merge'
   mergeSourceId.value = row.id
 }
 
@@ -206,8 +222,11 @@ function confirmMerge(): void {
   })
 }
 
+watch([aliasTagId, mergeSourceId, mergeTargetId, dialogKind], () => {
+  publishDialog()
+}, { immediate: true })
+
 watch(aliasTagId, (id) => {
-  if (props.aliasDialog) props.aliasDialog.id = id
   clearAliasActionErrors()
   if (!id) return
   void nextTick(() => focusAliasInput())
@@ -338,13 +357,15 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="prks-icon-btn prks-icon-btn--sm prks-icon-btn--danger"
+                :class="{ 'tags-page-alias-remove--busy': actionBusy(`alias-remove:${alias}`) }"
                 :data-alias-remove="alias"
-                aria-label="Remove alias"
+                :aria-label="actionBusy(`alias-remove:${alias}`) ? 'Removing…' : 'Remove alias'"
                 :aria-busy="actionBusy(`alias-remove:${alias}`) ? 'true' : undefined"
                 :disabled="actionBlocked(`alias-remove:${alias}`) || actionBusy(`alias-remove:${alias}`)"
                 @click="removeAlias(alias)"
               >
-                <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
+                <template v-if="actionBusy(`alias-remove:${alias}`)">Removing…</template>
+                <span v-else-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
               </button>
             </li>
           </ul>

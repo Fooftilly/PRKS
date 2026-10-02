@@ -20,6 +20,11 @@ export interface TagsIntentOptions {
    * Absent means the caller has no live dialog to preserve.
    */
   openAliasTagId?: () => string | null
+  /**
+   * Whichever Tags dialog is current: alias, merge, or none.
+   * A finishing write reloads this snapshot so it does not clear a newer dialog.
+   */
+  currentDialog?: () => TagsResume | null
 }
 
 export interface TagsIntents {
@@ -64,11 +69,14 @@ function deleteMessage(err: unknown): string {
   return actionMessage(err, DELETE_FAILURE)
 }
 
-function aliasResume(options: TagsIntentOptions | undefined, writtenTagId: string): TagsResume | null {
-  if (typeof options?.openAliasTagId !== 'function') return { aliasTagId: writtenTagId }
-  const openId = options.openAliasTagId()
-  if (openId == null || String(openId) === '') return null
-  return { aliasTagId: String(openId) }
+function dialogResume(options: TagsIntentOptions | undefined, fallback: TagsResume | null): TagsResume | null {
+  if (typeof options?.currentDialog === 'function') return options.currentDialog()
+  if (typeof options?.openAliasTagId === 'function') {
+    const openId = options.openAliasTagId()
+    if (openId == null || String(openId) === '') return null
+    return { aliasTagId: String(openId) }
+  }
+  return fallback
 }
 
 async function reloadIfCurrent(
@@ -118,7 +126,7 @@ export function browserTagsIntents(
         if (!ownsTags(owner, generation)) return quiet()
         return failure(actionMessage(err, ADD_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, aliasResume(options, tagId))
+      return reloadIfCurrent(owner, generation, dialogResume(options, { aliasTagId: tagId }))
     },
 
     async removeAlias(tagId, alias) {
@@ -132,7 +140,7 @@ export function browserTagsIntents(
         if (!ownsTags(owner, generation)) return quiet()
         return failure(actionMessage(err, REMOVE_ALIAS_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, aliasResume(options, tagId))
+      return reloadIfCurrent(owner, generation, dialogResume(options, { aliasTagId: tagId }))
     },
 
     async remove(tagId, name) {
@@ -156,7 +164,7 @@ export function browserTagsIntents(
         return failure(deleteMessage(err))
       }
       if (!ownsTags(owner, generation)) return quiet()
-      return reloadIfCurrent(owner, generation, null)
+      return reloadIfCurrent(owner, generation, dialogResume(options, null))
     },
 
     async merge(sourceId, targetId) {
@@ -170,7 +178,7 @@ export function browserTagsIntents(
         return failure(actionMessage(err, MERGE_FAILURE))
       }
       if (!ownsTags(owner, generation)) return quiet()
-      return reloadIfCurrent(owner, generation, null)
+      return reloadIfCurrent(owner, generation, dialogResume(options, null))
     },
   }
 }

@@ -22,7 +22,7 @@ export interface TagsPresentInput {
    * The Tags sidebar is static copy; Vue does not publish it.
    */
   shell?: boolean
-  /** Reopen one tag's alias dialog after this owner reloads. */
+  /** Reopen the alias or merge dialog that is still current after this owner reloads. */
   resume?: TagsResume | null
 }
 
@@ -32,8 +32,27 @@ export interface TagsRefreshSink {
   set: ((message: string) => void) | null
 }
 
-export interface TagsAliasDialog {
-  id: string | null
+export type TagsDialogKind = 'alias' | 'merge' | null
+
+/** The dialog this pane currently has open. A reload reads it before remounting. */
+export interface TagsDialogState {
+  kind: TagsDialogKind
+  aliasTagId: string | null
+  mergeSourceId: string | null
+  mergeTargetId: string | null
+}
+
+function resumeFromDialog(dialog: TagsDialogState): TagsResume | null {
+  if (dialog.kind === 'merge' && dialog.mergeSourceId) {
+    return {
+      mergeSourceId: dialog.mergeSourceId,
+      mergeTargetId: dialog.mergeTargetId,
+    }
+  }
+  if (dialog.kind === 'alias' && dialog.aliasTagId) {
+    return { aliasTagId: dialog.aliasTagId }
+  }
+  return null
 }
 
 const refreshSinks = new WeakMap<object, TagsRefreshSink>()
@@ -84,13 +103,18 @@ export function presentTags(input: TagsPresentInput): void {
     route,
     render: (generation) => {
       const projection: TagsProjection = buildTagsProjection({ tags, generation, resume })
-      const aliasDialog: TagsAliasDialog = { id: projection.openAliasTagId }
+      const dialogState: TagsDialogState = {
+        kind: projection.openMergeSourceId ? 'merge' : projection.openAliasTagId ? 'alias' : null,
+        aliasTagId: projection.openAliasTagId,
+        mergeSourceId: projection.openMergeSourceId,
+        mergeTargetId: projection.openMergeTargetId,
+      }
       return createVNode(TagsRoute, {
         projection,
         intents: browserTagsIntents(owner, generation, {
-          openAliasTagId: () => aliasDialog.id,
+          currentDialog: () => resumeFromDialog(dialogState),
         }),
-        aliasDialog,
+        dialogState,
         refreshSink: refreshSinkFor(owner),
       })
     },

@@ -2963,8 +2963,9 @@ function prksPresentVueTags(ctx, contentDiv, detail) {
 
 /**
  * Refetch used tags and repaint this owner only. Alias add/remove passes
- * `resume.aliasTagId` for the dialog that is still open. A closed dialog is
- * not resumed. A generation that is no longer current does not paint.
+ * `resume` for the alias or merge dialog that is still open. A closed dialog
+ * is not resumed, and a newer dialog is not cleared. A generation that is no
+ * longer current does not paint.
  * A failed read keeps the list already on screen and reports the refresh
  * failure. An empty successful read still paints the empty state.
  */

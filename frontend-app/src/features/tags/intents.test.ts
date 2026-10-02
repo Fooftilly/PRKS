@@ -153,6 +153,31 @@ describe('Tags intents', () => {
     expect(reload).toHaveBeenCalledWith(expect.anything(), 2, { aliasTagId: 't1' })
   })
 
+  it('resumes a merge dialog that replaced the alias dialog during the write', async () => {
+    const reload = vi.fn(async () => true)
+    window.prksTagsAddAlias = async () => ({ ok: true })
+    window.prksReloadTagsVocabulary = reload
+    const outcome = await browserTagsIntents(owner({ generation: 2 }), 2, {
+      currentDialog: () => ({ mergeSourceId: 't2', mergeTargetId: 't1' }),
+    }).addAlias('t1', 'Latin')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, {
+      mergeSourceId: 't2',
+      mergeTargetId: 't1',
+    })
+  })
+
+  it('resumes an alias dialog that replaced the merge dialog during the write', async () => {
+    const reload = vi.fn(async () => true)
+    window.prksTagsMerge = async () => ({ ok: true })
+    window.prksReloadTagsVocabulary = reload
+    const outcome = await browserTagsIntents(owner({ generation: 2 }), 2, {
+      currentDialog: () => ({ aliasTagId: 't2' }),
+    }).merge('t1', 't3')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, { aliasTagId: 't2' })
+  })
+
   it('merges through the durable wrapper only while the owner is still current', async () => {
     const state = { generation: 6 }
     const merge = vi.fn(async () => ({ ok: true }))

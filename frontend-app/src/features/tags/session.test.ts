@@ -391,4 +391,106 @@ describe('Tags route bridge', () => {
     expect(el.querySelector('#tags-page-alias-modal')).toBeNull()
     expect(el.querySelector('[data-tag-alias-edit="t1"]')).not.toBeNull()
   })
+
+  it('keeps a newer merge dialog when an alias write finishes', async () => {
+    let releaseAdd: (value: { ok: boolean }) => void = () => {}
+    window.prksTagsAddAlias = () => new Promise((resolve) => {
+      releaseAdd = resolve
+    })
+    const pane = owner()
+    const el = host()
+    window.prksReloadTagsVocabulary = async (ownerArg, generation, nextResume) => {
+      presentTags({
+        owner: ownerArg as ReturnType<typeof owner>,
+        host: el,
+        tags: [ALPHA, BETA],
+        generation,
+        resume: nextResume,
+      })
+      return true
+    }
+    presentTags({ owner: pane, host: el, tags: [ALPHA, BETA], generation: 10 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#tags-page-alias-input')
+    input!.value = 'Latin'
+    input!.dispatchEvent(new Event('input'))
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-add-btn')?.click()
+    await flush()
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-modal-close')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-merge="t2"]')?.click()
+    await nextTick()
+    expect(el.querySelector('#tags-page-merge-source-label')?.textContent).toContain('Beta')
+    releaseAdd({ ok: true })
+    await flush()
+    expect(el.querySelector('#tags-page-merge-source-label')?.textContent).toContain('Beta')
+    expect(el.querySelector('#tags-page-alias-modal')).toBeNull()
+  })
+
+  it('keeps a newer alias dialog when a merge finishes', async () => {
+    let releaseMerge: (value: { ok: boolean }) => void = () => {}
+    window.prksTagsMerge = () => new Promise((resolve) => {
+      releaseMerge = resolve
+    })
+    const pane = owner()
+    const el = host()
+    window.prksReloadTagsVocabulary = async (ownerArg, generation, nextResume) => {
+      presentTags({
+        owner: ownerArg as ReturnType<typeof owner>,
+        host: el,
+        tags: [ALPHA, BETA],
+        generation,
+        resume: nextResume,
+      })
+      return true
+    }
+    presentTags({ owner: pane, host: el, tags: [ALPHA, BETA], generation: 11 })
+    el.querySelector<HTMLButtonElement>('[data-tag-merge="t1"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-merge-pick="t2"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#tags-page-merge-confirm-btn')?.click()
+    await flush()
+    el.querySelector<HTMLButtonElement>('#tags-page-merge-modal-close')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t2"]')?.click()
+    await nextTick()
+    expect(el.querySelector('#tags-page-alias-canonical')?.textContent).toBe('Beta')
+    releaseMerge({ ok: true })
+    await flush()
+    expect(el.querySelector('#tags-page-alias-canonical')?.textContent).toBe('Beta')
+    expect(el.querySelector('#tags-page-merge-modal')).toBeNull()
+  })
+
+  it('shows Removing… while an alias remove is in flight and restores the icon', async () => {
+    window.prksIcon = (name) => `<i data-lucide="${name}"></i>`
+    let releaseRemove: (value: { ok: boolean }) => void = () => {}
+    window.prksTagsRemoveAlias = () => new Promise((resolve) => {
+      releaseRemove = resolve
+    })
+    window.prksReloadTagsVocabulary = async () => false
+    const el = host()
+    presentTags({ owner: owner(), host: el, tags: [ALPHA], generation: 12 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const button = el.querySelector<HTMLButtonElement>('[data-alias-remove="Latin"]')
+    expect(button).not.toBeNull()
+    expect(button?.textContent).not.toContain('Removing')
+    expect(button?.querySelector('[data-lucide="x"]')).not.toBeNull()
+    button?.click()
+    await flush()
+    expect(button?.getAttribute('aria-busy')).toBe('true')
+    expect(button?.disabled).toBe(true)
+    expect(button?.textContent).toContain('Removing…')
+    expect(button?.querySelector('[data-lucide]')).toBeNull()
+    releaseRemove({ ok: true })
+    await flush()
+    const restored = el.querySelector<HTMLButtonElement>('[data-alias-remove="Latin"]')
+    expect(restored?.getAttribute('aria-busy')).toBeNull()
+    expect(restored?.disabled).toBe(false)
+    expect(restored?.textContent).not.toContain('Removing')
+    expect(restored?.getAttribute('aria-label')).toBe('Remove alias')
+    expect(restored?.querySelector('[data-lucide="x"]')).not.toBeNull()
+  })
 })

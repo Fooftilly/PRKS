@@ -3445,6 +3445,13 @@ body.prks-sidebar-open #app-container.app-container--tiled #sidebar .nav-disclos
     color: var(--danger, #c44);
 }
 
+.prks-icon-btn.tags-page-alias-remove--busy {
+    width: auto;
+    min-width: var(--control-height-sm);
+    padding: 0 var(--space-sm);
+    font-size: var(--text-sm);
+}
+
 .tags-page-alias-add {
     display: flex;
     flex-wrap: wrap;

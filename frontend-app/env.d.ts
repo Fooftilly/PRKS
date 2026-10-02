@@ -45,7 +45,11 @@ interface TagsPresentRequest {
   tags: unknown
   generation?: number
   shell?: boolean
-  resume?: { aliasTagId?: string | null } | null
+  resume?: {
+    aliasTagId?: string | null
+    mergeSourceId?: string | null
+    mergeTargetId?: string | null
+  } | null
 }
 
 interface TagsMutationOutcome {
@@ -315,7 +319,11 @@ interface Window {
   prksReloadTagsVocabulary?: (
     owner: object,
     generation: number,
-    resume?: { aliasTagId?: string | null } | null,
+    resume?: {
+      aliasTagId?: string | null
+      mergeSourceId?: string | null
+      mergeTargetId?: string | null
+    } | null,
   ) => Promise<boolean>
   prksTagsAddAlias?: (tagId: string, alias: string) => Promise<TagsMutationOutcome>
   prksTagsRemoveAlias?: (tagId: string, alias: string) => Promise<TagsMutationOutcome>

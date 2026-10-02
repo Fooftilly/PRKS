@@ -70,6 +70,7 @@ class FrontendTagsPageTests(unittest.TestCase):
         self.assertIn("data-tags-merge-error", vue)
         self.assertIn('busy-label="Deleting…"', vue)
         self.assertIn('busy-label="Merging…"', vue)
+        self.assertIn("Removing…", vue)
         self.assertIn('variant="danger"', vue)
         policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
         rule = policy[policy.index('"name": "tags-vue"'):policy.index('"name": "concepts-vue"')]
