@@ -991,7 +991,13 @@
             });
         }
 
+        function ownsFocusedInspector() {
+            if (typeof root.prksGetFocusedTabContext !== 'function') return true;
+            return root.prksGetFocusedTabContext() === ctx;
+        }
+
         function paintInspector(html) {
+            if (!ownsFocusedInspector()) return;
             const el = inspectorEl(liveDom);
             if (!el) return;
             el.innerHTML = html;
@@ -1011,7 +1017,7 @@
         }
 
         function syncInspectorVisibility() {
-            if (typeof root.prksRefreshFocusedRightPanelVisibility === 'function') {
+            if (ownsFocusedInspector() && typeof root.prksRefreshFocusedRightPanelVisibility === 'function') {
                 root.prksRefreshFocusedRightPanelVisibility();
             }
             const cy = liveCy;

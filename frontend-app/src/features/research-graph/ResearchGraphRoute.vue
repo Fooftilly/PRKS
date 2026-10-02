@@ -9,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const rootEl = ref<HTMLElement | null>(null)
+const graphUnavailable = ref(false)
 const headerIcon = computed(() => window.prksPageHeaderIconHtml?.('share-2') ?? '')
 
 function legendIcon(name: string): string {
@@ -17,6 +18,7 @@ function legendIcon(name: string): string {
 
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
+  graphUnavailable.value = typeof window.renderResearchGraph !== 'function'
 })
 
 onBeforeUnmount(() => {
@@ -130,19 +132,22 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div data-prks-role="graph-body">
-      <div class="research-graph__stage" data-prks-role="graph-stage">
-        <div class="prks-panel research-graph__canvas-wrap">
-          <div
-            class="research-graph__canvas"
-            data-prks-role="graph-canvas"
-            role="img"
-            aria-label="Research relationship graph"
-          ></div>
+      <p v-if="graphUnavailable" class="prks-inline-message" role="status">Graph UI unavailable.</p>
+      <template v-else>
+        <div class="research-graph__stage" data-prks-role="graph-stage">
+          <div class="prks-panel research-graph__canvas-wrap">
+            <div
+              class="research-graph__canvas"
+              data-prks-role="graph-canvas"
+              role="img"
+              aria-label="Research relationship graph"
+            ></div>
+          </div>
         </div>
-      </div>
-      <p class="meta-row" role="status" data-prks-role="graph-derived-off" hidden>
-        Note-mention edges unavailable. Canonical relationships still shown.
-      </p>
+        <p class="meta-row" role="status" data-prks-role="graph-derived-off" hidden>
+          Note-mention edges unavailable. Canonical relationships still shown.
+        </p>
+      </template>
     </div>
   </div>
 </template>

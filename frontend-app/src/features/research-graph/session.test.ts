@@ -90,6 +90,21 @@ describe('Research Graph route bridge', () => {
     expect(first?.ctx).toBe(main)
   })
 
+  it('shows Graph UI unavailable in the graph body when the renderer is missing', async () => {
+    const alerts: string[] = []
+    window.alert = (message?: string) => {
+      alerts.push(String(message ?? ''))
+    }
+    const pane = owner('main')
+    const el = host()
+    presentResearchGraph({ owner: pane, host: el, generation: 1, attach: {} })
+    await nextTick()
+    const body = el.querySelector('[data-prks-role="graph-body"]')
+    expect(body?.textContent).toContain('Graph UI unavailable.')
+    expect(body?.querySelector('[data-prks-role="graph-canvas"]')).toBeNull()
+    expect(alerts).toEqual([])
+  })
+
   it('does not mount a stale generation over the current owner', async () => {
     window.renderResearchGraph = vi.fn(async () => undefined)
     const pane = owner('main')

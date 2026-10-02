@@ -719,6 +719,91 @@ function makeCtx(tabId) {
     assertEq(rows, 'stale start does not mount', sandbox.__prksResearchGraphLiveCount, countAtStaleStart);
     assertEq(rows, 'stale owner stays empty', staleCtx.getResource('researchGraph'), undefined);
 
+    const sharedInspector = {
+        innerHTML: '',
+        _attrs: {},
+        getAttribute: function (name) {
+            return sharedInspector._attrs[name] || null;
+        },
+        setAttribute: function (name, value) {
+            sharedInspector._attrs[name] = String(value);
+        },
+        removeAttribute: function (name) {
+            delete sharedInspector._attrs[name];
+        },
+        addEventListener: function () {},
+    };
+    const savedFocused = sandbox.prksGetFocusedTabContext;
+    const savedDocument = sandbox.document;
+    const savedVisibility = sandbox.prksRefreshFocusedRightPanelVisibility;
+    let visibilityCalls = 0;
+    let focusedOwner = null;
+    sandbox.document = {
+        getElementById: function (id) {
+            if (id !== 'panel-content') return null;
+            return {
+                querySelector: function (sel) {
+                    return sel === '#prks-graph-inspector' ? sharedInspector : null;
+                },
+            };
+        },
+    };
+    sandbox.prksGetFocusedTabContext = function () {
+        return focusedOwner;
+    };
+    sandbox.prksRefreshFocusedRightPanelVisibility = function () {
+        visibilityCalls += 1;
+    };
+    try {
+        fetchImpl = async function () {
+            return fixture;
+        };
+        const focusMain = makeCtx('focus-main');
+        const focusSide = makeCtx('focus-side');
+        focusedOwner = focusMain;
+        const focusMainHost = makeGraphHost();
+        const focusSideHost = makeGraphHost();
+        await g.renderResearchGraph(focusMainHost, { ctx: focusMain, focus: 'person:P-123' });
+        const mainPaint = sharedInspector.innerHTML;
+        assert(
+            rows,
+            'focused main paints its inspector',
+            mainPaint.indexOf('Max Horkheimer') >= 0
+        );
+        assertEq(rows, 'focused main reports its selection', g.getSelectedGraphNodeId(), 'person:P-123');
+        visibilityCalls = 0;
+        await g.renderResearchGraph(focusSideHost, { ctx: focusSide, focus: 'concept:C-1' });
+        assertEq(rows, 'unfocused secondary leaves the inspector', sharedInspector.innerHTML, mainPaint);
+        assert(
+            rows,
+            'unfocused secondary does not paint its node',
+            sharedInspector.innerHTML.indexOf('Culture Industry') < 0
+        );
+        assertEq(rows, 'unfocused secondary skips panel visibility', visibilityCalls, 0);
+        assertEq(
+            rows,
+            'secondary keeps its own selection',
+            focusSide.getResource('researchGraph').getSelectedId(),
+            'concept:C-1'
+        );
+        assertEq(rows, 'main selection stays pane-local', g.getSelectedGraphNodeId(), 'person:P-123');
+        focusedOwner = focusSide;
+        g.renderGraphInspector();
+        assert(
+            rows,
+            'focusing secondary paints its inspector',
+            sharedInspector.innerHTML.indexOf('Culture Industry') >= 0
+        );
+        assert(rows, 'focusing secondary replaces the main inspector', sharedInspector.innerHTML !== mainPaint);
+        g.destroyResearchGraph(focusMainHost);
+        g.destroyResearchGraph(focusSideHost);
+    } finally {
+        sandbox.prksGetFocusedTabContext = savedFocused;
+        sandbox.prksRefreshFocusedRightPanelVisibility = savedVisibility;
+        if (savedDocument === undefined) delete sandbox.document;
+        else sandbox.document = savedDocument;
+    }
+
     const passed = rows.filter((r) => r.ok).length;
     const failed = rows.filter((r) => !r.ok).length;
     rows.forEach((r) => {

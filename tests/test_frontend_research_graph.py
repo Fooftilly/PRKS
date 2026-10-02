@@ -305,7 +305,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("prksRefreshIcons", vue)
         self.assertIn('data-prks-role="graph-body"', vue)
         self.assertIn('data-prks-role="graph-legend-panel"', vue)
-        self.assertNotIn("Graph UI unavailable", vue)
+        self.assertIn("Graph UI unavailable.", vue)
 
     def test_node_selftest(self):
         node = shutil.which("node")
