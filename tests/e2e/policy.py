@@ -628,6 +628,18 @@ AFFECTED_RULES = (
         "note": "Vue Search + Saved View detail (#302 R2) → browse. Shared route-surface stays unmapped (CI full).",
     },
     {
+        "name": "types-vue",
+        "paths": ("frontend-app/src/features/types/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue File types index/detail (#302 R3) → browse. Shared route-surface stays unmapped (CI full).",
+    },
+    {
         "name": "concepts-vue",
         "paths": ("frontend-app/src/features/concepts/**",),
         "exclude_paths": (

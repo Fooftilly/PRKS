@@ -2887,6 +2887,56 @@ function prksPresentVueRecent(ctx, contentDiv, detail) {
 }
 
 /**
+ * Mount the Vue File types index in this pane.
+ * `detail.rows` must already be `prksTypesIndexModel` rows.
+ */
+function prksPresentVueTypesIndex(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'types',
+        owner: ctx,
+        rows: detail.rows,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentTypesIndex === 'function') {
+        window.prksVuePresentTypesIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
+ * Mount the Vue type detail in this pane.
+ * `detail.rows` must already be `prksTypesDetailModel` works.
+ */
+function prksPresentVueTypeDetail(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'type-detail',
+        owner: ctx,
+        docType: detail.docType,
+        label: detail.label,
+        canonicalHash: detail.canonicalHash,
+        rows: detail.rows,
+        offlineCached: !!detail.offlineCached,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentTypeDetail === 'function') {
+        window.prksVuePresentTypeDetail(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
  * The one read behind Search and Saved View detail. Membership is the
  * server's (`fetchSearch`), and the response is never cached. A pending local
  * edit is not on the server yet, so the rows are overlaid with
@@ -3757,6 +3807,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissRecent === 'function') {
             window.prksVueDismissRecent(ctx);
         }
+        if (typeof window.prksVueDismissTypes === 'function') {
+            window.prksVueDismissTypes(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -4484,7 +4537,19 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Types not available offline' };
                     break;
                 }
-                renderTypesIndex(works, contentDiv);
+                // Grouping stays here so the sidebar and the Vue list share one
+                // model. Vue does not regroup or read the durable queue.
+                const typesModel = typeof prksTypesIndexModel === 'function'
+                    ? prksTypesIndexModel(works)
+                    : { rows: [], typeCount: 0, totalFiles: 0 };
+                publishSidebar({
+                    typeCount: typesModel.typeCount,
+                    totalFiles: typesModel.totalFiles,
+                });
+                prksPresentVueTypesIndex(ctx, contentDiv, {
+                    rows: typesModel.rows,
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineBrowse);
                 break;
             }
@@ -4502,8 +4567,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     titleOpts = { notFound: true, notFoundTitle: 'Types not available offline' };
                     break;
                 }
-                renderWorksByDocType(works, route.params.docType, contentDiv,
-                    { offlineCached: offlineBrowse.source === 'cache' });
+                const typeDetail = typeof prksTypesDetailModel === 'function'
+                    ? prksTypesDetailModel(works, route.params.docType)
+                    : { docType: route.params.docType, label: route.params.docType, works: [], workCount: 0 };
+                publishSidebar({
+                    docType: typeDetail.docType,
+                    docTypeLabel: typeDetail.label,
+                    workCount: typeDetail.workCount,
+                });
+                prksPresentVueTypeDetail(ctx, contentDiv, {
+                    docType: typeDetail.docType,
+                    label: typeDetail.label,
+                    canonicalHash: route.canonicalHash,
+                    rows: typeDetail.works,
+                    offlineCached: offlineBrowse.source === 'cache',
+                    generation: generation,
+                });
                 prksOfflinePrependBanner(contentDiv, offlineBrowse);
                 break;
             }
