@@ -71,6 +71,58 @@ interface PublishersMutationOutcome {
   reason?: string
 }
 
+interface ProcessingPresentRequest {
+  owner: object
+  host: HTMLElement
+  files: unknown
+  people: unknown
+  folders: unknown
+  roleTypes: unknown
+  domPrefix: string
+  generation?: number
+  shell?: boolean
+  resume?: { visibleCount?: number | null } | null
+}
+
+/** Painted inbox people. The coordinator stores the person rows; quick-create appends `{ id, name }`. */
+interface ProcessingPeopleCatalogueEntry {
+  id?: string
+  name?: string
+  first_name?: string
+  last_name?: string
+}
+
+interface ProcessingDraft {
+  title?: string
+  status_draft?: string
+  abstract?: string
+  source_url?: string
+  published_date?: string
+  year?: string
+  publisher?: string
+  location?: string
+  edition?: string
+  journal?: string
+  volume?: string
+  issue?: string
+  pages?: string
+  isbn?: string
+  doi?: string
+  doc_type?: string
+  private_notes?: string
+  thumb_page?: string
+  target_folder_id?: string
+  roles?: Array<{ person_id?: string; person_name?: string; role_type?: string }>
+  tags?: Array<{ id?: string; name?: string }>
+}
+
+interface ProcessingPreviewTarget {
+  id: string
+  filename?: string
+  relPath?: string
+  canPreview?: boolean
+}
+
 interface SearchPresentRequest {
   owner: object
   host: HTMLElement
@@ -358,6 +410,64 @@ interface Window {
   prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
+  __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
+  prksVuePresentProcessing?: (input: ProcessingPresentRequest) => void
+  prksVueDismissProcessing?: (owner: object) => void
+  prksReloadProcessingFiles?: (
+    owner: object,
+    generation: number,
+    resume?: { visibleCount?: number | null } | null,
+  ) => Promise<boolean | string>
+  prksProcessingRoleTypes?: () => string[]
+  prksProcessingDomPrefix?: (owner: { tabId?: string } | null | undefined) => string
+  prksProcessingAttachResources?: (owner: object, host: HTMLElement) => void
+  prksProcessingReleaseResources?: (owner: object) => void
+  prksProcessingSetPreview?: (
+    owner: object,
+    file: ProcessingPreviewTarget,
+  ) => 'card' | 'side' | 'unavailable'
+  prksProcessingSave?: (fileId: string, draft: ProcessingDraft) => Promise<unknown>
+  prksProcessingImport?: (fileId: string) => Promise<unknown>
+  prksProcessingSearchTags?: () => Promise<unknown>
+  prksProcessingCreateTag?: (name: string) => Promise<{ id: string; name: string }>
+  prksProcessingQuickCreateFolder?: (title: string) => Promise<{
+    ok?: boolean
+    id?: string
+    title?: string
+    folders?: unknown
+    foldersFailed?: boolean
+    message?: string
+  }>
+  prksProcessingQuickCreatePerson?: (name: string) => Promise<{
+    ok?: boolean
+    id?: string
+    name?: string
+    people?: unknown
+    message?: string
+  } | null>
+  prksSegmentedControlHtml?: (
+    hiddenId: string,
+    ariaLabel: string,
+    labels: string[],
+    selectedValue: string,
+    variant: string,
+    options?: { dataField?: string; compact?: boolean; dataRole?: string; withRoleIcons?: boolean },
+  ) => string
+  prksBindSegmentedHidden?: (hiddenId: string) => void
+  prksDocTypeMenuShellHtml?: (prefix: string, selectedValue: string, disabled?: boolean) => string
+  prksIsoToDdMmYyyy?: (iso: string) => string
+  prksShowInlineComboboxResults?: (input: HTMLElement, results: HTMLElement) => void
+  prksHideInlineComboboxResults?: (results: HTMLElement) => void
+  prksTagMatchesQuery?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
+  prksTagExactMatch?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
+  prksTagComboboxLabel?: (tag: { name?: string; aliases?: string[] }, query: string) => string
+  personMatchesComboboxQuery?: (person: Record<string, unknown>, query: string) => boolean
+  formatPersonComboboxSubtitle?: (person: Record<string, unknown>) => string
+  prksWorkHasRoleLink?: (
+    roles: Array<{ person_id?: string; role_type?: string }>,
+    personId: string,
+    roleType: string,
+  ) => boolean
   prksTagPlusIconHtml?: () => string
   fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
   prksVuePresentSearch?: (input: SearchPresentRequest) => void

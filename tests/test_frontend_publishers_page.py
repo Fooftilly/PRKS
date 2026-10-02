@@ -27,8 +27,9 @@ class FrontendPublishersPageTests(unittest.TestCase):
         self.assertIn("async function prksReloadPublishersPage(", app)
         self.assertIn("prksVueDismissPublishers", app)
         processing = app[processing_at:search_at]
-        self.assertIn("prksRenderProcessingFilesPageWithFetch", processing)
-        self.assertNotIn("prksPresentVue", processing)
+        self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
+        self.assertIn("prksPresentVueProcessing", processing)
+        self.assertNotIn("prksRenderProcessingFilesPageWithFetch", processing)
 
     def test_reload_keeps_the_list_when_the_publisher_read_fails(self):
         app = _read(_APP)
@@ -61,7 +62,7 @@ class FrontendPublishersPageTests(unittest.TestCase):
         card = vue[vue.index('class="project-card publishers-page__list-item"'):vue.index('class="publishers-page__list-main"')]
         self.assertNotIn("data-prks-route", card)
         policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
-        rule = policy[policy.index('"name": "publishers-vue"'):policy.index('"name": "concepts-vue"')]
+        rule = policy[policy.index('"name": "publishers-vue"'):policy.index('"name": "processing-vue"')]
         self.assertIn('"features": ("publishers",)', rule)
         self.assertIn("test_publishers_route_surface", rule)
         self.assertNotIn('"features": ("browse",)', rule)

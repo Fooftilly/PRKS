@@ -31,8 +31,9 @@ class FrontendTagsPageTests(unittest.TestCase):
         self.assertIn("prksPresentVuePublishers", publishers)
         self.assertNotIn("renderPublishersPage", publishers)
         processing = app[processing_at:search_at]
-        self.assertIn("prksRenderProcessingFilesPageWithFetch", processing)
-        self.assertNotIn("prksPresentVue", processing)
+        self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
+        self.assertIn("prksPresentVueProcessing", processing)
+        self.assertNotIn("prksRenderProcessingFilesPageWithFetch", processing)
 
     def test_legacy_module_keeps_canonical_writes_only(self):
         tags = _read(_TAGS)

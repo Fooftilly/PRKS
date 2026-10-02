@@ -328,6 +328,10 @@ FEATURES = {
         "description": "Publishers vocabulary Vue route surface",
         "selectors": ("tests.e2e.test_publishers_route_surface",),
     },
+    "processing": {
+        "description": "Processing Files inbox Vue route surface",
+        "selectors": ("tests.e2e.test_processing_route_surface",),
+    },
     "offline": {
         "description": "Offline foundation + broad offline coherence (Work cache)",
         "selectors": (
@@ -666,6 +670,18 @@ AFFECTED_RULES = (
         ),
         "features": ("publishers",),
         "note": "Vue Publishers page (#302 R3) → publishers, because test_publishers_route_surface opens #/publishers. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "processing-vue",
+        "paths": ("frontend-app/src/features/processing/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("processing",),
+        "note": "Vue Processing Files inbox (#302 R3) → processing, because test_processing_route_surface opens #/processing-files. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "concepts-vue",
