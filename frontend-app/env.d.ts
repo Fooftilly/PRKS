@@ -29,6 +29,14 @@ interface SearchPresentRequest {
   shell?: boolean
 }
 
+interface SavedViewsIndexPresentRequest {
+  owner: object
+  host: HTMLElement
+  views?: unknown
+  generation?: number
+  shell?: boolean
+}
+
 interface SavedViewDetailPresentRequest {
   owner: object
   host: HTMLElement
@@ -263,6 +271,7 @@ interface Window {
   prksVueDismissRecent?: (owner: object) => void
   prksVuePresentSearch?: (input: SearchPresentRequest) => void
   prksVueDismissSearch?: (owner: object) => void
+  prksVuePresentSavedViewsIndex?: (input: SavedViewsIndexPresentRequest) => void
   prksVuePresentSavedViewDetail?: (input: SavedViewDetailPresentRequest) => void
   prksVueDismissSavedViews?: (owner: object) => void
   prksSearchHashFromDefinition?: (definition: Record<string, string>) => string
@@ -273,6 +282,14 @@ interface Window {
     definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
   }) => void
   prksDeleteSavedViewFromDetail?: (viewId: string, still?: () => boolean, tabId?: string) => Promise<void>
+  prksDeleteSavedViewFromIndex?: (
+    viewId: string,
+    still?: () => boolean,
+    tabId?: string,
+  ) => Promise<{ ok?: boolean; reason?: string; message?: string } | void>
+  prksSearchSummaryText?: (definition: unknown) => string
+  fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
+  prksOpenCommandPalette?: () => void
   prksScopeLineHtml?: (options: { total?: number; label?: string }) => string
   prksVuePresentFolderDetail?: (input: FolderDetailPresentRequest) => void
   prksVueDismissFolderDetail?: (owner: object) => void

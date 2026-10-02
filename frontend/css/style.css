@@ -4742,6 +4742,7 @@ a.tag {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: var(--space-md);
 }
 
@@ -4772,6 +4773,12 @@ a.tag {
     flex-shrink: 0;
     align-items: center;
     gap: var(--space-sm);
+}
+
+.saved-views-page__row-error {
+    flex: 1 0 100%;
+    margin: 0;
+    padding-top: 0;
 }
 
 .saved-view-detail__kicker {

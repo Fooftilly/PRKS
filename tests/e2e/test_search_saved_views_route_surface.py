@@ -122,6 +122,10 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
         self.assertEqual(
             page.locator(".prks-tile--main .saved-views-page__list-item").count(), 0
         )
+        self.assertIn(
+            "No Saved Views yet.",
+            page.locator(".prks-tile--main .saved-views-page").inner_text(),
+        )
 
 
 if __name__ == "__main__":

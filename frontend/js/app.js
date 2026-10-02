@@ -2927,6 +2927,29 @@ function prksPresentVueSearch(ctx, contentDiv, detail) {
 }
 
 /**
+ * Mount the Vue Saved Views index in this pane.
+ * `detail.views` is the list from `fetchSavedViews`. Vue does not fetch it.
+ */
+function prksPresentVueSavedViewsIndex(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'saved-views',
+        owner: ctx,
+        views: detail.views,
+        generation: detail.generation,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentSavedViewsIndex === 'function') {
+        window.prksVuePresentSavedViewsIndex(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
  * Mount the Vue Saved View detail surface in this pane.
  * `detail.rows` must come from `prksEffectiveSearchResults`.
  */
@@ -4291,12 +4314,10 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 }
                 const views = typeof fetchSavedViews === 'function' ? await fetchSavedViews({ signal: routeSignal }) : [];
                 if (stale()) return;
-                if (typeof renderSavedViewsIndex === 'function') {
-                    renderSavedViewsIndex(views, contentDiv);
-                } else {
-                    contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Saved Views</h2></div><p class="meta-row">Saved Views UI unavailable.</p>';
-                }
+                prksPresentVueSavedViewsIndex(ctx, contentDiv, {
+                    views: views,
+                    generation: generation,
+                });
                 break;
             }
             case 'saved-view-detail': {

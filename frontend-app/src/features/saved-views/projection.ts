@@ -39,6 +39,48 @@ export interface SavedViewDetailProjection {
   readonly generation: number
 }
 
+export const SAVED_VIEWS_EMPTY = 'No Saved Views yet.'
+export const SAVED_VIEWS_EMPTY_HINT = 'Run a search and choose “Save View” to keep it here.'
+
+export interface SavedViewIndexRow {
+  readonly id: string
+  readonly name: string
+  readonly summary: string
+  readonly href: string
+}
+
+export interface SavedViewIndexProjection {
+  readonly rows: readonly SavedViewIndexRow[]
+  readonly generation: number
+}
+
+/** Summary text stays the codec in `saved-views.js`. This does not restate it. */
+export function savedViewSummary(search: unknown): string {
+  const summarize = window.prksSearchSummaryText
+  if (typeof summarize !== 'function') return ''
+  return summarize(search)
+}
+
+export function buildSavedViewIndexProjection(input: {
+  views?: unknown
+  generation: number
+}): SavedViewIndexProjection {
+  const rows: SavedViewIndexRow[] = []
+  if (Array.isArray(input.views)) {
+    for (const item of input.views) {
+      const view = acceptSavedViewRecord(item)
+      if (!view) continue
+      rows.push({
+        id: view.id,
+        name: view.name,
+        summary: savedViewSummary(view.search),
+        href: `#/views/${encodeURIComponent(view.id)}`,
+      })
+    }
+  }
+  return { rows, generation: input.generation }
+}
+
 export function buildSavedViewDetailProjection(input: {
   availability?: SavedViewDetailAvailability
   view?: unknown

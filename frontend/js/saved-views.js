@@ -5,24 +5,13 @@
  *
  * This file owns the canonical search query codec (definition <-> route
  * params <-> hash <-> fetchSearch options) until the typed route model in
- * #303 B1, the shared Saved View modal, and the Saved Views index painter
- * until that index moves to Vue. Search and Saved View detail are painted by
- * frontend-app/src/features/search and features/saved-views.
+ * #303 B1, and the shared Saved View modal until #303 B4. Search, Saved View
+ * detail, and the Saved Views index are painted by frontend-app.
  */
 (function (root) {
     'use strict';
 
     const UNSAVABLE_MSG = 'This search combination cannot be saved as a view.';
-    const EMPTY_HINT = 'Run a search and choose “Save View” to keep it here.';
-
-    function esc(s) {
-        if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-    }
 
     function truthyAny(raw) {
         const anyRaw = raw == null ? '' : raw;
@@ -366,109 +355,15 @@
         }
     }
 
-    function renderSavedViewsIndex(views, container) {
-        const list = Array.isArray(views) ? views : [];
-        const icon = typeof root.prksIcon === 'function' ? root.prksIcon('bookmark', { size: 'sm' }) : '';
-        const rowsHtml = list.length
-            ? list
-                  .map(function (v) {
-                      const id = String(v && v.id ? v.id : '').trim();
-                      const path = '#/views/' + encodeURIComponent(id);
-                      const name = esc(v.name || 'Saved View');
-                      const summary = esc(prksSearchSummaryText(v.search || {}));
-                      const idAttr = esc(id);
-                      return `
-                        <div class="project-card saved-views-page__list-item">
-                            <a class="saved-views-page__list-main" href="${path}">
-                                <span class="saved-views-page__badge">${icon}<span>${name}</span></span>
-                                <p class="meta-row saved-views-page__summary">${summary}</p>
-                            </a>
-                            <div class="saved-views-page__row-actions">
-                                <a class="prks-btn prks-btn--secondary prks-btn--sm" href="${path}">Open</a>
-                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-sv-edit="${idAttr}">Edit</button>
-                                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-sv-delete="${idAttr}">Delete</button>
-                            </div>
-                        </div>`;
-                  })
-                  .join('')
-            : `<p class="meta-row saved-views-page__empty">No Saved Views yet.</p>
-               <p class="meta-row">${esc(EMPTY_HINT)}</p>
-               <p><button type="button" class="prks-btn prks-btn--secondary" id="prks-saved-views-empty-search">Search or jump</button></p>`;
-        container.innerHTML = `
-            <div class="saved-views-page">
-                <div class="prks-page-header page-header">
-                    <h2 class="prks-page-title">${typeof root.prksPageHeaderIconHtml === 'function' ? root.prksPageHeaderIconHtml('bookmark') : ''} Saved Views</h2>
-                </div>
-                <div class="list-view saved-views-page__list">
-                    ${rowsHtml}
-                </div>
-            </div>
-        `;
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(container);
-        bindIndexActions(container);
+    function savedViewActionMessage(err, fallback) {
+        const message = err && err.message != null ? String(err.message).trim() : '';
+        return message || fallback;
     }
 
-    function bindIndexActions(container) {
-        const emptyLaunch = container.querySelector('#prks-saved-views-empty-search');
-        if (emptyLaunch) {
-            emptyLaunch.addEventListener('click', function () {
-                if (typeof root.prksOpenCommandPalette === 'function') root.prksOpenCommandPalette();
-            });
-        }
-        container.querySelectorAll('[data-sv-edit]').forEach(function (btn) {
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const id = btn.getAttribute('data-sv-edit');
-                void openEditById(id);
-            });
-        });
-        container.querySelectorAll('[data-sv-delete]').forEach(function (btn) {
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const id = btn.getAttribute('data-sv-delete');
-                void confirmDelete(id);
-            });
-        });
-    }
-
-    function currentCanonicalHash() {
-        if (typeof root.prksCurrentCanonicalHash === 'function') {
-            return root.prksCurrentCanonicalHash();
-        }
-        if (typeof root.prksParseRoute === 'function' && root.location) {
-            const parsed = root.prksParseRoute(root.location.hash || '');
-            return (parsed && parsed.canonicalHash) || '';
-        }
-        return root.location ? String(root.location.hash || '') : '';
-    }
-
-    function editFetchStillCurrent(routeGen, canonicalHash) {
-        if (typeof root.prksFocusedRouteGeneration === 'function' && routeGen !== root.prksFocusedRouteGeneration()) return false;
-        return canonicalHash === currentCanonicalHash();
-    }
-
-    async function openEditById(id) {
-        if (typeof root.fetchSavedView !== 'function') return;
-        const routeGen = typeof root.prksFocusedRouteGeneration === 'function' ? root.prksFocusedRouteGeneration() : 0;
-        const canonicalHash = currentCanonicalHash();
-        let view;
-        try {
-            view = await root.fetchSavedView(id);
-        } catch (_e) {
-            if (!editFetchStillCurrent(routeGen, canonicalHash)) return;
-            return;
-        }
-        if (!editFetchStillCurrent(routeGen, canonicalHash)) return;
-        if (!view) return;
-        openModalWith({
-            viewId: view.id,
-            name: view.name || '',
-            definition: view.search || {},
-        });
-    }
-
+    /**
+     * Confirm, recheck `still`, then delete. Success, cancel, a stale owner,
+     * and a failed delete stay distinct so the index can show only the failure.
+     */
     async function confirmAndDelete(id, still) {
         const ok =
             typeof root.prksConfirmDestructive === 'function'
@@ -478,18 +373,34 @@
                       confirmLabel: 'Delete Saved View',
                   })
                 : true;
-        if (!ok) return false;
-        if (typeof still === 'function' && !still()) return false;
+        if (!ok) return { ok: false, reason: 'cancelled' };
+        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
         try {
             await root.deleteSavedView(id);
-        } catch (_e) {
-            return false;
+        } catch (err) {
+            if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
+            return {
+                ok: false,
+                reason: 'failed',
+                message: savedViewActionMessage(err, 'Could not delete Saved View.'),
+            };
         }
-        return true;
+        return { ok: true, reason: 'success' };
     }
 
-    async function confirmDelete(id) {
-        if (await confirmAndDelete(id)) navigateRefresh();
+    /**
+     * Index delete. Confirms, rechecks `still`, deletes, rechecks `still`,
+     * then navigates this tab to `#/views` so the index refetches. The
+     * refresh is the index hash on `tabId`. The focused location stays put.
+     * Cancel and a stale owner stay quiet. A failed delete returns its message.
+     */
+    async function prksDeleteSavedViewFromIndex(id, still, tabId) {
+        const outcome = await confirmAndDelete(id, still);
+        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
+        if (!outcome.ok) return outcome;
+        if (typeof root.prksNavigate !== 'function') return { ok: false, reason: 'stale' };
+        root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
+        return outcome;
     }
 
     /**
@@ -498,7 +409,8 @@
      * started does not navigate a pane that moved on.
      */
     async function prksDeleteSavedViewFromDetail(id, still, tabId) {
-        if (!(await confirmAndDelete(id, still))) return;
+        const outcome = await confirmAndDelete(id, still);
+        if (!outcome.ok) return;
         if (typeof still === 'function' && !still()) return;
         if (typeof root.prksNavigate === 'function') {
             root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
@@ -516,10 +428,9 @@
         prksSearchSummaryText: prksSearchSummaryText,
         prksOpenSavedViewModalFromCurrentSearch: prksOpenSavedViewModalFromCurrentSearch,
         prksOpenSavedViewModalForCurrentView: prksOpenSavedViewModalForCurrentView,
-        prksOpenSavedViewIndexEdit: openEditById,
         prksOpenSavedViewModal: openModalWith,
-        renderSavedViewsIndex: renderSavedViewsIndex,
         prksDeleteSavedViewFromDetail: prksDeleteSavedViewFromDetail,
+        prksDeleteSavedViewFromIndex: prksDeleteSavedViewFromIndex,
         prksInitSavedViews: init,
     };
     Object.keys(api).forEach(function (k) {
