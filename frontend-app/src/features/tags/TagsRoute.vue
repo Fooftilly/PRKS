@@ -57,6 +57,14 @@ function aliasEditButton(tagId: string): HTMLElement | null {
   return node instanceof HTMLElement ? node : null
 }
 
+function mergeRowButton(tagId: string): HTMLElement | null {
+  const root = rootEl.value
+  if (!root) return null
+  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(tagId) : tagId
+  const node = root.querySelector(`[data-tag-merge="${escaped}"]`)
+  return node instanceof HTMLElement ? node : null
+}
+
 function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null): void {
   const root = rootEl.value
   const target = trigger && trigger.isConnected && root?.contains(trigger) ? trigger : fallback
@@ -89,13 +97,14 @@ function closeAlias(): void {
 
 function closeMerge(): void {
   const trigger = mergeTrigger.value
+  const sourceId = mergeSourceId.value
   mergeSourceId.value = null
   mergeTargetId.value = null
   mergeFilter.value = ''
   mergeError.value = ''
   mergeTrigger.value = null
   if (dialogKind.value === 'merge') dialogKind.value = aliasTagId.value ? 'alias' : null
-  void nextTick(() => restoreFocus(trigger, null))
+  void nextTick(() => restoreFocus(trigger, sourceId ? mergeRowButton(sourceId) : null))
 }
 
 function closeAliasFor(modal?: Element | null): boolean {
@@ -151,6 +160,10 @@ function focusAliasInput(): void {
 
 function focusMergeFilter(): void {
   rootEl.value?.querySelector<HTMLInputElement>('#tags-page-merge-filter')?.focus()
+}
+
+function focusMergeConfirm(): void {
+  rootEl.value?.querySelector<HTMLElement>('#tags-page-merge-confirm-btn')?.focus()
 }
 
 function clearAliasActionErrors(): void {
@@ -234,9 +247,12 @@ watch(aliasTagId, (id) => {
 
 watch(mergeSourceId, (id) => {
   mergeError.value = ''
-  if (!id || mergeTargetId.value) return
-  void nextTick(() => focusMergeFilter())
-})
+  if (!id) return
+  void nextTick(() => {
+    if (mergeTargetId.value) focusMergeConfirm()
+    else focusMergeFilter()
+  })
+}, { immediate: true })
 
 watch(mergeTargetId, () => {
   mergeError.value = ''

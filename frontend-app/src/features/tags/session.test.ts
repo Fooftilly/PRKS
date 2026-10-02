@@ -233,6 +233,51 @@ describe('Tags route bridge', () => {
     expect(document.activeElement).toBe(el.querySelector('[data-tag-alias-edit="t1"]'))
   })
 
+  it('focuses a resumed merge dialog and returns to the row button after a delayed merge', async () => {
+    let releaseMerge: (value: { ok: boolean }) => void = () => {}
+    window.prksTagsMerge = () => new Promise((resolve) => {
+      releaseMerge = resolve
+    })
+    const pane = owner()
+    let el = host()
+    window.prksReloadTagsVocabulary = async (ownerArg, generation, nextResume) => {
+      const next = host()
+      el.replaceWith(next)
+      el = next
+      presentTags({
+        owner: ownerArg as ReturnType<typeof owner>,
+        host: el,
+        tags: [ALPHA, BETA],
+        generation,
+        resume: nextResume,
+      })
+      return true
+    }
+    presentTags({
+      owner: pane,
+      host: el,
+      tags: [ALPHA, BETA],
+      generation: 13,
+      resume: { mergeSourceId: 't1' },
+    })
+    await nextTick()
+    expect(document.activeElement).toBe(el.querySelector('#tags-page-merge-filter'))
+
+    el.querySelector<HTMLButtonElement>('[data-tag-merge-pick="t2"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#tags-page-merge-confirm-btn')?.click()
+    await flush()
+    releaseMerge({ ok: true })
+    await flush()
+
+    expect(el.querySelector('#tags-page-merge-confirm')).not.toBeNull()
+    expect(document.activeElement).toBe(el.querySelector('#tags-page-merge-confirm-btn'))
+    el.querySelector<HTMLButtonElement>('#tags-page-merge-modal-close')?.click()
+    await nextTick()
+    expect(el.querySelector('#tags-page-merge-modal')).toBeNull()
+    expect(document.activeElement).toBe(el.querySelector('[data-tag-merge="t1"]'))
+  })
+
   it('keeps the tag list when a refresh fails and shows that failure', async () => {
     const pane = owner()
     const el = host()
