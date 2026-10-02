@@ -2997,6 +2997,56 @@ async function prksReloadTagsVocabulary(ctx, generation, resume) {
 window.prksReloadTagsVocabulary = prksReloadTagsVocabulary;
 
 /**
+ * Mount the Vue Publishers page in this pane.
+ * `detail.publishers` must already be `fetchPublishersInUse`. Vue does not fetch.
+ * `detail.resume` reopens one publisher's alias dialog after a reload of this owner.
+ */
+function prksPresentVuePublishers(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'publishers',
+        owner: ctx,
+        publishers: detail.publishers,
+        generation: detail.generation,
+        resume: detail.resume || null,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentPublishers === 'function') {
+        window.prksVuePresentPublishers(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
+ * Refetch publishers in use and repaint this owner only. Alias add/remove
+ * passes `resume.aliasPublisherId` so the dialog stays on that publisher.
+ * Create and delete pass no resume. A generation that is no longer current
+ * does not paint. The page stays online-only.
+ */
+async function prksReloadPublishersPage(ctx, generation, resume) {
+    if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'publishers') return false;
+    if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return false;
+    const publishers = await fetchPublishersInUse();
+    if (!ctx.isCurrent(generation)) return false;
+    const live = ctx.lastResolvedRoute || ctx.route;
+    if (!live || live.name !== 'publishers' || !ctx.root || !ctx.root.isConnected) return false;
+    prksPresentVuePublishers(ctx, ctx.root, {
+        publishers: publishers,
+        generation: generation,
+        resume: resume || null,
+    });
+    return true;
+}
+
+window.prksReloadPublishersPage = prksReloadPublishersPage;
+
+/**
  * The one read behind Search and Saved View detail. Membership is the
  * server's (`fetchSearch`), and the response is never cached. A pending local
  * edit is not on the server yet, so the rows are overlaid with
@@ -3873,6 +3923,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissTags === 'function') {
             window.prksVueDismissTags(ctx);
         }
+        if (typeof window.prksVueDismissPublishers === 'function') {
+            window.prksVueDismissPublishers(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -4584,10 +4637,12 @@ async function prksRenderTabRoute(ctx, hash, options) {
                     };
                     break;
                 }
-                if (typeof renderPublishersPage === 'function') {
-                    await renderPublishersPage(contentDiv, generation, { signal: routeSignal, ctx: ctx });
-                    if (stale()) return;
-                }
+                const publishers = await fetchPublishersInUse({ signal: routeSignal });
+                if (stale()) return;
+                prksPresentVuePublishers(ctx, contentDiv, {
+                    publishers: publishers,
+                    generation: generation,
+                });
                 break;
             }
             case 'types': {

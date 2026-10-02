@@ -652,6 +652,18 @@ AFFECTED_RULES = (
         "note": "Vue Tags vocabulary page (#302 R3) → folders, because test_folders_offline covers #/tags. Shared route-surface stays unmapped (CI full).",
     },
     {
+        "name": "publishers-vue",
+        "paths": ("frontend-app/src/features/publishers/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue Publishers page (#302 R3) → browse. Shared route-surface stays unmapped (CI full).",
+    },
+    {
         "name": "concepts-vue",
         "paths": ("frontend-app/src/features/concepts/**",),
         "exclude_paths": (

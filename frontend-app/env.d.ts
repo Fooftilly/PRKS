@@ -57,6 +57,20 @@ interface TagsMutationOutcome {
   reason?: string
 }
 
+interface PublishersPresentRequest {
+  owner: object
+  host: HTMLElement
+  publishers: unknown
+  generation?: number
+  shell?: boolean
+  resume?: { aliasPublisherId?: string | null } | null
+}
+
+interface PublishersMutationOutcome {
+  ok?: boolean
+  reason?: string
+}
+
 interface SearchPresentRequest {
   owner: object
   host: HTMLElement
@@ -331,6 +345,20 @@ interface Window {
   prksTagsMerge?: (sourceId: string, targetId: string) => Promise<TagsMutationOutcome>
   fetchTags?: (options?: { used?: boolean; signal?: AbortSignal }) => Promise<unknown>
   prksTagVocabularyMessage?: (error: unknown, action: string) => string
+  prksVuePresentPublishers?: (input: PublishersPresentRequest) => void
+  prksVueDismissPublishers?: (owner: object) => void
+  prksVueClosePublishersAliasModal?: () => void
+  prksReloadPublishersPage?: (
+    owner: object,
+    generation: number,
+    resume?: { aliasPublisherId?: string | null } | null,
+  ) => Promise<boolean>
+  prksPublishersCreate?: (name: string) => Promise<PublishersMutationOutcome>
+  prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
+  prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
+  prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
+  prksTagPlusIconHtml?: () => string
+  fetchPublishersInUse?: (options?: { signal?: AbortSignal }) => Promise<unknown>
   prksVuePresentSearch?: (input: SearchPresentRequest) => void
   prksVueDismissSearch?: (owner: object) => void
   prksVuePresentSavedViewsIndex?: (input: SavedViewsIndexPresentRequest) => void
