@@ -26,11 +26,43 @@ export interface PublishersPresentInput {
    * The Publishers sidebar is static copy; Vue does not publish it.
    */
   shell?: boolean
-  /** Reopen one publisher's alias dialog after this owner reloads. */
+  /** Reopen the alias dialog that is still current after this owner reloads. */
   resume?: PublishersResume | null
 }
 
 const PUBLISHERS_FEATURE = 'publishers'
+
+/** The alias dialog this pane currently has open. A reload reads it before remounting. */
+export interface PublishersDialogState {
+  aliasPublisherId: string | null
+}
+
+export interface PublishersRefreshSink {
+  set: ((message: string) => void) | null
+}
+
+function resumeFromDialog(dialog: PublishersDialogState): PublishersResume | null {
+  if (dialog.aliasPublisherId) return { aliasPublisherId: dialog.aliasPublisherId }
+  return null
+}
+
+const refreshSinks = new WeakMap<object, PublishersRefreshSink>()
+
+function refreshSinkFor(owner: object): PublishersRefreshSink {
+  let sink = refreshSinks.get(owner)
+  if (!sink) {
+    sink = { set: null }
+    refreshSinks.set(owner, sink)
+  }
+  return sink
+}
+
+/** Keep the painted list and show the refresh failure on that owner. */
+export function reportPublishersRefreshFailure(owner: object | null | undefined, message: string): void {
+  if (!owner) return
+  const text = String(message || '').trim() || 'Could not refresh publishers.'
+  refreshSinks.get(owner)?.set?.(text)
+}
 
 function isPublishersEarlyRequest(
   value: unknown,
@@ -62,9 +94,16 @@ export function presentPublishers(input: PublishersPresentInput): void {
     route,
     render: (generation) => {
       const projection: PublishersProjection = buildPublishersProjection({ publishers, generation, resume })
+      const dialogState: PublishersDialogState = {
+        aliasPublisherId: projection.openAliasPublisherId,
+      }
       return createVNode(PublishersRoute, {
         projection,
-        intents: browserPublishersIntents(owner, generation),
+        intents: browserPublishersIntents(owner, generation, {
+          currentDialog: () => resumeFromDialog(dialogState),
+        }),
+        dialogState,
+        refreshSink: refreshSinkFor(owner),
       })
     },
   })
@@ -82,6 +121,7 @@ export function registerPublishersBridge(target: Window = window): void {
   target.prksVuePresentPublishers = presentPublishers
   target.prksVueDismissPublishers = dismissPublishers
   target.prksVueClosePublishersAliasModal = closePublishersAliasModals
+  target.prksVueReportPublishersRefreshFailure = reportPublishersRefreshFailure
   registerEarlyRoutePresenter(
     PUBLISHERS_FEATURE,
     (request, host) => {

@@ -3022,20 +3022,31 @@ function prksPresentVuePublishers(ctx, contentDiv, detail) {
 }
 
 /**
- * Refetch publishers in use and repaint this owner only. Alias add/remove
- * passes `resume.aliasPublisherId` so the dialog stays on that publisher.
- * Create and delete pass no resume. A generation that is no longer current
- * does not paint. The page stays online-only.
+ * Refetch publishers in use and repaint this owner only. A finishing write
+ * passes `resume` for the alias dialog that is still open. A closed dialog
+ * is not resumed, and a newer publisher's dialog is not cleared. A generation
+ * that is no longer current does not paint. The page stays online-only.
+ * A failed read keeps the list already on screen and reports the refresh
+ * failure. An empty successful read still paints the empty state.
  */
 async function prksReloadPublishersPage(ctx, generation, resume) {
     if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
     const route = ctx.lastResolvedRoute || ctx.route;
     if (!route || route.name !== 'publishers') return false;
     if (typeof prksOfflineRuntimeState === 'function' && prksOfflineRuntimeState() !== 'online') return false;
-    const publishers = await fetchPublishersInUse();
+    const errorOwner = {};
+    const publishers = await fetchPublishersInUse({ errorOwner: errorOwner });
     if (!ctx.isCurrent(generation)) return false;
     const live = ctx.lastResolvedRoute || ctx.route;
     if (!live || live.name !== 'publishers' || !ctx.root || !ctx.root.isConnected) return false;
+    const failure = typeof prksConsumeApiError === 'function' ? prksConsumeApiError(errorOwner) : null;
+    if (failure) {
+        const message = failure.message || 'Could not refresh publishers.';
+        if (typeof window.prksVueReportPublishersRefreshFailure === 'function') {
+            window.prksVueReportPublishersRefreshFailure(ctx, message);
+        }
+        return false;
+    }
     prksPresentVuePublishers(ctx, ctx.root, {
         publishers: publishers,
         generation: generation,

@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerPublishersAliasCloser } from './closers'
 import type { PublishersIntents } from './intents'
 import type { PublisherRow, PublishersProjection } from './projection'
+import type { PublishersDialogState, PublishersRefreshSink } from './session'
 
 const props = defineProps<{
   projection: PublishersProjection
   intents: PublishersIntents
+  dialogState?: PublishersDialogState
+  refreshSink?: PublishersRefreshSink
 }>()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
@@ -16,6 +20,11 @@ const draftName = ref('')
 const aliasPublisherId = ref<string | null>(props.projection.openAliasPublisherId)
 const aliasDraft = ref('')
 const aliasTrigger = ref<HTMLElement | null>(null)
+const createError = ref('')
+const aliasAddError = ref('')
+const aliasRemoveError = ref('')
+const aliasDeleteError = ref('')
+const refreshError = ref('')
 const rows = computed(() => props.projection.rows)
 const aliasPublisher = computed(() => rows.value.find((row) => row.id === aliasPublisherId.value) ?? null)
 const plusIcon = computed(() => window.prksTagPlusIconHtml?.() ?? '')
@@ -23,21 +32,42 @@ const buildingIcon = computed(() => window.prksIcon?.('building-2', { size: 'sm'
 
 let unregisterAlias: (() => void) | null = null
 
-function restoreFocus(trigger: HTMLElement | null): void {
-  if (!trigger || !trigger.isConnected || typeof trigger.focus !== 'function') return
+function showRefreshFailure(message: string): void {
+  refreshError.value = message
+}
+
+function aliasEditButton(publisherId: string): HTMLElement | null {
+  const root = rootEl.value
+  if (!root) return null
+  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(publisherId) : publisherId
+  const node = root.querySelector(`[data-publisher-alias-edit="${escaped}"]`)
+  return node instanceof HTMLElement ? node : null
+}
+
+function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null): void {
+  const root = rootEl.value
+  const target = trigger && trigger.isConnected && root?.contains(trigger) ? trigger : fallback
+  if (!target || typeof target.focus !== 'function') return
   try {
-    trigger.focus()
+    target.focus()
   } catch {
     /* The control may already be gone. */
   }
 }
 
+function publishDialog(): void {
+  const state = props.dialogState
+  if (!state) return
+  state.aliasPublisherId = aliasPublisherId.value
+}
+
 function closeAlias(): void {
   const trigger = aliasTrigger.value
+  const publisherId = aliasPublisherId.value
   aliasPublisherId.value = null
   aliasDraft.value = ''
   aliasTrigger.value = null
-  restoreFocus(trigger)
+  void nextTick(() => restoreFocus(trigger, publisherId ? aliasEditButton(publisherId) : null))
 }
 
 function openAlias(row: PublisherRow, event: MouseEvent): void {
@@ -52,63 +82,83 @@ function onRowKeydown(row: PublisherRow, event: KeyboardEvent): void {
   props.intents.openPublisher(row.name)
 }
 
-async function report(title: string, message: string): Promise<void> {
-  const alertFn = window.prksAlertMessage
-  if (typeof alertFn === 'function') await alertFn(message, title)
-}
-
 function focusAliasInput(): void {
   rootEl.value?.querySelector<HTMLInputElement>('#publishers-page-alias-input')?.focus()
+}
+
+function clearAliasActionErrors(): void {
+  aliasAddError.value = ''
+  aliasRemoveError.value = ''
+  aliasDeleteError.value = ''
 }
 
 function createPublisher(): void {
   const name = draftName.value
   void withBusy('create', async () => {
     const outcome = await props.intents.create(name)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    if (outcome.status === 'error') createError.value = outcome.message
+    else if (outcome.status === 'success') {
+      createError.value = ''
+      draftName.value = ''
+    }
   })
 }
 
 function addAlias(): void {
   const publisher = aliasPublisher.value
   if (!publisher) return
+  const publisherId = publisher.id
   const draft = aliasDraft.value
   void withBusy('alias-add', async () => {
-    const outcome = await props.intents.addAlias(publisher.id, draft)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    const outcome = await props.intents.addAlias(publisherId, draft)
+    if (aliasPublisherId.value !== publisherId) return
+    if (outcome.status === 'error') aliasAddError.value = outcome.message
+    else if (outcome.status === 'success') {
+      aliasAddError.value = ''
+      aliasDraft.value = ''
+    }
   })
 }
 
 function removeAlias(alias: string): void {
   const publisher = aliasPublisher.value
   if (!publisher) return
+  const publisherId = publisher.id
   void withBusy(`alias-remove:${alias}`, async () => {
-    const outcome = await props.intents.removeAlias(publisher.id, alias)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    const outcome = await props.intents.removeAlias(publisherId, alias)
+    if (aliasPublisherId.value !== publisherId) return
+    if (outcome.status === 'error') aliasRemoveError.value = outcome.message
+    else if (outcome.status === 'success') aliasRemoveError.value = ''
   })
 }
 
 function removePublisher(): void {
   const publisher = aliasPublisher.value
   if (!publisher) return
+  const publisherId = publisher.id
   void withBusy('delete', async () => {
-    const outcome = await props.intents.remove(publisher.id, publisher.name)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    const outcome = await props.intents.remove(publisherId, publisher.name)
+    if (aliasPublisherId.value !== publisherId) return
+    if (outcome.status === 'error') aliasDeleteError.value = outcome.message
+    else if (outcome.status === 'success') aliasDeleteError.value = ''
   })
 }
 
 watch(aliasPublisherId, (id) => {
+  publishDialog()
+  clearAliasActionErrors()
   if (!id) return
   void nextTick(() => focusAliasInput())
-})
+}, { immediate: true })
 
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
+  if (props.refreshSink) props.refreshSink.set = showRefreshFailure
   unregisterAlias = registerPublishersAliasCloser(closeAlias)
-  if (aliasPublisherId.value) void nextTick(() => focusAliasInput())
 })
 
 onUnmounted(() => {
+  if (props.refreshSink?.set === showRefreshFailure) props.refreshSink.set = null
   unregisterAlias?.()
   unregisterAlias = null
 })
@@ -141,21 +191,43 @@ onUnmounted(() => {
                 placeholder="e.g. Oxford University Press"
                 autocomplete="off"
                 aria-label="New canonical publisher name"
+                :aria-invalid="createError ? 'true' : undefined"
+                :aria-describedby="createError ? 'publishers-page-create-error' : undefined"
               >
             </div>
           </div>
-          <button
+          <PrksButton
             id="publishers-page-add-btn"
-            type="button"
             class="tags-page-alias-add__submit"
-            :disabled="actionBlocked('create') || actionBusy('create')"
+            variant="secondary"
+            size="sm"
+            :busy="actionBusy('create')"
+            :disabled="actionBlocked('create')"
+            busy-label="Adding…"
             @click="createPublisher"
           >
             Add
-          </button>
+          </PrksButton>
         </div>
+        <p
+          v-if="createError"
+          id="publishers-page-create-error"
+          class="prks-inline-message prks-inline-message--error"
+          role="status"
+          data-publishers-create-error
+        >
+          {{ createError }}
+        </p>
       </div>
     </div>
+    <p
+      v-if="refreshError"
+      class="prks-inline-message prks-inline-message--error"
+      role="status"
+      data-publishers-refresh-error
+    >
+      {{ refreshError }}
+    </p>
     <div id="publishers-page-cloud" class="list-view publishers-page__list">
       <p v-if="!rows.length" class="tags-page__empty publishers-page__empty">
         No publisher groups yet. Add a canonical name below, then add alternate spellings that appear on your files (⋯).
@@ -164,13 +236,13 @@ onUnmounted(() => {
         v-for="row in rows"
         :key="row.id"
         class="project-card publishers-page__list-item"
-        :data-prks-route="row.searchHash"
-        data-prks-middleclick-nav="1"
       >
         <div
           class="publishers-page__list-main"
           role="button"
           tabindex="0"
+          :data-prks-route="row.searchHash"
+          data-prks-middleclick-nav="1"
           :data-publisher-nav="row.encodedName"
           :aria-label="`View files for publisher ${row.name}`"
           @keydown="onRowKeydown(row, $event)"
@@ -239,15 +311,27 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="tags-page-alias-remove"
+                :class="{ 'tags-page-alias-remove--busy': actionBusy(`alias-remove:${alias}`) }"
                 :data-publisher-alias-remove="alias"
-                aria-label="Remove alias"
-                :disabled="actionBlocked(`alias-remove:${alias}`)"
+                :aria-label="actionBusy(`alias-remove:${alias}`) ? 'Removing…' : 'Remove alias'"
+                :aria-busy="actionBusy(`alias-remove:${alias}`) ? 'true' : undefined"
+                :disabled="actionBlocked(`alias-remove:${alias}`) || actionBusy(`alias-remove:${alias}`)"
                 @click="removeAlias(alias)"
               >
-                ×
+                <template v-if="actionBusy(`alias-remove:${alias}`)">Removing…</template>
+                <template v-else>×</template>
               </button>
             </li>
           </ul>
+          <p
+            v-if="aliasRemoveError"
+            id="publishers-page-alias-remove-error"
+            class="prks-inline-message prks-inline-message--error"
+            role="status"
+            data-publishers-alias-remove-error
+          >
+            {{ aliasRemoveError }}
+          </p>
           <div class="tags-page-alias-add">
             <input
               id="publishers-page-alias-input"
@@ -258,27 +342,51 @@ onUnmounted(() => {
               placeholder="New alias…"
               autocomplete="off"
               aria-label="New alias"
+              :aria-invalid="aliasAddError ? 'true' : undefined"
+              :aria-describedby="aliasAddError ? 'publishers-page-alias-add-error' : undefined"
             >
-            <button
+            <PrksButton
               id="publishers-page-alias-add-btn"
-              type="button"
               class="tags-page-alias-add__submit"
-              :disabled="actionBlocked('alias-add') || actionBusy('alias-add')"
+              variant="secondary"
+              size="sm"
+              :busy="actionBusy('alias-add')"
+              :disabled="actionBlocked('alias-add')"
+              busy-label="Adding…"
               @click="addAlias"
             >
               Add alias
-            </button>
+            </PrksButton>
           </div>
+          <p
+            v-if="aliasAddError"
+            id="publishers-page-alias-add-error"
+            class="prks-inline-message prks-inline-message--error"
+            role="status"
+            data-publishers-alias-add-error
+          >
+            {{ aliasAddError }}
+          </p>
           <div class="tags-page-alias-delete">
-            <button
+            <PrksButton
               id="publishers-page-delete-btn"
-              type="button"
-              class="prks-btn prks-btn--danger"
+              variant="danger"
+              :busy="actionBusy('delete')"
               :disabled="actionBlocked('delete')"
+              busy-label="Deleting…"
               @click="removePublisher"
             >
               Delete publisher
-            </button>
+            </PrksButton>
+            <p
+              v-if="aliasDeleteError"
+              id="publishers-page-delete-error"
+              class="prks-inline-message prks-inline-message--error"
+              role="status"
+              data-publishers-delete-error
+            >
+              {{ aliasDeleteError }}
+            </p>
           </div>
         </div>
       </div>

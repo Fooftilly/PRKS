@@ -348,6 +348,7 @@ interface Window {
   prksVuePresentPublishers?: (input: PublishersPresentRequest) => void
   prksVueDismissPublishers?: (owner: object) => void
   prksVueClosePublishersAliasModal?: () => void
+  prksVueReportPublishersRefreshFailure?: (owner: object, message: string) => void
   prksReloadPublishersPage?: (
     owner: object,
     generation: number,
@@ -358,7 +359,7 @@ interface Window {
   prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
   prksTagPlusIconHtml?: () => string
-  fetchPublishersInUse?: (options?: { signal?: AbortSignal }) => Promise<unknown>
+  fetchPublishersInUse?: (options?: { signal?: AbortSignal; errorOwner?: object }) => Promise<unknown>
   prksVuePresentSearch?: (input: SearchPresentRequest) => void
   prksVueDismissSearch?: (owner: object) => void
   prksVuePresentSavedViewsIndex?: (input: SavedViewsIndexPresentRequest) => void

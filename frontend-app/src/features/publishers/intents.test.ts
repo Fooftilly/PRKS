@@ -74,6 +74,37 @@ describe('Publishers intents', () => {
     expect(reload).toHaveBeenCalledWith(expect.anything(), 4, { aliasPublisherId: 'p1' })
   })
 
+  it('does not resume an alias dialog the user already closed', async () => {
+    const reload = vi.fn(async () => true)
+    window.prksPublishersAddAlias = async () => ({ ok: true })
+    window.prksReloadPublishersPage = reload
+    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4, {
+      currentDialog: () => null,
+    }).addAlias('p1', 'Oxford')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 4, null)
+  })
+
+  it('resumes the publisher the user switched to, not the write that was in flight', async () => {
+    const reload = vi.fn(async () => true)
+    window.prksPublishersRemoveAlias = async () => ({ ok: true })
+    window.prksReloadPublishersPage = reload
+    const outcome = await browserPublishersIntents(owner({ generation: 4 }), 4, {
+      currentDialog: () => ({ aliasPublisherId: 'p2' }),
+    }).removeAlias('p1', 'OUP')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 4, { aliasPublisherId: 'p2' })
+  })
+
+  it('keeps a successful write when the refresh does not repaint', async () => {
+    const reload = vi.fn(async () => false)
+    window.prksPublishersCreate = async () => ({ ok: true })
+    window.prksReloadPublishersPage = reload
+    const outcome = await browserPublishersIntents(owner({ generation: 2 }), 2).create('OUP')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, null)
+  })
+
   it('stays quiet when the offline guard refuses the write', async () => {
     const reload = vi.fn()
     window.prksReloadPublishersPage = reload

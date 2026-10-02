@@ -13,6 +13,15 @@ export type PublishersActionOutcome =
   | { status: 'quiet' }
   | { status: 'error'; message: string }
 
+export interface PublishersIntentOptions {
+  /**
+   * The alias dialog this pane has open right now.
+   * Null means the user closed it. A different id means they switched publishers.
+   * Absent means the caller has no live dialog to preserve.
+   */
+  currentDialog?: () => PublishersResume | null
+}
+
 export interface PublishersIntents {
   openPublisher(name: string): void
   create(name: string): Promise<PublishersActionOutcome>
@@ -52,6 +61,14 @@ export function ownsPublishers(
   return !!route && route.name === 'publishers'
 }
 
+function dialogResume(
+  options: PublishersIntentOptions | undefined,
+  fallback: PublishersResume | null,
+): PublishersResume | null {
+  if (typeof options?.currentDialog === 'function') return options.currentDialog()
+  return fallback
+}
+
 async function reloadIfCurrent(
   owner: PublishersIntentOwner | null,
   generation: number,
@@ -60,9 +77,10 @@ async function reloadIfCurrent(
   if (!owner || !ownsPublishers(owner, generation)) return quiet()
   const reload = window.prksReloadPublishersPage
   if (typeof reload !== 'function') return quiet()
-  const painted = await reload(owner, generation, resume)
+  await reload(owner, generation, resume)
   if (!ownsPublishers(owner, generation)) return quiet()
-  if (!painted) return quiet()
+  // The write landed. A failed refresh keeps the current list and reports
+  // itself; it is not a failed create, alias change, or delete.
   return success()
 }
 
@@ -75,6 +93,7 @@ async function reloadIfCurrent(
 export function browserPublishersIntents(
   owner: PublishersIntentOwner | null,
   generation: number,
+  options?: PublishersIntentOptions,
 ): PublishersIntents {
   return {
     openPublisher(name) {
@@ -97,7 +116,7 @@ export function browserPublishersIntents(
         if (!ownsPublishers(owner, generation)) return quiet()
         return failure(actionMessage(err, CREATE_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, null)
+      return reloadIfCurrent(owner, generation, dialogResume(options, null))
     },
 
     async addAlias(publisherId, alias) {
@@ -112,7 +131,7 @@ export function browserPublishersIntents(
         if (!ownsPublishers(owner, generation)) return quiet()
         return failure(actionMessage(err, ADD_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, { aliasPublisherId: publisherId })
+      return reloadIfCurrent(owner, generation, dialogResume(options, { aliasPublisherId: publisherId }))
     },
 
     async removeAlias(publisherId, alias) {
@@ -126,7 +145,7 @@ export function browserPublishersIntents(
         if (!ownsPublishers(owner, generation)) return quiet()
         return failure(actionMessage(err, REMOVE_ALIAS_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, { aliasPublisherId: publisherId })
+      return reloadIfCurrent(owner, generation, dialogResume(options, { aliasPublisherId: publisherId }))
     },
 
     async remove(publisherId, name) {
@@ -150,7 +169,7 @@ export function browserPublishersIntents(
         return failure(actionMessage(err, DELETE_FAILURE))
       }
       if (!ownsPublishers(owner, generation)) return quiet()
-      return reloadIfCurrent(owner, generation, null)
+      return reloadIfCurrent(owner, generation, dialogResume(options, null))
     },
   }
 }
