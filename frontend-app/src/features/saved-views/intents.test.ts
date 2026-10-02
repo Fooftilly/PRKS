@@ -82,15 +82,47 @@ describe('saved view intents', () => {
     const pending = browserSavedViewIntents(indexOwner(state), 2).editById('SV-1')
     state.generation = 3
     release(VIEW)
-    await pending
+    await expect(pending).resolves.toEqual({ status: 'quiet' })
     expect(open).not.toHaveBeenCalled()
 
     state.generation = 4
     window.fetchSavedView = async () => VIEW
-    await browserSavedViewIntents(indexOwner(state), 4).editById('SV-1')
+    await expect(browserSavedViewIntents(indexOwner(state), 4).editById('SV-1')).resolves.toEqual({ status: 'success' })
     expect(open).toHaveBeenCalledWith({ viewId: 'SV-1', name: 'Critical theory', definition: VIEW.search })
-    await browserSavedViewIntents(owner({ generation: 4, entityId: 'SV-1' }), 4).editById('SV-1')
+    await expect(browserSavedViewIntents(owner({ generation: 4, entityId: 'SV-1' }), 4).editById('SV-1')).resolves.toEqual({
+      status: 'quiet',
+    })
     expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a failed index edit and stays quiet when that owner goes stale', async () => {
+    const state = { generation: 2 }
+    const open = vi.fn()
+    window.prksOpenSavedViewModal = open
+    window.fetchSavedView = async () => {
+      throw new Error('Could not open Saved View.')
+    }
+    await expect(browserSavedViewIntents(indexOwner(state), 2).editById('SV-1')).resolves.toEqual({
+      status: 'error',
+      message: 'Could not open Saved View.',
+    })
+    expect(open).not.toHaveBeenCalled()
+
+    window.fetchSavedView = async () => null
+    await expect(browserSavedViewIntents(indexOwner(state), 2).editById('SV-1')).resolves.toEqual({
+      status: 'error',
+      message: 'Could not open Saved View.',
+    })
+
+    let rejectFetch: (err: Error) => void = () => {}
+    window.fetchSavedView = () => new Promise((_resolve, reject) => {
+      rejectFetch = reject
+    })
+    const pending = browserSavedViewIntents(indexOwner(state), 2).editById('SV-1')
+    state.generation = 3
+    rejectFetch(new Error('late failure'))
+    await expect(pending).resolves.toEqual({ status: 'quiet' })
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('deletes an index row through the in-place wrapper and does not navigate itself', async () => {
@@ -101,14 +133,31 @@ describe('saved view intents', () => {
     })
     window.prksDeleteSavedViewFromIndex = del
     window.prksNavigate = vi.fn()
-    await browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')
+    await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({ status: 'quiet' })
     expect(del).toHaveBeenCalledWith('SV-1', expect.any(Function), 'tab-index')
     expect(fence?.()).toBe(true)
     expect(window.prksNavigate).not.toHaveBeenCalled()
     state.generation = 2
     expect(fence?.()).toBe(false)
-    await browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')
+    await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({ status: 'quiet' })
     expect(del).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a failed index delete and stays quiet for cancel', async () => {
+    const state = { generation: 1 }
+    window.prksDeleteSavedViewFromIndex = async () => ({
+      ok: false,
+      reason: 'failed',
+      message: 'Could not delete Saved View.',
+    })
+    await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({
+      status: 'error',
+      message: 'Could not delete Saved View.',
+    })
+    window.prksDeleteSavedViewFromIndex = async () => ({ ok: false, reason: 'cancelled' })
+    await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({ status: 'quiet' })
+    window.prksDeleteSavedViewFromIndex = async () => ({ ok: false, reason: 'stale' })
+    await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({ status: 'quiet' })
   })
 
   it('opens the command palette from the empty index only while that index is current', () => {

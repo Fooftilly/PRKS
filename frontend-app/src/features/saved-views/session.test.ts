@@ -286,6 +286,84 @@ describe('Saved Views index route bridge', () => {
     expect(del).toHaveBeenCalledTimes(1)
   })
 
+  it('shows a failed Edit or Delete on the owning row and stays quiet for cancel or stale', async () => {
+    window.prksSearchSummaryText = () => 'Any file'
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    const open = vi.fn()
+    window.prksOpenSavedViewModal = open
+    let rejectFetch: (err: Error) => void = () => {}
+    window.fetchSavedView = vi.fn(
+      () =>
+        new Promise<typeof VIEW>((_resolve, reject) => {
+          rejectFetch = reject
+        }),
+    )
+    let deleteResult: { ok: boolean; reason: string; message?: string } = {
+      ok: false,
+      reason: 'cancelled',
+    }
+    const del = vi.fn(async () => deleteResult)
+    window.prksDeleteSavedViewFromIndex = del
+    const main = owner('main')
+    const other = owner('other')
+    main.state.generation = 3
+    other.state.generation = 1
+    main.state.routeName = 'saved-views'
+    other.state.routeName = 'saved-views'
+    const mainHost = host()
+    const otherHost = host()
+    const views = [VIEW, { ...VIEW, id: 'SV 2', name: 'Later' }]
+    presentSavedViewsIndex({ owner: main, host: mainHost, views, generation: 3 })
+    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
+    const editButton = (root: HTMLElement, id: string) =>
+      root.querySelector(`[data-sv-index-edit="${id}"]`) as HTMLButtonElement
+    const deleteButton = (root: HTMLElement, id: string) =>
+      root.querySelector(`[data-sv-index-delete="${id}"]`) as HTMLButtonElement
+    const rowError = (root: HTMLElement, id: string) => root.querySelector(`[data-sv-index-error="${id}"]`)
+
+    editButton(mainHost, 'SV 1').click()
+    await nextTick()
+    expect(editButton(mainHost, 'SV 1').textContent).toBe('Opening…')
+    rejectFetch(new Error('Could not open Saved View.'))
+    await flushPromises()
+    expect(open).not.toHaveBeenCalled()
+    expect(editButton(mainHost, 'SV 1').disabled).toBe(false)
+    expect(editButton(mainHost, 'SV 1').getAttribute('aria-busy')).toBeNull()
+    expect(editButton(mainHost, 'SV 1').textContent?.trim()).toBe('Edit')
+    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
+    expect(rowError(mainHost, 'SV 2')).toBeNull()
+    expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
+
+    editButton(mainHost, 'SV 2').click()
+    await nextTick()
+    main.state.generation = 4
+    rejectFetch(new Error('late failure'))
+    await flushPromises()
+    expect(mainHost.textContent).not.toContain('late failure')
+    expect(rowError(mainHost, 'SV 2')).toBeNull()
+    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
+    expect(editButton(mainHost, 'SV 2').disabled).toBe(false)
+    expect(editButton(otherHost, 'SV 1').disabled).toBe(false)
+
+    main.state.generation = 3
+    deleteButton(mainHost, 'SV 1').click()
+    await flushPromises()
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
+    expect(deleteButton(mainHost, 'SV 1').disabled).toBe(false)
+    expect(deleteButton(mainHost, 'SV 1').textContent?.trim()).toBe('Delete')
+
+    deleteResult = { ok: false, reason: 'failed', message: 'Could not delete Saved View.' }
+    deleteButton(mainHost, 'SV 2').click()
+    await flushPromises()
+    expect(rowError(mainHost, 'SV 2')?.textContent?.trim()).toBe('Could not delete Saved View.')
+    expect(rowError(mainHost, 'SV 1')?.textContent?.trim()).toBe('Could not open Saved View.')
+    expect(deleteButton(mainHost, 'SV 2').disabled).toBe(false)
+    expect(deleteButton(mainHost, 'SV 2').classList.contains('prks-btn--danger')).toBe(true)
+    expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
+  })
+
   it('paints the empty index, keeps owners apart, and drops a stale generation', async () => {
     const palette = vi.fn()
     window.prksOpenCommandPalette = palette

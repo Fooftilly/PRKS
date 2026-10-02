@@ -355,6 +355,15 @@
         }
     }
 
+    function savedViewActionMessage(err, fallback) {
+        const message = err && err.message != null ? String(err.message).trim() : '';
+        return message || fallback;
+    }
+
+    /**
+     * Confirm, recheck `still`, then delete. Success, cancel, a stale owner,
+     * and a failed delete stay distinct so the index can show only the failure.
+     */
     async function confirmAndDelete(id, still) {
         const ok =
             typeof root.prksConfirmDestructive === 'function'
@@ -364,26 +373,33 @@
                       confirmLabel: 'Delete Saved View',
                   })
                 : true;
-        if (!ok) return false;
-        if (typeof still === 'function' && !still()) return false;
+        if (!ok) return { ok: false, reason: 'cancelled' };
+        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
         try {
             await root.deleteSavedView(id);
-        } catch (_e) {
-            return false;
+        } catch (err) {
+            return {
+                ok: false,
+                reason: 'failed',
+                message: savedViewActionMessage(err, 'Could not delete Saved View.'),
+            };
         }
-        return true;
+        return { ok: true, reason: 'success' };
     }
 
     /**
      * Index delete. Confirms, rechecks `still`, deletes, rechecks `still`,
      * then navigates this tab to `#/views` so the index refetches. The
      * refresh is the index hash on `tabId`. The focused location stays put.
+     * Cancel and a stale owner stay quiet. A failed delete returns its message.
      */
     async function prksDeleteSavedViewFromIndex(id, still, tabId) {
-        if (!(await confirmAndDelete(id, still))) return;
-        if (typeof still === 'function' && !still()) return;
-        if (typeof root.prksNavigate !== 'function') return;
+        const outcome = await confirmAndDelete(id, still);
+        if (!outcome.ok) return outcome;
+        if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
+        if (typeof root.prksNavigate !== 'function') return { ok: false, reason: 'stale' };
         root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
+        return outcome;
     }
 
     /**
@@ -392,7 +408,8 @@
      * started does not navigate a pane that moved on.
      */
     async function prksDeleteSavedViewFromDetail(id, still, tabId) {
-        if (!(await confirmAndDelete(id, still))) return;
+        const outcome = await confirmAndDelete(id, still);
+        if (!outcome.ok) return;
         if (typeof still === 'function' && !still()) return;
         if (typeof root.prksNavigate === 'function') {
             root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });

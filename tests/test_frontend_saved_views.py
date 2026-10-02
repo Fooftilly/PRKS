@@ -127,6 +127,8 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("SAVED_VIEWS_EMPTY", index)
         self.assertIn("work-html-slot", index)
         self.assertNotIn('style="display: contents"', index)
+        self.assertIn("prks-inline-message--error", index)
+        self.assertIn("data-sv-index-error", index)
         self.assertIn('variant="danger"', index)
         self.assertIn('busy-label="Deleting…"', index)
         self.assertIn("usePendingAction", index)

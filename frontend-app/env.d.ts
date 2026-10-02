@@ -282,7 +282,11 @@ interface Window {
     definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
   }) => void
   prksDeleteSavedViewFromDetail?: (viewId: string, still?: () => boolean, tabId?: string) => Promise<void>
-  prksDeleteSavedViewFromIndex?: (viewId: string, still?: () => boolean, tabId?: string) => Promise<void>
+  prksDeleteSavedViewFromIndex?: (
+    viewId: string,
+    still?: () => boolean,
+    tabId?: string,
+  ) => Promise<{ ok?: boolean; reason?: string; message?: string } | void>
   prksSearchSummaryText?: (definition: unknown) => string
   fetchSavedView?: (id: string) => Promise<{ id?: string; name?: string; search?: { mode: string; q: string; tag: string; author: string; publisher: string } } | null>
   prksOpenCommandPalette?: () => void

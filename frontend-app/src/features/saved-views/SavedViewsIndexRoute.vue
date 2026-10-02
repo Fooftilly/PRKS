@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
 const rootEl = ref<HTMLElement | null>(null)
+const rowErrors = ref<Record<string, string>>({})
 const headerIcon = computed(() => window.prksPageHeaderIconHtml?.('bookmark') ?? '')
 const bookmarkIcon = computed(() => window.prksIcon?.('bookmark', { size: 'sm' }) ?? '')
 const rows = computed(() => props.projection.rows)
@@ -24,12 +25,25 @@ function editKey(viewId: string): string {
   return `edit:${viewId}`
 }
 
+function showRowError(viewId: string, message: string): void {
+  rowErrors.value = { ...rowErrors.value, [viewId]: message }
+}
+
+function clearRowError(viewId: string): void {
+  if (!rowErrors.value[viewId]) return
+  const next = { ...rowErrors.value }
+  delete next[viewId]
+  rowErrors.value = next
+}
+
 function edit(viewId: string): void {
   void withBusy(editKey(viewId), async () => {
     try {
-      await props.intents.editById(viewId)
-    } catch {
-      /* Busy clears in finally. A failed fetch does not reopen the modal. */
+      const outcome = await props.intents.editById(viewId)
+      if (outcome.status === 'error') showRowError(viewId, outcome.message)
+      else if (outcome.status === 'success') clearRowError(viewId)
+    } catch (err) {
+      showRowError(viewId, err instanceof Error && err.message.trim() ? err.message.trim() : 'Could not open Saved View.')
     }
   })
 }
@@ -37,9 +51,11 @@ function edit(viewId: string): void {
 function remove(viewId: string): void {
   void withBusy(deleteKey(viewId), async () => {
     try {
-      await props.intents.removeFromIndex(viewId)
-    } catch {
-      /* Busy clears in finally. The delete wrapper keeps its own error. */
+      const outcome = await props.intents.removeFromIndex(viewId)
+      if (outcome.status === 'error') showRowError(viewId, outcome.message)
+      else if (outcome.status === 'success') clearRowError(viewId)
+    } catch (err) {
+      showRowError(viewId, err instanceof Error && err.message.trim() ? err.message.trim() : 'Could not delete Saved View.')
     }
   })
 }
@@ -92,6 +108,14 @@ onMounted(() => {
               Delete
             </PrksButton>
           </div>
+          <p
+            v-if="rowErrors[row.id]"
+            class="prks-inline-message prks-inline-message--error saved-views-page__row-error"
+            role="status"
+            :data-sv-index-error="row.id"
+          >
+            {{ rowErrors[row.id] }}
+          </p>
         </div>
       </template>
       <template v-else>

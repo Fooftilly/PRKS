@@ -309,9 +309,25 @@ Promise.resolve(root.createSavedView({
                     navCalls.length = 0;
                     const before = deletes.length;
                     return root.prksDeleteSavedViewFromIndex('SV-I5', function () { return true; }, 'tab-index')
-                        .then(function () {
+                        .then(function (outcome) {
                             assertEq('cancelled index delete does not delete', deletes.length, before);
                             assertEq('cancelled index delete does not refresh', navCalls.length, 0);
+                            assertEq('cancelled index delete stays quiet', outcome && outcome.reason, 'cancelled');
+                            root.prksConfirmDestructive = function () { return Promise.resolve(true); };
+                            root.deleteSavedView = function () {
+                                return Promise.reject(new Error('Could not delete Saved View.'));
+                            };
+                            return root.prksDeleteSavedViewFromIndex('SV-I6', function () { return true; }, 'tab-index');
+                        })
+                        .then(function (outcome) {
+                            assertEq('failed index delete does not refresh', navCalls.length, 0);
+                            assertEq('failed index delete names the failure', outcome && outcome.reason, 'failed');
+                            assertEq('failed index delete keeps the message', outcome && outcome.message, 'Could not delete Saved View.');
+                            return root.prksDeleteSavedViewFromIndex('SV-I7', function () { return false; }, 'tab-index');
+                        })
+                        .then(function (outcome) {
+                            assertEq('stale index delete stays quiet', outcome && outcome.reason, 'stale');
+                            assertEq('stale index delete does not refresh', navCalls.length, 0);
                         });
                 });
         }).then(function () {
