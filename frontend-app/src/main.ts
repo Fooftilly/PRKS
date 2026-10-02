@@ -5,6 +5,7 @@ import { registerFolderLibraryBridge } from './features/folder-library/session'
 import { registerRecentBridge } from './features/recent/session'
 import { registerTypesBridge } from './features/types/session'
 import { registerTagsBridge } from './features/tags/session'
+import { registerPublishersBridge } from './features/publishers/session'
 import { registerSavedViewsBridge } from './features/saved-views/session'
 import { registerSearchBridge } from './features/search/session'
 import { registerArgumentsBridge } from './features/arguments/session'
@@ -36,6 +37,7 @@ registerFolderDetailBridge(window)
 registerRecentBridge(window)
 registerTypesBridge(window)
 registerTagsBridge(window)
+registerPublishersBridge(window)
 registerSearchBridge(window)
 registerSavedViewsBridge(window)
 registerPositionsBridge(window)

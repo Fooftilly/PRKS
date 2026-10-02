@@ -324,6 +324,10 @@ FEATURES = {
             "tests.e2e.test_search_saved_views_route_surface",
         ),
     },
+    "publishers": {
+        "description": "Publishers vocabulary Vue route surface",
+        "selectors": ("tests.e2e.test_publishers_route_surface",),
+    },
     "offline": {
         "description": "Offline foundation + broad offline coherence (Work cache)",
         "selectors": (
@@ -650,6 +654,18 @@ AFFECTED_RULES = (
         ),
         "features": ("folders",),
         "note": "Vue Tags vocabulary page (#302 R3) → folders, because test_folders_offline covers #/tags. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "publishers-vue",
+        "paths": ("frontend-app/src/features/publishers/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("publishers",),
+        "note": "Vue Publishers page (#302 R3) → publishers, because test_publishers_route_surface opens #/publishers. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "concepts-vue",
