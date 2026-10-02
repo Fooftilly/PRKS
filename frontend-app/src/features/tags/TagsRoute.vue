@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import { registerTagsAliasCloser, registerTagsMergeCloser } from './closers'
 import type { TagsIntents } from './intents'
+import type { TagsAliasDialog, TagsRefreshSink } from './session'
 import { filterMergeCandidates, type TagCloudRow, type TagsProjection } from './projection'
 
 const props = defineProps<{
   projection: TagsProjection
   intents: TagsIntents
+  aliasDialog?: TagsAliasDialog
+  refreshSink?: TagsRefreshSink
 }>()
 
 const { actionBusy, actionBlocked, withBusy } = usePendingAction()
@@ -15,9 +19,14 @@ const rootEl = ref<HTMLElement | null>(null)
 const aliasTagId = ref<string | null>(props.projection.openAliasTagId)
 const aliasDraft = ref('')
 const aliasTrigger = ref<HTMLElement | null>(null)
+const aliasAddError = ref('')
+const aliasRemoveError = ref('')
+const aliasDeleteError = ref('')
+const refreshError = ref('')
 const mergeSourceId = ref<string | null>(null)
 const mergeTargetId = ref<string | null>(null)
 const mergeFilter = ref('')
+const mergeError = ref('')
 const mergeTrigger = ref<HTMLElement | null>(null)
 const rows = computed(() => props.projection.rows)
 const aliasTag = computed(() => rows.value.find((row) => row.id === aliasTagId.value) ?? null)
@@ -26,15 +35,31 @@ const mergeTarget = computed(() => rows.value.find((row) => row.id === mergeTarg
 const mergeCandidates = computed(() =>
   mergeSourceId.value ? filterMergeCandidates(rows.value, mergeSourceId.value, mergeFilter.value) : [],
 )
-const mergeIcon = computed(() => window.prksIcon?.('arrowRight', { size: 'sm' }) ?? '→')
+const aliasIcon = computed(() => window.prksIcon?.('ellipsis', { size: 'sm' }) ?? '')
+const mergeIcon = computed(() => window.prksIcon?.('arrowRight', { size: 'sm' }) ?? '')
+const closeIcon = computed(() => window.prksIcon?.('x', { size: 'sm' }) ?? '')
 
 let unregisterAlias: (() => void) | null = null
 let unregisterMerge: (() => void) | null = null
 
-function restoreFocus(trigger: HTMLElement | null): void {
-  if (!trigger || !trigger.isConnected || typeof trigger.focus !== 'function') return
+function showRefreshFailure(message: string): void {
+  refreshError.value = message
+}
+
+function aliasEditButton(tagId: string): HTMLElement | null {
+  const root = rootEl.value
+  if (!root) return null
+  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(tagId) : tagId
+  const node = root.querySelector(`[data-tag-alias-edit="${escaped}"]`)
+  return node instanceof HTMLElement ? node : null
+}
+
+function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null): void {
+  const root = rootEl.value
+  const target = trigger && trigger.isConnected && root?.contains(trigger) ? trigger : fallback
+  if (!target || typeof target.focus !== 'function') return
   try {
-    trigger.focus()
+    target.focus()
   } catch {
     /* The control may already be gone. */
   }
@@ -42,10 +67,11 @@ function restoreFocus(trigger: HTMLElement | null): void {
 
 function closeAlias(): void {
   const trigger = aliasTrigger.value
+  const tagId = aliasTagId.value
   aliasTagId.value = null
   aliasDraft.value = ''
   aliasTrigger.value = null
-  restoreFocus(trigger)
+  void nextTick(() => restoreFocus(trigger, tagId ? aliasEditButton(tagId) : null))
 }
 
 function closeMerge(): void {
@@ -53,8 +79,27 @@ function closeMerge(): void {
   mergeSourceId.value = null
   mergeTargetId.value = null
   mergeFilter.value = ''
+  mergeError.value = ''
   mergeTrigger.value = null
-  restoreFocus(trigger)
+  void nextTick(() => restoreFocus(trigger, null))
+}
+
+function closeAliasFor(modal?: Element | null): boolean {
+  if (modal instanceof Element) {
+    const root = rootEl.value
+    if (!root || !root.contains(modal)) return false
+  }
+  closeAlias()
+  return true
+}
+
+function closeMergeFor(modal?: Element | null): boolean {
+  if (modal instanceof Element) {
+    const root = rootEl.value
+    if (!root || !root.contains(modal)) return false
+  }
+  closeMerge()
+  return true
 }
 
 function chipStyle(row: TagCloudRow): Record<string, string> {
@@ -84,11 +129,6 @@ function onTagKeydown(row: TagCloudRow, event: KeyboardEvent): void {
   props.intents.openTag(row.name)
 }
 
-async function report(title: string, message: string): Promise<void> {
-  const alertFn = window.prksAlertMessage
-  if (typeof alertFn === 'function') await alertFn(message, title)
-}
-
 function focusAliasInput(): void {
   rootEl.value?.querySelector<HTMLInputElement>('#tags-page-alias-input')?.focus()
 }
@@ -97,31 +137,49 @@ function focusMergeFilter(): void {
   rootEl.value?.querySelector<HTMLInputElement>('#tags-page-merge-filter')?.focus()
 }
 
+function clearAliasActionErrors(): void {
+  aliasAddError.value = ''
+  aliasRemoveError.value = ''
+  aliasDeleteError.value = ''
+}
+
 function addAlias(): void {
   const tag = aliasTag.value
   if (!tag) return
+  const tagId = tag.id
   const draft = aliasDraft.value
   void withBusy('alias-add', async () => {
-    const outcome = await props.intents.addAlias(tag.id, draft)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    const outcome = await props.intents.addAlias(tagId, draft)
+    if (aliasTagId.value !== tagId) return
+    if (outcome.status === 'error') aliasAddError.value = outcome.message
+    else if (outcome.status === 'success') {
+      aliasAddError.value = ''
+      aliasDraft.value = ''
+    }
   })
 }
 
 function removeAlias(alias: string): void {
   const tag = aliasTag.value
   if (!tag) return
+  const tagId = tag.id
   void withBusy(`alias-remove:${alias}`, async () => {
-    const outcome = await props.intents.removeAlias(tag.id, alias)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    const outcome = await props.intents.removeAlias(tagId, alias)
+    if (aliasTagId.value !== tagId) return
+    if (outcome.status === 'error') aliasRemoveError.value = outcome.message
+    else if (outcome.status === 'success') aliasRemoveError.value = ''
   })
 }
 
 function removeTag(): void {
   const tag = aliasTag.value
   if (!tag) return
+  const tagId = tag.id
   void withBusy('alias-delete', async () => {
-    const outcome = await props.intents.remove(tag.id, tag.name)
-    if (outcome.status === 'error') await report('Could not delete', outcome.message)
+    const outcome = await props.intents.remove(tagId, tag.name)
+    if (aliasTagId.value !== tagId) return
+    if (outcome.status === 'error') aliasDeleteError.value = outcome.message
+    else if (outcome.status === 'success') aliasDeleteError.value = ''
   })
 }
 
@@ -138,30 +196,42 @@ function confirmMerge(): void {
   const source = mergeSource.value
   const target = mergeTarget.value
   if (!source || !target) return
+  const sourceId = source.id
+  const targetId = target.id
   void withBusy('merge', async () => {
-    const outcome = await props.intents.merge(source.id, target.id)
-    if (outcome.status === 'error') await report('Error', outcome.message)
+    const outcome = await props.intents.merge(sourceId, targetId)
+    if (mergeSourceId.value !== sourceId || mergeTargetId.value !== targetId) return
+    if (outcome.status === 'error') mergeError.value = outcome.message
+    else if (outcome.status === 'success') mergeError.value = ''
   })
 }
 
 watch(aliasTagId, (id) => {
+  if (props.aliasDialog) props.aliasDialog.id = id
+  clearAliasActionErrors()
   if (!id) return
   void nextTick(() => focusAliasInput())
-})
+}, { immediate: true })
 
 watch(mergeSourceId, (id) => {
+  mergeError.value = ''
   if (!id || mergeTargetId.value) return
   void nextTick(() => focusMergeFilter())
 })
 
+watch(mergeTargetId, () => {
+  mergeError.value = ''
+})
+
 onMounted(() => {
   window.prksRefreshIcons?.(rootEl.value)
-  unregisterAlias = registerTagsAliasCloser(closeAlias)
-  unregisterMerge = registerTagsMergeCloser(closeMerge)
-  if (aliasTagId.value) void nextTick(() => focusAliasInput())
+  if (props.refreshSink) props.refreshSink.set = showRefreshFailure
+  unregisterAlias = registerTagsAliasCloser(closeAliasFor)
+  unregisterMerge = registerTagsMergeCloser(closeMergeFor)
 })
 
 onUnmounted(() => {
+  if (props.refreshSink?.set === showRefreshFailure) props.refreshSink.set = null
   unregisterAlias?.()
   unregisterMerge?.()
   unregisterAlias = null
@@ -174,11 +244,19 @@ onUnmounted(() => {
     <div class="prks-page-header page-header tags-page__header">
       <h2 class="prks-page-title">All tags</h2>
       <p class="tags-page__sub">
-        Tags currently used on at least one file or folder. Click a name to list matching files. Use ⋯ for alternate
-        names (e.g. other languages). Use → to merge this tag into another; the merged name becomes an alias and no
-        longer appears as its own tag.
+        Tags currently used on at least one file or folder. Click a name to list matching files. Use the alias control
+        for alternate names (e.g. other languages). Use the merge control to merge this tag into another; the merged
+        name becomes an alias and no longer appears as its own tag.
       </p>
     </div>
+    <p
+      v-if="refreshError"
+      class="prks-inline-message prks-inline-message--error"
+      role="status"
+      data-tags-refresh-error
+    >
+      {{ refreshError }}
+    </p>
     <div id="tags-page-cloud" class="tag-cloud tag-cloud--page">
       <p v-if="!rows.length" class="tags-page__empty">
         No tags in use yet. Add tags to files or folders from the details panel.
@@ -200,23 +278,23 @@ onUnmounted(() => {
         >{{ row.name }}</span>
         <button
           type="button"
-          class="tag-page-alias-btn"
+          class="prks-icon-btn prks-icon-btn--sm"
           :data-tag-alias-edit="row.id"
           title="Aliases"
           :aria-label="`Edit aliases for ${row.name}`"
           @click="openAlias(row, $event)"
         >
-          ⋯
+          <span v-if="aliasIcon" class="work-html-slot" v-html="aliasIcon"></span>
         </button>
         <button
           type="button"
-          class="tag-page-merge-btn"
+          class="prks-icon-btn prks-icon-btn--sm"
           :data-tag-merge="row.id"
           title="Merge into another tag"
           :aria-label="`Merge ${row.name} into another tag`"
           @click="openMerge(row, $event)"
         >
-          <span class="work-html-slot" v-html="mergeIcon"></span>
+          <span v-if="mergeIcon" class="work-html-slot" v-html="mergeIcon"></span>
         </button>
       </span>
     </div>
@@ -245,7 +323,7 @@ onUnmounted(() => {
             aria-label="Close"
             @click="closeAlias"
           >
-            ×
+            <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
           </button>
         </div>
         <div class="modal-body tags-page-alias-modal__body">
@@ -259,47 +337,80 @@ onUnmounted(() => {
               <span class="tags-page-alias-list__text">{{ alias }}</span>
               <button
                 type="button"
-                class="tags-page-alias-remove"
+                class="prks-icon-btn prks-icon-btn--sm prks-icon-btn--danger"
                 :data-alias-remove="alias"
                 aria-label="Remove alias"
-                :disabled="actionBlocked(`alias-remove:${alias}`)"
+                :aria-busy="actionBusy(`alias-remove:${alias}`) ? 'true' : undefined"
+                :disabled="actionBlocked(`alias-remove:${alias}`) || actionBusy(`alias-remove:${alias}`)"
                 @click="removeAlias(alias)"
               >
-                ×
+                <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
               </button>
             </li>
           </ul>
+          <p
+            v-if="aliasRemoveError"
+            id="tags-page-alias-remove-error"
+            class="prks-inline-message prks-inline-message--error"
+            role="status"
+            data-tags-alias-remove-error
+          >
+            {{ aliasRemoveError }}
+          </p>
           <div class="tags-page-alias-add">
             <input
               id="tags-page-alias-input"
               v-model="aliasDraft"
               type="text"
-              class="tags-page-alias-input"
+              class="prks-input"
               maxlength="120"
               placeholder="New alias…"
               autocomplete="off"
               aria-label="New alias"
+              :aria-invalid="aliasAddError ? 'true' : undefined"
+              :aria-describedby="aliasAddError ? 'tags-page-alias-add-error' : undefined"
             >
-            <button
+            <PrksButton
               id="tags-page-alias-add-btn"
-              type="button"
-              class="tags-page-alias-add__submit"
-              :disabled="actionBlocked('alias-add') || actionBusy('alias-add')"
+              variant="secondary"
+              size="sm"
+              :busy="actionBusy('alias-add')"
+              :disabled="actionBlocked('alias-add')"
+              busy-label="Adding…"
               @click="addAlias"
             >
               Add alias
-            </button>
+            </PrksButton>
           </div>
+          <p
+            v-if="aliasAddError"
+            id="tags-page-alias-add-error"
+            class="prks-inline-message prks-inline-message--error"
+            role="status"
+            data-tags-alias-add-error
+          >
+            {{ aliasAddError }}
+          </p>
           <div class="tags-page-alias-delete">
-            <button
+            <PrksButton
               id="tags-page-alias-delete-btn"
-              type="button"
-              class="prks-btn prks-btn--danger"
+              variant="danger"
+              :busy="actionBusy('alias-delete')"
               :disabled="actionBlocked('alias-delete')"
+              busy-label="Deleting…"
               @click="removeTag"
             >
               Delete tag
-            </button>
+            </PrksButton>
+            <p
+              v-if="aliasDeleteError"
+              id="tags-page-alias-delete-error"
+              class="prks-inline-message prks-inline-message--error"
+              role="status"
+              data-tags-alias-delete-error
+            >
+              {{ aliasDeleteError }}
+            </p>
           </div>
         </div>
       </div>
@@ -329,7 +440,7 @@ onUnmounted(() => {
             aria-label="Close"
             @click="closeMerge"
           >
-            ×
+            <span v-if="closeIcon" class="work-html-slot" v-html="closeIcon"></span>
           </button>
         </div>
         <div class="modal-body tags-page-merge-modal__body">
@@ -346,7 +457,7 @@ onUnmounted(() => {
               id="tags-page-merge-filter"
               v-model="mergeFilter"
               type="search"
-              class="tags-page-merge-filter"
+              class="prks-input tags-page-merge-filter"
               maxlength="120"
               placeholder="Search tags…"
               autocomplete="off"
@@ -357,15 +468,15 @@ onUnmounted(() => {
                 No other tags match. Try another search.
               </li>
               <li v-for="candidate in mergeCandidates" :key="candidate.id" class="tags-page-merge-list__item">
-                <button
-                  type="button"
+                <PrksButton
+                  variant="secondary"
                   class="tags-page-merge-pick-btn"
                   :data-tag-merge-pick="candidate.id"
                   :style="{ '--tag-accent': candidate.color }"
                   @click="pickMergeTarget(candidate.id)"
                 >
                   {{ candidate.name }}
-                </button>
+                </PrksButton>
               </li>
             </ul>
           </div>
@@ -375,19 +486,34 @@ onUnmounted(() => {
               It will no longer appear as a separate tag; searches and links using that name will use the same files
               as the target tag.
             </p>
+            <p
+              v-if="mergeError"
+              id="tags-page-merge-error"
+              class="prks-inline-message prks-inline-message--error"
+              role="status"
+              data-tags-merge-error
+            >
+              {{ mergeError }}
+            </p>
             <div class="tags-page-merge-confirm-actions">
-              <button id="tags-page-merge-back-btn" type="button" class="tags-page-merge-back-btn" @click="backToMergePick">
+              <PrksButton
+                id="tags-page-merge-back-btn"
+                variant="secondary"
+                :disabled="actionBusy('merge') || actionBlocked('merge')"
+                @click="backToMergePick"
+              >
                 Back
-              </button>
-              <button
+              </PrksButton>
+              <PrksButton
                 id="tags-page-merge-confirm-btn"
-                type="button"
-                class="tags-page-merge-confirm-btn"
+                variant="primary"
+                :busy="actionBusy('merge')"
                 :disabled="actionBlocked('merge')"
+                busy-label="Merging…"
                 @click="confirmMerge"
               >
                 Merge
-              </button>
+              </PrksButton>
             </div>
           </div>
         </div>

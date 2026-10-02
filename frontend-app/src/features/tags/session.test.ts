@@ -1,7 +1,13 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readRouteSurface } from '../../route-surface/lifecycle'
-import { dismissTags, presentTags, registerTagsBridge, resetTagsSessionForTests } from './session'
+import {
+  dismissTags,
+  presentTags,
+  registerTagsBridge,
+  reportTagsRefreshFailure,
+  resetTagsSessionForTests,
+} from './session'
 
 afterEach(() => {
   resetTagsSessionForTests()
@@ -14,7 +20,20 @@ afterEach(() => {
   delete window.prksIcon
   delete window.prksRefreshIcons
   delete window.fetchTags
+  delete window.prksAlertMessage
+  delete window.prksTagsAddAlias
+  delete window.prksTagsRemoveAlias
+  delete window.prksTagsDelete
+  delete window.prksTagsMerge
+  delete window.prksReloadTagsVocabulary
+  delete window.prksConfirmDestructive
 })
+
+async function flush(): Promise<void> {
+  await nextTick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await nextTick()
+}
 
 function host(): HTMLElement {
   const el = document.createElement('div')
@@ -169,5 +188,207 @@ describe('Tags route bridge', () => {
     expect(mainHost.querySelector('[data-prks-tags-page]')).toBeNull()
     expect(secondaryHost.querySelector('[data-tag-merge="t2"]')).not.toBeNull()
     expect(secondaryHost.querySelector('#tags-page-alias-canonical')?.textContent).toBe('Beta')
+  })
+
+  it('closes only the alias dialog Escape dismissed and can still close every pane', async () => {
+    registerTagsBridge(window)
+    const main = owner()
+    const secondary = owner()
+    const mainHost = host()
+    const secondaryHost = host()
+    presentTags({ owner: main, host: mainHost, tags: [ALPHA], generation: 2, shell: true })
+    presentTags({
+      owner: secondary,
+      host: secondaryHost,
+      tags: [{ id: 'side', name: 'Side', work_count: 1, folder_count: 0 }],
+      generation: 1,
+      shell: false,
+    })
+    mainHost.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    secondaryHost.querySelector<HTMLButtonElement>('[data-tag-alias-edit="side"]')?.click()
+    await nextTick()
+    const secondaryModal = secondaryHost.querySelector('#tags-page-alias-modal')
+    expect(secondaryModal).not.toBeNull()
+    window.prksVueCloseTagsAliasModal?.(secondaryModal)
+    await nextTick()
+    expect(secondaryHost.querySelector('#tags-page-alias-modal')).toBeNull()
+    expect(mainHost.querySelector('#tags-page-alias-canonical')?.textContent).toBe('Alpha')
+    window.prksVueCloseTagsAliasModal?.()
+    await nextTick()
+    expect(mainHost.querySelector('#tags-page-alias-modal')).toBeNull()
+  })
+
+  it('returns focus to the alias button after a resumed dialog closes', async () => {
+    const el = host()
+    presentTags({
+      owner: owner(),
+      host: el,
+      tags: [ALPHA],
+      generation: 3,
+      resume: { aliasTagId: 't1' },
+    })
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-modal-close')?.click()
+    await nextTick()
+    expect(document.activeElement).toBe(el.querySelector('[data-tag-alias-edit="t1"]'))
+  })
+
+  it('keeps the tag list when a refresh fails and shows that failure', async () => {
+    const pane = owner()
+    const el = host()
+    presentTags({ owner: pane, host: el, tags: [ALPHA, BETA], generation: 4 })
+    reportTagsRefreshFailure(pane, 'Could not refresh tags.')
+    await nextTick()
+    expect(el.querySelector('[data-tag-alias-edit="t1"]')).not.toBeNull()
+    expect(el.querySelector('.tags-page__empty')).toBeNull()
+    expect(el.querySelector('[data-tags-refresh-error]')?.textContent).toContain('Could not refresh tags.')
+  })
+
+  it('shows alias and merge failures in the open dialog and stays quiet for a no-op', async () => {
+    const alert = vi.fn()
+    window.prksAlertMessage = alert
+    window.prksTagsAddAlias = async () => {
+      throw new Error('Duplicate alias')
+    }
+    window.prksTagsRemoveAlias = async () => {
+      throw new Error('Alias is in use')
+    }
+    window.prksConfirmDestructive = async () => true
+    window.prksTagsDelete = async () => {
+      throw new Error('Could not delete tag.')
+    }
+    window.prksTagsMerge = async () => {
+      throw new Error('Could not merge tags.')
+    }
+    const el = host()
+    presentTags({ owner: owner(), host: el, tags: [ALPHA, BETA], generation: 5 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#tags-page-alias-input')
+    expect(input).not.toBeNull()
+    input!.value = 'Latin'
+    input!.dispatchEvent(new Event('input'))
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-add-btn')?.click()
+    await flush()
+    expect(el.querySelector('[data-tags-alias-add-error]')?.textContent).toContain('Duplicate alias')
+    expect(alert).not.toHaveBeenCalled()
+
+    el.querySelector<HTMLButtonElement>('[data-alias-remove="Latin"]')?.click()
+    await flush()
+    expect(el.querySelector('[data-tags-alias-remove-error]')?.textContent).toContain('Alias is in use')
+
+    const deleteBtn = el.querySelector<HTMLButtonElement>('#tags-page-alias-delete-btn')
+    expect(deleteBtn?.classList.contains('prks-btn--danger')).toBe(true)
+    deleteBtn?.click()
+    await flush()
+    expect(el.querySelector('[data-tags-alias-delete-error]')?.textContent).toContain('Could not delete tag.')
+    expect(el.querySelector('#tags-page-alias-modal')).not.toBeNull()
+    expect(alert).not.toHaveBeenCalled()
+
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-modal-close')?.click()
+    await nextTick()
+    expect(el.querySelector('[data-tags-alias-add-error]')).toBeNull()
+
+    el.querySelector<HTMLButtonElement>('[data-tag-merge="t1"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-merge-pick="t2"]')?.click()
+    await nextTick()
+    const mergeBtn = el.querySelector<HTMLButtonElement>('#tags-page-merge-confirm-btn')
+    expect(mergeBtn?.classList.contains('prks-btn--primary')).toBe(true)
+    mergeBtn?.click()
+    await flush()
+    expect(el.querySelector('[data-tags-merge-error]')?.textContent).toContain('Could not merge tags.')
+    expect(el.querySelector('#tags-page-merge-confirm')).not.toBeNull()
+    expect(alert).not.toHaveBeenCalled()
+
+    window.prksTagsAddAlias = async () => ({ ok: false, reason: 'offline' })
+    el.querySelector<HTMLButtonElement>('#tags-page-merge-modal-close')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const again = el.querySelector<HTMLInputElement>('#tags-page-alias-input')
+    again!.value = 'Quiet'
+    again!.dispatchEvent(new Event('input'))
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-add-btn')?.click()
+    await flush()
+    expect(el.querySelector('[data-tags-alias-add-error]')).toBeNull()
+    expect(alert).not.toHaveBeenCalled()
+  })
+
+  it('marks delete and merge busy while the write is in flight', async () => {
+    let releaseDelete: () => void = () => {}
+    let releaseMerge: () => void = () => {}
+    window.prksConfirmDestructive = async () => true
+    window.prksTagsDelete = () => new Promise((resolve) => {
+      releaseDelete = () => resolve({ ok: true })
+    })
+    window.prksTagsMerge = () => new Promise((resolve) => {
+      releaseMerge = () => resolve({ ok: true })
+    })
+    window.prksReloadTagsVocabulary = async () => false
+    const el = host()
+    presentTags({ owner: owner(), host: el, tags: [ALPHA, BETA], generation: 6 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-delete-btn')?.click()
+    await flush()
+    const deleteBtn = el.querySelector<HTMLButtonElement>('#tags-page-alias-delete-btn')
+    expect(deleteBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(deleteBtn?.disabled).toBe(true)
+    expect(deleteBtn?.textContent).toContain('Deleting…')
+    releaseDelete()
+    await flush()
+    expect(deleteBtn?.getAttribute('aria-busy')).toBeNull()
+
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-modal-close')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-merge="t1"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-tag-merge-pick="t2"]')?.click()
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#tags-page-merge-confirm-btn')?.click()
+    await flush()
+    const mergeBtn = el.querySelector<HTMLButtonElement>('#tags-page-merge-confirm-btn')
+    expect(mergeBtn?.getAttribute('aria-busy')).toBe('true')
+    expect(mergeBtn?.disabled).toBe(true)
+    expect(mergeBtn?.textContent).toContain('Merging…')
+    releaseMerge()
+    await flush()
+  })
+
+  it('does not reopen a closed alias dialog when the write finishes', async () => {
+    let releaseAdd: (value: { ok: boolean }) => void = () => {}
+    let resume: { aliasTagId?: string | null } | null | undefined = { aliasTagId: 'pending' }
+    window.prksTagsAddAlias = () => new Promise((resolve) => {
+      releaseAdd = resolve
+    })
+    const pane = owner()
+    const el = host()
+    window.prksReloadTagsVocabulary = async (ownerArg, generation, nextResume) => {
+      resume = nextResume
+      presentTags({
+        owner: ownerArg as ReturnType<typeof owner>,
+        host: el,
+        tags: [ALPHA, BETA],
+        generation,
+        resume: nextResume,
+      })
+      return true
+    }
+    presentTags({ owner: pane, host: el, tags: [ALPHA, BETA], generation: 8 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#tags-page-alias-input')
+    input!.value = 'Latin'
+    input!.dispatchEvent(new Event('input'))
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-add-btn')?.click()
+    await flush()
+    el.querySelector<HTMLButtonElement>('#tags-page-alias-modal-close')?.click()
+    await nextTick()
+    releaseAdd({ ok: true })
+    await flush()
+    expect(resume).toBeNull()
+    expect(el.querySelector('#tags-page-alias-modal')).toBeNull()
+    expect(el.querySelector('[data-tag-alias-edit="t1"]')).not.toBeNull()
   })
 })

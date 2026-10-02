@@ -309,8 +309,9 @@ interface Window {
   prksVueDismissTypes?: (owner: object) => void
   prksVuePresentTags?: (input: TagsPresentRequest) => void
   prksVueDismissTags?: (owner: object) => void
-  prksVueCloseTagsAliasModal?: () => void
-  prksVueCloseTagsMergeModal?: () => void
+  prksVueCloseTagsAliasModal?: (modal?: Element | null) => void
+  prksVueCloseTagsMergeModal?: (modal?: Element | null) => void
+  prksVueReportTagsRefreshFailure?: (owner: object, message: string) => void
   prksReloadTagsVocabulary?: (
     owner: object,
     generation: number,

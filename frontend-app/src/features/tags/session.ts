@@ -28,6 +28,32 @@ export interface TagsPresentInput {
 
 const TAGS_FEATURE = 'tags'
 
+export interface TagsRefreshSink {
+  set: ((message: string) => void) | null
+}
+
+export interface TagsAliasDialog {
+  id: string | null
+}
+
+const refreshSinks = new WeakMap<object, TagsRefreshSink>()
+
+function refreshSinkFor(owner: object): TagsRefreshSink {
+  let sink = refreshSinks.get(owner)
+  if (!sink) {
+    sink = { set: null }
+    refreshSinks.set(owner, sink)
+  }
+  return sink
+}
+
+/** Keep the painted list and show the refresh failure on that owner. */
+export function reportTagsRefreshFailure(owner: object | null | undefined, message: string): void {
+  if (!owner) return
+  const text = String(message || '').trim() || 'Could not refresh tags.'
+  refreshSinks.get(owner)?.set?.(text)
+}
+
 function isTagsEarlyRequest(
   value: unknown,
 ): value is Omit<TagsPresentInput, 'host'> & { feature: typeof TAGS_FEATURE } {
@@ -58,9 +84,14 @@ export function presentTags(input: TagsPresentInput): void {
     route,
     render: (generation) => {
       const projection: TagsProjection = buildTagsProjection({ tags, generation, resume })
+      const aliasDialog: TagsAliasDialog = { id: projection.openAliasTagId }
       return createVNode(TagsRoute, {
         projection,
-        intents: browserTagsIntents(owner, generation),
+        intents: browserTagsIntents(owner, generation, {
+          openAliasTagId: () => aliasDialog.id,
+        }),
+        aliasDialog,
+        refreshSink: refreshSinkFor(owner),
       })
     },
   })
@@ -79,6 +110,7 @@ export function registerTagsBridge(target: Window = window): void {
   target.prksVueDismissTags = dismissTags
   target.prksVueCloseTagsAliasModal = closeTagsAliasModals
   target.prksVueCloseTagsMergeModal = closeTagsMergeModals
+  target.prksVueReportTagsRefreshFailure = reportTagsRefreshFailure
   registerEarlyRoutePresenter(
     TAGS_FEATURE,
     (request, host) => {

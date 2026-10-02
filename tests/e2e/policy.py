@@ -648,8 +648,8 @@ AFFECTED_RULES = (
             "frontend-app/**/*.stories.vue",
             "frontend-app/**/*.stories.js",
         ),
-        "features": ("browse",),
-        "note": "Vue Tags vocabulary page (#302 R3) → browse. Shared route-surface stays unmapped (CI full).",
+        "features": ("folders",),
+        "note": "Vue Tags vocabulary page (#302 R3) → folders, because test_folders_offline covers #/tags. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "concepts-vue",

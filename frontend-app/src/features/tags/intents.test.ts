@@ -114,6 +114,45 @@ describe('Tags intents', () => {
     expect(reload).not.toHaveBeenCalled()
   })
 
+  it('does not resume an alias dialog the user closed during the write', async () => {
+    let open: string | null = 't1'
+    const reload = vi.fn(async () => true)
+    window.prksTagsAddAlias = async () => {
+      open = null
+      return { ok: true }
+    }
+    window.prksReloadTagsVocabulary = reload
+    const outcome = await browserTagsIntents(owner({ generation: 2 }), 2, {
+      openAliasTagId: () => open,
+    }).addAlias('t1', 'Latin')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, null)
+  })
+
+  it('resumes the tag the user switched to, not the write that was in flight', async () => {
+    let open: string | null = 't1'
+    const reload = vi.fn(async () => false)
+    window.prksTagsRemoveAlias = async () => {
+      open = 't2'
+      return { ok: true }
+    }
+    window.prksReloadTagsVocabulary = reload
+    const outcome = await browserTagsIntents(owner({ generation: 2 }), 2, {
+      openAliasTagId: () => open,
+    }).removeAlias('t1', 'Latin')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, { aliasTagId: 't2' })
+  })
+
+  it('keeps a successful write quiet in the dialog when the refresh does not repaint', async () => {
+    const reload = vi.fn(async () => false)
+    window.prksTagsAddAlias = async () => ({ ok: true })
+    window.prksReloadTagsVocabulary = reload
+    const outcome = await browserTagsIntents(owner({ generation: 2 }), 2).addAlias('t1', 'Latin')
+    expect(outcome.status).toBe('success')
+    expect(reload).toHaveBeenCalledWith(expect.anything(), 2, { aliasTagId: 't1' })
+  })
+
   it('merges through the durable wrapper only while the owner is still current', async () => {
     const state = { generation: 6 }
     const merge = vi.fn(async () => ({ ok: true }))

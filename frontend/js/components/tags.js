@@ -6,8 +6,9 @@
  * and remove stay raw HTTP because aliases live in `tag_aliases` and never
  * appear in a cached work.tags[] / folder.tags[]. Delete and merge stay on
  * the durable wrappers. `prksCloseTagsAliasModal` / `prksCloseTagsMergeModal`
- * remain the names Escape and overlay dismissal already call; they close the
- * Vue dialog and do not own selection.
+ * remain the names Escape and overlay dismissal already call. Escape passes
+ * the dialog element so only that pane closes. A call with no element closes
+ * every open Tags dialog. They do not own selection.
  */
 
 async function prksTagsAddAlias(tagId, alias) {
@@ -54,15 +55,15 @@ async function prksTagsMerge(sourceId, targetId) {
     return { ok: true };
 }
 
-function prksCloseTagsAliasModal() {
+function prksCloseTagsAliasModal(modal) {
     if (typeof window.prksVueCloseTagsAliasModal === 'function') {
-        window.prksVueCloseTagsAliasModal();
+        window.prksVueCloseTagsAliasModal(modal);
     }
 }
 
-function prksCloseTagsMergeModal() {
+function prksCloseTagsMergeModal(modal) {
     if (typeof window.prksVueCloseTagsMergeModal === 'function') {
-        window.prksVueCloseTagsMergeModal();
+        window.prksVueCloseTagsMergeModal(modal);
     }
 }
 

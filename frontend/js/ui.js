@@ -627,7 +627,7 @@ function prksCloseStandalonePageModal(modal) {
     const name = modal && PRKS_STANDALONE_PAGE_MODAL_CLOSERS[modal.id];
     const closer = name && window[name];
     if (typeof closer !== 'function') return false;
-    closer();
+    closer(modal);
     return true;
 }
 

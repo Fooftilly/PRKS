@@ -2963,17 +2963,28 @@ function prksPresentVueTags(ctx, contentDiv, detail) {
 
 /**
  * Refetch used tags and repaint this owner only. Alias add/remove passes
- * `resume.aliasTagId` so the dialog stays on that tag. Delete and merge pass
- * no resume. A generation that is no longer current does not paint.
+ * `resume.aliasTagId` for the dialog that is still open. A closed dialog is
+ * not resumed. A generation that is no longer current does not paint.
+ * A failed read keeps the list already on screen and reports the refresh
+ * failure. An empty successful read still paints the empty state.
  */
 async function prksReloadTagsVocabulary(ctx, generation, resume) {
     if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
     const route = ctx.lastResolvedRoute || ctx.route;
     if (!route || route.name !== 'tags') return false;
-    const tags = await fetchTags({ used: true });
+    const errorOwner = {};
+    const tags = await fetchTags({ used: true, errorOwner: errorOwner });
     if (!ctx.isCurrent(generation)) return false;
     const live = ctx.lastResolvedRoute || ctx.route;
     if (!live || live.name !== 'tags' || !ctx.root || !ctx.root.isConnected) return false;
+    const failure = typeof prksConsumeApiError === 'function' ? prksConsumeApiError(errorOwner) : null;
+    if (failure) {
+        const message = failure.message || 'Could not refresh tags.';
+        if (typeof window.prksVueReportTagsRefreshFailure === 'function') {
+            window.prksVueReportTagsRefreshFailure(ctx, message);
+        }
+        return false;
+    }
     prksPresentVueTags(ctx, ctx.root, {
         tags: tags,
         generation: generation,

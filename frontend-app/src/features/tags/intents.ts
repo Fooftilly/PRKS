@@ -13,6 +13,15 @@ export type TagsActionOutcome =
   | { status: 'quiet' }
   | { status: 'error'; message: string }
 
+export interface TagsIntentOptions {
+  /**
+   * The alias dialog this pane has open right now.
+   * Null means the user closed it. A different id means they switched tags.
+   * Absent means the caller has no live dialog to preserve.
+   */
+  openAliasTagId?: () => string | null
+}
+
 export interface TagsIntents {
   openTag(name: string): void
   addAlias(tagId: string, alias: string): Promise<TagsActionOutcome>
@@ -55,6 +64,13 @@ function deleteMessage(err: unknown): string {
   return actionMessage(err, DELETE_FAILURE)
 }
 
+function aliasResume(options: TagsIntentOptions | undefined, writtenTagId: string): TagsResume | null {
+  if (typeof options?.openAliasTagId !== 'function') return { aliasTagId: writtenTagId }
+  const openId = options.openAliasTagId()
+  if (openId == null || String(openId) === '') return null
+  return { aliasTagId: String(openId) }
+}
+
 async function reloadIfCurrent(
   owner: TagsIntentOwner | null,
   generation: number,
@@ -63,9 +79,10 @@ async function reloadIfCurrent(
   if (!owner || !ownsTags(owner, generation)) return quiet()
   const reload = window.prksReloadTagsVocabulary
   if (typeof reload !== 'function') return quiet()
-  const painted = await reload(owner, generation, resume)
+  await reload(owner, generation, resume)
   if (!ownsTags(owner, generation)) return quiet()
-  if (!painted) return quiet()
+  // The write landed. A failed refresh keeps the current list and reports
+  // itself; it is not a failed add, remove, delete, or merge.
   return success()
 }
 
@@ -75,7 +92,11 @@ async function reloadIfCurrent(
  * owner's generation: a confirm that outlives the pane does not write, and a
  * write that finishes late does not repaint a replaced owner.
  */
-export function browserTagsIntents(owner: TagsIntentOwner | null, generation: number): TagsIntents {
+export function browserTagsIntents(
+  owner: TagsIntentOwner | null,
+  generation: number,
+  options?: TagsIntentOptions,
+): TagsIntents {
   return {
     openTag(name) {
       if (!ownsTags(owner, generation) || !name) return
@@ -97,7 +118,7 @@ export function browserTagsIntents(owner: TagsIntentOwner | null, generation: nu
         if (!ownsTags(owner, generation)) return quiet()
         return failure(actionMessage(err, ADD_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, { aliasTagId: tagId })
+      return reloadIfCurrent(owner, generation, aliasResume(options, tagId))
     },
 
     async removeAlias(tagId, alias) {
@@ -111,7 +132,7 @@ export function browserTagsIntents(owner: TagsIntentOwner | null, generation: nu
         if (!ownsTags(owner, generation)) return quiet()
         return failure(actionMessage(err, REMOVE_ALIAS_FAILURE))
       }
-      return reloadIfCurrent(owner, generation, { aliasTagId: tagId })
+      return reloadIfCurrent(owner, generation, aliasResume(options, tagId))
     },
 
     async remove(tagId, name) {
