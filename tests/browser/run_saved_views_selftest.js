@@ -328,6 +328,17 @@ Promise.resolve(root.createSavedView({
                         .then(function (outcome) {
                             assertEq('stale index delete stays quiet', outcome && outcome.reason, 'stale');
                             assertEq('stale index delete does not refresh', navCalls.length, 0);
+                            let owns = true;
+                            root.deleteSavedView = function () {
+                                owns = false;
+                                return Promise.reject(new Error('late failure'));
+                            };
+                            return root.prksDeleteSavedViewFromIndex('SV-I8', function () { return owns; }, 'tab-index');
+                        })
+                        .then(function (outcome) {
+                            assertEq('late failed index delete after the owner leaves stays stale', outcome && outcome.reason, 'stale');
+                            assertEq('late failed index delete after the owner leaves does not refresh', navCalls.length, 0);
+                            assert('late failed index delete after the owner leaves drops the message', !(outcome && outcome.message));
                         });
                 });
         }).then(function () {

@@ -378,6 +378,7 @@
         try {
             await root.deleteSavedView(id);
         } catch (err) {
+            if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
             return {
                 ok: false,
                 reason: 'failed',
@@ -395,8 +396,8 @@
      */
     async function prksDeleteSavedViewFromIndex(id, still, tabId) {
         const outcome = await confirmAndDelete(id, still);
-        if (!outcome.ok) return outcome;
         if (typeof still === 'function' && !still()) return { ok: false, reason: 'stale' };
+        if (!outcome.ok) return outcome;
         if (typeof root.prksNavigate !== 'function') return { ok: false, reason: 'stale' };
         root.prksNavigate('#/views', tabId ? { replace: true, tabId: tabId } : { replace: true });
         return outcome;
