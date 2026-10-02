@@ -158,6 +158,17 @@ describe('saved view intents', () => {
     await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({ status: 'quiet' })
     window.prksDeleteSavedViewFromIndex = async () => ({ ok: false, reason: 'stale' })
     await expect(browserSavedViewIntents(indexOwner(state), 1).removeFromIndex('SV-1')).resolves.toEqual({ status: 'quiet' })
+
+    let releaseDelete: (value: { ok: boolean; reason: string; message: string }) => void = () => {}
+    window.prksDeleteSavedViewFromIndex = () =>
+      new Promise((resolve) => {
+        releaseDelete = resolve
+      })
+    const late = { generation: 2 }
+    const pending = browserSavedViewIntents(indexOwner(late), 2).removeFromIndex('SV-1')
+    late.generation = 3
+    releaseDelete({ ok: false, reason: 'failed', message: 'late failure' })
+    await expect(pending).resolves.toEqual({ status: 'quiet' })
   })
 
   it('opens the command palette from the empty index only while that index is current', () => {

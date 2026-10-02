@@ -117,6 +117,7 @@ export function browserSavedViewIntents(
       const outcome = await fn(viewId, () => ownsIndex(owner, generation), owner?.tabId)
       if (outcome && outcome.ok) return success()
       if (outcome && outcome.reason === 'failed') {
+        if (!ownsIndex(owner, generation)) return quiet()
         return failure(String(outcome.message || '').trim() || DELETE_FAILURE)
       }
       return quiet()

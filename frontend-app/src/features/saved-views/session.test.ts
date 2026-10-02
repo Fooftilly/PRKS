@@ -364,6 +364,43 @@ describe('Saved Views index route bridge', () => {
     expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
   })
 
+  it('stays quiet when a delete fails after the owning index goes stale', async () => {
+    window.prksSearchSummaryText = () => 'Any file'
+    window.prksPageHeaderIconHtml = () => ''
+    window.prksIcon = () => ''
+    let releaseDelete: (value: { ok: boolean; reason: string; message: string }) => void = () => {}
+    window.prksDeleteSavedViewFromIndex = () =>
+      new Promise((resolve) => {
+        releaseDelete = resolve
+      })
+    const main = owner('main')
+    const other = owner('other')
+    main.state.generation = 3
+    other.state.generation = 1
+    main.state.routeName = 'saved-views'
+    other.state.routeName = 'saved-views'
+    const mainHost = host()
+    const otherHost = host()
+    presentSavedViewsIndex({ owner: main, host: mainHost, views: [VIEW], generation: 3 })
+    presentSavedViewsIndex({ owner: other, host: otherHost, views: [VIEW], generation: 1 })
+    const deleteButton = (root: HTMLElement) =>
+      root.querySelector('[data-sv-index-delete="SV 1"]') as HTMLButtonElement
+
+    deleteButton(mainHost).click()
+    await nextTick()
+    expect(deleteButton(mainHost).textContent).toBe('Deleting…')
+    expect(deleteButton(mainHost).classList.contains('prks-btn--danger')).toBe(true)
+    main.state.generation = 4
+    releaseDelete({ ok: false, reason: 'failed', message: 'late failure' })
+    await flushPromises()
+    expect(mainHost.textContent).not.toContain('late failure')
+    expect(mainHost.querySelector('[data-sv-index-error]')).toBeNull()
+    expect(deleteButton(mainHost).disabled).toBe(false)
+    expect(deleteButton(mainHost).textContent?.trim()).toBe('Delete')
+    expect(deleteButton(otherHost).disabled).toBe(false)
+    expect(otherHost.querySelector('[data-sv-index-error]')).toBeNull()
+  })
+
   it('paints the empty index, keeps owners apart, and drops a stale generation', async () => {
     const palette = vi.fn()
     window.prksOpenCommandPalette = palette
