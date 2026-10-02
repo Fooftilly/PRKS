@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { PrksRouteInstance } from './routes'
+import type { PrksRouteInstance, PrksRouteInstanceInput } from './routes'
+
+function acceptRouteInput(route: PrksRouteInstanceInput): PrksRouteInstanceInput {
+  return route
+}
 
 /**
  * Fails typecheck when a mounted route is added to `PrksRouteInstance` and
@@ -60,5 +64,22 @@ describe('PrksRouteInstance', () => {
     expect(routeName(detail)).toBe('concept-detail')
     if (search.name === 'search') expect(search.params.q).toBe('adorno')
     if (detail.name === 'concept-detail') expect(detail.params.conceptId).toBe('C-1')
+  })
+
+  it('rejects a route name paired with another member’s params', () => {
+    const recent = acceptRouteInput({
+      name: 'recent',
+      canonicalHash: '#/recent',
+      params: {},
+      ownsMainShell: true,
+    })
+    expect(recent.name).toBe('recent')
+    // @ts-expect-error recent cannot carry concept-detail params
+    acceptRouteInput({
+      name: 'recent',
+      canonicalHash: '#/recent',
+      params: { conceptId: 'C-1' },
+      ownsMainShell: false,
+    })
   })
 })

@@ -134,7 +134,7 @@ export function presentRouteSurface(input: RouteSurfacePresent): boolean {
   const generation = requested ?? session.paintedGeneration + 1
   if (generation <= session.closedGeneration || generation < session.paintedGeneration) return false
   if (!input.host || !input.host.isConnected) return false
-  const route = { ...input.route, generation } as PrksRouteInstance
+  const route: PrksRouteInstance = { ...input.route, generation }
   session.paintedGeneration = generation
   session.route = route
   if (input.armBeginRouteCleanup !== false) {

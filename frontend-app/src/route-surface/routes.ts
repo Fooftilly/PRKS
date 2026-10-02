@@ -55,7 +55,14 @@ export type PrksRouteInstance =
   | PersonGroupDetailRouteInstance
   | ResearchGraphRouteInstance
 
+/**
+ * Present input for one union member. `Omit` is not distributive, so this
+ * applies it to each member, then adds an optional generation. A name and
+ * params pair from different members is not assignable.
+ */
+type RouteInstanceInputMember<T> = T extends unknown
+  ? Omit<T, 'generation'> & { readonly generation?: number }
+  : never
+
 /** Present input. Generation is filled from this owner when the caller omits it. */
-export type PrksRouteInstanceInput = Omit<PrksRouteInstance, 'generation'> & {
-  readonly generation?: number
-}
+export type PrksRouteInstanceInput = RouteInstanceInputMember<PrksRouteInstance>
