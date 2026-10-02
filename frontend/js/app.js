@@ -3058,6 +3058,92 @@ async function prksReloadPublishersPage(ctx, generation, resume) {
 window.prksReloadPublishersPage = prksReloadPublishersPage;
 
 /**
+ * Mount the Vue Processing inbox in this pane.
+ * `detail.files` is already `fetchProcessingFiles({ rescan: true })`.
+ * People and folders are the catalogs the cards search. Vue does not fetch.
+ * The preview iframe is released before this host is replaced.
+ */
+function prksPresentVueProcessing(ctx, contentDiv, detail) {
+    if (typeof window.prksProcessingReleaseResources === 'function') {
+        window.prksProcessingReleaseResources(ctx);
+    }
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'processing-files',
+        owner: ctx,
+        files: detail.files,
+        people: detail.people,
+        folders: detail.folders,
+        roleTypes: detail.roleTypes,
+        domPrefix: detail.domPrefix,
+        generation: detail.generation,
+        resume: detail.resume || null,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentProcessing === 'function') {
+        window.prksVuePresentProcessing(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
+ * Rescan the inbox and repaint this owner only. `resume.visibleCount` keeps
+ * the loaded window. A generation that is no longer current does not paint
+ * and does not move the nav badge.
+ */
+async function prksReloadProcessingFiles(ctx, generation, resume) {
+    if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'processing-files') return false;
+    const loaded = await prksLoadProcessingInbox();
+    if (!ctx.isCurrent(generation)) return false;
+    const live = ctx.lastResolvedRoute || ctx.route;
+    if (!live || live.name !== 'processing-files' || !ctx.root || !ctx.root.isConnected) return false;
+    ctx.routeSidebar = { pendingCount: loaded.items.length };
+    if (typeof prksSetProcessingAttentionCount === 'function') {
+        prksSetProcessingAttentionCount(loaded.items.length);
+    }
+    if (!ctx.isCurrent(generation)) return false;
+    prksPresentVueProcessing(ctx, ctx.root, {
+        files: loaded.items,
+        people: loaded.people,
+        folders: loaded.folders,
+        roleTypes: typeof window.prksProcessingRoleTypes === 'function' ? window.prksProcessingRoleTypes() : [],
+        domPrefix: typeof window.prksProcessingDomPrefix === 'function' ? window.prksProcessingDomPrefix(ctx) : 'prks-pf',
+        generation: generation,
+        resume: resume || null,
+    });
+    if (
+        typeof prksTabContextIsFocused === 'function' &&
+        prksTabContextIsFocused(ctx) &&
+        typeof updatePanelContent === 'function'
+    ) {
+        updatePanelContent('details');
+    }
+    return true;
+}
+
+async function prksLoadProcessingInbox(signal) {
+    const request = signal ? { signal: signal } : {};
+    const [items, people, folders] = await Promise.all([
+        fetchProcessingFiles(Object.assign({ rescan: true }, request)),
+        typeof fetchPersons === 'function' ? fetchPersons(request) : Promise.resolve([]),
+        typeof fetchFolders === 'function' ? fetchFolders(request) : Promise.resolve([]),
+    ]);
+    return {
+        items: Array.isArray(items) ? items : [],
+        people: Array.isArray(people) ? people : [],
+        folders: Array.isArray(folders) ? folders : [],
+    };
+}
+
+window.prksReloadProcessingFiles = prksReloadProcessingFiles;
+
+/**
  * The one read behind Search and Saved View detail. Membership is the
  * server's (`fetchSearch`), and the response is never cached. A pending local
  * edit is not on the server yet, so the rows are overlaid with
@@ -3937,6 +4023,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissPublishers === 'function') {
             window.prksVueDismissPublishers(ctx);
         }
+        if (typeof window.prksVueDismissProcessing === 'function') {
+            window.prksVueDismissProcessing(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -4571,23 +4660,22 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'processing-files': {
-                if (typeof prksRenderProcessingFilesPageWithFetch === 'function') {
-                    await prksRenderProcessingFilesPageWithFetch(contentDiv, { rescan: true, routeGen: generation, signal: routeSignal, ctx: ctx });
-                    if (stale()) return;
-                } else {
-                    const rows = await fetchProcessingFiles({ rescan: true, signal: routeSignal });
-                    if (stale()) return;
-                    publishSidebar({ pendingCount: Array.isArray(rows) ? rows.length : 0 });
-                    if (Array.isArray(rows) && typeof prksSetProcessingAttentionCount === 'function') {
-                        prksSetProcessingAttentionCount(rows.length);
-                    }
-                    if (typeof renderProcessingFilesPage === 'function') {
-                        renderProcessingFilesPage(rows, contentDiv);
-                    } else {
-                        contentDiv.innerHTML =
-                            '<div class="prks-page-header page-header"><h2 class="prks-page-title">Files for Processing</h2></div><p class="meta-row">Processing inbox UI unavailable.</p>';
-                    }
+                const loaded = await prksLoadProcessingInbox(routeSignal);
+                if (stale()) return;
+                publishSidebar({ pendingCount: loaded.items.length });
+                if (stale()) return;
+                if (typeof prksSetProcessingAttentionCount === 'function') {
+                    prksSetProcessingAttentionCount(loaded.items.length);
                 }
+                if (stale()) return;
+                prksPresentVueProcessing(ctx, contentDiv, {
+                    files: loaded.items,
+                    people: loaded.people,
+                    folders: loaded.folders,
+                    roleTypes: typeof window.prksProcessingRoleTypes === 'function' ? window.prksProcessingRoleTypes() : [],
+                    domPrefix: typeof window.prksProcessingDomPrefix === 'function' ? window.prksProcessingDomPrefix(ctx) : 'prks-pf',
+                    generation: generation,
+                });
                 break;
             }
             case 'search': {

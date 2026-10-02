@@ -668,6 +668,18 @@ AFFECTED_RULES = (
         "note": "Vue Publishers page (#302 R3) → publishers, because test_publishers_route_surface opens #/publishers. Shared route-surface stays unmapped (CI full).",
     },
     {
+        "name": "processing-vue",
+        "paths": ("frontend-app/src/features/processing/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("browse",),
+        "note": "Vue Processing Files inbox (#302 R3) → browse. Shared route-surface stays unmapped (CI full).",
+    },
+    {
         "name": "concepts-vue",
         "paths": ("frontend-app/src/features/concepts/**",),
         "exclude_paths": (
