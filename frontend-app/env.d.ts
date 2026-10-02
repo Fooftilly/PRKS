@@ -84,6 +84,14 @@ interface ProcessingPresentRequest {
   resume?: { visibleCount?: number | null } | null
 }
 
+/** Painted inbox people. The coordinator stores the person rows; quick-create appends `{ id, name }`. */
+interface ProcessingPeopleCatalogueEntry {
+  id?: string
+  name?: string
+  first_name?: string
+  last_name?: string
+}
+
 interface ProcessingDraft {
   title?: string
   status_draft?: string
@@ -402,6 +410,7 @@ interface Window {
   prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
+  __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
   prksVuePresentProcessing?: (input: ProcessingPresentRequest) => void
   prksVueDismissProcessing?: (owner: object) => void
   prksReloadProcessingFiles?: (
