@@ -8,6 +8,8 @@ import {
   filterProcessingPeople,
   filterProcessingTags,
   folderTitle,
+  processingFoldersAfterCreate,
+  processingPeopleAfterCreate,
   processingWidgetPrefix,
   type ProcessingFileDraft,
   type ProcessingFileRow,
@@ -265,11 +267,7 @@ async function createPerson(): Promise<void> {
   hideResults(personResults.value, personOpen)
   const created = await props.intents.quickCreatePerson(typed)
   if (!created) return
-  emit('people', created.people.length ? created.people : props.people.concat([{
-    id: created.id,
-    name: created.name,
-    raw: { id: created.id, first_name: created.name },
-  }]))
+  emit('people', processingPeopleAfterCreate(props.people, { id: created.id, name: created.name }))
   personId.value = created.id
   personQuery.value = created.name
 }
@@ -283,10 +281,11 @@ function chooseFolder(folder: ProcessingFolder): void {
 async function createFolder(): Promise<void> {
   const created = await props.intents.quickCreateFolder(folderQuery.value)
   if (!created) return
-  const folders = created.folders.some((folder) => folder.id === created.id)
-    ? created.folders
-    : created.folders.concat([{ id: created.id, title: created.title }])
-  emit('folders', folders)
+  emit('folders', processingFoldersAfterCreate(
+    props.folders,
+    created.foldersFailed ? null : created.folders,
+    { id: created.id, title: created.title },
+  ))
   draft.target_folder_id = created.id
   folderQuery.value = created.title
   hideResults(folderResults.value, folderOpen)
@@ -343,13 +342,21 @@ async function save(): Promise<void> {
 
 async function importFile(): Promise<void> {
   importing.value = true
-  const outcome = await props.intents.importFile(props.file.id, collectDraft(), {
-    visibleCount: props.visibleCount,
-  })
-  if (!rootEl.value?.isConnected) return
-  importing.value = false
-  if (outcome.status === 'error') message.value = outcome.message
-  else if (outcome.status === 'success') message.value = 'Imported to library.'
+  try {
+    const outcome = await props.intents.importFile(props.file.id, collectDraft(), {
+      visibleCount: props.visibleCount,
+    })
+    if (!rootEl.value?.isConnected) return
+    if (outcome.status === 'error') message.value = outcome.message
+    else if (outcome.status === 'success') message.value = 'Imported to library.'
+  } catch (err) {
+    if (!rootEl.value?.isConnected) return
+    message.value = err instanceof Error && err.message.trim()
+      ? err.message.trim()
+      : 'Could not refresh files for processing.'
+  } finally {
+    if (rootEl.value?.isConnected) importing.value = false
+  }
 }
 
 onMounted(() => {

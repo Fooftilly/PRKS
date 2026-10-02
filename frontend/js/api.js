@@ -230,11 +230,18 @@ async function fetchWorks(options = {}) {
  * -- would make offline creation useless the moment it succeeded.
  */
 async function fetchFolders(options = {}) {
-    if (typeof prksEffectiveFolderCatalogue === 'function') {
-        try { return await prksEffectiveFolderCatalogue() || []; }
-        catch (_e) { return []; }
-    }
     const errorOwner = prksApiErrorOwner(options);
+    if (typeof prksEffectiveFolderCatalogue === 'function') {
+        try {
+            const rows = await prksEffectiveFolderCatalogue();
+            return Array.isArray(rows) ? rows : [];
+        } catch (e) {
+            if (prksAbortFallback(e)) return [];
+            prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
+            prksReportApiClientError('folders');
+            return [];
+        }
+    }
     try {
         const res = await prksRequest('/api/folders', { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
         const data = await prksParseJsonResponse(res, [], 'folders', errorOwner);

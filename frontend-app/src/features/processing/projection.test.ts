@@ -5,8 +5,12 @@ import {
   filterProcessingPeople,
   filterProcessingTags,
   normalizeProcessingFile,
+  processingFoldersAfterCreate,
+  processingPeopleAfterCreate,
   processingVisibleCount,
   processingWidgetPrefix,
+  type ProcessingFolder,
+  type ProcessingPerson,
 } from './projection'
 
 describe('Processing inbox projection', () => {
@@ -72,5 +76,37 @@ describe('Processing inbox projection', () => {
     )
     expect(tags.tags).toEqual([])
     expect(tags.canCreate).toBe(true)
+  })
+})
+
+const ada: ProcessingPerson = { id: 'ada', name: 'Ada Lovelace', raw: { id: 'ada' } }
+const grace: ProcessingPerson = { id: 'grace', name: 'Grace Hopper', raw: { id: 'grace' } }
+const library: ProcessingFolder = { id: 'lib', title: 'Library' }
+const archive: ProcessingFolder = { id: 'arc', title: 'Archive' }
+
+describe('Processing catalogue after quick-create', () => {
+  it('keeps painted people when the returned catalogue is empty or only the new person', () => {
+    const created = { id: 'new', name: 'New Person' }
+    expect(processingPeopleAfterCreate([ada, grace], created).map((person) => person.id)).toEqual([
+      'ada',
+      'grace',
+      'new',
+    ])
+    expect(processingPeopleAfterCreate([ada, grace], { id: 'ada', name: 'Ada Lovelace' })).toEqual([ada, grace])
+  })
+
+  it('keeps painted folders when the folder read is empty or only the new folder', () => {
+    const created = { id: 'created', title: 'Created' }
+    expect(processingFoldersAfterCreate([library, archive], [], created).map((folder) => folder.id)).toEqual([
+      'lib',
+      'arc',
+      'created',
+    ])
+    expect(processingFoldersAfterCreate([library, archive], [created], created).map((folder) => folder.title)).toEqual([
+      'Library',
+      'Archive',
+      'Created',
+    ])
+    expect(processingFoldersAfterCreate([library], null, created).map((folder) => folder.id)).toEqual(['lib', 'created'])
   })
 })

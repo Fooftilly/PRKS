@@ -41,7 +41,9 @@ export interface ProcessingPersonCreated {
 export interface ProcessingFolderCreated {
   id: string
   title: string
-  folders: ProcessingFolder[]
+  /** Null when the folder read failed. The painted list stays the catalogue. */
+  folders: ProcessingFolder[] | null
+  foldersFailed?: boolean
 }
 
 export interface ProcessingIntents {
@@ -59,6 +61,7 @@ export interface ProcessingIntents {
 
 const SAVE_FAILURE = 'Save failed.'
 const IMPORT_FAILURE = 'Import failed.'
+const REFRESH_FAILURE = 'Could not refresh files for processing.'
 
 function quiet(): ProcessingActionOutcome {
   return { status: 'quiet' }
@@ -94,10 +97,16 @@ async function reloadIfCurrent(
   if (!owner || !ownsProcessing(owner, generation)) return quiet()
   const reload = window.prksReloadProcessingFiles
   if (typeof reload !== 'function') return quiet()
-  const painted = await reload(owner, generation, resume)
-  if (!ownsProcessing(owner, generation)) return quiet()
-  if (!painted) return quiet()
-  return success()
+  try {
+    const painted = await reload(owner, generation, resume)
+    if (!ownsProcessing(owner, generation)) return quiet()
+    if (typeof painted === 'string' && painted.trim()) return failure(painted.trim())
+    if (painted !== true) return quiet()
+    return success()
+  } catch (err) {
+    if (!ownsProcessing(owner, generation)) return quiet()
+    return failure(actionMessage(err, REFRESH_FAILURE))
+  }
 }
 
 /**
@@ -178,7 +187,8 @@ export function browserProcessingIntents(
       return {
         id: String(created.id),
         title: String(created.title || title),
-        folders: normalizeProcessingFolders(created.folders),
+        folders: created.foldersFailed ? null : normalizeProcessingFolders(created.folders),
+        foldersFailed: !!created.foldersFailed,
       }
     },
     async quickCreatePerson(name) {

@@ -228,22 +228,35 @@ async function prksProcessingQuickCreateFolder(title) {
         }
         return { ok: false };
     }
+    const errorOwner = {};
     let folders = [];
+    let foldersFailed = false;
     try {
-        const fetched = await fetchFolders();
-        folders = Array.isArray(fetched) ? fetched : [];
+        const fetched = await fetchFolders({ errorOwner: errorOwner });
+        const failure = typeof prksConsumeApiError === 'function' ? prksConsumeApiError(errorOwner) : null;
+        if (failure) foldersFailed = true;
+        else folders = Array.isArray(fetched) ? fetched : [];
     } catch (_e) {
-        folders = [];
+        foldersFailed = true;
     }
-    try {
-        allFolders = folders;
-        window.allFolders = allFolders;
-    } catch (_e2) {}
-    return { ok: true, id: String(newFolderId || ''), title: trimmed, folders: folders };
+    if (!foldersFailed) {
+        try {
+            allFolders = folders;
+            window.allFolders = allFolders;
+        } catch (_e2) {}
+    }
+    return {
+        ok: true,
+        id: String(newFolderId || ''),
+        title: trimmed,
+        folders: foldersFailed ? null : folders,
+        foldersFailed: foldersFailed,
+    };
 }
 
 async function prksProcessingQuickCreatePerson(name) {
     if (typeof prksQuickCreatePersonForSearchField !== 'function') return null;
+    const painted = Array.isArray(window.__prksProcessingPeople) ? window.__prksProcessingPeople.slice() : [];
     const search = document.createElement('input');
     const hidden = document.createElement('input');
     await prksQuickCreatePersonForSearchField(
@@ -253,9 +266,18 @@ async function prksProcessingQuickCreatePerson(name) {
         'Quick-created from processing inbox',
         { stillApplies: function () { return true; } }
     );
-    if (!hidden.value) return null;
-    const people = Array.isArray(window.__prksProcessingPeople) ? window.__prksProcessingPeople : [];
-    return { id: String(hidden.value), name: String(search.value || name || ''), people: people };
+    if (!hidden.value) {
+        window.__prksProcessingPeople = painted;
+        return null;
+    }
+    const id = String(hidden.value);
+    const createdName = String(search.value || name || '');
+    const people = painted.slice();
+    if (!people.some(function (person) { return person && String(person.id) === id; })) {
+        people.push({ id: id, name: createdName });
+    }
+    window.__prksProcessingPeople = people;
+    return { id: id, name: createdName, people: people };
 }
 
 window.prksProcessingRoleTypes = prksProcessingRoleTypes;

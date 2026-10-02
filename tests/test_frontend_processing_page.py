@@ -25,7 +25,8 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertNotIn("prksRenderProcessingFilesPageWithFetch", body)
         self.assertNotIn("renderProcessingFilesPage", body)
         self.assertIn("async function prksLoadProcessingInbox(", app)
-        self.assertIn("fetchProcessingFiles(Object.assign({ rescan: true }", app)
+        self.assertIn("Object.assign({ rescan: true }", app)
+        self.assertIn("fetchProcessingFiles(fileRequest)", app)
         self.assertIn("async function prksReloadProcessingFiles(", app)
         self.assertIn("prksVueDismissProcessing", app)
 
@@ -77,6 +78,45 @@ class FrontendProcessingPageTests(unittest.TestCase):
         e2e = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "test_processing_route_surface.py"))
         self.assertIn("prksNavigate('#/processing-files')", e2e)
         self.assertIn("data-prks-processing-page", e2e)
+
+    def test_failed_reads_keep_the_painted_inbox_and_people(self):
+        app = _read(_APP)
+        present = app.split("function prksPresentVueProcessing(", 1)[1].split(
+            "async function prksReloadProcessingFiles(", 1
+        )[0]
+        self.assertIn("window.__prksProcessingPeople = Array.isArray(detail.people)", present)
+        reload = app.split("async function prksReloadProcessingFiles(", 1)[1].split(
+            "async function prksLoadProcessingInbox(", 1
+        )[0]
+        self.assertLess(reload.index("readError"), reload.index("ctx.routeSidebar"))
+        self.assertLess(reload.index("if (readError) return readError;"), reload.index("prksPresentVueProcessing"))
+        load = app.split("async function prksLoadProcessingInbox(", 1)[1].split(
+            "window.prksReloadProcessingFiles", 1
+        )[0]
+        self.assertIn("errorOwner", load)
+        self.assertIn("prksConsumeApiError", load)
+        self.assertIn("filesError", load)
+        api = _read(os.path.join(_PROJECT_DIR, "frontend", "js", "api.js"))
+        fetch = api.split("async function fetchProcessingFiles(", 1)[1].split(
+            "async function patchProcessingFile(", 1
+        )[0]
+        self.assertIn("return [];", fetch)
+        quick = _read(_PROCESSING).split("async function prksProcessingQuickCreatePerson(", 1)[1].split(
+            "window.prksProcessingRoleTypes", 1
+        )[0]
+        self.assertLess(
+            quick.index("window.__prksProcessingPeople"),
+            quick.index("await prksQuickCreatePersonForSearchField"),
+        )
+        folder = _read(_PROCESSING).split("async function prksProcessingQuickCreateFolder(", 1)[1].split(
+            "async function prksProcessingQuickCreatePerson(", 1
+        )[0]
+        self.assertIn("foldersFailed", folder)
+        self.assertLess(folder.index("if (!foldersFailed)"), folder.index("allFolders = folders"))
+        card = _read(os.path.join(_VUE, "ProcessingFileCard.vue"))
+        self.assertIn("processingPeopleAfterCreate", card)
+        self.assertNotIn("created.people.length", card)
+        self.assertIn("processingFoldersAfterCreate", card)
 
 
 if __name__ == "__main__":

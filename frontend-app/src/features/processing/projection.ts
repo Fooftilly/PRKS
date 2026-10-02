@@ -191,6 +191,44 @@ export function normalizeProcessingFile(value: unknown): ProcessingFileRow | nul
   }
 }
 
+/** Keep the painted people and append only the person just created. */
+export function processingPeopleAfterCreate(
+  painted: ProcessingPerson[],
+  created: { id: string; name: string },
+): ProcessingPerson[] {
+  const id = created.id.trim()
+  if (!id) return painted.slice()
+  if (painted.some((person) => person.id === id)) return painted.slice()
+  return painted.concat([{
+    id,
+    name: created.name.trim() || id,
+    raw: { id, name: created.name },
+  }])
+}
+
+/**
+ * Keep every painted folder. A failed read is null or empty and must not
+ * become the whole catalogue. The created folder is added when it is missing.
+ */
+export function processingFoldersAfterCreate(
+  painted: ProcessingFolder[],
+  fetched: ProcessingFolder[] | null,
+  created: { id: string; title: string },
+): ProcessingFolder[] {
+  const out: ProcessingFolder[] = []
+  const seen = new Set<string>()
+  function add(folder: { id?: string; title?: string } | null | undefined): void {
+    const id = String(folder?.id || '').trim()
+    if (!id || seen.has(id)) return
+    seen.add(id)
+    out.push({ id, title: String(folder?.title || '').trim() || id })
+  }
+  painted.forEach(add)
+  if (Array.isArray(fetched)) fetched.forEach(add)
+  add(created)
+  return out
+}
+
 export function normalizeProcessingPeople(value: unknown): ProcessingPerson[] {
   if (!Array.isArray(value)) return []
   const people: ProcessingPerson[] = []

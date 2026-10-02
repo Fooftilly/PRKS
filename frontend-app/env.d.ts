@@ -408,7 +408,7 @@ interface Window {
     owner: object,
     generation: number,
     resume?: { visibleCount?: number | null } | null,
-  ) => Promise<boolean>
+  ) => Promise<boolean | string>
   prksProcessingRoleTypes?: () => string[]
   prksProcessingDomPrefix?: (owner: { tabId?: string } | null | undefined) => string
   prksProcessingAttachResources?: (owner: object, host: HTMLElement) => void
@@ -426,6 +426,7 @@ interface Window {
     id?: string
     title?: string
     folders?: unknown
+    foldersFailed?: boolean
   }>
   prksProcessingQuickCreatePerson?: (name: string) => Promise<{
     id: string

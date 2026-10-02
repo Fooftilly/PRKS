@@ -3064,6 +3064,7 @@ window.prksReloadPublishersPage = prksReloadPublishersPage;
  * The preview iframe is released before this host is replaced.
  */
 function prksPresentVueProcessing(ctx, contentDiv, detail) {
+    window.__prksProcessingPeople = Array.isArray(detail.people) ? detail.people : [];
     if (typeof window.prksProcessingReleaseResources === 'function') {
         window.prksProcessingReleaseResources(ctx);
     }
@@ -3093,16 +3094,20 @@ function prksPresentVueProcessing(ctx, contentDiv, detail) {
 /**
  * Rescan the inbox and repaint this owner only. `resume.visibleCount` keeps
  * the loaded window. A generation that is no longer current does not paint
- * and does not move the nav badge.
+ * and does not move the nav badge. A failed read returns the message and
+ * leaves the painted inbox and sidebar count alone. An empty successful
+ * read still paints the empty state.
  */
 async function prksReloadProcessingFiles(ctx, generation, resume) {
     if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
     const route = ctx.lastResolvedRoute || ctx.route;
     if (!route || route.name !== 'processing-files') return false;
-    const loaded = await prksLoadProcessingInbox();
+    const loaded = await prksLoadProcessingInbox(null, true);
     if (!ctx.isCurrent(generation)) return false;
     const live = ctx.lastResolvedRoute || ctx.route;
     if (!live || live.name !== 'processing-files' || !ctx.root || !ctx.root.isConnected) return false;
+    const readError = loaded.filesError || loaded.peopleError || loaded.foldersError;
+    if (readError) return readError;
     ctx.routeSidebar = { pendingCount: loaded.items.length };
     if (typeof prksSetProcessingAttentionCount === 'function') {
         prksSetProcessingAttentionCount(loaded.items.length);
@@ -3127,17 +3132,36 @@ async function prksReloadProcessingFiles(ctx, generation, resume) {
     return true;
 }
 
-async function prksLoadProcessingInbox(signal) {
+async function prksLoadProcessingInbox(signal, trackErrors) {
     const request = signal ? { signal: signal } : {};
+    const filesOwner = {};
+    const peopleOwner = {};
+    const foldersOwner = {};
+    const fileRequest = Object.assign({ rescan: true }, request);
+    const peopleRequest = Object.assign({}, request);
+    const folderRequest = Object.assign({}, request);
+    if (trackErrors) {
+        fileRequest.errorOwner = filesOwner;
+        peopleRequest.errorOwner = peopleOwner;
+        folderRequest.errorOwner = foldersOwner;
+    }
     const [items, people, folders] = await Promise.all([
-        fetchProcessingFiles(Object.assign({ rescan: true }, request)),
-        typeof fetchPersons === 'function' ? fetchPersons(request) : Promise.resolve([]),
-        typeof fetchFolders === 'function' ? fetchFolders(request) : Promise.resolve([]),
+        fetchProcessingFiles(fileRequest),
+        typeof fetchPersons === 'function' ? fetchPersons(peopleRequest) : Promise.resolve([]),
+        typeof fetchFolders === 'function' ? fetchFolders(folderRequest) : Promise.resolve([]),
     ]);
+    function failureMessage(owner, fallback) {
+        if (!trackErrors || typeof prksConsumeApiError !== 'function') return '';
+        const failure = prksConsumeApiError(owner);
+        return failure ? (failure.message || fallback) : '';
+    }
     return {
         items: Array.isArray(items) ? items : [],
         people: Array.isArray(people) ? people : [],
         folders: Array.isArray(folders) ? folders : [],
+        filesError: failureMessage(filesOwner, 'Could not load files for processing.'),
+        peopleError: failureMessage(peopleOwner, 'Could not load people.'),
+        foldersError: failureMessage(foldersOwner, 'Could not load folders.'),
     };
 }
 

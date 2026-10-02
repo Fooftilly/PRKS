@@ -17,6 +17,7 @@ const props = defineProps<{
 
 const rootEl = ref<HTMLElement | null>(null)
 const scanning = ref(false)
+const refreshError = ref('')
 const visibleCount = ref(props.projection.visibleCount)
 const people = ref<ProcessingPerson[]>(props.projection.people)
 const folders = ref<ProcessingFolder[]>(props.projection.folders)
@@ -32,9 +33,19 @@ function loadMore(): void {
 
 async function refresh(): Promise<void> {
   scanning.value = true
-  await props.intents.reload({ visibleCount: visibleCount.value })
-  if (!rootEl.value?.isConnected) return
-  scanning.value = false
+  try {
+    const outcome = await props.intents.reload({ visibleCount: visibleCount.value })
+    if (!rootEl.value?.isConnected) return
+    if (outcome.status === 'error') refreshError.value = outcome.message
+    else if (outcome.status === 'success') refreshError.value = ''
+  } catch (err) {
+    if (!rootEl.value?.isConnected) return
+    refreshError.value = err instanceof Error && err.message.trim()
+      ? err.message.trim()
+      : 'Could not refresh files for processing.'
+  } finally {
+    if (rootEl.value?.isConnected) scanning.value = false
+  }
 }
 
 function replacePeople(next: ProcessingPerson[]): void {
@@ -67,6 +78,12 @@ onBeforeUnmount(() => {
         @click="refresh"
       >Refresh folder scan</PrksButton>
     </div>
+    <p
+      v-if="refreshError"
+      class="prks-inline-message prks-inline-message--error"
+      role="status"
+      data-prks-processing-refresh-error
+    >{{ refreshError }}</p>
     <p class="meta-row meta-row--lede">
       Inbox reads PDFs recursively from <code>/data/for_processing</code>. Files here stay out of library search and graph until imported.
     </p>

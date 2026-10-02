@@ -18,7 +18,18 @@ afterEach(() => {
   delete window.prksProcessingReleaseResources
   delete window.prksProcessingSetPreview
   delete window.prksReloadProcessingFiles
+  delete window.prksProcessingQuickCreatePerson
+  delete window.prksProcessingQuickCreateFolder
+  delete window.prksProcessingSave
+  delete window.prksProcessingImport
+  delete window.__prksProcessingPeople
 })
+
+async function flush(): Promise<void> {
+  await nextTick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await nextTick()
+}
 
 function host(): HTMLElement {
   const el = document.createElement('div')
@@ -119,6 +130,165 @@ describe('Processing Files route bridge', () => {
     dismissProcessing(current)
     expect(release).toHaveBeenCalledWith(current)
     expect(pane.querySelector('[data-prks-processing-page]')).toBeNull()
+  })
+
+  it('keeps painted people when quick-create returns an empty or short global catalogue', async () => {
+    window.__prksProcessingPeople = []
+    window.prksProcessingQuickCreatePerson = async () => {
+      window.__prksProcessingPeople = [{ id: 'new', name: 'New Person' }]
+      return { id: 'new', name: 'New Person', people: [{ id: 'new', name: 'New Person' }] }
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [
+        { id: 'ada', first_name: 'Ada', last_name: 'Lovelace' },
+        { id: 'grace', first_name: 'Grace', last_name: 'Hopper' },
+      ],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('[aria-label="Search person"]')
+    input!.value = 'New Person'
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    el.querySelector('.result-item--create')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await flush()
+    input!.value = ''
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const names = [...el.querySelectorAll('.result-item--person-pick .result-item__primary')].map((node) => node.textContent)
+    expect(names).toEqual(['Ada Lovelace', 'Grace Hopper', 'New Person'])
+    expect(window.__prksProcessingPeople).toEqual([{ id: 'new', name: 'New Person' }])
+  })
+
+  it('keeps painted folders when the folder read after create is only the new folder', async () => {
+    window.prksProcessingQuickCreateFolder = async () => ({
+      ok: true,
+      id: 'created',
+      title: 'Created',
+      folders: [{ id: 'created', title: 'Created' }],
+      foldersFailed: false,
+    })
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [
+        { id: 'lib', title: 'Library' },
+        { id: 'arc', title: 'Archive' },
+      ],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('[aria-label="Search folder"]')
+    input!.value = 'Created'
+    input!.dispatchEvent(new Event('input'))
+    el.querySelector<HTMLButtonElement>('[aria-label="Create new folder"]')?.click()
+    await flush()
+    input!.value = ''
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    const folderList = input!.closest('.tag-add-shell')?.querySelector('.combobox-results')
+    const titles = [...(folderList?.querySelectorAll('.result-item') || [])]
+      .map((node) => node.textContent?.trim())
+      .filter((title) => title && title !== 'No folders found')
+    expect(titles).toEqual(['Library', 'Archive', 'Created'])
+  })
+
+  it('keeps the inbox when a refresh rejects, then clears the busy state', async () => {
+    window.prksReloadProcessingFiles = async () => {
+      throw new Error('Could not refresh files for processing.')
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#prks-processing-refresh')?.click()
+    await flush()
+    expect(el.querySelector('[data-processing-id="pdf-1"]')).not.toBeNull()
+    expect(el.querySelector('[data-prks-processing-refresh-error]')?.textContent).toContain(
+      'Could not refresh files for processing.',
+    )
+    const refresh = el.querySelector<HTMLButtonElement>('#prks-processing-refresh')
+    expect(refresh?.getAttribute('aria-busy')).toBeNull()
+    expect(refresh?.textContent).toContain('Refresh folder scan')
+  })
+
+  it('stays quiet when a refresh rejects for a stale owner', async () => {
+    let current = true
+    const pane = {
+      tabId: 'main',
+      isCurrent: () => current,
+      route: { name: 'processing-files' },
+    }
+    window.prksReloadProcessingFiles = async () => {
+      current = false
+      throw new Error('Could not refresh files for processing.')
+    }
+    const el = host()
+    presentProcessing({
+      owner: pane,
+      host: el,
+      files: [file],
+      people: [],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('#prks-processing-refresh')?.click()
+    await flush()
+    expect(el.querySelector('[data-prks-processing-refresh-error]')).toBeNull()
+    expect(el.querySelector('[data-processing-id="pdf-1"]')).not.toBeNull()
+    expect(el.querySelector('#prks-processing-refresh')?.getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('clears import busy and shows the reload error beside the import action', async () => {
+    window.prksProcessingSave = async () => ({})
+    window.prksProcessingImport = async () => ({})
+    window.prksReloadProcessingFiles = async () => {
+      throw new Error('Could not refresh files for processing.')
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const button = [...el.querySelectorAll('button')].find((node) => node.textContent?.includes('Import to library'))
+    button?.click()
+    await flush()
+    expect(el.querySelector('[data-processing-id="pdf-1"]')).not.toBeNull()
+    expect(el.querySelector('.prks-processing-card__message')?.textContent).toContain(
+      'Could not refresh files for processing.',
+    )
+    const after = [...el.querySelectorAll('button')].find((node) => node.textContent?.includes('Import to library'))
+    expect(after?.getAttribute('aria-busy')).toBeNull()
   })
 
   it('registers the early presenter', () => {
