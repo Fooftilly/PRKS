@@ -2937,6 +2937,54 @@ function prksPresentVueTypeDetail(ctx, contentDiv, detail) {
 }
 
 /**
+ * Mount the Vue Tags vocabulary page in this pane.
+ * `detail.tags` must already be `fetchTags({ used: true })`. Vue does not fetch.
+ * `detail.resume` reopens one tag's alias dialog after a reload of this owner.
+ */
+function prksPresentVueTags(ctx, contentDiv, detail) {
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const request = {
+        feature: 'tags',
+        owner: ctx,
+        tags: detail.tags,
+        generation: detail.generation,
+        resume: detail.resume || null,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentTags === 'function') {
+        window.prksVuePresentTags(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
+/**
+ * Refetch used tags and repaint this owner only. Alias add/remove passes
+ * `resume.aliasTagId` so the dialog stays on that tag. Delete and merge pass
+ * no resume. A generation that is no longer current does not paint.
+ */
+async function prksReloadTagsVocabulary(ctx, generation, resume) {
+    if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'tags') return false;
+    const tags = await fetchTags({ used: true });
+    if (!ctx.isCurrent(generation)) return false;
+    const live = ctx.lastResolvedRoute || ctx.route;
+    if (!live || live.name !== 'tags' || !ctx.root || !ctx.root.isConnected) return false;
+    prksPresentVueTags(ctx, ctx.root, {
+        tags: tags,
+        generation: generation,
+        resume: resume || null,
+    });
+    return true;
+}
+
+window.prksReloadTagsVocabulary = prksReloadTagsVocabulary;
+
+/**
  * The one read behind Search and Saved View detail. Membership is the
  * server's (`fetchSearch`), and the response is never cached. A pending local
  * edit is not on the server yet, so the rows are overlaid with
@@ -3810,6 +3858,9 @@ async function prksRenderTabRoute(ctx, hash, options) {
         if (typeof window.prksVueDismissTypes === 'function') {
             window.prksVueDismissTypes(ctx);
         }
+        if (typeof window.prksVueDismissTags === 'function') {
+            window.prksVueDismissTags(ctx);
+        }
         prksRenderRouteLoading(contentDiv, route.hash);
     } else if (sameFolderWorkspace) {
         contentDiv.setAttribute('aria-busy', 'true');
@@ -4499,10 +4550,14 @@ async function prksRenderTabRoute(ctx, hash, options) {
                 break;
             }
             case 'tags': {
-                if (typeof renderTagsPage === 'function') {
-                    await renderTagsPage(contentDiv, generation, { signal: routeSignal, ctx: ctx });
-                    if (stale()) return;
-                }
+                // The coordinator loads used tags. Vue paints the cloud and the
+                // alias, merge, and delete controls. It does not fetch.
+                const tags = await fetchTags({ used: true, signal: routeSignal });
+                if (stale()) return;
+                prksPresentVueTags(ctx, contentDiv, {
+                    tags: tags,
+                    generation: generation,
+                });
                 break;
             }
             case 'publishers': {

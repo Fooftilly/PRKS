@@ -39,6 +39,20 @@ interface TypeDetailPresentRequest {
   shell?: boolean
 }
 
+interface TagsPresentRequest {
+  owner: object
+  host: HTMLElement
+  tags: unknown
+  generation?: number
+  shell?: boolean
+  resume?: { aliasTagId?: string | null } | null
+}
+
+interface TagsMutationOutcome {
+  ok?: boolean
+  reason?: string
+}
+
 interface SearchPresentRequest {
   owner: object
   host: HTMLElement
@@ -293,6 +307,21 @@ interface Window {
   prksVuePresentTypesIndex?: (input: TypesIndexPresentRequest) => void
   prksVuePresentTypeDetail?: (input: TypeDetailPresentRequest) => void
   prksVueDismissTypes?: (owner: object) => void
+  prksVuePresentTags?: (input: TagsPresentRequest) => void
+  prksVueDismissTags?: (owner: object) => void
+  prksVueCloseTagsAliasModal?: () => void
+  prksVueCloseTagsMergeModal?: () => void
+  prksReloadTagsVocabulary?: (
+    owner: object,
+    generation: number,
+    resume?: { aliasTagId?: string | null } | null,
+  ) => Promise<boolean>
+  prksTagsAddAlias?: (tagId: string, alias: string) => Promise<TagsMutationOutcome>
+  prksTagsRemoveAlias?: (tagId: string, alias: string) => Promise<TagsMutationOutcome>
+  prksTagsDelete?: (tagId: string) => Promise<TagsMutationOutcome>
+  prksTagsMerge?: (sourceId: string, targetId: string) => Promise<TagsMutationOutcome>
+  fetchTags?: (options?: { used?: boolean; signal?: AbortSignal }) => Promise<unknown>
+  prksTagVocabularyMessage?: (error: unknown, action: string) => string
   prksVuePresentSearch?: (input: SearchPresentRequest) => void
   prksVueDismissSearch?: (owner: object) => void
   prksVuePresentSavedViewsIndex?: (input: SavedViewsIndexPresentRequest) => void
