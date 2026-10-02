@@ -83,6 +83,75 @@ class WikiLinkResolutionTests(unittest.TestCase):
         self.person("P-ESC", 'Quote"<b>', "Amp&")
         self.work("W-ESC", '<script>"x"</script>')
 
+    def assert_matches_legacy(self, text):
+        out = self.db.resolve_wiki_links(text)
+        self.assertEqual(out, legacy_resolve_wiki_links(self.db, text))
+        return out
+
+    def test_single_work_link(self):
+        self.work("W-1", "Critique of Pure Reason")
+        out = self.assert_matches_legacy("See [[Critique of Pure Reason]].")
+        self.assertEqual(
+            out,
+            'See <a href="#/works/W-1" class="wiki-link" style="color:var(--accent); '
+            'text-decoration:none;">Critique of Pure Reason</a>.',
+        )
+
+    def test_single_person_link(self):
+        self.person("P-1", "Kant", "Immanuel")
+        out = self.assert_matches_legacy("By [[Kant]].")
+        self.assertEqual(
+            out,
+            'By <a href="#/people/P-1" class="wiki-link" style="color:var(--accent); '
+            'text-decoration:none;">Immanuel Kant</a>.',
+        )
+
+    def test_unresolved_target(self):
+        out = self.assert_matches_legacy("[[Nobody <here>]]")
+        self.assertEqual(
+            out,
+            '<span class="wiki-link-unresolved" style="color:#ef4444;">[[Nobody &lt;here&gt;]]</span>',
+        )
+
+    def test_multiple_distinct_markers(self):
+        self.work("W-1", "Alpha")
+        self.work("W-2", "Beta")
+        self.person("P-1", "Gamma", "G")
+        out = self.assert_matches_legacy("[[Alpha]], [[Beta]], [[Gamma]] and [[Delta]]")
+        self.assertIn('href="#/works/W-1"', out)
+        self.assertIn('href="#/works/W-2"', out)
+        self.assertIn('href="#/people/P-1"', out)
+        self.assertIn("wiki-link-unresolved", out)
+
+    def test_case_and_whitespace_semantics(self):
+        """Lookups are exact (case-sensitive); only the ends of a target are trimmed."""
+        self.work("W-1", "Alpha Beta")
+        self.person("P-1", "Kant", "Immanuel")
+        cases = {
+            "[[  Alpha Beta\t]]": "#/works/W-1",
+            "[[Kant ]]": "#/people/P-1",
+            "[[alpha beta]]": None,
+            "[[ALPHA BETA]]": None,
+            "[[Alpha  Beta]]": None,
+            "[[kant]]": None,
+        }
+        for text, href in cases.items():
+            with self.subTest(text=text):
+                out = self.assert_matches_legacy(text)
+                if href:
+                    self.assertIn(f'href="{href}"', out)
+                else:
+                    self.assertIn("wiki-link-unresolved", out)
+
+    def test_work_detail_html_content_is_unchanged(self):
+        self.seed_ambiguous_library()
+        text = "Notes on [[Alpha]], [[Kant]], [[Shared]] and [[nobody]]. [[Alpha]] again."
+        self.db.execute_query("UPDATE works SET text_content = ? WHERE id = ?", (text, "W-LATE"))
+        work = self.db.get_work("W-LATE")
+        self.assertIsNotNone(work)
+        assert work is not None
+        self.assertEqual(work["html_content"], legacy_resolve_wiki_links(self.db, text))
+
     def test_output_matches_per_marker_implementation(self):
         self.seed_ambiguous_library()
         text = (
@@ -121,6 +190,34 @@ class WikiLinkResolutionTests(unittest.TestCase):
         self.assertEqual(len(selects), 2)
         self.assertIn("FROM works", selects[0])
         self.assertIn("FROM persons", selects[1])
+
+    def test_more_occurrences_of_the_same_markers_add_no_queries(self):
+        self.seed_ambiguous_library()
+        mixed = "[[Alpha]] [[Kant]] [[nobody]] "
+        counts = []
+        for repeat in (1, 10, 500):
+            text = mixed * repeat
+            out, selects = self.selects(lambda t=text: self.db.resolve_wiki_links(t))
+            self.assertEqual(out, legacy_resolve_wiki_links(self.db, text))
+            counts.append(len(selects))
+        self.assertEqual(counts, [2, 2, 2])
+
+    def test_more_distinct_markers_stay_within_one_chunk_per_table(self):
+        for i in range(300):
+            self.work(f"W-{i:04d}", f"Work {i}")
+            self.person(f"P-{i:04d}", f"Person {i}")
+        counts = []
+        for distinct in (1, 30, 300):
+            text = " ".join(
+                f"[[Work {i}]] [[Person {i}]] [[Gone {i}]]" for i in range(distinct)
+            )
+            out, selects = self.selects(lambda t=text: self.db.resolve_wiki_links(t))
+            self.assertEqual(out, legacy_resolve_wiki_links(self.db, text))
+            counts.append(len(selects))
+        # At 300 the 900 distinct targets were 900 Works lookups plus 600
+        # Persons lookups before; now ceil(900 / 400) Works statements plus
+        # ceil(600 / 400) Persons statements.
+        self.assertEqual(counts, [2, 2, 3 + 2])
 
     def test_work_only_targets_skip_the_person_lookup(self):
         self.seed_ambiguous_library()
