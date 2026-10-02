@@ -3618,24 +3618,71 @@ class PRKSDatabase:
             )
         return current_set_rev
 
+    # Distinct wiki-link targets per lookup statement. Each target binds two
+    # parameters (id and name), so 400 stays far below SQLite's variable limit.
+    _WIKI_LINK_LOOKUP_CHUNK = 400
+
+    def _first_wiki_link_matches(self, sql: str, targets: List[str]) -> Dict[str, dict]:
+        """``{target: row}`` for the first row, in table order, matching each target.
+
+        ``sql`` selects ``id``, ``name`` and the matched-by ``key`` column, and
+        takes one ``{marks}`` list for ids and one for keys. Rows come back in
+        rowid order -- the order the old one-target ``id=? OR key=?`` scan
+        returned them in -- so the first row claiming a target is the same row
+        the per-marker query picked.
+        """
+        found: Dict[str, dict] = {}
+        for start in range(0, len(targets), self._WIKI_LINK_LOOKUP_CHUNK):
+            chunk = targets[start:start + self._WIKI_LINK_LOOKUP_CHUNK]
+            marks = ",".join("?" * len(chunk))
+            wanted = set(chunk)
+            for row in self.execute_query(sql.format(marks=marks), tuple(chunk) * 2):
+                for target in (row["id"], row["key"]):
+                    if target in wanted and target not in found:
+                        found[target] = row
+        return found
+
+    def _resolve_wiki_link_targets(self, targets: List[str]) -> Dict[str, Tuple[str, dict]]:
+        """``{target: (kind, row)}``; a Work match wins over a Person match."""
+        resolved: Dict[str, Tuple[str, dict]] = {
+            target: ("works", row)
+            for target, row in self._first_wiki_link_matches(
+                "SELECT id, title AS name, title AS key FROM works "
+                "WHERE id IN ({marks}) OR title IN ({marks}) ORDER BY rowid",
+                targets,
+            ).items()
+        }
+        rest = [target for target in targets if target not in resolved]
+        if rest:
+            for target, row in self._first_wiki_link_matches(
+                "SELECT id, (first_name || ' ' || last_name) AS name, last_name AS key "
+                "FROM persons WHERE id IN ({marks}) OR last_name IN ({marks}) ORDER BY rowid",
+                rest,
+            ).items():
+                resolved[target] = ("people", row)
+        return resolved
+
     def resolve_wiki_links(self, text: str) -> str:
         if not text: return ""
-        import re
+        pattern = re.compile(r'\[\[(.*?)\]\]')
+        # Resolve each distinct target once, then replace from the map: the
+        # cost follows the number of different targets, not of markers.
+        targets = list(dict.fromkeys(m.group(1).strip() for m in pattern.finditer(text)))
+        if not targets:
+            return text
+        resolved = self._resolve_wiki_link_targets(targets)
+
         def replacer(match):
             raw = match.group(1).strip()
-            res = self.execute_query("SELECT id, title as name FROM works WHERE id=? OR title=?", (raw, raw))
-            if res:
-                safe_name = html.escape(str(res[0]["name"] or ""), quote=True)
-                safe_id = html.escape(str(res[0]["id"] or ""), quote=True)
-                return f'<a href="#/works/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
-            res2 = self.execute_query("SELECT id, (first_name || ' ' || last_name) as name FROM persons WHERE id=? OR last_name=?", (raw, raw))
-            if res2:
-                safe_name = html.escape(str(res2[0]["name"] or ""), quote=True)
-                safe_id = html.escape(str(res2[0]["id"] or ""), quote=True)
-                return f'<a href="#/people/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
+            hit = resolved.get(raw)
+            if hit:
+                kind, row = hit
+                safe_name = html.escape(str(row["name"] or ""), quote=True)
+                safe_id = html.escape(str(row["id"] or ""), quote=True)
+                return f'<a href="#/{kind}/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
             safe_raw = html.escape(raw, quote=True)
             return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
-        return re.sub(r'\[\[(.*?)\]\]', replacer, text)
+        return pattern.sub(replacer, text)
 
     # --- Folders ---
     def _folder_descendant_ids(self, folder_id: str) -> set:

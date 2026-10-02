@@ -1,0 +1,155 @@
+"""Batched wiki-link resolution (#124).
+
+``resolve_wiki_links`` must render exactly what the per-marker implementation
+rendered -- Work before Person, first matching row in table order -- while
+issuing statements per distinct target set rather than per marker.
+"""
+import html
+import re
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from backend.db_manager import PRKSDatabase
+from backend.storage.config import StorageConfig
+
+
+def legacy_resolve_wiki_links(db, text):
+    """The pre-#124 per-marker implementation, kept as the output oracle."""
+    if not text:
+        return ""
+
+    def replacer(match):
+        raw = match.group(1).strip()
+        res = db.execute_query("SELECT id, title as name FROM works WHERE id=? OR title=?", (raw, raw))
+        if res:
+            safe_name = html.escape(str(res[0]["name"] or ""), quote=True)
+            safe_id = html.escape(str(res[0]["id"] or ""), quote=True)
+            return f'<a href="#/works/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
+        res2 = db.execute_query("SELECT id, (first_name || ' ' || last_name) as name FROM persons WHERE id=? OR last_name=?", (raw, raw))
+        if res2:
+            safe_name = html.escape(str(res2[0]["name"] or ""), quote=True)
+            safe_id = html.escape(str(res2[0]["id"] or ""), quote=True)
+            return f'<a href="#/people/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
+        safe_raw = html.escape(raw, quote=True)
+        return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
+
+    return re.sub(r"\[\[(.*?)\]\]", replacer, text)
+
+
+class WikiLinkResolutionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="prks-wiki-links-")
+        self.addCleanup(self.tmp.cleanup)
+        self.db = PRKSDatabase(storage=StorageConfig.for_testing(self.tmp.name))
+
+    def work(self, work_id, title):
+        self.db.execute_query("INSERT INTO works (id, title) VALUES (?, ?)", (work_id, title))
+
+    def person(self, person_id, last_name, first_name=None):
+        self.db.execute_query(
+            "INSERT INTO persons (id, first_name, last_name) VALUES (?, ?, ?)",
+            (person_id, first_name, last_name),
+        )
+
+    def selects(self, call):
+        """Run ``call`` and return the SELECT statements it issued."""
+        sqls = []
+        real_get = self.db.get_connection
+
+        def traced():
+            conn = real_get()
+            conn.set_trace_callback(sqls.append)
+            return conn
+
+        with patch.object(self.db, "get_connection", side_effect=traced):
+            result = call()
+        return result, [s for s in sqls if s.lstrip().upper().startswith("SELECT")]
+
+    def seed_ambiguous_library(self):
+        # Two Works share a title: the first inserted one wins.
+        self.work("W-ALPHA-1", "Alpha")
+        self.work("W-ALPHA-2", "Alpha")
+        # A Work whose id is another Work's title: the earlier row wins.
+        self.work("W-ID-AS-TITLE", "W-LATE")
+        self.work("W-LATE", "Late title")
+        # A Work and a Person share a name: the Work wins.
+        self.work("W-SHARED", "Shared")
+        self.person("P-SHARED", "Shared", "Pat")
+        # Persons resolve by id or last name; first row wins on duplicates.
+        self.person("P-KANT-1", "Kant", "Immanuel")
+        self.person("P-KANT-2", "Kant", "Other")
+        self.person("P-NOFIRST", "Solo")
+        self.person("P-ESC", 'Quote"<b>', "Amp&")
+        self.work("W-ESC", '<script>"x"</script>')
+
+    def test_output_matches_per_marker_implementation(self):
+        self.seed_ambiguous_library()
+        text = (
+            "Intro [[Alpha]] and [[ Alpha ]] again [[W-ALPHA-2]].\n"
+            "[[W-LATE]] [[Late title]] [[Shared]] [[P-SHARED]]\n"
+            "[[Kant]] [[P-KANT-2]] [[Solo]] [[Quote\"<b>]] [[<script>\"x\"</script>]]\n"
+            "[[missing <thing>]] [[]] [[  ]] [[a]][[b]] [[nested [[Alpha]]]] [[Alpha"
+        )
+        self.assertEqual(
+            self.db.resolve_wiki_links(text),
+            legacy_resolve_wiki_links(self.db, text),
+        )
+
+    def test_precedence_and_first_row_are_explicit(self):
+        self.seed_ambiguous_library()
+        out = self.db.resolve_wiki_links("[[Alpha]] [[Shared]] [[Kant]] [[W-LATE]]")
+        self.assertIn('href="#/works/W-ALPHA-1"', out)
+        self.assertNotIn("W-ALPHA-2", out)
+        self.assertIn('href="#/works/W-SHARED"', out)
+        self.assertNotIn("P-SHARED", out)
+        self.assertIn('href="#/people/P-KANT-1"', out)
+        self.assertIn('href="#/works/W-ID-AS-TITLE"', out)
+
+    def test_text_without_markers_is_returned_unchanged_without_queries(self):
+        for text in ("", "plain text", "[single] brackets ]]"):
+            with self.subTest(text=text):
+                out, selects = self.selects(lambda t=text: self.db.resolve_wiki_links(t))
+                self.assertEqual(out, text)
+                self.assertEqual(selects, [])
+
+    def test_repeated_markers_cost_one_lookup_per_table(self):
+        self.seed_ambiguous_library()
+        text = " ".join(["[[Alpha]]"] * 100 + ["[[Kant]]"] * 100 + ["[[nobody]]"] * 100)
+        out, selects = self.selects(lambda: self.db.resolve_wiki_links(text))
+        self.assertEqual(out, legacy_resolve_wiki_links(self.db, text))
+        self.assertEqual(len(selects), 2)
+        self.assertIn("FROM works", selects[0])
+        self.assertIn("FROM persons", selects[1])
+
+    def test_work_only_targets_skip_the_person_lookup(self):
+        self.seed_ambiguous_library()
+        text = "[[Alpha]] [[Shared]] [[W-LATE]] " * 50
+        out, selects = self.selects(lambda: self.db.resolve_wiki_links(text))
+        self.assertEqual(out, legacy_resolve_wiki_links(self.db, text))
+        self.assertEqual(len(selects), 1)
+        self.assertIn("FROM works", selects[0])
+
+    def test_many_distinct_targets_use_bounded_chunks(self):
+        chunk = PRKSDatabase._WIKI_LINK_LOOKUP_CHUNK
+        count = chunk * 2 + 7
+        for i in range(0, count, 3):
+            self.work(f"W-{i:05d}", f"Work {i}")
+        for i in range(1, count, 3):
+            self.person(f"P-{i:05d}", f"Person {i}")
+        names = []
+        for i in range(count):
+            names.append(f"Work {i}" if i % 3 == 0 else f"Person {i}" if i % 3 == 1 else f"Gone {i}")
+        text = " ".join(f"[[{name}]]" for name in names)
+        out, selects = self.selects(lambda: self.db.resolve_wiki_links(text))
+        self.assertEqual(out, legacy_resolve_wiki_links(self.db, text))
+        work_selects = [s for s in selects if "FROM works" in s]
+        person_selects = [s for s in selects if "FROM persons" in s]
+        self.assertEqual(len(work_selects), 3)
+        # Only the targets no Work claimed reach the Person lookup.
+        unresolved_after_works = count - len(range(0, count, 3))
+        self.assertEqual(len(person_selects), -(-unresolved_after_works // chunk))
+
+
+if __name__ == "__main__":
+    unittest.main()
