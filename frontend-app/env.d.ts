@@ -19,6 +19,26 @@ interface RecentPresentRequest {
   shell?: boolean
 }
 
+interface TypesIndexPresentRequest {
+  owner: object
+  host: HTMLElement
+  rows: unknown
+  generation?: number
+  shell?: boolean
+}
+
+interface TypeDetailPresentRequest {
+  owner: object
+  host: HTMLElement
+  docType?: string
+  label?: string
+  canonicalHash?: string
+  rows: unknown
+  offlineCached?: boolean
+  generation?: number
+  shell?: boolean
+}
+
 interface SearchPresentRequest {
   owner: object
   host: HTMLElement
@@ -236,8 +256,9 @@ interface Window {
       abstract_excerpt?: unknown
       abstract?: unknown
     },
-    options: { subtitle?: string; suppressThumbnail?: boolean },
+    options: { subtitle?: string; suppressThumbnail?: boolean; hideDocTypeBadge?: boolean },
   ) => string
+  prksDocTypeBadgeHtml?: (docType: string) => string
   prksWorkBrowseModeToggleHtml?: (hiddenId?: string) => string
   prksWorkBrowseCollectionClass?: (extraClass?: string) => string
   prksBindWorkBrowseMode?: (root: ParentNode | null) => void
@@ -269,6 +290,9 @@ interface Window {
   prksVueDismissProgress?: (owner: object) => void
   prksVuePresentRecent?: (input: RecentPresentRequest) => void
   prksVueDismissRecent?: (owner: object) => void
+  prksVuePresentTypesIndex?: (input: TypesIndexPresentRequest) => void
+  prksVuePresentTypeDetail?: (input: TypeDetailPresentRequest) => void
+  prksVueDismissTypes?: (owner: object) => void
   prksVuePresentSearch?: (input: SearchPresentRequest) => void
   prksVueDismissSearch?: (owner: object) => void
   prksVuePresentSavedViewsIndex?: (input: SavedViewsIndexPresentRequest) => void

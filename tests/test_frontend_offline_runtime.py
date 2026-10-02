@@ -1462,12 +1462,15 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
         with self.subTest(module="features/recent/legacy-work-card.ts"):
             self.assertIn("offlineCached", recent)
             self.assertIn("suppressThumbnail", recent)
-        for name, fn in (("components/types.js", "function renderWorksByDocType("),):
-            src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
-            with self.subTest(module=name):
-                body = _fn_body(src, fn)
-                self.assertIn("offlineCached", body)
-                self.assertIn("suppressThumbnail", body)
+        types_card = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "types", "legacy-work-card.ts"))
+        with self.subTest(module="features/types/legacy-work-card.ts"):
+            self.assertIn("offlineCached", types_card)
+            self.assertIn("suppressThumbnail", types_card)
+            self.assertIn("hideDocTypeBadge", types_card)
+        types_js = _read(os.path.join(_FRONTEND, "js", "components", "types.js"))
+        self.assertNotIn("function renderWorksByDocType(", types_js)
+        self.assertNotIn("function renderTypesIndex(", types_js)
 
     def test_progress_reads_the_bounded_excerpt(self):
         src = _read(os.path.join(
