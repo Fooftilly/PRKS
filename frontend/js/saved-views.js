@@ -4,9 +4,10 @@
  * coordinator's prksEffectiveSearchResults, the same read Search uses.
  *
  * This file owns the canonical search query codec (definition <-> route
- * params <-> hash <-> fetchSearch options) until the typed route model in
- * #303 B1, and the shared Saved View modal until #303 B4. Search, Saved View
- * detail, and the Saved Views index are painted by frontend-app.
+ * params <-> hash <-> fetchSearch options) until the coordinator/global-window
+ * remainder of #303 B1, and the shared Saved View modal until #303 B4. The
+ * typed route identity already lives in frontend-app `PrksRouteInstance`.
+ * Search, Saved View detail, and the Saved Views index are painted by frontend-app.
  */
 (function (root) {
     'use strict';

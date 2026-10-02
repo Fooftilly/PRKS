@@ -70,8 +70,9 @@ function paint(
     owner,
     host: el,
     route: {
-      name: 'probe',
+      name: 'recent',
       canonicalHash: `#/${label}`,
+      params: {},
       ownsMainShell,
       generation,
     },
@@ -179,8 +180,9 @@ describe('route surface lifecycle', () => {
         owner: pane,
         host: el,
         route: {
-          name: 'probe',
+          name: 'recent',
           canonicalHash: '#/kept',
+          params: {},
           ownsMainShell: false,
           generation: 1,
         },
@@ -425,7 +427,7 @@ describe('route surface lifecycle', () => {
     paint(main, mainHost, 'main', 2, true)
     paint(secondary, secondaryHost, 'side', 1, false)
     expect(readRouteSurface(main)).toMatchObject({
-      name: 'probe',
+      name: 'recent',
       canonicalHash: '#/main',
       ownsMainShell: true,
       generation: 2,
@@ -441,5 +443,70 @@ describe('route surface lifecycle', () => {
     expect(readRouteSurface(secondary)?.ownsMainShell).toBe(false)
     expect(shellCalls).toEqual([])
     delete target.prksSyncSidebarActive
+  })
+
+  it('keeps each owner route params when both panes are mounted', () => {
+    const main = cleanupOwner()
+    const secondary = cleanupOwner()
+    const mainHost = host()
+    const secondaryHost = host()
+    expect(
+      presentRouteSurface({
+        owner: main,
+        host: mainHost,
+        route: {
+          name: 'concept-detail',
+          canonicalHash: '#/concepts/C-main',
+          params: { conceptId: 'C-main' },
+          ownsMainShell: true,
+          generation: 1,
+        },
+        render: () => h('p', { 'data-probe': 'main' }, 'main'),
+      }),
+    ).toBe(true)
+    expect(
+      presentRouteSurface({
+        owner: secondary,
+        host: secondaryHost,
+        route: {
+          name: 'folder-detail',
+          canonicalHash: '#/folders/F-side',
+          params: { folderId: 'F-side' },
+          ownsMainShell: false,
+          generation: 1,
+        },
+        render: () => h('p', { 'data-probe': 'side' }, 'side'),
+      }),
+    ).toBe(true)
+    expect(readRouteSurface(main)).toMatchObject({
+      name: 'concept-detail',
+      params: { conceptId: 'C-main' },
+      canonicalHash: '#/concepts/C-main',
+    })
+    expect(readRouteSurface(secondary)).toMatchObject({
+      name: 'folder-detail',
+      params: { folderId: 'F-side' },
+      canonicalHash: '#/folders/F-side',
+    })
+    presentRouteSurface({
+      owner: secondary,
+      host: secondaryHost,
+      route: {
+        name: 'folder-detail',
+        canonicalHash: '#/folders/F-next',
+        params: { folderId: 'F-next' },
+        ownsMainShell: false,
+        generation: 2,
+      },
+      render: () => h('p', { 'data-probe': 'side' }, 'side'),
+    })
+    const mainRoute = readRouteSurface(main)
+    expect(mainRoute?.name).toBe('concept-detail')
+    if (mainRoute?.name === 'concept-detail') {
+      expect(mainRoute.params.conceptId).toBe('C-main')
+    }
+    expect(readRouteSurface(secondary)).toMatchObject({
+      params: { folderId: 'F-next' },
+    })
   })
 })

@@ -1,9 +1,10 @@
 /**
  * Typed search request and result shapes shared by Search and Saved View detail.
  * The query codec (`prksSearchDefinitionFromRoute` / `prksSearchHashFromDefinition`
- * / `prksSearchOptionsFromDefinition`) stays in `saved-views.js` until the typed
- * route model (#303 B1). Rows are the coordinator's already-effective server
- * results, not a second Work store.
+ * / `prksSearchOptionsFromDefinition`) stays in `saved-views.js` until the
+ * coordinator/global-window remainder of #303 B1. `PrksRouteInstance` records
+ * the already-parsed search params; it does not replace that codec. Rows are
+ * the coordinator's already-effective server results, not a second Work store.
  */
 
 export interface SearchRequest {

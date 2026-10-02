@@ -23,7 +23,7 @@ Reuse shared components in `src/components/` and existing PRKS CSS/component fam
 
 ## Route and workspace ownership
 
-`src/route-surface/` is an owner-scoped bridge from the current PRKS route/TabContext runtime into Vue. It is not a second router. Route-local runtime must stay owner-scoped; stale generations or asynchronous completions must not mutate a replaced route owner.
+`src/route-surface/` is an owner-scoped bridge from the current PRKS route/TabContext runtime into Vue. It is not a second router. `PrksRouteInstance` in `src/route-surface/routes.ts` is the discriminated identity of one mounted owner, imported from the feature route types. It does not parse hashes. Route-local runtime must stay owner-scoped; stale generations or asynchronous completions must not mutate a replaced route owner. The coordinator/global-window collapse and the search codec in `saved-views.js` remain the rest of #303 B1.
 
 `src/workspace/` owns the typed canonical workspace model and pure transforms. `src/workspace-shell/` renders a detached projection and sends intents. The classic runtime coordinator remains responsible for the live effectful state while #303 is incomplete. Do not introduce a parallel store or second drag/state system.
 
