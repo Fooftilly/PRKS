@@ -3063,6 +3063,41 @@ window.prksReloadPublishersPage = prksReloadPublishersPage;
  * People and folders are the catalogs the cards search. Vue does not fetch.
  * The preview iframe is released before this host is replaced.
  */
+/**
+ * Mount the Vue Research Graph chrome in this pane.
+ * The coordinator still owns the Cytoscape instance. Destroy the previous
+ * instance before the host node is removed, then let Vue paint. `detail.attach`
+ * mounts the new instance into that shell. Vue does not fetch the projection.
+ */
+function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
+    if (ctx && typeof ctx.clearResource === 'function') ctx.clearResource('researchGraph');
+    contentDiv.innerHTML = '';
+    const host = document.createElement('div');
+    host.setAttribute('data-prks-vue-route-host', 'true');
+    contentDiv.appendChild(host);
+    const focus = detail.focus || '';
+    const request = {
+        feature: 'research-graph',
+        owner: ctx,
+        focus: focus,
+        includePeople: !!detail.includePeople,
+        generation: detail.generation,
+        chrome: ctx && typeof ctx.domId === 'function' ? {
+            findId: ctx.domId('graph-find'),
+            resultsId: ctx.domId('graph-find-results'),
+            filtersPanelId: ctx.domId('graph-filters-panel'),
+            legendPanelId: ctx.domId('graph-legend-panel'),
+        } : null,
+        attach: detail.attach || null,
+        shell: typeof prksIsMainTabContext === 'function' ? !!prksIsMainTabContext(ctx) : true,
+    };
+    if (typeof window.prksVuePresentResearchGraph === 'function') {
+        window.prksVuePresentResearchGraph(Object.assign({ host: host }, request));
+        return;
+    }
+    host.__prksVueRouteRequest = request;
+}
+
 function prksPresentVueProcessing(ctx, contentDiv, detail) {
     window.__prksProcessingPeople = Array.isArray(detail.people) ? detail.people : [];
     if (typeof window.prksProcessingReleaseResources === 'function') {
@@ -5660,13 +5695,17 @@ async function prksRenderTabRoute(ctx, hash, options) {
             case 'research-graph': {
                 // Work nodes carry Work metadata, and Concept/Position nodes
                 // carry names; the snapshot is overlaid with pending edits,
-                // which needs every map read first.
+                // which needs every map read first. Vue paints the chrome.
+                // The Cytoscape instance stays on this TabContext.
                 await prksHydratePendingWorkMetadata();
                 if (stale()) return;
-                if (typeof renderResearchGraph === 'function') {
-                    await renderResearchGraph(contentDiv, {
-                        ctx: ctx,
-                        focus: route.params.focus || '',
+                const focus = route.params.focus || '';
+                prksPresentVueResearchGraph(ctx, contentDiv, {
+                    generation: generation,
+                    focus: focus,
+                    includePeople: typeof peopleRequiredForFocus === 'function' && peopleRequiredForFocus(focus),
+                    attach: {
+                        focus: focus,
                         loadSnapshot: prksOfflineResearchGraphFetch,
                         onSnapshot: function (result) {
                             contentDiv.querySelectorAll('[data-prks-role="offline-provenance-banner"]').forEach(el => el.remove());
@@ -5675,11 +5714,8 @@ async function prksRenderTabRoute(ctx, hash, options) {
                         routeGen: generation,
                         stale: stale,
                         signal: routeSignal,
-                    });
-                } else {
-                    contentDiv.innerHTML =
-                        '<div class="prks-page-header page-header"><h2 class="prks-page-title">Research Graph</h2></div><p class="meta-row">Graph UI unavailable.</p>';
-                }
+                    },
+                });
                 break;
             }
             case 'person': {

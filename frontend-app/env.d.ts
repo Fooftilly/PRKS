@@ -71,6 +71,29 @@ interface PublishersMutationOutcome {
   reason?: string
 }
 
+interface ResearchGraphPresentRequest {
+  owner: object
+  host: HTMLElement
+  generation?: number
+  shell?: boolean
+  focus?: string
+  includePeople?: boolean
+  chrome?: {
+    findId?: string
+    resultsId?: string
+    filtersPanelId?: string
+    legendPanelId?: string
+  }
+  attach?: {
+    focus?: string
+    signal?: AbortSignal
+    routeGen?: number
+    stale?: () => boolean
+    loadSnapshot?: (people: boolean, signal?: AbortSignal) => Promise<unknown>
+    onSnapshot?: (result: unknown) => void
+  } | null
+}
+
 interface ProcessingPresentRequest {
   owner: object
   host: HTMLElement
@@ -410,6 +433,22 @@ interface Window {
   prksPublishersAddAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersRemoveAlias?: (publisherId: string, alias: string) => Promise<PublishersMutationOutcome>
   prksPublishersDelete?: (publisherId: string) => Promise<PublishersMutationOutcome>
+  prksVuePresentResearchGraph?: (input: ResearchGraphPresentRequest) => void
+  prksVueDismissResearchGraph?: (owner: object) => void
+  renderResearchGraph?: (
+    container: HTMLElement,
+    options?: {
+      adoptShell?: boolean
+      ctx?: object
+      focus?: string
+      signal?: AbortSignal
+      routeGen?: number
+      stale?: () => boolean
+      loadSnapshot?: (people: boolean, signal?: AbortSignal) => Promise<unknown>
+      onSnapshot?: (result: unknown) => void
+    },
+  ) => Promise<unknown>
+  prksReleaseResearchGraph?: (owner: object) => void
   __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
   prksVuePresentProcessing?: (input: ProcessingPresentRequest) => void
   prksVueDismissProcessing?: (owner: object) => void

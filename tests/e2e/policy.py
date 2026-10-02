@@ -436,8 +436,15 @@ AFFECTED_RULES = (
         "name": "graph",
         "paths": (
             "frontend/js/components/research-graph.js",
+            "frontend-app/src/features/research-graph/**",
             "backend/research_graph.py",
             "tools/research-graph/**",
+        ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
         ),
         "features": ("graph",),
     },

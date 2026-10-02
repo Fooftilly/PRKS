@@ -135,6 +135,9 @@ function fakeCytoscape(opts) {
         },
         animate: function () {},
         fit: function () {},
+        resize: function () {
+            this._resizes = (this._resizes || 0) + 1;
+        },
     };
     fakeElements.push(cy);
     return cy;
@@ -168,11 +171,40 @@ const _mockCtx = {
     query: function () { return null; },
 };
 
+const pendingFrames = new Map();
+const resizeObservers = [];
+let nextFrameId = 1;
+
 const sandbox = {
     window: {},
     global: {},
     module: { exports: {} },
     cytoscape: fakeCytoscape,
+    requestAnimationFrame: function (fn) {
+        const id = nextFrameId++;
+        pendingFrames.set(id, fn);
+        return id;
+    },
+    cancelAnimationFrame: function (id) {
+        pendingFrames.delete(id);
+    },
+    ResizeObserver: function (callback) {
+        const obs = {
+            callback: callback,
+            target: null,
+            disconnected: false,
+            observe: function (el) {
+                obs.target = el;
+                obs.disconnected = false;
+            },
+            disconnect: function () {
+                obs.disconnected = true;
+                obs.target = null;
+            },
+        };
+        resizeObservers.push(obs);
+        return obs;
+    },
     prksNavigate: function (hash) {
         navigated.push(hash);
     },
@@ -440,6 +472,42 @@ function makeGraphHost() {
     return host;
 }
 
+function makeCtx(tabId) {
+    const resources = new Map();
+    return {
+        tabId: tabId,
+        resources: resources,
+        setResource: function (name, value, disposer) {
+            const key = String(name);
+            const prev = resources.get(key);
+            if (prev && typeof prev.disposer === 'function') {
+                try { prev.disposer(); } catch (_e) {}
+            }
+            resources.set(key, { value: value, disposer: disposer });
+            return value;
+        },
+        getResource: function (name) {
+            const rec = resources.get(String(name));
+            return rec ? rec.value : undefined;
+        },
+        clearResource: function (name) {
+            const key = String(name);
+            const rec = resources.get(key);
+            if (!rec) return;
+            resources.delete(key);
+            if (typeof rec.disposer === 'function') {
+                try { rec.disposer(); } catch (_e) {}
+            }
+        },
+        domId: function (local) {
+            return 'prks-tab-' + tabId + '-' + local;
+        },
+        query: function () {
+            return null;
+        },
+    };
+}
+
 (async function () {
     assertEq(rows, 'person focus requires people', g.peopleRequiredForFocus('person:P-123'), true);
     assertEq(rows, 'concept focus does not require people', g.peopleRequiredForFocus('concept:C-1'), false);
@@ -582,6 +650,159 @@ function makeGraphHost() {
         String(raceHost._inspector.innerHTML).indexOf('too large') < 0 &&
             String(raceHost._status.textContent).indexOf('too large') < 0
     );
+
+    fetchImpl = async function () {
+        return fixture;
+    };
+    const liveBeforeOwners = sandbox.__prksResearchGraphLiveCount || 0;
+    assertEq(rows, 'focused pane still holds one graph', liveBeforeOwners, 1);
+    const cyMark = fakeElements.length;
+    const mainCtx = makeCtx('main');
+    const sideCtx = makeCtx('side');
+    const mainHost = makeGraphHost();
+    const sideHost = makeGraphHost();
+    await g.renderResearchGraph(mainHost, { ctx: mainCtx });
+    await g.renderResearchGraph(sideHost, { ctx: sideCtx });
+    const mainCy = fakeElements[cyMark];
+    const sideCy = fakeElements[cyMark + 1];
+    const mainCanvas = mainHost.querySelector('[data-prks-role="graph-canvas"]');
+    const sideCanvas = sideHost.querySelector('[data-prks-role="graph-canvas"]');
+    assertEq(rows, 'two owners retain two live graphs', sandbox.__prksResearchGraphLiveCount, liveBeforeOwners + 2);
+    assertEq(rows, 'main cytoscape stays mounted', mainCy.destroyed, false);
+    assertEq(rows, 'secondary cytoscape stays mounted', sideCy.destroyed, false);
+    const mainObs = resizeObservers.filter(function (obs) {
+        return obs.target === mainCanvas && !obs.disconnected;
+    });
+    const sideObs = resizeObservers.filter(function (obs) {
+        return obs.target === sideCanvas && !obs.disconnected;
+    });
+    assertEq(rows, 'main canvas has one observer', mainObs.length, 1);
+    assertEq(rows, 'secondary canvas has one observer', sideObs.length, 1);
+
+    const framesBefore = pendingFrames.size;
+    const mainRuntime = mainCtx.getResource('researchGraph');
+    mainRuntime.selectNode('concept:C-1');
+    mainRuntime.selectNode('work:W-1');
+    assertEq(rows, 'owner keeps one resize frame', pendingFrames.size, framesBefore + 1);
+
+    g.destroyResearchGraph(mainHost);
+    assertEq(rows, 'destroying main leaves secondary', sandbox.__prksResearchGraphLiveCount, liveBeforeOwners + 1);
+    assertEq(rows, 'main cytoscape destroyed', mainCy.destroyed, true);
+    assertEq(rows, 'secondary cytoscape kept', sideCy.destroyed, false);
+    assertEq(rows, 'main observer disconnected', mainObs[0].disconnected, true);
+    assertEq(rows, 'secondary observer kept', sideObs[0].disconnected, false);
+    assertEq(rows, 'destroy cancels the owner frame', pendingFrames.size, framesBefore);
+    assert(rows, 'secondary resource remains', sideCtx.getResource('researchGraph') != null);
+
+    g.destroyResearchGraph(sideHost);
+    assertEq(rows, 'both owners released', sandbox.__prksResearchGraphLiveCount, liveBeforeOwners);
+    assertEq(rows, 'secondary cytoscape destroyed', sideCy.destroyed, true);
+    assertEq(rows, 'secondary observer disconnected', sideObs[0].disconnected, true);
+    assertEq(rows, 'secondary resource cleared', sideCtx.getResource('researchGraph'), undefined);
+
+    const staleCtx = makeCtx('stale');
+    const staleHost = makeGraphHost();
+    let resolveStale;
+    fetchImpl = function () {
+        return new Promise(function (resolve) {
+            resolveStale = resolve;
+        });
+    };
+    const countAtStaleStart = sandbox.__prksResearchGraphLiveCount || 0;
+    const stalePending = g.renderResearchGraph(staleHost, { ctx: staleCtx });
+    assertEq(rows, 'in-flight start has not created cytoscape', sandbox.__prksResearchGraphLiveCount, countAtStaleStart);
+    staleCtx.clearResource('researchGraph');
+    staleHost.innerHTML = 'LEFT';
+    resolveStale(fixture);
+    await stalePending;
+    assertEq(rows, 'stale start does not replace left page', staleHost.innerHTML, 'LEFT');
+    assertEq(rows, 'stale start does not mount', sandbox.__prksResearchGraphLiveCount, countAtStaleStart);
+    assertEq(rows, 'stale owner stays empty', staleCtx.getResource('researchGraph'), undefined);
+
+    const sharedInspector = {
+        innerHTML: '',
+        _attrs: {},
+        getAttribute: function (name) {
+            return sharedInspector._attrs[name] || null;
+        },
+        setAttribute: function (name, value) {
+            sharedInspector._attrs[name] = String(value);
+        },
+        removeAttribute: function (name) {
+            delete sharedInspector._attrs[name];
+        },
+        addEventListener: function () {},
+    };
+    const savedFocused = sandbox.prksGetFocusedTabContext;
+    const savedDocument = sandbox.document;
+    const savedVisibility = sandbox.prksRefreshFocusedRightPanelVisibility;
+    let visibilityCalls = 0;
+    let focusedOwner = null;
+    sandbox.document = {
+        getElementById: function (id) {
+            if (id !== 'panel-content') return null;
+            return {
+                querySelector: function (sel) {
+                    return sel === '#prks-graph-inspector' ? sharedInspector : null;
+                },
+            };
+        },
+    };
+    sandbox.prksGetFocusedTabContext = function () {
+        return focusedOwner;
+    };
+    sandbox.prksRefreshFocusedRightPanelVisibility = function () {
+        visibilityCalls += 1;
+    };
+    try {
+        fetchImpl = async function () {
+            return fixture;
+        };
+        const focusMain = makeCtx('focus-main');
+        const focusSide = makeCtx('focus-side');
+        focusedOwner = focusMain;
+        const focusMainHost = makeGraphHost();
+        const focusSideHost = makeGraphHost();
+        await g.renderResearchGraph(focusMainHost, { ctx: focusMain, focus: 'person:P-123' });
+        const mainPaint = sharedInspector.innerHTML;
+        assert(
+            rows,
+            'focused main paints its inspector',
+            mainPaint.indexOf('Max Horkheimer') >= 0
+        );
+        assertEq(rows, 'focused main reports its selection', g.getSelectedGraphNodeId(), 'person:P-123');
+        visibilityCalls = 0;
+        await g.renderResearchGraph(focusSideHost, { ctx: focusSide, focus: 'concept:C-1' });
+        assertEq(rows, 'unfocused secondary leaves the inspector', sharedInspector.innerHTML, mainPaint);
+        assert(
+            rows,
+            'unfocused secondary does not paint its node',
+            sharedInspector.innerHTML.indexOf('Culture Industry') < 0
+        );
+        assertEq(rows, 'unfocused secondary skips panel visibility', visibilityCalls, 0);
+        assertEq(
+            rows,
+            'secondary keeps its own selection',
+            focusSide.getResource('researchGraph').getSelectedId(),
+            'concept:C-1'
+        );
+        assertEq(rows, 'main selection stays pane-local', g.getSelectedGraphNodeId(), 'person:P-123');
+        focusedOwner = focusSide;
+        g.renderGraphInspector();
+        assert(
+            rows,
+            'focusing secondary paints its inspector',
+            sharedInspector.innerHTML.indexOf('Culture Industry') >= 0
+        );
+        assert(rows, 'focusing secondary replaces the main inspector', sharedInspector.innerHTML !== mainPaint);
+        g.destroyResearchGraph(focusMainHost);
+        g.destroyResearchGraph(focusSideHost);
+    } finally {
+        sandbox.prksGetFocusedTabContext = savedFocused;
+        sandbox.prksRefreshFocusedRightPanelVisibility = savedVisibility;
+        if (savedDocument === undefined) delete sandbox.document;
+        else sandbox.document = savedDocument;
+    }
 
     const passed = rows.filter((r) => r.ok).length;
     const failed = rows.filter((r) => !r.ok).length;
