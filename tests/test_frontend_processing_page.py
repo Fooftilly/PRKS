@@ -67,6 +67,17 @@ class FrontendProcessingPageTests(unittest.TestCase):
         card = _read(os.path.join(_VUE, "ProcessingFileCard.vue"))
         self.assertIn("data-prks-processing-status-host", card)
 
+    def test_processing_vue_maps_to_the_processing_files_e2e(self):
+        policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
+        rule = policy[policy.index('"name": "processing-vue"'):policy.index('"name": "concepts-vue"')]
+        self.assertIn('"features": ("processing",)', rule)
+        self.assertIn("test_processing_route_surface", rule)
+        self.assertIn("#/processing-files", rule)
+        self.assertNotIn('"features": ("browse",)', rule)
+        e2e = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "test_processing_route_surface.py"))
+        self.assertIn("prksNavigate('#/processing-files')", e2e)
+        self.assertIn("data-prks-processing-page", e2e)
+
 
 if __name__ == "__main__":
     unittest.main()
