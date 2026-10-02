@@ -10821,6 +10821,26 @@ button.prks-research-row {
     gap: var(--space-sm);
 }
 
+/* Vue route-surface host must participate in the Research Graph flex chain.
+ * Without this, the canvas stays at its 420px minimum. */
+.prks-tab-root > [data-prks-vue-route-host]:has(.research-graph) {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+}
+
+.research-graph > [data-prks-role="graph-body"] {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .research-graph__toolbar {
     margin-bottom: 0;
 }

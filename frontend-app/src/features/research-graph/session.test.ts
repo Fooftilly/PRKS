@@ -1,6 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readRouteSurface } from '../../route-surface/lifecycle'
+import { readRouteSurface, type RouteSurfaceOwner } from '../../route-surface/lifecycle'
 import {
   dismissResearchGraph,
   presentResearchGraph,
@@ -17,6 +17,7 @@ afterEach(() => {
   delete window.prksReleaseResearchGraph
   delete window.prksIcon
   delete window.prksPageHeaderIconHtml
+  delete window.prksRefreshIcons
 })
 
 function host(): HTMLElement {
@@ -25,7 +26,11 @@ function host(): HTMLElement {
   return el
 }
 
-function owner(tabId: string) {
+function owner(tabId: string): RouteSurfaceOwner & {
+  tabId: string
+  isCurrent: () => boolean
+  lastResolvedRoute: { name: string }
+} {
   return {
     tabId,
     isCurrent: () => true,
@@ -138,5 +143,37 @@ describe('Research Graph route bridge', () => {
     expect(el.querySelector('[data-prks-research-graph]')).not.toBeNull()
     expect(decoy.querySelector('[data-prks-research-graph]')).toBeNull()
     expect(window.renderResearchGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes header and legend icons on the painted graph after the markup is written', async () => {
+    const refreshed: ParentNode[] = []
+    window.prksRefreshIcons = (root) => {
+      if (root) refreshed.push(root)
+    }
+    window.prksIcon = (name) => `<i data-lucide="${name}"></i>`
+    window.prksPageHeaderIconHtml = () => '<i data-lucide="share-2"></i>'
+    window.renderResearchGraph = vi.fn(async () => undefined)
+    const tab = document.createElement('div')
+    tab.className = 'prks-tab-root'
+    document.body.appendChild(tab)
+    const el = document.createElement('div')
+    tab.appendChild(el)
+    const pane = owner('main')
+    presentResearchGraph({ owner: pane, host: el, generation: 1, attach: {} })
+    await nextTick()
+    const graph = el.querySelector<HTMLElement>('[data-prks-research-graph]')
+    const body = graph?.querySelector<HTMLElement>('[data-prks-role="graph-body"]')
+    const stage = body?.querySelector('.research-graph__stage')
+    expect(el.getAttribute('data-prks-vue-route-host')).toBe('true')
+    expect(el.parentElement).toBe(tab)
+    expect(graph).not.toBeNull()
+    expect(body).not.toBeNull()
+    expect(stage).not.toBeNull()
+    expect(graph?.parentElement).toBe(el)
+    expect(refreshed).toContain(graph)
+    const painted = refreshed.find((node) => node === graph)
+    expect(painted?.querySelector('.prks-page-title [data-lucide="share-2"]')).not.toBeNull()
+    expect(painted?.querySelector('[data-prks-role="graph-legend-panel"] [data-lucide="network"]')).not.toBeNull()
+    expect(painted?.querySelector('[data-prks-role="graph-legend-panel"] [data-lucide="user"]')).not.toBeNull()
   })
 })

@@ -286,6 +286,27 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("shellHtml", agents)
         self.assertIn("#303 B2", agents)
 
+    def test_vue_graph_host_fills_the_pane_and_refreshes_icons(self):
+        css = _read(_CSS)
+        host = css.split(
+            ".prks-tab-root > [data-prks-vue-route-host]:has(.research-graph)", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("flex: 1 1 auto", host)
+        self.assertIn("min-height: 0", host)
+        self.assertIn("display: flex", host)
+        self.assertIn("flex-direction: column", host)
+        body = css.split('.research-graph > [data-prks-role="graph-body"]', 1)[1].split("}", 1)[0]
+        self.assertIn("flex: 1 1 auto", body)
+        self.assertIn("min-height: 0", body)
+        self.assertIn("display: flex", body)
+        self.assertIn("flex-direction: column", body)
+        vue = _read(_GRAPH_VUE)
+        self.assertIn("onMounted", vue)
+        self.assertIn("prksRefreshIcons", vue)
+        self.assertIn('data-prks-role="graph-body"', vue)
+        self.assertIn('data-prks-role="graph-legend-panel"', vue)
+        self.assertNotIn("Graph UI unavailable", vue)
+
     def test_node_selftest(self):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required for research graph tests")

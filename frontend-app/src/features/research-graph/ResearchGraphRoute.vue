@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ResearchGraphChromeIds } from './session'
 
 const props = defineProps<{
@@ -8,11 +8,16 @@ const props = defineProps<{
   chrome?: ResearchGraphChromeIds
 }>()
 
+const rootEl = ref<HTMLElement | null>(null)
 const headerIcon = computed(() => window.prksPageHeaderIconHtml?.('share-2') ?? '')
 
 function legendIcon(name: string): string {
   return window.prksIcon?.(name, { size: 'sm' }) ?? ''
 }
+
+onMounted(() => {
+  window.prksRefreshIcons?.(rootEl.value)
+})
 
 onBeforeUnmount(() => {
   window.prksReleaseResearchGraph?.(props.owner)
@@ -20,7 +25,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="research-graph" data-prks-research-graph data-prks-research-graph-page>
+  <div ref="rootEl" class="research-graph" data-prks-research-graph data-prks-research-graph-page>
     <div class="prks-page-header page-header">
       <div class="page-header__title-row">
         <h2 class="prks-page-title">
