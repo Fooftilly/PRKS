@@ -970,6 +970,85 @@ async function run() {
         );
     }
 
+    {
+        /* These commits used to park whoever was Main at approval. Make Main can
+         * change that role without a leave, so approving A must not park B. */
+        async function scene() {
+            const h = makeHarness({ hash: '#/works/WA' });
+            const parked = await h.ws.openTab('#/works/WP', { activate: false });
+            await h.ws.navigate('#/works/WB', { target: 'tile' });
+            const snap = h.ws.snapshot();
+            return { h: h, A: snap.mainTabId, B: snap.secondaryTree.tabId, P: parked.id };
+        }
+
+        function roleView(h) {
+            const snap = h.ws.snapshot();
+            return JSON.stringify({
+                main: snap.mainTabId,
+                focus: snap.focusedTabId,
+                mode: snap.mode,
+                tree: snap.secondaryTree,
+                tabs: snap.tabs.map(function (tab) { return tab.id + ':' + tab.route; }),
+                url: h.hist.getHash(),
+                mounted: snap.tabs.filter(function (tab) { return h.isMounted(tab.id); }).map(function (tab) { return tab.id; }),
+                parked: h.life.park.slice(),
+                warmParked: h.life.warmPark.slice(),
+                destroyed: h.life.destroy.slice(),
+            });
+        }
+
+        async function raceRole(name, start) {
+            const s = await scene();
+            const asked = [];
+            let release = null;
+            s.h.setCanLeaveFn(function (tabId) {
+                asked.push(tabId);
+                if (asked.length > 1) return false;
+                return new Promise(function (resolve) { release = resolve; });
+            });
+            let threw = false;
+            const pending = Promise.resolve(start(s)).then(
+                function (value) { return value; },
+                function () {
+                    threw = true;
+                    return false;
+                }
+            );
+            await Promise.resolve();
+            assert(name + ' waits on main leave', typeof release === 'function');
+            assertEq(name + ' preflighted A', asked[0], s.A);
+            const made = await s.h.ws.makeMain(s.B);
+            assert(name + ' make main skipped leave', made === true);
+            assertEq(name + ' make main did not ask B', asked.indexOf(s.B), -1);
+            assert('A stays mounted as secondary', s.h.isMounted(s.A));
+            assert('B stays mounted as main', s.h.isMounted(s.B));
+            const afterSwap = roleView(s.h);
+            release(true);
+            const result = await pending;
+            assert(name + ' does not throw', threw === false);
+            assertEq(name + ' does not apply after the role swap', result, false);
+            assertEq(name + ' keeps the post-swap workspace', roleView(s.h), afterSwap);
+            assert('B stays mounted', s.h.isMounted(s.B));
+            assertEq(name + ' did not park B', s.h.life.park.indexOf(s.B), -1);
+            assertEq(name + ' did not warm-park B', s.h.life.warmPark.indexOf(s.B), -1);
+            assertEq(name + ' did not destroy B', s.h.life.destroy.indexOf(s.B), -1);
+            assertEq(name + ' did not approve B', asked.indexOf(s.B), -1);
+        }
+
+        await raceRole('activated new tab', function (s) {
+            return s.h.ws.openTab('#/works/WN', { activate: true });
+        });
+        await raceRole('parked activation', function (s) {
+            return s.h.ws.activateTab(s.P);
+        });
+        await raceRole('parked history', function (s) {
+            s.h.hist.setLocation('#/works/WP', {
+                prksWorkspace: { v: 1, tabId: s.P, route: '#/works/WP', historyIndex: 0 },
+            });
+            return s.h.ws.handlePopState(s.h.hist.getState());
+        });
+    }
+
     const unsup = makeHarness({ hash: '#/works/WA' });
     await unsup.ws.navigate('#/people/P1', { target: 'tile' });
     const unsupB = unsup.ws.snapshot().secondaryTree.tabId;

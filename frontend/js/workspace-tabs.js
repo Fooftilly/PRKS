@@ -1038,6 +1038,13 @@
             paint();
         }
 
+        /* Leave approved this id as the Main that may be parked. Tile-capable Make
+         * Main can put a different tab in that role without a leave and without
+         * changing generation, so a commit must not park the later Main. */
+        function outgoingMainStill(leavingMainId) {
+            return !!leavingMainId && state.mainTabId === leavingMainId && !!getTab(leavingMainId);
+        }
+
         function openTab(hash, options) {
             const opts = options || {};
             const shouldActivate = opts.activate === true;
@@ -1049,11 +1056,12 @@
                 announce(tab.title);
                 return Promise.resolve(copyTab(tab));
             }
-            return runLeave(state.mainTabId, route, 'route-replace', function () {
-                const prevId = state.mainTabId;
+            const leavingMainId = state.mainTabId;
+            return runLeave(leavingMainId, route, 'route-replace', function () {
+                if (!outgoingMainStill(leavingMainId)) return false;
                 const tab = makeTab(route);
                 state.tabs.push(tab);
-                if (prevId && prevId !== tab.id) warmParkContext(prevId);
+                if (leavingMainId !== tab.id) warmParkContext(leavingMainId);
                 setMain(tab.id);
                 mountContext(tab.id);
                 commitUrl(tab, 'replace');
@@ -1478,10 +1486,11 @@
             if (visualTiled() && root.containsTab(state.secondaryTree, tab.id) && !opts.fromPopstate) {
                 return Promise.resolve(focusTab(tab.id));
             }
-            return runLeave(state.mainTabId, tab.route, 'route-replace', function () {
+            const leavingMainId = state.mainTabId;
+            return runLeave(leavingMainId, tab.route, 'route-replace', function () {
                 if (!getTab(tabId)) return false;
-                const prevId = state.mainTabId;
-                if (prevId && prevId !== tabId) warmParkContext(prevId);
+                if (!outgoingMainStill(leavingMainId)) return false;
+                if (leavingMainId !== tabId) warmParkContext(leavingMainId);
                 if (root.containsTab(state.secondaryTree, tabId)) {
                     if (!promoteSecondaryToMain(tabId)) return false;
                 } else {
@@ -1978,13 +1987,14 @@
             }
 
             const parkedWant = historyWant(target, raw, locHash);
-            return runLeave(state.mainTabId, parkedWant.route, 'history', function () {
+            const leavingMainId = state.mainTabId;
+            return runLeave(leavingMainId, parkedWant.route, 'history', function () {
                 if (!getTab(target.id)) {
                     restoreMainUrl();
                     return false;
                 }
-                const prevId = state.mainTabId;
-                if (prevId && prevId !== target.id) warmParkContext(prevId);
+                if (!outgoingMainStill(leavingMainId)) return false;
+                if (leavingMainId !== target.id) warmParkContext(leavingMainId);
                 /* A visually parked tab may still occupy a leaf in the preserved logical tree
                  * (Hide split / narrow fallback). Promotion uses the same eligibility rule as
                  * Make Main / startup: demote into that leaf only when the old Main is
