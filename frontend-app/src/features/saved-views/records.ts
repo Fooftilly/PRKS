@@ -9,10 +9,13 @@ import {
   type SavedView,
   type SavedViewInput,
 } from '../../api/saved-views'
-import { prksQueryClient } from '../../query/client'
+import { prksQueryClient, type PrksQueryMeta } from '../../query/client'
 import { prksQueryKeys } from '../../query/keys'
 
 const OFFLINE_MESSAGE = 'Saved Views require a connection to PRKS.'
+
+/** Every Saved View read reports its final failure under the classic source. */
+export const SAVED_VIEWS_READ_META: PrksQueryMeta = { clientErrorSource: 'saved-views.fetch' }
 
 /** The offline runtime refused a write and already told the user. Nothing was sent. */
 export class SavedViewOfflineRefusal extends Error {
@@ -38,13 +41,44 @@ export class SavedViewOfflineRefusal extends Error {
  */
 export interface SavedViewRecords {
   list(): Promise<SavedView[]>
-  /** `null` when the server has no such view. */
-  get(viewId: string): Promise<SavedView | null>
+  /**
+   * `null` when the server has no such view. `signal` is the reader's
+   * lifetime (a route's abort signal): when it aborts, this call rejects with
+   * an AbortError, and the request itself is cancelled only if no other
+   * reader of that view is still waiting on it.
+   */
+  get(viewId: string, signal?: AbortSignal): Promise<SavedView | null>
   create(input: SavedViewInput): Promise<SavedView>
   update(viewId: string, input: SavedViewInput): Promise<SavedView>
   remove(viewId: string): Promise<void>
   /** {@link savedViewActionMessage}, for classic callers. */
   actionMessage(err: unknown, fallback: string): string
+  /**
+   * Call `listener` after every sent Saved View write has invalidated the
+   * domain, from any surface. For imperative readers that hold a list outside
+   * a query observer (the open command palette). Returns the unsubscribe.
+   */
+  onWrite(listener: () => void): () => void
+}
+
+/** Readers still waiting on each detail key, page-wide. */
+const pendingReads = new Map<string, number>()
+
+function abortError(): DOMException {
+  return new DOMException('Saved View read aborted.', 'AbortError')
+}
+
+/** Page-wide: writes from any records instance reach every subscriber. */
+const writeListeners = new Set<() => void>()
+
+function notifyWrite(): void {
+  for (const listener of [...writeListeners]) {
+    try {
+      listener()
+    } catch {
+      /* One reader's failure does not stop the others. */
+    }
+  }
 }
 
 /**
@@ -78,6 +112,7 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
     } finally {
       mutation.reset()
       await shared.invalidateQueries({ queryKey: prksQueryKeys.savedViews.all() })
+      notifyWrite()
     }
   }
 
@@ -87,13 +122,42 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
         queryKey: prksQueryKeys.savedViews.list(),
         queryFn: ({ signal }) => listSavedViews(signal),
         staleTime: 0,
+        meta: SAVED_VIEWS_READ_META,
       })
     },
-    get(viewId) {
-      return client().fetchQuery({
-        queryKey: prksQueryKeys.savedViews.detail(viewId),
-        queryFn: ({ signal }) => getSavedView(viewId, signal),
+    get(viewId, signal) {
+      if (signal?.aborted) return Promise.reject(abortError())
+      const shared = client()
+      const queryKey = prksQueryKeys.savedViews.detail(viewId)
+      const slot = JSON.stringify(queryKey)
+      pendingReads.set(slot, (pendingReads.get(slot) ?? 0) + 1)
+      let held = true
+      const release = (): boolean => {
+        if (!held) return false
+        held = false
+        const left = (pendingReads.get(slot) ?? 1) - 1
+        if (left > 0) pendingReads.set(slot, left)
+        else pendingReads.delete(slot)
+        return left <= 0
+      }
+      const read = shared.fetchQuery({
+        queryKey,
+        queryFn: ({ signal: requestSignal }) => getSavedView(viewId, requestSignal),
         staleTime: 0,
+        meta: SAVED_VIEWS_READ_META,
+      })
+      if (!signal) return read.finally(release)
+      return new Promise<SavedView | null>((resolve, reject) => {
+        const onAbort = () => {
+          // The last reader leaving stops the request and its retries.
+          if (release()) void shared.cancelQueries({ queryKey, exact: true })
+          reject(abortError())
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        read.then(resolve, reject).finally(() => {
+          signal.removeEventListener('abort', onAbort)
+          release()
+        })
       })
     },
     create(input) {
@@ -106,5 +170,11 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
       return write(() => deleteSavedView(viewId))
     },
     actionMessage: savedViewActionMessage,
+    onWrite(listener) {
+      writeListeners.add(listener)
+      return () => {
+        writeListeners.delete(listener)
+      }
+    },
   }
 }

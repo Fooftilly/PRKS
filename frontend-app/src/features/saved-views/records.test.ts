@@ -9,6 +9,7 @@ import { savedViewActionMessage, savedViewRecords, SavedViewOfflineRefusal } fro
 afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksOfflineGuardMutation
+  delete window.prksReportClientError
 })
 
 const SEARCH = { mode: 'all', q: 'x', tag: '', author: '', publisher: '' } as const
@@ -44,9 +45,27 @@ describe('Saved View records', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('answers null for a missing view', async () => {
+  it('answers null for a missing view without reporting a failure', async () => {
+    const report = vi.fn()
+    window.prksReportClientError = report
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Saved View not found.' }), { status: 404 })))
     await expect(savedViewRecords(createPrksQueryClient()).get('SV-9')).resolves.toBeNull()
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('reports a failed list or record read under the Saved Views source, with no id', async () => {
+    const report = vi.fn()
+    window.prksReportClientError = report
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'SV-1' }), { status: 200 })))
+    const records = savedViewRecords(createPrksQueryClient())
+    await expect(records.get('SV-1')).rejects.toMatchObject({ code: 'invalid_response' })
+    await expect(records.list()).rejects.toMatchObject({ code: 'invalid_response' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'boom' }), { status: 500 })))
+    await expect(records.get('SV-2')).rejects.toMatchObject({ status: 500 })
+    await expect(records.list()).rejects.toMatchObject({ status: 500 })
+    expect(report.mock.calls).toEqual(
+      Array.from({ length: 4 }, () => [{ kind: 'api_client_error', source: 'saved-views.fetch' }]),
+    )
   })
 
   it.each([
@@ -114,5 +133,73 @@ describe('Saved View records', () => {
     expect(savedViewActionMessage(new SavedViewOfflineRefusal(), 'Could not save view.')).toBe(
       'Requires a connection to PRKS.',
     )
+  })
+
+  it('tells write listeners after any sent write invalidated, from any instance, until they unsubscribe', async () => {
+    const client = createPrksQueryClient()
+    client.setQueryData(prksQueryKeys.savedViews.list(), [])
+    const seen: boolean[] = []
+    const stop = savedViewRecords(client).onWrite(() => {
+      seen.push(client.getQueryState(prksQueryKeys.savedViews.list())?.isInvalidated === true)
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(null), { status: 500 })))
+    await expect(savedViewRecords(client).remove('SV-1')).rejects.toBeDefined()
+    expect(seen).toEqual([true])
+    stop()
+    await expect(savedViewRecords(client).remove('SV-1')).rejects.toBeDefined()
+    expect(seen).toEqual([true])
+  })
+
+  function heldRead() {
+    const signals: AbortSignal[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit = {}) => {
+        if (init.signal) signals.push(init.signal)
+        await gate
+        if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+        return new Response(JSON.stringify(view('SV-1', 'Held')), { status: 200 })
+      }),
+    )
+    return { signals, release: () => release() }
+  }
+
+  it('cancels a record read when its only reader leaves, and reports nothing', async () => {
+    const report = vi.fn()
+    window.prksReportClientError = report
+    const server = heldRead()
+    const client = createPrksQueryClient()
+    const route = new AbortController()
+    const read = savedViewRecords(client).get('SV-1', route.signal)
+    await vi.waitFor(() => expect(server.signals).toHaveLength(1))
+    route.abort()
+    await expect(read).rejects.toMatchObject({ name: 'AbortError' })
+    expect(server.signals[0].aborted).toBe(true)
+    server.release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(client.getQueryState(prksQueryKeys.savedViews.detail('SV-1'))?.fetchStatus).toBe('idle')
+    expect(report).not.toHaveBeenCalled()
+    await expect(savedViewRecords(client).get('SV-1', AbortSignal.abort())).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+  })
+
+  it('keeps a shared record read for the reader that is still waiting', async () => {
+    const server = heldRead()
+    const client = createPrksQueryClient()
+    const records = savedViewRecords(client)
+    const leaving = new AbortController()
+    const left = records.get('SV-1', leaving.signal)
+    const staying = records.get('SV-1')
+    await vi.waitFor(() => expect(server.signals).toHaveLength(1))
+    leaving.abort()
+    await expect(left).rejects.toMatchObject({ name: 'AbortError' })
+    expect(server.signals[0].aborted).toBe(false)
+    server.release()
+    await expect(staying).resolves.toMatchObject({ id: 'SV-1', name: 'Held' })
   })
 })

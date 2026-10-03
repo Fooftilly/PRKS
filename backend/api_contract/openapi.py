@@ -40,6 +40,7 @@ from backend.api_contract.saved_views import (
     SavedViewCreateRequest,
     SavedViewDeleted,
     SavedViewSearch,
+    SavedViewSearchInput,
     SavedViewUpdateRequest,
 )
 
@@ -584,6 +585,7 @@ def saved_views_openapi_document() -> dict[str, Any]:
     for model in (
         ApiErrorEnvelope,
         SavedViewSearch,
+        SavedViewSearchInput,
         SavedView,
         SavedViewCreateRequest,
         SavedViewUpdateRequest,

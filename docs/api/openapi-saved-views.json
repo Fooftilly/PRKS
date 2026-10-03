@@ -317,6 +317,40 @@
         ],
         "type": "object"
       },
+      "SavedViewSearchInput": {
+        "description": "A search definition as the endpoint accepts it.\n\nAll five keys are required strings. Extra keys are ignored. ``mode`` is\ntrimmed by the domain before it must be ``all``, ``advanced``, or ``tag``,\nso the schema types it as a string; the allowed values, field lengths,\nand mode/field combinations are domain refusals (400).",
+        "properties": {
+          "mode": {
+            "description": "`all`, `advanced`, or `tag` after trimming (domain-checked).",
+            "title": "Mode",
+            "type": "string"
+          },
+          "q": {
+            "title": "Q",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "q",
+          "tag",
+          "author",
+          "publisher"
+        ],
+        "type": "object"
+      },
       "SavedView": {
         "additionalProperties": false,
         "description": "One Saved View: GET list rows, GET by id, POST and PATCH bodies.",
@@ -372,7 +406,7 @@
             "type": "string"
           },
           "search": {
-            "$ref": "#/components/schemas/SavedViewSearch"
+            "$ref": "#/components/schemas/SavedViewSearchInput"
           }
         },
         "required": [
@@ -382,14 +416,30 @@
         "type": "object"
       },
       "SavedViewUpdateRequest": {
-        "description": "PATCH /api/saved-views/{id}. Omit a field to leave it unchanged.\n\nSending neither field is a domain refusal (``Nothing to update.``). The\npublished contract refuses JSON null; the controller still treats a null\nfield as omitted, as it did before this contract existed.",
+        "description": "PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.\n\nSending neither field (or only nulls) is a domain refusal\n(``Nothing to update.``).",
         "properties": {
           "name": {
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
           },
           "search": {
-            "$ref": "#/components/schemas/SavedViewSearch"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedViewSearchInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "type": "object"

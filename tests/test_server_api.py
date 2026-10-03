@@ -5003,6 +5003,61 @@ class TestServerAPI(unittest.TestCase):
         status, body = self._saved_views_call("DELETE", "/api/saved-views/SV-missing")
         self.assertEqual((status, body), (404, {"error": "Saved View not found."}))
 
+    def test_saved_views_request_schema_matches_the_live_endpoint(self):
+        """Inputs the schema accepts, the server accepts, and the reverse."""
+        search = {"mode": "all", "q": "parity", "tag": "", "author": "", "publisher": ""}
+        # Extra keys, top-level and nested, are ignored by both.
+        status, created = self._saved_views_call(
+            "POST",
+            "/api/saved-views",
+            {"name": "Parity", "search": {**search, "extra": 1}, "unused": True},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["search"], search)
+        # The domain trims the mode; the schema types it as a string.
+        status, trimmed = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Trimmed", "search": {**search, "mode": " all "}}
+        )
+        self.assertEqual((status, trimmed["search"]["mode"]), (201, "all"))
+        # A mode outside the three is a domain refusal of a schema-valid body.
+        status, body = self._saved_views_call(
+            "POST", "/api/saved-views", {"name": "Regex", "search": {**search, "mode": "regex"}}
+        )
+        self.assertEqual((status, body), (400, {"error": "Invalid search mode."}))
+        # PATCH null means "leave unchanged" in both.
+        vid = created["id"]
+        status, body = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{vid}", {"name": None, "search": None}
+        )
+        self.assertEqual((status, body), (400, {"error": "Nothing to update."}))
+        status, renamed = self._saved_views_call(
+            "PATCH", f"/api/saved-views/{vid}", {"name": "Parity 2", "search": None}
+        )
+        self.assertEqual((status, renamed["name"], renamed["search"]), (200, "Parity 2", search))
+        # A missing search key is refused by both.
+        status, body = self._saved_views_call(
+            "POST",
+            "/api/saved-views",
+            {"name": "Short", "search": {"mode": "all", "q": "x"}},
+            schema_valid=False,
+        )
+        self.assertEqual((status, body), (400, {"error": "Search definition is incomplete."}))
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest
+
+        from backend.api_contract.openapi import saved_views_openapi_document
+
+        api = OpenAPI.from_dict(saved_views_openapi_document())
+        with self.assertRaises(Exception):
+            api.validate_request(
+                MockRequest(
+                    host_url="http://127.0.0.1",
+                    method="post",
+                    path="/api/saved-views",
+                    data=json.dumps({"name": "Short", "search": {"mode": "all", "q": "x"}}).encode(),
+                )
+            )
+
     def test_saved_views_live_results_match_search(self):
         db = self.__class__.test_db
         a = db.add_work(title="Work A", author_text="Adorno")

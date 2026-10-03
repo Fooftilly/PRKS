@@ -70,6 +70,8 @@ interface PrksNavigateOptions {
 }
 
 interface Window {
+  /** Sanitized `/api/client-errors` reporter from `api.js` (deduped there). */
+  prksReportClientError?: (input: { kind: string; source: string; request_id?: string }) => void
   prksVueActivatePerformanceDiagnostics?: () => void
   __prksPerformanceDiagnosticsRequested?: boolean
   prksRequestCoordinatorSnapshot?: () => {

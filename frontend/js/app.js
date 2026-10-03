@@ -4068,14 +4068,14 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                     break;
                 }
                 const viewId = route.params.viewId;
-                // The record comes from the frontend-app Saved View records
-                // service (typed client + shared query cache). Search rows stay
-                // this coordinator's prksEffectiveSearchResults read.
+                // Record: frontend-app records service, cancelled with this
+                // route. Rows: this coordinator's search read below.
                 let view = null;
                 let viewReadFailed = false;
                 try {
-                    view = await window.prksSavedViewRecords.get(viewId);
-                } catch (_err) {
+                    view = await window.prksSavedViewRecords.get(viewId, routeSignal);
+                } catch (err) {
+                    if (stale() || (typeof prksIsAbortError === 'function' && prksIsAbortError(err))) return;
                     viewReadFailed = true;
                 }
                 if (stale()) return;

@@ -8,19 +8,15 @@ online-only: there is no durable operation and no sync state.
 The domain already refuses every wrong-type request field with its own
 message (``Name must be a string.``, ``Search fields must be strings.``), so
 the controller passes the JSON object straight to the domain. The request
-models here are the published wire contract and the test oracle; they do not
-replace those messages with a generic ``invalid_request``.
+models here describe exactly what the endpoint accepts (extra keys ignored,
+``mode`` trimmed by the domain, PATCH null treated as omitted); parity tests in
+``tests/test_server_api.py`` keep them in step with the live controller.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-def _strip_null_default(schema: dict[str, Any]) -> None:
-    if schema.get("default") is None:
-        schema.pop("default", None)
 
 
 class SavedViewSearch(BaseModel):
@@ -48,29 +44,47 @@ class SavedView(BaseModel):
     updated_at: str | None
 
 
+class SavedViewSearchInput(BaseModel):
+    """A search definition as the endpoint accepts it.
+
+    All five keys are required strings. Extra keys are ignored. ``mode`` is
+    trimmed by the domain before it must be ``all``, ``advanced``, or ``tag``,
+    so the schema types it as a string; the allowed values, field lengths,
+    and mode/field combinations are domain refusals (400).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    mode: str = Field(
+        ...,
+        description="`all`, `advanced`, or `tag` after trimming (domain-checked).",
+    )
+    q: str
+    tag: str
+    author: str
+    publisher: str
+
+
 class SavedViewCreateRequest(BaseModel):
     """POST /api/saved-views."""
 
     model_config = ConfigDict(extra="ignore")
 
     name: str
-    search: SavedViewSearch
+    search: SavedViewSearchInput
 
 
 class SavedViewUpdateRequest(BaseModel):
-    """PATCH /api/saved-views/{id}. Omit a field to leave it unchanged.
+    """PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.
 
-    Sending neither field is a domain refusal (``Nothing to update.``). The
-    published contract refuses JSON null; the controller still treats a null
-    field as omitted, as it did before this contract existed.
+    Sending neither field (or only nulls) is a domain refusal
+    (``Nothing to update.``).
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    name: Annotated[str, Field(default=None, json_schema_extra=_strip_null_default)]
-    search: Annotated[
-        SavedViewSearch, Field(default=None, json_schema_extra=_strip_null_default)
-    ]
+    name: str | None = None
+    search: SavedViewSearchInput | None = None
 
 
 class SavedViewDeleted(BaseModel):

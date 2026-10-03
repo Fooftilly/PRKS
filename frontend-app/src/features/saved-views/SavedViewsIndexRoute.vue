@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import { usePendingAction } from '../../route-surface/pending-action'
 import type { SavedViewIntents } from './intents'
@@ -61,14 +61,14 @@ function remove(viewId: string): void {
   })
 }
 
-// Rows arrive after mount and change after each write; icons follow them.
-watch(
-  rows,
-  () => {
-    window.prksRefreshIcons?.(rootEl.value)
-  },
-  { flush: 'post', immediate: true },
-)
+function refreshIcons(): void {
+  window.prksRefreshIcons?.(rootEl.value)
+}
+
+// The header icon paints on mount, whatever the first read does; row icons
+// follow the rows after each read and write.
+onMounted(refreshIcons)
+watch(rows, refreshIcons, { flush: 'post' })
 </script>
 
 <template>

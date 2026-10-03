@@ -21,6 +21,7 @@ export function usePublishersCatalog(queryClient: QueryClient = prksQueryClient(
       queryKey: prksQueryKeys.publishers.inUse(),
       queryFn: ({ signal }) => listPublishersInUse(signal),
       refetchOnMount: 'always',
+      meta: { clientErrorSource: 'publishers.fetch' },
     },
     queryClient,
   )

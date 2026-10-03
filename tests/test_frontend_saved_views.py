@@ -126,7 +126,7 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertNotIn("views:", case_body)
         detail_at = app.index("case 'saved-view-detail': {")
         detail_body = app[detail_at: detail_at + 2400]
-        self.assertIn("window.prksSavedViewRecords.get(viewId)", detail_body)
+        self.assertIn("window.prksSavedViewRecords.get(viewId, routeSignal)", detail_body)
         self.assertIn("availability: 'error'", detail_body)
         self.assertNotIn("renderSavedViewsIndex", app)
         src = _read(_SV)

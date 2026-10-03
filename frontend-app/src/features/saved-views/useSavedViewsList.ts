@@ -5,6 +5,7 @@ import { listSavedViews } from '../../api/saved-views'
 import { prksQueryClient } from '../../query/client'
 import { prksQueryKeys } from '../../query/keys'
 import { savedViewIndexRows } from './projection'
+import { SAVED_VIEWS_READ_META } from './records'
 
 const LOAD_ERROR = 'Could not load Saved Views.'
 const REFRESH_ERROR = 'Could not refresh Saved Views.'
@@ -21,6 +22,7 @@ export function useSavedViewsList(queryClient: QueryClient = prksQueryClient()) 
       queryKey: prksQueryKeys.savedViews.list(),
       queryFn: ({ signal }) => listSavedViews(signal),
       refetchOnMount: 'always',
+      meta: SAVED_VIEWS_READ_META,
     },
     queryClient,
   )

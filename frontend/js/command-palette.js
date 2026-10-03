@@ -409,6 +409,7 @@
         groupPromise: null,
         playlistPromise: null,
         savedViewPromise: null,
+        savedViewUnwatch: null,
         conceptPromise: null,
         positionPromise: null,
         argumentPromise: null,
@@ -1400,6 +1401,39 @@
             });
     }
 
+    /**
+     * Saved Views come from the frontend-app records service, so the palette
+     * shares the index's query cache. The list it holds is replaced when a
+     * read finishes, never cleared first.
+     */
+    function loadSavedViews() {
+        const records = root.prksSavedViewRecords;
+        const listSaved = records && typeof records.list === 'function'
+            ? function () { return records.list(); }
+            : null;
+        state.savedViewPromise = wrapCatalog(listSaved, function (v) { state.savedViewCache = v; });
+    }
+
+    /**
+     * A Saved View write anywhere on the page re-reads the open palette's
+     * list, so a renamed or deleted view does not linger until it reopens.
+     */
+    function watchSavedViewWrites() {
+        unwatchSavedViewWrites();
+        const records = root.prksSavedViewRecords;
+        if (!records || typeof records.onWrite !== 'function') return;
+        state.savedViewUnwatch = records.onWrite(function () {
+            if (!state.open) return;
+            if (state.savedViewPromise) loadSavedViews();
+        });
+    }
+
+    function unwatchSavedViewWrites() {
+        const stop = state.savedViewUnwatch;
+        state.savedViewUnwatch = null;
+        if (typeof stop === 'function') stop();
+    }
+
     function ensureCatalogs() {
         if (state.scope === 'create') return;
         if (normalizeQuery(state.query).length < MIN_DYNAMIC_LEN) return;
@@ -1416,15 +1450,7 @@
             const fetchPl = root.fetchPlaylists;
             state.playlistPromise = wrapCatalog(fetchPl, function (v) { state.playlistCache = v; });
         }
-        if (!state.savedViewPromise) {
-            // Saved Views come from the frontend-app records service, so the
-            // palette shares the index's query cache and its write invalidation.
-            const records = root.prksSavedViewRecords;
-            const listSaved = records && typeof records.list === 'function'
-                ? function () { return records.list(); }
-                : null;
-            state.savedViewPromise = wrapCatalog(listSaved, function (v) { state.savedViewCache = v; });
-        }
+        if (!state.savedViewPromise) loadSavedViews();
         if (!state.conceptPromise) {
             state.conceptPromise = wrapCatalog(root.fetchConcepts, function (v) { state.conceptCache = v; });
         }
@@ -1751,6 +1777,7 @@
         state.queryGen += 1;
         clearDebounce();
         clearCaches();
+        watchSavedViewWrites();
         parts.input.value = '';
         if (parts.title) {
             if (state.scope === 'create') parts.title.textContent = 'Create…';
@@ -1794,6 +1821,7 @@
         state.emptyCreate = false;
         clearDebounce();
         clearCaches();
+        unwatchSavedViewWrites();
         const parts = paletteEls();
         if (parts.input) {
             parts.input.value = '';

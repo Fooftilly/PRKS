@@ -482,8 +482,17 @@ const sandbox = {
         return Promise.resolve([]);
     },
     prksSavedViewRecords: {
+        listeners: new Set(),
         list: function () {
             return Promise.resolve([]);
+        },
+        onWrite: function (listener) {
+            const set = this.listeners;
+            set.add(listener);
+            return function () { set.delete(listener); };
+        },
+        wrote: function () {
+            this.listeners.forEach(function (listener) { listener(); });
         },
     },
 };
@@ -1064,7 +1073,23 @@ Promise.resolve()
                     return r.entity === 'saved-view';
                 });
                 assert('saved view by name', svRows.some(function (r) { return r.entityId === 'SV-1'; }));
-                root.prksCloseCommandPalette();
+                // A Saved View write elsewhere re-reads the open palette's list.
+                const records = root.prksSavedViewRecords;
+                assertEq('open palette watches Saved View writes', records.listeners.size, 1);
+                const previousList = records.list;
+                records.list = function () { return Promise.resolve([]); };
+                records.wrote();
+                return new Promise(function (r) { setTimeout(r, 0); }).then(function () {
+                    const after = root.prksCommandPaletteGetResults().filter(function (r) {
+                        return r.entity === 'saved-view';
+                    });
+                    assertEq('deleted saved view leaves the open palette', after.length, 0);
+                    records.list = previousList;
+                    root.prksCloseCommandPalette();
+                    assertEq('closed palette stops watching Saved View writes', records.listeners.size, 0);
+                });
+            })
+            .then(function () {
                 root.prksOpenCommandPalette();
                 root.prksCommandPaletteSetQuery('PRIVATE_SAVED_QUERY_X9Q7');
                 return new Promise(function (r) { setTimeout(r, 0); });

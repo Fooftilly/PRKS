@@ -382,6 +382,25 @@ describe('Saved Views index route', () => {
     )
   })
 
+  it('refreshes icons on mount even when the first read fails, and again when rows arrive', async () => {
+    chrome()
+    const refresh = vi.fn()
+    window.prksRefreshIcons = refresh
+    const server = fakeServer([VIEW])
+    server.refuse('GET /api/saved-views', { status: 500, body: null })
+    const main = host()
+    presentSavedViewsIndex({ owner: indexOwner('main', 1), host: main, generation: 1 })
+    await flush()
+    expect(main.querySelector('[data-saved-views-load-error]')).not.toBeNull()
+    expect(refresh).toHaveBeenCalledWith(main.querySelector('.saved-views-page'))
+    const afterMount = refresh.mock.calls.length
+    main.querySelector<HTMLButtonElement>('[data-saved-views-load-error] button')?.click()
+    await flush()
+    expect(rowIds(main)).toEqual(['SV 1'])
+    expect(refresh.mock.calls.length).toBeGreaterThan(afterMount)
+    expect(refresh.mock.calls.every(([root]) => root === main.querySelector('.saved-views-page'))).toBe(true)
+  })
+
   it('drops a stale generation and keeps owners apart', async () => {
     chrome()
     fakeServer([VIEW])
