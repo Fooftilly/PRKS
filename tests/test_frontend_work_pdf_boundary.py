@@ -42,6 +42,8 @@ class WorkPdfBoundaryTests(unittest.TestCase):
         route = _between(_APP, "async function prksCommitTabRouteRender", "const contentDiv = ctx.root;")
         self.assertIn("ctx.getResource('pdf')", route)
         self.assertIn("prevPdf.flushLastPage()", route)
+        self.assertIn("const prevRoute = ctx.lastResolvedRoute || null", route)
+        self.assertLess(route.find("const prevRoute"), route.find("prevHash = prevRoute"))
         self.assertNotIn("prksHasPendingWorkAnnotationSync", route)
         wrapper = _between(_APP, "async function prksRenderTabRoute", "async function prksCommitTabRouteRender")
         self.assertIn("prksTabLeave.run", wrapper)

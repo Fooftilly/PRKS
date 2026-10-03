@@ -85,7 +85,11 @@ var prksTabLeave = (function(exports) {
 			};
 			for (const id of keys) slots.set(id, slot);
 			const finish = (result) => {
-				result.finally(release);
+				result.then(() => {
+					release();
+				}, () => {
+					release();
+				});
 				return result;
 			};
 			if (idle) try {

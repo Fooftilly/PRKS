@@ -3701,6 +3701,8 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
     let route = typeof prksParseRoute === 'function' ? prksParseRoute(suppliedHash) : null;
     if (!route) return;
 
+    const prevRoute = ctx.lastResolvedRoute || null;
+
     if (route.canonicalize && route.canonicalHash && route.canonicalHash !== suppliedHash) {
         const isMain = typeof prksIsMainTabContext === 'function' ? prksIsMainTabContext(ctx) : true;
         if (isMain && typeof prksNavigate === 'function') {

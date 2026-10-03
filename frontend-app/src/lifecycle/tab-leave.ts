@@ -197,7 +197,16 @@ export function createTabLeave(): TabLeaveApi {
     }
     for (const id of keys) slots.set(id, slot)
     const finish = (result: Promise<T>) => {
-      void result.finally(release)
+      /* Handled callbacks release the slot. A detached finally would reject
+       * on its own when `result` rejects, even if the caller catches it. */
+      void result.then(
+        () => {
+          release()
+        },
+        () => {
+          release()
+        },
+      )
       return result
     }
     if (idle) {

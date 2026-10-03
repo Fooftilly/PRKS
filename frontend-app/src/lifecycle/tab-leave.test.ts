@@ -386,4 +386,34 @@ describe('tab leave preflight', () => {
     expect(flushes).toBe(0)
     expect(owner.route).toBe('#/people/p')
   })
+
+  it('releases the slot when commit rejects without a second rejection', async () => {
+    const leave = createTabLeave()
+    const owner: Owner = { id: 'main', generation: 1, destroyed: false, notes: 0, route: '#/works/a' }
+    const stray: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      stray.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      await expect(
+        leave.run(
+          attempt(owner, '#/folders', () => null, () => {
+            throw new Error('commit failed')
+          }),
+        ),
+      ).rejects.toThrow('commit failed')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(stray).toEqual([])
+      const next = await leave.run(
+        attempt(owner, '#/people/p', () => null, () => {
+          owner.route = '#/people/p'
+        }),
+      )
+      expect(next.status).toBe('approved')
+      expect(owner.route).toBe('#/people/p')
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
 })

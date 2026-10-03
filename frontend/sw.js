@@ -22,7 +22,7 @@
     // frontend/js/search-query-codec.js, or
     // frontend/js/tab-leave.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '9275610e5dad';
+    const DEPENDENCY_REVISION = 'de320e812028';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
