@@ -682,5 +682,78 @@ describe('work private notes owner lifetime', () => {
     expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
     expect(ownerA.getResource('privateNotesEditor')).toBeUndefined()
   })
+
+  function busyRetryTimers(owner: WorkCtx): string[] {
+    return [...owner.timers.keys()].filter((key) => key.startsWith('privateNotesBusyRetry:'))
+  }
+
+  function countingSync() {
+    const listeners = new Set<() => void>()
+    panelWindow.prksSync = {
+      subscribe(listener: () => void) {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    }
+    return listeners
+  }
+
+  // Dirty draft, warm park disposes the editor, the session saver flushes it,
+  // and the save settles scope_busy: the retry is scheduled for no live editor.
+  async function busyRetryFromSessionSaver() {
+    const pair = bound('saved')
+    const listeners = countingSync()
+    const saves: SaveCall[] = []
+    let release: (result: { code: string }) => void = () => {}
+    panelWindow.prksSaveWorkNoteDurably = (entityId, kind, content) => {
+      saves.push({ entityId: String(entityId), kind: String(kind), content: String(content) })
+      if (saves.length > 1) return Promise.resolve({ code: 'saved' })
+      return new Promise((resolve) => { release = resolve })
+    }
+    pair.notes.value = 'Busy from the session'
+    pair.notes.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(pair.ownerA.suspend(parking())).toBe(true)
+    expect(pair.ownerA.getResource('privateNotesEditor')).toBeUndefined()
+    panelWindow.prksFlushPendingPrivateNotes(pair.ownerA)
+    await flushMicrotasks()
+    expect(saves).toHaveLength(1)
+    release({ code: 'scope_busy' })
+    await flushMicrotasks()
+    expect(listeners.size).toBe(1)
+    expect(busyRetryTimers(pair.ownerA)).toHaveLength(1)
+    return { ...pair, listeners, saves }
+  }
+
+  it('stops the session-saver busy retry on cold route without a sync event', async () => {
+    vi.useFakeTimers()
+    const { ownerA, listeners, saves } = await busyRetryFromSessionSaver()
+    ownerA.unmount('park')
+    expect(listeners.size).toBe(0)
+    expect(busyRetryTimers(ownerA)).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(saves).toHaveLength(1)
+  })
+
+  it('stops the session-saver busy retry when the owner is destroyed', async () => {
+    vi.useFakeTimers()
+    const { ownerA, listeners, saves } = await busyRetryFromSessionSaver()
+    panelWindow.prksDestroyAllTabContexts()
+    expect(ownerA.destroyed).toBe(true)
+    expect(listeners.size).toBe(0)
+    expect(busyRetryTimers(ownerA)).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(saves).toHaveLength(1)
+  })
+
+  it('stops the busy retry listener when its timer fires', async () => {
+    vi.useFakeTimers()
+    const { ownerA, listeners, saves } = await busyRetryFromSessionSaver()
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(listeners.size).toBe(0)
+    expect(busyRetryTimers(ownerA)).toEqual([])
+    expect(saves).toHaveLength(2)
+    expect(ownerA.ui.workPrivateNoteSession?.dirty).toBe(false)
+  })
 })
 

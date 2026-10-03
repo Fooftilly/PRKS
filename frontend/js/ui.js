@@ -2964,10 +2964,21 @@ function prksPrivateNotesRetryStillDirty(live) {
     return true;
 }
 
+// ctx -> Map(timerKey -> stop) so a reschedule from a fresh session saver
+// still stops the previous retry listener for the same note.
+const prksPrivateNoteBusyRetryStops = new WeakMap();
+
 function prksSchedulePrivateNoteBusyRetry(editor, token) {
-    if (!editor || !editor.ctx) return;
+    if (!editor || !editor.ctx || editor.ctx.destroyed) return;
     const timerKey = 'privateNotesBusyRetry:' + editor.key;
     editor.ctx.clearTimer(timerKey);
+    let retryStops = prksPrivateNoteBusyRetryStops.get(editor.ctx);
+    if (!retryStops) {
+        retryStops = new Map();
+        prksPrivateNoteBusyRetryStops.set(editor.ctx, retryStops);
+    }
+    const previousStop = retryStops.get(timerKey);
+    if (previousStop) previousStop();
     if (editor._prksBusyRetryStop) {
         try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
         editor._prksBusyRetryStop = null;
@@ -2979,25 +2990,41 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         if (!prksPrivateNotesRetryStillDirty(liveEditor)) return;
         void prksEnqueuePrivateNotesSave(liveEditor);
     };
+    // The retry listener is owner-scoped: the timer, the sync event, the editor
+    // disposer and cold route/destroy (registerCleanup) all stop it, whichever
+    // comes first, so a disposed or synthetic editor never leaks it.
+    let stopRetry = function () {};
     if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.subscribe === 'function') {
-        const stop = prksSync.subscribe(function () {
-            const liveEditor = prksPrivateNotesRetryTarget(editor);
-            if (!liveEditor || token !== prksPrivateNoteLatestSaveToken(liveEditor) ||
-                !prksPrivateNotesRetryStillDirty(liveEditor)) {
-                stop();
-                editor._prksBusyRetryStop = null;
-                return;
+        let stopSync = null;
+        let unregisterCleanup = null;
+        stopRetry = function () {
+            const stop = stopSync;
+            const unregister = unregisterCleanup;
+            stopSync = null;
+            unregisterCleanup = null;
+            if (editor._prksBusyRetryStop === stopRetry) editor._prksBusyRetryStop = null;
+            if (retryStops.get(timerKey) === stopRetry) retryStops.delete(timerKey);
+            if (unregister) unregister();
+            if (stop) {
+                try { stop(); } catch (_e) { /* ignore */ }
             }
-            stop();
-            editor._prksBusyRetryStop = null;
-            tryAgain();
+        };
+        stopSync = prksSync.subscribe(function () {
+            const liveEditor = prksPrivateNotesRetryTarget(editor);
+            const stillDue = !!liveEditor && token === prksPrivateNoteLatestSaveToken(liveEditor) &&
+                prksPrivateNotesRetryStillDirty(liveEditor);
+            stopRetry();
+            if (stillDue) tryAgain();
         });
-        editor._prksBusyRetryStop = stop;
+        unregisterCleanup = editor.ctx.registerCleanup(stopRetry);
+        retryStops.set(timerKey, stopRetry);
+        editor._prksBusyRetryStop = stopRetry;
     }
     const timer = window.setTimeout(function () {
         if (editor.ctx.timers && editor.ctx.timers.get(timerKey) === timer) {
             editor.ctx.clearTimer(timerKey);
         }
+        stopRetry();
         tryAgain();
     }, 400);
     editor.ctx.setTimer(timerKey, timer);

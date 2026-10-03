@@ -84,6 +84,14 @@ class NotesLifetimeContractTests(unittest.TestCase):
         live = _slice(ui, "function prksPrivateNotesOwnerCurrent(", "\n}")
         self.assertIn("getResource('privateNotesEditor') === editor", live)
 
+    def test_busy_retry_listener_is_owner_scoped(self):
+        ui = _UI.read_text(encoding="utf-8")
+        retry = _slice(ui, "function prksSchedulePrivateNoteBusyRetry(", "\nfunction ")
+        self.assertIn("editor.ctx.destroyed", retry)
+        self.assertLess(retry.index("prksSync.subscribe("), retry.index("editor.ctx.registerCleanup(stopRetry)"))
+        timer = _slice(retry, "window.setTimeout(", "}, 400)")
+        self.assertLess(timer.index("stopRetry()"), timer.index("tryAgain()"))
+
     def test_notes_acknowledgement_subscription_is_owner_scoped(self):
         state = _NOTES_STATE.read_text(encoding="utf-8")
         bind = _slice(state, "function bindSync(", "\n    }\n")
