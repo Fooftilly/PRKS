@@ -15,15 +15,34 @@
  * Route generation is not used for that. Research Graph is not suspendable.
  * The PDF runtime is suspendable. Production registers it from
  * initPdfViewerForWork with the ticket captured before deferred setup.
- * This module does not construct that runtime.
+ * Work role, Work tag, Work source, Work metadata, and Folder tag sessions
+ * are non-suspendable. Warm park releases them. Production captures a ticket
+ * and registers that session before subscriptions or async prepare. This
+ * module does not construct those sessions or decide their durable writes.
  *
  * VueUse is not used here. Cytoscape, the PDF viewer, and other owned browser
  * resources outlive a component mount, and their dispose stays on this registry.
  */
 
-export const OWNER_RESOURCE_KINDS = ['researchGraph', 'pdf'] as const
+const EDITOR_SESSION_KINDS = [
+  'workRoleEditor',
+  'workTagEditor',
+  'workSourceEditor',
+  'workMetadataEditor',
+  'folderTagEditor',
+] as const
+
+export const OWNER_RESOURCE_KINDS = ['researchGraph', 'pdf', ...EDITOR_SESSION_KINDS] as const
 
 export type OwnerResourceKind = (typeof OWNER_RESOURCE_KINDS)[number]
+
+function isOwnerResourceKind(kind: string): kind is OwnerResourceKind {
+  return (OWNER_RESOURCE_KINDS as readonly string[]).includes(kind)
+}
+
+function isEditorSessionKind(kind: OwnerResourceKind): boolean {
+  return (EDITOR_SESSION_KINDS as readonly string[]).includes(kind)
+}
 
 export interface ResourceTicket {
   ownerId: string
@@ -147,8 +166,9 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
 
   function register<T>(ticket: ResourceTicket, registration: ResourceRegistration<T>): RegisterResult {
     if (releasing > 0) return 'rejected'
-    if (!ticketCurrent(ticket) || !registration) return 'rejected'
-    if (registration.kind !== 'researchGraph' && registration.kind !== 'pdf') return 'rejected'
+    if (!ticketCurrent(ticket) || !registration || typeof registration.kind !== 'string') return 'rejected'
+    if (!isOwnerResourceKind(registration.kind)) return 'rejected'
+    if (isEditorSessionKind(registration.kind) && registration.suspendable === true) return 'rejected'
     if (ownerPhase === 'suspended' && registration.suspendable !== true) return 'rejected'
     const previous = slots.get(registration.kind)
     let result: RegisterResult = 'attached'

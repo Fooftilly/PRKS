@@ -23,7 +23,7 @@
     // frontend/js/tab-leave.js, or
     // frontend/js/owner-resource.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '2b28918070b9';
+    const DEPENDENCY_REVISION = '02b5539667f2';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';

@@ -1,6 +1,49 @@
 var prksOwnerResource = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 	//#region src/lifecycle/owner-resource.ts
+	/**
+	* Owner-scoped external resource lifetime.
+	*
+	* TabContext hosts one registry per owner. A later Vue-native owner can host
+	* the same registry. This is not a second TabContext and not a leave decision.
+	*
+	* A slot is absent, live, or warm-suspended. The owner itself is live or
+	* warm-suspended. Cold park and owner destruction dispose every slot and
+	* clear that owner state. Warm park keeps only a registration that declares
+	* `suspendable`. While the owner is suspended, a non-suspendable registration
+	* is rejected and not attached; a suspendable registration attaches already
+	* suspended and its suspend hook runs. The ticket stays current across warm
+	* park. Cold release advances a resource epoch, so a ticket captured before
+	* that release cannot attach again, including after the same owner remounts.
+	* Route generation is not used for that. Research Graph is not suspendable.
+	* The PDF runtime is suspendable. Production registers it from
+	* initPdfViewerForWork with the ticket captured before deferred setup.
+	* Work role, Work tag, Work source, Work metadata, and Folder tag sessions
+	* are non-suspendable. Warm park releases them. Production captures a ticket
+	* and registers that session before subscriptions or async prepare. This
+	* module does not construct those sessions or decide their durable writes.
+	*
+	* VueUse is not used here. Cytoscape, the PDF viewer, and other owned browser
+	* resources outlive a component mount, and their dispose stays on this registry.
+	*/
+	var EDITOR_SESSION_KINDS = [
+		"workRoleEditor",
+		"workTagEditor",
+		"workSourceEditor",
+		"workMetadataEditor",
+		"folderTagEditor"
+	];
+	var OWNER_RESOURCE_KINDS = [
+		"researchGraph",
+		"pdf",
+		...EDITOR_SESSION_KINDS
+	];
+	function isOwnerResourceKind(kind) {
+		return OWNER_RESOURCE_KINDS.includes(kind);
+	}
+	function isEditorSessionKind(kind) {
+		return EDITOR_SESSION_KINDS.includes(kind);
+	}
 	function call(fn, value) {
 		if (typeof fn !== "function") return;
 		try {
@@ -54,8 +97,9 @@ var prksOwnerResource = (function(exports) {
 		}
 		function register(ticket, registration) {
 			if (releasing > 0) return "rejected";
-			if (!ticketCurrent(ticket) || !registration) return "rejected";
-			if (registration.kind !== "researchGraph" && registration.kind !== "pdf") return "rejected";
+			if (!ticketCurrent(ticket) || !registration || typeof registration.kind !== "string") return "rejected";
+			if (!isOwnerResourceKind(registration.kind)) return "rejected";
+			if (isEditorSessionKind(registration.kind) && registration.suspendable === true) return "rejected";
 			if (ownerPhase === "suspended" && registration.suspendable !== true) return "rejected";
 			const previous = slots.get(registration.kind);
 			let result = "attached";

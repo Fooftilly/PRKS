@@ -1,5 +1,6 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import metadataEditorSource from '../../../../frontend/js/work-metadata-editor.js?raw'
@@ -142,6 +143,7 @@ function editorState(ctx: WorkCtx, name: string): EditorState {
 }
 
 beforeAll(() => {
+  panelWindow.eval(ownerResourceSource)
   panelWindow.eval(tabContextSource)
   panelWindow.eval(uiSource)
   panelWindow.eval(metadataEditorSource)
@@ -281,7 +283,7 @@ describe('work metadata editor lifecycle', () => {
     expect(baseline.source_url).toBe('')
   })
 
-  it('does not let a stale field-conflict continuation edit the next session', async () => {
+  it('does not let a stale field-conflict continuation resolve or edit the next session', async () => {
     const ctx = mount()
     const state = editorState(ctx, 'workMetadataEditor')
     state.operations = [{
@@ -324,7 +326,9 @@ describe('work metadata editor lifecycle', () => {
     state.errors = { identity: 'new-session-error' }
     release(true)
     await pending
-    expect(resolved).toBe(1)
+    // The edit-session fence is stale after reconciliation, so this continuation
+    // returns before store.resolveConflict and does not resolve.
+    expect(resolved).toBe(0)
     expect(ctx.getEntity('work')?.title).toBe('Alpha')
     expect(ctx.ui.workMetaDraft.title).toBe('Fresh')
     expect(state.errors.identity).toBe('new-session-error')
