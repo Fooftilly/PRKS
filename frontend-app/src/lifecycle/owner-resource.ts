@@ -15,10 +15,14 @@
  * Route generation is not used for that. Research Graph is not suspendable.
  * The PDF runtime is suspendable. Production registers it from
  * initPdfViewerForWork with the ticket captured before deferred setup.
- * Work role, Work tag, Work source, Work metadata, and Folder tag sessions
- * are non-suspendable. Warm park releases them. Production captures a ticket
- * and registers that session before subscriptions or async prepare. This
- * module does not construct those sessions or decide their durable writes.
+ * Work role, Work tag, Work source, Work metadata, Folder tag, and private
+ * notes sessions are non-suspendable. Warm park releases them. Production
+ * captures a ticket and registers that session before subscriptions or async
+ * prepare. Research Notes (`workNotes`, the pane-local EasyMDE) is
+ * suspendable: it lives in the parked pane DOM beside the PDF, so warm park
+ * keeps it and cold release destroys it. Production captures that ticket when
+ * the Work paint begins. This module does not construct those sessions or
+ * decide their durable writes.
  *
  * VueUse is not used here. Cytoscape, the PDF viewer, and other owned browser
  * resources outlive a component mount, and their dispose stays on this registry.
@@ -30,9 +34,10 @@ const EDITOR_SESSION_KINDS = [
   'workSourceEditor',
   'workMetadataEditor',
   'folderTagEditor',
+  'privateNotesEditor',
 ] as const
 
-export const OWNER_RESOURCE_KINDS = ['researchGraph', 'pdf', ...EDITOR_SESSION_KINDS] as const
+export const OWNER_RESOURCE_KINDS = ['researchGraph', 'pdf', 'workNotes', ...EDITOR_SESSION_KINDS] as const
 
 export type OwnerResourceKind = (typeof OWNER_RESOURCE_KINDS)[number]
 

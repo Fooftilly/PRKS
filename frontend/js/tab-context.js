@@ -2,10 +2,11 @@
  * Per-workspace-tab runtime. Cold-parked contexts are inert. Up to three PDF
  * contexts may instead be warm-suspended with their DOM/runtime preserved.
  * Owner-registry resources that are not suspendable are released on that warm
- * suspend. The pdf kind is suspendable and stays readable. Work role, Work
- * tag, Work source, Work metadata, and Folder tag sessions are not
- * suspendable: warm park disposes them, and the focused-panel refresh
- * reconstructs the sessions that owner needs. Warm park does not
+ * suspend. The pdf and workNotes kinds are suspendable and stay readable:
+ * both live in the parked pane DOM. Work role, Work tag, Work source, Work
+ * metadata, Folder tag, and private notes sessions are not suspendable: warm
+ * park disposes them, and the focused-panel refresh reconstructs the sessions
+ * that owner needs. Warm park does not
  * invalidate a resource ticket. Cold park does.
  * Role changes do not suspend, release, or replace them.
  */
@@ -337,24 +338,25 @@
         };
 
         /**
-         * Registry kinds. pdf is warm-suspendable. researchGraph and the five
-         * editor sessions are not. setResource mints a fresh ticket at write
-         * time. It is a compatibility bridge for synchronous harness callers
-         * of these named kinds, so a legacy-map entry cannot sit beside the
-         * registry slot. Production async and session setup must capture
-         * ctx.resourceTicket() and call registerResource; this setter is not
-         * that path. Generic setResource storage stays on ctx.resources.
-         * Remaining disposer-backed map entries include privateNotesEditor,
-         * workNotes, workNotesSyncBound, and workNotesSideRo.
+         * Registry kinds. pdf and workNotes are warm-suspendable. researchGraph
+         * and the six editor sessions are not. setResource mints a fresh
+         * ticket at write time. It is a compatibility bridge for synchronous
+         * harness callers of these named kinds, so a legacy-map entry cannot
+         * sit beside the registry slot. Production async and session setup
+         * must capture ctx.resourceTicket() and call registerResource; this
+         * setter is not that path. No production ctx.resources entry has a
+         * disposer: the map holds ordinary TabContext values.
          */
         const registrySuspendable = {
             researchGraph: false,
             pdf: true,
+            workNotes: true,
             workRoleEditor: false,
             workTagEditor: false,
             workSourceEditor: false,
             workMetadataEditor: false,
             folderTagEditor: false,
+            privateNotesEditor: false,
         };
 
         function isRegistryKind(key) {

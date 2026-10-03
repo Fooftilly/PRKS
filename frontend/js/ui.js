@@ -2857,10 +2857,17 @@ function prksPrivateNotesTextForEntity(entityType, entityId, serverText) {
     return entry.draftText;
 }
 
+/**
+ * Private notes liveness: the owner generation and entity still match, and
+ * this exact editor is the installed `privateNotesEditor` slot. A
+ * same-generation replacement fails the identity check.
+ */
 function prksPrivateNotesOwnerCurrent(editor) {
     if (!editor || !editor.ctx || !editor.ctx.isCurrent(editor.generation)) return false;
     const live = editor.ctx.getEntity ? editor.ctx.getEntity(editor.entityType) : null;
-    return !!(live && String(live.id) === editor.entityId);
+    if (!live || String(live.id) !== editor.entityId) return false;
+    return typeof editor.ctx.getResource === 'function' &&
+        editor.ctx.getResource('privateNotesEditor') === editor;
 }
 
 function prksPrivateNotesSetStatus(editor, text) {
@@ -2907,12 +2914,44 @@ function prksPrivateNotesStatusForResult(code) {
 function prksPrivateNotesRetryTarget(editor) {
     if (!editor || !editor.ctx || typeof editor.ctx.getResource !== 'function') return null;
     const live = editor.ctx.getResource('privateNotesEditor');
-    if (!live || live.ctx !== editor.ctx) return null;
+    if (!live) {
+        /* Warm park disposed the editor; the Work draft is still on the
+         * session and is retried from there while this generation holds. */
+        if (String(editor.entityType) !== 'work') return null;
+        if (String(editor.generation) !== String(editor.ctx.generation)) return null;
+        return prksWorkPrivateNoteSessionSaver(editor.ctx, editor.entityId);
+    }
+    if (live.ctx !== editor.ctx) return null;
     if (String(live.entityType) !== String(editor.entityType)) return null;
     if (String(live.entityId) !== String(editor.entityId)) return null;
     if (String(live.generation) !== String(editor.generation)) return null;
     if (!prksPrivateNotesOwnerCurrent(live)) return null;
     return live;
+}
+
+/**
+ * A paint-less save target for the owner's current Work Reminders session
+ * when no editor is installed (warm park or a focus switch disposed it).
+ * It never matches the installed slot, so its saves do not paint.
+ */
+function prksWorkPrivateNoteSessionSaver(ctx, workId) {
+    if (!ctx || ctx.destroyed || !ctx.ui || typeof ctx.isCurrent !== 'function') return null;
+    if (!ctx.isCurrent(ctx.generation)) return null;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work || String(work.id) !== String(workId)) return null;
+    const session = ctx.ui.workPrivateNoteSession;
+    if (!prksWorkPrivateNoteSessionCurrent(session, ctx, work.id)) return null;
+    const id = String(work.id);
+    return {
+        key: prksPrivateNotesEditorKey('work', id, ctx),
+        entityType: 'work',
+        entityId: id,
+        ctx: ctx,
+        generation: ctx.generation,
+        textarea: null,
+        statusEl: null,
+        dirty: !!session.dirty,
+    };
 }
 
 function prksPrivateNotesRetryStillDirty(live) {
@@ -2925,10 +2964,21 @@ function prksPrivateNotesRetryStillDirty(live) {
     return true;
 }
 
+// ctx -> Map(timerKey -> stop) so a reschedule from a fresh session saver
+// still stops the previous retry listener for the same note.
+const prksPrivateNoteBusyRetryStops = new WeakMap();
+
 function prksSchedulePrivateNoteBusyRetry(editor, token) {
-    if (!editor || !editor.ctx) return;
+    if (!editor || !editor.ctx || editor.ctx.destroyed) return;
     const timerKey = 'privateNotesBusyRetry:' + editor.key;
     editor.ctx.clearTimer(timerKey);
+    let retryStops = prksPrivateNoteBusyRetryStops.get(editor.ctx);
+    if (!retryStops) {
+        retryStops = new Map();
+        prksPrivateNoteBusyRetryStops.set(editor.ctx, retryStops);
+    }
+    const previousStop = retryStops.get(timerKey);
+    if (previousStop) previousStop();
     if (editor._prksBusyRetryStop) {
         try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
         editor._prksBusyRetryStop = null;
@@ -2940,25 +2990,41 @@ function prksSchedulePrivateNoteBusyRetry(editor, token) {
         if (!prksPrivateNotesRetryStillDirty(liveEditor)) return;
         void prksEnqueuePrivateNotesSave(liveEditor);
     };
+    // The retry listener is owner-scoped: the timer, the sync event, the editor
+    // disposer and cold route/destroy (registerCleanup) all stop it, whichever
+    // comes first, so a disposed or synthetic editor never leaks it.
+    let stopRetry = function () {};
     if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.subscribe === 'function') {
-        const stop = prksSync.subscribe(function () {
-            const liveEditor = prksPrivateNotesRetryTarget(editor);
-            if (!liveEditor || token !== prksPrivateNoteLatestSaveToken(liveEditor) ||
-                !prksPrivateNotesRetryStillDirty(liveEditor)) {
-                stop();
-                editor._prksBusyRetryStop = null;
-                return;
+        let stopSync = null;
+        let unregisterCleanup = null;
+        stopRetry = function () {
+            const stop = stopSync;
+            const unregister = unregisterCleanup;
+            stopSync = null;
+            unregisterCleanup = null;
+            if (editor._prksBusyRetryStop === stopRetry) editor._prksBusyRetryStop = null;
+            if (retryStops.get(timerKey) === stopRetry) retryStops.delete(timerKey);
+            if (unregister) unregister();
+            if (stop) {
+                try { stop(); } catch (_e) { /* ignore */ }
             }
-            stop();
-            editor._prksBusyRetryStop = null;
-            tryAgain();
+        };
+        stopSync = prksSync.subscribe(function () {
+            const liveEditor = prksPrivateNotesRetryTarget(editor);
+            const stillDue = !!liveEditor && token === prksPrivateNoteLatestSaveToken(liveEditor) &&
+                prksPrivateNotesRetryStillDirty(liveEditor);
+            stopRetry();
+            if (stillDue) tryAgain();
         });
-        editor._prksBusyRetryStop = stop;
+        unregisterCleanup = editor.ctx.registerCleanup(stopRetry);
+        retryStops.set(timerKey, stopRetry);
+        editor._prksBusyRetryStop = stopRetry;
     }
     const timer = window.setTimeout(function () {
         if (editor.ctx.timers && editor.ctx.timers.get(timerKey) === timer) {
             editor.ctx.clearTimer(timerKey);
         }
+        stopRetry();
         tryAgain();
     }, 400);
     editor.ctx.setTimer(timerKey, timer);
@@ -3161,9 +3227,22 @@ function prksEnqueuePrivateNotesSave(editor) {
 function prksFlushPendingPrivateNotes(ctx) {
     if (!ctx || typeof ctx.getResource !== 'function') return;
     const editor = ctx.getResource('privateNotesEditor');
-    if (!editor || !editor.dirty) return;
-    ctx.clearTimer(editor.timerKey);
-    prksEnqueuePrivateNotesSave(editor);
+    if (editor) {
+        if (!editor.dirty) return;
+        ctx.clearTimer(editor.timerKey);
+        prksEnqueuePrivateNotesSave(editor);
+        return;
+    }
+    /* The Work draft outlives its editor: warm park and a focus switch
+     * dispose the editor, and a scope_busy settlement can leave the session
+     * dirty after that. Flush it from the session so closing or leaving
+     * this owner does not drop it. The save never paints: no editor is
+     * installed for it to own. */
+    const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (!work || !session || !session.dirty || session.promise) return;
+    const saver = prksWorkPrivateNoteSessionSaver(ctx, work.id);
+    if (saver) void prksEnqueueWorkPrivateNoteSave(saver);
 }
 
 /** Work and Folder private notes are durable SET_* paths. */
@@ -3187,14 +3266,24 @@ function prksPrivateNotesEditorKey(entityType, entityId, ctx) {
     return prksPrivateNoteKey(entityType, entityId);
 }
 
+/**
+ * Binds the Reminders field in the shared right panel as the owner's
+ * `privateNotesEditor` session. The session is non-suspendable: warm park
+ * disposes it (listeners, debounce, busy retry) and the focused-panel
+ * refresh binds a new one from the draft kept on the TabContext. The ticket
+ * is captured before the field is touched; a rejected registration binds
+ * nothing. The draft and durable save stay on the session and
+ * `prksEnqueuePrivateNotesSave`; flushing stays on the leave path.
+ */
 function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     const idSuffix = `${entityType}-${entityId}`;
     const ctx = ownerCtx || (typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null);
     if (!ctx || !prksRightPanelOwnedBy(ctx)) return;
+    const ticket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket() : null;
+    if (!ctx.resourceRegistry || !ctx.resourceRegistry.accepts(ticket)) return;
     const panel = document.getElementById('panel-content');
     const ta = panel && panel.querySelector(`#prks-private-notes-${idSuffix}`);
     if (!ta || ta.dataset.prksNotesBound === '1') return;
-    ta.dataset.prksNotesBound = '1';
     const statusEl = panel.querySelector(`#prks-private-notes-status-${idSuffix}`);
     const editorKey = prksPrivateNotesEditorKey(entityType, entityId, ctx);
     let session = null;
@@ -3254,18 +3343,25 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
         ctx.clearTimer(editor.timerKey);
         prksEnqueuePrivateNotesSave(editor);
     };
+    const attached = ctx.registerResource(ticket, {
+        kind: 'privateNotesEditor',
+        value: editor,
+        suspendable: false,
+        dispose: function () {
+            ctx.clearTimer(editor.timerKey);
+            ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
+            if (editor._prksBusyRetryStop) {
+                try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
+                editor._prksBusyRetryStop = null;
+            }
+            ta.removeEventListener('input', schedule);
+            ta.removeEventListener('blur', blur);
+        },
+    });
+    if (attached === 'rejected') return;
+    ta.dataset.prksNotesBound = '1';
     ta.addEventListener('input', schedule);
     ta.addEventListener('blur', blur);
-    ctx.setResource('privateNotesEditor', editor, function () {
-        ctx.clearTimer(editor.timerKey);
-        ctx.clearTimer('privateNotesBusyRetry:' + editor.key);
-        if (editor._prksBusyRetryStop) {
-            try { editor._prksBusyRetryStop(); } catch (_e) { /* ignore */ }
-            editor._prksBusyRetryStop = null;
-        }
-        ta.removeEventListener('input', schedule);
-        ta.removeEventListener('blur', blur);
-    });
     if (editor.entityType === 'work' && typeof prksRefreshPendingWorkNotes === 'function') {
         void prksRefreshPendingWorkNotes().then(function () {
             if (!ctx.isCurrent(editor.generation)) return;

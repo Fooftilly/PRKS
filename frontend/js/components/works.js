@@ -895,6 +895,10 @@ async function renderWorkDetails(ctx, work, requestCtx) {
     const isCurrent = function () {
         return ctx.isCurrent(generation);
     };
+    /* Research Notes setup runs after awaits and a deferred timer. Its
+     * owner ticket is captured here, when this paint begins, so a cold park,
+     * route change, or replaced owner rejects the late EasyMDE. */
+    const notesTicket = typeof ctx.resourceTicket === 'function' ? ctx.resourceTicket(generation) : null;
 
     if (!work) {
         container.innerHTML = '<p class="prks-inline-message prks-inline-message--error">File not found.</p>';
@@ -1136,7 +1140,7 @@ async function renderWorkDetails(ctx, work, requestCtx) {
                 notesTaLive.value = notesText;
             }
         }
-        initEasyMDE(ctx, work);
+        initEasyMDE(ctx, work, notesTicket);
         setupWorkNotesSplitResize(ctx, work.id);
         setupWorkNotesCollapseToggle(ctx, work.id);
     }, 200);
@@ -1207,7 +1211,26 @@ function prksPaintEasyMDEToolbarIcons(toolbar) {
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(toolbar);
 }
 
-function initEasyMDE(ctx, work) {
+/**
+ * Research Notes liveness: the owner generation and Work still match, and
+ * this exact session is the installed `workNotes` slot. A same-generation
+ * replacement fails the identity check.
+ */
+function prksWorkNotesSessionLive(ctx, notes, generation) {
+    if (!prksResearchNotesMayPaint(ctx, notes && notes.workId, generation)) return false;
+    return typeof ctx.getResource === 'function' && ctx.getResource('workNotes') === notes;
+}
+
+/**
+ * Builds the pane-local EasyMDE session and registers it as the `workNotes`
+ * owner resource with `ticket`, captured when the Work paint began. The
+ * session is warm-suspendable: it lives in the parked pane DOM beside the
+ * PDF, keeps its buffer and undo history, and its `saveNotesTimeout`
+ * debounce stays a TabContext timer. Cold release destroys it. A stale or
+ * rejected ticket builds nothing.
+ */
+function initEasyMDE(ctx, work, ticket) {
+    if (!ctx || !work || !ctx.resourceRegistry || !ctx.resourceRegistry.accepts(ticket)) return;
     const titleLowerToId = (ctx && ctx.getResource ? ctx.getResource('wikiTitleMap') : null) || {};
     const prksNotesHelpHtml = `
 <div class="prks-help-section">
@@ -1259,7 +1282,7 @@ function initEasyMDE(ctx, work) {
     } catch (_e) {
         /* ignore */
     }
-    const notesEl = ctx && ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
+    const notesEl = ctx.query ? ctx.query('[data-prks-role="research-notes-editor"]') : null;
     if (!notesEl) return;
     const easyMDE = new EasyMDE({
         element: notesEl,
@@ -1375,23 +1398,30 @@ function initEasyMDE(ctx, work) {
         },
     };
     if (transient) prksSyncResearchNotesState(workNotes, transient);
-    if (ctx && typeof ctx.setResource === 'function') {
-        ctx.setResource('workNotes', workNotes, function () {
+    const attached = ctx.registerResource(ticket, {
+        kind: 'workNotes',
+        value: workNotes,
+        suspendable: true,
+        dispose: function () {
             if (typeof workNotes.stopSync === 'function') workNotes.stopSync();
             workNotes.destroy();
             if (typeof window.prksVueDismissWorkResearchNotes === 'function') {
                 window.prksVueDismissWorkResearchNotes(ctx);
             }
-        });
+        },
+    });
+    if (attached === 'rejected') {
+        workNotes.destroy();
+        return;
     }
-    const notesGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : undefined;
+    const notesGeneration = ticket.generation;
     if (window.prksSync && typeof window.prksSync.subscribe === 'function') {
         workNotes.stopSync = window.prksSync.subscribe(function (event) {
             if (!event || event.operation !== 'SET_WORK_RESEARCH_NOTE') return;
             if (event.op && event.op.entity_id !== workNotes.workId) return;
             if (workNotes.drafting) return;
-            if (!prksResearchNotesMayPaint(ctx, workNotes.workId, notesGeneration)) return;
-            const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
+            if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
+            const statusEl = ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
             if (!statusEl) return;
             if (event.acknowledged) {
                 statusEl.innerText = 'All changes saved';
@@ -1425,7 +1455,7 @@ function initEasyMDE(ctx, work) {
     }
 
     const notesChangeHandler = () => {
-        if (!prksResearchNotesMayPaint(ctx, work.id, notesGeneration)) return;
+        if (!prksWorkNotesSessionLive(ctx, workNotes, notesGeneration)) return;
         const statusEl = ctx && ctx.query ? ctx.query('[data-prks-role="editor-status"]') : null;
         if (statusEl) statusEl.innerText = "Drafting...";
         prksWorkNotesMarkEdit(workNotes, work.id, easyMDE.value(), ctx);
@@ -1977,6 +2007,9 @@ function setupWorkNotesSplitResize(ctx, workId) {
         }
     });
 
+    /* The one split-view observer for this route. registerCleanup ties it to
+     * the route: warm park keeps it on the parked pane; beginRoute, cold park,
+     * and destroy disconnect it. */
     if (typeof ResizeObserver === 'function') {
         const ro = new ResizeObserver(function () {
             prksReapplyWorkNotesSplitLayout(ctx);
@@ -2028,28 +2061,6 @@ function setupWorkNotesSplitResize(ctx, workId) {
             requestAnimationFrame(() => refreshNotesEditor());
         }
     });
-
-    if (ctx && typeof ctx.setResource === 'function' && typeof ResizeObserver !== 'undefined') {
-        if (!ctx.getResource('workNotesSideRo')) {
-            let ticking = false;
-            const ro = new ResizeObserver(function () {
-                if (ticking) return;
-                ticking = true;
-                requestAnimationFrame(function () {
-                    ticking = false;
-                    if (typeof prksReapplyWorkNotesSplitLayout === 'function') {
-                        prksReapplyWorkNotesSplitLayout(ctx);
-                    }
-                });
-            });
-            ro.observe(ws);
-            ctx.setResource('workNotesSideRo', ro, function () {
-                try {
-                    ro.disconnect();
-                } catch (_e) {}
-            });
-        }
-    }
 }
 
 function setupWorkNotesCollapseToggle(ctx, workId) {

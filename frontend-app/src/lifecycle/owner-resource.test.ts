@@ -554,13 +554,14 @@ describe('owner resource lifetime', () => {
     expect(registry.get('researchGraph')).toBe('winner')
   })
 
-  it('keeps the five editor sessions non-suspendable and beside the PDF runtime', () => {
+  it('keeps the editor sessions non-suspendable and beside the PDF runtime', () => {
     const editorKinds = [
       'workRoleEditor',
       'workTagEditor',
       'workSourceEditor',
       'workMetadataEditor',
       'folderTagEditor',
+      'privateNotesEditor',
     ] as const
     const { host, registry } = openHost('editors')
     const ticket = resourceTicket(host)
@@ -623,5 +624,55 @@ describe('owner resource lifetime', () => {
     })).toBe('replaced')
     expect(secondDisposed).toBe(1)
     expect(pdfDisposed).toBe(0)
+  })
+
+  it('keeps Research Notes beside the PDF on warm park and releases both cold', () => {
+    const main = openHost('main')
+    const side = openHost('side')
+    const disposed = { main: 0, side: 0, pdf: 0 }
+    const mainNotes = { id: 'main-notes' }
+    const sideNotes = { id: 'side-notes' }
+    const mainTicket = resourceTicket(main.host)
+    expect(main.registry.register(mainTicket, {
+      kind: 'pdf',
+      value: { id: 'pdf' },
+      suspendable: true,
+      dispose: () => { disposed.pdf += 1 },
+    })).toBe('attached')
+    expect(main.registry.register(mainTicket, {
+      kind: 'workNotes',
+      value: mainNotes,
+      suspendable: true,
+      dispose: () => { disposed.main += 1 },
+    })).toBe('attached')
+    expect(side.registry.register(resourceTicket(side.host), {
+      kind: 'workNotes',
+      value: sideNotes,
+      suspendable: true,
+      dispose: () => { disposed.side += 1 },
+    })).toBe('attached')
+
+    main.state.mounted = false
+    main.state.suspended = true
+    main.registry.warmSuspend()
+    expect(main.registry.get('workNotes')).toBe(mainNotes)
+    expect(disposed).toEqual({ main: 0, side: 0, pdf: 0 })
+    expect(main.registry.accepts(mainTicket)).toBe(true)
+    main.state.mounted = true
+    main.state.suspended = false
+    main.registry.resume()
+    expect(main.registry.get('workNotes')).toBe(mainNotes)
+
+    main.registry.releaseAll()
+    expect(main.registry.get('workNotes')).toBeUndefined()
+    expect(disposed).toEqual({ main: 1, side: 0, pdf: 1 })
+    expect(side.registry.get('workNotes')).toBe(sideNotes)
+    expect(main.registry.register(mainTicket, {
+      kind: 'workNotes',
+      value: { id: 'late' },
+      suspendable: true,
+      dispose: () => { disposed.main += 1 },
+    })).toBe('rejected')
+    expect(main.registry.get('workNotes')).toBeUndefined()
   })
 })
