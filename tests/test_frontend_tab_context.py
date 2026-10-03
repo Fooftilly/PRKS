@@ -245,13 +245,15 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
         ws = html.find('src="/js/workspace-tabs.js"')
         tc = html.find('src="/js/tab-context.js"')
         tiling = html.find('src="/js/workspace-tiling.js"')
+        leave = html.find('src="/js/tab-leave.js"')
         pdf_rt = html.find('src="/js/pdf-work-runtime.js"')
         app = html.find('src="/js/app.js"')
         self.assertNotEqual(nav, -1)
         self.assertLess(nav, ws)
         self.assertLess(ws, tc)
         self.assertLess(tc, tiling)
-        self.assertLess(tiling, pdf_rt)
+        self.assertLess(tiling, leave)
+        self.assertLess(leave, pdf_rt)
         self.assertLess(pdf_rt, app)
 
     def test_render_tab_route_signature(self):
@@ -259,7 +261,8 @@ class TestScriptOrderAndRenderer(unittest.TestCase):
         with open(app, encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn("async function prksRenderTabRoute(ctx, hash, options)", src)
-        self.assertIn("return { cancelled: true, reason: 'pending-sync' }", src)
+        self.assertIn("if (status === 'rejected-pending-pdf-sync') return 'pending-sync';", src)
+        self.assertIn("return { cancelled: true, reason: prksLeaveDecisionReason(decision) }", src)
         self.assertNotIn("window.location.hash = revertHash", src)
 
 
@@ -469,7 +472,7 @@ class TestWorkRefreshHelpersUseOwnedEntity(unittest.TestCase):
         app_path = os.path.join(FRONTEND_JS, "app.js")
         with open(app_path, encoding="utf-8") as fh:
             app = fh.read()
-        route = _js_function_source(app, "prksRenderTabRoute")
+        route = _js_function_source(app, "prksCommitTabRouteRender")
         self.assertIn("prksTabContextIsFocused", route)
         self.assertIn("isFocused", route)
 

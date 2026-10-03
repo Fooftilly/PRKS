@@ -45,12 +45,21 @@ class ArgumentsVueContracts(unittest.TestCase):
             "sameArgumentsWorkspace && typeof window.prksVueDismissArguments",
             app,
         )
-        owned = app[
-            app.index("function prksCanLeaveTabContextOwnedDraft") : app.index(
-                "async function prksRenderTabRoute"
+        people = (FRONTEND / "components" / "people.js").read_text()
+        person_probe = people[
+            people.index("function prksAssessPersonProfileLeave") : people.index(
+                "function prksSyncPersonProfileDraftFromEditor"
             )
         ]
-        self.assertNotIn("argumentEditing", owned)
+        work_src = (FRONTEND / "ui.js").read_text()
+        work_probe = work_src[
+            work_src.index("function prksAssessWorkMetadataLeave") : work_src.index(
+                "function prksBindWorkMetaDraftEditor"
+            )
+        ]
+        self.assertNotIn("argumentEditing", person_probe + work_probe)
+        leave_src = (ROOT / "frontend-app" / "src" / "lifecycle" / "tab-leave.ts").read_text()
+        self.assertNotIn("argumentEditing", leave_src)
         refresh = app[
             app.index("function prksOfflineMaybeRefreshFocusedRoute") : app.index(
                 "function prksRenderConnectivityIndicator"

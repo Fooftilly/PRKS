@@ -204,16 +204,15 @@ class AnnotationConfirmStructureTests(unittest.TestCase):
         self.assertIn("await prksConfirmDeletePdfAnnotation()", list_delete)
 
     def test_pending_sync_leave_guard_still_uses_native_confirm(self):
+        pdf = _read(os.path.join(_ROOT, "frontend", "js", "pdf-work-runtime.js"))
+        message = "PDF annotation sync still running. Leave page before all changes save to server?"
+        self.assertEqual(pdf.count(message), 1)
+        assess = _extract(pdf, "function prksAssessPendingPdfSyncLeave(ctx, nextHash) {", "function prksInstallPdfLeaveProbe")
+        self.assertIn("window.confirm", assess)
+        self.assertIn("rejected-pending-pdf-sync", assess)
         app = _read(_APP)
-        # Both call sites of the synchronous pending-annotation-sync guard must
-        # remain window.confirm -- this is an intentional exception (see
-        # AGENTS.md / DESIGN.md), not an oversight to "fix" in a later pass.
-        self.assertEqual(
-            app.count("PDF annotation sync still running. Leave page before all changes save to server?"),
-            2,
-        )
-        guard = _extract(app, "function prksCanLeaveTabContext(ctx, nextHash) {", "\nfunction ")
-        self.assertIn("window.confirm(", guard)
+        self.assertEqual(app.count(message), 0)
+        self.assertNotIn("window.confirm(", app.split("async function prksRenderTabRoute", 1)[1].split("async function prksCommitTabRouteRender", 1)[0])
 
     def test_copy_link_uses_shared_flash_helper(self):
         drawer = _read(

@@ -15,6 +15,7 @@
     "build:workspace-model": "node scripts/build-workspace-model.mjs",
     "build:work-route": "node scripts/build-work-route.mjs",
     "build:search-codec": "node scripts/build-search-codec.mjs",
+    "build:tab-leave": "node scripts/build-tab-leave.mjs",
     "storybook": "storybook dev -p 6006 --no-open --disable-telemetry",
     "build-storybook": "storybook build --output-dir storybook-static --disable-telemetry"
   },

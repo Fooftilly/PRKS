@@ -1321,6 +1321,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    tab_leave_path = root / "frontend" / "js" / "tab-leave.js"
+    if tab_leave_path.is_file():
+        entries.append(
+            {
+                "name": "prks-tab-leave",
+                "version": "1",
+                "source_category": "frontend-app:tab-leave",
+                "runtime_files": [
+                    {
+                        "path": "/js/tab-leave.js",
+                        "sha256": sha256_file(tab_leave_path),
+                    }
+                ],
+            }
+        )
+
     entries.sort(key=lambda e: e["name"])
     return {
         "schema_version": 1,

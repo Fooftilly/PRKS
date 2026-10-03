@@ -1032,6 +1032,42 @@ const PRKS_PERSON_DRAFT_FIELDS = {
     'pd-links-other': 'links_other',
 };
 
+/**
+ * Person profile leave answer. Captures the open editor and asks
+ * prksPersonProfileDraftIsDirty. The styled confirm stays Keep editing /
+ * Discard changes. Retires when the Vue Person surface registers this probe.
+ */
+function prksAssessPersonProfileLeave(ctx) {
+    const prevRoute = ctx && ctx.lastResolvedRoute;
+    if (!ctx || !ctx.ui || !prevRoute || prevRoute.name !== 'person' || !ctx.ui.personDetailEditing) {
+        return null;
+    }
+    const person = ctx.getEntity ? ctx.getEntity('person') : null;
+    const draft = ctx.ui.personProfileDraft;
+    if (!(person && draft && String(draft.personId) === String(person.id))) return null;
+    if (
+        typeof prksRightPanelOwnedBy === 'function' &&
+        prksRightPanelOwnedBy(ctx) &&
+        typeof prksSyncPersonProfileDraftFromEditor === 'function'
+    ) {
+        const panel = document.getElementById('panel-content');
+        const editor = panel && panel.querySelector('.person-panel-edit');
+        if (editor) prksSyncPersonProfileDraftFromEditor(ctx, editor, person.id, ctx.generation);
+    }
+    if (typeof prksPersonProfileDraftIsDirty !== 'function' || !prksPersonProfileDraftIsDirty(ctx, person)) {
+        return null;
+    }
+    if (typeof prksConfirmUnsavedRouteLeave !== 'function') {
+        return { status: 'rejected-unsaved-edit', feature: 'person-profile' };
+    }
+    return prksConfirmUnsavedRouteLeave({
+        title: 'Discard profile changes?',
+        message: 'Your unsaved Person profile changes will be discarded.',
+    }).then(function (ok) {
+        return ok ? null : { status: 'rejected-unsaved-edit', feature: 'person-profile' };
+    });
+}
+
 function prksSyncPersonProfileDraftFromEditor(ctx, editor, personId, generation) {
     const draft = ctx && ctx.ui && ctx.ui.personProfileDraft;
     if (!prksPersonProfileEditorCurrent(ctx, generation, personId, draft, editor)) return false;
@@ -1101,6 +1137,14 @@ window.prksPersonProfileDraftIsDirty = prksPersonProfileDraftIsDirty;
 window.prksPersonProfileEditSessionCurrent = prksPersonProfileEditSessionCurrent;
 window.prksPersonProfileEditorCurrent = prksPersonProfileEditorCurrent;
 window.prksSyncPersonProfileDraftFromEditor = prksSyncPersonProfileDraftFromEditor;
+window.prksAssessPersonProfileLeave = prksAssessPersonProfileLeave;
+if (typeof prksTabLeave !== 'undefined' && prksTabLeave && typeof prksTabLeave.registerProbe === 'function') {
+    prksTabLeave.registerProbe({
+        id: 'person-profile',
+        order: 20,
+        assess: prksAssessPersonProfileLeave,
+    });
+}
 
 async function deletePerson(explicitCtx, explicitGeneration) {
     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;

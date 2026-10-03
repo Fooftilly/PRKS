@@ -9,6 +9,7 @@ const model = require(path.join(rootDir, 'frontend/js/workspace-model.js'));
 const tree = require(path.join(rootDir, 'frontend/js/workspace-tree.js'));
 const persist = require(path.join(rootDir, 'frontend/js/workspace-persistence.js'));
 const wsApi = require(path.join(rootDir, 'frontend/js/workspace-tabs.js'));
+globalThis.prksTabLeave = require(path.join(rootDir, 'frontend/js/tab-leave.js'));
 
 const { createPrksWorkspaceTabs, prksWorkspaceNavigationIntent } = wsApi;
 
@@ -1542,22 +1543,34 @@ async function run() {
         const raced = makeHarness({ hash: '#/works/WA' });
         await raced.ws.navigate('#/works/WB', { target: 'tile' });
         const racedLeaf = raced.ws.snapshot().secondaryTree.tabId;
+        const racedBefore = jsonClone(raced.ws.snapshot());
         let releaseRaced = null;
         raced.setCanLeaveFn(function () {
             return new Promise(function (resolve) { releaseRaced = resolve; });
         });
         const pendingRaced = raced.ws.setMode('stacked');
         await Promise.resolve();
+        const promptsDuringHide = raced.canLeaveCalls();
+        let closeSettled = false;
+        const closePromise = raced.ws.closeTab(racedLeaf).then(function (value) {
+            closeSettled = true;
+            return value;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        assert('close waits while hide is unresolved', closeSettled === false);
+        assertEq('close does not open a second prompt', raced.canLeaveCalls(), promptsDuringHide);
+        assertEq('close during hide leaves the mode', raced.ws.snapshot().mode, racedBefore.mode);
+        assert('close during hide leaves the leaf', raced.ws.snapshot().tabs.some(function (t) { return t.id === racedLeaf; }));
         raced.setCanLeave(true);
-        const closedDuringHide = await raced.ws.closeTab(racedLeaf);
-        assert('close during hide approval', closedDuringHide === true);
-        releaseRaced(true);
+        releaseRaced(false);
         const hideAfterClose = await pendingRaced;
-        assertEq('hide does not commit stale plan', hideAfterClose, false);
+        assertEq('rejected hide does not commit', hideAfterClose, false);
+        const closedAfter = await closePromise;
+        assert('close proceeds after hide rejects', closedAfter === true);
         snap = raced.ws.snapshot();
         assert('closed leaf stayed gone', snap.tabs.every(function (t) { return t.id !== racedLeaf; }));
-        assertEq('close during hide left no tree', snap.secondaryTree, null);
-        assertEq('close during hide mode', snap.mode, 'stacked');
+        assertEq('close after rejected hide left no tree', snap.secondaryTree, null);
     }
 
     {
@@ -1942,6 +1955,238 @@ async function run() {
             globalThis.setTimeout = prevSet;
             globalThis.clearTimeout = prevClear;
         }
+    }
+
+    {
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const secondary = h.ws.snapshot().secondaryTree.tabId;
+        const main = h.ws.snapshot().mainTabId;
+        const calls = h.canLeaveCalls();
+        assert('focus secondary does not leave', h.ws.focusTab(secondary) === true);
+        assert('focus main does not leave', h.ws.focusTab(main) === true);
+        assertEq('focus between panes does not prompt', h.canLeaveCalls(), calls);
+    }
+
+    {
+        const h = makeHarness({ hash: '#/works/WA' });
+        await h.ws.navigate('#/works/WB', { target: 'tile' });
+        const leaf = h.ws.snapshot().secondaryTree.tabId;
+        await h.ws.splitLeaf(leaf, 'top-bottom', { hash: '#/works/WC' });
+        const before = jsonClone(h.ws.snapshot());
+        const resolvers = [];
+        h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { resolvers.push(resolve); });
+        });
+        const pending = h.ws.setMode('stacked');
+        await Promise.resolve();
+        assertEq('batch asks the first leaf first', resolvers.length, 1);
+        resolvers[0](true);
+        await Promise.resolve();
+        assertEq('batch asks the second leaf before mutation', resolvers.length, 2);
+        assertEq('batch stays tiled until every leave settles', h.ws.snapshot().mode, 'tiled');
+        resolvers[1](false);
+        const rejected = await pending;
+        assertEq('batch reject result', rejected, false);
+        assertEq('batch reject keeps mode', h.ws.snapshot().mode, before.mode);
+        assertEq('batch reject keeps tree', JSON.stringify(h.ws.snapshot().secondaryTree), JSON.stringify(before.secondaryTree));
+
+        const both = makeHarness({ hash: '#/works/WA' });
+        await both.ws.navigate('#/works/WB', { target: 'tile' });
+        const bothLeaf = both.ws.snapshot().secondaryTree.tabId;
+        await both.ws.splitLeaf(bothLeaf, 'top-bottom', { hash: '#/works/WC' });
+        const bothResolvers = [];
+        let mutated = false;
+        both.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { bothResolvers.push(resolve); });
+        });
+        const bothPending = both.ws.setMode('stacked');
+        await Promise.resolve();
+        bothResolvers[0](true);
+        await Promise.resolve();
+        assertEq('both-accept still tiled after the first', both.ws.snapshot().mode, 'tiled');
+        assert('both-accept has not mutated', mutated === false);
+        bothResolvers[1](true);
+        const bothResult = await bothPending;
+        mutated = bothResult === true;
+        assert('both-accept hides only after the second', mutated);
+        assertEq('both-accept stacked', both.ws.snapshot().mode, 'stacked');
+    }
+
+    {
+        const h = makeHarness({ hash: '#/folders' });
+        const resolvers = [];
+        h.setCanLeaveFn(function () {
+            return new Promise(function (resolve) { resolvers.push(resolve); });
+        });
+        const first = h.ws.navigate('#/works/W1');
+        await Promise.resolve();
+        assertEq('first navigation prompts once', resolvers.length, 1);
+        const second = h.ws.navigate('#/works/W2');
+        await Promise.resolve();
+        await Promise.resolve();
+        assertEq('second navigation does not prompt yet', resolvers.length, 1);
+        assertEq('unresolved navigation keeps the route', h.ws.snapshot().tabs[0].route, '#/folders');
+        resolvers[0](true);
+        await first;
+        await Promise.resolve();
+        assertEq('accepted navigation prompts the waiter next', resolvers.length, 2);
+        assertEq('only the accepted navigation replaced the route', h.ws.snapshot().tabs[0].route, '#/works/W1');
+        resolvers[1](false);
+        const secondResult = await second;
+        assertEq('rejected waiter result', secondResult, false);
+        assertEq('rejected waiter leaves the accepted route', h.ws.snapshot().tabs[0].route, '#/works/W1');
+    }
+
+    {
+        const h = makeHarness({ hash: '#/folders' });
+        const mainId = h.ws.snapshot().mainTabId;
+        let current = { tabId: mainId, generation: 1, destroyed: false };
+        globalThis.prksGetTabContext = function (id) {
+            if (id === mainId) return current;
+            return { tabId: id, generation: 1, destroyed: false };
+        };
+        try {
+            let release = null;
+            h.setCanLeaveFn(function () {
+                return new Promise(function (resolve) { release = resolve; });
+            });
+            const pending = h.ws.navigate('#/works/WSTALE');
+            await Promise.resolve();
+            current = { tabId: mainId, generation: 1, destroyed: false };
+            release(true);
+            const result = await pending;
+            assertEq('stale confirmation does not navigate', result, false);
+            assertEq('stale confirmation keeps the route', h.ws.snapshot().tabs[0].route, '#/folders');
+
+            current = { tabId: mainId, generation: 2, destroyed: false };
+            let releaseDestroyed = null;
+            h.setCanLeaveFn(function () {
+                return new Promise(function (resolve) { releaseDestroyed = resolve; });
+            });
+            const pendingDestroyed = h.ws.navigate('#/works/WGONE');
+            await Promise.resolve();
+            current.destroyed = true;
+            releaseDestroyed(true);
+            const destroyedResult = await pendingDestroyed;
+            assertEq('destroyed confirmation does not navigate', destroyedResult, false);
+            assertEq('destroyed confirmation keeps the route', h.ws.snapshot().tabs[0].route, '#/folders');
+        } finally {
+            delete globalThis.prksGetTabContext;
+        }
+    }
+
+    {
+        const vm = require('vm');
+        const fs = require('fs');
+        function extractFunction(source, name) {
+            const marker = 'function ' + name + '(';
+            const start = source.indexOf(marker);
+            if (start < 0) throw new Error('missing ' + name);
+            let i = source.indexOf('{', start);
+            let depth = 0;
+            let quote = '';
+            for (; i < source.length; i++) {
+                const ch = source[i];
+                if (quote) {
+                    if (ch === '\\') { i += 1; continue; }
+                    if (ch === quote) quote = '';
+                    continue;
+                }
+                if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+                if (ch === '{') depth += 1;
+                else if (ch === '}') {
+                    depth -= 1;
+                    if (depth === 0) return source.slice(start, i + 1);
+                }
+            }
+            throw new Error('unclosed ' + name);
+        }
+        function installProbe(file, name, id, order) {
+            const source = fs.readFileSync(path.join(rootDir, file), 'utf8');
+            const sandbox = { document: { getElementById: function () { return null; } } };
+            vm.createContext(sandbox);
+            vm.runInContext(extractFunction(source, name) + '\nthis.assess = ' + name + ';', sandbox);
+            globalThis.prksTabLeave.registerProbe({ id: id, order: order, assess: sandbox.assess });
+            return sandbox;
+        }
+        const person = installProbe('frontend/js/components/people.js', 'prksAssessPersonProfileLeave', 'person-profile', 20);
+        const work = installProbe('frontend/js/ui.js', 'prksAssessWorkMetadataLeave', 'work-metadata', 30);
+        person.prksPersonProfileDraftIsDirty = function () { return true; };
+        person.prksRightPanelOwnedBy = function () { return false; };
+        let personKept = 0;
+        person.prksConfirmUnsavedRouteLeave = function (options) {
+            personKept += 1;
+            person.lastTitle = options.title;
+            return Promise.resolve(false);
+        };
+        work.prksCaptureWorkMetaDraft = function () {};
+        work.prksWorkMetaDraftIsDirty = function () { return true; };
+        let workKept = 0;
+        work.prksConfirmUnsavedRouteLeave = function (options) {
+            workKept += 1;
+            work.lastTitle = options.title;
+            return Promise.resolve(false);
+        };
+        const owner = { id: 'draft-owner', generation: 1, destroyed: false, route: '#/people/P1' };
+        function draftAttempt(ctx, destination) {
+            return globalThis.prksTabLeave.run({
+                ownerId: owner.id,
+                destination: destination,
+                transition: 'route-replace',
+                capture: function () {
+                    return { ownerId: owner.id, generation: owner.generation, token: owner };
+                },
+                still: function (snap) {
+                    return snap.token === owner && !owner.destroyed && owner.generation === snap.generation;
+                },
+                assess: function () {
+                    return globalThis.prksTabLeave.assessOwner(ctx, destination);
+                },
+                commit: function () {
+                    owner.route = destination;
+                    return true;
+                },
+            });
+        }
+        const personCtx = {
+            ui: { personDetailEditing: true, personProfileDraft: { personId: 'P1' } },
+            lastResolvedRoute: { name: 'person', canonicalHash: '#/people/P1' },
+            getEntity: function () { return { id: 'P1' }; },
+            generation: 1,
+        };
+        const personDenied = await draftAttempt(personCtx, '#/folders');
+        assertEq('dirty person profile rejects', personDenied.status, 'rejected-unsaved-edit');
+        assertEq('dirty person profile keeps the route', owner.route, '#/people/P1');
+        assertEq('dirty person profile uses the styled confirm', person.lastTitle, 'Discard profile changes?');
+        assertEq('dirty person profile asked once', personKept, 1);
+
+        person.prksConfirmUnsavedRouteLeave = function () { return Promise.resolve(true); };
+        const personAccepted = await draftAttempt(personCtx, '#/folders');
+        assertEq('discarded person profile is approved', personAccepted.status, 'approved');
+        assertEq('discarded person profile replaces once', owner.route, '#/folders');
+
+        owner.route = '#/works/W1';
+        const workCtx = {
+            ui: { workDetailsMode: 'metadata' },
+            lastResolvedRoute: { name: 'work', canonicalHash: '#/works/W1' },
+            getEntity: function () { return { id: 'W1' }; },
+        };
+        const workDenied = await draftAttempt(workCtx, '#/folders');
+        assertEq('dirty work metadata rejects', workDenied.status, 'rejected-unsaved-edit');
+        assertEq('dirty work metadata keeps the route', owner.route, '#/works/W1');
+        assertEq('dirty work metadata uses the styled confirm', work.lastTitle, 'Discard metadata changes?');
+        assertEq('dirty work metadata asked once', workKept, 1);
+        assertEq('person probe does not run for a work draft', personKept, 1);
+    }
+
+    {
+        const h = makeHarness({ hash: '#/folders' });
+        const calls = h.canLeaveCalls();
+        await h.ws.navigate('#/works/WONCE');
+        assertEq('clean navigation asks once', h.canLeaveCalls(), calls + 1);
+        const last = h.renders[h.renders.length - 1];
+        assert('approved navigation renders with leave already decided', !!(last && last.leaveApproved === true));
     }
 
     console.log('\n' + passed + ' passed, ' + failed + ' failed');

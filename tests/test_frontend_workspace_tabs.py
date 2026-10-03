@@ -401,7 +401,8 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
     def test_low_level_hash_writes_remain_narrow(self):
         app = _read(_APP)
         self.assertIn("prksCanLeaveCurrentRoute", app)
-        self.assertIn("prksHasPendingWorkAnnotationSync", app)
+        self.assertIn("prksTabLeave.run", app)
+        self.assertNotIn("prksHasPendingWorkAnnotationSync", app)
         self.assertIn("workspaceSwitch", app)
         ws = _read(_WS)
         self.assertIn("createPrksWorkspaceTabs", ws)
@@ -417,14 +418,21 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         guard = app.split("function prksCanLeaveTabContext(ctx, nextHash)", 1)[1].split(
             "function prksCanLeaveCurrentRoute", 1
         )[0]
-        self.assertIn("prksFlushPendingWorkResearchNotes(ctx)", guard)
-        self.assertIn("prksFlushPendingPrivateNotes(ctx)", guard)
-        self.assertIn("window.confirm(", guard)
-        self.assertIn("prksSyncPersonProfileDraftFromEditor", guard)
-        self.assertIn("prksPersonProfileDraftIsDirty(ctx, person)", guard)
-        self.assertIn("prksCaptureWorkMetaDraft(ctx)", guard)
-        self.assertIn("prksWorkMetaDraftIsDirty(ctx, work)", guard)
-        self.assertEqual(guard.count("prksConfirmUnsavedRouteLeave({"), 2)
+        self.assertIn("prksTabLeave.run", guard)
+        self.assertIn("prksTabLeave.flushOwner", guard)
+        self.assertIn("prksTabLeave.assessOwner", guard)
+        self.assertNotIn("window.confirm(", guard)
+        self.assertNotIn("prksFlushPendingWorkResearchNotes(ctx)", guard)
+        render = app.split("async function prksRenderTabRoute", 1)[1].split(
+            "async function prksCommitTabRouteRender", 1
+        )[0]
+        self.assertIn("opts.leaveApproved", render)
+        self.assertIn("prksTabLeave.run", render)
+        commit = app.split("async function prksCommitTabRouteRender", 1)[1].split(
+            "const contentDiv = ctx.root;", 1
+        )[0]
+        self.assertNotIn("prksTabLeave.assessOwner", commit)
+        self.assertNotIn("prksFlushPendingWorkResearchNotes", commit)
         self.assertIn("function prksConfirmUnsavedRouteLeave(options)", ui)
         confirm = ui.split("function prksConfirmUnsavedRouteLeave(options)", 1)[1].split(
             "function prksBindModalConfirmOnce", 1
@@ -432,12 +440,23 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("cancelLabel: 'Keep editing'", confirm)
         self.assertIn("confirmLabel: 'Discard changes'", confirm)
         self.assertNotIn("window.confirm", confirm)
+        person = _read(os.path.join(_FRONTEND, "js", "components", "people.js"))
+        self.assertIn("function prksAssessPersonProfileLeave", person)
+        self.assertIn("prksPersonProfileDraftIsDirty(ctx, person)", person)
+        self.assertIn("id: 'person-profile'", person)
+        self.assertIn("Discard profile changes?", person)
+        self.assertIn("function prksAssessWorkMetadataLeave", ui)
+        self.assertIn("prksWorkMetaDraftIsDirty(ctx, work)", ui)
+        self.assertIn("id: 'work-metadata'", ui)
+        self.assertIn("Discard metadata changes?", ui)
 
         ws = _read(_WS)
-        await_leave = ws.split("function awaitLeave(tabId, nextHash)", 1)[1].split(
-            "function enforceInvariants", 1
-        )[0]
-        self.assertIn("Promise.resolve(canLeave(tabId, nextHash))", await_leave)
+        self.assertIn("function runLeave(", ws)
+        self.assertIn("function runLeaves(", ws)
+        self.assertNotIn("function awaitLeave(", ws)
+        self.assertNotIn("function preflightLeaves(", ws)
+        production = ws.split("function ensureProduction()", 1)[1].split("function prksWorkspaceInit", 1)[0]
+        self.assertNotIn("canLeave:", production)
         history = ws.split("function bindHistory()", 1)[1].split("function ensureProduction", 1)[0]
         self.assertIn("pendingHistoryNavigation", history)
         self.assertIn("void pending.then(finishHashChange)", history)

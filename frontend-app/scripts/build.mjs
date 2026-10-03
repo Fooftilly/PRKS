@@ -97,6 +97,14 @@ if (searchCodecBuild.status !== 0) {
   process.exit(searchCodecBuild.status || 1);
 }
 
+const tabLeaveBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-tab-leave.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (tabLeaveBuild.status !== 0) {
+  process.exit(tabLeaveBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

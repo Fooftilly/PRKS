@@ -18,10 +18,11 @@
     // (sha256 prefix). scripts/dependency_gate.py --write-manifest keeps it in sync;
     // --repo fails if it drifts. Changing manifest bytes (vendor files, the
     // committed Vue bundle, frontend/js/workspace-model.js,
-    // frontend/js/work-route-projection.js, or
-    // frontend/js/search-query-codec.js) retires old
+    // frontend/js/work-route-projection.js,
+    // frontend/js/search-query-codec.js, or
+    // frontend/js/tab-leave.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '2fa7fabc21c7';
+    const DEPENDENCY_REVISION = '9275610e5dad';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
@@ -107,6 +108,7 @@
         '/js/workspace-tab-menu.js',
         '/js/workspace-drag.js',
         '/js/workspace-overview.js',
+        '/js/tab-leave.js',
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
         '/vendor/idb/idb.min.js',

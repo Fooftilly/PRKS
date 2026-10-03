@@ -39,10 +39,13 @@ class WorkPdfBoundaryTests(unittest.TestCase):
         self.assertNotIn("works-pdf.js", _SURFACE + _VIEW)
 
     def test_route_change_flushes_last_page_before_the_next_paint(self):
-        route = _between(_APP, "async function prksRenderTabRoute", "const contentDiv = ctx.root;")
+        route = _between(_APP, "async function prksCommitTabRouteRender", "const contentDiv = ctx.root;")
         self.assertIn("ctx.getResource('pdf')", route)
         self.assertIn("prevPdf.flushLastPage()", route)
-        self.assertIn("prksHasPendingWorkAnnotationSync(ctx)", route)
+        self.assertNotIn("prksHasPendingWorkAnnotationSync", route)
+        wrapper = _between(_APP, "async function prksRenderTabRoute", "async function prksCommitTabRouteRender")
+        self.assertIn("prksTabLeave.run", wrapper)
+        self.assertIn("leaveApproved", wrapper)
         self.assertIn("function prksHasPendingWorkAnnotationSync(ctx)", _RUNTIME)
         self.assertIn("function savePdfAnnotation(workId, desired, observed)", _STORE)
 
